@@ -1,0 +1,5 @@
+error[FS1000]: pipeline operator cannot begin a stage
+ --> grammar/invalid/leading-pipe.fsh:1:1
+  |
+1 | | echo unreachable
+  | ^ pipeline operator cannot begin a stage

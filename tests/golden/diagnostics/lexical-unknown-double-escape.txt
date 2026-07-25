@@ -1,0 +1,5 @@
+error[FS0001]: unknown double-quoted escape
+ --> lexical/invalid/unknown-double-escape.fsh:1:7
+  |
+1 | echo "\q"
+  |       ^^ unknown double-quoted escape

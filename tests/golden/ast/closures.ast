@@ -1,0 +1,326 @@
+Script {
+    statements: [
+        AstNode {
+            kind: Declaration(
+                Declaration {
+                    mutable: false,
+                    name: Identifier {
+                        span: Span(4..10),
+                    },
+                    type_annotation: None,
+                    value: AstNode {
+                        kind: Closure(
+                            Closure {
+                                parameters: [
+                                    Parameter {
+                                        name: Identifier {
+                                            span: Span(15..19),
+                                        },
+                                        type_annotation: Some(
+                                            TypeReference {
+                                                name: Identifier {
+                                                    span: Span(21..27),
+                                                },
+                                                arguments: [],
+                                                span: Span(21..27),
+                                            },
+                                        ),
+                                        span: Span(15..27),
+                                    },
+                                ],
+                                body: ConditionalChain {
+                                    or_terms: [
+                                        AndChain {
+                                            and_terms: [
+                                                Pipeline {
+                                                    stages: [
+                                                        AstNode {
+                                                            kind: Expression(
+                                                                AstNode {
+                                                                    kind: Member(
+                                                                        MemberExpression {
+                                                                            target: AstNode {
+                                                                                kind: Variable(
+                                                                                    VariableReference {
+                                                                                        name: Identifier {
+                                                                                            span: Span(30..34),
+                                                                                        },
+                                                                                        span: Span(29..34),
+                                                                                    },
+                                                                                ),
+                                                                                span: Span(29..34),
+                                                                            },
+                                                                            member: Identifier {
+                                                                                span: Span(35..41),
+                                                                            },
+                                                                        },
+                                                                    ),
+                                                                    span: Span(29..41),
+                                                                },
+                                                            ),
+                                                            span: Span(29..41),
+                                                        },
+                                                    ],
+                                                    operators: [],
+                                                    span: Span(29..41),
+                                                },
+                                            ],
+                                            operators: [],
+                                            span: Span(29..41),
+                                        },
+                                    ],
+                                    operators: [],
+                                    span: Span(29..41),
+                                },
+                                span: Span(13..42),
+                            },
+                        ),
+                        span: Span(13..42),
+                    },
+                },
+            ),
+            span: Span(0..42),
+        },
+        AstNode {
+            kind: Job(
+                JobStatement {
+                    chain: ConditionalChain {
+                        or_terms: [
+                            AndChain {
+                                and_terms: [
+                                    Pipeline {
+                                        stages: [
+                                            AstNode {
+                                                kind: Command(
+                                                    CommandStage {
+                                                        head: CommandHead {
+                                                            kind: Bare,
+                                                            word: Word {
+                                                                parts: [
+                                                                    AstNode {
+                                                                        kind: Bare,
+                                                                        span: Span(43..48),
+                                                                    },
+                                                                ],
+                                                                span: Span(43..48),
+                                                            },
+                                                            span: Span(43..48),
+                                                        },
+                                                        items: [
+                                                            AstNode {
+                                                                kind: Closure(
+                                                                    Closure {
+                                                                        parameters: [
+                                                                            Parameter {
+                                                                                name: Identifier {
+                                                                                    span: Span(51..54),
+                                                                                },
+                                                                                type_annotation: None,
+                                                                                span: Span(51..54),
+                                                                            },
+                                                                        ],
+                                                                        body: ConditionalChain {
+                                                                            or_terms: [
+                                                                                AndChain {
+                                                                                    and_terms: [
+                                                                                        Pipeline {
+                                                                                            stages: [
+                                                                                                AstNode {
+                                                                                                    kind: Expression(
+                                                                                                        AstNode {
+                                                                                                            kind: Binary(
+                                                                                                                BinaryExpression {
+                                                                                                                    left: AstNode {
+                                                                                                                        kind: Member(
+                                                                                                                            MemberExpression {
+                                                                                                                                target: AstNode {
+                                                                                                                                    kind: Variable(
+                                                                                                                                        VariableReference {
+                                                                                                                                            name: Identifier {
+                                                                                                                                                span: Span(57..60),
+                                                                                                                                            },
+                                                                                                                                            span: Span(56..60),
+                                                                                                                                        },
+                                                                                                                                    ),
+                                                                                                                                    span: Span(56..60),
+                                                                                                                                },
+                                                                                                                                member: Identifier {
+                                                                                                                                    span: Span(61..65),
+                                                                                                                                },
+                                                                                                                            },
+                                                                                                                        ),
+                                                                                                                        span: Span(56..65),
+                                                                                                                    },
+                                                                                                                    operator: AstNode {
+                                                                                                                        kind: Greater,
+                                                                                                                        span: Span(66..67),
+                                                                                                                    },
+                                                                                                                    right: AstNode {
+                                                                                                                        kind: Literal(
+                                                                                                                            Literal {
+                                                                                                                                kind: Integer,
+                                                                                                                                span: Span(68..69),
+                                                                                                                            },
+                                                                                                                        ),
+                                                                                                                        span: Span(68..69),
+                                                                                                                    },
+                                                                                                                },
+                                                                                                            ),
+                                                                                                            span: Span(56..69),
+                                                                                                        },
+                                                                                                    ),
+                                                                                                    span: Span(56..69),
+                                                                                                },
+                                                                                            ],
+                                                                                            operators: [],
+                                                                                            span: Span(56..69),
+                                                                                        },
+                                                                                    ],
+                                                                                    operators: [],
+                                                                                    span: Span(56..69),
+                                                                                },
+                                                                            ],
+                                                                            operators: [],
+                                                                            span: Span(56..69),
+                                                                        },
+                                                                        span: Span(49..70),
+                                                                    },
+                                                                ),
+                                                                span: Span(49..70),
+                                                            },
+                                                        ],
+                                                    },
+                                                ),
+                                                span: Span(43..70),
+                                            },
+                                        ],
+                                        operators: [],
+                                        span: Span(43..70),
+                                    },
+                                ],
+                                operators: [],
+                                span: Span(43..70),
+                            },
+                        ],
+                        operators: [],
+                        span: Span(43..70),
+                    },
+                    background_span: None,
+                },
+            ),
+            span: Span(43..70),
+        },
+        AstNode {
+            kind: Job(
+                JobStatement {
+                    chain: ConditionalChain {
+                        or_terms: [
+                            AndChain {
+                                and_terms: [
+                                    Pipeline {
+                                        stages: [
+                                            AstNode {
+                                                kind: Command(
+                                                    CommandStage {
+                                                        head: CommandHead {
+                                                            kind: Bare,
+                                                            word: Word {
+                                                                parts: [
+                                                                    AstNode {
+                                                                        kind: Bare,
+                                                                        span: Span(71..75),
+                                                                    },
+                                                                ],
+                                                                span: Span(71..75),
+                                                            },
+                                                            span: Span(71..75),
+                                                        },
+                                                        items: [
+                                                            AstNode {
+                                                                kind: Closure(
+                                                                    Closure {
+                                                                        parameters: [],
+                                                                        body: ConditionalChain {
+                                                                            or_terms: [
+                                                                                AndChain {
+                                                                                    and_terms: [
+                                                                                        Pipeline {
+                                                                                            stages: [
+                                                                                                AstNode {
+                                                                                                    kind: Command(
+                                                                                                        CommandStage {
+                                                                                                            head: CommandHead {
+                                                                                                                kind: Bare,
+                                                                                                                word: Word {
+                                                                                                                    parts: [
+                                                                                                                        AstNode {
+                                                                                                                            kind: Bare,
+                                                                                                                            span: Span(80..84),
+                                                                                                                        },
+                                                                                                                    ],
+                                                                                                                    span: Span(80..84),
+                                                                                                                },
+                                                                                                                span: Span(80..84),
+                                                                                                            },
+                                                                                                            items: [
+                                                                                                                AstNode {
+                                                                                                                    kind: Word(
+                                                                                                                        Word {
+                                                                                                                            parts: [
+                                                                                                                                AstNode {
+                                                                                                                                    kind: Bare,
+                                                                                                                                    span: Span(85..89),
+                                                                                                                                },
+                                                                                                                            ],
+                                                                                                                            span: Span(85..89),
+                                                                                                                        },
+                                                                                                                    ),
+                                                                                                                    span: Span(85..89),
+                                                                                                                },
+                                                                                                            ],
+                                                                                                        },
+                                                                                                    ),
+                                                                                                    span: Span(80..89),
+                                                                                                },
+                                                                                            ],
+                                                                                            operators: [],
+                                                                                            span: Span(80..89),
+                                                                                        },
+                                                                                    ],
+                                                                                    operators: [],
+                                                                                    span: Span(80..89),
+                                                                                },
+                                                                            ],
+                                                                            operators: [],
+                                                                            span: Span(80..89),
+                                                                        },
+                                                                        span: Span(76..90),
+                                                                    },
+                                                                ),
+                                                                span: Span(76..90),
+                                                            },
+                                                        ],
+                                                    },
+                                                ),
+                                                span: Span(71..90),
+                                            },
+                                        ],
+                                        operators: [],
+                                        span: Span(71..90),
+                                    },
+                                ],
+                                operators: [],
+                                span: Span(71..90),
+                            },
+                        ],
+                        operators: [],
+                        span: Span(71..90),
+                    },
+                    background_span: None,
+                },
+            ),
+            span: Span(71..90),
+        },
+    ],
+    span: Span(0..91),
+}

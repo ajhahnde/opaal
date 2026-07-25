@@ -1,0 +1,10 @@
+# corpus	source	expected
+grammar	invalid/leading-pipe.fsh	grammar-leading-pipe.txt
+grammar	invalid/stray-else.fsh	grammar-stray-else.txt
+grammar	invalid/grouped-background.fsh	grammar-grouped-background.txt
+grammar	invalid/declaration-background.fsh	grammar-declaration-background.txt
+grammar	invalid/chained-comparison.fsh	grammar-chained-comparison.txt
+lexical	invalid/unknown-double-escape.fsh	lexical-unknown-double-escape.txt
+lexical	invalid/empty-unicode-escape.fsh	lexical-empty-unicode-escape.txt
+lexical	invalid/surrogate-unicode-escape.fsh	lexical-surrogate-unicode-escape.txt
+lexical	invalid/out-of-range-unicode-escape.fsh	lexical-out-of-range-unicode-escape.txt

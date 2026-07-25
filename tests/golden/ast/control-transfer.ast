@@ -1,0 +1,270 @@
+Script {
+    statements: [
+        AstNode {
+            kind: Function(
+                FunctionDefinition {
+                    name: Identifier {
+                        span: Span(4..15),
+                    },
+                    parameters: [
+                        Parameter {
+                            name: Identifier {
+                                span: Span(16..21),
+                            },
+                            type_annotation: Some(
+                                TypeReference {
+                                    name: Identifier {
+                                        span: Span(23..27),
+                                    },
+                                    arguments: [
+                                        TypeReference {
+                                            name: Identifier {
+                                                span: Span(28..34),
+                                            },
+                                            arguments: [],
+                                            span: Span(28..34),
+                                        },
+                                    ],
+                                    span: Span(23..35),
+                                },
+                            ),
+                            span: Span(16..35),
+                        },
+                    ],
+                    return_type: None,
+                    body: Block {
+                        statements: [
+                            AstNode {
+                                kind: For(
+                                    ForStatement {
+                                        binding: Identifier {
+                                            span: Span(47..51),
+                                        },
+                                        iterable: AstNode {
+                                            kind: Variable(
+                                                VariableReference {
+                                                    name: Identifier {
+                                                        span: Span(56..61),
+                                                    },
+                                                    span: Span(55..61),
+                                                },
+                                            ),
+                                            span: Span(55..61),
+                                        },
+                                        body: Block {
+                                            statements: [
+                                                AstNode {
+                                                    kind: If(
+                                                        IfStatement {
+                                                            condition: ConditionalChain {
+                                                                or_terms: [
+                                                                    AndChain {
+                                                                        and_terms: [
+                                                                            Pipeline {
+                                                                                stages: [
+                                                                                    AstNode {
+                                                                                        kind: Expression(
+                                                                                            AstNode {
+                                                                                                kind: Binary(
+                                                                                                    BinaryExpression {
+                                                                                                        left: AstNode {
+                                                                                                            kind: Variable(
+                                                                                                                VariableReference {
+                                                                                                                    name: Identifier {
+                                                                                                                        span: Span(76..80),
+                                                                                                                    },
+                                                                                                                    span: Span(75..80),
+                                                                                                                },
+                                                                                                            ),
+                                                                                                            span: Span(75..80),
+                                                                                                        },
+                                                                                                        operator: AstNode {
+                                                                                                            kind: Equal,
+                                                                                                            span: Span(81..83),
+                                                                                                        },
+                                                                                                        right: AstNode {
+                                                                                                            kind: Literal(
+                                                                                                                Literal {
+                                                                                                                    kind: DoubleQuoted(
+                                                                                                                        [
+                                                                                                                            AstNode {
+                                                                                                                                kind: DoubleText,
+                                                                                                                                span: Span(85..89),
+                                                                                                                            },
+                                                                                                                        ],
+                                                                                                                    ),
+                                                                                                                    span: Span(84..90),
+                                                                                                                },
+                                                                                                            ),
+                                                                                                            span: Span(84..90),
+                                                                                                        },
+                                                                                                    },
+                                                                                                ),
+                                                                                                span: Span(75..90),
+                                                                                            },
+                                                                                        ),
+                                                                                        span: Span(75..90),
+                                                                                    },
+                                                                                ],
+                                                                                operators: [],
+                                                                                span: Span(75..90),
+                                                                            },
+                                                                        ],
+                                                                        operators: [],
+                                                                        span: Span(75..90),
+                                                                    },
+                                                                ],
+                                                                operators: [],
+                                                                span: Span(75..90),
+                                                            },
+                                                            then_block: Block {
+                                                                statements: [
+                                                                    AstNode {
+                                                                        kind: Control(
+                                                                            Break,
+                                                                        ),
+                                                                        span: Span(93..98),
+                                                                    },
+                                                                ],
+                                                                span: Span(91..100),
+                                                            },
+                                                            else_branch: None,
+                                                        },
+                                                    ),
+                                                    span: Span(72..100),
+                                                },
+                                                AstNode {
+                                                    kind: If(
+                                                        IfStatement {
+                                                            condition: ConditionalChain {
+                                                                or_terms: [
+                                                                    AndChain {
+                                                                        and_terms: [
+                                                                            Pipeline {
+                                                                                stages: [
+                                                                                    AstNode {
+                                                                                        kind: Expression(
+                                                                                            AstNode {
+                                                                                                kind: Binary(
+                                                                                                    BinaryExpression {
+                                                                                                        left: AstNode {
+                                                                                                            kind: Variable(
+                                                                                                                VariableReference {
+                                                                                                                    name: Identifier {
+                                                                                                                        span: Span(113..117),
+                                                                                                                    },
+                                                                                                                    span: Span(112..117),
+                                                                                                                },
+                                                                                                            ),
+                                                                                                            span: Span(112..117),
+                                                                                                        },
+                                                                                                        operator: AstNode {
+                                                                                                            kind: Equal,
+                                                                                                            span: Span(118..120),
+                                                                                                        },
+                                                                                                        right: AstNode {
+                                                                                                            kind: Literal(
+                                                                                                                Literal {
+                                                                                                                    kind: DoubleQuoted(
+                                                                                                                        [
+                                                                                                                            AstNode {
+                                                                                                                                kind: DoubleText,
+                                                                                                                                span: Span(122..126),
+                                                                                                                            },
+                                                                                                                        ],
+                                                                                                                    ),
+                                                                                                                    span: Span(121..127),
+                                                                                                                },
+                                                                                                            ),
+                                                                                                            span: Span(121..127),
+                                                                                                        },
+                                                                                                    },
+                                                                                                ),
+                                                                                                span: Span(112..127),
+                                                                                            },
+                                                                                        ),
+                                                                                        span: Span(112..127),
+                                                                                    },
+                                                                                ],
+                                                                                operators: [],
+                                                                                span: Span(112..127),
+                                                                            },
+                                                                        ],
+                                                                        operators: [],
+                                                                        span: Span(112..127),
+                                                                    },
+                                                                ],
+                                                                operators: [],
+                                                                span: Span(112..127),
+                                                            },
+                                                            then_block: Block {
+                                                                statements: [
+                                                                    AstNode {
+                                                                        kind: Control(
+                                                                            Continue,
+                                                                        ),
+                                                                        span: Span(130..138),
+                                                                    },
+                                                                ],
+                                                                span: Span(128..140),
+                                                            },
+                                                            else_branch: None,
+                                                        },
+                                                    ),
+                                                    span: Span(109..140),
+                                                },
+                                                AstNode {
+                                                    kind: Control(
+                                                        Return(
+                                                            Some(
+                                                                AstNode {
+                                                                    kind: Variable(
+                                                                        VariableReference {
+                                                                            name: Identifier {
+                                                                                span: Span(157..161),
+                                                                            },
+                                                                            span: Span(156..161),
+                                                                        },
+                                                                    ),
+                                                                    span: Span(156..161),
+                                                                },
+                                                            ),
+                                                        ),
+                                                    ),
+                                                    span: Span(149..161),
+                                                },
+                                            ],
+                                            span: Span(62..167),
+                                        },
+                                    },
+                                ),
+                                span: Span(43..167),
+                            },
+                            AstNode {
+                                kind: Control(
+                                    Return(
+                                        Some(
+                                            AstNode {
+                                                kind: Literal(
+                                                    Literal {
+                                                        kind: Null,
+                                                        span: Span(179..183),
+                                                    },
+                                                ),
+                                                span: Span(179..183),
+                                            },
+                                        ),
+                                    ),
+                                ),
+                                span: Span(172..183),
+                            },
+                        ],
+                        span: Span(37..185),
+                    },
+                },
+            ),
+            span: Span(0..185),
+        },
+    ],
+    span: Span(0..186),
+}

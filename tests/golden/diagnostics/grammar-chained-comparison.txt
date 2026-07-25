@@ -1,0 +1,5 @@
+error[FS1000]: comparison operators are non-associative
+ --> grammar/invalid/chained-comparison.fsh:1:23
+  |
+1 | let ascending = 1 < 2 < 3
+  |                       ^ comparison operators are non-associative

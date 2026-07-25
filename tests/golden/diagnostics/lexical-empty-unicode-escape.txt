@@ -1,0 +1,5 @@
+error[FS0001]: Unicode escape requires hexadecimal digits
+ --> lexical/invalid/empty-unicode-escape.fsh:1:7
+  |
+1 | echo "\u{}"
+  |       ^^^^ Unicode escape requires hexadecimal digits

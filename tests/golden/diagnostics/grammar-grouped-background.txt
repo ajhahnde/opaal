@@ -1,0 +1,11 @@
+error[FS1000]: backgrounding is forbidden inside a grouped job
+ --> grammar/invalid/grouped-background.fsh:1:19
+  |
+1 | let job = (^build &)
+  |                   ^ backgrounding is forbidden inside a grouped job
+
+error[FS1000]: expected a command word
+ --> grammar/invalid/grouped-background.fsh:1:20
+  |
+1 | let job = (^build &)
+  |                    ^ expected a command word

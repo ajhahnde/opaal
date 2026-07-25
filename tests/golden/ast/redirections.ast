@@ -1,0 +1,287 @@
+Script {
+    statements: [
+        AstNode {
+            kind: Job(
+                JobStatement {
+                    chain: ConditionalChain {
+                        or_terms: [
+                            AndChain {
+                                and_terms: [
+                                    Pipeline {
+                                        stages: [
+                                            AstNode {
+                                                kind: Command(
+                                                    CommandStage {
+                                                        head: CommandHead {
+                                                            kind: ForcedExternal,
+                                                            word: Word {
+                                                                parts: [
+                                                                    AstNode {
+                                                                        kind: Bare,
+                                                                        span: Span(1..5),
+                                                                    },
+                                                                ],
+                                                                span: Span(1..5),
+                                                            },
+                                                            span: Span(0..5),
+                                                        },
+                                                        items: [
+                                                            AstNode {
+                                                                kind: Redirection(
+                                                                    AstNode {
+                                                                        kind: Input {
+                                                                            descriptor: None,
+                                                                            operator_span: Span(6..7),
+                                                                            target: Word {
+                                                                                parts: [
+                                                                                    AstNode {
+                                                                                        kind: Bare,
+                                                                                        span: Span(8..17),
+                                                                                    },
+                                                                                ],
+                                                                                span: Span(8..17),
+                                                                            },
+                                                                        },
+                                                                        span: Span(6..17),
+                                                                    },
+                                                                ),
+                                                                span: Span(6..17),
+                                                            },
+                                                            AstNode {
+                                                                kind: Redirection(
+                                                                    AstNode {
+                                                                        kind: File(
+                                                                            FileRedirection {
+                                                                                descriptor: None,
+                                                                                mode: Truncate,
+                                                                                operator_span: Span(18..19),
+                                                                                target: Word {
+                                                                                    parts: [
+                                                                                        AstNode {
+                                                                                            kind: Bare,
+                                                                                            span: Span(20..30),
+                                                                                        },
+                                                                                    ],
+                                                                                    span: Span(20..30),
+                                                                                },
+                                                                            },
+                                                                        ),
+                                                                        span: Span(18..30),
+                                                                    },
+                                                                ),
+                                                                span: Span(18..30),
+                                                            },
+                                                        ],
+                                                    },
+                                                ),
+                                                span: Span(0..30),
+                                            },
+                                        ],
+                                        operators: [],
+                                        span: Span(0..30),
+                                    },
+                                ],
+                                operators: [],
+                                span: Span(0..30),
+                            },
+                        ],
+                        operators: [],
+                        span: Span(0..30),
+                    },
+                    background_span: None,
+                },
+            ),
+            span: Span(0..30),
+        },
+        AstNode {
+            kind: Job(
+                JobStatement {
+                    chain: ConditionalChain {
+                        or_terms: [
+                            AndChain {
+                                and_terms: [
+                                    Pipeline {
+                                        stages: [
+                                            AstNode {
+                                                kind: Command(
+                                                    CommandStage {
+                                                        head: CommandHead {
+                                                            kind: ForcedExternal,
+                                                            word: Word {
+                                                                parts: [
+                                                                    AstNode {
+                                                                        kind: Bare,
+                                                                        span: Span(32..37),
+                                                                    },
+                                                                ],
+                                                                span: Span(32..37),
+                                                            },
+                                                            span: Span(31..37),
+                                                        },
+                                                        items: [
+                                                            AstNode {
+                                                                kind: Redirection(
+                                                                    AstNode {
+                                                                        kind: File(
+                                                                            FileRedirection {
+                                                                                descriptor: None,
+                                                                                mode: Append,
+                                                                                operator_span: Span(38..40),
+                                                                                target: Word {
+                                                                                    parts: [
+                                                                                        AstNode {
+                                                                                            kind: Bare,
+                                                                                            span: Span(41..50),
+                                                                                        },
+                                                                                    ],
+                                                                                    span: Span(41..50),
+                                                                                },
+                                                                            },
+                                                                        ),
+                                                                        span: Span(38..50),
+                                                                    },
+                                                                ),
+                                                                span: Span(38..50),
+                                                            },
+                                                            AstNode {
+                                                                kind: Redirection(
+                                                                    AstNode {
+                                                                        kind: Duplicate {
+                                                                            descriptor: IoNumber {
+                                                                                span: Span(51..52),
+                                                                            },
+                                                                            operator_span: Span(52..54),
+                                                                            target: IoNumber {
+                                                                                span: Span(54..55),
+                                                                            },
+                                                                        },
+                                                                        span: Span(51..55),
+                                                                    },
+                                                                ),
+                                                                span: Span(51..55),
+                                                            },
+                                                        ],
+                                                    },
+                                                ),
+                                                span: Span(31..55),
+                                            },
+                                        ],
+                                        operators: [],
+                                        span: Span(31..55),
+                                    },
+                                ],
+                                operators: [],
+                                span: Span(31..55),
+                            },
+                        ],
+                        operators: [],
+                        span: Span(31..55),
+                    },
+                    background_span: None,
+                },
+            ),
+            span: Span(31..55),
+        },
+        AstNode {
+            kind: Job(
+                JobStatement {
+                    chain: ConditionalChain {
+                        or_terms: [
+                            AndChain {
+                                and_terms: [
+                                    Pipeline {
+                                        stages: [
+                                            AstNode {
+                                                kind: Command(
+                                                    CommandStage {
+                                                        head: CommandHead {
+                                                            kind: ForcedExternal,
+                                                            word: Word {
+                                                                parts: [
+                                                                    AstNode {
+                                                                        kind: Bare,
+                                                                        span: Span(57..62),
+                                                                    },
+                                                                ],
+                                                                span: Span(57..62),
+                                                            },
+                                                            span: Span(56..62),
+                                                        },
+                                                        items: [
+                                                            AstNode {
+                                                                kind: Redirection(
+                                                                    AstNode {
+                                                                        kind: File(
+                                                                            FileRedirection {
+                                                                                descriptor: Some(
+                                                                                    IoNumber {
+                                                                                        span: Span(63..64),
+                                                                                    },
+                                                                                ),
+                                                                                mode: Truncate,
+                                                                                operator_span: Span(64..65),
+                                                                                target: Word {
+                                                                                    parts: [
+                                                                                        AstNode {
+                                                                                            kind: Bare,
+                                                                                            span: Span(66..76),
+                                                                                        },
+                                                                                    ],
+                                                                                    span: Span(66..76),
+                                                                                },
+                                                                            },
+                                                                        ),
+                                                                        span: Span(63..76),
+                                                                    },
+                                                                ),
+                                                                span: Span(63..76),
+                                                            },
+                                                            AstNode {
+                                                                kind: Redirection(
+                                                                    AstNode {
+                                                                        kind: File(
+                                                                            FileRedirection {
+                                                                                descriptor: None,
+                                                                                mode: Truncate,
+                                                                                operator_span: Span(77..78),
+                                                                                target: Word {
+                                                                                    parts: [
+                                                                                        AstNode {
+                                                                                            kind: Bare,
+                                                                                            span: Span(79..89),
+                                                                                        },
+                                                                                    ],
+                                                                                    span: Span(79..89),
+                                                                                },
+                                                                            },
+                                                                        ),
+                                                                        span: Span(77..89),
+                                                                    },
+                                                                ),
+                                                                span: Span(77..89),
+                                                            },
+                                                        ],
+                                                    },
+                                                ),
+                                                span: Span(56..89),
+                                            },
+                                        ],
+                                        operators: [],
+                                        span: Span(56..89),
+                                    },
+                                ],
+                                operators: [],
+                                span: Span(56..89),
+                            },
+                        ],
+                        operators: [],
+                        span: Span(56..89),
+                    },
+                    background_span: None,
+                },
+            ),
+            span: Span(56..89),
+        },
+    ],
+    span: Span(0..90),
+}

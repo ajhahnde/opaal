@@ -1,0 +1,23 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/flashshell-syntax",
+    "crates/flashshell-runtime",
+    "crates/flashshell-platform",
+    "crates/flashshell-platform-posix",
+    "crates/flashshell-cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.97"
+license = "Apache-2.0"
+repository = "https://github.com/ajhahnde/FlashOS"
+
+[workspace.lints.rust]
+rust_2018_idioms = "deny"
+unused_lifetimes = "deny"
+
+[workspace.lints.clippy]
+all = "deny"

@@ -1,0 +1,5 @@
+error[FS0001]: Unicode escape exceeds the scalar range
+ --> lexical/invalid/out-of-range-unicode-escape.fsh:1:7
+  |
+1 | echo "\u{110000}"
+  |       ^^^^^^^^^^ Unicode escape exceeds the scalar range

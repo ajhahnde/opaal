@@ -1,0 +1,181 @@
+Script {
+    statements: [
+        AstNode {
+            kind: Declaration(
+                Declaration {
+                    mutable: false,
+                    name: Identifier {
+                        span: Span(4..8),
+                    },
+                    type_annotation: Some(
+                        TypeReference {
+                            name: Identifier {
+                                span: Span(10..16),
+                            },
+                            arguments: [],
+                            span: Span(10..16),
+                        },
+                    ),
+                    value: AstNode {
+                        kind: Literal(
+                            Literal {
+                                kind: DoubleQuoted(
+                                    [
+                                        AstNode {
+                                            kind: DoubleText,
+                                            span: Span(20..30),
+                                        },
+                                    ],
+                                ),
+                                span: Span(19..31),
+                            },
+                        ),
+                        span: Span(19..31),
+                    },
+                },
+            ),
+            span: Span(0..31),
+        },
+        AstNode {
+            kind: Declaration(
+                Declaration {
+                    mutable: true,
+                    name: Identifier {
+                        span: Span(36..41),
+                    },
+                    type_annotation: Some(
+                        TypeReference {
+                            name: Identifier {
+                                span: Span(43..46),
+                            },
+                            arguments: [],
+                            span: Span(43..46),
+                        },
+                    ),
+                    value: AstNode {
+                        kind: Literal(
+                            Literal {
+                                kind: Integer,
+                                span: Span(49..50),
+                            },
+                        ),
+                        span: Span(49..50),
+                    },
+                },
+            ),
+            span: Span(32..50),
+        },
+        AstNode {
+            kind: Assignment(
+                Assignment {
+                    target: VariableReference {
+                        name: Identifier {
+                            span: Span(52..57),
+                        },
+                        span: Span(51..57),
+                    },
+                    value: AstNode {
+                        kind: Binary(
+                            BinaryExpression {
+                                left: AstNode {
+                                    kind: Variable(
+                                        VariableReference {
+                                            name: Identifier {
+                                                span: Span(61..66),
+                                            },
+                                            span: Span(60..66),
+                                        },
+                                    ),
+                                    span: Span(60..66),
+                                },
+                                operator: AstNode {
+                                    kind: Add,
+                                    span: Span(67..68),
+                                },
+                                right: AstNode {
+                                    kind: Literal(
+                                        Literal {
+                                            kind: Integer,
+                                            span: Span(69..70),
+                                        },
+                                    ),
+                                    span: Span(69..70),
+                                },
+                            },
+                        ),
+                        span: Span(60..70),
+                    },
+                },
+            ),
+            span: Span(51..70),
+        },
+        AstNode {
+            kind: Declaration(
+                Declaration {
+                    mutable: false,
+                    name: Identifier {
+                        span: Span(75..80),
+                    },
+                    type_annotation: Some(
+                        TypeReference {
+                            name: Identifier {
+                                span: Span(82..86),
+                            },
+                            arguments: [
+                                TypeReference {
+                                    name: Identifier {
+                                        span: Span(87..93),
+                                    },
+                                    arguments: [],
+                                    span: Span(87..93),
+                                },
+                            ],
+                            span: Span(82..94),
+                        },
+                    ),
+                    value: AstNode {
+                        kind: List(
+                            [
+                                AstNode {
+                                    kind: Literal(
+                                        Literal {
+                                            kind: DoubleQuoted(
+                                                [
+                                                    AstNode {
+                                                        kind: DoubleText,
+                                                        span: Span(99..102),
+                                                    },
+                                                ],
+                                            ),
+                                            span: Span(98..103),
+                                        },
+                                    ),
+                                    span: Span(98..103),
+                                },
+                                AstNode {
+                                    kind: Literal(
+                                        Literal {
+                                            kind: DoubleQuoted(
+                                                [
+                                                    AstNode {
+                                                        kind: DoubleText,
+                                                        span: Span(106..109),
+                                                    },
+                                                ],
+                                            ),
+                                            span: Span(105..110),
+                                        },
+                                    ),
+                                    span: Span(105..110),
+                                },
+                            ],
+                        ),
+                        span: Span(97..111),
+                    },
+                },
+            ),
+            span: Span(71..111),
+        },
+    ],
+    span: Span(0..112),
+}

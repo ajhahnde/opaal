@@ -1,0 +1,16 @@
+# class	path	reason
+complete	complete/comments.fsh	comments start only at a token boundary
+complete	complete/word-parts.fsh	adjacent word parts and empty quotes are complete
+complete	complete/escapes.fsh	all ratified bare and double-quoted escapes
+complete	complete/interpolation.fsh	all interpolation starters and literal dollars
+complete	complete/continuation.fsh	bare and double-quoted explicit continuation
+complete	complete/reserved-words.fsh	the reserved-word spellings are lexically complete
+incomplete	incomplete/single-quote.fsh	unmatched single quote
+incomplete	incomplete/double-quote.fsh	unmatched double quote
+incomplete	incomplete/trailing-backslash.fsh	explicit continuation requires more source
+incomplete	incomplete/braced-interpolation.fsh	unmatched braced interpolation
+incomplete	incomplete/command-substitution.fsh	unmatched command substitution
+invalid	invalid/unknown-double-escape.fsh	unknown double-quoted escape
+invalid	invalid/empty-unicode-escape.fsh	Unicode escape requires hexadecimal digits
+invalid	invalid/surrogate-unicode-escape.fsh	Unicode escape cannot encode a surrogate
+invalid	invalid/out-of-range-unicode-escape.fsh	Unicode escape exceeds the scalar range

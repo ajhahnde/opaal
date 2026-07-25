@@ -1,0 +1,21 @@
+[package]
+name = "flashshell-platform-posix"
+description = "macOS and Linux platform adapter for FlashShell"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+flashshell-platform = { path = "../flashshell-platform" }
+
+[[bin]]
+name = "flashshell-process-observer-fixture"
+path = "../../tests/fixtures/process_observer.rs"
+test = false
+bench = false
+doc = false
+
+[lints]
+workspace = true

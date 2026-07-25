@@ -1,0 +1,52 @@
+[package]
+name = "flashshell-cli"
+description = "Command-line and interactive client for FlashShell"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "fsh"
+path = "src/main.rs"
+
+[[bin]]
+name = "flashshell-e2e-process-observer-fixture"
+path = "../../tests/fixtures/process_observer.rs"
+test = false
+bench = false
+doc = false
+
+[[bin]]
+name = "flashshell-e2e-status-fixture"
+path = "../../tests/fixtures/status.rs"
+test = false
+bench = false
+doc = false
+
+[[bin]]
+name = "flashshell-e2e-stream-fixture"
+path = "../../tests/fixtures/stream.rs"
+test = false
+bench = false
+doc = false
+
+[dependencies]
+flashshell-platform-posix = { path = "../flashshell-platform-posix" }
+flashshell-runtime = { path = "../flashshell-runtime" }
+flashshell-syntax = { path = "../flashshell-syntax" }
+
+[target.'cfg(any(target_os = "macos", target_os = "linux"))'.dependencies]
+fd-lock = "=4.0.4"
+nu-ansi-term = "=0.50.3"
+reedline = { version = "=0.49.0", default-features = false }
+rustix = { version = "=1.1.4", features = ["fs", "process"] }
+
+# The PTY acceptance harness composes a pseudoterminal from rustix directly
+# rather than pulling a new crate; these features stay out of the shipped binary.
+[target.'cfg(any(target_os = "macos", target_os = "linux"))'.dev-dependencies]
+rustix = { version = "=1.1.4", features = ["fs", "process", "pty", "termios"] }
+
+[lints]
+workspace = true

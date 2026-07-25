@@ -1,0 +1,231 @@
+Script {
+    statements: [
+        AstNode {
+            kind: Declaration(
+                Declaration {
+                    mutable: false,
+                    name: Identifier {
+                        span: Span(4..17),
+                    },
+                    type_annotation: None,
+                    value: AstNode {
+                        kind: List(
+                            [
+                                AstNode {
+                                    kind: Literal(
+                                        Literal {
+                                            kind: Null,
+                                            span: Span(21..25),
+                                        },
+                                    ),
+                                    span: Span(21..25),
+                                },
+                                AstNode {
+                                    kind: Literal(
+                                        Literal {
+                                            kind: Boolean(
+                                                true,
+                                            ),
+                                            span: Span(27..31),
+                                        },
+                                    ),
+                                    span: Span(27..31),
+                                },
+                                AstNode {
+                                    kind: Literal(
+                                        Literal {
+                                            kind: Boolean(
+                                                false,
+                                            ),
+                                            span: Span(33..38),
+                                        },
+                                    ),
+                                    span: Span(33..38),
+                                },
+                                AstNode {
+                                    kind: Literal(
+                                        Literal {
+                                            kind: Integer,
+                                            span: Span(40..42),
+                                        },
+                                    ),
+                                    span: Span(40..42),
+                                },
+                                AstNode {
+                                    kind: Literal(
+                                        Literal {
+                                            kind: Integer,
+                                            span: Span(44..48),
+                                        },
+                                    ),
+                                    span: Span(44..48),
+                                },
+                                AstNode {
+                                    kind: Literal(
+                                        Literal {
+                                            kind: Float,
+                                            span: Span(50..53),
+                                        },
+                                    ),
+                                    span: Span(50..53),
+                                },
+                                AstNode {
+                                    kind: Literal(
+                                        Literal {
+                                            kind: DoubleQuoted(
+                                                [
+                                                    AstNode {
+                                                        kind: DoubleText,
+                                                        span: Span(56..60),
+                                                    },
+                                                ],
+                                            ),
+                                            span: Span(55..61),
+                                        },
+                                    ),
+                                    span: Span(55..61),
+                                },
+                                AstNode {
+                                    kind: Literal(
+                                        Literal {
+                                            kind: SingleQuoted,
+                                            span: Span(63..70),
+                                        },
+                                    ),
+                                    span: Span(63..70),
+                                },
+                            ],
+                        ),
+                        span: Span(20..71),
+                    },
+                },
+            ),
+            span: Span(0..71),
+        },
+        AstNode {
+            kind: Declaration(
+                Declaration {
+                    mutable: false,
+                    name: Identifier {
+                        span: Span(76..83),
+                    },
+                    type_annotation: None,
+                    value: AstNode {
+                        kind: Record(
+                            [
+                                RecordEntry {
+                                    key: Identifier(
+                                        Identifier {
+                                            span: Span(92..96),
+                                        },
+                                    ),
+                                    value: AstNode {
+                                        kind: Literal(
+                                            Literal {
+                                                kind: DoubleQuoted(
+                                                    [
+                                                        AstNode {
+                                                            kind: DoubleText,
+                                                            span: Span(99..109),
+                                                        },
+                                                    ],
+                                                ),
+                                                span: Span(98..110),
+                                            },
+                                        ),
+                                        span: Span(98..110),
+                                    },
+                                    span: Span(92..110),
+                                },
+                                RecordEntry {
+                                    key: Identifier(
+                                        Identifier {
+                                            span: Span(116..120),
+                                        },
+                                    ),
+                                    value: AstNode {
+                                        kind: List(
+                                            [
+                                                AstNode {
+                                                    kind: Literal(
+                                                        Literal {
+                                                            kind: DoubleQuoted(
+                                                                [
+                                                                    AstNode {
+                                                                        kind: DoubleText,
+                                                                        span: Span(124..129),
+                                                                    },
+                                                                ],
+                                                            ),
+                                                            span: Span(123..130),
+                                                        },
+                                                    ),
+                                                    span: Span(123..130),
+                                                },
+                                                AstNode {
+                                                    kind: Literal(
+                                                        Literal {
+                                                            kind: DoubleQuoted(
+                                                                [
+                                                                    AstNode {
+                                                                        kind: DoubleText,
+                                                                        span: Span(133..138),
+                                                                    },
+                                                                ],
+                                                            ),
+                                                            span: Span(132..139),
+                                                        },
+                                                    ),
+                                                    span: Span(132..139),
+                                                },
+                                            ],
+                                        ),
+                                        span: Span(122..140),
+                                    },
+                                    span: Span(116..140),
+                                },
+                                RecordEntry {
+                                    key: Identifier(
+                                        Identifier {
+                                            span: Span(146..154),
+                                        },
+                                    ),
+                                    value: AstNode {
+                                        kind: Record(
+                                            [
+                                                RecordEntry {
+                                                    key: Identifier(
+                                                        Identifier {
+                                                            span: Span(157..163),
+                                                        },
+                                                    ),
+                                                    value: AstNode {
+                                                        kind: Literal(
+                                                            Literal {
+                                                                kind: Boolean(
+                                                                    false,
+                                                                ),
+                                                                span: Span(165..170),
+                                                            },
+                                                        ),
+                                                        span: Span(165..170),
+                                                    },
+                                                    span: Span(157..170),
+                                                },
+                                            ],
+                                        ),
+                                        span: Span(156..171),
+                                    },
+                                    span: Span(146..171),
+                                },
+                            ],
+                        ),
+                        span: Span(86..174),
+                    },
+                },
+            ),
+            span: Span(72..174),
+        },
+    ],
+    span: Span(0..175),
+}

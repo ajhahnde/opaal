@@ -1,0 +1,323 @@
+Script {
+    statements: [
+        AstNode {
+            kind: Declaration(
+                Declaration {
+                    mutable: false,
+                    name: Identifier {
+                        span: Span(4..14),
+                    },
+                    type_annotation: None,
+                    value: AstNode {
+                        kind: Binary(
+                            BinaryExpression {
+                                left: AstNode {
+                                    kind: Unary(
+                                        UnaryExpression {
+                                            operator: AstNode {
+                                                kind: Negative,
+                                                span: Span(17..18),
+                                            },
+                                            operand: AstNode {
+                                                kind: Variable(
+                                                    VariableReference {
+                                                        name: Identifier {
+                                                            span: Span(19..23),
+                                                        },
+                                                        span: Span(18..23),
+                                                    },
+                                                ),
+                                                span: Span(18..23),
+                                            },
+                                        },
+                                    ),
+                                    span: Span(17..23),
+                                },
+                                operator: AstNode {
+                                    kind: Add,
+                                    span: Span(24..25),
+                                },
+                                right: AstNode {
+                                    kind: Binary(
+                                        BinaryExpression {
+                                            left: AstNode {
+                                                kind: Variable(
+                                                    VariableReference {
+                                                        name: Identifier {
+                                                            span: Span(27..32),
+                                                        },
+                                                        span: Span(26..32),
+                                                    },
+                                                ),
+                                                span: Span(26..32),
+                                            },
+                                            operator: AstNode {
+                                                kind: Multiply,
+                                                span: Span(33..34),
+                                            },
+                                            right: AstNode {
+                                                kind: Literal(
+                                                    Literal {
+                                                        kind: Integer,
+                                                        span: Span(35..36),
+                                                    },
+                                                ),
+                                                span: Span(35..36),
+                                            },
+                                        },
+                                    ),
+                                    span: Span(26..36),
+                                },
+                            },
+                        ),
+                        span: Span(17..36),
+                    },
+                },
+            ),
+            span: Span(0..36),
+        },
+        AstNode {
+            kind: Declaration(
+                Declaration {
+                    mutable: false,
+                    name: Identifier {
+                        span: Span(41..46),
+                    },
+                    type_annotation: None,
+                    value: AstNode {
+                        kind: Binary(
+                            BinaryExpression {
+                                left: AstNode {
+                                    kind: Literal(
+                                        Literal {
+                                            kind: Integer,
+                                            span: Span(49..50),
+                                        },
+                                    ),
+                                    span: Span(49..50),
+                                },
+                                operator: AstNode {
+                                    kind: RangeInclusive,
+                                    span: Span(50..53),
+                                },
+                                right: AstNode {
+                                    kind: Literal(
+                                        Literal {
+                                            kind: Integer,
+                                            span: Span(53..55),
+                                        },
+                                    ),
+                                    span: Span(53..55),
+                                },
+                            },
+                        ),
+                        span: Span(49..55),
+                    },
+                },
+            ),
+            span: Span(37..55),
+        },
+        AstNode {
+            kind: Declaration(
+                Declaration {
+                    mutable: false,
+                    name: Identifier {
+                        span: Span(60..67),
+                    },
+                    type_annotation: None,
+                    value: AstNode {
+                        kind: Binary(
+                            BinaryExpression {
+                                left: AstNode {
+                                    kind: Variable(
+                                        VariableReference {
+                                            name: Identifier {
+                                                span: Span(71..75),
+                                            },
+                                            span: Span(70..75),
+                                        },
+                                    ),
+                                    span: Span(70..75),
+                                },
+                                operator: AstNode {
+                                    kind: Less,
+                                    span: Span(76..77),
+                                },
+                                right: AstNode {
+                                    kind: Variable(
+                                        VariableReference {
+                                            name: Identifier {
+                                                span: Span(79..84),
+                                            },
+                                            span: Span(78..84),
+                                        },
+                                    ),
+                                    span: Span(78..84),
+                                },
+                            },
+                        ),
+                        span: Span(70..84),
+                    },
+                },
+            ),
+            span: Span(56..84),
+        },
+        AstNode {
+            kind: Declaration(
+                Declaration {
+                    mutable: false,
+                    name: Identifier {
+                        span: Span(89..93),
+                    },
+                    type_annotation: None,
+                    value: AstNode {
+                        kind: Binary(
+                            BinaryExpression {
+                                left: AstNode {
+                                    kind: Variable(
+                                        VariableReference {
+                                            name: Identifier {
+                                                span: Span(97..101),
+                                            },
+                                            span: Span(96..101),
+                                        },
+                                    ),
+                                    span: Span(96..101),
+                                },
+                                operator: AstNode {
+                                    kind: Equal,
+                                    span: Span(102..104),
+                                },
+                                right: AstNode {
+                                    kind: Variable(
+                                        VariableReference {
+                                            name: Identifier {
+                                                span: Span(106..111),
+                                            },
+                                            span: Span(105..111),
+                                        },
+                                    ),
+                                    span: Span(105..111),
+                                },
+                            },
+                        ),
+                        span: Span(96..111),
+                    },
+                },
+            ),
+            span: Span(85..111),
+        },
+        AstNode {
+            kind: Declaration(
+                Declaration {
+                    mutable: false,
+                    name: Identifier {
+                        span: Span(116..121),
+                    },
+                    type_annotation: None,
+                    value: AstNode {
+                        kind: Binary(
+                            BinaryExpression {
+                                left: AstNode {
+                                    kind: Variable(
+                                        VariableReference {
+                                            name: Identifier {
+                                                span: Span(125..131),
+                                            },
+                                            span: Span(124..131),
+                                        },
+                                    ),
+                                    span: Span(124..131),
+                                },
+                                operator: AstNode {
+                                    kind: In,
+                                    span: Span(132..134),
+                                },
+                                right: AstNode {
+                                    kind: Variable(
+                                        VariableReference {
+                                            name: Identifier {
+                                                span: Span(136..144),
+                                            },
+                                            span: Span(135..144),
+                                        },
+                                    ),
+                                    span: Span(135..144),
+                                },
+                            },
+                        ),
+                        span: Span(124..144),
+                    },
+                },
+            ),
+            span: Span(112..144),
+        },
+        AstNode {
+            kind: Declaration(
+                Declaration {
+                    mutable: false,
+                    name: Identifier {
+                        span: Span(149..154),
+                    },
+                    type_annotation: None,
+                    value: AstNode {
+                        kind: Member(
+                            MemberExpression {
+                                target: AstNode {
+                                    kind: Index(
+                                        IndexExpression {
+                                            target: AstNode {
+                                                kind: Call(
+                                                    CallExpression {
+                                                        callee: AstNode {
+                                                            kind: Symbol(
+                                                                Identifier {
+                                                                    span: Span(157..164),
+                                                                },
+                                                            ),
+                                                            span: Span(157..164),
+                                                        },
+                                                        arguments: [
+                                                            AstNode {
+                                                                kind: Variable(
+                                                                    VariableReference {
+                                                                        name: Identifier {
+                                                                            span: Span(166..171),
+                                                                        },
+                                                                        span: Span(165..171),
+                                                                    },
+                                                                ),
+                                                                span: Span(165..171),
+                                                            },
+                                                        ],
+                                                    },
+                                                ),
+                                                span: Span(157..172),
+                                            },
+                                            index: AstNode {
+                                                kind: Literal(
+                                                    Literal {
+                                                        kind: Integer,
+                                                        span: Span(173..174),
+                                                    },
+                                                ),
+                                                span: Span(173..174),
+                                            },
+                                        },
+                                    ),
+                                    span: Span(157..175),
+                                },
+                                member: Identifier {
+                                    span: Span(176..180),
+                                },
+                            },
+                        ),
+                        span: Span(157..180),
+                    },
+                },
+            ),
+            span: Span(145..180),
+        },
+    ],
+    span: Span(0..181),
+}

@@ -1,0 +1,5 @@
+error[FS1000]: else requires a preceding if statement
+ --> grammar/invalid/stray-else.fsh:1:1
+  |
+1 | else { echo unreachable }
+  | ^^^^ else requires a preceding if statement

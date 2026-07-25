@@ -1,0 +1,5 @@
+error[FS0001]: Unicode escape cannot encode a surrogate
+ --> lexical/invalid/surrogate-unicode-escape.fsh:1:7
+  |
+1 | echo "\u{D800}"
+  |       ^^^^^^^^ Unicode escape cannot encode a surrogate

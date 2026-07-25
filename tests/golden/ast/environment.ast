@@ -1,0 +1,41 @@
+Script {
+    statements: [
+        AstNode {
+            kind: Environment(
+                Export {
+                    name: Identifier {
+                        span: Span(7..13),
+                    },
+                    value: AstNode {
+                        kind: Literal(
+                            Literal {
+                                kind: DoubleQuoted(
+                                    [
+                                        AstNode {
+                                            kind: DoubleText,
+                                            span: Span(17..22),
+                                        },
+                                    ],
+                                ),
+                                span: Span(16..23),
+                            },
+                        ),
+                        span: Span(16..23),
+                    },
+                },
+            ),
+            span: Span(0..23),
+        },
+        AstNode {
+            kind: Environment(
+                Unset {
+                    name: Identifier {
+                        span: Span(30..36),
+                    },
+                },
+            ),
+            span: Span(24..36),
+        },
+    ],
+    span: Span(0..37),
+}

@@ -1,0 +1,32 @@
+[package]
+name = "flashshell-runtime"
+description = "Runtime and execution planning for FlashShell"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+flashshell-platform = { path = "../flashshell-platform" }
+flashshell-syntax = { path = "../flashshell-syntax" }
+
+[dev-dependencies]
+flashshell-platform-posix = { path = "../flashshell-platform-posix" }
+
+[[bin]]
+name = "flashshell-status-fixture"
+path = "../../tests/fixtures/status.rs"
+test = false
+bench = false
+doc = false
+
+[[bin]]
+name = "flashshell-stream-fixture"
+path = "../../tests/fixtures/stream.rs"
+test = false
+bench = false
+doc = false
+
+[lints]
+workspace = true

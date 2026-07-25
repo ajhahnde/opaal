@@ -1,0 +1,5 @@
+error[FS1000]: background marker can terminate only a job statement
+ --> grammar/invalid/declaration-background.fsh:1:15
+  |
+1 | let value = 1 &
+  |               ^ background marker can terminate only a job statement

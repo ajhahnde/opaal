@@ -1,0 +1,27 @@
+# class	family	path	reason
+complete	script-separators	complete/script-separators.fsh	newlines and semicolons terminate foreground statements
+complete	bindings	complete/bindings.fsh	immutable mutable typed and assignment statement forms
+complete	environment	complete/environment.fsh	export and unset statements
+complete	functions	complete/functions.fsh	typed parameters return type block and expression call
+complete	control-flow	complete/control-flow.fsh	if else-if while for and match statements
+complete	control-transfer	complete/control-transfer.fsh	break continue and return in their structural contexts
+complete	commands	complete/commands.fsh	bare forced-external and path command heads
+complete	calls-and-grouping	complete/calls-and-grouping.fsh	call lookahead postfix access and grouped jobs
+complete	pipelines	complete/pipelines.fsh	stdout and stdout-plus-stderr pipelines
+complete	conditional-chains	complete/conditional-chains.fsh	pipeline-before-and-before-or precedence
+complete	background	complete/background.fsh	statement-only background boundaries target complete chains
+complete	redirections	complete/redirections.fsh	stage-local source-order redirections and descriptor duplication
+complete	closures	complete/closures.fsh	typed nonempty and empty expression-bodied closures
+complete	literals-and-collections	complete/literals-and-collections.fsh	scalar list and ordered-record expression literals
+complete	operators	complete/operators.fsh	postfix unary arithmetic range comparison and equality precedence
+complete	substitution	complete/substitution.fsh	foreground conditional chains inside command substitution
+incomplete	pipelines	incomplete/pipeline-stage.fsh	pipeline operator requires another stage
+incomplete	redirections	incomplete/redirection-target.fsh	redirection operator requires one target word
+incomplete	functions	incomplete/function-block.fsh	function block requires a closing brace
+incomplete	closures	incomplete/closure-body.fsh	closure requires a body and closing brace
+incomplete	calls-and-grouping	incomplete/call-close.fsh	call requires a closing parenthesis
+invalid	pipelines	invalid/leading-pipe.fsh	pipeline operator cannot begin a stage
+invalid	control-flow	invalid/stray-else.fsh	else requires a preceding if statement
+invalid	background	invalid/grouped-background.fsh	backgrounding is forbidden inside a grouped job
+invalid	background	invalid/declaration-background.fsh	background marker can terminate only a job statement
+invalid	operators	invalid/chained-comparison.fsh	comparison operators are non-associative

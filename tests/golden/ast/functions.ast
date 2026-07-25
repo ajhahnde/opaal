@@ -1,0 +1,143 @@
+Script {
+    statements: [
+        AstNode {
+            kind: Function(
+                FunctionDefinition {
+                    name: Identifier {
+                        span: Span(4..9),
+                    },
+                    parameters: [
+                        Parameter {
+                            name: Identifier {
+                                span: Span(10..14),
+                            },
+                            type_annotation: Some(
+                                TypeReference {
+                                    name: Identifier {
+                                        span: Span(16..22),
+                                    },
+                                    arguments: [],
+                                    span: Span(16..22),
+                                },
+                            ),
+                            span: Span(10..22),
+                        },
+                    ],
+                    return_type: Some(
+                        TypeReference {
+                            name: Identifier {
+                                span: Span(27..33),
+                            },
+                            arguments: [],
+                            span: Span(27..33),
+                        },
+                    ),
+                    body: Block {
+                        statements: [
+                            AstNode {
+                                kind: Control(
+                                    Return(
+                                        Some(
+                                            AstNode {
+                                                kind: Literal(
+                                                    Literal {
+                                                        kind: DoubleQuoted(
+                                                            [
+                                                                AstNode {
+                                                                    kind: DoubleText,
+                                                                    span: Span(48..54),
+                                                                },
+                                                                AstNode {
+                                                                    kind: Variable(
+                                                                        Identifier {
+                                                                            span: Span(55..59),
+                                                                        },
+                                                                    ),
+                                                                    span: Span(54..59),
+                                                                },
+                                                            ],
+                                                        ),
+                                                        span: Span(47..60),
+                                                    },
+                                                ),
+                                                span: Span(47..60),
+                                            },
+                                        ),
+                                    ),
+                                ),
+                                span: Span(40..60),
+                            },
+                        ],
+                        span: Span(34..62),
+                    },
+                },
+            ),
+            span: Span(0..62),
+        },
+        AstNode {
+            kind: Job(
+                JobStatement {
+                    chain: ConditionalChain {
+                        or_terms: [
+                            AndChain {
+                                and_terms: [
+                                    Pipeline {
+                                        stages: [
+                                            AstNode {
+                                                kind: Expression(
+                                                    AstNode {
+                                                        kind: Call(
+                                                            CallExpression {
+                                                                callee: AstNode {
+                                                                    kind: Symbol(
+                                                                        Identifier {
+                                                                            span: Span(64..69),
+                                                                        },
+                                                                    ),
+                                                                    span: Span(64..69),
+                                                                },
+                                                                arguments: [
+                                                                    AstNode {
+                                                                        kind: Literal(
+                                                                            Literal {
+                                                                                kind: DoubleQuoted(
+                                                                                    [
+                                                                                        AstNode {
+                                                                                            kind: DoubleText,
+                                                                                            span: Span(71..81),
+                                                                                        },
+                                                                                    ],
+                                                                                ),
+                                                                                span: Span(70..82),
+                                                                            },
+                                                                        ),
+                                                                        span: Span(70..82),
+                                                                    },
+                                                                ],
+                                                            },
+                                                        ),
+                                                        span: Span(64..83),
+                                                    },
+                                                ),
+                                                span: Span(64..83),
+                                            },
+                                        ],
+                                        operators: [],
+                                        span: Span(64..83),
+                                    },
+                                ],
+                                operators: [],
+                                span: Span(64..83),
+                            },
+                        ],
+                        operators: [],
+                        span: Span(64..83),
+                    },
+                    background_span: None,
+                },
+            ),
+            span: Span(64..83),
+        },
+    ],
+    span: Span(0..84),
+}

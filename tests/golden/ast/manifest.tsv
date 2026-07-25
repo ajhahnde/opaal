@@ -1,0 +1,17 @@
+# source	expected
+complete/script-separators.fsh	script-separators.ast
+complete/bindings.fsh	bindings.ast
+complete/environment.fsh	environment.ast
+complete/functions.fsh	functions.ast
+complete/control-flow.fsh	control-flow.ast
+complete/control-transfer.fsh	control-transfer.ast
+complete/commands.fsh	commands.ast
+complete/calls-and-grouping.fsh	calls-and-grouping.ast
+complete/pipelines.fsh	pipelines.ast
+complete/conditional-chains.fsh	conditional-chains.ast
+complete/background.fsh	background.ast
+complete/redirections.fsh	redirections.ast
+complete/closures.fsh	closures.ast
+complete/literals-and-collections.fsh	literals-and-collections.ast
+complete/operators.fsh	operators.ast
+complete/substitution.fsh	substitution.ast
