@@ -9,6 +9,7 @@ repository.workspace = true
 
 [dependencies]
 flashshell-platform = { path = "../flashshell-platform" }
+libc = "0.2"
 
 [[bin]]
 name = "flashshell-process-observer-fixture"

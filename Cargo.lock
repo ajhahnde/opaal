@@ -189,6 +189,7 @@ name = "flashshell-platform-posix"
 version = "0.1.0"
 dependencies = [
  "flashshell-platform",
+ "libc",
 ]
 
 [[package]]
