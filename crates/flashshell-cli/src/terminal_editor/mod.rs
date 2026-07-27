@@ -25,6 +25,12 @@ use render::render_line;
 const HISTORY_CAPACITY: usize = 1000;
 
 /// Access to what a writer has accumulated, for test observation only.
+///
+/// Deliberately not implemented for `std::io::Stdout`: a terminal keeps no
+/// transcript, so the only honest implementation would return nothing and
+/// silently answer "the editor drew nothing" in the shipped path. Leaving it
+/// out makes that a compile error instead. The real terminal is observed from
+/// the other end, over a pseudoterminal, in `tests/terminal_editor_pty.rs`.
 pub trait DrawnOutput {
     fn drawn(&self) -> &[u8];
 }
@@ -32,12 +38,6 @@ pub trait DrawnOutput {
 impl DrawnOutput for Vec<u8> {
     fn drawn(&self) -> &[u8] {
         self
-    }
-}
-
-impl DrawnOutput for std::io::Stdout {
-    fn drawn(&self) -> &[u8] {
-        &[]
     }
 }
 

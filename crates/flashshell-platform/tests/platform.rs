@@ -4,9 +4,10 @@ use std::ffi::OsString;
 use std::path::Path;
 
 use flashshell_platform::{
-    Capabilities, Capability, ChildDescriptor, DescriptorReadError, FakePlatform, FileActionError,
-    FileOpenMode, FileOpenRequest, PipeError, Platform, PlatformError, ProcessStatus, SpawnError,
-    SpawnRequest, SpawnRequestError, WorkingDirectoryError, WorkingDirectoryRequest,
+    Capabilities, Capability, ChildDescriptor, ChildProcess, DescriptorEndpoint,
+    DescriptorReadError, FakePlatform, FileActionError, FileOpenMode, FileOpenRequest,
+    PipeEndpoints, PipeError, Platform, PlatformError, ProcessStatus, RecordingPlatform,
+    SpawnError, SpawnRequest, SpawnRequestError, WorkingDirectoryError, WorkingDirectoryRequest,
 };
 
 #[test]
@@ -342,4 +343,156 @@ fn a_fake_raw_mode_guard_restores_without_a_terminal() {
 
     assert!(guard.restore().is_ok());
     assert!(guard.restore().is_ok(), "restore is idempotent");
+}
+
+/// A platform that implements only what the trait requires.
+///
+/// `FakePlatform` overrides both terminal answers, so it cannot reach the trait
+/// defaults; the adapters that do reach them are the ones that never think
+/// about terminals at all, and this stands in for those.
+#[derive(Debug)]
+struct MinimalPlatform;
+
+impl Platform for MinimalPlatform {
+    fn capabilities(&self) -> Capabilities {
+        Capabilities::empty()
+    }
+
+    fn pipe(&self) -> Result<PipeEndpoints, PipeError> {
+        Err(PipeError::Platform(unsupported(Capability::Pipes)))
+    }
+
+    fn open_file(
+        &self,
+        _request: FileOpenRequest<'_>,
+    ) -> Result<Box<dyn DescriptorEndpoint>, FileActionError> {
+        Err(FileActionError::Platform(unsupported(
+            Capability::FileActions,
+        )))
+    }
+
+    fn inherit_descriptor(
+        &self,
+        _descriptor: u32,
+    ) -> Result<Box<dyn DescriptorEndpoint>, FileActionError> {
+        Err(FileActionError::Platform(unsupported(
+            Capability::FileActions,
+        )))
+    }
+
+    fn spawn(&self, _request: &SpawnRequest<'_>) -> Result<Box<dyn ChildProcess>, SpawnError> {
+        Err(SpawnError::Platform(unsupported(Capability::ProcessSpawn)))
+    }
+}
+
+fn unsupported(capability: Capability) -> PlatformError {
+    PlatformError::Unsupported { capability }
+}
+
+#[test]
+fn a_platform_reports_neither_end_as_a_terminal_by_default() {
+    // Both defaults have to be false. An implementor that forgets the output
+    // end must fall back to the canonical editor, which is merely degraded —
+    // the opposite default would write cursor escapes into a redirect target.
+    let platform = MinimalPlatform;
+
+    assert!(!platform.is_terminal());
+    assert!(!platform.is_output_terminal());
+}
+
+#[test]
+fn a_scripted_platform_can_answer_its_two_ends_differently() {
+    // The mixed case is the whole point of the second method: a keyboard
+    // session with its output redirected. A double backed by one flag could
+    // not express it, so the distinction would be untestable everywhere.
+    let redirected = FakePlatform::with_terminal_ends(
+        Capabilities::full(),
+        true,
+        false,
+        TerminalSize::new(80, 24),
+    );
+
+    assert!(redirected.is_terminal());
+    assert!(!redirected.is_output_terminal());
+}
+
+#[test]
+fn a_scripted_terminal_reports_both_ends() {
+    let platform =
+        FakePlatform::with_terminal(Capabilities::full(), true, TerminalSize::new(80, 24));
+
+    assert!(platform.is_terminal());
+    assert!(platform.is_output_terminal());
+}
+
+#[test]
+fn a_recording_platform_counts_the_terminal_calls_after_it_has_moved() {
+    let platform = RecordingPlatform::new(FakePlatform::full());
+    let log = platform.log();
+
+    // The consumer takes the platform by value; the log outlives that move,
+    // which is the whole reason this double exists.
+    let moved = platform;
+    let _ = moved.enter_raw_mode();
+    let _ = moved.enter_raw_mode();
+    let _ = moved.terminal_size();
+
+    assert_eq!(log.raw_mode_entries(), 2);
+    assert_eq!(log.terminal_size_queries(), 1);
+}
+
+#[test]
+fn a_recording_platform_answers_exactly_as_the_platform_it_wraps() {
+    // The recorder overrides every method so it can observe two of them. That
+    // makes it structurally able to drift: a method whose override is dropped
+    // silently falls back to the trait default instead of the wrapped
+    // platform, and the three methods below are exactly the ones whose
+    // defaults differ from `FakePlatform`'s answers.
+    let inner = FakePlatform::with_terminal(Capabilities::full(), true, TerminalSize::new(132, 43));
+    let recording = RecordingPlatform::new(inner);
+
+    assert_eq!(recording.capabilities(), inner.capabilities());
+    assert_eq!(recording.is_terminal(), inner.is_terminal());
+    assert_eq!(recording.is_output_terminal(), inner.is_output_terminal());
+    assert_eq!(recording.terminal_size(), inner.terminal_size());
+    assert_eq!(
+        recording.resolve_working_directory(WorkingDirectoryRequest::new(
+            Path::new("/tmp"),
+            Path::new("sub/../here"),
+        )),
+        inner.resolve_working_directory(WorkingDirectoryRequest::new(
+            Path::new("/tmp"),
+            Path::new("sub/../here"),
+        ))
+    );
+
+    // The fifth and last override that can be deleted without a compile error.
+    // Its trait default returns InvalidEndpoint where the wrapped fake returns
+    // Ok(0), so a dropped delegation would change the answer silently.
+    let (reader, _writer) = inner.pipe().expect("the fake pipe exists").into_parts();
+    let mut buffer = [0u8; 8];
+    assert_eq!(
+        recording.read_descriptor(reader.as_ref(), &mut buffer),
+        inner.read_descriptor(reader.as_ref(), &mut buffer)
+    );
+}
+
+#[test]
+fn a_recording_platform_records_a_refused_call_and_still_refuses_it() {
+    let platform = RecordingPlatform::new(FakePlatform::none());
+    let log = platform.log();
+
+    let error = platform.enter_raw_mode().expect_err("capability is absent");
+
+    assert_eq!(
+        error,
+        PlatformError::Unsupported {
+            capability: Capability::TerminalInfo
+        }
+    );
+    assert_eq!(
+        log.raw_mode_entries(),
+        1,
+        "the attempt is recorded even though it failed"
+    );
 }

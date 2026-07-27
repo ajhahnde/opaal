@@ -18,6 +18,8 @@ use std::ffi::OsString;
 use std::fmt;
 use std::io;
 use std::path::{Component, Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// One platform capability group an adapter either supports or does not.
 ///
@@ -733,6 +735,16 @@ pub trait Platform: Send + Sync {
         false
     }
 
+    /// Whether the standard output of this process is a terminal.
+    ///
+    /// Deliberately separate from [`Platform::is_terminal`]: a session can be
+    /// typed at from a keyboard while its output is redirected, and an editor
+    /// that redraws with cursor escapes must not write them into the redirect
+    /// target.
+    fn is_output_terminal(&self) -> bool {
+        false
+    }
+
     /// The current terminal dimensions.
     fn terminal_size(&self) -> Result<TerminalSize, PlatformError> {
         self.require(Capability::TerminalInfo)?;
@@ -797,6 +809,7 @@ pub trait Platform: Send + Sync {
 pub struct FakePlatform {
     capabilities: Capabilities,
     is_terminal: bool,
+    is_output_terminal: bool,
     terminal_size: TerminalSize,
 }
 
@@ -806,6 +819,7 @@ impl FakePlatform {
         Self {
             capabilities,
             is_terminal: false,
+            is_output_terminal: false,
             terminal_size: TerminalSize::new(80, 24),
         }
     }
@@ -820,15 +834,31 @@ impl FakePlatform {
         Self::new(Capabilities::empty())
     }
 
-    /// A fake platform with scripted terminal answers.
+    /// A fake platform with scripted terminal answers on both ends alike.
     pub const fn with_terminal(
         capabilities: Capabilities,
         is_terminal: bool,
         size: TerminalSize,
     ) -> Self {
+        Self::with_terminal_ends(capabilities, is_terminal, is_terminal, size)
+    }
+
+    /// A fake platform whose input and output ends answer independently.
+    ///
+    /// The mixed case is the one worth representing: a session typed at from a
+    /// keyboard with its output redirected to a file is exactly what
+    /// [`Platform::is_output_terminal`] exists to detect, and a double backed
+    /// by a single flag cannot express it.
+    pub const fn with_terminal_ends(
+        capabilities: Capabilities,
+        is_terminal: bool,
+        is_output_terminal: bool,
+        size: TerminalSize,
+    ) -> Self {
         Self {
             capabilities,
             is_terminal,
+            is_output_terminal,
             terminal_size: size,
         }
     }
@@ -841,6 +871,10 @@ impl Platform for FakePlatform {
 
     fn is_terminal(&self) -> bool {
         self.is_terminal
+    }
+
+    fn is_output_terminal(&self) -> bool {
+        self.is_output_terminal
     }
 
     fn terminal_size(&self) -> Result<TerminalSize, PlatformError> {
@@ -897,6 +931,124 @@ impl Platform for FakePlatform {
     fn spawn(&self, _request: &SpawnRequest<'_>) -> Result<Box<dyn ChildProcess>, SpawnError> {
         self.require(Capability::ProcessSpawn)?;
         Ok(Box::new(FakeChild))
+    }
+}
+
+/// A shared tally of the terminal calls a [`RecordingPlatform`] received.
+///
+/// [`FakePlatform`] is `Copy` and carries no interior mutability, so a caller
+/// that takes its platform by value leaves the test no way to observe what was
+/// asked of it. A log is cloned off the platform before it is handed over and
+/// read back afterwards, which makes "raw mode was requested" an assertion
+/// rather than an inference from the outcome.
+#[derive(Clone, Debug, Default)]
+pub struct TerminalCallLog {
+    raw_mode_entries: Arc<AtomicUsize>,
+    terminal_size_queries: Arc<AtomicUsize>,
+}
+
+impl TerminalCallLog {
+    /// How often raw mode was requested, whether or not the request succeeded.
+    #[must_use]
+    pub fn raw_mode_entries(&self) -> usize {
+        self.raw_mode_entries.load(Ordering::Relaxed)
+    }
+
+    /// How often the terminal size was queried.
+    #[must_use]
+    pub fn terminal_size_queries(&self) -> usize {
+        self.terminal_size_queries.load(Ordering::Relaxed)
+    }
+}
+
+/// A [`FakePlatform`] that records the terminal calls it receives.
+///
+/// Every method delegates, so the wrapped platform's scripted capability set
+/// still decides whether a call succeeds; recording adds only the fact that the
+/// call was made.
+#[derive(Clone, Debug)]
+pub struct RecordingPlatform {
+    inner: FakePlatform,
+    log: TerminalCallLog,
+}
+
+impl RecordingPlatform {
+    /// Record the terminal calls made against `inner`.
+    #[must_use]
+    pub fn new(inner: FakePlatform) -> Self {
+        Self {
+            inner,
+            log: TerminalCallLog::default(),
+        }
+    }
+
+    /// A handle to this platform's log, still readable after the platform moves.
+    #[must_use]
+    pub fn log(&self) -> TerminalCallLog {
+        self.log.clone()
+    }
+}
+
+impl Platform for RecordingPlatform {
+    fn capabilities(&self) -> Capabilities {
+        self.inner.capabilities()
+    }
+
+    fn is_terminal(&self) -> bool {
+        self.inner.is_terminal()
+    }
+
+    fn is_output_terminal(&self) -> bool {
+        self.inner.is_output_terminal()
+    }
+
+    fn terminal_size(&self) -> Result<TerminalSize, PlatformError> {
+        self.log
+            .terminal_size_queries
+            .fetch_add(1, Ordering::Relaxed);
+        self.inner.terminal_size()
+    }
+
+    fn enter_raw_mode(&self) -> Result<Box<dyn TerminalModeGuard>, PlatformError> {
+        self.log.raw_mode_entries.fetch_add(1, Ordering::Relaxed);
+        self.inner.enter_raw_mode()
+    }
+
+    fn resolve_working_directory(
+        &self,
+        request: WorkingDirectoryRequest<'_>,
+    ) -> Result<PathBuf, WorkingDirectoryError> {
+        self.inner.resolve_working_directory(request)
+    }
+
+    fn pipe(&self) -> Result<PipeEndpoints, PipeError> {
+        self.inner.pipe()
+    }
+
+    fn open_file(
+        &self,
+        request: FileOpenRequest<'_>,
+    ) -> Result<Box<dyn DescriptorEndpoint>, FileActionError> {
+        self.inner.open_file(request)
+    }
+
+    fn inherit_descriptor(
+        &self,
+        descriptor: u32,
+    ) -> Result<Box<dyn DescriptorEndpoint>, FileActionError> {
+        self.inner.inherit_descriptor(descriptor)
+    }
+
+    fn read_descriptor(
+        &self,
+        endpoint: &dyn DescriptorEndpoint,
+        buffer: &mut [u8],
+    ) -> Result<usize, DescriptorReadError> {
+        self.inner.read_descriptor(endpoint, buffer)
+    }
+
+    fn spawn(&self, request: &SpawnRequest<'_>) -> Result<Box<dyn ChildProcess>, SpawnError> {
+        self.inner.spawn(request)
     }
 }
 

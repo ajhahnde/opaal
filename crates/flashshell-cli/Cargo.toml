@@ -32,6 +32,13 @@ test = false
 bench = false
 doc = false
 
+[[bin]]
+name = "flashshell-terminal-editor-fixture"
+path = "../../tests/fixtures/terminal_editor.rs"
+test = false
+bench = false
+doc = false
+
 [dependencies]
 flashshell-platform = { path = "../flashshell-platform" }
 flashshell-platform-posix = { path = "../flashshell-platform-posix" }

@@ -12,6 +12,8 @@ use std::process::ExitCode;
 use flashshell_cli::RawLineEditor;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 use flashshell_cli::ReedlineEditor;
+#[cfg(target_os = "redox")]
+use flashshell_cli::TerminalEditor;
 use flashshell_cli::cli::{Mode, parse_args};
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 use flashshell_cli::config::{
@@ -26,6 +28,8 @@ use flashshell_cli::interactive::{
     EvaluationControl, InteractiveDiagnostic, InteractiveEvaluator, InteractiveExit,
     InteractiveSessionError, run_interactive_session,
 };
+#[cfg(target_os = "redox")]
+use flashshell_platform::Platform;
 use flashshell_platform_posix::PosixPlatform;
 use flashshell_runtime::eval::SystemClock;
 use flashshell_runtime::plan::SessionOptions;
@@ -170,16 +174,33 @@ fn run_interactive(_no_config: bool, _no_history: bool) -> ExitCode {
         process_environment(),
         SessionOptions::default(),
     );
-    let mut editor = RawLineEditor::new();
     let mut evaluator = SessionEvaluator::new(session);
     let mut diagnostics = io::stderr();
 
-    match run_interactive_session(
-        &mut editor,
-        &mut evaluator,
-        &EditorPrompt::default(),
-        &mut diagnostics,
-    ) {
+    // A real terminal gets the raw-mode editor; a pipe or an uncooperative
+    // console falls back to canonical line reading. Both ends are checked: the
+    // editor redraws its row with cursor escapes, and a session typed at from
+    // a keyboard but redirected to a file must not have them written into it.
+    let platform = PosixPlatform;
+    let outcome = if platform.is_terminal() && platform.is_output_terminal() {
+        let mut editor = TerminalEditor::new(platform, io::stdin(), io::stdout());
+        run_interactive_session(
+            &mut editor,
+            &mut evaluator,
+            &EditorPrompt::default(),
+            &mut diagnostics,
+        )
+    } else {
+        let mut editor = RawLineEditor::new();
+        run_interactive_session(
+            &mut editor,
+            &mut evaluator,
+            &EditorPrompt::default(),
+            &mut diagnostics,
+        )
+    };
+
+    match outcome {
         Ok(InteractiveExit::EndOfInput) => ExitCode::SUCCESS,
         Ok(InteractiveExit::Requested(code)) => ExitCode::from(code),
         Err(error) => {

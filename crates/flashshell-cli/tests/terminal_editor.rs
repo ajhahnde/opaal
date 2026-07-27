@@ -434,13 +434,31 @@ fn a_control_character_never_reaches_the_drawn_row() {
 
 use flashshell_cli::editor::{EditorEvent, EditorPrompt, LineEditor};
 use flashshell_cli::terminal_editor::TerminalEditor;
-use flashshell_platform::{Capabilities, FakePlatform, TerminalSize};
+use flashshell_platform::{
+    Capabilities, FakePlatform, RecordingPlatform, TerminalCallLog, TerminalSize,
+};
 
 /// A terminal-free editor over scripted input, collecting everything drawn.
 fn editor(input: &'static [u8]) -> TerminalEditor<FakePlatform, &'static [u8], Vec<u8>> {
     let platform =
         FakePlatform::with_terminal(Capabilities::full(), true, TerminalSize::new(80, 24));
     TerminalEditor::new(platform, input, Vec::new())
+}
+
+/// The same editor over a platform that records what the editor asked it for.
+///
+/// The editor takes its platform by value, so the log handle is taken before
+/// the move and read back through the returned pair.
+fn recording_editor(
+    platform: FakePlatform,
+    input: &'static [u8],
+) -> (
+    TerminalEditor<RecordingPlatform, &'static [u8], Vec<u8>>,
+    TerminalCallLog,
+) {
+    let recording = RecordingPlatform::new(platform);
+    let log = recording.log();
+    (TerminalEditor::new(recording, input, Vec::new()), log)
 }
 
 #[test]
@@ -685,4 +703,60 @@ fn a_cancelled_recall_does_not_strand_the_next_one() {
 
     assert_eq!(cancelled, EditorEvent::Cancelled);
     assert_eq!(after, EditorEvent::Submitted("two".to_owned()));
+}
+
+#[test]
+fn every_read_line_acquires_raw_mode_and_re_reads_the_terminal_size() {
+    // Both halves are invisible in the returned event: an editor that never
+    // asked for raw mode submits exactly the same text, and a size read once
+    // and cached looks identical until the window is resized mid-session.
+    let platform =
+        FakePlatform::with_terminal(Capabilities::full(), true, TerminalSize::new(80, 24));
+    let (mut editor, log) = recording_editor(platform, b"one\rtwo\r");
+
+    let first = editor.read_line(&EditorPrompt::default()).unwrap();
+    let second = editor.read_line(&EditorPrompt::default()).unwrap();
+
+    assert_eq!(first, EditorEvent::Submitted("one".to_owned()));
+    assert_eq!(second, EditorEvent::Submitted("two".to_owned()));
+    assert_eq!(log.raw_mode_entries(), 2, "raw mode is acquired per call");
+    assert_eq!(
+        log.terminal_size_queries(),
+        2,
+        "the size is re-read per call, so a resize between lines is seen"
+    );
+}
+
+#[test]
+fn a_refused_raw_mode_is_still_requested_and_the_line_still_submits() {
+    // Raw mode is best effort: a console that refuses it leaves the editor
+    // drawing into a cooked terminal rather than failing the session. The
+    // request itself is the part worth pinning, because the outcome alone
+    // cannot distinguish "asked and was refused" from "never asked".
+    let (mut editor, log) = recording_editor(FakePlatform::none(), b"echo hallo\r");
+
+    let event = editor.read_line(&EditorPrompt::default()).unwrap();
+
+    assert_eq!(event, EditorEvent::Submitted("echo hallo".to_owned()));
+    assert_eq!(log.raw_mode_entries(), 1);
+}
+
+#[test]
+fn an_unreadable_terminal_size_falls_back_to_eighty_columns() {
+    // A platform without the terminal capability answers no size at all. The
+    // fallback is only observable through the drawn row: 80 columns less the
+    // five-column prompt leaves a 75-cell window, whose last cell is reserved
+    // for the cursor, so 74 of the 100 characters are visible and the cursor
+    // lands on column 80.
+    let (mut editor, log) = recording_editor(FakePlatform::none(), b"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\r");
+
+    let event = editor.read_line(&EditorPrompt::default()).unwrap();
+
+    assert_eq!(event, EditorEvent::Submitted("a".repeat(100)));
+    assert_eq!(log.terminal_size_queries(), 1);
+    let expected = format!("\r\x1b[Kfsh> {}\r\x1b[80G", "a".repeat(74));
+    assert!(
+        String::from_utf8_lossy(editor.drawn()).contains(&expected),
+        "the final row is drawn for an 80-column terminal"
+    );
 }

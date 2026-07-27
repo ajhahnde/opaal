@@ -119,6 +119,10 @@ impl Platform for PosixPlatform {
         terminal_mode::is_terminal(io::stdin().as_fd())
     }
 
+    fn is_output_terminal(&self) -> bool {
+        terminal_mode::is_terminal(io::stdout().as_fd())
+    }
+
     fn terminal_size(&self) -> Result<TerminalSize, PlatformError> {
         self.require(Capability::TerminalInfo)?;
         match terminal_mode::window_size(io::stdin().as_fd()) {
