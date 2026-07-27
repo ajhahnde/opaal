@@ -251,3 +251,154 @@ fn kill_word_back_on_leading_space_only_empties_the_buffer() {
     assert_eq!(buffer.text(), "");
     assert!(buffer.is_empty());
 }
+
+use flashshell_cli::terminal_editor::history::HistoryRing;
+use flashshell_cli::terminal_editor::render::render_line;
+
+#[test]
+fn recall_walks_backwards_from_the_newest_entry() {
+    let mut history = HistoryRing::new(16);
+    history.record("first");
+    history.record("second");
+
+    assert_eq!(history.recall_previous("draft").as_deref(), Some("second"));
+    assert_eq!(history.recall_previous("draft").as_deref(), Some("first"));
+    assert_eq!(history.recall_previous("draft"), None);
+}
+
+#[test]
+fn walking_forward_returns_the_parked_draft_last() {
+    let mut history = HistoryRing::new(16);
+    history.record("first");
+
+    assert_eq!(history.recall_previous("draft").as_deref(), Some("first"));
+    assert_eq!(history.recall_next().as_deref(), Some("draft"));
+    assert_eq!(history.recall_next(), None);
+}
+
+#[test]
+fn walking_forward_steps_through_the_entries_before_the_draft() {
+    let mut history = HistoryRing::new(16);
+    history.record("first");
+    history.record("second");
+
+    assert_eq!(history.recall_previous("draft").as_deref(), Some("second"));
+    assert_eq!(history.recall_previous("draft").as_deref(), Some("first"));
+    // The step back off the oldest entry must land on the entry between it and
+    // the draft, not on the draft and not on the wrong end of the ring.
+    assert_eq!(history.recall_next().as_deref(), Some("second"));
+    assert_eq!(history.recall_next().as_deref(), Some("draft"));
+}
+
+#[test]
+fn resetting_the_position_abandons_the_recall_and_the_draft() {
+    let mut history = HistoryRing::new(16);
+    history.record("first");
+    let _ = history.recall_previous("draft");
+
+    history.reset_position();
+
+    assert_eq!(history.recall_next(), None);
+    assert_eq!(history.recall_previous("new").as_deref(), Some("first"));
+    // Whether the reset also cleared the parked draft is not observable here,
+    // and not observable at all: the next recall re-parks it unconditionally.
+    // What this pins is that the reset rewound the position.
+    assert_eq!(history.recall_next().as_deref(), Some("new"));
+}
+
+#[test]
+fn adjacent_duplicate_entries_are_dropped() {
+    let mut history = HistoryRing::new(16);
+    history.record("same");
+    history.record("same");
+
+    assert_eq!(history.len(), 1);
+}
+
+#[test]
+fn a_non_adjacent_repeat_is_kept() {
+    let mut history = HistoryRing::new(16);
+    history.record("a");
+    history.record("b");
+    history.record("a");
+
+    assert_eq!(history.len(), 3);
+}
+
+#[test]
+fn an_empty_entry_is_not_recorded() {
+    let mut history = HistoryRing::new(16);
+    history.record("");
+
+    assert!(history.is_empty());
+}
+
+#[test]
+fn the_ring_drops_the_oldest_entry_past_capacity() {
+    let mut history = HistoryRing::new(2);
+    history.record("a");
+    history.record("b");
+    history.record("c");
+
+    assert_eq!(history.len(), 2);
+    assert_eq!(history.recall_previous("").as_deref(), Some("c"));
+    assert_eq!(history.recall_previous("").as_deref(), Some("b"));
+    assert_eq!(history.recall_previous(""), None);
+}
+
+#[test]
+fn recording_resets_the_recall_position() {
+    let mut history = HistoryRing::new(16);
+    history.record("first");
+    let _ = history.recall_previous("draft");
+
+    history.record("second");
+
+    assert_eq!(history.recall_previous("new").as_deref(), Some("second"));
+}
+
+#[test]
+fn a_short_line_renders_prompt_text_and_cursor() {
+    let rendered = render_line("fsh> ", "echo", 4, 80);
+
+    assert_eq!(rendered, "\r\x1b[Kfsh> echo\r\x1b[10G");
+}
+
+#[test]
+fn the_cursor_column_follows_the_cursor_position() {
+    let rendered = render_line("fsh> ", "echo", 0, 80);
+
+    assert_eq!(rendered, "\r\x1b[Kfsh> echo\r\x1b[6G");
+}
+
+#[test]
+fn a_wide_line_scrolls_horizontally_and_keeps_the_cursor_visible() {
+    // Prompt 5 + 20 characters of text does not fit 15 columns. The prompt
+    // takes columns 1..=5, leaving ten cells; the cursor sits past the last
+    // character and claims the tenth, so nine characters stay visible.
+    let text = "abcdefghijklmnopqrst";
+    let rendered = render_line("fsh> ", text, 20, 15);
+
+    assert_eq!(rendered, "\r\x1b[Kfsh> lmnopqrst\r\x1b[15G");
+}
+
+#[test]
+fn a_cursor_inside_the_text_fills_the_whole_window() {
+    // The reserved trailing cell only costs a character when the cursor sits
+    // past the end. With the cursor inside the text all ten cells carry one.
+    let text = "abcdefghijklmnopqrst";
+    let rendered = render_line("fsh> ", text, 5, 15);
+
+    assert_eq!(rendered, "\r\x1b[Kfsh> abcdefghij\r\x1b[11G");
+}
+
+#[test]
+fn a_prompt_wider_than_the_terminal_renders_no_text() {
+    // A five-column prompt does not fit four columns. The prompt is written
+    // whole and the cursor column runs past the row rather than being clamped:
+    // a terminal this narrow cannot show an edit line at all, and pinning the
+    // behaviour is worth more than pretending it degrades gracefully.
+    let rendered = render_line("fsh> ", "abc", 3, 4);
+
+    assert_eq!(rendered, "\r\x1b[Kfsh> \r\x1b[6G");
+}

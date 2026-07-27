@@ -4,4 +4,6 @@
 //! host test suite. Only its selection in `main` is target-specific.
 
 pub mod buffer;
+pub mod history;
 pub mod key;
+pub mod render;
