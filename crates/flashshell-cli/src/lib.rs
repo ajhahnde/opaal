@@ -19,6 +19,8 @@ mod raw_editor;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 mod reedline_editor;
 
+pub use terminal_editor::TerminalEditor;
+
 #[cfg(target_os = "redox")]
 pub use raw_editor::RawLineEditor;
 #[cfg(any(target_os = "macos", target_os = "linux"))]

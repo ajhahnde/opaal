@@ -38,6 +38,10 @@ fn workspace_crates_follow_the_ratified_dependency_direction() {
         (
             "flashshell-cli",
             &[
+                // The terminal editor is generic over `P: Platform`, so the
+                // client names the capability crate directly instead of
+                // reaching it only through an adapter.
+                "flashshell-platform",
                 "flashshell-platform-posix",
                 "flashshell-runtime",
                 "flashshell-syntax",

@@ -402,3 +402,287 @@ fn a_prompt_wider_than_the_terminal_renders_no_text() {
 
     assert_eq!(rendered, "\r\x1b[Kfsh> \r\x1b[6G");
 }
+
+#[test]
+fn editing_mid_line_keeps_text_visible_to_the_right_of_the_cursor() {
+    // Cursor at character 15 of 20 in a ten-cell window. Anchoring the window
+    // on the cursor alone would end it there and show "ghijklmnop" at column
+    // 15, hiding every character still to come. The quarter-row margin shifts
+    // the window two cells right, so "qr" stays on screen while editing.
+    let text = "abcdefghijklmnopqrst";
+    let rendered = render_line("fsh> ", text, 15, 15);
+
+    assert_eq!(rendered, "\r\x1b[Kfsh> ijklmnopqr\r\x1b[13G");
+}
+
+#[test]
+fn a_control_character_never_reaches_the_drawn_row() {
+    // A recalled multi-line submission is the reachable source. Raw newlines
+    // would walk the terminal down a row and strand the absolute column
+    // request that follows, so they are drawn as spaces.
+    let rendered = render_line("fsh> ", "if true {\nprintln\n}", 19, 80);
+
+    assert_eq!(rendered, "\r\x1b[Kfsh> if true { println }\r\x1b[25G");
+
+    // The guard is deliberately wider than the newline that motivated it: the
+    // decoder emits Key::Char for the C1 range, so pasting one lands it in the
+    // buffer just like any other character.
+    let pasted = render_line("fsh> ", "a\u{85}b", 3, 80);
+
+    assert_eq!(pasted, "\r\x1b[Kfsh> a b\r\x1b[9G");
+}
+
+use flashshell_cli::editor::{EditorEvent, EditorPrompt, LineEditor};
+use flashshell_cli::terminal_editor::TerminalEditor;
+use flashshell_platform::{Capabilities, FakePlatform, TerminalSize};
+
+/// A terminal-free editor over scripted input, collecting everything drawn.
+fn editor(input: &'static [u8]) -> TerminalEditor<FakePlatform, &'static [u8], Vec<u8>> {
+    let platform =
+        FakePlatform::with_terminal(Capabilities::full(), true, TerminalSize::new(80, 24));
+    TerminalEditor::new(platform, input, Vec::new())
+}
+
+#[test]
+fn a_typed_line_submits_its_text() {
+    let mut editor = editor(b"echo hallo\r");
+
+    let event = editor.read_line(&EditorPrompt::default()).unwrap();
+
+    assert_eq!(event, EditorEvent::Submitted("echo hallo".to_owned()));
+}
+
+#[test]
+fn backspace_edits_the_submitted_text() {
+    let mut editor = editor(b"echo hallo\x7f\x7fx\r");
+
+    let event = editor.read_line(&EditorPrompt::default()).unwrap();
+
+    assert_eq!(event, EditorEvent::Submitted("echo halx".to_owned()));
+}
+
+#[test]
+fn a_left_arrow_inserts_before_the_final_character() {
+    let mut editor = editor(b"ac\x1b[Db\r");
+
+    let event = editor.read_line(&EditorPrompt::default()).unwrap();
+
+    assert_eq!(event, EditorEvent::Submitted("abc".to_owned()));
+}
+
+#[test]
+fn incomplete_source_keeps_reading_under_the_continuation_prompt() {
+    let mut editor = editor(b"if true {\rprintln\r}\r");
+
+    let event = editor.read_line(&EditorPrompt::default()).unwrap();
+
+    assert_eq!(
+        event,
+        EditorEvent::Submitted("if true {\nprintln\n}".to_owned())
+    );
+    assert!(
+        String::from_utf8_lossy(editor.drawn()).contains("...> "),
+        "the continuation prompt is drawn"
+    );
+}
+
+#[test]
+fn ctrl_c_cancels_the_line() {
+    let mut editor = editor(b"echo hallo\x03");
+
+    let event = editor.read_line(&EditorPrompt::default()).unwrap();
+
+    assert_eq!(event, EditorEvent::Cancelled);
+}
+
+#[test]
+fn ctrl_d_on_an_empty_buffer_is_end_of_input() {
+    let mut editor = editor(b"\x04");
+
+    let event = editor.read_line(&EditorPrompt::default()).unwrap();
+
+    assert_eq!(event, EditorEvent::EndOfInput);
+}
+
+#[test]
+fn ctrl_d_on_a_non_empty_buffer_deletes_forward() {
+    let mut editor = editor(b"abc\x1b[D\x04\r");
+
+    let event = editor.read_line(&EditorPrompt::default()).unwrap();
+
+    assert_eq!(event, EditorEvent::Submitted("ab".to_owned()));
+}
+
+#[test]
+fn the_up_arrow_recalls_the_previous_submission() {
+    let mut editor = editor(b"echo one\r\x1b[A\r");
+
+    let first = editor.read_line(&EditorPrompt::default()).unwrap();
+    let second = editor.read_line(&EditorPrompt::default()).unwrap();
+
+    assert_eq!(first, EditorEvent::Submitted("echo one".to_owned()));
+    assert_eq!(second, EditorEvent::Submitted("echo one".to_owned()));
+}
+
+#[test]
+fn input_exhaustion_with_an_empty_buffer_is_end_of_input() {
+    let mut editor = editor(b"");
+
+    let event = editor.read_line(&EditorPrompt::default()).unwrap();
+
+    assert_eq!(event, EditorEvent::EndOfInput);
+}
+
+#[test]
+fn the_prompt_is_drawn_before_input_is_read() {
+    let mut editor = editor(b"a\r");
+
+    let _ = editor.read_line(&EditorPrompt::default()).unwrap();
+
+    assert!(String::from_utf8_lossy(editor.drawn()).contains("fsh> "));
+}
+
+/// Each key must reach the buffer operation it names.
+///
+/// The decoder tests pin bytes to `Key` values and the buffer tests pin the
+/// operations, but neither sees the wiring between them: a swapped or dropped
+/// match arm compiles and passes both suites. These drive one key end to end
+/// through `read_line` and read the wiring off the submitted text.
+#[test]
+fn home_moves_the_cursor_before_the_first_character() {
+    let mut editor = editor(b"bc\x01a\r");
+
+    let event = editor.read_line(&EditorPrompt::default()).unwrap();
+
+    assert_eq!(event, EditorEvent::Submitted("abc".to_owned()));
+}
+
+#[test]
+fn end_moves_the_cursor_past_the_last_character() {
+    let mut editor = editor(b"ab\x01x\x05y\r");
+
+    let event = editor.read_line(&EditorPrompt::default()).unwrap();
+
+    assert_eq!(event, EditorEvent::Submitted("xaby".to_owned()));
+}
+
+#[test]
+fn the_right_arrow_steps_towards_the_end() {
+    let mut editor = editor(b"abc\x01\x1b[Cx\r");
+
+    let event = editor.read_line(&EditorPrompt::default()).unwrap();
+
+    assert_eq!(event, EditorEvent::Submitted("axbc".to_owned()));
+}
+
+#[test]
+fn delete_removes_the_character_under_the_cursor_while_editing() {
+    let mut editor = editor(b"abc\x01\x1b[3~\r");
+
+    let event = editor.read_line(&EditorPrompt::default()).unwrap();
+
+    assert_eq!(event, EditorEvent::Submitted("bc".to_owned()));
+}
+
+#[test]
+fn kill_to_end_drops_everything_after_the_cursor() {
+    let mut editor = editor(b"abcd\x1b[D\x1b[D\x0b\r");
+
+    let event = editor.read_line(&EditorPrompt::default()).unwrap();
+
+    assert_eq!(event, EditorEvent::Submitted("ab".to_owned()));
+}
+
+#[test]
+fn kill_to_start_drops_everything_before_the_cursor() {
+    let mut editor = editor(b"abcd\x1b[D\x15\r");
+
+    let event = editor.read_line(&EditorPrompt::default()).unwrap();
+
+    assert_eq!(event, EditorEvent::Submitted("d".to_owned()));
+}
+
+#[test]
+fn kill_word_back_drops_the_word_before_the_cursor() {
+    let mut editor = editor(b"ab cd\x17\r");
+
+    let event = editor.read_line(&EditorPrompt::default()).unwrap();
+
+    assert_eq!(event, EditorEvent::Submitted("ab ".to_owned()));
+}
+
+#[test]
+fn the_down_arrow_walks_back_towards_the_newest_entry() {
+    let mut editor = editor(b"one\rtwo\r\x1b[A\x1b[A\x1b[B\r");
+
+    let _ = editor.read_line(&EditorPrompt::default()).unwrap();
+    let _ = editor.read_line(&EditorPrompt::default()).unwrap();
+    let recalled = editor.read_line(&EditorPrompt::default()).unwrap();
+
+    assert_eq!(recalled, EditorEvent::Submitted("two".to_owned()));
+}
+
+#[test]
+fn input_ending_mid_line_submits_what_was_typed() {
+    let mut editor = editor(b"echo hallo");
+
+    let event = editor.read_line(&EditorPrompt::default()).unwrap();
+
+    assert_eq!(event, EditorEvent::Submitted("echo hallo".to_owned()));
+}
+
+#[test]
+fn input_ending_mid_continuation_submits_every_line_so_far() {
+    let mut editor = editor(b"if true {\recho");
+
+    let event = editor.read_line(&EditorPrompt::default()).unwrap();
+
+    assert_eq!(event, EditorEvent::Submitted("if true {\necho".to_owned()));
+}
+
+#[test]
+fn input_ending_on_an_empty_continuation_line_submits_the_lines_before_it() {
+    // The third state of the end-of-input clause: nothing on the current line,
+    // but earlier lines are already accumulated. Only a guard testing both
+    // halves submits here rather than discarding the block.
+    let mut editor = editor(b"if true {\r");
+
+    let event = editor.read_line(&EditorPrompt::default()).unwrap();
+
+    assert_eq!(event, EditorEvent::Submitted("if true {\n".to_owned()));
+}
+
+#[test]
+fn a_recalled_multi_line_submission_still_draws_one_row() {
+    let mut editor = editor(b"if true {\rprintln\r}\r\x1b[A\r");
+
+    let _ = editor.read_line(&EditorPrompt::default()).unwrap();
+    let recalled = editor.read_line(&EditorPrompt::default()).unwrap();
+
+    // The newlines survive into the submitted source, so the block still
+    // parses — only the drawing of them is flattened.
+    assert_eq!(
+        recalled,
+        EditorEvent::Submitted("if true {\nprintln\n}".to_owned())
+    );
+    assert!(
+        !String::from_utf8_lossy(editor.drawn()).contains("{\nprintln"),
+        "the recalled block is never drawn with its newlines"
+    );
+}
+
+#[test]
+fn a_cancelled_recall_does_not_strand_the_next_one() {
+    // `read_line` resets the recall position on entry. Without that reset the
+    // cancelled walk below leaves the position parked at the exhausted end, so
+    // the next Up hands back the empty draft instead of the newest entry.
+    let mut editor = editor(b"one\rtwo\r\x1b[A\x1b[A\x03\x1b[A\r");
+
+    let _ = editor.read_line(&EditorPrompt::default()).unwrap();
+    let _ = editor.read_line(&EditorPrompt::default()).unwrap();
+    let cancelled = editor.read_line(&EditorPrompt::default()).unwrap();
+    let after = editor.read_line(&EditorPrompt::default()).unwrap();
+
+    assert_eq!(cancelled, EditorEvent::Cancelled);
+    assert_eq!(after, EditorEvent::Submitted("two".to_owned()));
+}

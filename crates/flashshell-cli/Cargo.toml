@@ -33,6 +33,7 @@ bench = false
 doc = false
 
 [dependencies]
+flashshell-platform = { path = "../flashshell-platform" }
 flashshell-platform-posix = { path = "../flashshell-platform-posix" }
 flashshell-runtime = { path = "../flashshell-runtime" }
 flashshell-syntax = { path = "../flashshell-syntax" }
