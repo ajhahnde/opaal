@@ -282,3 +282,64 @@ fn spawn_rejects_an_absent_capability_before_host_access() {
         }),
     );
 }
+
+use flashshell_platform::TerminalSize;
+
+#[test]
+fn a_fake_platform_reports_its_scripted_terminal_size() {
+    let platform =
+        FakePlatform::with_terminal(Capabilities::full(), true, TerminalSize::new(100, 40));
+
+    assert!(platform.is_terminal());
+    let size = platform.terminal_size().expect("size is supported");
+    assert_eq!(size.columns(), 100);
+    assert_eq!(size.rows(), 40);
+}
+
+#[test]
+fn a_default_fake_platform_is_not_a_terminal() {
+    let platform = FakePlatform::full();
+
+    assert!(!platform.is_terminal());
+    let size = platform.terminal_size().expect("size is supported");
+    assert_eq!(size.columns(), 80);
+    assert_eq!(size.rows(), 24);
+}
+
+#[test]
+fn terminal_size_requires_the_terminal_info_capability() {
+    let platform = FakePlatform::new(Capabilities::empty());
+
+    let error = platform.terminal_size().expect_err("capability is absent");
+
+    assert_eq!(
+        error,
+        PlatformError::Unsupported {
+            capability: Capability::TerminalInfo
+        }
+    );
+}
+
+#[test]
+fn entering_raw_mode_requires_the_terminal_info_capability() {
+    let platform = FakePlatform::new(Capabilities::empty());
+
+    let error = platform.enter_raw_mode().expect_err("capability is absent");
+
+    assert_eq!(
+        error,
+        PlatformError::Unsupported {
+            capability: Capability::TerminalInfo
+        }
+    );
+}
+
+#[test]
+fn a_fake_raw_mode_guard_restores_without_a_terminal() {
+    let platform = FakePlatform::full();
+
+    let mut guard = platform.enter_raw_mode().expect("raw mode is supported");
+
+    assert!(guard.restore().is_ok());
+    assert!(guard.restore().is_ok(), "restore is idempotent");
+}

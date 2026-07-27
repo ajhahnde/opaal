@@ -42,7 +42,7 @@ pub enum Capability {
     ForegroundTerminal,
     /// Signal delivery and cancellation.
     Signals,
-    /// Terminal size and TTY detection.
+    /// Terminal size, TTY detection, and canonical/raw input mode.
     TerminalInfo,
     /// A monotonic clock source.
     MonotonicClock,
@@ -674,6 +674,40 @@ pub trait ChildProcess: Send + fmt::Debug {
     fn terminate(&mut self) -> Result<(), TerminateError>;
 }
 
+/// The character-cell dimensions of a terminal.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TerminalSize {
+    columns: u16,
+    rows: u16,
+}
+
+impl TerminalSize {
+    #[must_use]
+    pub const fn new(columns: u16, rows: u16) -> Self {
+        Self { columns, rows }
+    }
+
+    #[must_use]
+    pub const fn columns(&self) -> u16 {
+        self.columns
+    }
+
+    #[must_use]
+    pub const fn rows(&self) -> u16 {
+        self.rows
+    }
+}
+
+/// An active raw-mode acquisition that restores the saved attributes on drop.
+///
+/// Restoration must also run in the implementor's `Drop`, so a panic or an
+/// early `exit` cannot leave the console unusable. `restore` is idempotent so
+/// an explicit call followed by the drop is well defined.
+pub trait TerminalModeGuard: fmt::Debug {
+    /// Restore the saved terminal attributes now, before the guard drops.
+    fn restore(&mut self) -> Result<(), PlatformError>;
+}
+
 /// Implemented by FlashShell platform adapters.
 ///
 /// Capability methods (spawn, pipes, file actions, …) are added to this trait
@@ -692,6 +726,23 @@ pub trait Platform: Send + Sync {
         } else {
             Err(PlatformError::Unsupported { capability })
         }
+    }
+
+    /// Whether the standard input of this process is a terminal.
+    fn is_terminal(&self) -> bool {
+        false
+    }
+
+    /// The current terminal dimensions.
+    fn terminal_size(&self) -> Result<TerminalSize, PlatformError> {
+        self.require(Capability::TerminalInfo)?;
+        Ok(TerminalSize::new(80, 24))
+    }
+
+    /// Put the terminal into raw mode until the returned guard is dropped.
+    fn enter_raw_mode(&self) -> Result<Box<dyn TerminalModeGuard>, PlatformError> {
+        self.require(Capability::TerminalInfo)?;
+        Ok(Box::new(NoopTerminalModeGuard))
     }
 
     /// Resolve and validate one logical working directory.
@@ -745,12 +796,18 @@ pub trait Platform: Send + Sync {
 #[derive(Clone, Copy, Debug)]
 pub struct FakePlatform {
     capabilities: Capabilities,
+    is_terminal: bool,
+    terminal_size: TerminalSize,
 }
 
 impl FakePlatform {
-    /// A fake platform supporting exactly `capabilities`.
+    /// A fake platform supporting exactly `capabilities`, reporting no terminal.
     pub const fn new(capabilities: Capabilities) -> Self {
-        Self { capabilities }
+        Self {
+            capabilities,
+            is_terminal: false,
+            terminal_size: TerminalSize::new(80, 24),
+        }
     }
 
     /// A fake platform supporting every capability.
@@ -762,11 +819,33 @@ impl FakePlatform {
     pub const fn none() -> Self {
         Self::new(Capabilities::empty())
     }
+
+    /// A fake platform with scripted terminal answers.
+    pub const fn with_terminal(
+        capabilities: Capabilities,
+        is_terminal: bool,
+        size: TerminalSize,
+    ) -> Self {
+        Self {
+            capabilities,
+            is_terminal,
+            terminal_size: size,
+        }
+    }
 }
 
 impl Platform for FakePlatform {
     fn capabilities(&self) -> Capabilities {
         self.capabilities
+    }
+
+    fn is_terminal(&self) -> bool {
+        self.is_terminal
+    }
+
+    fn terminal_size(&self) -> Result<TerminalSize, PlatformError> {
+        self.require(Capability::TerminalInfo)?;
+        Ok(self.terminal_size)
     }
 
     fn resolve_working_directory(
@@ -861,6 +940,16 @@ impl ChildProcess for FakeChild {
     }
 
     fn terminate(&mut self) -> Result<(), TerminateError> {
+        Ok(())
+    }
+}
+
+/// A guard that owns no terminal state; restoring it always succeeds.
+#[derive(Debug)]
+pub struct NoopTerminalModeGuard;
+
+impl TerminalModeGuard for NoopTerminalModeGuard {
+    fn restore(&mut self) -> Result<(), PlatformError> {
         Ok(())
     }
 }
