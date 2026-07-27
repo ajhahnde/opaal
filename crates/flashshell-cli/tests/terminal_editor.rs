@@ -122,3 +122,132 @@ fn a_truncated_multibyte_leader_is_dropped_and_the_next_one_still_decodes() {
     // before its continuation byte; the following character still decodes.
     assert_eq!(decode(&[0xC3, 0xC3, 0xA4]), vec![Key::Char('ä')]);
 }
+
+use flashshell_cli::terminal_editor::buffer::EditBuffer;
+
+#[test]
+fn inserting_advances_the_cursor() {
+    let mut buffer = EditBuffer::new();
+
+    buffer.insert('a');
+    buffer.insert('b');
+
+    assert_eq!(buffer.text(), "ab");
+    assert_eq!(buffer.cursor_chars(), 2);
+}
+
+#[test]
+fn inserting_at_the_cursor_splits_the_text() {
+    let mut buffer = EditBuffer::from_text("ac");
+    buffer.move_left();
+
+    buffer.insert('b');
+
+    assert_eq!(buffer.text(), "abc");
+    assert_eq!(buffer.cursor_chars(), 2);
+}
+
+#[test]
+fn movement_steps_whole_characters() {
+    let mut buffer = EditBuffer::from_text("äb");
+
+    buffer.move_home();
+    assert_eq!(buffer.cursor(), 0);
+    assert!(buffer.move_right());
+    // 'ä' occupies two bytes, so one character step moves the byte cursor by two.
+    assert_eq!(buffer.cursor(), 2);
+    assert_eq!(buffer.cursor_chars(), 1);
+}
+
+#[test]
+fn movement_at_the_edges_reports_no_change() {
+    let mut buffer = EditBuffer::from_text("a");
+
+    buffer.move_home();
+    assert!(!buffer.move_left());
+    buffer.move_end();
+    assert!(!buffer.move_right());
+}
+
+#[test]
+fn backspace_removes_the_whole_preceding_character() {
+    let mut buffer = EditBuffer::from_text("aä");
+
+    assert!(buffer.backspace());
+
+    assert_eq!(buffer.text(), "a");
+    assert_eq!(buffer.cursor_chars(), 1);
+}
+
+#[test]
+fn backspace_at_the_start_reports_no_change() {
+    let mut buffer = EditBuffer::from_text("a");
+    buffer.move_home();
+
+    assert!(!buffer.backspace());
+    assert_eq!(buffer.text(), "a");
+}
+
+#[test]
+fn delete_removes_the_character_under_the_cursor() {
+    let mut buffer = EditBuffer::from_text("abc");
+    buffer.move_home();
+
+    assert!(buffer.delete());
+
+    assert_eq!(buffer.text(), "bc");
+    assert_eq!(buffer.cursor(), 0);
+}
+
+#[test]
+fn delete_at_the_end_reports_no_change() {
+    let mut buffer = EditBuffer::from_text("abc");
+
+    assert!(!buffer.delete());
+    assert_eq!(buffer.text(), "abc");
+}
+
+#[test]
+fn kill_to_end_drops_the_tail() {
+    let mut buffer = EditBuffer::from_text("abcd");
+    buffer.move_home();
+    buffer.move_right();
+
+    buffer.kill_to_end();
+
+    assert_eq!(buffer.text(), "a");
+    assert_eq!(buffer.cursor_chars(), 1);
+}
+
+#[test]
+fn kill_to_start_drops_the_head_and_rewinds() {
+    let mut buffer = EditBuffer::from_text("abcd");
+    buffer.move_home();
+    buffer.move_right();
+    buffer.move_right();
+
+    buffer.kill_to_start();
+
+    assert_eq!(buffer.text(), "cd");
+    assert_eq!(buffer.cursor(), 0);
+}
+
+#[test]
+fn kill_word_back_removes_trailing_space_and_one_word() {
+    let mut buffer = EditBuffer::from_text("echo hallo  ");
+
+    buffer.kill_word_back();
+
+    assert_eq!(buffer.text(), "echo ");
+    assert_eq!(buffer.cursor_chars(), 5);
+}
+
+#[test]
+fn kill_word_back_on_leading_space_only_empties_the_buffer() {
+    let mut buffer = EditBuffer::from_text("   ");
+
+    buffer.kill_word_back();
+
+    assert_eq!(buffer.text(), "");
+    assert!(buffer.is_empty());
+}
