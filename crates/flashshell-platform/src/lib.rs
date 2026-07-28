@@ -14,7 +14,7 @@
 //! environment, and path bytes survive without lossy UTF-8 conversion.
 
 use std::any::Any;
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::io;
 use std::path::{Component, Path, PathBuf};
@@ -50,11 +50,19 @@ pub enum Capability {
     MonotonicClock,
     /// Home, config, and cache directory discovery.
     StandardDirectories,
+    /// Directory entry enumeration.
+    ///
+    /// Deliberately separate from [`FileActions`](Capability::FileActions),
+    /// which covers opening, duplicating, and closing child descriptors —
+    /// plumbing, not enumeration. A capability is supported or it is not, with
+    /// no partial support, so an adapter that can open a file but cannot list a
+    /// directory needs its own bit to say so.
+    DirectoryRead,
 }
 
 impl Capability {
     /// Every capability, in declaration order.
-    pub const ALL: [Capability; 11] = [
+    pub const ALL: [Capability; 12] = [
         Capability::Environment,
         Capability::WorkingDirectory,
         Capability::FileActions,
@@ -66,6 +74,7 @@ impl Capability {
         Capability::TerminalInfo,
         Capability::MonotonicClock,
         Capability::StandardDirectories,
+        Capability::DirectoryRead,
     ];
 
     /// The single set bit that represents this capability.
@@ -383,6 +392,128 @@ impl From<PlatformError> for FileActionError {
     fn from(error: PlatformError) -> Self {
         Self::Platform(error)
     }
+}
+
+/// One byte-preserving directory-enumeration request.
+#[derive(Clone, Copy, Debug)]
+pub struct DirectoryReadRequest<'a> {
+    path: &'a Path,
+    cwd: &'a Path,
+}
+
+impl<'a> DirectoryReadRequest<'a> {
+    /// Build an enumeration request relative to the stage working directory.
+    pub const fn new(path: &'a Path, cwd: &'a Path) -> Self {
+        Self { path, cwd }
+    }
+
+    /// The native directory to enumerate.
+    pub const fn path(self) -> &'a Path {
+        self.path
+    }
+
+    /// The working directory used for a relative target.
+    pub const fn cwd(self) -> &'a Path {
+        self.cwd
+    }
+}
+
+/// What one directory entry is, without following a symbolic link.
+///
+/// A link reports itself as a link rather than as its target: resolving it
+/// would be a second host access the caller did not ask for, and a dangling
+/// link has no target to report at all.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DirectoryEntryKind {
+    /// A regular file.
+    File,
+    /// A directory.
+    Directory,
+    /// A symbolic link, unresolved.
+    Symlink,
+    /// Anything else the host distinguishes but the shell does not.
+    Other,
+}
+
+/// One entry of an enumerated directory.
+///
+/// The name is the bare entry name, not a joined path, and stays an
+/// [`OsString`] so native bytes survive without a lossy conversion.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DirectoryEntry {
+    name: OsString,
+    kind: DirectoryEntryKind,
+    size: Option<u64>,
+}
+
+impl DirectoryEntry {
+    /// Build one entry from its native name, kind, and regular-file byte length.
+    ///
+    /// `size` is `None` for everything that is not a regular file: a directory
+    /// or a link has no byte length the shell could report without inventing
+    /// one.
+    pub const fn new(name: OsString, kind: DirectoryEntryKind, size: Option<u64>) -> Self {
+        Self { name, kind, size }
+    }
+
+    /// The bare native entry name.
+    pub fn name(&self) -> &OsStr {
+        &self.name
+    }
+
+    /// What this entry is, with links left unresolved.
+    pub const fn kind(&self) -> DirectoryEntryKind {
+        self.kind
+    }
+
+    /// The byte length of a regular file, else `None`.
+    pub const fn size(&self) -> Option<u64> {
+        self.size
+    }
+}
+
+/// Failure while enumerating a directory.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DirectoryReadError {
+    /// The platform cannot satisfy directory reads.
+    Platform(PlatformError),
+    /// The host rejected the enumeration or failed mid-walk.
+    Operation {
+        /// Stable I/O error category from the host adapter.
+        kind: io::ErrorKind,
+        /// Human-readable host error text.
+        message: String,
+    },
+}
+
+impl fmt::Display for DirectoryReadError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Platform(error) => error.fmt(formatter),
+            Self::Operation { message, .. } => {
+                write!(formatter, "directory read failed: {message}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for DirectoryReadError {}
+
+impl From<PlatformError> for DirectoryReadError {
+    fn from(error: PlatformError) -> Self {
+        Self::Platform(error)
+    }
+}
+
+/// An owned, pull-driven walk over one directory's entries.
+///
+/// Enumeration is lazy rather than a materialized vector so a structured
+/// pipeline that stops early — `ls | first 1` — stops the host walk with it,
+/// which is what the milestone's no-full-materialization rule requires.
+/// Exhaustion is `Ok(None)` and is idempotent.
+pub trait DirectoryStream: Send + fmt::Debug {
+    /// Advance the walk by one entry; `Ok(None)` is exhaustion.
+    fn next_entry(&mut self) -> Result<Option<DirectoryEntry>, DirectoryReadError>;
 }
 
 /// One entry in the final logical descriptor map passed to a child.
@@ -785,6 +916,19 @@ pub trait Platform: Send + Sync {
         descriptor: u32,
     ) -> Result<Box<dyn DescriptorEndpoint>, FileActionError>;
 
+    /// Enumerate one directory as an owned, lazily advanced walk.
+    fn read_directory(
+        &self,
+        request: DirectoryReadRequest<'_>,
+    ) -> Result<Box<dyn DirectoryStream>, DirectoryReadError> {
+        self.require(Capability::DirectoryRead)?;
+        let _ = request;
+        Err(DirectoryReadError::Operation {
+            kind: io::ErrorKind::Unsupported,
+            message: "the adapter does not implement directory enumeration".to_owned(),
+        })
+    }
+
     /// Read one chunk from an owned pipe endpoint, returning zero at EOF.
     fn read_descriptor(
         &self,
@@ -919,6 +1063,14 @@ impl Platform for FakePlatform {
         Ok(Box::new(FakeDescriptorEndpoint))
     }
 
+    fn read_directory(
+        &self,
+        _request: DirectoryReadRequest<'_>,
+    ) -> Result<Box<dyn DirectoryStream>, DirectoryReadError> {
+        self.require(Capability::DirectoryRead)?;
+        Ok(Box::new(EmptyDirectoryStream))
+    }
+
     fn read_descriptor(
         &self,
         _endpoint: &dyn DescriptorEndpoint,
@@ -1039,6 +1191,13 @@ impl Platform for RecordingPlatform {
         self.inner.inherit_descriptor(descriptor)
     }
 
+    fn read_directory(
+        &self,
+        request: DirectoryReadRequest<'_>,
+    ) -> Result<Box<dyn DirectoryStream>, DirectoryReadError> {
+        self.inner.read_directory(request)
+    }
+
     fn read_descriptor(
         &self,
         endpoint: &dyn DescriptorEndpoint,
@@ -1075,6 +1234,20 @@ pub struct FakeDescriptorEndpoint;
 impl DescriptorEndpoint for FakeDescriptorEndpoint {
     fn as_any(&self) -> &dyn Any {
         self
+    }
+}
+
+/// Deterministic host-free directory walk returned by [`FakePlatform`].
+///
+/// It reports an empty directory rather than scripted entries: the fake never
+/// touches a host, and a runtime test that needs entries drives the value
+/// mapping directly instead of going through a platform.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct EmptyDirectoryStream;
+
+impl DirectoryStream for EmptyDirectoryStream {
+    fn next_entry(&mut self) -> Result<Option<DirectoryEntry>, DirectoryReadError> {
+        Ok(None)
     }
 }
 

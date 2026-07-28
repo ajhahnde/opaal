@@ -11,8 +11,9 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use flashshell_platform::{
-    Capability, ChildDescriptor, FileOpenMode, FileOpenRequest, Platform, ProcessStatus,
-    SpawnError, SpawnRequest, TerminalSize, WorkingDirectoryError, WorkingDirectoryRequest,
+    Capability, ChildDescriptor, DirectoryEntry, DirectoryEntryKind, DirectoryReadError,
+    DirectoryReadRequest, FileOpenMode, FileOpenRequest, Platform, ProcessStatus, SpawnError,
+    SpawnRequest, TerminalSize, WorkingDirectoryError, WorkingDirectoryRequest,
 };
 use flashshell_platform_posix::{OwnedDescriptor, PosixPlatform};
 
@@ -438,4 +439,98 @@ fn entering_raw_mode_without_a_terminal_reports_unavailable() {
             "the diagnostic names the terminal: {error}"
         );
     }
+}
+
+#[test]
+fn reading_a_directory_reports_each_entry_with_its_kind_and_size() {
+    let temp = TempDir::new("read-directory");
+    fs::write(temp.path().join("notes.txt"), b"0123456789").expect("file should be written");
+    fs::create_dir(temp.path().join("src")).expect("directory should be created");
+    symlink("notes.txt", temp.path().join("link")).expect("symlink should be created");
+    let platform = PosixPlatform;
+
+    let mut stream = platform
+        .read_directory(DirectoryReadRequest::new(temp.path(), Path::new(".")))
+        .expect("the directory is readable");
+    let mut entries = Vec::new();
+    while let Some(entry) = stream.next_entry().expect("the walk should not fail") {
+        entries.push(entry);
+    }
+    entries.sort_by(|left, right| left.name().cmp(right.name()));
+
+    let names: Vec<&OsStr> = entries.iter().map(DirectoryEntry::name).collect();
+    assert_eq!(
+        names,
+        vec![
+            OsStr::new("link"),
+            OsStr::new("notes.txt"),
+            OsStr::new("src")
+        ],
+    );
+    // The link reports itself, not its target: enumeration never follows.
+    assert_eq!(entries[0].kind(), DirectoryEntryKind::Symlink);
+    assert_eq!(entries[0].size(), None);
+    assert_eq!(entries[1].kind(), DirectoryEntryKind::File);
+    assert_eq!(entries[1].size(), Some(10));
+    assert_eq!(entries[2].kind(), DirectoryEntryKind::Directory);
+    assert_eq!(entries[2].size(), None);
+}
+
+#[test]
+fn a_relative_directory_target_resolves_against_the_stage_working_directory() {
+    let temp = TempDir::new("read-directory-relative");
+    fs::create_dir(temp.path().join("inner")).expect("directory should be created");
+    fs::write(temp.path().join("inner").join("only.txt"), b"x").expect("file should be written");
+    let platform = PosixPlatform;
+
+    let mut stream = platform
+        .read_directory(DirectoryReadRequest::new(Path::new("inner"), temp.path()))
+        .expect("the directory is readable");
+
+    let entry = stream
+        .next_entry()
+        .expect("the walk should not fail")
+        .expect("the directory holds one entry");
+    assert_eq!(entry.name(), OsStr::new("only.txt"));
+    assert_eq!(stream.next_entry(), Ok(None));
+}
+
+#[test]
+fn reading_a_missing_directory_reports_the_host_error_category() {
+    let temp = TempDir::new("read-directory-missing");
+    let platform = PosixPlatform;
+
+    let error = platform
+        .read_directory(DirectoryReadRequest::new(
+            &temp.path().join("absent"),
+            Path::new("."),
+        ))
+        .expect_err("the directory does not exist");
+
+    assert!(
+        matches!(
+            error,
+            DirectoryReadError::Operation {
+                kind: std::io::ErrorKind::NotFound,
+                ..
+            }
+        ),
+        "expected a NotFound operation error, got {error:?}",
+    );
+}
+
+#[test]
+fn reading_a_file_as_a_directory_is_a_per_operation_failure() {
+    // The capability is present, so this is the method's own error rather than
+    // a capability gap.
+    let temp = TempDir::new("read-directory-not-a-directory");
+    let file = temp.path().join("plain.txt");
+    fs::write(&file, b"x").expect("file should be written");
+    let platform = PosixPlatform;
+
+    let error = platform
+        .read_directory(DirectoryReadRequest::new(&file, Path::new(".")))
+        .expect_err("a regular file cannot be enumerated");
+
+    assert!(matches!(error, DirectoryReadError::Operation { .. }));
 }

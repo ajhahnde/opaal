@@ -5,7 +5,8 @@ use std::path::Path;
 
 use flashshell_platform::{
     Capabilities, Capability, ChildDescriptor, ChildProcess, DescriptorEndpoint,
-    DescriptorReadError, FakePlatform, FileActionError, FileOpenMode, FileOpenRequest,
+    DescriptorReadError, DirectoryEntry, DirectoryEntryKind, DirectoryReadError,
+    DirectoryReadRequest, FakePlatform, FileActionError, FileOpenMode, FileOpenRequest,
     PipeEndpoints, PipeError, Platform, PlatformError, ProcessStatus, RecordingPlatform,
     SpawnError, SpawnRequest, SpawnRequestError, WorkingDirectoryError, WorkingDirectoryRequest,
 };
@@ -495,4 +496,75 @@ fn a_recording_platform_records_a_refused_call_and_still_refuses_it() {
         1,
         "the attempt is recorded even though it failed"
     );
+}
+
+#[test]
+fn directory_read_is_a_capability_of_its_own() {
+    // Directory enumeration is deliberately not folded into FileActions: an
+    // adapter can provide descriptor plumbing without providing enumeration,
+    // and the capability model has no partial support to express that with.
+    let platform = FakePlatform::new(Capabilities::empty().with(Capability::FileActions));
+
+    assert_eq!(
+        platform.require(Capability::DirectoryRead),
+        Err(PlatformError::Unsupported {
+            capability: Capability::DirectoryRead,
+        }),
+    );
+    assert!(Capability::ALL.contains(&Capability::DirectoryRead));
+}
+
+#[test]
+fn reading_a_directory_without_the_capability_is_unsupported() {
+    let platform = FakePlatform::new(Capabilities::empty().with(Capability::FileActions));
+    let request = DirectoryReadRequest::new(Path::new("."), Path::new("/stage"));
+
+    let error = platform
+        .read_directory(request)
+        .expect_err("the capability is absent");
+
+    assert_eq!(
+        error,
+        DirectoryReadError::Platform(PlatformError::Unsupported {
+            capability: Capability::DirectoryRead,
+        }),
+    );
+}
+
+#[test]
+fn the_fake_platform_enumerates_an_empty_directory() {
+    // The fake performs no host access, so a supported capability yields an
+    // immediately exhausted stream rather than invented entries.
+    let platform = FakePlatform::full();
+    let request = DirectoryReadRequest::new(Path::new("."), Path::new("/stage"));
+
+    let mut stream = platform
+        .read_directory(request)
+        .expect("the capability is present");
+
+    assert_eq!(stream.next_entry(), Ok(None));
+    assert_eq!(stream.next_entry(), Ok(None), "exhaustion is idempotent");
+}
+
+#[test]
+fn a_directory_entry_carries_its_native_name_kind_and_file_size() {
+    let entry = DirectoryEntry::new(
+        OsString::from("notes.txt"),
+        DirectoryEntryKind::File,
+        Some(4096),
+    );
+
+    assert_eq!(entry.name(), OsString::from("notes.txt"));
+    assert_eq!(entry.kind(), DirectoryEntryKind::File);
+    assert_eq!(entry.size(), Some(4096));
+}
+
+#[test]
+fn a_directory_entry_that_is_not_a_regular_file_has_no_size() {
+    // Size is absent rather than zero: a directory has no byte length the shell
+    // could honestly report, and inventing one would be a fabricated field.
+    let entry = DirectoryEntry::new(OsString::from("src"), DirectoryEntryKind::Directory, None);
+
+    assert_eq!(entry.kind(), DirectoryEntryKind::Directory);
+    assert_eq!(entry.size(), None);
 }

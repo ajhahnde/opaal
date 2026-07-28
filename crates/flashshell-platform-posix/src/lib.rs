@@ -11,7 +11,7 @@
 
 use std::any::Any;
 use std::collections::BTreeSet;
-use std::fs::{File, OpenOptions};
+use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read};
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd};
 use std::os::unix::process::{CommandExt, ExitStatusExt};
@@ -19,6 +19,7 @@ use std::process::{Child, Command, Stdio};
 
 use flashshell_platform::{
     Capabilities, Capability, ChildProcess, DescriptorEndpoint, DescriptorReadError,
+    DirectoryEntry, DirectoryEntryKind, DirectoryReadError, DirectoryReadRequest, DirectoryStream,
     FileActionError, FileOpenMode, FileOpenRequest, PipeEndpoints, PipeError, Platform,
     PlatformError, ProcessStatus, SpawnError, SpawnRequest, TerminalModeGuard, TerminalSize,
     TerminateError, WaitError, WorkingDirectoryError, WorkingDirectoryRequest,
@@ -243,6 +244,23 @@ impl Platform for PosixPlatform {
         }))
     }
 
+    fn read_directory(
+        &self,
+        request: DirectoryReadRequest<'_>,
+    ) -> Result<Box<dyn DirectoryStream>, DirectoryReadError> {
+        self.require(Capability::DirectoryRead)?;
+        let cwd = std::path::absolute(request.cwd()).map_err(directory_read_error)?;
+        let path = if request.path().is_relative() {
+            cwd.join(request.path())
+        } else {
+            request.path().to_owned()
+        };
+        // `read_dir` reports a missing or non-directory target here, so an
+        // unreadable target fails before any entry is handed out.
+        let entries = fs::read_dir(path).map_err(directory_read_error)?;
+        Ok(Box::new(PosixDirectoryStream { entries }))
+    }
+
     fn read_descriptor(
         &self,
         endpoint: &dyn DescriptorEndpoint,
@@ -373,6 +391,49 @@ fn descriptor_number(descriptor: u32) -> Result<i32, SpawnError> {
         kind: io::ErrorKind::InvalidInput,
         message: format!("child descriptor {descriptor} exceeds the POSIX descriptor range"),
     })
+}
+
+/// A lazily advanced walk over one host directory.
+///
+/// It holds the host iterator rather than a materialized vector, so a caller
+/// that stops early stops the walk with it.
+#[derive(Debug)]
+struct PosixDirectoryStream {
+    entries: fs::ReadDir,
+}
+
+impl DirectoryStream for PosixDirectoryStream {
+    fn next_entry(&mut self) -> Result<Option<DirectoryEntry>, DirectoryReadError> {
+        let Some(entry) = self.entries.next() else {
+            return Ok(None);
+        };
+        let entry = entry.map_err(directory_read_error)?;
+        // `symlink_metadata` does not follow the link, so a link reports itself
+        // and a dangling link is still enumerable.
+        let metadata = entry
+            .path()
+            .symlink_metadata()
+            .map_err(directory_read_error)?;
+        let file_type = metadata.file_type();
+        let kind = if file_type.is_symlink() {
+            DirectoryEntryKind::Symlink
+        } else if file_type.is_dir() {
+            DirectoryEntryKind::Directory
+        } else if file_type.is_file() {
+            DirectoryEntryKind::File
+        } else {
+            DirectoryEntryKind::Other
+        };
+        let size = matches!(kind, DirectoryEntryKind::File).then(|| metadata.len());
+        Ok(Some(DirectoryEntry::new(entry.file_name(), kind, size)))
+    }
+}
+
+fn directory_read_error(error: io::Error) -> DirectoryReadError {
+    DirectoryReadError::Operation {
+        kind: error.kind(),
+        message: error.to_string(),
+    }
 }
 
 fn pipe_error(error: io::Error) -> PipeError {
