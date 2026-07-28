@@ -6,6 +6,7 @@ pub mod builtin;
 pub mod closure;
 pub mod command;
 pub mod convert;
+pub mod directory;
 mod environment;
 pub mod eval;
 pub mod execute;

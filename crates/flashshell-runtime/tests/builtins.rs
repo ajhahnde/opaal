@@ -83,8 +83,8 @@ fn standard_registry_has_exact_carrier_contracts() {
         registry.names().collect::<Vec<_>>(),
         [
             "cd", "check", "collect", "command", "decode", "each", "encode", "exit", "first",
-            "from", "get", "last", "length", "lines", "pwd", "select", "sort", "to", "update",
-            "where", "which"
+            "from", "get", "last", "length", "lines", "ls", "pwd", "select", "sort", "to",
+            "update", "where", "which"
         ]
     );
 
@@ -115,6 +115,16 @@ fn standard_registry_has_exact_carrier_contracts() {
     // `ByteStream` into structured values; `encode`/`to` serialize structured
     // values back into a `ByteStream`. These make the pipeline-validation
     // `encode`/`to` and `decode`/`from` bridge suggestions name real commands.
+    // `ls` is a structured producer: it takes no pipeline input and yields one
+    // record per directory entry.
+    assert_eq!(fixed("ls"), CommandOutput::Fixed(Carrier::ValueStream));
+    {
+        let signature = registry.lookup("ls").unwrap();
+        assert!(signature.accepts(Carrier::Empty));
+        assert!(!signature.accepts(Carrier::ByteStream));
+        assert!(!signature.accepts(Carrier::ValueStream));
+    }
+
     assert_eq!(fixed("decode"), CommandOutput::Fixed(Carrier::ValueStream));
     assert_eq!(fixed("from"), CommandOutput::Fixed(Carrier::ValueStream));
     assert_eq!(fixed("encode"), CommandOutput::Fixed(Carrier::ByteStream));

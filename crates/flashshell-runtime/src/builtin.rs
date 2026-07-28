@@ -205,6 +205,9 @@ pub fn standard_registry() -> CommandRegistry {
         // `sort` materializes the stream and orders it, or records by a key (see
         // `structured`).
         CommandSignature::new("sort", [Carrier::ValueStream], Carrier::ValueStream),
+        // `ls` is a structured producer: it takes no pipeline input and yields
+        // one record per directory entry (see `directory`).
+        CommandSignature::new("ls", [Carrier::Empty], Carrier::ValueStream),
     ] {
         assert!(
             registry.register(signature),
