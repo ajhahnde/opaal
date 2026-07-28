@@ -12,7 +12,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use flashshell_platform::{
     Capability, ChildDescriptor, FileOpenMode, FileOpenRequest, Platform, ProcessStatus,
-    SpawnError, SpawnRequest, WorkingDirectoryError, WorkingDirectoryRequest,
+    SpawnError, SpawnRequest, TerminalSize, WorkingDirectoryError, WorkingDirectoryRequest,
 };
 use flashshell_platform_posix::{OwnedDescriptor, PosixPlatform};
 
@@ -401,5 +401,41 @@ impl TempDir {
 impl Drop for TempDir {
     fn drop(&mut self) {
         fs::remove_dir_all(&self.path).expect("temporary directory should be removed");
+    }
+}
+
+#[test]
+fn terminal_size_is_positive_or_falls_back_to_the_default() {
+    let platform = PosixPlatform;
+
+    let size = platform
+        .terminal_size()
+        .expect("terminal info is supported");
+
+    // Under `cargo test` stdin is usually not a tty, so the documented 80x24
+    // fallback is the expected answer there; on a tty any real size is valid.
+    assert!(size.columns() > 0);
+    assert!(size.rows() > 0);
+    if !platform.is_terminal() {
+        assert_eq!(size, TerminalSize::new(80, 24));
+    }
+}
+
+#[test]
+fn entering_raw_mode_without_a_terminal_reports_unavailable() {
+    let platform = PosixPlatform;
+
+    if platform.is_terminal() {
+        // A developer running the suite from a terminal: acquisition must
+        // succeed and restoring must be idempotent.
+        let mut guard = platform.enter_raw_mode().expect("a tty grants raw mode");
+        assert!(guard.restore().is_ok());
+        assert!(guard.restore().is_ok());
+    } else {
+        let error = platform.enter_raw_mode().expect_err("stdin is not a tty");
+        assert!(
+            format!("{error}").contains("terminal"),
+            "the diagnostic names the terminal: {error}"
+        );
     }
 }

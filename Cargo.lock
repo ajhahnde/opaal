@@ -172,6 +172,7 @@ name = "flashshell-cli"
 version = "0.1.0"
 dependencies = [
  "fd-lock",
+ "flashshell-platform",
  "flashshell-platform-posix",
  "flashshell-runtime",
  "flashshell-syntax",
@@ -189,6 +190,7 @@ name = "flashshell-platform-posix"
 version = "0.1.0"
 dependencies = [
  "flashshell-platform",
+ "libc",
 ]
 
 [[package]]

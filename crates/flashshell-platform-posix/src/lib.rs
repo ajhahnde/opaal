@@ -20,8 +20,8 @@ use std::process::{Child, Command, Stdio};
 use flashshell_platform::{
     Capabilities, Capability, ChildProcess, DescriptorEndpoint, DescriptorReadError,
     FileActionError, FileOpenMode, FileOpenRequest, PipeEndpoints, PipeError, Platform,
-    ProcessStatus, SpawnError, SpawnRequest, TerminateError, WaitError, WorkingDirectoryError,
-    WorkingDirectoryRequest,
+    PlatformError, ProcessStatus, SpawnError, SpawnRequest, TerminalModeGuard, TerminalSize,
+    TerminateError, WaitError, WorkingDirectoryError, WorkingDirectoryRequest,
 };
 
 /// A uniquely owned POSIX descriptor with close-on-exec discipline.
@@ -113,6 +113,50 @@ impl ChildProcess for PosixChild {
 impl Platform for PosixPlatform {
     fn capabilities(&self) -> Capabilities {
         Capabilities::full()
+    }
+
+    fn is_terminal(&self) -> bool {
+        terminal_mode::is_terminal(io::stdin().as_fd())
+    }
+
+    fn is_output_terminal(&self) -> bool {
+        terminal_mode::is_terminal(io::stdout().as_fd())
+    }
+
+    fn terminal_size(&self) -> Result<TerminalSize, PlatformError> {
+        self.require(Capability::TerminalInfo)?;
+        match terminal_mode::window_size(io::stdin().as_fd()) {
+            // A pty can legitimately report zero before a size is set; the
+            // documented fallback keeps the renderer's arithmetic valid.
+            Ok((columns, rows)) if columns > 0 && rows > 0 => Ok(TerminalSize::new(columns, rows)),
+            Ok(_) | Err(_) => Ok(TerminalSize::new(80, 24)),
+        }
+    }
+
+    fn enter_raw_mode(&self) -> Result<Box<dyn TerminalModeGuard>, PlatformError> {
+        self.require(Capability::TerminalInfo)?;
+        let stdin = io::stdin();
+        if !terminal_mode::is_terminal(stdin.as_fd()) {
+            return Err(PlatformError::Unavailable {
+                capability: Capability::TerminalInfo,
+                reason: "standard input is not a terminal".to_owned(),
+            });
+        }
+        let saved = terminal_mode::current_attributes(stdin.as_fd()).map_err(|error| {
+            PlatformError::Unavailable {
+                capability: Capability::TerminalInfo,
+                reason: format!("reading terminal attributes failed: {error}"),
+            }
+        })?;
+        let raw = terminal_mode::raw_from(&saved);
+        terminal_mode::apply(stdin.as_fd(), &raw).map_err(|error| PlatformError::Unavailable {
+            capability: Capability::TerminalInfo,
+            reason: format!("entering raw mode failed: {error}"),
+        })?;
+        Ok(Box::new(PosixTerminalModeGuard {
+            saved,
+            restored: false,
+        }))
     }
 
     fn resolve_working_directory(
@@ -403,5 +447,104 @@ mod child_descriptors {
                 Ok(())
             });
         }
+    }
+}
+
+/// Terminal attribute and size primitives.
+///
+/// `dup2`/`close` in `child_descriptors` take only `c_int` and are declared
+/// by hand. `tcgetattr`/`tcsetattr` take `*mut termios`, whose layout differs
+/// across macOS, Linux and Redox, so the layouts come from `libc` rather than
+/// being restated here where a wrong field would corrupt memory silently.
+#[allow(unsafe_code)]
+mod terminal_mode {
+    use std::io;
+    use std::os::fd::{AsRawFd, BorrowedFd};
+
+    pub(super) fn is_terminal(fd: BorrowedFd<'_>) -> bool {
+        // SAFETY: isatty only inspects the descriptor's kind and never
+        // dereferences memory; a borrowed fd is valid for the call.
+        unsafe { libc::isatty(fd.as_raw_fd()) == 1 }
+    }
+
+    pub(super) fn window_size(fd: BorrowedFd<'_>) -> io::Result<(u16, u16)> {
+        let mut size = libc::winsize {
+            ws_row: 0,
+            ws_col: 0,
+            ws_xpixel: 0,
+            ws_ypixel: 0,
+        };
+        // SAFETY: TIOCGWINSZ writes exactly one `winsize` through the pointer,
+        // which points at a live local of that type.
+        let result = unsafe { libc::ioctl(fd.as_raw_fd(), libc::TIOCGWINSZ, &raw mut size) };
+        if result == -1 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok((size.ws_col, size.ws_row))
+    }
+
+    pub(super) fn current_attributes(fd: BorrowedFd<'_>) -> io::Result<libc::termios> {
+        // SAFETY: `zeroed` is a valid bit pattern for `termios` because every
+        // field is an integer or an array of integers, and tcgetattr
+        // overwrites the whole struct before it is read.
+        let mut attributes: libc::termios = unsafe { std::mem::zeroed() };
+        // SAFETY: the pointer targets a live, correctly typed local.
+        let result = unsafe { libc::tcgetattr(fd.as_raw_fd(), &raw mut attributes) };
+        if result == -1 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(attributes)
+    }
+
+    pub(super) fn apply(fd: BorrowedFd<'_>, attributes: &libc::termios) -> io::Result<()> {
+        // SAFETY: the pointer targets a live, correctly typed value that
+        // tcsetattr only reads.
+        let result = unsafe { libc::tcsetattr(fd.as_raw_fd(), libc::TCSANOW, attributes) };
+        if result == -1 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(())
+    }
+
+    pub(super) fn raw_from(saved: &libc::termios) -> libc::termios {
+        let mut raw = *saved;
+        // SAFETY: cfmakeraw only writes the flag fields of a live struct.
+        unsafe { libc::cfmakeraw(&raw mut raw) };
+        // One byte at a time, no inter-byte timer: the decoder is incremental
+        // and must not wait for a full escape sequence to arrive.
+        raw.c_cc[libc::VMIN] = 1;
+        raw.c_cc[libc::VTIME] = 0;
+        raw
+    }
+}
+
+/// A raw-mode acquisition on the process's standard input.
+#[derive(Debug)]
+struct PosixTerminalModeGuard {
+    saved: libc::termios,
+    restored: bool,
+}
+
+impl TerminalModeGuard for PosixTerminalModeGuard {
+    fn restore(&mut self) -> Result<(), PlatformError> {
+        if self.restored {
+            return Ok(());
+        }
+        let stdin = io::stdin();
+        terminal_mode::apply(stdin.as_fd(), &self.saved).map_err(|error| {
+            PlatformError::Unavailable {
+                capability: Capability::TerminalInfo,
+                reason: format!("restoring terminal attributes failed: {error}"),
+            }
+        })?;
+        self.restored = true;
+        Ok(())
+    }
+}
+
+impl Drop for PosixTerminalModeGuard {
+    fn drop(&mut self) {
+        // A failure here cannot be reported and must not panic during unwind.
+        let _ = self.restore();
     }
 }
