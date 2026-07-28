@@ -19,10 +19,11 @@ use std::process::{Child, Command, Stdio};
 
 use flashshell_platform::{
     Capabilities, Capability, ChildProcess, DescriptorEndpoint, DescriptorReadError,
-    DirectoryEntry, DirectoryEntryKind, DirectoryReadError, DirectoryReadRequest, DirectoryStream,
-    FileActionError, FileIoEndpoint, FileOpenMode, FileOpenRequest, PipeEndpoints, PipeError,
-    Platform, PlatformError, ProcessStatus, SpawnError, SpawnRequest, TerminalModeGuard,
-    TerminalSize, TerminateError, WaitError, WorkingDirectoryError, WorkingDirectoryRequest,
+    DescriptorWriteError, DirectoryEntry, DirectoryEntryKind, DirectoryReadError,
+    DirectoryReadRequest, DirectoryStream, FileActionError, FileIoEndpoint, FileOpenMode,
+    FileOpenRequest, PipeEndpoints, PipeError, Platform, PlatformError, ProcessStatus, SpawnError,
+    SpawnRequest, TerminalModeGuard, TerminalSize, TerminateError, WaitError,
+    WorkingDirectoryError, WorkingDirectoryRequest,
 };
 
 /// A uniquely owned POSIX descriptor with close-on-exec discipline.
@@ -67,6 +68,24 @@ impl OwnedDescriptor {
 impl DescriptorEndpoint for OwnedDescriptor {
     fn as_any(&self) -> &dyn Any {
         self
+    }
+
+    fn read(&mut self, buffer: &mut [u8]) -> Result<usize, DescriptorReadError> {
+        self.descriptor
+            .read(buffer)
+            .map_err(|error| DescriptorReadError::Operation {
+                kind: error.kind(),
+                message: error.to_string(),
+            })
+    }
+
+    fn write(&mut self, buffer: &[u8]) -> Result<usize, DescriptorWriteError> {
+        self.descriptor
+            .write(buffer)
+            .map_err(|error| DescriptorWriteError::Operation {
+                kind: error.kind(),
+                message: error.to_string(),
+            })
     }
 }
 

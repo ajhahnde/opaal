@@ -14,8 +14,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant as SystemInstant;
 
 use flashshell_platform::{
-    DescriptorReadError, DirectoryReadError, FileActionError, PipeError, PlatformError, SpawnError,
-    WaitError, WorkingDirectoryError,
+    DescriptorReadError, DescriptorWriteError, DirectoryReadError, FileActionError, PipeError,
+    PlatformError, SpawnError, WaitError, WorkingDirectoryError,
 };
 use flashshell_syntax::{
     AndChain, Assignment, BinaryOperator, Block, CallExpression, Closure, ConditionalChain,
@@ -305,6 +305,10 @@ pub enum RuntimeErrorKind {
     CapturePipe(PipeError),
     /// Reading the captured stdout pipe failed while draining it.
     CaptureRead(DescriptorReadError),
+    /// Reading an external stage's bytes into an internal pipeline failed.
+    PipelineRead(DescriptorReadError),
+    /// Writing an internal byte stream into an external stage failed.
+    PipelineWrite(DescriptorWriteError),
     /// Captured stdout exceeded the plan's configured raw-byte limit.
     CaptureLimitExceeded { limit: usize },
     /// Text capture encountered invalid UTF-8.
@@ -512,6 +516,8 @@ impl fmt::Display for RuntimeErrorKind {
             Self::PipeCreate(error) => error.fmt(formatter),
             Self::CapturePipe(error) => error.fmt(formatter),
             Self::CaptureRead(error) => error.fmt(formatter),
+            Self::PipelineRead(error) => error.fmt(formatter),
+            Self::PipelineWrite(error) => error.fmt(formatter),
             Self::CaptureLimitExceeded { limit } => {
                 write!(
                     formatter,

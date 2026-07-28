@@ -167,12 +167,22 @@ impl std::error::Error for PlatformError {}
 
 /// One uniquely owned descriptor resource returned by a platform adapter.
 ///
-/// The runtime treats endpoints as opaque resources and can only move, borrow,
-/// or drop them. An adapter downcasts endpoints it created when installing the
-/// final descriptor map for a child.
+/// Child descriptor maps borrow endpoints opaquely. An anonymous-pipe endpoint
+/// may additionally be pulled or pushed by the in-process pipeline bridge; file
+/// endpoints used by internal commands remain represented by [`FileIoEndpoint`].
 pub trait DescriptorEndpoint: Send + fmt::Debug {
     /// Adapter-private concrete endpoint access for the matching spawn adapter.
     fn as_any(&self) -> &dyn Any;
+
+    /// Read at most `buffer.len()` bytes from an owned pipe reader.
+    fn read(&mut self, _buffer: &mut [u8]) -> Result<usize, DescriptorReadError> {
+        Err(DescriptorReadError::InvalidEndpoint)
+    }
+
+    /// Write bytes to an owned pipe writer.
+    fn write(&mut self, _buffer: &[u8]) -> Result<usize, DescriptorWriteError> {
+        Err(DescriptorWriteError::InvalidEndpoint)
+    }
 }
 
 /// The two uniquely owned endpoints of one anonymous byte pipe.
@@ -258,6 +268,44 @@ impl fmt::Display for DescriptorReadError {
 impl std::error::Error for DescriptorReadError {}
 
 impl From<PlatformError> for DescriptorReadError {
+    fn from(error: PlatformError) -> Self {
+        Self::Platform(error)
+    }
+}
+
+/// Failure while feeding bytes through an owned descriptor endpoint.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DescriptorWriteError {
+    /// The platform cannot satisfy pipe-backed descriptor writes.
+    Platform(PlatformError),
+    /// The endpoint was not created as a writable pipe endpoint.
+    InvalidEndpoint,
+    /// The host write operation failed.
+    Operation {
+        /// Stable I/O error category from the host adapter.
+        kind: io::ErrorKind,
+        /// Human-readable host error text.
+        message: String,
+    },
+}
+
+impl fmt::Display for DescriptorWriteError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Platform(error) => error.fmt(formatter),
+            Self::InvalidEndpoint => {
+                formatter.write_str("descriptor endpoint is not a writable pipe endpoint")
+            }
+            Self::Operation { message, .. } => {
+                write!(formatter, "descriptor write failed: {message}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for DescriptorWriteError {}
+
+impl From<PlatformError> for DescriptorWriteError {
     fn from(error: PlatformError) -> Self {
         Self::Platform(error)
     }

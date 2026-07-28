@@ -1,19 +1,16 @@
-//! Non-interactive script parsing and external foreground execution.
+//! Non-interactive script execution through the persistent session driver.
 
 use std::fmt;
+use std::io;
 use std::path::Path;
 
 use flashshell_platform::Platform;
-use flashshell_syntax::{
-    Diagnostic, IncompleteInput, ParseOutcome, Severity, SourceFile, SourceId, StatementKind,
-    parse, render_diagnostic,
-};
 
 use crate::command::CommandRegistry;
-use crate::eval::{Clock, Completion, EvalLimits, RuntimeError, evaluate_in_environment};
-use crate::execute::execute_foreground_chain;
+use crate::eval::Clock;
 use crate::plan::SessionOptions;
 use crate::resolve::ExecutableProbe;
+use crate::session::{Session, SubmitError, SubmitOutcome};
 use crate::{Environment, ScopeStack, Status};
 
 /// The normally completed result of one non-interactive source file.
@@ -37,35 +34,12 @@ pub struct ScriptError {
 }
 
 impl ScriptError {
-    fn incomplete(source: &SourceFile, input: IncompleteInput) -> Self {
-        let diagnostic = Diagnostic::new(
-            Severity::Error,
-            "SYN002",
-            format!("incomplete input: {}", input.reason()),
-        )
-        .with_primary(
-            input.span(),
-            "source ends before this construct is complete",
-        );
-        Self::diagnostics(source, &[diagnostic])
-    }
-
-    fn diagnostics(source: &SourceFile, diagnostics: &[Diagnostic]) -> Self {
-        let rendered = diagnostics
-            .iter()
-            .map(|diagnostic| {
-                render_diagnostic(source, diagnostic)
-                    .expect("parser diagnostics always carry source-local primary spans")
-            })
-            .collect::<Vec<_>>()
-            .join("");
+    fn submit(error: SubmitError) -> Self {
+        let rendered = match error {
+            SubmitError::Diagnostic(rendered) => rendered,
+            SubmitError::Output(error) => format!("fsh: output write failed: {error}\n"),
+        };
         Self { rendered }
-    }
-
-    fn runtime(source: &SourceFile, error: &RuntimeError) -> Self {
-        let diagnostic = Diagnostic::new(Severity::Error, "RUN001", error.to_string())
-            .with_primary(error.span(), "runtime failure");
-        Self::diagnostics(source, &[diagnostic])
     }
 
     /// Render the complete user-facing diagnostic.
@@ -85,9 +59,9 @@ impl std::error::Error for ScriptError {}
 
 /// Parse and execute one source file in statement order.
 ///
-/// Pure statements and environment mutations reuse one scope and environment.
-/// Foreground jobs use the external pipeline executor; internal stages remain a
-/// precise unsupported runtime form until mixed-carrier execution is available.
+/// Pure statements, environment mutations, internal commands, external
+/// processes, and mixed byte boundaries all reuse the same stateful execution
+/// path as interactive submissions.
 #[allow(clippy::too_many_arguments)]
 pub fn execute_script(
     name: impl Into<String>,
@@ -100,64 +74,24 @@ pub fn execute_script(
     platform: &dyn Platform,
     clock: &dyn Clock,
 ) -> Result<ScriptCompletion, ScriptError> {
-    let source = SourceFile::new(SourceId::new(1), name, text);
-    let script = match parse(&source) {
-        ParseOutcome::Complete(script) => script,
-        ParseOutcome::Incomplete(input) => return Err(ScriptError::incomplete(&source, input)),
-        ParseOutcome::Invalid(diagnostics) => {
-            return Err(ScriptError::diagnostics(&source, &diagnostics));
-        }
+    let mut session = Session::with_scope_and_registry(
+        ScopeStack::new(),
+        cwd,
+        environment.clone(),
+        *options,
+        registry.clone(),
+    );
+    let mut output = io::stdout().lock();
+    let outcome = session
+        .submit(name, text, probe, platform, clock, &mut output)
+        .map_err(ScriptError::submit)?;
+    let status = match outcome {
+        SubmitOutcome::Continued => session.current_status().cloned(),
+        SubmitOutcome::Exit(code) => Some(
+            Status::exit(i64::from(code), crate::Duration::ZERO)
+                .expect("an explicit script exit is a valid status"),
+        ),
     };
-
-    let mut scope = ScopeStack::new();
-    let mut status = None;
-    for statement in script.statements() {
-        match statement.kind() {
-            StatementKind::Job(job) => {
-                if job.background_span.is_some() {
-                    let error = RuntimeError::new(
-                        crate::eval::RuntimeErrorKind::Unsupported {
-                            feature: "background job execution",
-                        },
-                        statement.span(),
-                    );
-                    return Err(ScriptError::runtime(&source, &error));
-                }
-                status = Some(
-                    execute_foreground_chain(
-                        &job.chain,
-                        cwd,
-                        &source,
-                        &mut scope,
-                        environment,
-                        registry,
-                        probe,
-                        options,
-                        platform,
-                        clock,
-                    )
-                    .map_err(|error| ScriptError::runtime(&source, &error))?,
-                );
-            }
-            _ => {
-                let one = flashshell_syntax::Script::new(vec![statement.clone()], statement.span());
-                match evaluate_in_environment(
-                    &one,
-                    &source,
-                    &mut scope,
-                    environment,
-                    &EvalLimits::default(),
-                )
-                .map_err(|error| ScriptError::runtime(&source, &error))?
-                {
-                    Completion::Value(_) => {}
-                    Completion::Cancelled(_) => {
-                        unreachable!("default evaluation limits never cancel")
-                    }
-                }
-            }
-        }
-    }
-
+    *environment = session.environment().clone();
     Ok(ScriptCompletion { status })
 }

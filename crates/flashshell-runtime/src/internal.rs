@@ -148,7 +148,7 @@ pub fn execute_internal_pipeline(
     })
 }
 
-enum StageOutcome {
+pub(crate) enum StageOutcome {
     Completed {
         payload: InternalPayload,
         status: Status,
@@ -157,7 +157,7 @@ enum StageOutcome {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn execute_stage(
+pub(crate) fn execute_stage(
     name: &str,
     stage: &PlannedStage,
     input: InternalPayload,

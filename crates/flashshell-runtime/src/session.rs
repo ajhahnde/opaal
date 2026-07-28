@@ -6,31 +6,38 @@
 //! Each submitted buffer runs its statements in source order: pure statements
 //! and `export`/`unset` reuse the shared scope and environment, an all-internal
 //! pipeline moves owned structured carriers through the internal executor, and
-//! an external foreground pipeline runs through the ordinary byte executor. Parse and runtime
-//! failures are recoverable and leave the accumulated state untouched; only a
-//! failure to write built-in output to the caller's sink is fatal.
+//! an external foreground pipeline runs through the ordinary byte executor,
+//! and one contiguous internal island streams through owned process pipes.
+//! Parse and runtime failures are recoverable and leave the accumulated state
+//! untouched; only a failure to write built-in output to the caller's sink is
+//! fatal.
 //!
 //! Human presentation is selected only for a final structured carrier at an
-//! unredirected interactive output terminal. General mixed internal/external
-//! pipeline execution remains separate; an all-external pipeline retains the
-//! existing process executor.
+//! unredirected interactive output terminal. An all-external pipeline retains
+//! the existing process executor.
 
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
-use flashshell_platform::Platform;
+use flashshell_platform::{
+    DescriptorEndpoint, DescriptorReadError, DescriptorWriteError, Platform,
+};
 use flashshell_syntax::{
     Diagnostic, ParseOutcome, Script, Severity, SourceFile, SourceId, StatementKind, parse,
     render_diagnostic,
 };
 
 use crate::builtin::{SessionState, standard_registry};
+use crate::closure::OwnedClosureContext;
 use crate::command::CommandRegistry;
 use crate::eval::{
     Clock, Completion, EvalLimits, RuntimeError, RuntimeErrorKind, evaluate_in_environment,
 };
-use crate::execute::execute_foreground_status;
-use crate::internal::{InternalPayload, InternalPipelineOutcome, execute_internal_pipeline};
+use crate::execute::{execute_foreground_status, start_mixed_pipeline};
+use crate::internal::{
+    InternalPayload, InternalPipelineOutcome, StageOutcome, execute_internal_pipeline,
+    execute_stage,
+};
 use crate::plan::{
     PlannedResolution, PlannedStage, RedirectionAction, SessionOptions, plan_pipeline_with_options,
 };
@@ -38,7 +45,7 @@ use crate::presentation::{
     OutputDestination, TerminalPresentation, render_table, select_terminal_presentation,
 };
 use crate::resolve::ExecutableProbe;
-use crate::stream::{BytePull, StreamPull};
+use crate::stream::{BytePull, ByteStream, StreamPull};
 use crate::{Environment, ScopeStack, Status, Value};
 
 /// The control decision produced by one submitted edit buffer.
@@ -104,11 +111,26 @@ impl Session {
         environment: Environment,
         options: SessionOptions,
     ) -> Self {
+        Self::with_scope_and_registry(scope, cwd, environment, options, standard_registry())
+    }
+
+    /// Build a session with an explicit command registry.
+    ///
+    /// Script execution uses the same persistent driver as interactive input
+    /// while retaining the registry selected by its caller.
+    #[must_use]
+    pub fn with_scope_and_registry(
+        scope: ScopeStack,
+        cwd: impl Into<PathBuf>,
+        environment: Environment,
+        options: SessionOptions,
+        registry: CommandRegistry,
+    ) -> Self {
         Self {
             scope,
             state: SessionState::new(cwd, environment),
             options,
-            registry: standard_registry(),
+            registry,
             next_source: 1,
         }
     }
@@ -382,8 +404,260 @@ fn run_pipeline(
         };
     }
 
+    if plan
+        .stages()
+        .iter()
+        .any(|stage| matches!(stage.resolution(), PlannedResolution::Internal { .. }))
+    {
+        return run_mixed_pipeline(
+            &plan, state, registry, source, probe, platform, clock, output,
+        );
+    }
+
     let status = execute_foreground_status(&plan, platform, clock)?;
     Ok(ChainStep::Status(status))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_mixed_pipeline(
+    plan: &crate::plan::ExecutionPlan,
+    state: &mut SessionState,
+    registry: &CommandRegistry,
+    source: &SourceFile,
+    probe: &dyn ExecutableProbe,
+    platform: &dyn Platform,
+    clock: &dyn Clock,
+    output: &mut dyn Write,
+) -> Result<ChainStep, Interrupt> {
+    let first_internal = plan
+        .stages()
+        .iter()
+        .position(|stage| matches!(stage.resolution(), PlannedResolution::Internal { .. }))
+        .expect("the caller found an internal stage");
+    let last_internal = plan
+        .stages()
+        .iter()
+        .rposition(|stage| matches!(stage.resolution(), PlannedResolution::Internal { .. }))
+        .expect("the caller found an internal stage");
+    let internal = first_internal..last_internal + 1;
+
+    let presentation = if last_internal + 1 == plan.stages().len() {
+        let final_stage = &plan.stages()[last_internal];
+        let destination = output_destination(final_stage, platform)?;
+        Some(
+            select_terminal_presentation(final_stage.output_carrier(), destination).map_err(
+                |error| {
+                    RuntimeError::new(RuntimeErrorKind::Presentation(error), final_stage.span())
+                },
+            )?,
+        )
+    } else {
+        None
+    };
+
+    let mut pending_state = state.clone();
+    let closure_context = OwnedClosureContext::new(
+        source.clone(),
+        pending_state.environment().clone(),
+        EvalLimits::default(),
+    );
+    let mut mixed = start_mixed_pipeline(plan, platform, clock, internal.clone())?;
+    let mut payload = mixed.take_input().map_or(InternalPayload::Empty, |reader| {
+        InternalPayload::ByteStream(pipe_byte_stream(
+            reader,
+            plan.stages()[first_internal].span(),
+        ))
+    });
+    let mut indexed_statuses = Vec::with_capacity(plan.stages().len());
+
+    let internal_result = (|| {
+        for index in internal {
+            let stage = &plan.stages()[index];
+            let PlannedResolution::Internal { name } = stage.resolution() else {
+                return Err(Interrupt::Runtime(RuntimeError::new(
+                    RuntimeErrorKind::Unsupported {
+                        feature: "a mixed pipeline with more than one internal stage island",
+                    },
+                    stage.span(),
+                )));
+            };
+            let upstream = indexed_statuses.last().map(|(_, status)| status);
+            match execute_stage(
+                name,
+                stage,
+                payload,
+                upstream,
+                &mut pending_state,
+                registry,
+                probe,
+                platform,
+                plan.cwd(),
+                &closure_context,
+            )? {
+                StageOutcome::Completed {
+                    payload: output_payload,
+                    status,
+                } => {
+                    payload = output_payload;
+                    indexed_statuses.push((index, status));
+                }
+                StageOutcome::Exit(code) => return Ok(Some(ChainStep::Exit(code))),
+            }
+        }
+
+        if let Some(writer) = mixed.take_output() {
+            drain_payload_to_pipe(payload, writer, plan.stages()[last_internal].span())?;
+        } else {
+            let final_stage = &plan.stages()[last_internal];
+            render_payload(
+                payload,
+                presentation
+                    .as_ref()
+                    .expect("a final internal stage selected presentation")
+                    .as_ref(),
+                final_stage.span(),
+                output,
+            )?;
+        }
+        Ok(None)
+    })();
+
+    let requested_exit = match internal_result {
+        Ok(exit) => exit,
+        Err(error) => {
+            mixed.terminate();
+            return Err(error);
+        }
+    };
+    if let Some(exit) = requested_exit {
+        mixed.terminate();
+        *pending_state.environment_mut() = closure_context.environment_snapshot();
+        *state = pending_state;
+        return Ok(exit);
+    }
+
+    let (external_statuses, pipeline_duration) = mixed.wait(plan, clock)?;
+    indexed_statuses.extend(external_statuses);
+    indexed_statuses.sort_by_key(|(index, _)| *index);
+    let statuses: Vec<Status> = indexed_statuses
+        .into_iter()
+        .map(|(_, status)| status)
+        .collect();
+    let selected = if plan.pipefail() {
+        statuses
+            .iter()
+            .rposition(|status| !status.is_ok())
+            .unwrap_or(statuses.len() - 1)
+    } else {
+        statuses.len() - 1
+    };
+    let status = Status::aggregate(statuses, selected, pipeline_duration)
+        .expect("a mixed pipeline has source-ordered leaf statuses");
+    pending_state.set_current_status(Some(status.clone()));
+    *pending_state.environment_mut() = closure_context.environment_snapshot();
+    *state = pending_state;
+    Ok(ChainStep::Status(status))
+}
+
+fn pipe_byte_stream(
+    mut reader: Box<dyn DescriptorEndpoint>,
+    span: flashshell_syntax::Span,
+) -> ByteStream {
+    const CHUNK_SIZE: usize = 64 * 1024;
+    ByteStream::from_pull_fn(move || {
+        let mut chunk = vec![0; CHUNK_SIZE];
+        loop {
+            match reader.read(&mut chunk) {
+                Ok(0) => return BytePull::End,
+                Ok(amount) => {
+                    chunk.truncate(amount);
+                    return BytePull::Chunk(chunk);
+                }
+                Err(DescriptorReadError::Operation {
+                    kind: io::ErrorKind::Interrupted,
+                    ..
+                }) => {}
+                Err(error) => {
+                    return BytePull::Failed(RuntimeError::new(
+                        RuntimeErrorKind::PipelineRead(error),
+                        span,
+                    ));
+                }
+            }
+        }
+    })
+}
+
+fn drain_payload_to_pipe(
+    payload: InternalPayload,
+    mut writer: Box<dyn DescriptorEndpoint>,
+    span: flashshell_syntax::Span,
+) -> Result<(), Interrupt> {
+    let InternalPayload::ByteStream(mut bytes) = payload else {
+        return Err(Interrupt::Runtime(RuntimeError::new(
+            RuntimeErrorKind::Unsupported {
+                feature: "an implicit structured-to-external conversion",
+            },
+            span,
+        )));
+    };
+    loop {
+        match bytes.pull() {
+            BytePull::Chunk(chunk) => {
+                let mut remaining = chunk.as_slice();
+                while !remaining.is_empty() {
+                    match writer.write(remaining) {
+                        Ok(0) => {
+                            return Err(Interrupt::Runtime(RuntimeError::new(
+                                RuntimeErrorKind::PipelineWrite(DescriptorWriteError::Operation {
+                                    kind: io::ErrorKind::WriteZero,
+                                    message: "pipe writer accepted zero bytes".to_owned(),
+                                }),
+                                span,
+                            )));
+                        }
+                        Ok(amount) if amount <= remaining.len() => {
+                            remaining = &remaining[amount..];
+                        }
+                        Ok(amount) => {
+                            return Err(Interrupt::Runtime(RuntimeError::new(
+                                RuntimeErrorKind::PipelineWrite(DescriptorWriteError::Operation {
+                                    kind: io::ErrorKind::InvalidData,
+                                    message: format!(
+                                        "pipe writer reported {amount} bytes for a {}-byte remainder",
+                                        remaining.len()
+                                    ),
+                                }),
+                                span,
+                            )));
+                        }
+                        Err(DescriptorWriteError::Operation {
+                            kind: io::ErrorKind::Interrupted,
+                            ..
+                        }) => {}
+                        Err(DescriptorWriteError::Operation {
+                            kind: io::ErrorKind::BrokenPipe,
+                            ..
+                        }) => return Ok(()),
+                        Err(error) => {
+                            return Err(Interrupt::Runtime(RuntimeError::new(
+                                RuntimeErrorKind::PipelineWrite(error),
+                                span,
+                            )));
+                        }
+                    }
+                }
+            }
+            BytePull::End => return Ok(()),
+            BytePull::Failed(error) => return Err(Interrupt::Runtime(error)),
+            BytePull::Cancelled(reason) => {
+                return Err(Interrupt::Runtime(RuntimeError::new(
+                    RuntimeErrorKind::StreamCancelled { reason },
+                    span,
+                )));
+            }
+        }
+    }
 }
 
 fn output_destination(

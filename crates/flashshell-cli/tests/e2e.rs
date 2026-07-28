@@ -167,12 +167,50 @@ fn generated_64_mib_pipeline_completes_without_capture_or_deadlock() {
 }
 
 #[test]
+fn generated_64_mib_mixed_pipeline_streams_without_capture_or_deadlock() {
+    let temp = TempDir::new("large-mixed-stream");
+    let script = temp.script(
+        "large-mixed.fsh",
+        &format!(
+            "^{0} source 67108864 0 | decode bytes | encode bytes | \
+             ^{0} sink 67108864 0\n",
+            stream_fixture()
+        ),
+    );
+
+    let output = run_script(&script, temp.path(), fixture_directory());
+
+    assert!(output.status.success(), "{output:?}");
+    assert!(output.stdout.is_empty());
+    assert!(output.stderr.is_empty());
+}
+
+#[test]
 fn a_closed_pipeline_reader_preserves_the_last_stage_status() {
     let temp = TempDir::new("broken-pipe");
     let script = temp.script(
         "broken-pipe.fsh",
         &format!(
             "^{} source 67108864 0 | ^{} exit 0\n",
+            stream_fixture(),
+            status_fixture()
+        ),
+    );
+
+    let output = run_script(&script, temp.path(), fixture_directory());
+
+    assert!(output.status.success(), "{output:?}");
+    assert!(output.stdout.is_empty());
+    assert!(output.stderr.is_empty());
+}
+
+#[test]
+fn a_closed_mixed_pipeline_reader_stops_the_internal_bridge() {
+    let temp = TempDir::new("mixed-broken-pipe");
+    let script = temp.script(
+        "mixed-broken-pipe.fsh",
+        &format!(
+            "^{} source 67108864 0 | decode bytes | encode bytes | ^{} exit 0\n",
             stream_fixture(),
             status_fixture()
         ),

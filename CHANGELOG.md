@@ -49,5 +49,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   JSON documents and unterminated text lines enforce documented byte ceilings,
   while byte streams retain producer failures and cancellation without implicit
   decoding, rendering, or serialization.
+- Stream explicit byte boundaries across external and internal stages without
+  capture, in scripts and interactive sessions. Mixed pipelines preserve
+  source-ordered stage statuses and `pipefail`, and stop pulling an internal
+  producer when an external consumer closes early.
 
 ---

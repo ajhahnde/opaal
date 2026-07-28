@@ -146,6 +146,35 @@ fn posix_platform_reads_an_owned_pipe_endpoint_to_eof() {
 }
 
 #[test]
+fn posix_owned_pipe_endpoints_transfer_bytes_in_process() {
+    let (mut reader, mut writer) = PosixPlatform
+        .pipe()
+        .expect("POSIX creates a connected pipe")
+        .into_parts();
+
+    assert_eq!(
+        writer
+            .write(b"bridge bytes")
+            .expect("owned pipe write should succeed"),
+        12
+    );
+    drop(writer);
+
+    let mut bytes = Vec::new();
+    let mut buffer = [0u8; 4];
+    loop {
+        let amount = reader
+            .read(&mut buffer)
+            .expect("owned pipe read should succeed");
+        if amount == 0 {
+            break;
+        }
+        bytes.extend_from_slice(&buffer[..amount]);
+    }
+    assert_eq!(bytes, b"bridge bytes");
+}
+
+#[test]
 fn posix_file_actions_preserve_relative_cwd_and_open_modes() {
     let temp = TempDir::new("file-actions");
     fs::write(temp.path().join("target"), b"old").expect("seed file should be written");

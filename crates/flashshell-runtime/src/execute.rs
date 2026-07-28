@@ -7,6 +7,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
+use std::ops::Range;
 use std::path::Path;
 use std::sync::mpsc;
 use std::thread;
@@ -590,6 +591,197 @@ fn start_preflighted_pipeline(
     Ok(children)
 }
 
+/// Running external stages surrounding one contiguous internal stage island.
+///
+/// The boundary endpoints remain parent-owned so the internal executor can pull
+/// an external prefix lazily and push into an external suffix without capture.
+pub(crate) struct MixedPipeline {
+    children: Vec<IndexedStartedChild>,
+    input: Option<Box<dyn DescriptorEndpoint>>,
+    output: Option<Box<dyn DescriptorEndpoint>>,
+    started_at: Instant,
+}
+
+impl MixedPipeline {
+    /// Take the external-prefix reader, when the internal island has one.
+    pub(crate) fn take_input(&mut self) -> Option<Box<dyn DescriptorEndpoint>> {
+        self.input.take()
+    }
+
+    /// Take the external-suffix writer, when the internal island has one.
+    pub(crate) fn take_output(&mut self) -> Option<Box<dyn DescriptorEndpoint>> {
+        self.output.take()
+    }
+
+    /// Wait every external stage and return source-indexed language statuses.
+    pub(crate) fn wait(
+        self,
+        plan: &ExecutionPlan,
+        clock: &dyn Clock,
+    ) -> Result<(Vec<(usize, Status)>, Duration), RuntimeError> {
+        let mut statuses = Vec::with_capacity(self.children.len());
+        let mut first_error = None;
+        for mut started in self.children {
+            let stage = &plan.stages()[started.index];
+            match started.child.child.wait() {
+                Ok(status) => {
+                    let duration = started
+                        .child
+                        .started_at
+                        .map_or(Duration::ZERO, |start| elapsed(start, clock.now()));
+                    statuses.push((started.index, language_status(status, duration)));
+                }
+                Err(error) if first_error.is_none() => {
+                    first_error = Some(RuntimeError::new(
+                        RuntimeErrorKind::ProcessWait(error),
+                        stage.span(),
+                    ));
+                }
+                Err(_) => {}
+            }
+        }
+        match first_error {
+            Some(error) => Err(error),
+            None => Ok((statuses, elapsed(self.started_at, clock.now()))),
+        }
+    }
+
+    /// Stop and reap every spawned external stage after an internal failure.
+    pub(crate) fn terminate(mut self) {
+        terminate_indexed_and_reap(&mut self.children);
+    }
+}
+
+/// Start all external stages around one contiguous internal island.
+///
+/// External-to-external edges retain ordinary kernel pipes. Exactly the two
+/// edges touching the island keep one endpoint in the parent for lazy pulls or
+/// checked partial writes.
+pub(crate) fn start_mixed_pipeline(
+    plan: &ExecutionPlan,
+    platform: &dyn Platform,
+    clock: &dyn Clock,
+    internal: Range<usize>,
+) -> Result<MixedPipeline, RuntimeError> {
+    preflight(plan)?;
+    if internal.is_empty()
+        || internal.end > plan.stages().len()
+        || plan.stages()[internal.clone()]
+            .iter()
+            .any(|stage| !matches!(stage.resolution(), PlannedResolution::Internal { .. }))
+        || plan.stages()[..internal.start]
+            .iter()
+            .chain(&plan.stages()[internal.end..])
+            .any(|stage| !matches!(stage.resolution(), PlannedResolution::External { .. }))
+    {
+        return Err(RuntimeError::new(
+            RuntimeErrorKind::Unsupported {
+                feature: "a mixed pipeline with more than one internal stage island",
+            },
+            plan.span(),
+        ));
+    }
+
+    let mut pipes = Vec::with_capacity(plan.edges().len());
+    for (index, edge) in plan.edges().iter().enumerate() {
+        if internal.contains(&index) && internal.contains(&(index + 1)) {
+            pipes.push((None, None));
+            continue;
+        }
+        let endpoints = platform.pipe().map_err(|error| {
+            RuntimeError::new(RuntimeErrorKind::PipeCreate(error), edge.operator_span())
+        })?;
+        let (reader, writer) = endpoints.into_parts();
+        pipes.push((Some(reader), Some(writer)));
+    }
+
+    let input = internal
+        .start
+        .checked_sub(1)
+        .and_then(|edge| pipes[edge].0.take());
+    let output = (internal.end < plan.stages().len())
+        .then(|| pipes[internal.end - 1].1.take())
+        .flatten();
+    let environment: Vec<(OsString, OsString)> = plan
+        .environment()
+        .iter()
+        .map(|(name, value)| (OsString::from(name), value.to_os_string()))
+        .collect();
+    let mut children = Vec::with_capacity(plan.stages().len() - internal.len());
+    let started_at = clock.now();
+
+    for (index, stage) in plan.stages().iter().enumerate() {
+        if internal.contains(&index) {
+            continue;
+        }
+        let input_endpoint = index.checked_sub(1).and_then(|edge| pipes[edge].0.take());
+        let edge_output = pipes.get_mut(index).and_then(|edge| edge.1.take());
+        let merge_output =
+            edge_output.is_some() && plan.edges()[index].kind() == PipeOperator::StdoutAndStderr;
+        let mut descriptor_map = StageDescriptorMap::new(input_endpoint, edge_output, merge_output);
+        if let Err(error) =
+            descriptor_map.apply_redirections(stage.redirections(), plan.cwd(), platform)
+        {
+            drop(descriptor_map);
+            drop(pipes);
+            terminate_indexed_and_reap(&mut children);
+            return Err(error);
+        }
+        let descriptors = descriptor_map.child_descriptors();
+        let closed_descriptors = descriptor_map.closed_descriptors();
+        let PlannedResolution::External { path } = stage.resolution() else {
+            unreachable!("the internal island was validated before pipe creation");
+        };
+        let argv: Vec<OsString> = stage
+            .argv()
+            .iter()
+            .map(|argument| argument.value().to_os_string())
+            .collect();
+        let request = SpawnRequest::new(path, &argv, &environment, plan.cwd())
+            .expect("a planned command always carries argv zero")
+            .with_descriptors(&descriptors)
+            .expect("the final descriptor map has unique targets")
+            .with_closed_descriptors(&closed_descriptors)
+            .expect("a final descriptor cannot be both mapped and closed");
+        let child = platform
+            .spawn(&request)
+            .map(|child| IndexedStartedChild {
+                index,
+                child: StartedChild {
+                    child,
+                    started_at: Some(clock.now()),
+                },
+            })
+            .map_err(|error| {
+                RuntimeError::new(
+                    RuntimeErrorKind::ProcessSpawn(error),
+                    stage.argv()[0].span(),
+                )
+            });
+
+        drop(descriptors);
+        drop(closed_descriptors);
+        drop(descriptor_map);
+
+        match child {
+            Ok(child) => children.push(child),
+            Err(error) => {
+                drop(pipes);
+                terminate_indexed_and_reap(&mut children);
+                return Err(error);
+            }
+        }
+    }
+
+    drop(pipes);
+    Ok(MixedPipeline {
+        children,
+        input,
+        output,
+        started_at,
+    })
+}
+
 fn validate_preflighted_external_plan(plan: &ExecutionPlan) -> Result<(), RuntimeError> {
     if plan.stages().is_empty() {
         return Err(RuntimeError::new(
@@ -629,6 +821,20 @@ fn terminate_and_reap(children: &mut [StartedChild]) {
 struct StartedChild {
     child: Box<dyn ChildProcess>,
     started_at: Option<Instant>,
+}
+
+struct IndexedStartedChild {
+    index: usize,
+    child: StartedChild,
+}
+
+fn terminate_indexed_and_reap(children: &mut [IndexedStartedChild]) {
+    for child in &mut *children {
+        let _ = child.child.child.terminate();
+    }
+    for child in children {
+        let _ = child.child.child.wait();
+    }
 }
 
 struct StageCompletion {

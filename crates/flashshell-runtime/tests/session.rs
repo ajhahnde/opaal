@@ -17,11 +17,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use flashshell_platform::{Capabilities, FakePlatform, TerminalSize};
 use flashshell_platform_posix::PosixPlatform;
-use flashshell_runtime::Environment;
 use flashshell_runtime::eval::FakeClock;
 use flashshell_runtime::plan::SessionOptions;
 use flashshell_runtime::resolve::ExecutableProbe;
 use flashshell_runtime::session::{Session, SubmitOutcome};
+use flashshell_runtime::{Environment, Status};
 
 #[derive(Default)]
 struct Probe {
@@ -461,6 +461,93 @@ fn live_file_and_format_boundaries_preserve_json_and_text() {
     assert_eq!(
         fs::read(temp.path().join("output.bin")).unwrap(),
         [0, 0xff, 7]
+    );
+}
+
+#[test]
+fn mixed_process_boundaries_stream_in_both_directions() {
+    let temp = TempDir::new("session-mixed-boundaries");
+    fs::write(temp.path().join("lines.txt"), b"one\ntwo\n")
+        .expect("text fixture should be written");
+    let binary: Vec<u8> = (0u8..=255).cycle().take(2 * 1024 * 1024).collect();
+    fs::write(temp.path().join("input.bin"), &binary).expect("binary fixture should be written");
+
+    let mut session = Session::new(temp.path(), environment(), SessionOptions::default());
+    let probe = Probe::new(["/bin/cat"]);
+    let mut sink = Vec::new();
+    session
+        .submit(
+            "<interactive>",
+            "^/bin/cat < lines.txt | from text | first 1 | to text\n\
+             open input.bin | decode bytes | encode bytes | ^/bin/cat > output.bin\n\
+             ^/bin/cat < input.bin | decode bytes | encode bytes | \
+             ^/bin/cat > roundtrip.bin",
+            &probe,
+            &PosixPlatform,
+            &FakeClock::new(),
+            &mut sink,
+        )
+        .expect("mixed boundaries should stream without capture");
+
+    assert_eq!(sink, b"one\n");
+    assert_eq!(fs::read(temp.path().join("output.bin")).unwrap(), binary);
+    assert_eq!(fs::read(temp.path().join("roundtrip.bin")).unwrap(), binary);
+}
+
+#[test]
+fn an_early_external_exit_stops_the_internal_byte_producer() {
+    let temp = TempDir::new("session-mixed-early-exit");
+    fs::write(temp.path().join("large.bin"), vec![b'x'; 2 * 1024 * 1024])
+        .expect("large fixture should be written");
+
+    let mut session = Session::new(temp.path(), environment(), SessionOptions::default());
+    let probe = Probe::new(["/usr/bin/head"]);
+    let mut sink = Vec::new();
+    session
+        .submit(
+            "<interactive>",
+            "open large.bin | ^/usr/bin/head -c 1 > first.bin",
+            &probe,
+            &PosixPlatform,
+            &FakeClock::new(),
+            &mut sink,
+        )
+        .expect("a closed consumer pipe should stop the internal producer");
+
+    assert!(sink.is_empty());
+    assert_eq!(fs::read(temp.path().join("first.bin")).unwrap(), b"x");
+    assert_eq!(session.current_status().and_then(Status::code), Some(0),);
+}
+
+#[test]
+fn mixed_pipeline_statuses_aggregate_in_source_order() {
+    let temp = TempDir::new("session-mixed-status");
+    let mut session = Session::new(
+        temp.path(),
+        environment(),
+        SessionOptions::default().with_pipefail(true),
+    );
+    let probe = Probe::new(["/usr/bin/false", "/bin/cat"]);
+    let mut sink = Vec::new();
+    session
+        .submit(
+            "<interactive>",
+            "^/usr/bin/false | decode bytes | encode bytes | ^/bin/cat > output.bin",
+            &probe,
+            &PosixPlatform,
+            &FakeClock::new(),
+            &mut sink,
+        )
+        .expect("nonzero process completion should remain a normal status");
+
+    let status = session
+        .current_status()
+        .expect("pipeline status should commit");
+    assert_eq!(status.code(), Some(1));
+    assert_eq!(status.stages().len(), 4);
+    assert_eq!(
+        status.stages().iter().map(Status::code).collect::<Vec<_>>(),
+        vec![Some(1), Some(0), Some(0), Some(0)]
     );
 }
 
