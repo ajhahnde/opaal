@@ -356,15 +356,26 @@ fn run_pipeline(
         // state before presentation would leave a successful status behind a
         // failed pipeline.
         let mut pending_state = state.clone();
-        let outcome =
-            execute_internal_pipeline(&plan, &mut pending_state, registry, probe, platform)?;
+        let outcome = execute_internal_pipeline(
+            &plan,
+            &mut pending_state,
+            registry,
+            probe,
+            platform,
+            source,
+        )?;
         return match outcome {
             InternalPipelineOutcome::Exit(code) => {
                 *state = pending_state;
                 Ok(ChainStep::Exit(code))
             }
-            InternalPipelineOutcome::Completed { payload, status } => {
+            InternalPipelineOutcome::Completed {
+                payload,
+                status,
+                closure_context,
+            } => {
                 render_payload(payload, presentation.as_ref(), final_stage.span(), output)?;
+                *pending_state.environment_mut() = closure_context.environment_snapshot();
                 *state = pending_state;
                 Ok(ChainStep::Status(status))
             }

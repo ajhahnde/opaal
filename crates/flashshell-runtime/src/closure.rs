@@ -12,19 +12,71 @@
 //! All three are lazy transformers — [`each`] returns an [`EachStream`],
 //! [`r#where`] a [`WhereStream`], and [`update`] an [`UpdateStream`], each
 //! pull-driven like [`crate::convert`]'s encoder — so behind a bounded downstream
-//! they stay bounded over an unbounded producer. Every terminal state is a
-//! first-class step: exhaustion, an upstream producer failure, a cancellation
-//! (either from upstream or from the shared token during a closure application), a
-//! closure runtime error, and the command-specific faults — a non-boolean `where`
-//! predicate, and a missing key or non-record item for `update`. The executor that
-//! later drives one inside a pipeline attaches the command's source span at the
+//! they stay bounded over an unbounded producer. Owned counterparts use one
+//! [`OwnedClosureContext`] when a stream must outlive stage dispatch. Every
+//! terminal state is a first-class step: exhaustion, an upstream producer
+//! failure, a cancellation (either from upstream or from the shared token during
+//! a closure application), a closure runtime error, and the command-specific
+//! faults — a non-boolean `where` predicate, and a missing key or non-record item
+//! for `update`. The live executor attaches the command's source span at the
 //! boundary. `update`'s replacement is applied as a closure when it is callable
 //! and used verbatim otherwise.
+
+use std::cell::RefCell;
+use std::rc::Rc;
 
 use crate::eval::{CancelReason, Completion, EvalLimits, RuntimeError, apply_callable};
 use crate::stream::{StreamPull, ValueStream};
 use crate::{Environment, Record, Value};
 use flashshell_syntax::{SourceFile, Span};
+
+/// Owned evaluator context shared by lazy closure-driven pipeline stages.
+///
+/// The source and limits are immutable. The environment is shared through
+/// interior mutability so a closure stream can be stored in an owned
+/// [`ValueStream`] and still preserve environment changes across successive
+/// pulls. The session snapshots it only after the complete pipeline succeeds.
+#[derive(Clone)]
+pub struct OwnedClosureContext {
+    source: SourceFile,
+    environment: Rc<RefCell<Environment>>,
+    limits: EvalLimits,
+}
+
+impl OwnedClosureContext {
+    /// Build a transactional closure context from one submitted source and
+    /// environment snapshot.
+    #[must_use]
+    pub fn new(source: SourceFile, environment: Environment, limits: EvalLimits) -> Self {
+        Self {
+            source,
+            environment: Rc::new(RefCell::new(environment)),
+            limits,
+        }
+    }
+
+    /// Clone the environment after all lazy closure applications have finished.
+    #[must_use]
+    pub fn environment_snapshot(&self) -> Environment {
+        self.environment.borrow().clone()
+    }
+
+    fn apply(
+        &self,
+        callable: &Value,
+        arguments: Vec<Value>,
+        span: Span,
+    ) -> Result<Completion, RuntimeError> {
+        apply_callable(
+            callable,
+            arguments,
+            &self.source,
+            span,
+            &mut self.environment.borrow_mut(),
+            &self.limits,
+        )
+    }
+}
 
 /// One step of mapping a value stream through a closure.
 #[derive(Debug)]
@@ -104,6 +156,69 @@ impl EachStream<'_> {
                     EachStep::Failed(error)
                 }
             },
+            StreamPull::End => {
+                self.done = true;
+                EachStep::End
+            }
+            StreamPull::Failed(error) => {
+                self.done = true;
+                EachStep::Failed(error)
+            }
+            StreamPull::Cancelled(reason) => {
+                self.done = true;
+                EachStep::Cancelled(reason)
+            }
+        }
+    }
+}
+
+/// Owned lazy `each` transformer for the live internal executor.
+pub struct OwnedEachStream {
+    input: ValueStream,
+    closure: Value,
+    span: Span,
+    context: OwnedClosureContext,
+    done: bool,
+}
+
+/// Build an owned lazy `each` transformer.
+#[must_use]
+pub fn each_owned(
+    input: ValueStream,
+    closure: Value,
+    span: Span,
+    context: OwnedClosureContext,
+) -> OwnedEachStream {
+    OwnedEachStream {
+        input,
+        closure,
+        span,
+        context,
+        done: false,
+    }
+}
+
+impl OwnedEachStream {
+    /// Pull the next mapped value while retaining the complete terminal-state
+    /// contract of [`EachStream::pull`].
+    pub fn pull(&mut self) -> EachStep {
+        if self.done {
+            return EachStep::End;
+        }
+        match self.input.pull() {
+            StreamPull::Item(value) => {
+                match self.context.apply(&self.closure, vec![value], self.span) {
+                    Ok(Completion::Value(mapped)) => EachStep::Item(mapped),
+                    Ok(Completion::Cancelled(cancellation)) => {
+                        self.done = true;
+                        EachStep::Cancelled(cancellation.reason())
+                    }
+                    Err(error) => {
+                        self.done = true;
+                        EachStep::Failed(error)
+                    }
+                }
+            }
             StreamPull::End => {
                 self.done = true;
                 EachStep::End
@@ -231,6 +346,83 @@ impl WhereStream<'_> {
     }
 }
 
+/// Owned lazy `where` transformer for the live internal executor.
+pub struct OwnedWhereStream {
+    input: ValueStream,
+    closure: Value,
+    span: Span,
+    context: OwnedClosureContext,
+    done: bool,
+}
+
+/// Build an owned lazy `where` transformer.
+#[must_use]
+pub fn where_owned(
+    input: ValueStream,
+    closure: Value,
+    span: Span,
+    context: OwnedClosureContext,
+) -> OwnedWhereStream {
+    OwnedWhereStream {
+        input,
+        closure,
+        span,
+        context,
+        done: false,
+    }
+}
+
+impl OwnedWhereStream {
+    /// Pull the next matching value while retaining the complete terminal-state
+    /// contract of [`WhereStream::pull`].
+    pub fn pull(&mut self) -> WhereStep {
+        if self.done {
+            return WhereStep::End;
+        }
+        loop {
+            match self.input.pull() {
+                StreamPull::Item(value) => {
+                    match self
+                        .context
+                        .apply(&self.closure, vec![value.clone()], self.span)
+                    {
+                        Ok(Completion::Value(Value::Bool(true))) => {
+                            return WhereStep::Item(value);
+                        }
+                        Ok(Completion::Value(Value::Bool(false))) => {}
+                        Ok(Completion::Value(other)) => {
+                            self.done = true;
+                            return WhereStep::PredicateNotBool {
+                                actual: other.family_name(),
+                            };
+                        }
+                        Ok(Completion::Cancelled(cancellation)) => {
+                            self.done = true;
+                            return WhereStep::Cancelled(cancellation.reason());
+                        }
+                        Err(error) => {
+                            self.done = true;
+                            return WhereStep::Failed(error);
+                        }
+                    }
+                }
+                StreamPull::End => {
+                    self.done = true;
+                    return WhereStep::End;
+                }
+                StreamPull::Failed(error) => {
+                    self.done = true;
+                    return WhereStep::Failed(error);
+                }
+                StreamPull::Cancelled(reason) => {
+                    self.done = true;
+                    return WhereStep::Cancelled(reason);
+                }
+            }
+        }
+    }
+}
+
 /// One step of updating a field in a stream of records.
 #[derive(Debug)]
 pub enum UpdateStep {
@@ -337,6 +529,105 @@ impl UpdateStream<'_> {
                     other => other.clone(),
                 };
                 let entries: Vec<(String, Value)> = record
+                    .entries()
+                    .iter()
+                    .map(|(key, value)| {
+                        if key.as_ref() == self.key {
+                            (key.to_string(), replacement.clone())
+                        } else {
+                            (key.to_string(), value.clone())
+                        }
+                    })
+                    .collect();
+                let updated = Record::new(entries).expect("keys are unchanged and unique");
+                UpdateStep::Record(Value::Record(updated))
+            }
+            StreamPull::Item(other) => {
+                self.done = true;
+                UpdateStep::NotRecord {
+                    actual: other.family_name(),
+                }
+            }
+            StreamPull::End => {
+                self.done = true;
+                UpdateStep::End
+            }
+            StreamPull::Failed(error) => {
+                self.done = true;
+                UpdateStep::Failed(error)
+            }
+            StreamPull::Cancelled(reason) => {
+                self.done = true;
+                UpdateStep::Cancelled(reason)
+            }
+        }
+    }
+}
+
+/// Owned lazy `update` transformer for the live internal executor.
+pub struct OwnedUpdateStream {
+    input: ValueStream,
+    key: String,
+    replacement: Value,
+    span: Span,
+    context: OwnedClosureContext,
+    done: bool,
+}
+
+/// Build an owned lazy `update` transformer.
+#[must_use]
+pub fn update_owned(
+    input: ValueStream,
+    key: String,
+    replacement: Value,
+    span: Span,
+    context: OwnedClosureContext,
+) -> OwnedUpdateStream {
+    OwnedUpdateStream {
+        input,
+        key,
+        replacement,
+        span,
+        context,
+        done: false,
+    }
+}
+
+impl OwnedUpdateStream {
+    /// Pull the next updated record while retaining the complete terminal-state
+    /// contract of [`UpdateStream::pull`].
+    pub fn pull(&mut self) -> UpdateStep {
+        if self.done {
+            return UpdateStep::End;
+        }
+        match self.input.pull() {
+            StreamPull::Item(Value::Record(record)) => {
+                let Some(current) = record.get(&self.key).cloned() else {
+                    self.done = true;
+                    return UpdateStep::MissingKey {
+                        key: self.key.clone(),
+                    };
+                };
+                let replacement = match &self.replacement {
+                    Value::Callable(_) => {
+                        match self
+                            .context
+                            .apply(&self.replacement, vec![current], self.span)
+                        {
+                            Ok(Completion::Value(value)) => value,
+                            Ok(Completion::Cancelled(cancellation)) => {
+                                self.done = true;
+                                return UpdateStep::Cancelled(cancellation.reason());
+                            }
+                            Err(error) => {
+                                self.done = true;
+                                return UpdateStep::Failed(error);
+                            }
+                        }
+                    }
+                    other => other.clone(),
+                };
+                let entries = record
                     .entries()
                     .iter()
                     .map(|(key, value)| {

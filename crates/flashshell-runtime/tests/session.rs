@@ -295,6 +295,111 @@ fn a_lazy_structured_failure_does_not_commit_pipeline_status() {
 }
 
 #[test]
+fn each_and_where_execute_captured_closures_lazily() {
+    let mut session = session();
+    let probe = Probe::default();
+    let mut sink = Vec::new();
+
+    session
+        .submit(
+            "<interactive>",
+            "let wanted = 'internal'\n\
+             which pwd missing | where {|row| $row.kind == $wanted} | \
+             each {|row| $row.name} | first 1",
+            &probe,
+            &terminal_platform(),
+            &FakeClock::new(),
+            &mut sink,
+        )
+        .expect("where and each should execute their captured closures");
+
+    assert_eq!(String::from_utf8(sink).unwrap(), "pwd\n");
+}
+
+#[test]
+fn update_supports_closure_and_static_replacements() {
+    let probe = Probe::default();
+
+    let mut closure_session = session();
+    let mut closure_sink = Vec::new();
+    closure_session
+        .submit(
+            "<interactive>",
+            "which pwd | update kind {|kind| 'changed'} | get kind",
+            &probe,
+            &terminal_platform(),
+            &FakeClock::new(),
+            &mut closure_sink,
+        )
+        .expect("update should apply a closure to the current field");
+    assert_eq!(String::from_utf8(closure_sink).unwrap(), "changed\n");
+
+    let mut static_session = session();
+    let mut static_sink = Vec::new();
+    static_session
+        .submit(
+            "<interactive>",
+            "which pwd | update kind known | get kind",
+            &probe,
+            &terminal_platform(),
+            &FakeClock::new(),
+            &mut static_sink,
+        )
+        .expect("update should accept a static text replacement");
+    assert_eq!(String::from_utf8(static_sink).unwrap(), "known\n");
+}
+
+#[test]
+fn a_successful_lazy_closure_pipeline_commits_its_environment() {
+    let mut session = session();
+    let probe = Probe::default();
+    let mut sink = Vec::new();
+
+    session
+        .submit(
+            "<interactive>",
+            "def mark(row) {\n\
+                 export SEEN = 'yes'\n\
+                 return $row\n\
+             }\n\
+             which pwd | each {|row| mark($row)} | first 1",
+            &probe,
+            &terminal_platform(),
+            &FakeClock::new(),
+            &mut sink,
+        )
+        .expect("a successful closure application should commit its environment");
+
+    assert_eq!(session.environment().get("SEEN"), Some(OsStr::new("yes")));
+}
+
+#[test]
+fn a_failing_lazy_closure_pipeline_rolls_back_its_environment() {
+    let mut session = session();
+    let probe = Probe::default();
+    let mut sink = Vec::new();
+
+    let error = session
+        .submit(
+            "<interactive>",
+            "def mark(row) {\n\
+                 export LEAK = 'no'\n\
+                 return $row\n\
+             }\n\
+             which pwd | each {|row| mark($row)} | get absent",
+            &probe,
+            &terminal_platform(),
+            &FakeClock::new(),
+            &mut sink,
+        )
+        .expect_err("a downstream lazy failure should reject closure side effects");
+
+    assert!(error.render().contains("record has no field `absent`"));
+    assert_eq!(session.environment().get("LEAK"), None);
+    assert!(sink.is_empty());
+}
+
+#[test]
 fn structured_output_requires_an_interactive_output_terminal() {
     let mut session = session();
     let probe = Probe::default();

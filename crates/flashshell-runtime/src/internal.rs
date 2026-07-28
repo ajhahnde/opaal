@@ -9,11 +9,15 @@ use std::ffi::OsStr;
 use std::path::Path;
 
 use flashshell_platform::{DirectoryReadRequest, Platform};
+use flashshell_syntax::SourceFile;
 
 use crate::builtin::{BuiltinOutcome, BuiltinOutput, SessionState, execute_builtin};
+use crate::closure::{
+    EachStep, OwnedClosureContext, UpdateStep, WhereStep, each_owned, update_owned, where_owned,
+};
 use crate::command::{Carrier, CommandRegistry};
 use crate::directory::{ListStep, list};
-use crate::eval::{RuntimeError, RuntimeErrorKind};
+use crate::eval::{EvalLimits, RuntimeError, RuntimeErrorKind};
 use crate::plan::{ExecutionPlan, PlannedArgument, PlannedResolution, PlannedStage, preflight};
 use crate::resolve::ExecutableProbe;
 use crate::stream::{StreamPull, ValueStream};
@@ -57,6 +61,8 @@ pub enum InternalPipelineOutcome {
         payload: InternalPayload,
         /// The leaf or aggregate pipeline status.
         status: Status,
+        /// The shared closure environment after every lazy stage has drained.
+        closure_context: Box<OwnedClosureContext>,
     },
     /// The `exit` built-in requested session termination.
     Exit(u8),
@@ -70,10 +76,16 @@ pub fn execute_internal_pipeline(
     registry: &CommandRegistry,
     probe: &dyn ExecutableProbe,
     platform: &dyn Platform,
+    source: &SourceFile,
 ) -> Result<InternalPipelineOutcome, RuntimeError> {
     preflight(plan)?;
     let mut payload = InternalPayload::Empty;
     let mut statuses = Vec::with_capacity(plan.stages().len());
+    let closure_context = OwnedClosureContext::new(
+        source.clone(),
+        state.environment().clone(),
+        EvalLimits::default(),
+    );
 
     for stage in plan.stages() {
         let PlannedResolution::Internal { name } = stage.resolution() else {
@@ -95,6 +107,7 @@ pub fn execute_internal_pipeline(
             probe,
             platform,
             plan.cwd(),
+            &closure_context,
         )? {
             StageOutcome::Completed {
                 payload: output,
@@ -109,7 +122,11 @@ pub fn execute_internal_pipeline(
 
     let status = aggregate_status(statuses, plan.pipefail());
     state.set_current_status(Some(status.clone()));
-    Ok(InternalPipelineOutcome::Completed { payload, status })
+    Ok(InternalPipelineOutcome::Completed {
+        payload,
+        status,
+        closure_context: Box::new(closure_context),
+    })
 }
 
 enum StageOutcome {
@@ -131,6 +148,7 @@ fn execute_stage(
     probe: &dyn ExecutableProbe,
     platform: &dyn Platform,
     cwd: &Path,
+    closure_context: &OwnedClosureContext,
 ) -> Result<StageOutcome, RuntimeError> {
     match name {
         "cd" | "pwd" | "which" | "command" | "exit" | "check" => {
@@ -145,6 +163,9 @@ fn execute_stage(
         "get" => execute_get(stage, input),
         "sort" => execute_sort(stage, input),
         "ls" => execute_ls(stage, input, platform, cwd),
+        "each" => execute_each(stage, input, closure_context),
+        "where" => execute_where(stage, input, closure_context),
+        "update" => execute_update(stage, input, closure_context),
         _ => Err(RuntimeError::new(
             RuntimeErrorKind::Unsupported {
                 feature: "this internal command in the live structured executor",
@@ -152,6 +173,123 @@ fn execute_stage(
             stage.span(),
         )),
     }
+}
+
+fn execute_each(
+    stage: &PlannedStage,
+    input: InternalPayload,
+    context: &OwnedClosureContext,
+) -> Result<StageOutcome, RuntimeError> {
+    expect_arity(stage, "each", 1, Some(1))?;
+    let closure = typed_value("each", &stage.arguments()[0])?.clone();
+    let mut mapper = each_owned(
+        expect_stream(stage, input)?,
+        closure,
+        stage.span(),
+        context.clone(),
+    );
+    let stream = ValueStream::from_pull_fn(move || match mapper.pull() {
+        EachStep::Item(value) => StreamPull::Item(value),
+        EachStep::End => StreamPull::End,
+        EachStep::Failed(error) => StreamPull::Failed(error),
+        EachStep::Cancelled(reason) => StreamPull::Cancelled(reason),
+    });
+    completed(InternalPayload::ValueStream(stream))
+}
+
+fn execute_where(
+    stage: &PlannedStage,
+    input: InternalPayload,
+    context: &OwnedClosureContext,
+) -> Result<StageOutcome, RuntimeError> {
+    expect_arity(stage, "where", 1, Some(1))?;
+    let closure = typed_value("where", &stage.arguments()[0])?.clone();
+    let mut filter = where_owned(
+        expect_stream(stage, input)?,
+        closure,
+        stage.span(),
+        context.clone(),
+    );
+    let span = stage.span();
+    let stream = ValueStream::from_pull_fn(move || match filter.pull() {
+        WhereStep::Item(value) => StreamPull::Item(value),
+        WhereStep::End => StreamPull::End,
+        WhereStep::PredicateNotBool { actual } => StreamPull::Failed(RuntimeError::new(
+            RuntimeErrorKind::StructuredCommand {
+                command: "where",
+                message: format!("predicate must return Bool, found {actual}"),
+            },
+            span,
+        )),
+        WhereStep::Failed(error) => StreamPull::Failed(error),
+        WhereStep::Cancelled(reason) => StreamPull::Cancelled(reason),
+    });
+    completed(InternalPayload::ValueStream(stream))
+}
+
+fn execute_update(
+    stage: &PlannedStage,
+    input: InternalPayload,
+    context: &OwnedClosureContext,
+) -> Result<StageOutcome, RuntimeError> {
+    expect_arity(stage, "update", 2, Some(2))?;
+    let key_word = word("update", &stage.arguments()[0])?;
+    let key = key_word
+        .value()
+        .to_str()
+        .map(str::to_owned)
+        .ok_or_else(|| {
+            RuntimeError::new(
+                RuntimeErrorKind::BuiltinArgument {
+                    command: "update",
+                    message: "the field name must be valid UTF-8".to_owned(),
+                },
+                key_word.span(),
+            )
+        })?;
+    let replacement = match &stage.arguments()[1] {
+        PlannedArgument::Value { value, .. } => value.clone(),
+        PlannedArgument::Word(word) => {
+            word.value().to_str().map(Value::string).ok_or_else(|| {
+                RuntimeError::new(
+                    RuntimeErrorKind::BuiltinArgument {
+                        command: "update",
+                        message: "a static replacement must be valid UTF-8".to_owned(),
+                    },
+                    word.span(),
+                )
+            })?
+        }
+    };
+    let mut updater = update_owned(
+        expect_stream(stage, input)?,
+        key,
+        replacement,
+        stage.span(),
+        context.clone(),
+    );
+    let span = stage.span();
+    let stream = ValueStream::from_pull_fn(move || match updater.pull() {
+        UpdateStep::Record(value) => StreamPull::Item(value),
+        UpdateStep::End => StreamPull::End,
+        UpdateStep::MissingKey { key } => StreamPull::Failed(RuntimeError::new(
+            RuntimeErrorKind::StructuredCommand {
+                command: "update",
+                message: format!("record has no field `{key}`"),
+            },
+            span,
+        )),
+        UpdateStep::NotRecord { actual } => StreamPull::Failed(RuntimeError::new(
+            RuntimeErrorKind::StructuredCommand {
+                command: "update",
+                message: format!("expected Record input, found {actual}"),
+            },
+            span,
+        )),
+        UpdateStep::Failed(error) => StreamPull::Failed(error),
+        UpdateStep::Cancelled(reason) => StreamPull::Cancelled(reason),
+    });
+    completed(InternalPayload::ValueStream(stream))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -519,6 +657,21 @@ fn word<'a>(
     })
 }
 
+fn typed_value<'a>(
+    command: &'static str,
+    argument: &'a PlannedArgument,
+) -> Result<&'a Value, RuntimeError> {
+    argument.as_value().ok_or_else(|| {
+        RuntimeError::new(
+            RuntimeErrorKind::BuiltinArgument {
+                command,
+                message: "expected a closure argument".to_owned(),
+            },
+            argument.span(),
+        )
+    })
+}
+
 fn drain<T>(
     command: &'static str,
     stage: &PlannedStage,
@@ -588,6 +741,9 @@ fn command_name(stage: &PlannedStage) -> &'static str {
             "get" => "get",
             "sort" => "sort",
             "ls" => "ls",
+            "each" => "each",
+            "where" => "where",
+            "update" => "update",
             _ => "internal command",
         },
         PlannedResolution::External { .. } => "internal command",

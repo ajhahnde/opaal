@@ -39,8 +39,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   the line and Ctrl-D on an empty line exits.
 - Add live structured internal pipelines with lazy carrier-preserving execution
   for `ls`, `first`, `last`, `collect`, `length`, `lines`, `select`, `get`, and
-  `sort`. Structured edges are never rendered or serialized between stages;
-  commands that must drain a stream enforce a documented item ceiling, and a
-  lazy failure rolls back pending session state.
+  `sort`, plus closure-driven `each`, `where`, and `update`. Structured edges
+  are never rendered or serialized between stages; commands that must drain a
+  stream enforce a documented item ceiling, and a lazy failure rolls back
+  pending session state and closure environment changes.
 
 ---
