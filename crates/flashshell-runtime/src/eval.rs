@@ -322,6 +322,12 @@ pub enum RuntimeErrorKind {
     ProcessSpawn(SpawnError),
     /// Waiting for a successfully spawned external process failed.
     ProcessWait(WaitError),
+    /// The terminal could not be handed to a foreground job that must own it.
+    ///
+    /// Distinct from a spawn failure: the job's processes exist, and running
+    /// them without the terminal would send every keyboard interrupt to the
+    /// shell instead of to the job.
+    ForegroundTerminal(PlatformError),
 }
 
 /// Renders a carrier set as a human list: `A`, `A or B`, or `A, B, or C`.
@@ -540,6 +546,9 @@ impl fmt::Display for RuntimeErrorKind {
             Self::RedirectionSetup(error) => error.fmt(formatter),
             Self::ProcessSpawn(error) => error.fmt(formatter),
             Self::ProcessWait(error) => error.fmt(formatter),
+            Self::ForegroundTerminal(error) => {
+                write!(formatter, "terminal handover to the job failed: {error}")
+            }
         }
     }
 }

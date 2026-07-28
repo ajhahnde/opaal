@@ -34,7 +34,7 @@ bench = false
 doc = false
 
 [[bin]]
-name = "flashshell-process-observer-fixture"
+name = "flashshell-job-observer-fixture"
 path = "../../tests/fixtures/process_observer.rs"
 test = false
 bench = false

@@ -14,7 +14,7 @@ use std::thread;
 
 use flashshell_platform::{
     Capability, ChildDescriptor, ChildProcess, DescriptorEndpoint, FileOpenMode, FileOpenRequest,
-    Platform, ProcessGroup, ProcessStatus, SpawnRequest,
+    ForegroundTerminalGuard, Platform, ProcessGroup, ProcessGroupId, ProcessStatus, SpawnRequest,
 };
 use flashshell_syntax::{ConditionalChain, OutputMode, PipeOperator, Pipeline, SourceFile};
 
@@ -146,7 +146,11 @@ where
         .map_err(|error| RuntimeError::new(RuntimeErrorKind::CapturePipe(error), producer_span))?
         .into_parts();
     let pipeline_started = clock.now();
-    let children = start_preflighted_pipeline(plan, platform, Some(clock), Some(writer))?;
+    let started = start_preflighted_pipeline(plan, platform, Some(clock), Some(writer))?;
+    // Held across the drain and the wait; `Drop` is the backstop that returns
+    // the terminal even when the drain callback panics.
+    let foreground = take_foreground(plan, platform, started.group)?;
+    let children = started.children;
 
     let (wait_result, drain_result) = thread::scope(|scope| {
         let (ready_sender, ready_receiver) = mpsc::sync_channel(0);
@@ -162,8 +166,10 @@ where
         (wait_result, drain_result)
     });
 
+    let released = release_foreground(foreground, plan);
     let completions = wait_result?;
     drain_result?;
+    released?;
     let pipeline_duration = elapsed(pipeline_started, clock.now());
     Ok(aggregate_language_status(
         plan,
@@ -503,8 +509,13 @@ fn execute_preflighted_pipeline_inner(
     platform: &dyn Platform,
     clock: Option<&dyn Clock>,
 ) -> Result<Vec<StageCompletion>, RuntimeError> {
-    let children = start_preflighted_pipeline(plan, platform, clock, None)?;
-    wait_in_source_order(children, plan, clock)
+    let started = start_preflighted_pipeline(plan, platform, clock, None)?;
+    let foreground = take_foreground(plan, platform, started.group)?;
+    let waited = wait_in_source_order(started.children, plan, clock);
+    let released = release_foreground(foreground, plan);
+    let completions = waited?;
+    released?;
+    Ok(completions)
 }
 
 /// The single process group every external member of one pipeline joins.
@@ -545,6 +556,67 @@ impl PipelineGroup {
             self.placement = ProcessGroup::Join(group);
         }
     }
+
+    /// The established group, once a member has led one.
+    const fn established(&self) -> Option<ProcessGroupId> {
+        match self.placement {
+            ProcessGroup::Join(group) => Some(group),
+            ProcessGroup::Inherit | ProcessGroup::New => None,
+        }
+    }
+}
+
+/// Started external members of one pipeline and the group they share.
+struct StartedPipeline {
+    children: Vec<StartedChild>,
+    group: Option<ProcessGroupId>,
+}
+
+/// Hand the terminal to `group` for as long as the returned guard lives.
+///
+/// A foreground job that owns the terminal is what makes a keyboard interrupt
+/// reach the job instead of the shell. The handover is attempted only when the
+/// platform can perform it and the shell actually has a terminal, so an absent
+/// capability or a redirected session is not a failure — but a refused handover
+/// on a real terminal is, because running the job anyway would silently send
+/// the user's interrupts to the wrong process.
+/// Give the terminal back to the shell, reporting a failed return.
+///
+/// The guard would also restore on drop, but silently: a shell that failed to
+/// take its terminal back cannot read the next command, so the failure is
+/// surfaced instead of discarded. A pipeline error stays primary, because the
+/// failed job is the more useful diagnostic.
+fn release_foreground(
+    guard: Option<Box<dyn ForegroundTerminalGuard>>,
+    plan: &ExecutionPlan,
+) -> Result<(), RuntimeError> {
+    let Some(mut guard) = guard else {
+        return Ok(());
+    };
+    guard.restore().map_err(|error| {
+        RuntimeError::new(RuntimeErrorKind::ForegroundTerminal(error), plan.span())
+    })
+}
+
+fn take_foreground(
+    plan: &ExecutionPlan,
+    platform: &dyn Platform,
+    group: Option<ProcessGroupId>,
+) -> Result<Option<Box<dyn ForegroundTerminalGuard>>, RuntimeError> {
+    let Some(group) = group else {
+        return Ok(None);
+    };
+    if !platform
+        .capabilities()
+        .supports(Capability::ForegroundTerminal)
+        || !platform.is_terminal()
+    {
+        return Ok(None);
+    }
+
+    platform.enter_foreground(group).map(Some).map_err(|error| {
+        RuntimeError::new(RuntimeErrorKind::ForegroundTerminal(error), plan.span())
+    })
 }
 
 fn start_preflighted_pipeline(
@@ -552,7 +624,7 @@ fn start_preflighted_pipeline(
     platform: &dyn Platform,
     clock: Option<&dyn Clock>,
     mut final_output: Option<Box<dyn DescriptorEndpoint>>,
-) -> Result<Vec<StartedChild>, RuntimeError> {
+) -> Result<StartedPipeline, RuntimeError> {
     validate_preflighted_external_plan(plan)?;
 
     let mut pipes = Vec::with_capacity(plan.edges().len());
@@ -633,7 +705,10 @@ fn start_preflighted_pipeline(
     }
 
     drop(pipes);
-    Ok(children)
+    Ok(StartedPipeline {
+        children,
+        group: group.established(),
+    })
 }
 
 /// Running external stages surrounding one contiguous internal stage island.
@@ -642,6 +717,12 @@ fn start_preflighted_pipeline(
 /// an external prefix lazily and push into an external suffix without capture.
 pub(crate) struct MixedPipeline {
     children: Vec<IndexedStartedChild>,
+    /// Terminal ownership held for the external members. The shell process runs
+    /// the internal island in its own group while the job owns the terminal; the
+    /// island reads pipes rather than the keyboard, so it needs no ownership of
+    /// its own, and it must not take the terminal back before the external
+    /// members have finished with it.
+    foreground: Option<Box<dyn ForegroundTerminalGuard>>,
     input: Option<Box<dyn DescriptorEndpoint>>,
     output: Option<Box<dyn DescriptorEndpoint>>,
     started_at: Instant,
@@ -666,6 +747,7 @@ impl MixedPipeline {
     ) -> Result<(Vec<(usize, Status)>, Duration), RuntimeError> {
         let mut statuses = Vec::with_capacity(self.children.len());
         let mut first_error = None;
+        let foreground = self.foreground;
         for mut started in self.children {
             let stage = &plan.stages()[started.index];
             match started.child.child.wait() {
@@ -685,9 +767,15 @@ impl MixedPipeline {
                 Err(_) => {}
             }
         }
+        // The terminal returns only after the last external member has been
+        // waited, so a job that outlives the internal island still owns it.
+        let released = release_foreground(foreground, plan);
         match first_error {
             Some(error) => Err(error),
-            None => Ok((statuses, elapsed(self.started_at, clock.now()))),
+            None => {
+                released?;
+                Ok((statuses, elapsed(self.started_at, clock.now())))
+            }
         }
     }
 
@@ -824,8 +912,10 @@ pub(crate) fn start_mixed_pipeline(
     }
 
     drop(pipes);
+    let foreground = take_foreground(plan, platform, group.established())?;
     Ok(MixedPipeline {
         children,
+        foreground,
         input,
         output,
         started_at,

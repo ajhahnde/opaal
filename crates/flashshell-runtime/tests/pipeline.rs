@@ -758,3 +758,103 @@ fn a_platform_without_process_groups_still_runs_an_external_pipeline() {
         assert_eq!(record.process_group(), None);
     }
 }
+
+#[test]
+fn a_foreground_pipeline_owns_the_terminal_and_gives_it_back() {
+    let fixture = PathBuf::from(env!("CARGO_BIN_EXE_flashshell-stream-fixture"));
+    let directory = fixture.parent().expect("fixture has a parent").to_owned();
+    let name = fixture.file_name().expect("fixture has a name");
+    let text = format!("^{0} source 0 0 | ^{0} sink 0 0", name.to_string_lossy());
+    let file = source(&text);
+    let syntax = pipeline(&file);
+    let plan = plan_pipeline(
+        &syntax,
+        &directory,
+        &file,
+        &mut ScopeStack::new(),
+        &Environment::from_snapshot([("PATH", directory.as_os_str().to_os_string())]),
+        &CommandRegistry::new(),
+        &ExactProbe(fixture),
+    )
+    .expect("the foreground pipeline plan should build");
+    let interactive = FakePlatform::with_terminal(
+        Capabilities::full(),
+        true,
+        flashshell_platform::TerminalSize::new(80, 24),
+    );
+    let platform = RecordingPlatform::new(interactive);
+    let log = platform.log();
+    let spawns = platform.spawn_log();
+
+    execute_foreground_pipeline(&plan, &platform).expect("the pipeline should run");
+
+    let group = spawns.records()[0]
+        .process_group()
+        .expect("the pipeline leads a group");
+    // The terminal goes to the job's own group, not to a single stage, and it
+    // is back with the shell before the next prompt could be drawn.
+    assert_eq!(log.foreground_handovers(), vec![group]);
+    assert_eq!(log.foreground_releases(), 1);
+}
+
+#[test]
+fn a_pipeline_takes_no_terminal_when_the_session_has_none() {
+    let fixture = PathBuf::from(env!("CARGO_BIN_EXE_flashshell-stream-fixture"));
+    let directory = fixture.parent().expect("fixture has a parent").to_owned();
+    let name = fixture.file_name().expect("fixture has a name");
+    let text = format!("^{0} source 0 0 | ^{0} sink 0 0", name.to_string_lossy());
+    let file = source(&text);
+    let syntax = pipeline(&file);
+    let plan = plan_pipeline(
+        &syntax,
+        &directory,
+        &file,
+        &mut ScopeStack::new(),
+        &Environment::from_snapshot([("PATH", directory.as_os_str().to_os_string())]),
+        &CommandRegistry::new(),
+        &ExactProbe(fixture),
+    )
+    .expect("the redirected pipeline plan should build");
+    // A redirected session has a real process group but no terminal to give:
+    // taking one would be a handover to a descriptor that is not a terminal.
+    let platform = RecordingPlatform::new(FakePlatform::full());
+    let log = platform.log();
+
+    execute_foreground_pipeline(&plan, &platform).expect("the pipeline should run");
+
+    assert!(log.foreground_handovers().is_empty());
+    assert_eq!(log.foreground_releases(), 0);
+}
+
+#[test]
+fn a_platform_without_terminal_ownership_still_runs_a_foreground_pipeline() {
+    let fixture = PathBuf::from(env!("CARGO_BIN_EXE_flashshell-stream-fixture"));
+    let directory = fixture.parent().expect("fixture has a parent").to_owned();
+    let name = fixture.file_name().expect("fixture has a name");
+    let text = format!("^{0} source 0 0 | ^{0} sink 0 0", name.to_string_lossy());
+    let file = source(&text);
+    let syntax = pipeline(&file);
+    let plan = plan_pipeline(
+        &syntax,
+        &directory,
+        &file,
+        &mut ScopeStack::new(),
+        &Environment::from_snapshot([("PATH", directory.as_os_str().to_os_string())]),
+        &CommandRegistry::new(),
+        &ExactProbe(fixture),
+    )
+    .expect("the unowned pipeline plan should build");
+    let no_ownership = FakePlatform::with_terminal(
+        Capabilities::full_without(Capability::ForegroundTerminal),
+        true,
+        flashshell_platform::TerminalSize::new(80, 24),
+    );
+    let platform = RecordingPlatform::new(no_ownership);
+    let log = platform.log();
+
+    execute_foreground_pipeline(&plan, &platform).expect("the pipeline still runs");
+
+    // Terminal ownership is a capability, not a requirement: without it the
+    // job runs in the shell's terminal exactly as it did before job control.
+    assert!(log.foreground_handovers().is_empty());
+}

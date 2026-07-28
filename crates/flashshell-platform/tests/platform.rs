@@ -677,3 +677,55 @@ fn a_recording_platform_reports_the_group_placement_of_every_spawn() {
     assert_eq!(records[1].requested(), ProcessGroup::Join(group));
     assert_eq!(records[1].process_group(), Some(group));
 }
+
+#[test]
+fn entering_the_foreground_requires_the_foreground_terminal_capability() {
+    let group = ProcessGroupId::new(11).expect("eleven is a usable group");
+    let platform = FakePlatform::new(Capabilities::full_without(Capability::ForegroundTerminal));
+
+    assert_eq!(
+        platform
+            .enter_foreground(group)
+            .expect_err("the handover must be refused"),
+        PlatformError::Unsupported {
+            capability: Capability::ForegroundTerminal,
+        },
+    );
+    assert_eq!(
+        platform
+            .foreground_process_group()
+            .expect_err("querying the owner must be refused too"),
+        PlatformError::Unsupported {
+            capability: Capability::ForegroundTerminal,
+        },
+    );
+}
+
+#[test]
+fn a_terminal_handover_is_released_once_whether_restored_or_dropped() {
+    let platform = RecordingPlatform::new(FakePlatform::full());
+    let log = platform.log();
+    let first = ProcessGroupId::new(21).expect("the group is usable");
+    let second = ProcessGroupId::new(22).expect("the group is usable");
+
+    let mut guard = platform
+        .enter_foreground(first)
+        .expect("the full fake hands the terminal over");
+    assert_eq!(guard.restore(), Ok(()));
+    // Restoration is idempotent, and the drop that follows must not count a
+    // second release: a doubled tally would hide a terminal that never returned.
+    assert_eq!(guard.restore(), Ok(()));
+    drop(guard);
+    assert_eq!(log.foreground_releases(), 1);
+
+    // The path a runtime error or a panic takes: the guard is never restored
+    // explicitly and the terminal comes back through `Drop` alone.
+    drop(
+        platform
+            .enter_foreground(second)
+            .expect("the second handover succeeds"),
+    );
+
+    assert_eq!(log.foreground_handovers(), vec![first, second]);
+    assert_eq!(log.foreground_releases(), 2);
+}

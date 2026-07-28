@@ -21,9 +21,9 @@ use flashshell_platform::{
     Capabilities, Capability, ChildProcess, DescriptorEndpoint, DescriptorReadError,
     DescriptorWriteError, DirectoryEntry, DirectoryEntryKind, DirectoryReadError,
     DirectoryReadRequest, DirectoryStream, FileActionError, FileIoEndpoint, FileOpenMode,
-    FileOpenRequest, PipeEndpoints, PipeError, Platform, PlatformError, ProcessGroupId,
-    ProcessStatus, SpawnError, SpawnRequest, TerminalModeGuard, TerminalSize, TerminateError,
-    WaitError, WorkingDirectoryError, WorkingDirectoryRequest,
+    FileOpenRequest, ForegroundTerminalGuard, PipeEndpoints, PipeError, Platform, PlatformError,
+    ProcessGroupId, ProcessStatus, SpawnError, SpawnRequest, TerminalModeGuard, TerminalSize,
+    TerminateError, WaitError, WorkingDirectoryError, WorkingDirectoryRequest,
 };
 
 /// A uniquely owned POSIX descriptor with close-on-exec discipline.
@@ -190,6 +190,39 @@ impl Platform for PosixPlatform {
         })?;
         Ok(Box::new(PosixTerminalModeGuard {
             saved,
+            restored: false,
+        }))
+    }
+
+    fn foreground_process_group(&self) -> Result<Option<ProcessGroupId>, PlatformError> {
+        self.require(Capability::ForegroundTerminal)?;
+        let stdin = io::stdin();
+        if !terminal_mode::is_terminal(stdin.as_fd()) {
+            return Ok(None);
+        }
+        foreground_terminal::owner(stdin.as_fd())
+            .map_err(foreground_unavailable)
+            .map(ProcessGroupId::new)
+    }
+
+    fn enter_foreground(
+        &self,
+        group: ProcessGroupId,
+    ) -> Result<Box<dyn ForegroundTerminalGuard>, PlatformError> {
+        self.require(Capability::ForegroundTerminal)?;
+        let stdin = io::stdin();
+        if !terminal_mode::is_terminal(stdin.as_fd()) {
+            return Err(PlatformError::Unavailable {
+                capability: Capability::ForegroundTerminal,
+                reason: "standard input is not a terminal".to_owned(),
+            });
+        }
+        let previous = foreground_terminal::owner(stdin.as_fd())
+            .map_err(foreground_unavailable)
+            .map(ProcessGroupId::new)?;
+        foreground_terminal::hand_over(stdin.as_fd(), group).map_err(foreground_unavailable)?;
+        Ok(Box::new(PosixForegroundTerminalGuard {
+            previous,
             restored: false,
         }))
     }
@@ -647,6 +680,95 @@ mod child_descriptors {
     }
 }
 
+/// Foreground terminal ownership.
+///
+/// `tcsetpgrp` raises `SIGTTOU` at the caller when the calling process is not
+/// in the terminal's current foreground group, whose default action stops the
+/// shell. That is exactly the situation restoration runs in: the job owns the
+/// terminal, and the shell taking it back is a background write. The signal is
+/// therefore blocked for the calling thread across the call and the previous
+/// mask is restored afterwards.
+///
+/// The mask is per-thread (`pthread_sigmask`), not a process-wide disposition
+/// change: an installed `SIGTTOU` handler stays installed, other threads keep
+/// their own masks, and a concurrent handover cannot observe a half-changed
+/// global state.
+#[allow(unsafe_code)]
+mod foreground_terminal {
+    use std::io;
+    use std::os::fd::{AsRawFd, BorrowedFd};
+
+    use flashshell_platform::ProcessGroupId;
+
+    pub(super) fn owner(fd: BorrowedFd<'_>) -> io::Result<u64> {
+        // SAFETY: tcgetpgrp only reads the terminal state behind a valid
+        // descriptor and dereferences no caller memory.
+        let group = unsafe { libc::tcgetpgrp(fd.as_raw_fd()) };
+        if group == -1 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(u64::try_from(group).unwrap_or_default())
+    }
+
+    pub(super) fn hand_over(fd: BorrowedFd<'_>, group: ProcessGroupId) -> io::Result<()> {
+        let group = libc::pid_t::try_from(group.get()).map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "process group exceeds the POSIX process identifier range",
+            )
+        })?;
+
+        let blocked = block_terminal_stops()?;
+        // SAFETY: tcsetpgrp takes two scalars and dereferences no memory.
+        let result = unsafe { libc::tcsetpgrp(fd.as_raw_fd(), group) };
+        let outcome = if result == -1 {
+            Err(io::Error::last_os_error())
+        } else {
+            Ok(())
+        };
+        // The mask is restored even when the handover failed, so a failed
+        // transfer cannot leave the shell deaf to terminal stop signals.
+        restore_mask(&blocked)?;
+        outcome
+    }
+
+    /// Block the terminal stop signals for this thread, returning the old mask.
+    fn block_terminal_stops() -> io::Result<libc::sigset_t> {
+        // SAFETY: `zeroed` is a valid starting bit pattern for `sigset_t`, and
+        // sigemptyset overwrites it before any read.
+        let mut blocked: libc::sigset_t = unsafe { std::mem::zeroed() };
+        // SAFETY: `previous` is written by pthread_sigmask before it is read.
+        let mut previous: libc::sigset_t = unsafe { std::mem::zeroed() };
+
+        // SAFETY: every pointer below targets a live, correctly typed local.
+        unsafe {
+            if libc::sigemptyset(&raw mut blocked) == -1
+                || libc::sigaddset(&raw mut blocked, libc::SIGTTOU) == -1
+                || libc::sigaddset(&raw mut blocked, libc::SIGTTIN) == -1
+                || libc::sigaddset(&raw mut blocked, libc::SIGTSTP) == -1
+            {
+                return Err(io::Error::last_os_error());
+            }
+            let result =
+                libc::pthread_sigmask(libc::SIG_BLOCK, &raw const blocked, &raw mut previous);
+            if result != 0 {
+                return Err(io::Error::from_raw_os_error(result));
+            }
+        }
+        Ok(previous)
+    }
+
+    fn restore_mask(previous: &libc::sigset_t) -> io::Result<()> {
+        // SAFETY: the pointer targets a live mask that pthread_sigmask reads.
+        let result =
+            unsafe { libc::pthread_sigmask(libc::SIG_SETMASK, previous, std::ptr::null_mut()) };
+        if result != 0 {
+            return Err(io::Error::from_raw_os_error(result));
+        }
+        Ok(())
+    }
+}
+
 /// Terminal attribute and size primitives.
 ///
 /// `dup2`/`close` in `child_descriptors` take only `c_int` and are declared
@@ -743,5 +865,48 @@ impl Drop for PosixTerminalModeGuard {
     fn drop(&mut self) {
         // A failure here cannot be reported and must not panic during unwind.
         let _ = self.restore();
+    }
+}
+
+/// Terminal ownership held by a foreground job on the process's standard input.
+#[derive(Debug)]
+struct PosixForegroundTerminalGuard {
+    previous: Option<ProcessGroupId>,
+    restored: bool,
+}
+
+impl ForegroundTerminalGuard for PosixForegroundTerminalGuard {
+    fn restore(&mut self) -> Result<(), PlatformError> {
+        if self.restored {
+            return Ok(());
+        }
+        // Nothing owned the terminal when the handover began, so there is no
+        // owner to give it back to and the guard is already settled.
+        let Some(previous) = self.previous else {
+            self.restored = true;
+            return Ok(());
+        };
+        foreground_terminal::hand_over(io::stdin().as_fd(), previous)
+            .map_err(foreground_unavailable)?;
+        self.restored = true;
+        Ok(())
+    }
+
+    fn previous_owner(&self) -> Option<ProcessGroupId> {
+        self.previous
+    }
+}
+
+impl Drop for PosixForegroundTerminalGuard {
+    fn drop(&mut self) {
+        // A failure here cannot be reported and must not panic during unwind.
+        let _ = self.restore();
+    }
+}
+
+fn foreground_unavailable(error: io::Error) -> PlatformError {
+    PlatformError::Unavailable {
+        capability: Capability::ForegroundTerminal,
+        reason: format!("terminal ownership operation failed: {error}"),
     }
 }

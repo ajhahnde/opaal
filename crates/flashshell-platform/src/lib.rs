@@ -986,6 +986,22 @@ pub trait TerminalModeGuard: fmt::Debug {
     fn restore(&mut self) -> Result<(), PlatformError>;
 }
 
+/// An active handover of the terminal to a foreground job.
+///
+/// The shell must get the terminal back whatever happens to the job, so
+/// restoration also runs in the implementor's `Drop`: a runtime error, an early
+/// return, or a panic during the wait would otherwise leave the terminal owned
+/// by a process that has exited, where the next read raises `SIGTTIN` instead of
+/// reaching the prompt. `restore` is idempotent, so an explicit call followed by
+/// the drop is well defined.
+pub trait ForegroundTerminalGuard: fmt::Debug {
+    /// Return terminal ownership to the shell now, before the guard drops.
+    fn restore(&mut self) -> Result<(), PlatformError>;
+
+    /// The group that held the terminal when this handover began.
+    fn previous_owner(&self) -> Option<ProcessGroupId>;
+}
+
 /// Implemented by FlashShell platform adapters.
 ///
 /// Capability methods (spawn, pipes, file actions, …) are added to this trait
@@ -1031,6 +1047,26 @@ pub trait Platform: Send + Sync {
     fn enter_raw_mode(&self) -> Result<Box<dyn TerminalModeGuard>, PlatformError> {
         self.require(Capability::TerminalInfo)?;
         Ok(Box::new(NoopTerminalModeGuard))
+    }
+
+    /// The process group that currently owns the terminal, if there is one.
+    fn foreground_process_group(&self) -> Result<Option<ProcessGroupId>, PlatformError> {
+        self.require(Capability::ForegroundTerminal)?;
+        Ok(None)
+    }
+
+    /// Give the terminal to `group` until the returned guard is dropped.
+    ///
+    /// The guard, not the caller, remembers which group held the terminal
+    /// before: only the adapter can read that owner without racing the handover
+    /// it is about to perform.
+    fn enter_foreground(
+        &self,
+        group: ProcessGroupId,
+    ) -> Result<Box<dyn ForegroundTerminalGuard>, PlatformError> {
+        self.require(Capability::ForegroundTerminal)?;
+        let _ = group;
+        Ok(Box::new(NoopForegroundTerminalGuard))
     }
 
     /// Resolve and validate one logical working directory.
@@ -1266,6 +1302,8 @@ impl Platform for FakePlatform {
 pub struct TerminalCallLog {
     raw_mode_entries: Arc<AtomicUsize>,
     terminal_size_queries: Arc<AtomicUsize>,
+    foreground_handovers: Arc<Mutex<Vec<ProcessGroupId>>>,
+    foreground_releases: Arc<AtomicUsize>,
 }
 
 impl TerminalCallLog {
@@ -1279,6 +1317,57 @@ impl TerminalCallLog {
     #[must_use]
     pub fn terminal_size_queries(&self) -> usize {
         self.terminal_size_queries.load(Ordering::Relaxed)
+    }
+
+    /// Every group the terminal was handed to, in call order.
+    #[must_use]
+    pub fn foreground_handovers(&self) -> Vec<ProcessGroupId> {
+        self.foreground_handovers
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    /// How often the terminal came back, whether restored explicitly or dropped.
+    ///
+    /// Counted at the guard rather than at the platform: restoration on drop is
+    /// the path that a runtime error or a panic takes, and a tally that missed
+    /// it could not tell a returned terminal from a leaked one.
+    #[must_use]
+    pub fn foreground_releases(&self) -> usize {
+        self.foreground_releases.load(Ordering::Relaxed)
+    }
+}
+
+/// A [`ForegroundTerminalGuard`] that tallies its release exactly once.
+#[derive(Debug)]
+struct RecordingForegroundGuard {
+    inner: Box<dyn ForegroundTerminalGuard>,
+    releases: Arc<AtomicUsize>,
+    released: bool,
+}
+
+impl ForegroundTerminalGuard for RecordingForegroundGuard {
+    fn restore(&mut self) -> Result<(), PlatformError> {
+        let result = self.inner.restore();
+        if !self.released {
+            self.released = true;
+            self.releases.fetch_add(1, Ordering::Relaxed);
+        }
+        result
+    }
+
+    fn previous_owner(&self) -> Option<ProcessGroupId> {
+        self.inner.previous_owner()
+    }
+}
+
+impl Drop for RecordingForegroundGuard {
+    fn drop(&mut self) {
+        if !self.released {
+            self.released = true;
+            self.releases.fetch_add(1, Ordering::Relaxed);
+        }
     }
 }
 
@@ -1390,6 +1479,27 @@ impl Platform for RecordingPlatform {
     fn enter_raw_mode(&self) -> Result<Box<dyn TerminalModeGuard>, PlatformError> {
         self.log.raw_mode_entries.fetch_add(1, Ordering::Relaxed);
         self.inner.enter_raw_mode()
+    }
+
+    fn foreground_process_group(&self) -> Result<Option<ProcessGroupId>, PlatformError> {
+        self.inner.foreground_process_group()
+    }
+
+    fn enter_foreground(
+        &self,
+        group: ProcessGroupId,
+    ) -> Result<Box<dyn ForegroundTerminalGuard>, PlatformError> {
+        let guard = self.inner.enter_foreground(group)?;
+        self.log
+            .foreground_handovers
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(group);
+        Ok(Box::new(RecordingForegroundGuard {
+            inner: guard,
+            releases: Arc::clone(&self.log.foreground_releases),
+            released: false,
+        }))
     }
 
     fn resolve_working_directory(
@@ -1551,6 +1661,20 @@ impl ChildProcess for FakeChild {
 
     fn terminate(&mut self) -> Result<(), TerminateError> {
         Ok(())
+    }
+}
+
+/// A handover that moved no terminal; restoring it always succeeds.
+#[derive(Debug)]
+pub struct NoopForegroundTerminalGuard;
+
+impl ForegroundTerminalGuard for NoopForegroundTerminalGuard {
+    fn restore(&mut self) -> Result<(), PlatformError> {
+        Ok(())
+    }
+
+    fn previous_owner(&self) -> Option<ProcessGroupId> {
+        None
     }
 }
 

@@ -12,8 +12,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use flashshell_platform::{
     Capability, ChildDescriptor, DirectoryEntry, DirectoryEntryKind, DirectoryReadError,
-    DirectoryReadRequest, FileOpenMode, FileOpenRequest, Platform, ProcessGroup, ProcessGroupId,
-    ProcessStatus, SpawnError, SpawnRequest, TerminalSize, WorkingDirectoryError,
+    DirectoryReadRequest, FileOpenMode, FileOpenRequest, Platform, PlatformError, ProcessGroup,
+    ProcessGroupId, ProcessStatus, SpawnError, SpawnRequest, TerminalSize, WorkingDirectoryError,
     WorkingDirectoryRequest,
 };
 use flashshell_platform_posix::{OwnedDescriptor, PosixPlatform};
@@ -731,4 +731,26 @@ fn read_group(directory: &Path, process: u64) -> u64 {
         .trim()
         .parse()
         .expect("a process group is an integer")
+}
+
+#[test]
+fn posix_reports_no_terminal_owner_when_standard_input_is_not_a_terminal() {
+    // The test harness runs with a redirected standard input, which is exactly
+    // the non-interactive shape a script or a pipeline sees.
+    assert_eq!(PosixPlatform.foreground_process_group(), Ok(None));
+}
+
+#[test]
+fn posix_refuses_a_terminal_handover_without_a_terminal() {
+    let group = ProcessGroupId::new(1).expect("the group is usable");
+
+    match PosixPlatform.enter_foreground(group) {
+        Err(PlatformError::Unavailable { capability, reason }) => {
+            // Unavailable, not Unsupported: the adapter has the capability and
+            // this session simply has no terminal to hand over.
+            assert_eq!(capability, Capability::ForegroundTerminal);
+            assert!(reason.contains("not a terminal"), "{reason}");
+        }
+        other => panic!("expected an unavailable terminal, got {other:?}"),
+    }
 }

@@ -695,7 +695,7 @@ impl Drop for TempDir {
 #[test]
 fn the_external_members_around_an_internal_island_share_one_process_group() {
     let temp = TempDir::new("session-mixed-group");
-    let fixture = PathBuf::from(env!("CARGO_BIN_EXE_flashshell-process-observer-fixture"));
+    let fixture = PathBuf::from(env!("CARGO_BIN_EXE_flashshell-job-observer-fixture"));
     let mut environment = environment();
     environment.set(
         "FLASH_PROBE_REPORT",
@@ -733,7 +733,7 @@ fn the_external_members_around_an_internal_island_share_one_process_group() {
 /// The group of a child spawned without a placement, which is the shell's own.
 fn shell_group() -> u64 {
     let temp = TempDir::new("session-shell-group");
-    let fixture = PathBuf::from(env!("CARGO_BIN_EXE_flashshell-process-observer-fixture"));
+    let fixture = PathBuf::from(env!("CARGO_BIN_EXE_flashshell-job-observer-fixture"));
     let argv = [OsString::from("inheritor")];
     let environment = [
         (
