@@ -154,6 +154,9 @@ enum Source {
     Queue(BoundedQueue),
     /// A lazy producer advanced once per pull; `None` is exhaustion.
     Producer(Box<dyn FnMut() -> Option<Result<Value, RuntimeError>>>),
+    /// A lazy transformer that preserves every first-class stream terminal
+    /// state instead of folding cancellation into an error.
+    Puller(Box<dyn FnMut() -> StreamPull>),
 }
 
 impl Source {
@@ -180,6 +183,7 @@ impl Source {
                 Some(Err(error)) => StreamPull::Failed(error),
                 None => StreamPull::End,
             },
+            Self::Puller(puller) => puller(),
         }
     }
 }
@@ -215,6 +219,17 @@ impl ValueStream {
         producer: impl FnMut() -> Option<Result<Value, RuntimeError>> + 'static,
     ) -> Self {
         Self::with_source(Source::Producer(Box::new(producer)))
+    }
+
+    /// A stream advanced by a lazy producer that returns the complete
+    /// [`StreamPull`] state.
+    ///
+    /// This is the adapter for internal pipeline transformers whose upstream can
+    /// end, fail, or cancel independently. The stream's own cancellation token
+    /// is still polled before the producer is advanced.
+    #[must_use]
+    pub fn from_pull_fn(producer: impl FnMut() -> StreamPull + 'static) -> Self {
+        Self::with_source(Source::Puller(Box::new(producer)))
     }
 
     fn with_source(source: Source) -> Self {

@@ -14,8 +14,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant as SystemInstant;
 
 use flashshell_platform::{
-    DescriptorReadError, FileActionError, PipeError, PlatformError, SpawnError, WaitError,
-    WorkingDirectoryError,
+    DescriptorReadError, DirectoryReadError, FileActionError, PipeError, PlatformError, SpawnError,
+    WaitError, WorkingDirectoryError,
 };
 use flashshell_syntax::{
     AndChain, Assignment, BinaryOperator, Block, CallExpression, Closure, ConditionalChain,
@@ -269,6 +269,20 @@ pub enum RuntimeErrorKind {
         command: &'static str,
         input: crate::command::Carrier,
     },
+    /// A standard internal command received an argument it could not interpret.
+    BuiltinArgument {
+        command: &'static str,
+        message: String,
+    },
+    /// A structured command refused or could not transform its input.
+    StructuredCommand {
+        command: &'static str,
+        message: String,
+    },
+    /// A platform directory walk failed while a structured `ls` was being pulled.
+    DirectoryRead(DirectoryReadError),
+    /// A lazy structured stream observed cooperative cancellation.
+    StreamCancelled { reason: CancelReason },
     /// `cd` without an argument could not find a HOME environment entry.
     MissingHome,
     /// Resolving or validating a requested logical working directory failed.
@@ -469,6 +483,16 @@ impl fmt::Display for RuntimeErrorKind {
             },
             Self::BuiltinInputCarrier { command, input } => {
                 write!(formatter, "{command} does not accept {input:?} input")
+            }
+            Self::BuiltinArgument { command, message } => {
+                write!(formatter, "{command}: {message}")
+            }
+            Self::StructuredCommand { command, message } => {
+                write!(formatter, "{command}: {message}")
+            }
+            Self::DirectoryRead(error) => error.fmt(formatter),
+            Self::StreamCancelled { reason } => {
+                write!(formatter, "structured stream cancelled: {reason:?}")
             }
             Self::MissingHome => formatter.write_str("cd requires a HOME environment entry"),
             Self::WorkingDirectory(error) => error.fmt(formatter),

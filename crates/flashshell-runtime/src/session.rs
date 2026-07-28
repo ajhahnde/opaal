@@ -4,17 +4,16 @@
 //! retained scope, environment, logical working directory, and last status, so
 //! an interactive client observes the same accumulated state a script would.
 //! Each submitted buffer runs its statements in source order: pure statements
-//! and `export`/`unset` reuse the shared scope and environment, a single-stage
-//! internal command dispatches against the session state, and an external
-//! foreground pipeline runs through the ordinary executor. Parse and runtime
+//! and `export`/`unset` reuse the shared scope and environment, an all-internal
+//! pipeline moves owned structured carriers through the internal executor, and
+//! an external foreground pipeline runs through the ordinary byte executor. Parse and runtime
 //! failures are recoverable and leave the accumulated state untouched; only a
 //! failure to write built-in output to the caller's sink is fatal.
 //!
 //! Human presentation is selected only for a final structured carrier at an
 //! unredirected interactive output terminal. General mixed internal/external
-//! pipeline execution remains a later milestone; a pipeline that is not a lone
-//! internal stage is planned and executed as an external pipeline exactly as in
-//! script mode.
+//! pipeline execution remains separate; an all-external pipeline retains the
+//! existing process executor.
 
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -25,14 +24,13 @@ use flashshell_syntax::{
     render_diagnostic,
 };
 
-use crate::builtin::{
-    BuiltinOutcome, BuiltinOutput, SessionState, execute_builtin, standard_registry,
-};
-use crate::command::{Carrier, CommandRegistry};
+use crate::builtin::{SessionState, standard_registry};
+use crate::command::CommandRegistry;
 use crate::eval::{
     Clock, Completion, EvalLimits, RuntimeError, RuntimeErrorKind, evaluate_in_environment,
 };
 use crate::execute::execute_foreground_status;
+use crate::internal::{InternalPayload, InternalPipelineOutcome, execute_internal_pipeline};
 use crate::plan::{
     PlannedResolution, PlannedStage, RedirectionAction, SessionOptions, plan_pipeline_with_options,
 };
@@ -40,6 +38,7 @@ use crate::presentation::{
     OutputDestination, TerminalPresentation, render_table, select_terminal_presentation,
 };
 use crate::resolve::ExecutableProbe;
+use crate::stream::StreamPull;
 use crate::{Environment, ScopeStack, Status, Value};
 
 /// The control decision produced by one submitted edit buffer.
@@ -338,44 +337,37 @@ fn run_pipeline(
         options,
     )?;
 
-    // A lone internal stage dispatches against the mutable session state; every
-    // other shape runs as an external pipeline, exactly as in script mode.
-    if plan.edges().is_empty()
-        && plan.stages().len() == 1
-        && matches!(
-            plan.stages()[0].resolution(),
-            PlannedResolution::Internal { .. }
-        )
+    if plan
+        .stages()
+        .iter()
+        .all(|stage| matches!(stage.resolution(), PlannedResolution::Internal { .. }))
     {
-        let stage = &plan.stages()[0];
-        let destination = output_destination(stage, platform)?;
-        let presentation = select_terminal_presentation(stage.output_carrier(), destination)
+        let final_stage = plan
+            .stages()
+            .last()
+            .expect("a parsed pipeline contains at least one stage");
+        let destination = output_destination(final_stage, platform)?;
+        let presentation = select_terminal_presentation(final_stage.output_carrier(), destination)
             .map_err(|error| {
-                RuntimeError::new(RuntimeErrorKind::Presentation(error), stage.span())
+                RuntimeError::new(RuntimeErrorKind::Presentation(error), final_stage.span())
             })?;
-        let upstream = state.current_status().cloned();
-        let outcome = execute_builtin(
-            stage,
-            Carrier::Empty,
-            upstream.as_ref(),
-            state,
-            registry,
-            probe,
-            platform,
-        )?;
+        // Internal execution is transactional through final lazy rendering. A
+        // producer can fail only when the sink pulls it, so committing session
+        // state before presentation would leave a successful status behind a
+        // failed pipeline.
+        let mut pending_state = state.clone();
+        let outcome =
+            execute_internal_pipeline(&plan, &mut pending_state, registry, probe, platform)?;
         return match outcome {
-            BuiltinOutcome::Exit(request) => Ok(ChainStep::Exit(request.code())),
-            BuiltinOutcome::Completed(completion) => {
-                render_output(completion.output(), presentation.as_ref(), output)
-                    .map_err(Interrupt::Output)?;
-                Ok(ChainStep::Status(completion.status().clone()))
+            InternalPipelineOutcome::Exit(code) => {
+                *state = pending_state;
+                Ok(ChainStep::Exit(code))
             }
-            BuiltinOutcome::External(_) => Err(Interrupt::Runtime(RuntimeError::new(
-                RuntimeErrorKind::Unsupported {
-                    feature: "the command built-in in interactive sessions",
-                },
-                stage.span(),
-            ))),
+            InternalPipelineOutcome::Completed { payload, status } => {
+                render_payload(payload, presentation.as_ref(), final_stage.span(), output)?;
+                *state = pending_state;
+                Ok(ChainStep::Status(status))
+            }
         };
     }
 
@@ -409,26 +401,40 @@ fn output_destination(
     })
 }
 
-/// Write a completed built-in's human output after destination selection.
-fn render_output(
-    output: &BuiltinOutput,
+/// Write a completed internal pipeline's human output after destination
+/// selection.
+fn render_payload(
+    output: InternalPayload,
     presentation: Option<&TerminalPresentation>,
+    span: flashshell_syntax::Span,
     sink: &mut dyn Write,
-) -> io::Result<()> {
+) -> Result<(), Interrupt> {
     match output {
-        BuiltinOutput::Empty | BuiltinOutput::ForwardInput(_) => Ok(()),
-        BuiltinOutput::Value(value) => write_value(
-            value,
+        InternalPayload::Empty => Ok(()),
+        InternalPayload::Value(value) => write_value(
+            &value,
             presentation.expect("a Value carrier has terminal-presentation proof"),
             sink,
-        ),
-        BuiltinOutput::ValueStream(values) => {
+        )
+        .map_err(Interrupt::Output),
+        InternalPayload::ValueStream(mut values) => {
             let presentation =
                 presentation.expect("a ValueStream carrier has terminal-presentation proof");
-            for value in values {
-                write_value(value, presentation, sink)?;
+            loop {
+                match values.pull() {
+                    StreamPull::Item(value) => {
+                        write_value(&value, presentation, sink).map_err(Interrupt::Output)?;
+                    }
+                    StreamPull::End => return Ok(()),
+                    StreamPull::Failed(error) => return Err(Interrupt::Runtime(error)),
+                    StreamPull::Cancelled(reason) => {
+                        return Err(Interrupt::Runtime(RuntimeError::new(
+                            RuntimeErrorKind::StreamCancelled { reason },
+                            span,
+                        )));
+                    }
+                }
             }
-            Ok(())
         }
     }
 }

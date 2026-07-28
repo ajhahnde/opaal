@@ -163,6 +163,138 @@ fn pwd_renders_the_logical_cwd_to_the_output_sink() {
 }
 
 #[test]
+fn an_internal_structured_pipeline_preserves_values_until_final_presentation() {
+    let mut session = session();
+    let probe = Probe::default();
+    let mut sink = Vec::new();
+
+    session
+        .submit(
+            "<interactive>",
+            "which pwd missing | select name | get name | first 1",
+            &probe,
+            &terminal_platform(),
+            &FakeClock::new(),
+            &mut sink,
+        )
+        .expect("the all-internal structured pipeline should execute");
+
+    assert_eq!(String::from_utf8(sink).unwrap(), "pwd\n");
+    let status = session.current_status().expect("pipeline records a status");
+    assert_eq!(status.code(), Some(0));
+    assert_eq!(status.stages().len(), 4);
+}
+
+#[test]
+fn a_terminal_structured_command_can_materialize_under_its_bound() {
+    let mut session = session();
+    let probe = Probe::default();
+    let mut sink = Vec::new();
+
+    session
+        .submit(
+            "<interactive>",
+            "which pwd missing | length",
+            &probe,
+            &terminal_platform(),
+            &FakeClock::new(),
+            &mut sink,
+        )
+        .expect("length should consume the live value stream");
+
+    assert_eq!(String::from_utf8(sink).unwrap(), "2\n");
+}
+
+#[test]
+fn closure_free_reshapers_compose_without_serializing_an_edge() {
+    let mut session = session();
+    let probe = Probe::default();
+    let mut sink = Vec::new();
+
+    session
+        .submit(
+            "<interactive>",
+            "which pwd missing | get kind | lines | sort | last 1 | collect",
+            &probe,
+            &terminal_platform(),
+            &FakeClock::new(),
+            &mut sink,
+        )
+        .expect("the closure-free structured commands should compose");
+
+    assert_eq!(
+        String::from_utf8(sink).unwrap(),
+        "[\"internalmissing\"]\n",
+        "lines treats adjacent String values as chunks of one logical text stream"
+    );
+}
+
+#[test]
+fn ls_is_a_live_structured_source() {
+    let mut session = session();
+    let probe = Probe::default();
+    let mut sink = Vec::new();
+
+    session
+        .submit(
+            "<interactive>",
+            "ls | length",
+            &probe,
+            &terminal_platform(),
+            &FakeClock::new(),
+            &mut sink,
+        )
+        .expect("the fake platform's empty directory should be a live stream");
+
+    assert_eq!(String::from_utf8(sink).unwrap(), "0\n");
+}
+
+#[test]
+fn a_typed_argument_to_a_word_only_builtin_is_rejected() {
+    let mut session = session();
+    let probe = Probe::default();
+    let original = session.cwd().to_owned();
+    let mut sink = Vec::new();
+
+    let error = session
+        .submit(
+            "<interactive>",
+            "cd {|| 1}",
+            &probe,
+            &terminal_platform(),
+            &FakeClock::new(),
+            &mut sink,
+        )
+        .expect_err("cd must not reinterpret a callable as a native path");
+
+    assert!(error.render().contains("expected a word argument"));
+    assert_eq!(session.cwd(), original);
+    assert!(sink.is_empty());
+}
+
+#[test]
+fn a_lazy_structured_failure_does_not_commit_pipeline_status() {
+    let mut session = session();
+    let probe = Probe::default();
+    let mut sink = Vec::new();
+
+    let error = session
+        .submit(
+            "<interactive>",
+            "which pwd | get absent",
+            &probe,
+            &terminal_platform(),
+            &FakeClock::new(),
+            &mut sink,
+        )
+        .expect_err("the missing field is discovered when presentation pulls");
+
+    assert!(error.render().contains("record has no field `absent`"));
+    assert!(session.current_status().is_none());
+    assert!(sink.is_empty());
+}
+
+#[test]
 fn structured_output_requires_an_interactive_output_terminal() {
     let mut session = session();
     let probe = Probe::default();

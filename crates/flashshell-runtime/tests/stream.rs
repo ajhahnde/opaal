@@ -106,6 +106,25 @@ fn from_fn_can_fail_mid_stream() {
 }
 
 #[test]
+fn from_pull_fn_preserves_a_first_class_cancellation_state() {
+    let mut step = 0;
+    let mut stream = ValueStream::from_pull_fn(move || {
+        step += 1;
+        match step {
+            1 => StreamPull::Item(Value::Int(7)),
+            2 => StreamPull::Cancelled(CancelReason::Timeout),
+            _ => StreamPull::End,
+        }
+    });
+
+    assert!(matches!(stream.pull(), StreamPull::Item(Value::Int(7))));
+    assert!(matches!(
+        stream.pull(),
+        StreamPull::Cancelled(CancelReason::Timeout)
+    ));
+}
+
+#[test]
 fn cancellation_stops_the_stream_without_advancing_the_source() {
     // An already-cancelled token trips before the source is advanced, so the
     // producer is never invoked and the pull reports the token's reason.

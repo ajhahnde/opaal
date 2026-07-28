@@ -8,7 +8,7 @@ use flashshell_platform::{Platform, WorkingDirectoryRequest};
 
 use crate::command::{Carrier, CommandRegistry, CommandSignature};
 use crate::eval::{RuntimeError, RuntimeErrorKind};
-use crate::plan::{PlannedResolution, PlannedStage};
+use crate::plan::{PlannedArgument, PlannedResolution, PlannedStage};
 use crate::resolve::{
     ExecutableProbe, Resolution, ResolutionError, resolve_command, resolve_external,
 };
@@ -281,8 +281,11 @@ fn execute_cd(
     platform: &dyn Platform,
 ) -> Result<BuiltinOutcome, RuntimeError> {
     expect_arity(stage, "cd", 0, Some(1))?;
-    let (target, span) = match stage.argv().get(1) {
-        Some(argument) => (argument.value().to_os_string(), argument.span()),
+    let (target, span) = match stage.arguments().first() {
+        Some(argument) => {
+            let argument = word_argument("cd", argument)?;
+            (argument.value().to_os_string(), argument.span())
+        }
         None => (
             session
                 .environment
@@ -330,8 +333,9 @@ fn execute_which(
 ) -> Result<BuiltinOutcome, RuntimeError> {
     expect_arity(stage, "which", 1, None)?;
     let mut missing = false;
-    let mut output = Vec::with_capacity(stage.argv().len() - 1);
-    for argument in &stage.argv()[1..] {
+    let mut output = Vec::with_capacity(stage.arguments().len());
+    for argument in stage.arguments() {
+        let argument = word_argument("which", argument)?;
         let name = argument.value();
         let (kind, path) = match resolve_command(name, false, registry, &session.environment, probe)
         {
@@ -370,7 +374,13 @@ fn execute_command(
     probe: &dyn ExecutableProbe,
 ) -> Result<BuiltinOutcome, RuntimeError> {
     expect_arity(stage, "command", 1, None)?;
-    let name = &stage.argv()[1];
+    let name = word_argument(
+        "command",
+        stage
+            .arguments()
+            .first()
+            .expect("arity guarantees one command name"),
+    )?;
     let resolved = resolve_external(name.value(), &session.environment, probe).map_err(
         |ResolutionError::NotFound { name: missing }| {
             RuntimeError::new(
@@ -381,10 +391,13 @@ fn execute_command(
     )?;
     Ok(BuiltinOutcome::External(ExternalInvocation {
         executable: resolved.path().to_owned(),
-        argv: stage.argv()[1..]
+        argv: stage
+            .arguments()
             .iter()
-            .map(|argument| argument.value().to_os_string())
-            .collect(),
+            .map(|argument| {
+                word_argument("command", argument).map(|word| word.value().to_os_string())
+            })
+            .collect::<Result<Vec<_>, _>>()?,
     }))
 }
 
@@ -393,9 +406,13 @@ fn execute_exit(
     session: &SessionState,
 ) -> Result<BuiltinOutcome, RuntimeError> {
     expect_arity(stage, "exit", 0, Some(1))?;
-    let code = match stage.argv().get(1) {
-        Some(argument) => parse_exit_code(argument.value())
-            .ok_or_else(|| RuntimeError::new(RuntimeErrorKind::InvalidExitCode, argument.span()))?,
+    let code = match stage.arguments().first() {
+        Some(argument) => {
+            let argument = word_argument("exit", argument)?;
+            parse_exit_code(argument.value()).ok_or_else(|| {
+                RuntimeError::new(RuntimeErrorKind::InvalidExitCode, argument.span())
+            })?
+        }
         None => default_exit_code(session.current_status()),
     };
     Ok(BuiltinOutcome::Exit(ExitRequest { code }))
@@ -427,7 +444,7 @@ fn expect_arity(
     minimum: usize,
     maximum: Option<usize>,
 ) -> Result<(), RuntimeError> {
-    let actual = stage.argv().len().saturating_sub(1);
+    let actual = stage.arguments().len();
     if actual < minimum || maximum.is_some_and(|maximum| actual > maximum) {
         return Err(RuntimeError::new(
             RuntimeErrorKind::BuiltinArity {
@@ -440,6 +457,21 @@ fn expect_arity(
         ));
     }
     Ok(())
+}
+
+fn word_argument<'a>(
+    command: &'static str,
+    argument: &'a PlannedArgument,
+) -> Result<&'a crate::eval::ExpandedWord, RuntimeError> {
+    argument.as_word().ok_or_else(|| {
+        RuntimeError::new(
+            RuntimeErrorKind::BuiltinArgument {
+                command,
+                message: "expected a word argument, found a typed value".to_owned(),
+            },
+            argument.span(),
+        )
+    })
 }
 
 fn completed(session: &mut SessionState, output: BuiltinOutput, code: i64) -> BuiltinOutcome {
