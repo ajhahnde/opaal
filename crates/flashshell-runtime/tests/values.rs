@@ -1,9 +1,10 @@
 #![forbid(unsafe_code)]
 
 use std::ffi::OsString;
+use std::sync::Arc;
 
 use flashshell_runtime::{
-    ByteSize, Duration, FiniteFloat, NativePath, Record, Signal, Status, Value,
+    ByteSize, Duration, FiniteFloat, NativePath, Record, Signal, Status, Table, TableError, Value,
 };
 
 #[test]
@@ -159,6 +160,167 @@ fn paths_preserve_and_escape_native_unix_bytes() {
     let path = NativePath::new(OsString::from_vec(b"/tmp/\xff".to_vec()));
     assert_eq!(path.as_os_str().as_encoded_bytes(), b"/tmp/\xff");
     assert_forms(Value::from(path), r#"path"/tmp/\xFF""#, r#"/tmp/\xFF"#);
+}
+
+#[test]
+fn tables_are_rectangular_with_unique_ordered_columns() {
+    let table = Table::new(
+        vec!["name".to_owned(), "size".to_owned()],
+        vec![
+            vec![Value::string("a"), Value::Int(1)],
+            vec![Value::string("b"), Value::Int(2)],
+        ],
+    )
+    .unwrap();
+
+    assert_eq!(
+        table
+            .columns()
+            .iter()
+            .map(AsRef::as_ref)
+            .collect::<Vec<&str>>(),
+        ["name", "size"]
+    );
+    assert_eq!(table.rows().len(), 2);
+    assert_eq!(table.column_index("size"), Some(1));
+    assert_eq!(table.column_index("absent"), None);
+    assert_eq!(table.get(1, "name"), Some(&Value::string("b")));
+    assert_eq!(table.get(2, "name"), None);
+    assert_eq!(table.get(0, "absent"), None);
+
+    assert_forms(
+        Value::from(table),
+        r#"table(columns: ["name", "size"], rows: [["a", 1], ["b", 2]])"#,
+        r#"table(columns: ["name", "size"], rows: [["a", 1], ["b", 2]])"#,
+    );
+
+    // A table with no rows still carries its declared columns, so an empty
+    // result keeps its shape instead of collapsing to an empty list.
+    let empty = Table::new(vec!["only".to_owned()], Vec::new()).unwrap();
+    assert_eq!(empty.rows(), &[] as &[Arc<[Value]>]);
+    assert_eq!(
+        format!("{:?}", Value::from(empty)),
+        r#"table(columns: ["only"], rows: [])"#
+    );
+
+    // A table with neither columns nor rows is legal and remains rectangular.
+    let nothing = Table::new(Vec::new(), Vec::new()).unwrap();
+    assert_eq!(
+        format!("{:?}", Value::from(nothing)),
+        "table(columns: [], rows: [])"
+    );
+}
+
+#[test]
+fn table_construction_rejects_duplicate_columns_and_ragged_rows() {
+    let duplicate = Table::new(vec!["name".to_owned(), "name".to_owned()], Vec::new()).unwrap_err();
+    assert_eq!(
+        duplicate,
+        TableError::DuplicateColumn {
+            column: "name".to_owned(),
+            index: 1,
+        }
+    );
+
+    let short = Table::new(
+        vec!["a".to_owned(), "b".to_owned()],
+        vec![vec![Value::Int(1)]],
+    )
+    .unwrap_err();
+    assert_eq!(
+        short,
+        TableError::RowWidth {
+            row: 0,
+            expected: 2,
+            actual: 1,
+        }
+    );
+
+    let long = Table::new(
+        vec!["a".to_owned()],
+        vec![vec![Value::Int(1)], vec![Value::Int(1), Value::Int(2)]],
+    )
+    .unwrap_err();
+    assert_eq!(
+        long,
+        TableError::RowWidth {
+            row: 1,
+            expected: 1,
+            actual: 2,
+        }
+    );
+}
+
+#[test]
+fn table_equality_compares_ordered_columns_and_every_cell_recursively() {
+    let columns = vec!["first".to_owned(), "second".to_owned()];
+    let rows = vec![vec![Value::Int(1), Value::list(vec![Value::Int(2)])]];
+    let table = Table::new(columns.clone(), rows.clone()).unwrap();
+
+    assert_eq!(table, Table::new(columns.clone(), rows.clone()).unwrap());
+
+    // Column order is observable, exactly as record field order is.
+    let reordered = Table::new(
+        vec!["second".to_owned(), "first".to_owned()],
+        vec![vec![Value::list(vec![Value::Int(2)]), Value::Int(1)]],
+    )
+    .unwrap();
+    assert_ne!(table, reordered);
+
+    // Cells compare recursively, so a nested difference is a table difference.
+    let nested = Table::new(
+        columns.clone(),
+        vec![vec![Value::Int(1), Value::list(vec![Value::Int(3)])]],
+    )
+    .unwrap();
+    assert_ne!(table, nested);
+
+    // The numeric equality domain reaches into cells like everywhere else.
+    let promoted = Table::new(
+        columns,
+        vec![vec![
+            Value::from(FiniteFloat::new(1.0).unwrap()),
+            Value::list(vec![Value::Int(2)]),
+        ]],
+    )
+    .unwrap();
+    assert_eq!(table, promoted);
+}
+
+#[test]
+fn tables_built_from_records_fill_absent_fields_with_explicit_nulls() {
+    let first = Record::new(vec![
+        ("name".to_owned(), Value::string("a")),
+        ("size".to_owned(), Value::Int(1)),
+    ])
+    .unwrap();
+    let second = Record::new(vec![
+        ("size".to_owned(), Value::Int(2)),
+        ("mode".to_owned(), Value::string("rw")),
+    ])
+    .unwrap();
+
+    let table = Table::from_records([first, second]);
+
+    // Columns are the union in first-seen order across the records — not sorted,
+    // and not the keys of the first record alone.
+    assert_eq!(
+        table
+            .columns()
+            .iter()
+            .map(AsRef::as_ref)
+            .collect::<Vec<&str>>(),
+        ["name", "size", "mode"]
+    );
+    assert_eq!(
+        format!("{:?}", Value::from(table)),
+        r#"table(columns: ["name", "size", "mode"], rows: [["a", 1, null], [null, 2, "rw"]])"#
+    );
+
+    // No records means no columns and no rows, not a one-row empty table.
+    let empty = Table::from_records([]);
+    assert!(empty.columns().is_empty());
+    assert!(empty.rows().is_empty());
 }
 
 fn assert_forms(value: Value, debug: &str, display: &str) {

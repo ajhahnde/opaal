@@ -5,7 +5,7 @@ use flashshell_runtime::operation::{
     less_equal, member, multiply, negate, not_equal, plus, range, remainder, subtract, to_float,
     to_int,
 };
-use flashshell_runtime::{FiniteFloat, Range, Record, Value};
+use flashshell_runtime::{FiniteFloat, Range, Record, Table, Value};
 
 fn int(value: i64) -> Value {
     Value::Int(value)
@@ -116,6 +116,21 @@ fn comparison_is_exact_and_equality_is_total() {
         less(&Value::Bool(true), &Value::Bool(false)),
         Err(OperationError::UnsupportedOperands { .. })
     ));
+    // Tables are in no ordering domain, so `sort` must refuse a pair of them
+    // rather than invent a column-wise or row-count ranking.
+    let table = Value::from(Table::new(vec!["n".to_owned()], vec![vec![int(1)]]).unwrap());
+    let other = Value::from(Table::new(vec!["n".to_owned()], vec![vec![int(2)]]).unwrap());
+    assert!(matches!(
+        less(&table, &other),
+        Err(OperationError::UnsupportedOperands { .. })
+    ));
+    assert!(matches!(
+        operation::order(&table, &other),
+        Err(OperationError::UnsupportedOperands { .. })
+    ));
+    // Equality still works on them, because equality is total.
+    assert_eq!(equal(&table, &other), Value::Bool(false));
+    assert_eq!(equal(&table, &table.clone()), Value::Bool(true));
     assert_eq!(equal(&int(2), &float(2.0)), Value::Bool(true));
     assert_eq!(equal(&int(2), &Value::string("2")), Value::Bool(false));
     assert_eq!(

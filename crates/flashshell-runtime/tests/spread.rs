@@ -8,7 +8,7 @@
 use std::ffi::OsStr;
 
 use flashshell_runtime::eval::{ExpandedWord, RuntimeErrorKind, expand_spread};
-use flashshell_runtime::{BindingMutability, ScopeError, ScopeStack, Value};
+use flashshell_runtime::{BindingMutability, ScopeError, ScopeStack, Table, Value};
 use flashshell_syntax::{
     CommandItemKind, CommandStage, ParseOutcome, SourceFile, SourceId, Span, StageKind,
     StatementKind, VariableReference, parse,
@@ -164,6 +164,28 @@ fn spread_never_recursively_flattens_a_nested_list() {
         RuntimeErrorKind::SpreadElementNotWordEligible {
             index: 0,
             actual: "list",
+        }
+    );
+}
+
+#[test]
+fn a_table_is_never_word_eligible_so_rendering_cannot_become_serialization() {
+    // A table reaching argv would make human presentation an implicit external
+    // serialization step, which the value model forbids. It must be refused by
+    // family, exactly as a record or a list is.
+    let table = Table::new(
+        vec!["name".to_owned(), "size".to_owned()],
+        vec![vec![Value::string("a"), Value::Int(1)]],
+    )
+    .unwrap();
+
+    let mut scope = ScopeStack::new();
+    bind(&mut scope, "args", Value::list(vec![Value::from(table)]));
+    assert_eq!(
+        expand_in("show ...$args", &mut scope).unwrap_err(),
+        RuntimeErrorKind::SpreadElementNotWordEligible {
+            index: 0,
+            actual: "table",
         }
     );
 }

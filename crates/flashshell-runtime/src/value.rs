@@ -291,6 +291,180 @@ impl fmt::Display for DuplicateRecordKey {
 
 impl Error for DuplicateRecordKey {}
 
+/// An immutable rectangular value with unique ordered columns and ordered rows.
+///
+/// Every row holds exactly one cell per column, in column order, so a table is
+/// rectangular by construction rather than by convention. A table with columns
+/// and no rows keeps its shape — an empty result still reports what it would
+/// have contained.
+#[derive(Clone, Eq, PartialEq)]
+pub struct Table {
+    columns: Arc<[Arc<str>]>,
+    rows: Arc<[Arc<[Value]>]>,
+}
+
+impl Table {
+    /// Builds a table from declared columns and rows given in column order.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TableError::DuplicateColumn`] when a column name repeats, and
+    /// [`TableError::RowWidth`] when a row does not hold one cell per column.
+    pub fn new(columns: Vec<String>, rows: Vec<Vec<Value>>) -> Result<Self, TableError> {
+        let mut checked: Vec<Arc<str>> = Vec::with_capacity(columns.len());
+        for (index, column) in columns.into_iter().enumerate() {
+            if checked.iter().any(|existing| existing.as_ref() == column) {
+                return Err(TableError::DuplicateColumn { column, index });
+            }
+            checked.push(Arc::from(column));
+        }
+
+        let width = checked.len();
+        let mut shaped: Vec<Arc<[Value]>> = Vec::with_capacity(rows.len());
+        for (row, cells) in rows.into_iter().enumerate() {
+            if cells.len() != width {
+                return Err(TableError::RowWidth {
+                    row,
+                    expected: width,
+                    actual: cells.len(),
+                });
+            }
+            shaped.push(Arc::from(cells));
+        }
+
+        Ok(Self {
+            columns: Arc::from(checked),
+            rows: Arc::from(shaped),
+        })
+    }
+
+    /// Builds a table from a sequence of records.
+    ///
+    /// Columns are the union of the record keys in first-seen order, so the
+    /// shape follows the data rather than an alphabetical rule. A field absent
+    /// from a record becomes an explicit `null` cell, which is why this cannot
+    /// fail: record keys are already unique and every row is filled to width.
+    pub fn from_records(records: impl IntoIterator<Item = Record>) -> Self {
+        let records: Vec<Record> = records.into_iter().collect();
+
+        let mut columns: Vec<Arc<str>> = Vec::new();
+        for record in &records {
+            for (key, _) in record.entries() {
+                if !columns.iter().any(|existing| existing == key) {
+                    columns.push(Arc::clone(key));
+                }
+            }
+        }
+
+        let rows: Vec<Arc<[Value]>> = records
+            .iter()
+            .map(|record| {
+                columns
+                    .iter()
+                    .map(|column| record.get(column).cloned().unwrap_or(Value::Null))
+                    .collect::<Arc<[Value]>>()
+            })
+            .collect();
+
+        Self {
+            columns: Arc::from(columns),
+            rows: Arc::from(rows),
+        }
+    }
+
+    #[must_use]
+    pub fn columns(&self) -> &[Arc<str>] {
+        &self.columns
+    }
+
+    #[must_use]
+    pub fn rows(&self) -> &[Arc<[Value]>] {
+        &self.rows
+    }
+
+    /// Returns the position of a column, which is also its cell index in a row.
+    #[must_use]
+    pub fn column_index(&self, column: &str) -> Option<usize> {
+        self.columns
+            .iter()
+            .position(|candidate| candidate.as_ref() == column)
+    }
+
+    /// Returns one cell, or `None` when the row or the column does not exist.
+    #[must_use]
+    pub fn get(&self, row: usize, column: &str) -> Option<&Value> {
+        let index = self.column_index(column)?;
+        self.rows.get(row).map(|cells| &cells[index])
+    }
+}
+
+impl fmt::Debug for Table {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("table(columns: [")?;
+        for (index, column) in self.columns.iter().enumerate() {
+            if index != 0 {
+                formatter.write_str(", ")?;
+            }
+            write_quoted(formatter, column)?;
+        }
+        formatter.write_str("], rows: [")?;
+        for (index, cells) in self.rows.iter().enumerate() {
+            if index != 0 {
+                formatter.write_str(", ")?;
+            }
+            formatter.write_char('[')?;
+            for (cell, value) in cells.iter().enumerate() {
+                if cell != 0 {
+                    formatter.write_str(", ")?;
+                }
+                write!(formatter, "{value:?}")?;
+            }
+            formatter.write_char(']')?;
+        }
+        formatter.write_str("])")
+    }
+}
+
+impl fmt::Display for Table {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(self, formatter)
+    }
+}
+
+/// Why a sequence of columns and rows is not a table.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum TableError {
+    /// The later occurrence of a repeated column name.
+    DuplicateColumn { column: String, index: usize },
+    /// A row that does not hold exactly one cell per column.
+    RowWidth {
+        row: usize,
+        expected: usize,
+        actual: usize,
+    },
+}
+
+impl fmt::Display for TableError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::DuplicateColumn { column, index } => write!(
+                formatter,
+                "duplicate table column {column:?} at column {index}"
+            ),
+            Self::RowWidth {
+                row,
+                expected,
+                actual,
+            } => write!(
+                formatter,
+                "table row {row} holds {actual} cells but the table has {expected} columns"
+            ),
+        }
+    }
+}
+
+impl Error for TableError {}
+
 /// A platform signal identity with at least a number or a name.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Signal {
@@ -518,6 +692,7 @@ pub enum Value {
     ByteSize(ByteSize),
     List(Arc<[Self]>),
     Record(Record),
+    Table(Table),
     Range(Range),
     Status(Status),
     Callable(Arc<dyn Callable>),
@@ -562,6 +737,7 @@ impl Value {
             Self::ByteSize(_) => "byte size",
             Self::List(_) => "list",
             Self::Record(_) => "record",
+            Self::Table(_) => "table",
             Self::Range(_) => "range",
             Self::Status(_) => "status",
             Self::Callable(value) => value.family(),
@@ -586,6 +762,7 @@ impl PartialEq for Value {
             (Self::ByteSize(left), Self::ByteSize(right)) => left == right,
             (Self::List(left), Self::List(right)) => left == right,
             (Self::Record(left), Self::Record(right)) => left == right,
+            (Self::Table(left), Self::Table(right)) => left == right,
             (Self::Range(left), Self::Range(right)) => left == right,
             (Self::Status(left), Self::Status(right)) => left == right,
             (Self::Callable(left), Self::Callable(right)) => Arc::ptr_eq(left, right),
@@ -623,6 +800,7 @@ impl fmt::Debug for Value {
                 formatter.write_char(']')
             }
             Self::Record(value) => value.fmt(formatter),
+            Self::Table(value) => value.fmt(formatter),
             Self::Range(value) => value.fmt(formatter),
             Self::Status(value) => value.fmt(formatter),
             Self::Callable(value) => fmt::Debug::fmt(value, formatter),
@@ -642,7 +820,7 @@ impl fmt::Display for Value {
             Self::Path(value) => value.fmt(formatter),
             Self::Duration(value) => value.fmt(formatter),
             Self::ByteSize(value) => value.fmt(formatter),
-            Self::List(_) | Self::Record(_) => fmt::Debug::fmt(self, formatter),
+            Self::List(_) | Self::Record(_) | Self::Table(_) => fmt::Debug::fmt(self, formatter),
             Self::Range(value) => value.fmt(formatter),
             Self::Status(value) => value.fmt(formatter),
             Self::Callable(value) => value.display(formatter),
@@ -677,6 +855,12 @@ impl From<NativePath> for Value {
 impl From<Record> for Value {
     fn from(value: Record) -> Self {
         Self::Record(value)
+    }
+}
+
+impl From<Table> for Value {
+    fn from(value: Table) -> Self {
+        Self::Table(value)
     }
 }
 
