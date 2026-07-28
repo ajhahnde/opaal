@@ -7,8 +7,9 @@ use flashshell_platform::{
     Capabilities, Capability, ChildDescriptor, ChildProcess, DescriptorEndpoint,
     DescriptorReadError, DirectoryEntry, DirectoryEntryKind, DirectoryReadError,
     DirectoryReadRequest, FakeChild, FakePlatform, FileActionError, FileOpenMode, FileOpenRequest,
-    PipeEndpoints, PipeError, Platform, PlatformError, ProcessGroup, ProcessGroupId, ProcessStatus,
-    RecordingPlatform, SpawnError, SpawnRequest, SpawnRequestError, WorkingDirectoryError,
+    JobControlSignalGuard, JobSignal, NoopJobControlSignalGuard, PipeEndpoints, PipeError,
+    Platform, PlatformError, ProcessGroup, ProcessGroupId, ProcessStatus, RecordingPlatform,
+    SignalError, SpawnError, SpawnRequest, SpawnRequestError, WorkingDirectoryError,
     WorkingDirectoryRequest,
 };
 
@@ -728,4 +729,60 @@ fn a_terminal_handover_is_released_once_whether_restored_or_dropped() {
 
     assert_eq!(log.foreground_handovers(), vec![first, second]);
     assert_eq!(log.foreground_releases(), 2);
+}
+
+#[test]
+fn signalling_a_group_needs_the_signals_capability() {
+    let platform = FakePlatform::new(Capabilities::full_without(Capability::Signals));
+    let group = ProcessGroupId::new(4321).expect("the value is nonzero");
+
+    assert_eq!(
+        platform.signal_process_group(group, JobSignal::Continue),
+        Err(SignalError::Platform(PlatformError::Unsupported {
+            capability: Capability::Signals,
+        })),
+    );
+}
+
+#[test]
+fn installing_job_control_signals_needs_the_signals_capability() {
+    let platform = FakePlatform::new(Capabilities::full_without(Capability::Signals));
+
+    assert!(matches!(
+        platform.install_job_control_signals(),
+        Err(PlatformError::Unsupported {
+            capability: Capability::Signals,
+        }),
+    ));
+}
+
+#[test]
+fn a_recording_platform_reports_every_group_signal_in_call_order() {
+    let platform = RecordingPlatform::new(FakePlatform::full());
+    let log = platform.signal_log();
+    let first = ProcessGroupId::new(11).expect("the value is nonzero");
+    let second = ProcessGroupId::new(22).expect("the value is nonzero");
+
+    platform
+        .signal_process_group(first, JobSignal::Stop)
+        .expect("a full platform signals a group");
+    platform
+        .signal_process_group(second, JobSignal::Continue)
+        .expect("a full platform signals a group");
+
+    let records = log.records();
+    assert_eq!(records.len(), 2);
+    assert_eq!(records[0].group(), first);
+    assert_eq!(records[0].signal(), JobSignal::Stop);
+    assert_eq!(records[1].group(), second);
+    assert_eq!(records[1].signal(), JobSignal::Continue);
+}
+
+#[test]
+fn a_job_control_signal_guard_restores_once_however_it_is_released() {
+    let mut guard = NoopJobControlSignalGuard;
+    assert_eq!(guard.restore(), Ok(()));
+    // Restoration is idempotent, so an explicit call followed by the drop is
+    // well defined rather than a double restore.
+    assert_eq!(guard.restore(), Ok(()));
 }

@@ -662,6 +662,77 @@ impl ProcessGroup {
     }
 }
 
+/// One signal the shell deliberately sends to a job's process group.
+///
+/// A closed set rather than a raw number: the shell only ever chooses from
+/// signals it must be able to honour on every target, and a platform-independent
+/// caller must not name a host signal number it did not receive from an adapter.
+/// Inbound observations keep their raw number, because they report what the host
+/// already did and must not be narrowed to what the shell happens to model.
+///
+/// The set grows when the `kill` built-in lands. Every arm here has a caller.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum JobSignal {
+    /// Stop the group unconditionally.
+    Stop,
+    /// Resume a stopped group.
+    Continue,
+}
+
+/// Failure while delivering a signal to a process group.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SignalError {
+    /// The platform cannot satisfy the signal capability.
+    Platform(PlatformError),
+    /// The host rejected or could not complete the delivery.
+    Operation {
+        /// Stable I/O error category from the host adapter.
+        kind: io::ErrorKind,
+        /// A human-readable description of the host failure.
+        message: String,
+    },
+}
+
+impl From<PlatformError> for SignalError {
+    fn from(error: PlatformError) -> Self {
+        Self::Platform(error)
+    }
+}
+
+impl fmt::Display for SignalError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Platform(error) => error.fmt(formatter),
+            Self::Operation { message, .. } => {
+                write!(formatter, "signal delivery failed: {message}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for SignalError {}
+
+/// An active job-control signal arrangement owned by an interactive shell.
+///
+/// The dispositions are process-wide, so restoration must also run in the
+/// implementor's `Drop`: an early exit or a panic would otherwise leave a
+/// process whose interrupts are permanently ignored. `restore` is idempotent, so
+/// an explicit call followed by the drop is well defined.
+pub trait JobControlSignalGuard: fmt::Debug {
+    /// Put the previous dispositions back now, before the guard drops.
+    fn restore(&mut self) -> Result<(), PlatformError>;
+}
+
+/// A guard that arranged nothing; restoring it always succeeds.
+#[derive(Debug)]
+pub struct NoopJobControlSignalGuard;
+
+impl JobControlSignalGuard for NoopJobControlSignalGuard {
+    fn restore(&mut self) -> Result<(), PlatformError> {
+        Ok(())
+    }
+}
+
 /// A structurally valid request to execute one program directly with argv.
 ///
 /// The first argv entry is explicit rather than inferred from `executable`.
@@ -1069,6 +1140,30 @@ pub trait Platform: Send + Sync {
         Ok(Box::new(NoopForegroundTerminalGuard))
     }
 
+    /// Deliver `signal` to every member of `group`.
+    ///
+    /// Group-directed because the terminal stops or interrupts a whole job at
+    /// once; a per-process loop would race source-ordered waiting.
+    fn signal_process_group(
+        &self,
+        group: ProcessGroupId,
+        signal: JobSignal,
+    ) -> Result<(), SignalError> {
+        self.require(Capability::Signals)?;
+        let _ = (group, signal);
+        Ok(())
+    }
+
+    /// Arrange the shell's own job-control signal dispositions.
+    ///
+    /// Called only by an interactive client. A shell running a script keeps the
+    /// default dispositions, because a script host that ignores an interrupt
+    /// cannot be stopped from the keyboard.
+    fn install_job_control_signals(&self) -> Result<Box<dyn JobControlSignalGuard>, PlatformError> {
+        self.require(Capability::Signals)?;
+        Ok(Box::new(NoopJobControlSignalGuard))
+    }
+
     /// Resolve and validate one logical working directory.
     fn resolve_working_directory(
         &self,
@@ -1420,6 +1515,55 @@ impl SpawnCallLog {
     }
 }
 
+/// One group-directed signal a [`RecordingPlatform`] observed, in call order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SignalRecord {
+    group: ProcessGroupId,
+    signal: JobSignal,
+}
+
+impl SignalRecord {
+    /// The group the signal was addressed to.
+    #[must_use]
+    pub const fn group(&self) -> ProcessGroupId {
+        self.group
+    }
+
+    /// The signal the caller chose.
+    #[must_use]
+    pub const fn signal(&self) -> JobSignal {
+        self.signal
+    }
+}
+
+/// The group-directed signals a [`RecordingPlatform`] received, in order.
+///
+/// A resume that works and a resume that was never attempted produce the same
+/// completed job, so the log is the only way to assert that the executor
+/// actually sent one.
+#[derive(Clone, Debug, Default)]
+pub struct SignalCallLog {
+    records: Arc<Mutex<Vec<SignalRecord>>>,
+}
+
+impl SignalCallLog {
+    /// Every signal recorded so far, in call order.
+    #[must_use]
+    pub fn records(&self) -> Vec<SignalRecord> {
+        self.records
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    fn push(&self, record: SignalRecord) {
+        self.records
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(record);
+    }
+}
+
 /// A [`FakePlatform`] that records the terminal and spawn calls it receives.
 ///
 /// Every method delegates, so the wrapped platform's scripted capability set
@@ -1430,6 +1574,7 @@ pub struct RecordingPlatform {
     inner: FakePlatform,
     log: TerminalCallLog,
     spawns: SpawnCallLog,
+    signals: SignalCallLog,
 }
 
 impl RecordingPlatform {
@@ -1440,6 +1585,7 @@ impl RecordingPlatform {
             inner,
             log: TerminalCallLog::default(),
             spawns: SpawnCallLog::default(),
+            signals: SignalCallLog::default(),
         }
     }
 
@@ -1453,6 +1599,12 @@ impl RecordingPlatform {
     #[must_use]
     pub fn spawn_log(&self) -> SpawnCallLog {
         self.spawns.clone()
+    }
+
+    /// A handle to this platform's signal log, readable after the platform moves.
+    #[must_use]
+    pub fn signal_log(&self) -> SignalCallLog {
+        self.signals.clone()
     }
 }
 
@@ -1556,6 +1708,19 @@ impl Platform for RecordingPlatform {
             process_group: child.process_group(),
         });
         Ok(child)
+    }
+
+    fn signal_process_group(
+        &self,
+        group: ProcessGroupId,
+        signal: JobSignal,
+    ) -> Result<(), SignalError> {
+        self.signals.push(SignalRecord { group, signal });
+        self.inner.signal_process_group(group, signal)
+    }
+
+    fn install_job_control_signals(&self) -> Result<Box<dyn JobControlSignalGuard>, PlatformError> {
+        self.inner.install_job_control_signals()
     }
 }
 
