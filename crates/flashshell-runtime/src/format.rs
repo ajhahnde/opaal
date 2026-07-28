@@ -21,8 +21,10 @@ use std::rc::Rc;
 use serde::Deserializer;
 use serde::de::{self, MapAccess, SeqAccess, Visitor};
 
+use crate::convert::{Codec, DecodeStep, Decoder, decode};
 use crate::eval::{CancelReason, RuntimeError};
 use crate::stream::{StreamPull, ValueStream};
+use crate::structured::LineCarry;
 use crate::value::{Record, Table, Value};
 
 /// How `from json` reads a document.
@@ -494,4 +496,183 @@ fn write_string(out: &mut String, text: &str) {
     if let Ok(encoded) = serde_json::to_string(text) {
         out.push_str(&encoded);
     }
+}
+
+/// One step of parsing a byte stream into lines of text.
+#[derive(Debug)]
+pub enum FromTextStep {
+    /// The next line, as a `String` value, with its terminator and a single
+    /// preceding `\r` removed.
+    Line(Value),
+    /// The source is exhausted and no partial line remains; further steps stay
+    /// `End`.
+    End,
+    /// Strict UTF-8 decoding met malformed input at this logical byte offset.
+    /// The executor attaches the command's source span at the pipeline boundary.
+    Malformed {
+        /// The logical byte offset of the malformed input.
+        offset: usize,
+    },
+    /// One line grew past the bound without a terminator. Unlike a whole
+    /// document, a single line is the only thing this format must materialize,
+    /// so it is the only thing that needs a budget — and it is refused rather
+    /// than truncated.
+    LineTooLong {
+        /// The budget in bytes for one line.
+        limit: usize,
+    },
+}
+
+/// A pull-driven line reader produced by [`from_text`].
+pub struct FromText {
+    decoder: Decoder,
+    carry: LineCarry,
+    limit: usize,
+    /// The decoder reached `End`; only a trailing partial line remains.
+    input_ended: bool,
+    /// Latched once a terminal step was returned.
+    done: bool,
+}
+
+/// Builds a reader that turns the byte chunks yielded by `chunks` into one
+/// `String` value per line.
+///
+/// Unlike JSON this format is genuinely streaming: a line is complete at its
+/// terminator, so no whole-document budget is required and an endless source
+/// with a bounded reader stays bounded. `limit` bounds one *line* in bytes,
+/// which is the only unbounded materialization the format can be forced into.
+pub fn from_text(chunks: impl FnMut() -> Option<Vec<u8>> + 'static, limit: usize) -> FromText {
+    FromText {
+        decoder: decode(Codec::Utf8 { lossy: false }, chunks),
+        carry: LineCarry::default(),
+        limit,
+        input_ended: false,
+        done: false,
+    }
+}
+
+impl FromText {
+    /// Pulls the next line, exhaustion, malformed input, or a refused line bound.
+    pub fn pull(&mut self) -> FromTextStep {
+        if self.done {
+            return FromTextStep::End;
+        }
+        loop {
+            if let Some(line) = self.carry.next_line() {
+                return FromTextStep::Line(Value::string(line));
+            }
+            if self.input_ended {
+                self.done = true;
+                return match self.carry.flush() {
+                    Some(line) => FromTextStep::Line(Value::string(line)),
+                    None => FromTextStep::End,
+                };
+            }
+            // Only an unterminated line is held, so the bound is checked here
+            // rather than against the whole stream.
+            if self.carry.len() > self.limit {
+                self.done = true;
+                return FromTextStep::LineTooLong { limit: self.limit };
+            }
+            match self.decoder.pull() {
+                DecodeStep::Value(Value::String(text)) => self.carry.push(&text),
+                DecodeStep::Value(_) => unreachable!("the UTF-8 codec yields only String values"),
+                DecodeStep::End => self.input_ended = true,
+                DecodeStep::Malformed { offset } => {
+                    self.done = true;
+                    return FromTextStep::Malformed { offset };
+                }
+            }
+        }
+    }
+}
+
+/// One step of writing structured values as lines of text.
+#[derive(Debug)]
+pub enum ToTextStep {
+    /// The next value's line, including its terminator.
+    Chunk(Vec<u8>),
+    /// The input stream is exhausted; further steps stay `End`.
+    End,
+    /// The value's family has no single-line text form.
+    NotEncodable {
+        /// The family name of the refused value.
+        actual: &'static str,
+    },
+    /// The upstream producer raised a runtime error carrying its own span.
+    Failed(RuntimeError),
+    /// The upstream stream was cancelled.
+    Cancelled(CancelReason),
+}
+
+/// A pull-driven line writer produced by [`to_text`].
+pub struct ToText {
+    input: ValueStream,
+    done: bool,
+}
+
+/// Builds a writer that turns each value of `input` into one terminated line.
+#[must_use]
+pub fn to_text(input: ValueStream) -> ToText {
+    ToText { input, done: false }
+}
+
+impl ToText {
+    /// Pulls the next line, exhaustion, or a first-class terminal state.
+    pub fn pull(&mut self) -> ToTextStep {
+        if self.done {
+            return ToTextStep::End;
+        }
+        match self.input.pull() {
+            StreamPull::Item(value) => match line_encoding(&value) {
+                Some(mut bytes) => {
+                    bytes.push(b'\n');
+                    ToTextStep::Chunk(bytes)
+                }
+                None => {
+                    self.done = true;
+                    ToTextStep::NotEncodable {
+                        actual: value.family_name(),
+                    }
+                }
+            },
+            StreamPull::End => {
+                self.done = true;
+                ToTextStep::End
+            }
+            StreamPull::Failed(error) => {
+                self.done = true;
+                ToTextStep::Failed(error)
+            }
+            StreamPull::Cancelled(reason) => {
+                self.done = true;
+                ToTextStep::Cancelled(reason)
+            }
+        }
+    }
+}
+
+/// One value's line bytes, or `None` when its family has no single-line form.
+///
+/// The eligible families are deliberately the same set that may become a command
+/// argument (see `word_encoding` in `crate::eval`): a value that can be written
+/// as a word can be written as a line, and nothing else can. That keeps the
+/// no-implicit-serialization rule in one place — a list, record, or table has an
+/// obvious-looking human rendering, and neither argv nor this writer will accept
+/// it as bytes. `null` is excluded for the same reason it is excluded from argv:
+/// it denotes absence and must be converted explicitly.
+fn line_encoding(value: &Value) -> Option<Vec<u8>> {
+    let text = match value {
+        Value::Bool(flag) => (if *flag { "true" } else { "false" }).to_owned(),
+        Value::Int(integer) => integer.to_string(),
+        Value::Float(float) => float.to_string(),
+        Value::String(text) => text.as_ref().to_owned(),
+        Value::Duration(duration) => duration.to_string(),
+        Value::ByteSize(size) => size.to_string(),
+        // A path carries native units, which may not be UTF-8; it crosses as its
+        // exact bytes rather than through a lossy string.
+        Value::Path(path) => return Some(path.as_os_str().as_encoded_bytes().to_vec()),
+        _ => return None,
+    };
+    Some(text.into_bytes())
 }

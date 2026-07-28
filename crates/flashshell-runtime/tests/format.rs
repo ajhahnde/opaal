@@ -11,9 +11,16 @@
 //! last byte is read — so `from json` drains its byte source under an explicit
 //! byte budget rather than truncating silently. `to json` stays lazy, emitting
 //! one serialized chunk per pulled value.
+//!
+//! The line-oriented `text` format is genuinely streaming, so it needs no
+//! whole-document budget — only a bound on one unterminated line. Its splitting
+//! rule is the same implementation `lines` uses, so the two cannot drift.
 
 use flashshell_runtime::eval::{CancelReason, CancellationToken, RuntimeError, RuntimeErrorKind};
-use flashshell_runtime::format::{FromJsonStep, JsonMode, ToJsonStep, from_json, to_json};
+use flashshell_runtime::format::{
+    FromJsonStep, FromTextStep, JsonMode, ToJsonStep, ToTextStep, from_json, from_text, to_json,
+    to_text,
+};
 use flashshell_runtime::stream::ValueStream;
 use flashshell_runtime::{Record, Table, Value};
 use flashshell_syntax::{SourceFile, SourceId};
@@ -321,5 +328,169 @@ fn both_directions_pass_upstream_failure_and_cancellation_through() {
     assert!(matches!(
         refused.pull(),
         FromJsonStep::LimitExceeded { limit: 0 }
+    ));
+}
+
+/// A generous single-line bound for tests that are not about the bound.
+const AMPLE_LINE: usize = 4 * 1024;
+
+/// Pulls one line from a text parser, failing on any other step.
+fn text_line(parser: &mut flashshell_runtime::format::FromText) -> String {
+    match parser.pull() {
+        FromTextStep::Line(Value::String(text)) => text.as_ref().to_owned(),
+        other => panic!("expected a line, got {other:?}"),
+    }
+}
+
+#[test]
+fn the_text_format_splits_lines_exactly_as_the_lines_command_does() {
+    let mut parser = from_text(document("first\nsecond\n"), AMPLE_LINE);
+    assert_eq!(text_line(&mut parser), "first");
+    assert_eq!(text_line(&mut parser), "second");
+    // A trailing terminator emits no empty final line.
+    assert!(matches!(parser.pull(), FromTextStep::End));
+    assert!(matches!(parser.pull(), FromTextStep::End));
+
+    // An unterminated final line is still flushed.
+    let mut unterminated = from_text(document("only"), AMPLE_LINE);
+    assert_eq!(text_line(&mut unterminated), "only");
+    assert!(matches!(unterminated.pull(), FromTextStep::End));
+
+    // CRLF and a trailing CR on the flushed line leave no carriage return, while
+    // a lone interior CR is ordinary content and blank lines are preserved.
+    let mut endings = from_text(document("a\r\n\r\nb\rc\r"), AMPLE_LINE);
+    assert_eq!(text_line(&mut endings), "a");
+    assert_eq!(text_line(&mut endings), "");
+    assert_eq!(text_line(&mut endings), "b\rc");
+    assert!(matches!(endings.pull(), FromTextStep::End));
+
+    // A line split across chunks is joined.
+    let mut split = from_text(
+        chunks(vec![b"beg".to_vec(), b"in\nen".to_vec(), b"d\n".to_vec()]),
+        AMPLE_LINE,
+    );
+    assert_eq!(text_line(&mut split), "begin");
+    assert_eq!(text_line(&mut split), "end");
+    assert!(matches!(split.pull(), FromTextStep::End));
+
+    // An empty source is End, not one empty line.
+    let mut empty = from_text(chunks(Vec::new()), AMPLE_LINE);
+    assert!(matches!(empty.pull(), FromTextStep::End));
+}
+
+#[test]
+fn the_text_format_is_lazy_and_bounds_one_unterminated_line() {
+    // Streaming: a bounded reader over an endless source stays bounded, because
+    // the format needs no whole-document budget.
+    let mut endless = from_text(|| Some(b"line\n".to_vec()), AMPLE_LINE);
+    assert_eq!(text_line(&mut endless), "line");
+    assert_eq!(text_line(&mut endless), "line");
+
+    // But a single line that never terminates would materialize without bound,
+    // so it is refused rather than truncated.
+    let mut runaway = from_text(|| Some(vec![b'x'; 64]), 128);
+    assert!(matches!(
+        runaway.pull(),
+        FromTextStep::LineTooLong { limit: 128 }
+    ));
+
+    // A line of exactly the bound is accepted: the bound is inclusive.
+    let exact = "x".repeat(8);
+    let mut fits = from_text(document(&format!("{exact}\n")), 8);
+    assert_eq!(text_line(&mut fits), exact);
+}
+
+#[test]
+fn the_text_format_decodes_strictly_and_reports_a_malformed_offset() {
+    let mut parser = from_text(chunks(vec![b"ok\n\xff".to_vec()]), AMPLE_LINE);
+    assert_eq!(text_line(&mut parser), "ok");
+    let FromTextStep::Malformed { offset } = parser.pull() else {
+        panic!("expected a malformed report");
+    };
+    assert_eq!(offset, 3);
+    // The report latches.
+    assert!(matches!(parser.pull(), FromTextStep::End));
+}
+
+#[test]
+fn text_output_writes_one_terminated_line_per_value() {
+    let mut writer = to_text(ValueStream::from_values(vec![
+        Value::string("first"),
+        Value::Int(2),
+        Value::Bool(true),
+    ]));
+    assert!(matches!(writer.pull(), ToTextStep::Chunk(ref bytes) if bytes == b"first\n"));
+    assert!(matches!(writer.pull(), ToTextStep::Chunk(ref bytes) if bytes == b"2\n"));
+    assert!(matches!(writer.pull(), ToTextStep::Chunk(ref bytes) if bytes == b"true\n"));
+    assert!(matches!(writer.pull(), ToTextStep::End));
+
+    // A string containing a newline is written through unchanged: `to text` is a
+    // line-oriented writer, not an escaping serializer.
+    let mut embedded = to_text(ValueStream::once(Value::string("a\nb")));
+    assert!(matches!(embedded.pull(), ToTextStep::Chunk(ref bytes) if bytes == b"a\nb\n"));
+}
+
+#[test]
+fn text_output_accepts_exactly_the_families_that_are_word_eligible() {
+    // The `text` format and argv share one eligibility rule: a value that can
+    // become a command argument can be written as a line, and nothing else can.
+    // Terminal rendering of a compound value is never a serialization path, and
+    // this writer is the second of the two doors that keep it that way.
+    for value in [
+        Value::Bool(true),
+        Value::Int(1),
+        Value::string("text"),
+        Value::from(flashshell_runtime::ByteSize::new(4)),
+    ] {
+        let family = value.family_name();
+        let mut writer = to_text(ValueStream::once(value));
+        assert!(
+            matches!(writer.pull(), ToTextStep::Chunk(_)),
+            "{family} must be writable as a line"
+        );
+    }
+
+    for value in [
+        Value::Null,
+        Value::list(vec![Value::Int(1)]),
+        Value::from(record(vec![("a", Value::Int(1))])),
+        Value::from(Table::new(vec!["a".to_owned()], vec![vec![Value::Int(1)]]).unwrap()),
+        Value::Bytes(std::sync::Arc::from(b"raw".as_slice())),
+    ] {
+        let family = value.family_name();
+        let mut writer = to_text(ValueStream::once(value));
+        assert!(
+            matches!(writer.pull(), ToTextStep::NotEncodable { actual } if actual == family),
+            "{family} must not be writable as a line"
+        );
+    }
+}
+
+#[test]
+fn text_output_passes_upstream_failure_and_cancellation_through() {
+    let file = SourceFile::new(SourceId::new(1), "test.fsh", "x");
+    let span = file.span(0..1).unwrap();
+    let boom = RuntimeError::new(RuntimeErrorKind::ExecutionUnsupported, span);
+    let expected = boom.clone();
+    let mut produced = false;
+    let mut failing = to_text(ValueStream::from_fn(move || {
+        if produced {
+            None
+        } else {
+            produced = true;
+            Some(Err(boom.clone()))
+        }
+    }));
+    match failing.pull() {
+        ToTextStep::Failed(error) => assert_eq!(error, expected),
+        other => panic!("expected the upstream failure, got {other:?}"),
+    }
+
+    let token = CancellationToken::from_fn(|| true);
+    let mut cancelled =
+        to_text(ValueStream::from_values(vec![Value::string("later")]).with_cancellation(token));
+    assert!(matches!(
+        cancelled.pull(),
+        ToTextStep::Cancelled(CancelReason::Requested)
     ));
 }

@@ -185,9 +185,8 @@ pub enum LineStep {
 /// A pull-driven line splitter produced by [`lines`].
 pub struct LineSplitter {
     input: ValueStream,
-    /// Text pulled but not yet emitted as a line; it never contains a `\n`, since
-    /// every terminator is consumed as soon as it appears.
-    carry: String,
+    /// Text pulled but not yet emitted as a line.
+    carry: LineCarry,
     /// The upstream stream reached `End`; only a trailing partial line remains to
     /// flush.
     input_ended: bool,
@@ -205,7 +204,7 @@ pub struct LineSplitter {
 pub fn lines(input: ValueStream) -> LineSplitter {
     LineSplitter {
         input,
-        carry: String::new(),
+        carry: LineCarry::default(),
         input_ended: false,
         done: false,
     }
@@ -222,14 +221,14 @@ impl LineSplitter {
             return LineStep::End;
         }
         loop {
-            if let Some(newline) = self.carry.find('\n') {
-                return LineStep::Line(self.take_line(newline));
+            if let Some(line) = self.carry.next_line() {
+                return LineStep::Line(Value::string(line));
             }
             if self.input_ended {
                 return self.flush_remainder();
             }
             match self.input.pull() {
-                StreamPull::Item(Value::String(text)) => self.carry.push_str(&text),
+                StreamPull::Item(Value::String(text)) => self.carry.push(&text),
                 StreamPull::Item(other) => {
                     self.done = true;
                     return LineStep::NotText {
@@ -249,24 +248,59 @@ impl LineSplitter {
         }
     }
 
-    /// Removes the line ending at the `\n` at byte index `newline` (with a single
-    /// preceding `\r`) and returns it, leaving the rest in `carry`.
-    fn take_line(&mut self, newline: usize) -> Value {
-        let mut line: String = self.carry.drain(..newline).collect();
-        self.carry.remove(0); // Drop the `\n`.
-        strip_carriage_return(&mut line);
-        Value::string(line)
-    }
-
     /// Emits the trailing partial line, if any, then latches `End`.
     fn flush_remainder(&mut self) -> LineStep {
         self.done = true;
-        if self.carry.is_empty() {
-            return LineStep::End;
+        match self.carry.flush() {
+            Some(line) => LineStep::Line(Value::string(line)),
+            None => LineStep::End,
         }
-        let mut line = std::mem::take(&mut self.carry);
+    }
+}
+
+/// Text pulled but not yet emitted as a line.
+///
+/// This is the single implementation of FlashShell's line-splitting rule, shared
+/// by `lines` here and by the line-oriented format boundary in
+/// [`crate::format`], so the two can never drift apart. A `\r\n` terminator and
+/// a trailing `\r` on a flushed final line both leave no carriage return, a lone
+/// interior `\r` is ordinary content, a trailing terminator emits no empty final
+/// line, and interior blank lines are preserved as empty strings.
+#[derive(Default)]
+pub(crate) struct LineCarry {
+    /// Never contains a `\n`: every terminator is consumed as it appears.
+    text: String,
+}
+
+impl LineCarry {
+    /// Appends freshly decoded text.
+    pub(crate) fn push(&mut self, text: &str) {
+        self.text.push_str(text);
+    }
+
+    /// The number of bytes held but not yet emitted.
+    pub(crate) fn len(&self) -> usize {
+        self.text.len()
+    }
+
+    /// Removes and returns the next complete line, if one is present.
+    pub(crate) fn next_line(&mut self) -> Option<String> {
+        let newline = self.text.find('\n')?;
+        let mut line: String = self.text.drain(..newline).collect();
+        self.text.remove(0); // Drop the `\n`.
         strip_carriage_return(&mut line);
-        LineStep::Line(Value::string(line))
+        Some(line)
+    }
+
+    /// Removes and returns the trailing partial line, if any. A trailing
+    /// terminator leaves nothing, so no empty final line is emitted.
+    pub(crate) fn flush(&mut self) -> Option<String> {
+        if self.text.is_empty() {
+            return None;
+        }
+        let mut line = std::mem::take(&mut self.text);
+        strip_carriage_return(&mut line);
+        Some(line)
     }
 }
 
