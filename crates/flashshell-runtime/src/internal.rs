@@ -1,14 +1,18 @@
 //! Live execution of all-internal structured pipelines.
 //!
-//! The external executor owns process descriptors and byte pipelines. This
-//! module owns the complementary carrier path: it moves `Empty`, `Value`, and
-//! lazy `ValueStream` payloads directly between internal stages without display,
-//! serialization, or edge materialization.
+//! The external executor owns process descriptors. This module owns the
+//! all-internal carrier path: it moves `Empty`, `Value`, lazy `ValueStream`, and
+//! lazy `ByteStream` payloads directly between stages without implicit display,
+//! serialization, decoding, or edge materialization.
 
+use std::cell::RefCell;
 use std::ffi::OsStr;
 use std::path::Path;
+use std::rc::Rc;
 
-use flashshell_platform::{DirectoryReadRequest, Platform};
+use flashshell_platform::{
+    DirectoryReadRequest, FileActionError, FileOpenMode, FileOpenRequest, Platform,
+};
 use flashshell_syntax::SourceFile;
 
 use crate::builtin::{BuiltinOutcome, BuiltinOutput, SessionState, execute_builtin};
@@ -16,11 +20,17 @@ use crate::closure::{
     EachStep, OwnedClosureContext, UpdateStep, WhereStep, each_owned, update_owned, where_owned,
 };
 use crate::command::{Carrier, CommandRegistry};
+use crate::convert::{Codec, DecodeStep, EncodeStep, decode, encode};
 use crate::directory::{ListStep, list};
 use crate::eval::{EvalLimits, RuntimeError, RuntimeErrorKind};
+use crate::file::{OpenStep, open, write_complete};
+use crate::format::{
+    FromJsonStep, FromTextStep, JsonMode, ToJsonStep, ToTextStep, from_json, from_text, to_json,
+    to_text,
+};
 use crate::plan::{ExecutionPlan, PlannedArgument, PlannedResolution, PlannedStage, preflight};
 use crate::resolve::ExecutableProbe;
-use crate::stream::{StreamPull, ValueStream};
+use crate::stream::{BytePull, ByteStream, StreamPull, ValueStream};
 use crate::structured::{
     DrainOutcome, GetStep, LineStep, SelectStep, SortOutcome, collect, first, get, last, length,
     lines, select, sort,
@@ -31,6 +41,12 @@ use crate::{Duration, Status, Value};
 /// stream (`last`, `collect`, `length`, and `sort`).
 pub const DEFAULT_MATERIALIZATION_LIMIT: usize = 1_000_000;
 
+/// Default byte budget for one JSON document or one unterminated text line.
+pub const DEFAULT_FORMAT_LIMIT: usize = 8 * 1024 * 1024;
+
+/// Maximum chunk size requested by one lazy `open` pull.
+pub const DEFAULT_FILE_CHUNK_SIZE: usize = 64 * 1024;
+
 /// One owned payload moving across an internal pipeline edge.
 pub enum InternalPayload {
     /// No payload.
@@ -39,6 +55,8 @@ pub enum InternalPayload {
     Value(Value),
     /// A lazy ordered sequence of structured values.
     ValueStream(ValueStream),
+    /// A lazy ordered sequence of byte-preserving chunks.
+    ByteStream(ByteStream),
 }
 
 impl InternalPayload {
@@ -49,6 +67,7 @@ impl InternalPayload {
             Self::Empty => Carrier::Empty,
             Self::Value(_) => Carrier::Value,
             Self::ValueStream(_) => Carrier::ValueStream,
+            Self::ByteStream(_) => Carrier::ByteStream,
         }
     }
 }
@@ -166,6 +185,12 @@ fn execute_stage(
         "each" => execute_each(stage, input, closure_context),
         "where" => execute_where(stage, input, closure_context),
         "update" => execute_update(stage, input, closure_context),
+        "decode" => execute_decode(stage, input),
+        "encode" => execute_encode(stage, input),
+        "from" => execute_from(stage, input),
+        "to" => execute_to(stage, input),
+        "open" => execute_open(stage, input, platform, cwd),
+        "save" => execute_save(stage, input, platform, cwd),
         _ => Err(RuntimeError::new(
             RuntimeErrorKind::Unsupported {
                 feature: "this internal command in the live structured executor",
@@ -290,6 +315,278 @@ fn execute_update(
         UpdateStep::Cancelled(reason) => StreamPull::Cancelled(reason),
     });
     completed(InternalPayload::ValueStream(stream))
+}
+
+fn execute_decode(
+    stage: &PlannedStage,
+    input: InternalPayload,
+) -> Result<StageOutcome, RuntimeError> {
+    expect_arity(stage, "decode", 1, Some(1))?;
+    let codec = parse_codec(stage, "decode", true)?;
+    let bridge = Rc::new(RefCell::new(ByteInputBridge::new(expect_bytes(
+        stage, input,
+    )?)));
+    let source = Rc::clone(&bridge);
+    let mut decoder = decode(codec, move || source.borrow_mut().next_chunk());
+    let span = stage.span();
+    let stream = ValueStream::from_pull_fn(move || {
+        let step = decoder.pull();
+        if let Some(terminal) = bridge.borrow_mut().take_terminal() {
+            return terminal.into_value_pull();
+        }
+        match step {
+            DecodeStep::Value(value) => StreamPull::Item(value),
+            DecodeStep::End => StreamPull::End,
+            DecodeStep::Malformed { offset } => StreamPull::Failed(structured_error_at(
+                "decode",
+                format!("malformed input at byte offset {offset}"),
+                span,
+            )),
+        }
+    });
+    completed(InternalPayload::ValueStream(stream))
+}
+
+fn execute_encode(
+    stage: &PlannedStage,
+    input: InternalPayload,
+) -> Result<StageOutcome, RuntimeError> {
+    expect_arity(stage, "encode", 1, Some(1))?;
+    let codec = parse_codec(stage, "encode", false)?;
+    let mut encoder = encode(codec, expect_values(stage, input)?);
+    let span = stage.span();
+    let stream = ByteStream::from_pull_fn(move || match encoder.pull() {
+        EncodeStep::Chunk(chunk) => BytePull::Chunk(chunk),
+        EncodeStep::End => BytePull::End,
+        EncodeStep::NotEncodable { actual } => BytePull::Failed(structured_error_at(
+            "encode",
+            format!("cannot encode {actual} with the selected codec"),
+            span,
+        )),
+        EncodeStep::Failed(error) => BytePull::Failed(error),
+        EncodeStep::Cancelled(reason) => BytePull::Cancelled(reason),
+    });
+    completed(InternalPayload::ByteStream(stream))
+}
+
+fn execute_from(
+    stage: &PlannedStage,
+    input: InternalPayload,
+) -> Result<StageOutcome, RuntimeError> {
+    expect_arity(stage, "from", 1, Some(2))?;
+    let format = utf8_word("from", &stage.arguments()[0], "format")?;
+    let input = expect_bytes(stage, input)?;
+    match format {
+        "json" => execute_from_json(stage, input),
+        "text" => {
+            expect_arity(stage, "from", 1, Some(1))?;
+            execute_from_text(stage, input)
+        }
+        other => Err(structured_error_at(
+            "from",
+            format!("unknown format `{other}`; expected `json` or `text`"),
+            stage.arguments()[0].span(),
+        )),
+    }
+}
+
+fn execute_from_json(
+    stage: &PlannedStage,
+    input: ByteStream,
+) -> Result<StageOutcome, RuntimeError> {
+    let mode = match stage.arguments().get(1) {
+        None => JsonMode::Document,
+        Some(argument) => match utf8_word("from", argument, "JSON mode")? {
+            "document" => JsonMode::Document,
+            "array" => JsonMode::Array,
+            other => {
+                return Err(structured_error_at(
+                    "from",
+                    format!("unknown JSON mode `{other}`; expected `document` or `array`"),
+                    argument.span(),
+                ));
+            }
+        },
+    };
+    let bridge = Rc::new(RefCell::new(ByteInputBridge::new(input)));
+    let source = Rc::clone(&bridge);
+    let mut parser = from_json(
+        mode,
+        move || source.borrow_mut().next_chunk(),
+        DEFAULT_FORMAT_LIMIT,
+    );
+    let span = stage.span();
+    let stream = ValueStream::from_pull_fn(move || {
+        let step = parser.pull();
+        if let Some(terminal) = bridge.borrow_mut().take_terminal() {
+            return terminal.into_value_pull();
+        }
+        match step {
+            FromJsonStep::Value(value) => StreamPull::Item(value),
+            FromJsonStep::End => StreamPull::End,
+            FromJsonStep::Malformed { offset } => StreamPull::Failed(structured_error_at(
+                "from",
+                format!("malformed JSON at byte offset {offset}"),
+                span,
+            )),
+            FromJsonStep::NotArray { actual } => StreamPull::Failed(structured_error_at(
+                "from",
+                format!("JSON array mode requires a List, found {actual}"),
+                span,
+            )),
+            FromJsonStep::DuplicateKey { key } => StreamPull::Failed(structured_error_at(
+                "from",
+                format!("JSON object repeats field `{key}`"),
+                span,
+            )),
+            FromJsonStep::LimitExceeded { limit } => StreamPull::Failed(structured_error_at(
+                "from",
+                format!("JSON input exceeds the {limit}-byte materialization limit"),
+                span,
+            )),
+        }
+    });
+    completed(InternalPayload::ValueStream(stream))
+}
+
+fn execute_from_text(
+    stage: &PlannedStage,
+    input: ByteStream,
+) -> Result<StageOutcome, RuntimeError> {
+    let bridge = Rc::new(RefCell::new(ByteInputBridge::new(input)));
+    let source = Rc::clone(&bridge);
+    let mut parser = from_text(
+        move || source.borrow_mut().next_chunk(),
+        DEFAULT_FORMAT_LIMIT,
+    );
+    let span = stage.span();
+    let stream = ValueStream::from_pull_fn(move || {
+        let step = parser.pull();
+        if let Some(terminal) = bridge.borrow_mut().take_terminal() {
+            return terminal.into_value_pull();
+        }
+        match step {
+            FromTextStep::Line(value) => StreamPull::Item(value),
+            FromTextStep::End => StreamPull::End,
+            FromTextStep::Malformed { offset } => StreamPull::Failed(structured_error_at(
+                "from",
+                format!("malformed text at byte offset {offset}"),
+                span,
+            )),
+            FromTextStep::LineTooLong { limit } => StreamPull::Failed(structured_error_at(
+                "from",
+                format!("text line exceeds the {limit}-byte limit"),
+                span,
+            )),
+        }
+    });
+    completed(InternalPayload::ValueStream(stream))
+}
+
+fn execute_to(stage: &PlannedStage, input: InternalPayload) -> Result<StageOutcome, RuntimeError> {
+    expect_arity(stage, "to", 1, Some(1))?;
+    let format = utf8_word("to", &stage.arguments()[0], "format")?;
+    let values = expect_values(stage, input)?;
+    let span = stage.span();
+    let stream = match format {
+        "json" => {
+            let mut writer = to_json(values);
+            ByteStream::from_pull_fn(move || match writer.pull() {
+                ToJsonStep::Chunk(chunk) => BytePull::Chunk(chunk),
+                ToJsonStep::End => BytePull::End,
+                ToJsonStep::NotEncodable { actual } => BytePull::Failed(structured_error_at(
+                    "to",
+                    format!("JSON cannot encode {actual}"),
+                    span,
+                )),
+                ToJsonStep::Failed(error) => BytePull::Failed(error),
+                ToJsonStep::Cancelled(reason) => BytePull::Cancelled(reason),
+            })
+        }
+        "text" => {
+            let mut writer = to_text(values);
+            ByteStream::from_pull_fn(move || match writer.pull() {
+                ToTextStep::Chunk(chunk) => BytePull::Chunk(chunk),
+                ToTextStep::End => BytePull::End,
+                ToTextStep::NotEncodable { actual } => BytePull::Failed(structured_error_at(
+                    "to",
+                    format!("text cannot encode {actual}"),
+                    span,
+                )),
+                ToTextStep::Failed(error) => BytePull::Failed(error),
+                ToTextStep::Cancelled(reason) => BytePull::Cancelled(reason),
+            })
+        }
+        other => {
+            return Err(structured_error_at(
+                "to",
+                format!("unknown format `{other}`; expected `json` or `text`"),
+                stage.arguments()[0].span(),
+            ));
+        }
+    };
+    completed(InternalPayload::ByteStream(stream))
+}
+
+fn execute_open(
+    stage: &PlannedStage,
+    input: InternalPayload,
+    platform: &dyn Platform,
+    cwd: &Path,
+) -> Result<StageOutcome, RuntimeError> {
+    expect_arity(stage, "open", 1, Some(1))?;
+    expect_empty(stage, input)?;
+    let path = word("open", &stage.arguments()[0])?;
+    let mut endpoint = platform
+        .open_file_io(FileOpenRequest::new(
+            Path::new(path.value()),
+            cwd,
+            FileOpenMode::Read,
+        ))
+        .map_err(|error| file_error("open", error, path.span()))?;
+    let mut reader = open(move |buffer| endpoint.read(buffer), DEFAULT_FILE_CHUNK_SIZE);
+    let span = stage.span();
+    let stream = ByteStream::from_pull_fn(move || match reader.pull() {
+        OpenStep::Chunk(chunk) => BytePull::Chunk(chunk),
+        OpenStep::End => BytePull::End,
+        OpenStep::Failed(error) => BytePull::Failed(file_error("open", error, span)),
+    });
+    completed(InternalPayload::ByteStream(stream))
+}
+
+fn execute_save(
+    stage: &PlannedStage,
+    input: InternalPayload,
+    platform: &dyn Platform,
+    cwd: &Path,
+) -> Result<StageOutcome, RuntimeError> {
+    expect_arity(stage, "save", 1, Some(1))?;
+    let mut input = expect_bytes(stage, input)?;
+    let path = word("save", &stage.arguments()[0])?;
+    let mut endpoint = platform
+        .open_file_io(FileOpenRequest::new(
+            Path::new(path.value()),
+            cwd,
+            FileOpenMode::WriteTruncate,
+        ))
+        .map_err(|error| file_error("save", error, path.span()))?;
+    loop {
+        match input.pull() {
+            BytePull::Chunk(chunk) => {
+                let mut write = |bytes: &[u8]| endpoint.write(bytes);
+                write_complete(&mut write, &chunk)
+                    .map_err(|error| file_error("save", error, stage.span()))?;
+            }
+            BytePull::End => return completed(InternalPayload::Empty),
+            BytePull::Failed(error) => return Err(error),
+            BytePull::Cancelled(reason) => {
+                return Err(RuntimeError::new(
+                    RuntimeErrorKind::StreamCancelled { reason },
+                    stage.span(),
+                ));
+            }
+        }
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -562,6 +859,115 @@ fn execute_ls(
     completed(InternalPayload::ValueStream(stream))
 }
 
+struct ByteInputBridge {
+    input: ByteStream,
+    terminal: Option<BytePull>,
+}
+
+impl ByteInputBridge {
+    fn new(input: ByteStream) -> Self {
+        Self {
+            input,
+            terminal: None,
+        }
+    }
+
+    fn next_chunk(&mut self) -> Option<Vec<u8>> {
+        match self.input.pull() {
+            BytePull::Chunk(chunk) => Some(chunk),
+            BytePull::End => None,
+            terminal @ (BytePull::Failed(_) | BytePull::Cancelled(_)) => {
+                self.terminal = Some(terminal);
+                None
+            }
+        }
+    }
+
+    fn take_terminal(&mut self) -> Option<BytePull> {
+        self.terminal.take()
+    }
+}
+
+impl BytePull {
+    fn into_value_pull(self) -> StreamPull {
+        match self {
+            Self::Failed(error) => StreamPull::Failed(error),
+            Self::Cancelled(reason) => StreamPull::Cancelled(reason),
+            Self::Chunk(_) | Self::End => {
+                unreachable!("only terminal byte-source failures are retained")
+            }
+        }
+    }
+}
+
+fn parse_codec(
+    stage: &PlannedStage,
+    command: &'static str,
+    allow_lossy: bool,
+) -> Result<Codec, RuntimeError> {
+    let argument = &stage.arguments()[0];
+    match utf8_word(command, argument, "codec")? {
+        "utf8" => Ok(Codec::Utf8 { lossy: false }),
+        "utf8-lossy" if allow_lossy => Ok(Codec::Utf8 { lossy: true }),
+        "bytes" => Ok(Codec::Bytes),
+        other => {
+            let expected = if allow_lossy {
+                "`utf8`, `utf8-lossy`, or `bytes`"
+            } else {
+                "`utf8` or `bytes`"
+            };
+            Err(structured_error_at(
+                command,
+                format!("unknown codec `{other}`; expected {expected}"),
+                argument.span(),
+            ))
+        }
+    }
+}
+
+fn expect_empty(stage: &PlannedStage, input: InternalPayload) -> Result<(), RuntimeError> {
+    match input {
+        InternalPayload::Empty => Ok(()),
+        other => Err(RuntimeError::new(
+            RuntimeErrorKind::BuiltinInputCarrier {
+                command: command_name(stage),
+                input: other.carrier(),
+            },
+            stage.span(),
+        )),
+    }
+}
+
+fn expect_bytes(stage: &PlannedStage, input: InternalPayload) -> Result<ByteStream, RuntimeError> {
+    match input {
+        InternalPayload::ByteStream(stream) => Ok(stream),
+        other => Err(RuntimeError::new(
+            RuntimeErrorKind::BuiltinInputCarrier {
+                command: command_name(stage),
+                input: other.carrier(),
+            },
+            stage.span(),
+        )),
+    }
+}
+
+fn expect_values(
+    stage: &PlannedStage,
+    input: InternalPayload,
+) -> Result<ValueStream, RuntimeError> {
+    match input {
+        InternalPayload::Value(value) => Ok(ValueStream::once(value)),
+        InternalPayload::ValueStream(stream) => Ok(stream),
+        other => Err(RuntimeError::new(
+            RuntimeErrorKind::BuiltinInputCarrier {
+                command: command_name(stage),
+                input: other.carrier(),
+            },
+            stage.span(),
+        )),
+    }
+}
+
 fn expect_stream(
     stage: &PlannedStage,
     input: InternalPayload,
@@ -642,6 +1048,23 @@ fn utf8_words(stage: &PlannedStage, command: &'static str) -> Result<Vec<String>
         .collect()
 }
 
+fn utf8_word<'a>(
+    command: &'static str,
+    argument: &'a PlannedArgument,
+    subject: &str,
+) -> Result<&'a str, RuntimeError> {
+    let word = word(command, argument)?;
+    word.value().to_str().ok_or_else(|| {
+        RuntimeError::new(
+            RuntimeErrorKind::BuiltinArgument {
+                command,
+                message: format!("{subject} must be valid UTF-8"),
+            },
+            word.span(),
+        )
+    })
+}
+
 fn word<'a>(
     command: &'static str,
     argument: &'a PlannedArgument,
@@ -699,6 +1122,25 @@ fn structured_error(command: &'static str, stage: &PlannedStage, message: String
     )
 }
 
+fn structured_error_at(
+    command: &'static str,
+    message: String,
+    span: flashshell_syntax::Span,
+) -> RuntimeError {
+    RuntimeError::new(
+        RuntimeErrorKind::StructuredCommand { command, message },
+        span,
+    )
+}
+
+fn file_error(
+    command: &'static str,
+    error: FileActionError,
+    span: flashshell_syntax::Span,
+) -> RuntimeError {
+    structured_error_at(command, error.to_string(), span)
+}
+
 fn completed(payload: InternalPayload) -> Result<StageOutcome, RuntimeError> {
     Ok(StageOutcome::Completed {
         payload,
@@ -744,6 +1186,12 @@ fn command_name(stage: &PlannedStage) -> &'static str {
             "each" => "each",
             "where" => "where",
             "update" => "update",
+            "decode" => "decode",
+            "encode" => "encode",
+            "from" => "from",
+            "to" => "to",
+            "open" => "open",
+            "save" => "save",
             _ => "internal command",
         },
         PlannedResolution::External { .. } => "internal command",

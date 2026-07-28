@@ -38,7 +38,7 @@ use crate::presentation::{
     OutputDestination, TerminalPresentation, render_table, select_terminal_presentation,
 };
 use crate::resolve::ExecutableProbe;
-use crate::stream::StreamPull;
+use crate::stream::{BytePull, StreamPull};
 use crate::{Environment, ScopeStack, Status, Value};
 
 /// The control decision produced by one submitted edit buffer.
@@ -447,6 +447,19 @@ fn render_payload(
                 }
             }
         }
+        InternalPayload::ByteStream(mut bytes) => loop {
+            match bytes.pull() {
+                BytePull::Chunk(chunk) => sink.write_all(&chunk).map_err(Interrupt::Output)?,
+                BytePull::End => return Ok(()),
+                BytePull::Failed(error) => return Err(Interrupt::Runtime(error)),
+                BytePull::Cancelled(reason) => {
+                    return Err(Interrupt::Runtime(RuntimeError::new(
+                        RuntimeErrorKind::StreamCancelled { reason },
+                        span,
+                    )));
+                }
+            }
+        },
     }
 }
 

@@ -13,10 +13,9 @@
 //! decoding carries an incomplete trailing multibyte sequence across chunk
 //! boundaries, so a byte source may split a code point without corrupting it.
 //!
-//! The format boundary — `from <format>` and `to <format>` — is separate; only
-//! its carrier contract is registered so far, and its format conversions arrive
-//! with the format library. This codec layer is not yet wired into a live
-//! pipeline executor.
+//! The format boundary — `from <format>` and `to <format>` — is separate. The
+//! live internal executor adapts both boundary families onto its owned byte and
+//! value streams while this module remains host-free and span-independent.
 
 use std::str;
 

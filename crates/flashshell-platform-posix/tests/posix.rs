@@ -211,6 +211,37 @@ fn posix_file_actions_preserve_relative_cwd_and_open_modes() {
 }
 
 #[test]
+fn posix_in_process_file_endpoints_read_and_write_owned_files() {
+    let temp = TempDir::new("file-io");
+    fs::write(temp.path().join("input"), [0, 0xff, 7]).expect("seed file should be written");
+
+    let mut input = PosixPlatform
+        .open_file_io(FileOpenRequest::new(
+            Path::new("input"),
+            temp.path(),
+            FileOpenMode::Read,
+        ))
+        .expect("in-process read open should succeed");
+    let mut buffer = [0; 8];
+    let amount = input
+        .read(&mut buffer)
+        .expect("owned file read should work");
+    assert_eq!(&buffer[..amount], &[0, 0xff, 7]);
+    assert_eq!(input.read(&mut buffer).unwrap(), 0);
+
+    let mut output = PosixPlatform
+        .open_file_io(FileOpenRequest::new(
+            Path::new("output"),
+            temp.path(),
+            FileOpenMode::WriteTruncate,
+        ))
+        .expect("in-process write open should succeed");
+    assert_eq!(output.write(&[9, 8, 7]).unwrap(), 3);
+    drop(output);
+    assert_eq!(fs::read(temp.path().join("output")).unwrap(), [9, 8, 7]);
+}
+
+#[test]
 fn posix_spawn_preserves_native_argv_and_never_invokes_a_shell() {
     let temp = TempDir::new("direct-argv");
     let report = temp.path().join("report.bin");

@@ -14,7 +14,7 @@ use std::rc::Rc;
 use flashshell_runtime::Value;
 use flashshell_runtime::eval::{CancelReason, CancellationToken};
 use flashshell_runtime::stream::{
-    BoundedQueue, CollectOutcome, QueueFull, StreamPull, ValueStream,
+    BoundedQueue, BytePull, ByteStream, CollectOutcome, QueueFull, StreamPull, ValueStream,
 };
 use flashshell_syntax::{SourceFile, SourceId};
 
@@ -121,6 +121,36 @@ fn from_pull_fn_preserves_a_first_class_cancellation_state() {
     assert!(matches!(
         stream.pull(),
         StreamPull::Cancelled(CancelReason::Timeout)
+    ));
+}
+
+#[test]
+fn byte_stream_preserves_chunk_boundaries_and_order() {
+    let mut stream =
+        ByteStream::from_chunks(vec![b"one".to_vec(), vec![0, 0xff], b"three".to_vec()]);
+
+    assert!(matches!(stream.pull(), BytePull::Chunk(chunk) if chunk == b"one"));
+    assert!(matches!(stream.pull(), BytePull::Chunk(chunk) if chunk == [0, 0xff]));
+    assert!(matches!(stream.pull(), BytePull::Chunk(chunk) if chunk == b"three"));
+    assert!(matches!(stream.pull(), BytePull::End));
+}
+
+#[test]
+fn byte_stream_puller_preserves_cancellation() {
+    let mut step = 0;
+    let mut stream = ByteStream::from_pull_fn(move || {
+        step += 1;
+        match step {
+            1 => BytePull::Chunk(vec![7]),
+            2 => BytePull::Cancelled(CancelReason::Timeout),
+            _ => BytePull::End,
+        }
+    });
+
+    assert!(matches!(stream.pull(), BytePull::Chunk(chunk) if chunk == [7]));
+    assert!(matches!(
+        stream.pull(),
+        BytePull::Cancelled(CancelReason::Timeout)
     ));
 }
 

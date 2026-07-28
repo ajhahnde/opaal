@@ -12,7 +12,7 @@
 use std::any::Any;
 use std::collections::BTreeSet;
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, Read};
+use std::io::{self, Read, Write};
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd};
 use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::process::{Child, Command, Stdio};
@@ -20,9 +20,9 @@ use std::process::{Child, Command, Stdio};
 use flashshell_platform::{
     Capabilities, Capability, ChildProcess, DescriptorEndpoint, DescriptorReadError,
     DirectoryEntry, DirectoryEntryKind, DirectoryReadError, DirectoryReadRequest, DirectoryStream,
-    FileActionError, FileOpenMode, FileOpenRequest, PipeEndpoints, PipeError, Platform,
-    PlatformError, ProcessStatus, SpawnError, SpawnRequest, TerminalModeGuard, TerminalSize,
-    TerminateError, WaitError, WorkingDirectoryError, WorkingDirectoryRequest,
+    FileActionError, FileIoEndpoint, FileOpenMode, FileOpenRequest, PipeEndpoints, PipeError,
+    Platform, PlatformError, ProcessStatus, SpawnError, SpawnRequest, TerminalModeGuard,
+    TerminalSize, TerminateError, WaitError, WorkingDirectoryError, WorkingDirectoryRequest,
 };
 
 /// A uniquely owned POSIX descriptor with close-on-exec discipline.
@@ -67,6 +67,16 @@ impl OwnedDescriptor {
 impl DescriptorEndpoint for OwnedDescriptor {
     fn as_any(&self) -> &dyn Any {
         self
+    }
+}
+
+impl FileIoEndpoint for OwnedDescriptor {
+    fn read(&mut self, buffer: &mut [u8]) -> Result<usize, FileActionError> {
+        self.descriptor.read(buffer).map_err(file_action_error)
+    }
+
+    fn write(&mut self, buffer: &[u8]) -> Result<usize, FileActionError> {
+        self.descriptor.write(buffer).map_err(file_action_error)
     }
 }
 
@@ -193,31 +203,14 @@ impl Platform for PosixPlatform {
         &self,
         request: FileOpenRequest<'_>,
     ) -> Result<Box<dyn DescriptorEndpoint>, FileActionError> {
-        self.require(Capability::FileActions)?;
-        let cwd = std::path::absolute(request.cwd()).map_err(file_action_error)?;
-        let path = if request.path().is_relative() {
-            cwd.join(request.path())
-        } else {
-            request.path().to_owned()
-        };
-        let mut options = OpenOptions::new();
-        match request.mode() {
-            FileOpenMode::Read => {
-                options.read(true);
-            }
-            FileOpenMode::WriteTruncate => {
-                options.write(true).create(true).truncate(true);
-            }
-            FileOpenMode::WriteAppend => {
-                options.write(true).create(true).append(true);
-            }
-        }
-        let descriptor = options
-            .open(path)
-            .map(OwnedFd::from)
-            .map_err(file_action_error)?;
-        let descriptor = OwnedDescriptor::adopt(descriptor).map_err(file_action_error)?;
-        Ok(Box::new(descriptor))
+        open_owned_file(self, request).map(|endpoint| Box::new(endpoint) as _)
+    }
+
+    fn open_file_io(
+        &self,
+        request: FileOpenRequest<'_>,
+    ) -> Result<Box<dyn FileIoEndpoint>, FileActionError> {
+        open_owned_file(self, request).map(|endpoint| Box::new(endpoint) as _)
     }
 
     fn inherit_descriptor(
@@ -455,6 +448,36 @@ fn file_action_error(error: io::Error) -> FileActionError {
         kind: error.kind(),
         message: error.to_string(),
     }
+}
+
+fn open_owned_file(
+    platform: &PosixPlatform,
+    request: FileOpenRequest<'_>,
+) -> Result<OwnedDescriptor, FileActionError> {
+    platform.require(Capability::FileActions)?;
+    let cwd = std::path::absolute(request.cwd()).map_err(file_action_error)?;
+    let path = if request.path().is_relative() {
+        cwd.join(request.path())
+    } else {
+        request.path().to_owned()
+    };
+    let mut options = OpenOptions::new();
+    match request.mode() {
+        FileOpenMode::Read => {
+            options.read(true);
+        }
+        FileOpenMode::WriteTruncate => {
+            options.write(true).create(true).truncate(true);
+        }
+        FileOpenMode::WriteAppend => {
+            options.write(true).create(true).append(true);
+        }
+    }
+    let descriptor = options
+        .open(path)
+        .map(OwnedFd::from)
+        .map_err(file_action_error)?;
+    OwnedDescriptor::adopt(descriptor).map_err(file_action_error)
 }
 
 fn working_directory_error(error: io::Error) -> WorkingDirectoryError {

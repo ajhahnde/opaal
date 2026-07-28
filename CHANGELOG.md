@@ -43,5 +43,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   are never rendered or serialized between stages; commands that must drain a
   stream enforce a documented item ceiling, and a lazy failure rolls back
   pending session state and closure environment changes.
+- Add live explicit byte boundaries: `decode` and `encode` support strict UTF-8,
+  lossy UTF-8 decoding, and byte-preserving values; `from` and `to` support JSON
+  and line-oriented text; and lazy `open` composes with byte-preserving `save`.
+  JSON documents and unterminated text lines enforce documented byte ceilings,
+  while byte streams retain producer failures and cancellation without implicit
+  decoding, rendering, or serialization.
 
 ---

@@ -1,4 +1,4 @@
-//! The lazy value stream carried by a structured pipeline edge.
+//! Lazy value and byte streams carried by structured pipeline edges.
 //!
 //! [`ValueStream`] is the concrete payload behind the `Carrier::ValueStream`
 //! planning tag: a single-threaded, pull-driven sequence that computes nothing
@@ -12,7 +12,9 @@
 //! producer/consumer bridge pushes into: a full queue refuses further pushes, so
 //! staged memory never exceeds the capacity. [`ValueStream::collect_bounded`]
 //! bounds terminal materialization, so an infinite producer paired with a
-//! bounded consumer never materializes fully.
+//! bounded consumer never materializes fully. [`ByteStream`] provides the same
+//! owned pull boundary for byte-preserving chunks and retains source failure and
+//! cancellation without decoding.
 //!
 //! The whole layer is span-independent, matching [`crate::resolve`] and
 //! [`crate::operation`]: a cancellation reports only its [`CancelReason`], and
@@ -42,6 +44,81 @@ pub enum StreamPull {
     Failed(RuntimeError),
     /// The carried cancellation token tripped before the source was advanced.
     Cancelled(CancelReason),
+}
+
+/// The outcome of pulling one chunk from a [`ByteStream`].
+#[derive(Debug)]
+pub enum BytePull {
+    /// The next byte-preserving chunk.
+    Chunk(Vec<u8>),
+    /// The source is exhausted; further pulls stay `End`.
+    End,
+    /// The producer raised a source-spanned runtime error.
+    Failed(RuntimeError),
+    /// The carried cancellation token tripped before the source advanced.
+    Cancelled(CancelReason),
+}
+
+enum ByteSource {
+    Chunks { chunks: Vec<Vec<u8>>, cursor: usize },
+    Puller(Box<dyn FnMut() -> BytePull>),
+}
+
+impl ByteSource {
+    fn advance(&mut self) -> BytePull {
+        match self {
+            Self::Chunks { chunks, cursor } => match chunks.get(*cursor) {
+                Some(chunk) => {
+                    *cursor += 1;
+                    BytePull::Chunk(chunk.clone())
+                }
+                None => BytePull::End,
+            },
+            Self::Puller(puller) => puller(),
+        }
+    }
+}
+
+/// A lazy, pull-driven sequence of byte-preserving chunks.
+pub struct ByteStream {
+    source: ByteSource,
+    cancel: CancellationToken,
+}
+
+impl ByteStream {
+    /// Build a stream that drains an eager chunk sequence in order.
+    #[must_use]
+    pub fn from_chunks(chunks: Vec<Vec<u8>>) -> Self {
+        Self::with_source(ByteSource::Chunks { chunks, cursor: 0 })
+    }
+
+    /// Build a lazy stream that preserves every first-class terminal state.
+    #[must_use]
+    pub fn from_pull_fn(producer: impl FnMut() -> BytePull + 'static) -> Self {
+        Self::with_source(ByteSource::Puller(Box::new(producer)))
+    }
+
+    fn with_source(source: ByteSource) -> Self {
+        Self {
+            source,
+            cancel: CancellationToken::never(),
+        }
+    }
+
+    /// Attach a cooperative cancellation token, polled before each pull.
+    #[must_use]
+    pub fn with_cancellation(mut self, token: CancellationToken) -> Self {
+        self.cancel = token;
+        self
+    }
+
+    /// Pull the next chunk or terminal state.
+    pub fn pull(&mut self) -> BytePull {
+        if self.cancel.is_cancelled() {
+            return BytePull::Cancelled(self.cancel.reason());
+        }
+        self.source.advance()
+    }
 }
 
 /// The outcome of draining a [`ValueStream`] under a materialization bound.

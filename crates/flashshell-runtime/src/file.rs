@@ -3,8 +3,8 @@
 //! Opening the platform endpoint is deliberately outside this module. The
 //! runtime layer receives one bounded read action, or one byte-chunk source and
 //! write action, so its streaming behavior is testable without a filesystem.
-//! The later mixed-carrier executor supplies those actions from the platform
-//! endpoint already owned by `FileActions`.
+//! The internal carrier executor supplies those actions from an owned platform
+//! file endpoint under `FileActions`.
 //!
 //! Neither direction interprets the bytes. Parsing remains an explicit
 //! `from <format>` stage and serialization remains an explicit `to <format>`
@@ -147,34 +147,43 @@ impl SaveFile {
             }
         };
 
-        let mut written = 0usize;
-        while written < chunk.len() {
-            match (self.write)(&chunk[written..]) {
-                Ok(0) => {
-                    self.done = true;
-                    return SaveStep::Failed(FileActionError::Operation {
-                        kind: io::ErrorKind::WriteZero,
-                        message: "file writer made no progress".to_owned(),
-                    });
-                }
-                Ok(amount) if amount <= chunk.len() - written => written += amount,
-                Ok(amount) => {
-                    self.done = true;
-                    return SaveStep::Failed(FileActionError::Operation {
-                        kind: io::ErrorKind::InvalidData,
-                        message: format!(
-                            "file writer reported {amount} bytes for a {}-byte remainder",
-                            chunk.len() - written
-                        ),
-                    });
-                }
-                Err(error) => {
-                    self.done = true;
-                    return SaveStep::Failed(error);
-                }
+        match write_complete(&mut self.write, &chunk) {
+            Ok(bytes) => SaveStep::Wrote { bytes },
+            Err(error) => {
+                self.done = true;
+                SaveStep::Failed(error)
             }
         }
-
-        SaveStep::Wrote { bytes: written }
     }
+}
+
+/// Write one complete chunk with the same progress and bounds checks as
+/// [`SaveFile`].
+pub(crate) fn write_complete(
+    write: &mut dyn FnMut(&[u8]) -> Result<usize, FileActionError>,
+    chunk: &[u8],
+) -> Result<usize, FileActionError> {
+    let mut written = 0usize;
+    while written < chunk.len() {
+        match write(&chunk[written..]) {
+            Ok(0) => {
+                return Err(FileActionError::Operation {
+                    kind: io::ErrorKind::WriteZero,
+                    message: "file writer made no progress".to_owned(),
+                });
+            }
+            Ok(amount) if amount <= chunk.len() - written => written += amount,
+            Ok(amount) => {
+                return Err(FileActionError::Operation {
+                    kind: io::ErrorKind::InvalidData,
+                    message: format!(
+                        "file writer reported {amount} bytes for a {}-byte remainder",
+                        chunk.len() - written
+                    ),
+                });
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(written)
 }

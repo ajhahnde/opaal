@@ -361,7 +361,7 @@ impl<'a> FileOpenRequest<'a> {
     }
 }
 
-/// Failure while preparing an owned descriptor for a redirection action.
+/// Failure while opening or transferring through an owned file endpoint.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum FileActionError {
     /// The platform cannot satisfy file actions.
@@ -380,7 +380,7 @@ impl fmt::Display for FileActionError {
         match self {
             Self::Platform(error) => error.fmt(formatter),
             Self::Operation { message, .. } => {
-                write!(formatter, "redirection setup failed: {message}")
+                write!(formatter, "file action failed: {message}")
             }
         }
     }
@@ -392,6 +392,19 @@ impl From<PlatformError> for FileActionError {
     fn from(error: PlatformError) -> Self {
         Self::Platform(error)
     }
+}
+
+/// One owned file endpoint that can outlive command dispatch.
+///
+/// Redirection endpoints remain opaque because the spawn adapter installs
+/// them into a child descriptor map. `open` and `save` instead need an owned
+/// object they can read or write lazily after the platform call returns.
+pub trait FileIoEndpoint: Send + fmt::Debug {
+    /// Read at most `buffer.len()` bytes, returning zero at EOF.
+    fn read(&mut self, buffer: &mut [u8]) -> Result<usize, FileActionError>;
+
+    /// Write bytes from `buffer`, returning the number accepted.
+    fn write(&mut self, buffer: &[u8]) -> Result<usize, FileActionError>;
 }
 
 /// One byte-preserving directory-enumeration request.
@@ -910,6 +923,19 @@ pub trait Platform: Send + Sync {
         request: FileOpenRequest<'_>,
     ) -> Result<Box<dyn DescriptorEndpoint>, FileActionError>;
 
+    /// Open one owned endpoint for lazy in-process file transfer.
+    fn open_file_io(
+        &self,
+        request: FileOpenRequest<'_>,
+    ) -> Result<Box<dyn FileIoEndpoint>, FileActionError> {
+        self.require(Capability::FileActions)?;
+        let _ = request;
+        Err(FileActionError::Operation {
+            kind: io::ErrorKind::Unsupported,
+            message: "the adapter does not implement in-process file transfer".to_owned(),
+        })
+    }
+
     /// Duplicate one deliberate inherited descriptor into an owned endpoint.
     fn inherit_descriptor(
         &self,
@@ -1055,6 +1081,14 @@ impl Platform for FakePlatform {
         Ok(Box::new(FakeDescriptorEndpoint))
     }
 
+    fn open_file_io(
+        &self,
+        _request: FileOpenRequest<'_>,
+    ) -> Result<Box<dyn FileIoEndpoint>, FileActionError> {
+        self.require(Capability::FileActions)?;
+        Ok(Box::new(FakeFileIoEndpoint))
+    }
+
     fn inherit_descriptor(
         &self,
         _descriptor: u32,
@@ -1184,6 +1218,13 @@ impl Platform for RecordingPlatform {
         self.inner.open_file(request)
     }
 
+    fn open_file_io(
+        &self,
+        request: FileOpenRequest<'_>,
+    ) -> Result<Box<dyn FileIoEndpoint>, FileActionError> {
+        self.inner.open_file_io(request)
+    }
+
     fn inherit_descriptor(
         &self,
         descriptor: u32,
@@ -1234,6 +1275,20 @@ pub struct FakeDescriptorEndpoint;
 impl DescriptorEndpoint for FakeDescriptorEndpoint {
     fn as_any(&self) -> &dyn Any {
         self
+    }
+}
+
+/// Empty in-process file endpoint used by [`FakePlatform`].
+#[derive(Clone, Copy, Debug, Default)]
+pub struct FakeFileIoEndpoint;
+
+impl FileIoEndpoint for FakeFileIoEndpoint {
+    fn read(&mut self, _buffer: &mut [u8]) -> Result<usize, FileActionError> {
+        Ok(0)
+    }
+
+    fn write(&mut self, buffer: &[u8]) -> Result<usize, FileActionError> {
+        Ok(buffer.len())
     }
 }
 

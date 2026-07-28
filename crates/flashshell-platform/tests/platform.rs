@@ -227,12 +227,26 @@ fn fake_file_actions_are_host_free_and_capability_gated() {
     let inherited = FakePlatform::full()
         .inherit_descriptor(1)
         .expect("the full fake duplicates an inherited endpoint");
-    drop((endpoint, inherited));
+    let mut file = FakePlatform::full()
+        .open_file_io(request)
+        .expect("the full fake opens an in-process file endpoint");
+    let mut buffer = [0; 4];
+    assert_eq!(file.read(&mut buffer).unwrap(), 0);
+    assert_eq!(file.write(b"bytes").unwrap(), 5);
+    drop((endpoint, inherited, file));
 
     assert_eq!(
         FakePlatform::none()
             .open_file(request)
             .expect_err("the empty fake rejects file actions"),
+        FileActionError::Platform(PlatformError::Unsupported {
+            capability: Capability::FileActions,
+        })
+    );
+    assert_eq!(
+        FakePlatform::none()
+            .open_file_io(request)
+            .expect_err("the empty fake rejects in-process file actions"),
         FileActionError::Platform(PlatformError::Unsupported {
             capability: Capability::FileActions,
         })

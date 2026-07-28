@@ -6,13 +6,17 @@
 //! independently submitted edit buffers, dispatches single-stage internal
 //! built-ins against that state, executes external foreground pipelines, and
 //! surfaces recoverable failures without discarding the accumulated state. It
-//! never depends on a real process, terminal, or clock: every test drives the
-//! host-free `FakePlatform` and `FakeClock`.
+//! never depends on a real process, terminal, or clock. Most tests drive the
+//! host-free `FakePlatform`; file-boundary acceptance uses the POSIX adapter
+//! against isolated temporary directories.
 
 use std::ffi::{OsStr, OsString};
+use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use flashshell_platform::{Capabilities, FakePlatform, TerminalSize};
+use flashshell_platform_posix::PosixPlatform;
 use flashshell_runtime::Environment;
 use flashshell_runtime::eval::FakeClock;
 use flashshell_runtime::plan::SessionOptions;
@@ -400,6 +404,91 @@ fn a_failing_lazy_closure_pipeline_rolls_back_its_environment() {
 }
 
 #[test]
+fn explicit_codec_boundaries_round_trip_live_bytes() {
+    let mut session = session();
+    let probe = Probe::default();
+    let mut sink = Vec::new();
+
+    session
+        .submit(
+            "<interactive>",
+            "which pwd | get kind | encode utf8 | decode utf8 | encode utf8",
+            &probe,
+            &terminal_platform(),
+            &FakeClock::new(),
+            &mut sink,
+        )
+        .expect("explicit codec boundaries should keep bytes byte-correct");
+
+    assert_eq!(sink, b"internal");
+}
+
+#[test]
+fn live_file_and_format_boundaries_preserve_json_and_text() {
+    let temp = TempDir::new("session-boundaries");
+    fs::write(
+        temp.path().join("input.json"),
+        br#"{"name":"FlashOS","active":true}"#,
+    )
+    .expect("JSON fixture should be written");
+    fs::write(temp.path().join("input.txt"), b"one\r\ntwo\n")
+        .expect("text fixture should be written");
+    fs::write(temp.path().join("input.bin"), [0, 0xff, 7])
+        .expect("binary fixture should be written");
+
+    let mut session = Session::new(temp.path(), environment(), SessionOptions::default());
+    let probe = Probe::default();
+    let mut sink = Vec::new();
+    session
+        .submit(
+            "<interactive>",
+            "open input.json | from json | to json | save output.json\n\
+             open input.txt | from text | first 1 | to text | save first.txt\n\
+             open input.bin | decode bytes | encode bytes | save output.bin",
+            &probe,
+            &PosixPlatform,
+            &FakeClock::new(),
+            &mut sink,
+        )
+        .expect("file and format boundaries should execute end to end");
+
+    assert!(sink.is_empty());
+    assert_eq!(
+        fs::read(temp.path().join("output.json")).unwrap(),
+        br#"{"name":"FlashOS","active":true}"#
+    );
+    assert_eq!(fs::read(temp.path().join("first.txt")).unwrap(), b"one\n");
+    assert_eq!(
+        fs::read(temp.path().join("output.bin")).unwrap(),
+        [0, 0xff, 7]
+    );
+}
+
+#[test]
+fn a_lazy_byte_boundary_failure_does_not_commit_status() {
+    let temp = TempDir::new("session-byte-failure");
+    fs::write(temp.path().join("bad.txt"), [0xff]).expect("byte fixture should be written");
+    let mut session = Session::new(temp.path(), environment(), SessionOptions::default());
+    let probe = Probe::default();
+    let mut sink = Vec::new();
+
+    let error = session
+        .submit(
+            "<interactive>",
+            "open bad.txt | decode utf8 | encode utf8",
+            &probe,
+            &PosixPlatform,
+            &FakeClock::new(),
+            &mut sink,
+        )
+        .expect_err("strict decoding should surface malformed input lazily");
+
+    assert!(error.render().contains("malformed input at byte offset 0"));
+    assert!(sink.is_empty());
+    assert!(session.current_status().is_none());
+}
+
+#[test]
 fn structured_output_requires_an_interactive_output_terminal() {
     let mut session = session();
     let probe = Probe::default();
@@ -487,4 +576,29 @@ fn several_statements_in_one_buffer_run_in_source_order() {
 
     submit(&mut session, "let a = 1\nexport B = $a", &probe);
     assert_eq!(session.environment().get("B"), Some(OsStr::new("1")));
+}
+
+struct TempDir {
+    path: PathBuf,
+}
+
+impl TempDir {
+    fn new(label: &str) -> Self {
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let nonce = NEXT.fetch_add(1, Ordering::Relaxed);
+        let path =
+            std::env::temp_dir().join(format!("flashshell-{label}-{}-{nonce}", std::process::id()));
+        fs::create_dir(&path).expect("temporary directory should be created");
+        Self { path }
+    }
+
+    fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for TempDir {
+    fn drop(&mut self) {
+        fs::remove_dir_all(&self.path).expect("temporary directory should be removed");
+    }
 }

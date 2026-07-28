@@ -169,7 +169,7 @@ pub fn standard_registry() -> CommandRegistry {
         // serialize structured values back into a byte stream. Registering their
         // carrier contracts makes the pipeline-validation bridge hints name real
         // commands. `decode`/`encode` implement the codec crossing in `convert`;
-        // `from`/`to`'s format conversions arrive with the format library.
+        // `from`/`to` use the format conversions in `format`.
         CommandSignature::new("decode", [Carrier::ByteStream], Carrier::ValueStream),
         CommandSignature::new("from", [Carrier::ByteStream], Carrier::ValueStream),
         CommandSignature::new(
