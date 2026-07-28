@@ -14,7 +14,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant as SystemInstant;
 
 use flashshell_platform::{
-    DescriptorReadError, FileActionError, PipeError, SpawnError, WaitError, WorkingDirectoryError,
+    DescriptorReadError, FileActionError, PipeError, PlatformError, SpawnError, WaitError,
+    WorkingDirectoryError,
 };
 use flashshell_syntax::{
     AndChain, Assignment, BinaryOperator, Block, CallExpression, Closure, ConditionalChain,
@@ -278,6 +279,12 @@ pub enum RuntimeErrorKind {
     CheckRequiresUpstream,
     /// `check` explicitly converted an unsuccessful completed status.
     UnsuccessfulStatus { status: Box<crate::Status> },
+    /// A structured final carrier was aimed at a destination that requires
+    /// explicit serialization rather than terminal presentation.
+    Presentation(crate::presentation::PresentationError),
+    /// The platform could not supply the terminal information needed to select
+    /// width-aware presentation.
+    TerminalPresentation(PlatformError),
     /// The platform rejected or failed creation of an anonymous pipeline edge.
     PipeCreate(PipeError),
     /// The platform rejected or failed creation of the stdout capture pipe.
@@ -473,6 +480,10 @@ impl fmt::Display for RuntimeErrorKind {
             }
             Self::UnsuccessfulStatus { status } => {
                 write!(formatter, "checked command was unsuccessful: {status}")
+            }
+            Self::Presentation(error) => error.fmt(formatter),
+            Self::TerminalPresentation(error) => {
+                write!(formatter, "terminal presentation is unavailable: {error}")
             }
             Self::PipeCreate(error) => error.fmt(formatter),
             Self::CapturePipe(error) => error.fmt(formatter),

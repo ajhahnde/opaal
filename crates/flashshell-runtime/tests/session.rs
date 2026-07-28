@@ -12,7 +12,7 @@
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 
-use flashshell_platform::FakePlatform;
+use flashshell_platform::{Capabilities, FakePlatform, TerminalSize};
 use flashshell_runtime::Environment;
 use flashshell_runtime::eval::FakeClock;
 use flashshell_runtime::plan::SessionOptions;
@@ -51,6 +51,10 @@ fn session() -> Session {
     Session::new("/work", environment(), SessionOptions::default())
 }
 
+fn terminal_platform() -> FakePlatform {
+    FakePlatform::with_terminal(Capabilities::full(), true, TerminalSize::new(80, 24))
+}
+
 /// Submit one buffer with a fresh throwaway output sink, asserting success.
 fn submit(session: &mut Session, text: &str, probe: &dyn ExecutableProbe) -> SubmitOutcome {
     let mut sink = Vec::new();
@@ -59,7 +63,7 @@ fn submit(session: &mut Session, text: &str, probe: &dyn ExecutableProbe) -> Sub
             "<interactive>",
             text,
             probe,
-            &FakePlatform::full(),
+            &terminal_platform(),
             &FakeClock::new(),
             &mut sink,
         )
@@ -145,7 +149,7 @@ fn pwd_renders_the_logical_cwd_to_the_output_sink() {
             "<interactive>",
             "pwd",
             &probe,
-            &FakePlatform::full(),
+            &terminal_platform(),
             &FakeClock::new(),
             &mut sink,
         )
@@ -156,6 +160,57 @@ fn pwd_renders_the_logical_cwd_to_the_output_sink() {
         rendered.contains("/srv"),
         "pwd should print the logical cwd, got {rendered:?}"
     );
+}
+
+#[test]
+fn structured_output_requires_an_interactive_output_terminal() {
+    let mut session = session();
+    let probe = Probe::default();
+    let platform = FakePlatform::with_terminal_ends(
+        Capabilities::full(),
+        true,
+        false,
+        TerminalSize::new(80, 24),
+    );
+    let mut sink = Vec::new();
+
+    let error = session
+        .submit(
+            "<interactive>",
+            "pwd",
+            &probe,
+            &platform,
+            &FakeClock::new(),
+            &mut sink,
+        )
+        .expect_err("nonterminal structured output must require serialization");
+
+    assert!(error.render().contains("explicit `encode`/`to`"));
+    assert!(sink.is_empty());
+    assert!(session.current_status().is_none());
+}
+
+#[test]
+fn a_structured_stdout_redirection_is_refused_before_execution() {
+    let mut session = session();
+    let probe = Probe::default();
+    let mut sink = Vec::new();
+
+    let error = session
+        .submit(
+            "<interactive>",
+            "pwd > out.txt",
+            &probe,
+            &terminal_platform(),
+            &FakeClock::new(),
+            &mut sink,
+        )
+        .expect_err("redirected structured output must require serialization");
+
+    assert!(error.render().contains("redirected output"));
+    assert!(error.render().contains("explicit `encode`/`to`"));
+    assert!(sink.is_empty());
+    assert!(session.current_status().is_none());
 }
 
 #[test]

@@ -3,10 +3,13 @@
 //! This module formats already-materialized values for an interactive terminal
 //! sink. Its output is intentionally not a serialization format.
 
+use std::error::Error;
+use std::fmt;
 use std::fmt::Write as _;
 
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
+use crate::command::Carrier;
 use crate::{Table, Value};
 
 const COLUMN_SEPARATOR: &str = " | ";
@@ -23,6 +26,108 @@ enum Alignment {
 struct Cell {
     text: String,
     alignment: Alignment,
+}
+
+/// The final destination selected for one pipeline's output carrier.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum OutputDestination {
+    /// Human-facing standard output with its current cell width.
+    InteractiveTerminal { columns: usize },
+    /// A file or other descriptor selected by an output redirection.
+    Redirected,
+    /// A command-substitution or explicit capture sink.
+    Captured,
+    /// An external process consuming a pipeline edge.
+    ExternalProcess,
+    /// An inherited output sink that is not an interactive terminal.
+    NonInteractive,
+}
+
+impl fmt::Display for OutputDestination {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InteractiveTerminal { .. } => formatter.write_str("an interactive terminal"),
+            Self::Redirected => formatter.write_str("redirected output"),
+            Self::Captured => formatter.write_str("command capture"),
+            Self::ExternalProcess => formatter.write_str("an external process"),
+            Self::NonInteractive => formatter.write_str("noninteractive output"),
+        }
+    }
+}
+
+/// A structured carrier whose destination requires explicit serialization.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PresentationError {
+    carrier: Carrier,
+    destination: OutputDestination,
+}
+
+impl PresentationError {
+    /// The final structured carrier that was refused.
+    #[must_use]
+    pub const fn carrier(&self) -> Carrier {
+        self.carrier
+    }
+
+    /// The byte-oriented destination that cannot consume human rendering.
+    #[must_use]
+    pub const fn destination(&self) -> OutputDestination {
+        self.destination
+    }
+}
+
+impl fmt::Display for PresentationError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "{:?} output cannot use {}; add an explicit `encode`/`to` boundary because \
+             terminal rendering is not serialization",
+            self.carrier, self.destination
+        )
+    }
+}
+
+impl Error for PresentationError {}
+
+/// Proof that human presentation was selected for an interactive terminal.
+///
+/// Construction stays private to [`select_terminal_presentation`], preventing a
+/// noninteractive destination from reaching a rendering function by accident.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TerminalPresentation {
+    columns: usize,
+}
+
+impl TerminalPresentation {
+    /// The terminal width in character cells at selection time.
+    #[must_use]
+    pub const fn columns(self) -> usize {
+        self.columns
+    }
+}
+
+/// Selects human presentation only for a final structured terminal carrier.
+///
+/// `ByteStream` and `Empty` return `Ok(None)` at every destination: final bytes
+/// are written directly and never decoded for display. Structured carriers
+/// return a presentation token only at an interactive terminal; every other
+/// destination requires an explicit serializer.
+pub fn select_terminal_presentation(
+    carrier: Carrier,
+    destination: OutputDestination,
+) -> Result<Option<TerminalPresentation>, PresentationError> {
+    match carrier {
+        Carrier::Empty | Carrier::ByteStream => Ok(None),
+        Carrier::Value | Carrier::ValueStream => match destination {
+            OutputDestination::InteractiveTerminal { columns } => {
+                Ok(Some(TerminalPresentation { columns }))
+            }
+            destination => Err(PresentationError {
+                carrier,
+                destination,
+            }),
+        },
+    }
 }
 
 /// Renders an already-materialized table within a terminal-cell width.

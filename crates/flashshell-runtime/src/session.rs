@@ -10,10 +10,11 @@
 //! failures are recoverable and leave the accumulated state untouched; only a
 //! failure to write built-in output to the caller's sink is fatal.
 //!
-//! General mixed internal/external pipeline execution and structured value
-//! presentation remain later milestones; a pipeline that is not a lone internal
-//! stage is planned and executed as an external pipeline exactly as in script
-//! mode.
+//! Human presentation is selected only for a final structured carrier at an
+//! unredirected interactive output terminal. General mixed internal/external
+//! pipeline execution remains a later milestone; a pipeline that is not a lone
+//! internal stage is planned and executed as an external pipeline exactly as in
+//! script mode.
 
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -32,7 +33,12 @@ use crate::eval::{
     Clock, Completion, EvalLimits, RuntimeError, RuntimeErrorKind, evaluate_in_environment,
 };
 use crate::execute::execute_foreground_status;
-use crate::plan::{PlannedResolution, SessionOptions, plan_pipeline_with_options};
+use crate::plan::{
+    PlannedResolution, PlannedStage, RedirectionAction, SessionOptions, plan_pipeline_with_options,
+};
+use crate::presentation::{
+    OutputDestination, TerminalPresentation, render_table, select_terminal_presentation,
+};
 use crate::resolve::ExecutableProbe;
 use crate::{Environment, ScopeStack, Status, Value};
 
@@ -341,9 +347,15 @@ fn run_pipeline(
             PlannedResolution::Internal { .. }
         )
     {
+        let stage = &plan.stages()[0];
+        let destination = output_destination(stage, platform)?;
+        let presentation = select_terminal_presentation(stage.output_carrier(), destination)
+            .map_err(|error| {
+                RuntimeError::new(RuntimeErrorKind::Presentation(error), stage.span())
+            })?;
         let upstream = state.current_status().cloned();
         let outcome = execute_builtin(
-            &plan.stages()[0],
+            stage,
             Carrier::Empty,
             upstream.as_ref(),
             state,
@@ -354,14 +366,15 @@ fn run_pipeline(
         return match outcome {
             BuiltinOutcome::Exit(request) => Ok(ChainStep::Exit(request.code())),
             BuiltinOutcome::Completed(completion) => {
-                render_output(completion.output(), output).map_err(Interrupt::Output)?;
+                render_output(completion.output(), presentation.as_ref(), output)
+                    .map_err(Interrupt::Output)?;
                 Ok(ChainStep::Status(completion.status().clone()))
             }
             BuiltinOutcome::External(_) => Err(Interrupt::Runtime(RuntimeError::new(
                 RuntimeErrorKind::Unsupported {
                     feature: "the command built-in in interactive sessions",
                 },
-                plan.stages()[0].span(),
+                stage.span(),
             ))),
         };
     }
@@ -370,26 +383,65 @@ fn run_pipeline(
     Ok(ChainStep::Status(status))
 }
 
-/// Write a completed built-in's textual output, one value per line.
-///
-/// Structured presentation (tables and typed rendering) is a later milestone;
-/// this renders scalar and stream values through their human display form so a
-/// command like `pwd` is not silent.
-fn render_output(output: &BuiltinOutput, sink: &mut dyn Write) -> io::Result<()> {
+fn output_destination(
+    stage: &PlannedStage,
+    platform: &dyn Platform,
+) -> Result<OutputDestination, RuntimeError> {
+    if stage.redirections().iter().any(|redirection| {
+        let descriptor = match redirection.action() {
+            RedirectionAction::Input { descriptor, .. }
+            | RedirectionAction::Output { descriptor, .. }
+            | RedirectionAction::Duplicate { descriptor, .. }
+            | RedirectionAction::Close { descriptor, .. } => descriptor,
+        };
+        *descriptor == 1
+    }) {
+        return Ok(OutputDestination::Redirected);
+    }
+    if !platform.is_output_terminal() {
+        return Ok(OutputDestination::NonInteractive);
+    }
+    let size = platform.terminal_size().map_err(|error| {
+        RuntimeError::new(RuntimeErrorKind::TerminalPresentation(error), stage.span())
+    })?;
+    Ok(OutputDestination::InteractiveTerminal {
+        columns: usize::from(size.columns()),
+    })
+}
+
+/// Write a completed built-in's human output after destination selection.
+fn render_output(
+    output: &BuiltinOutput,
+    presentation: Option<&TerminalPresentation>,
+    sink: &mut dyn Write,
+) -> io::Result<()> {
     match output {
         BuiltinOutput::Empty | BuiltinOutput::ForwardInput(_) => Ok(()),
-        BuiltinOutput::Value(value) => write_value(value, sink),
+        BuiltinOutput::Value(value) => write_value(
+            value,
+            presentation.expect("a Value carrier has terminal-presentation proof"),
+            sink,
+        ),
         BuiltinOutput::ValueStream(values) => {
+            let presentation =
+                presentation.expect("a ValueStream carrier has terminal-presentation proof");
             for value in values {
-                write_value(value, sink)?;
+                write_value(value, presentation, sink)?;
             }
             Ok(())
         }
     }
 }
 
-fn write_value(value: &Value, sink: &mut dyn Write) -> io::Result<()> {
-    writeln!(sink, "{value}")
+fn write_value(
+    value: &Value,
+    presentation: &TerminalPresentation,
+    sink: &mut dyn Write,
+) -> io::Result<()> {
+    match value {
+        Value::Table(table) => writeln!(sink, "{}", render_table(table, presentation.columns())),
+        _ => writeln!(sink, "{value}"),
+    }
 }
 
 fn render(source: &SourceFile, diagnostics: &[Diagnostic]) -> SubmitError {
