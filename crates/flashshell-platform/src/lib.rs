@@ -670,7 +670,9 @@ impl ProcessGroup {
 /// Inbound observations keep their raw number, because they report what the host
 /// already did and must not be narrowed to what the shell happens to model.
 ///
-/// The set grows when the `kill` built-in lands. Every arm here has a caller.
+/// The set grows when the `kill` built-in lands, which is also what gives
+/// `Stop` its first caller outside the adapter's own tests: the shell resumes a
+/// stopped job long before it has a reason to stop one itself.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum JobSignal {
     /// Stop the group unconditionally.
