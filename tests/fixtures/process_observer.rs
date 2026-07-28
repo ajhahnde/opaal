@@ -38,6 +38,21 @@ fn main() {
         fs::write(report, process_group::current().to_string())
             .expect("group report should be written");
     }
+
+    // Raising a signal at itself is how the fixture reports its own disposition
+    // and mask together: it survives only if the signal was ignored or blocked,
+    // and the parent reads the difference straight off the exit status.
+    if let Some(number) = env::var_os("FLASH_PROBE_RAISE") {
+        let number: i32 = number
+            .to_str()
+            .and_then(|value| value.parse().ok())
+            .expect("the raise probe takes a signal number");
+        signal_probe::raise_signal(number);
+        if let Some(directory) = env::var_os("FLASH_PROBE_GROUP_REPORT") {
+            let survived = PathBuf::from(directory).join(format!("{}.survived", process::id()));
+            fs::write(survived, b"survived").expect("survival report should be written");
+        }
+    }
 }
 
 fn write_field(output: &mut Vec<u8>, value: &OsStr) {
@@ -59,6 +74,24 @@ mod process_group {
         // SAFETY: getpgrp takes no argument, dereferences nothing, and is
         // specified never to fail.
         unsafe { getpgrp() }
+    }
+}
+
+#[allow(unsafe_code)]
+mod signal_probe {
+    use std::ffi::c_int;
+
+    unsafe extern "C" {
+        fn raise(signal: c_int) -> c_int;
+    }
+
+    /// Send `signal` to this process and return only if it survived it.
+    pub(super) fn raise_signal(signal: c_int) {
+        // SAFETY: raise takes one integer, dereferences nothing, and either
+        // does not return or returns a status this probe does not need.
+        unsafe {
+            raise(signal);
+        }
     }
 }
 

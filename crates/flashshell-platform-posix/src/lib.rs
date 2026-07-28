@@ -410,6 +410,9 @@ impl Platform for PosixPlatform {
             .copied()
             .map(descriptor_number)
             .collect::<Result<Vec<_>, _>>()?;
+        // The disposition reset is installed first so a child that fails any
+        // later hook is already killable by a default-disposition interrupt.
+        child_signal_dispositions::configure(&mut command);
         // Group placement is installed before the descriptor hook so a child
         // that fails its descriptor setup is already signallable as a member of
         // its job's group rather than of the shell's own group.
@@ -550,6 +553,68 @@ fn working_directory_error(error: io::Error) -> WorkingDirectoryError {
     WorkingDirectoryError::Operation {
         kind: error.kind(),
         message: error.to_string(),
+    }
+}
+
+/// Default signal dispositions and an empty mask for a child that has not
+/// executed yet.
+///
+/// Dispositions and the signal mask are both inherited across `fork`. An
+/// interactive shell ignores the job-control signals for its own survival, so
+/// without this reset every job it starts would inherit that ignore and stop
+/// responding to the keyboard. The mask is cleared for the same reason: `fork`
+/// copies the calling thread's mask, and an executed program is entitled to a
+/// clear one.
+#[allow(unsafe_code)]
+mod child_signal_dispositions {
+    use std::io;
+    use std::os::unix::process::CommandExt;
+    use std::process::Command;
+
+    /// The signals an interactive shell arranges and a child must not inherit.
+    const RESET: [libc::c_int; 5] = [
+        libc::SIGINT,
+        libc::SIGQUIT,
+        libc::SIGTSTP,
+        libc::SIGTTOU,
+        libc::SIGTTIN,
+    ];
+
+    /// Install the pre-exec hook that restores the child's default handling.
+    ///
+    /// Registered before the process-group and descriptor hooks so a child that
+    /// fails a later hook is already killable by a default-disposition
+    /// interrupt.
+    pub(super) fn configure(command: &mut Command) {
+        // SAFETY: this runs after `fork` and calls only sigaction, sigemptyset,
+        // and sigprocmask, each of which POSIX lists among the functions usable
+        // after `fork` in a multithreaded process. The closure captures nothing,
+        // `zeroed` is a valid starting pattern for both `sigaction` and
+        // `sigset_t`, and every pointer targets a live, correctly typed local.
+        unsafe {
+            command.pre_exec(|| {
+                let mut action: libc::sigaction = std::mem::zeroed();
+                action.sa_sigaction = libc::SIG_DFL;
+                if libc::sigemptyset(&raw mut action.sa_mask) == -1 {
+                    return Err(io::Error::last_os_error());
+                }
+                for signal in RESET {
+                    if libc::sigaction(signal, &raw const action, std::ptr::null_mut()) == -1 {
+                        return Err(io::Error::last_os_error());
+                    }
+                }
+                let mut empty: libc::sigset_t = std::mem::zeroed();
+                if libc::sigemptyset(&raw mut empty) == -1 {
+                    return Err(io::Error::last_os_error());
+                }
+                if libc::sigprocmask(libc::SIG_SETMASK, &raw const empty, std::ptr::null_mut())
+                    == -1
+                {
+                    return Err(io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
     }
 }
 

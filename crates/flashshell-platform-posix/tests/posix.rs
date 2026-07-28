@@ -734,6 +734,28 @@ fn read_group(directory: &Path, process: u64) -> u64 {
 }
 
 #[test]
+fn posix_spawn_gives_a_child_default_signal_dispositions() {
+    let temp = TempDir::new("child-dispositions");
+    let fixture = Path::new(env!("CARGO_BIN_EXE_flashshell-process-observer-fixture"));
+    let argv = [OsString::from("raiser")];
+    let mut environment = probe_environment(temp.path(), "raiser");
+    environment.push((OsString::from("FLASH_PROBE_RAISE"), OsString::from("2")));
+    let request = SpawnRequest::new(fixture, &argv, &environment, temp.path())
+        .expect("the spawn request is valid");
+
+    let mut child = PosixPlatform.spawn(&request).expect("the fixture spawns");
+    let identifier = child.id();
+
+    // SIGINT is 2 on every supported host. A child that inherited an ignore or
+    // a blocked mask would survive the raise and leave the survival marker.
+    assert_eq!(child.wait(), Ok(ProcessStatus::Signaled(2)));
+    assert!(
+        !temp.path().join(format!("{identifier}.survived")).exists(),
+        "a child with default dispositions must not survive raising SIGINT",
+    );
+}
+
+#[test]
 fn posix_reports_no_terminal_owner_when_standard_input_is_not_a_terminal() {
     // The test harness runs with a redirected standard input, which is exactly
     // the non-interactive shape a script or a pipeline sees.
