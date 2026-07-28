@@ -208,6 +208,11 @@ pub fn standard_registry() -> CommandRegistry {
         // `ls` is a structured producer: it takes no pipeline input and yields
         // one record per directory entry (see `directory`).
         CommandSignature::new("ls", [Carrier::Empty], Carrier::ValueStream),
+        // File bytes remain bytes. `open` produces them lazily and `save`
+        // consumes them; parsing and serialization stay explicit `from`/`to`
+        // stages (see `file`).
+        CommandSignature::new("open", [Carrier::Empty], Carrier::ByteStream),
+        CommandSignature::new("save", [Carrier::ByteStream], Carrier::Empty),
     ] {
         assert!(
             registry.register(signature),

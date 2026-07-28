@@ -10,6 +10,7 @@ pub mod directory;
 mod environment;
 pub mod eval;
 pub mod execute;
+pub mod file;
 pub mod format;
 pub mod operation;
 pub mod plan;

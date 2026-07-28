@@ -83,8 +83,8 @@ fn standard_registry_has_exact_carrier_contracts() {
         registry.names().collect::<Vec<_>>(),
         [
             "cd", "check", "collect", "command", "decode", "each", "encode", "exit", "first",
-            "from", "get", "last", "length", "lines", "ls", "pwd", "select", "sort", "to",
-            "update", "where", "which"
+            "from", "get", "last", "length", "lines", "ls", "open", "pwd", "save", "select",
+            "sort", "to", "update", "where", "which"
         ]
     );
 
@@ -122,6 +122,24 @@ fn standard_registry_has_exact_carrier_contracts() {
         let signature = registry.lookup("ls").unwrap();
         assert!(signature.accepts(Carrier::Empty));
         assert!(!signature.accepts(Carrier::ByteStream));
+        assert!(!signature.accepts(Carrier::ValueStream));
+    }
+
+    // File bytes cross the file boundary unchanged. `open` is a byte producer
+    // and `save` is a byte sink; parsing and serialization remain explicit
+    // `from`/`to` stages rather than being hidden in either command.
+    assert_eq!(fixed("open"), CommandOutput::Fixed(Carrier::ByteStream));
+    {
+        let signature = registry.lookup("open").unwrap();
+        assert!(signature.accepts(Carrier::Empty));
+        assert!(!signature.accepts(Carrier::ByteStream));
+        assert!(!signature.accepts(Carrier::ValueStream));
+    }
+    assert_eq!(fixed("save"), CommandOutput::Fixed(Carrier::Empty));
+    {
+        let signature = registry.lookup("save").unwrap();
+        assert!(signature.accepts(Carrier::ByteStream));
+        assert!(!signature.accepts(Carrier::Empty));
         assert!(!signature.accepts(Carrier::ValueStream));
     }
 
