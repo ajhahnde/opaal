@@ -21,9 +21,10 @@ use flashshell_platform::{
     Capabilities, Capability, ChildProcess, DescriptorEndpoint, DescriptorReadError,
     DescriptorWriteError, DirectoryEntry, DirectoryEntryKind, DirectoryReadError,
     DirectoryReadRequest, DirectoryStream, FileActionError, FileIoEndpoint, FileOpenMode,
-    FileOpenRequest, ForegroundTerminalGuard, PipeEndpoints, PipeError, Platform, PlatformError,
-    ProcessGroupId, ProcessStatus, SpawnError, SpawnRequest, TerminalModeGuard, TerminalSize,
-    TerminateError, WaitError, WorkingDirectoryError, WorkingDirectoryRequest,
+    FileOpenRequest, ForegroundTerminalGuard, JobControlSignalGuard, PipeEndpoints, PipeError,
+    Platform, PlatformError, ProcessGroupId, ProcessStatus, SpawnError, SpawnRequest,
+    TerminalModeGuard, TerminalSize, TerminateError, WaitError, WorkingDirectoryError,
+    WorkingDirectoryRequest,
 };
 
 /// A uniquely owned POSIX descriptor with close-on-exec discipline.
@@ -225,6 +226,12 @@ impl Platform for PosixPlatform {
             previous,
             restored: false,
         }))
+    }
+
+    fn install_job_control_signals(&self) -> Result<Box<dyn JobControlSignalGuard>, PlatformError> {
+        self.require(Capability::Signals)?;
+        job_control_signals::install()
+            .map(|guard| Box::new(guard) as Box<dyn JobControlSignalGuard>)
     }
 
     fn resolve_working_directory(
@@ -831,6 +838,158 @@ mod foreground_terminal {
             return Err(io::Error::from_raw_os_error(result));
         }
         Ok(())
+    }
+}
+
+/// The interactive shell's own job-control signal dispositions.
+///
+/// The shell ignores the five signals a terminal can generate for it. Without
+/// that, an interrupt aimed at a job the shell still owns the terminal for, or
+/// at a shell whose platform cannot hand the terminal over, kills the shell.
+/// Ignoring `SIGTTOU` and `SIGTTIN` does not replace the per-thread mask this
+/// adapter takes around `tcsetpgrp`: the two mechanisms cover the same hazard
+/// from different sides, and the mask still holds if a handler ever replaces
+/// the ignore. One consequence is deliberate — a background read now fails with
+/// `EIO` instead of stopping the shell.
+///
+/// The previous disposition is captured as a whole `sigaction`, not just a
+/// handler pointer, so restoring reinstates whatever flags and mask were in
+/// force before, and matches the reset the child hook installs on the other
+/// side of `fork`.
+#[allow(unsafe_code)]
+mod job_control_signals {
+    use std::io;
+
+    use flashshell_platform::{Capability, JobControlSignalGuard, PlatformError};
+
+    /// The signals an interactive shell arranges for the life of the session.
+    const ARRANGED: [libc::c_int; 5] = [
+        libc::SIGINT,
+        libc::SIGQUIT,
+        libc::SIGTSTP,
+        libc::SIGTTOU,
+        libc::SIGTTIN,
+    ];
+
+    /// The previous dispositions, restored explicitly or on drop.
+    pub(super) struct PosixJobControlSignalGuard {
+        previous: [libc::sigaction; 5],
+        restored: bool,
+    }
+
+    // `libc::sigaction` carries no `Debug` without the `extra_traits` feature,
+    // and its contents are opaque host state not worth formatting; the guard's
+    // observable field is whether it has already been restored.
+    impl std::fmt::Debug for PosixJobControlSignalGuard {
+        fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter
+                .debug_struct("PosixJobControlSignalGuard")
+                .field("restored", &self.restored)
+                .finish_non_exhaustive()
+        }
+    }
+
+    /// Ignore the job-control signals until the returned guard is released.
+    pub(super) fn install() -> Result<PosixJobControlSignalGuard, PlatformError> {
+        // SAFETY: an all-zero pattern is valid for `sigaction`, whose fields are
+        // integers and a function pointer; the mask is initialized by
+        // sigemptyset before any read.
+        let mut ignore: libc::sigaction = unsafe { std::mem::zeroed() };
+        ignore.sa_sigaction = libc::SIG_IGN;
+        // SAFETY: the pointer targets the live mask field of `ignore`.
+        if unsafe { libc::sigemptyset(&raw mut ignore.sa_mask) } == -1 {
+            return Err(unavailable(io::Error::last_os_error()));
+        }
+
+        // SAFETY: an all-zero pattern is valid for every element of the array;
+        // each slot is overwritten by sigaction below before it is ever read.
+        let mut previous: [libc::sigaction; 5] = unsafe { std::mem::zeroed() };
+        for index in 0..ARRANGED.len() {
+            // SAFETY: the index is bounded by the array it iterates, and both
+            // pointers target live, correctly typed locals; sigaction installs
+            // `ignore` for the arranged signal and writes the prior disposition
+            // into that signal's slot.
+            let installed = unsafe {
+                libc::sigaction(ARRANGED[index], &raw const ignore, &raw mut previous[index])
+            };
+            if installed == -1 {
+                let failure = io::Error::last_os_error();
+                undo(&previous, index);
+                return Err(unavailable(failure));
+            }
+        }
+        Ok(PosixJobControlSignalGuard {
+            previous,
+            restored: false,
+        })
+    }
+
+    impl PosixJobControlSignalGuard {
+        fn restore_now(&mut self) -> Result<(), PlatformError> {
+            if self.restored {
+                return Ok(());
+            }
+            // Marked before the loop rather than after it, so a failure partway
+            // is reported once instead of being reattempted by the drop against
+            // a host that has already refused it.
+            self.restored = true;
+            for (previous, signal) in self.previous.iter().zip(ARRANGED) {
+                // SAFETY: `previous` is a disposition this process produced in
+                // `install`; sigaction reinstates it for `signal` and writes no
+                // other memory.
+                if unsafe { libc::sigaction(signal, &raw const *previous, std::ptr::null_mut()) }
+                    == -1
+                {
+                    return Err(unavailable(io::Error::last_os_error()));
+                }
+            }
+            Ok(())
+        }
+    }
+
+    impl JobControlSignalGuard for PosixJobControlSignalGuard {
+        fn restore(&mut self) -> Result<(), PlatformError> {
+            self.restore_now()
+        }
+    }
+
+    impl Drop for PosixJobControlSignalGuard {
+        fn drop(&mut self) {
+            // A process that exits with its interrupts still ignored cannot be
+            // stopped from the keyboard, so the drop is the backstop for every
+            // path that skipped the explicit restore.
+            let _ = self.restore_now();
+        }
+    }
+
+    /// Reinstate the first `installed` dispositions after a failed install.
+    ///
+    /// An install that gave up partway would otherwise leave the signals it had
+    /// already changed ignored, with no guard in existence to change them back —
+    /// the one unrecoverable state this guard is built to prevent. Failures here
+    /// are discarded because the caller is already returning the error that
+    /// matters and has nothing better to attempt.
+    fn undo(previous: &[libc::sigaction; 5], installed: usize) {
+        for index in 0..installed {
+            // SAFETY: the disposition being reinstated is one this process
+            // captured moments earlier in `install`, the pointer targets a live
+            // element of the caller's array, and a null out-pointer asks for no
+            // previous value to be written back.
+            unsafe {
+                libc::sigaction(
+                    ARRANGED[index],
+                    &raw const previous[index],
+                    std::ptr::null_mut(),
+                );
+            }
+        }
+    }
+
+    fn unavailable(error: io::Error) -> PlatformError {
+        PlatformError::Unavailable {
+            capability: Capability::Signals,
+            reason: error.to_string(),
+        }
     }
 }
 

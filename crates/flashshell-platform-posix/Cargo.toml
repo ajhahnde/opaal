@@ -18,5 +18,12 @@ test = false
 bench = false
 doc = false
 
+[[bin]]
+name = "flashshell-signal-guard-fixture"
+path = "tests/fixtures/signal_guard.rs"
+test = false
+bench = false
+doc = false
+
 [lints]
 workspace = true

@@ -756,6 +756,47 @@ fn posix_spawn_gives_a_child_default_signal_dispositions() {
 }
 
 #[test]
+fn an_interactive_shell_survives_the_signals_its_children_still_answer() {
+    let temp = TempDir::new("signal-guard");
+    let fixture = Path::new(env!("CARGO_BIN_EXE_flashshell-signal-guard-fixture"));
+    let observer = Path::new(env!("CARGO_BIN_EXE_flashshell-process-observer-fixture"));
+    let report = temp.path().join("guard-report.txt");
+    let argv = [OsString::from("guard")];
+    let environment = [
+        (
+            OsString::from("FLASH_GUARD_REPORT"),
+            report.clone().into_os_string(),
+        ),
+        (
+            OsString::from("FLASH_GUARD_OBSERVER"),
+            observer.to_path_buf().into_os_string(),
+        ),
+        (
+            OsString::from("FLASH_GUARD_WORKSPACE"),
+            temp.path().to_path_buf().into_os_string(),
+        ),
+    ];
+    let request = SpawnRequest::new(fixture, &argv, &environment, temp.path())
+        .expect("the spawn request is valid");
+
+    let mut child = PosixPlatform.spawn(&request).expect("the fixture spawns");
+
+    // The fixture ends by raising SIGINT with the arrangement already restored,
+    // so a clean exit would mean the restore silently did nothing.
+    assert_eq!(child.wait(), Ok(ProcessStatus::Signaled(2)));
+
+    let findings = std::fs::read_to_string(&report).expect("the fixture wrote its report");
+    assert!(
+        findings.contains("shell-survived-interrupt"),
+        "an arranged shell must survive its own interrupt: {findings}",
+    );
+    assert!(
+        findings.contains("child-status:Signaled(2)"),
+        "a child must not inherit the shell's ignore: {findings}",
+    );
+}
+
+#[test]
 fn posix_reports_no_terminal_owner_when_standard_input_is_not_a_terminal() {
     // The test harness runs with a redirected standard input, which is exactly
     // the non-interactive shape a script or a pipeline sees.
