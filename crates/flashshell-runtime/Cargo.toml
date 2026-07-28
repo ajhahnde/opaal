@@ -10,6 +10,14 @@ repository.workspace = true
 [dependencies]
 flashshell-platform = { path = "../flashshell-platform" }
 flashshell-syntax = { path = "../flashshell-syntax" }
+# The JSON format library. These are the first external crates to reach the
+# shipped image, so both are exactly pinned with default features off and no
+# derive machinery. JSON is parsed through a visitor straight into `Value`
+# rather than into `serde_json::Value`, so object key order survives by
+# construction and the `preserve_order` feature — which would pull in
+# `indexmap`, `hashbrown`, and `equivalent` — is deliberately not enabled.
+serde = { version = "=1.0.229", default-features = false, features = ["std"] }
+serde_json = { version = "=1.0.151", default-features = false, features = ["std"] }
 
 [dev-dependencies]
 flashshell-platform-posix = { path = "../flashshell-platform-posix" }
