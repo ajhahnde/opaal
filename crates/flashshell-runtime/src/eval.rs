@@ -956,6 +956,35 @@ pub fn evaluate_in_environment(
     Ok(Completion::Value(last))
 }
 
+/// Evaluates one parsed closure command argument into its captured callable
+/// value.
+///
+/// Command planning uses this seam after resolving an internal stage. Creating
+/// the callable captures the current lexical scope by value but does not execute
+/// the body, mutate the environment, or consume any pipeline input.
+pub fn evaluate_closure_argument(
+    closure: &Closure,
+    source: &SourceFile,
+    scope: &ScopeStack,
+) -> Result<Value, RuntimeError> {
+    let limits = EvalLimits::default();
+    let mut env = Environment::new();
+    let evaluator = Evaluator {
+        source,
+        cancel: limits.cancel,
+        budget: limits.budget,
+        policy: limits.policy,
+        env: &mut env,
+    };
+    match evaluator.make_closure(closure, scope) {
+        Ok(value) => Ok(value),
+        Err(Abort::Error(error)) => Err(error),
+        Err(Abort::Cancelled(_)) => {
+            unreachable!("creating a closure does not poll cancellation")
+        }
+    }
+}
+
 /// Applies a runtime callable to already-evaluated argument values.
 ///
 /// This is the closure-invocation seam the structured closure commands (`each`,

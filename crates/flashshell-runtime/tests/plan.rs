@@ -7,10 +7,11 @@
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 
+use flashshell_runtime::builtin::standard_registry;
 use flashshell_runtime::command::{Carrier, CommandRegistry, CommandSignature};
 use flashshell_runtime::eval::RuntimeErrorKind;
 use flashshell_runtime::plan::{
-    ExecutionPlan, PlannedResolution, RedirectionAction, plan_pipeline,
+    ExecutionPlan, PlannedArgument, PlannedResolution, RedirectionAction, plan_pipeline,
 };
 use flashshell_runtime::resolve::ExecutableProbe;
 use flashshell_runtime::{BindingMutability, Environment, ScopeStack, Value};
@@ -410,7 +411,7 @@ fn missing_command_is_a_resolution_error_at_the_head_span() {
 }
 
 #[test]
-fn expression_and_closure_stages_are_unsupported_in_a_plan() {
+fn expression_stages_and_external_closure_arguments_are_unsupported_in_a_plan() {
     let probe = FakeProbe::with(&["/bin/map"]);
 
     // A pure expression stage is not a command plan.
@@ -425,7 +426,7 @@ fn expression_and_closure_stages_are_unsupported_in_a_plan() {
     .expect_err("expression stage");
     assert!(matches!(expr_err, RuntimeErrorKind::Unsupported { .. }));
 
-    // A closure command argument is deferred to structured pipelines.
+    // A closure is typed runtime data and cannot become an external argv word.
     let closure_err = plan_with(
         "^map {|item| item}",
         "/work",
@@ -436,6 +437,39 @@ fn expression_and_closure_stages_are_unsupported_in_a_plan() {
     )
     .expect_err("closure argument");
     assert!(matches!(closure_err, RuntimeErrorKind::Unsupported { .. }));
+}
+
+#[test]
+fn an_internal_closure_argument_is_captured_without_entering_native_argv() {
+    let file = source("which pwd | each {|item| $item.name}");
+    let pipeline = pipeline(&file);
+    let plan = plan_pipeline(
+        &pipeline,
+        "/work",
+        &file,
+        &mut ScopeStack::new(),
+        &Environment::from_snapshot([("PATH", "/bin")]),
+        &standard_registry(),
+        &FakeProbe::with(&[]),
+    )
+    .expect("an internal closure argument should plan");
+
+    let stage = &plan.stages()[1];
+    assert_eq!(argv_values(&plan, 1), [OsString::from("each")]);
+    let [PlannedArgument::Value { value, span }] = stage.arguments() else {
+        panic!("each should retain one typed closure argument");
+    };
+    assert!(matches!(value, Value::Callable(_)));
+    assert_eq!(
+        file.slice(*span),
+        Ok("{|item| $item.name}"),
+        "the typed argument retains its exact source span"
+    );
+    assert!(
+        plan.render()
+            .contains("values [<closure at test.fsh:1:18>]"),
+        "plan inspection includes typed arguments without calling them argv"
+    );
 }
 
 /// Builds a plan, panicking on any planning error, for render assertions.

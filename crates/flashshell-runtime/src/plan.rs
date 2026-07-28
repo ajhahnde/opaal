@@ -1,12 +1,13 @@
 //! Turning one parsed command pipeline into an inspectable [`ExecutionPlan`].
 //!
 //! Planning expands every command word, spread, and redirection target into
-//! native arguments, resolves each stage's command internal-first (or forced
-//! external), records the pipeline edges between stages, and captures each
-//! stage's redirections in source order — all while retaining source spans and
-//! without spawning a single process. The plan carries the working directory and
-//! the resolved child environment so a later executor, or a debug printer, can
-//! inspect exactly what would run.
+//! native arguments, captures internal-command closures as typed callable
+//! values, resolves each stage internal-first (or forced external), records the
+//! pipeline edges between stages, and captures each stage's redirections in
+//! source order — all while retaining source spans and without spawning a single
+//! process. The plan carries the working directory and the resolved child
+//! environment so a later executor, or a debug printer, can inspect exactly what
+//! would run.
 //!
 //! Planning only builds the plan. Rejecting NUL bytes, ambiguous
 //! structured-to-byte edges, conflicting descriptor ownership, and unsupported
@@ -24,11 +25,11 @@ use flashshell_syntax::{
 
 use crate::command::{Carrier, CommandOutput, CommandRegistry};
 use crate::eval::{
-    CarrierBridge, CarrierMismatch, ExpandedWord, RuntimeError, RuntimeErrorKind, expand_spread,
-    expand_word,
+    CarrierBridge, CarrierMismatch, ExpandedWord, RuntimeError, RuntimeErrorKind,
+    evaluate_closure_argument, expand_spread, expand_word,
 };
 use crate::resolve::{ExecutableProbe, Resolution, ResolutionError, resolve_command};
-use crate::{Environment, ScopeStack};
+use crate::{Environment, ScopeStack, Value};
 
 /// A complete, inspectable plan for one command pipeline.
 ///
@@ -127,6 +128,18 @@ impl ExecutionPlan {
                 let _ = write!(out, " [{}]", argument.value().to_string_lossy());
             }
             out.push('\n');
+            let values = stage
+                .arguments
+                .iter()
+                .filter_map(PlannedArgument::as_value)
+                .collect::<Vec<_>>();
+            if !values.is_empty() {
+                out.push_str("  values");
+                for value in values {
+                    let _ = write!(out, " [{value:?}]");
+                }
+                out.push('\n');
+            }
             let inputs = stage
                 .input_carriers
                 .iter()
@@ -249,6 +262,7 @@ pub struct PlannedStage {
     input_carriers: BTreeSet<Carrier>,
     output_carrier: Carrier,
     argv: Vec<ExpandedWord>,
+    arguments: Vec<PlannedArgument>,
     redirections: Vec<PlannedRedirection>,
     span: Span,
 }
@@ -285,6 +299,16 @@ impl PlannedStage {
         &self.argv
     }
 
+    /// The source-order internal-command arguments.
+    ///
+    /// Ordinary words and spread elements retain their native encoding, while a
+    /// closure argument is a captured callable value. External stages never
+    /// contain value arguments and continue to use [`Self::argv`] exclusively.
+    #[must_use]
+    pub fn arguments(&self) -> &[PlannedArgument] {
+        &self.arguments
+    }
+
     /// The stage-local redirections in source order.
     #[must_use]
     pub fn redirections(&self) -> &[PlannedRedirection] {
@@ -295,6 +319,49 @@ impl PlannedStage {
     #[must_use]
     pub const fn span(&self) -> Span {
         self.span
+    }
+}
+
+/// One source-order argument to a planned internal command.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum PlannedArgument {
+    /// One ordinary word or one element produced by a spread.
+    Word(ExpandedWord),
+    /// A typed value that must not be encoded into native argv.
+    Value {
+        /// The captured runtime value.
+        value: Value,
+        /// The source span of the typed argument.
+        span: Span,
+    },
+}
+
+impl PlannedArgument {
+    /// The source span that produced this argument.
+    #[must_use]
+    pub const fn span(&self) -> Span {
+        match self {
+            Self::Word(word) => word.span(),
+            Self::Value { span, .. } => *span,
+        }
+    }
+
+    /// The ordinary expanded word, when this argument is argv-compatible.
+    #[must_use]
+    pub const fn as_word(&self) -> Option<&ExpandedWord> {
+        match self {
+            Self::Word(word) => Some(word),
+            Self::Value { .. } => None,
+        }
+    }
+
+    /// The typed runtime value, when this argument is not native argv.
+    #[must_use]
+    pub const fn as_value(&self) -> Option<&Value> {
+        match self {
+            Self::Word(_) => None,
+            Self::Value { value, .. } => Some(value),
+        }
     }
 }
 
@@ -515,22 +582,33 @@ fn plan_stage(
         resolve(head.value(), force_external, command.head.span(), context)?;
 
     let mut argv = vec![head];
+    let mut arguments = Vec::new();
     let mut redirections = Vec::new();
     for item in &command.items {
         match item.kind() {
             CommandItemKind::Word(word) => {
-                argv.push(expand_word(word, context.source, scope)?);
+                let word = expand_word(word, context.source, scope)?;
+                argv.push(word.clone());
+                arguments.push(PlannedArgument::Word(word));
             }
             CommandItemKind::Spread(variable) => {
-                argv.extend(expand_spread(variable, item.span(), context.source, scope)?);
+                let words = expand_spread(variable, item.span(), context.source, scope)?;
+                argv.extend(words.iter().cloned());
+                arguments.extend(words.into_iter().map(PlannedArgument::Word));
             }
-            CommandItemKind::Closure(_) => {
-                return Err(RuntimeError::new(
-                    RuntimeErrorKind::Unsupported {
-                        feature: "a closure command argument",
-                    },
-                    item.span(),
-                ));
+            CommandItemKind::Closure(closure) => {
+                if matches!(resolution, PlannedResolution::External { .. }) {
+                    return Err(RuntimeError::new(
+                        RuntimeErrorKind::Unsupported {
+                            feature: "a closure argument to an external command",
+                        },
+                        item.span(),
+                    ));
+                }
+                arguments.push(PlannedArgument::Value {
+                    value: evaluate_closure_argument(closure, context.source, scope)?,
+                    span: item.span(),
+                });
             }
             CommandItemKind::Redirection(redirection) => {
                 let action = plan_redirection(redirection.kind(), context.source, scope)?;
@@ -547,6 +625,7 @@ fn plan_stage(
         input_carriers,
         output_carrier,
         argv,
+        arguments,
         redirections,
         span,
     })
