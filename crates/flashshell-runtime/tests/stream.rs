@@ -183,6 +183,43 @@ fn bounded_queue_refuses_push_when_full_and_frees_a_slot_on_pop() {
 }
 
 #[test]
+fn a_backpressured_producer_retries_without_reordering_or_exceeding_capacity() {
+    let mut queue = BoundedQueue::with_capacity(2);
+    let mut next = 0_i64;
+    let mut consumed = Vec::new();
+    let mut refusals = 0;
+    let mut maximum_staged = 0;
+
+    while next < 6 {
+        match queue.try_push(Value::Int(next)) {
+            Ok(()) => next += 1,
+            Err(QueueFull(value)) => {
+                assert_eq!(
+                    value,
+                    Value::Int(next),
+                    "the refused value is returned for an exact retry"
+                );
+                refusals += 1;
+                consumed.push(queue.pop().expect("a full queue has a front item"));
+            }
+        }
+        maximum_staged = maximum_staged.max(queue.len());
+        assert!(queue.len() <= queue.capacity());
+    }
+    while let Some(value) = queue.pop() {
+        consumed.push(value);
+    }
+
+    assert!(refusals > 0, "the interleaving must exercise backpressure");
+    assert_eq!(maximum_staged, queue.capacity());
+    assert_eq!(
+        consumed,
+        (0..6).map(Value::Int).collect::<Vec<_>>(),
+        "retry and consumption preserve producer order"
+    );
+}
+
+#[test]
 fn from_queue_drains_the_queue_in_fifo_order() {
     let mut queue = BoundedQueue::with_capacity(4);
     queue.try_push(Value::Int(10)).unwrap();

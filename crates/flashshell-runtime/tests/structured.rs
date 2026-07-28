@@ -13,6 +13,8 @@
 
 use std::cell::Cell;
 use std::rc::Rc;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use flashshell_runtime::eval::{CancelReason, CancellationToken};
 use flashshell_runtime::stream::ValueStream;
@@ -64,6 +66,35 @@ fn first_propagates_cancellation() {
         first(stream, 2),
         DrainOutcome::Cancelled(CancelReason::Requested)
     ));
+}
+
+#[test]
+fn first_stops_an_unbounded_source_when_cancellation_arrives_mid_drain() {
+    let pulls = Rc::new(Cell::new(0_i64));
+    let source = ValueStream::from_fn({
+        let pulls = Rc::clone(&pulls);
+        move || {
+            let value = pulls.get();
+            pulls.set(value + 1);
+            Some(Ok(Value::Int(value)))
+        }
+    });
+    let polls = Arc::new(AtomicUsize::new(0));
+    let token = CancellationToken::from_fn({
+        let polls = Arc::clone(&polls);
+        move || polls.fetch_add(1, Ordering::SeqCst) >= 2
+    });
+
+    assert!(matches!(
+        first(source.with_cancellation(token), usize::MAX),
+        DrainOutcome::Cancelled(CancelReason::Requested)
+    ));
+    assert_eq!(
+        pulls.get(),
+        2,
+        "cancellation stops the infinite producer before a third item"
+    );
+    assert_eq!(polls.load(Ordering::SeqCst), 3);
 }
 
 #[test]
