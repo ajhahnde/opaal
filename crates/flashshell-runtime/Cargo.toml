@@ -34,6 +34,13 @@ bench = false
 doc = false
 
 [[bin]]
+name = "flashshell-process-observer-fixture"
+path = "../../tests/fixtures/process_observer.rs"
+test = false
+bench = false
+doc = false
+
+[[bin]]
 name = "flashshell-stream-fixture"
 path = "../../tests/fixtures/stream.rs"
 test = false

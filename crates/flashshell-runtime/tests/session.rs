@@ -15,7 +15,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use flashshell_platform::{Capabilities, FakePlatform, TerminalSize};
+use flashshell_platform::{
+    Capabilities, FakePlatform, Platform, ProcessStatus, SpawnRequest, TerminalSize,
+};
 use flashshell_platform_posix::PosixPlatform;
 use flashshell_runtime::eval::FakeClock;
 use flashshell_runtime::plan::SessionOptions;
@@ -688,4 +690,85 @@ impl Drop for TempDir {
     fn drop(&mut self) {
         fs::remove_dir_all(&self.path).expect("temporary directory should be removed");
     }
+}
+
+#[test]
+fn the_external_members_around_an_internal_island_share_one_process_group() {
+    let temp = TempDir::new("session-mixed-group");
+    let fixture = PathBuf::from(env!("CARGO_BIN_EXE_flashshell-process-observer-fixture"));
+    let mut environment = environment();
+    environment.set(
+        "FLASH_PROBE_REPORT",
+        temp.path().join("report.bin").into_os_string(),
+    );
+    environment.set(
+        "FLASH_PROBE_GROUP_REPORT",
+        temp.path().as_os_str().to_os_string(),
+    );
+    let mut session = Session::new(temp.path(), environment, SessionOptions::default());
+    let probe = Probe::new([fixture.as_os_str()]);
+    let observer = fixture.to_string_lossy().into_owned();
+    let mut sink = Vec::new();
+
+    session
+        .submit(
+            "<interactive>",
+            format!("^{observer} | from text | to text | ^{observer}"),
+            &probe,
+            &PosixPlatform,
+            &FakeClock::new(),
+            &mut sink,
+        )
+        .expect("the mixed pipeline should execute");
+
+    // An internal island splits the pipeline but not the job: the external
+    // stages on either side of it stay members of the same group, and that
+    // group is not the shell's own.
+    let groups = reported_groups(temp.path());
+    assert_eq!(groups.len(), 2, "both external members report a group");
+    assert_eq!(groups[0], groups[1]);
+    assert_ne!(groups[0], shell_group());
+}
+
+/// The group of a child spawned without a placement, which is the shell's own.
+fn shell_group() -> u64 {
+    let temp = TempDir::new("session-shell-group");
+    let fixture = PathBuf::from(env!("CARGO_BIN_EXE_flashshell-process-observer-fixture"));
+    let argv = [OsString::from("inheritor")];
+    let environment = [
+        (
+            OsString::from("FLASH_PROBE_REPORT"),
+            temp.path().join("report.bin").into_os_string(),
+        ),
+        (
+            OsString::from("FLASH_PROBE_GROUP_REPORT"),
+            temp.path().as_os_str().to_os_string(),
+        ),
+    ];
+    let request = SpawnRequest::new(&fixture, &argv, &environment, temp.path())
+        .expect("the spawn request is valid");
+    let mut child = PosixPlatform.spawn(&request).expect("the fixture spawns");
+    assert_eq!(child.wait(), Ok(ProcessStatus::Exited(0)));
+
+    let groups = reported_groups(temp.path());
+    assert_eq!(groups.len(), 1);
+    groups[0]
+}
+
+/// Every process group reported by the observers that ran in `directory`.
+fn reported_groups(directory: &Path) -> Vec<u64> {
+    let mut groups: Vec<u64> = fs::read_dir(directory)
+        .expect("the probe directory should be readable")
+        .map(|entry| entry.expect("the entry should be readable").path())
+        .filter(|path| path.extension() == Some(OsStr::new("group")))
+        .map(|path| {
+            fs::read_to_string(path)
+                .expect("the fixture should report its process group")
+                .trim()
+                .parse()
+                .expect("a process group is an integer")
+        })
+        .collect();
+    groups.sort_unstable();
+    groups
 }

@@ -57,5 +57,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   job identities, an all-members startup barrier, foreground/background and
   stopped states, per-process completion observations, prompt-safe notice
   retention, and explicit acknowledged record removal.
+- Start every external stage of one pipeline in a single process group, so a
+  pipeline can later be signalled, stopped, and continued as one job instead of
+  as unrelated processes. The group is established before each child executes
+  and covers the external stages on both sides of an internal pipeline stage. A
+  platform that does not provide process groups keeps running pipelines in the
+  shell's own group.
 
 ---

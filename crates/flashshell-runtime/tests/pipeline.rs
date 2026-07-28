@@ -11,9 +11,9 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use flashshell_platform::{
-    Capabilities, Capability, ChildProcess, DescriptorEndpoint, FileActionError, FileOpenRequest,
-    PipeEndpoints, PipeError, Platform, ProcessStatus, SpawnError, SpawnRequest, TerminateError,
-    WaitError,
+    Capabilities, Capability, ChildProcess, DescriptorEndpoint, FakePlatform, FileActionError,
+    FileOpenRequest, PipeEndpoints, PipeError, Platform, ProcessGroup, ProcessStatus,
+    RecordingPlatform, SpawnError, SpawnRequest, TerminateError, WaitError,
 };
 use flashshell_platform_posix::PosixPlatform;
 use flashshell_runtime::command::CommandRegistry;
@@ -684,5 +684,77 @@ impl TempDir {
 impl Drop for TempDir {
     fn drop(&mut self) {
         fs::remove_dir_all(&self.path).expect("temporary directory should be removed");
+    }
+}
+
+#[test]
+fn every_external_pipeline_member_joins_one_process_group() {
+    let fixture = PathBuf::from(env!("CARGO_BIN_EXE_flashshell-stream-fixture"));
+    let directory = fixture.parent().expect("fixture has a parent").to_owned();
+    let name = fixture.file_name().expect("fixture has a name");
+    let text = format!(
+        "^{0} source 0 0 | ^{0} relay 0 | ^{0} sink 0 0",
+        name.to_string_lossy(),
+    );
+    let file = source(&text);
+    let syntax = pipeline(&file);
+    let plan = plan_pipeline(
+        &syntax,
+        &directory,
+        &file,
+        &mut ScopeStack::new(),
+        &Environment::from_snapshot([("PATH", directory.as_os_str().to_os_string())]),
+        &CommandRegistry::new(),
+        &ExactProbe(fixture),
+    )
+    .expect("the grouped pipeline plan should build");
+    let platform = RecordingPlatform::new(FakePlatform::full());
+    let spawns = platform.spawn_log();
+
+    execute_foreground_pipeline(&plan, &platform).expect("the fake pipeline should run");
+
+    let records = spawns.records();
+    assert_eq!(records.len(), 3);
+    let leader = records[0]
+        .process_group()
+        .expect("the first member leads the group");
+    assert_eq!(records[0].requested(), ProcessGroup::New);
+    for record in &records[1..] {
+        // The later members join rather than lead: a pipeline that created one
+        // group per stage could not be stopped or signalled as a single job.
+        assert_eq!(record.requested(), ProcessGroup::Join(leader));
+        assert_eq!(record.process_group(), Some(leader));
+    }
+}
+
+#[test]
+fn a_platform_without_process_groups_still_runs_an_external_pipeline() {
+    let fixture = PathBuf::from(env!("CARGO_BIN_EXE_flashshell-stream-fixture"));
+    let directory = fixture.parent().expect("fixture has a parent").to_owned();
+    let name = fixture.file_name().expect("fixture has a name");
+    let text = format!("^{0} source 0 0 | ^{0} sink 0 0", name.to_string_lossy());
+    let file = source(&text);
+    let syntax = pipeline(&file);
+    let plan = plan_pipeline(
+        &syntax,
+        &directory,
+        &file,
+        &mut ScopeStack::new(),
+        &Environment::from_snapshot([("PATH", directory.as_os_str().to_os_string())]),
+        &CommandRegistry::new(),
+        &ExactProbe(fixture),
+    )
+    .expect("the ungrouped pipeline plan should build");
+    let ungrouped = Capabilities::full_without(Capability::ProcessGroups);
+    let platform = RecordingPlatform::new(FakePlatform::new(ungrouped));
+    let spawns = platform.spawn_log();
+
+    execute_foreground_pipeline(&plan, &platform).expect("the pipeline still runs ungrouped");
+
+    // Job control is a capability, not a requirement: a platform without
+    // process groups keeps the pre-job-control behavior instead of failing.
+    for record in spawns.records() {
+        assert_eq!(record.requested(), ProcessGroup::Inherit);
+        assert_eq!(record.process_group(), None);
     }
 }

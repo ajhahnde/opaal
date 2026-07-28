@@ -18,8 +18,8 @@ use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::io;
 use std::path::{Component, Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
 
 /// One platform capability group an adapter either supports or does not.
 ///
@@ -107,6 +107,18 @@ impl Capabilities {
             index += 1;
         }
         Self { bits }
+    }
+
+    /// The full set minus `capability`.
+    ///
+    /// A host that provides everything except one capability is the shape worth
+    /// naming directly: spelling it as a list of the other eleven would drift
+    /// silently the next time a capability is added.
+    #[must_use]
+    pub const fn full_without(capability: Capability) -> Self {
+        Self {
+            bits: Self::full().bits & !capability.bit(),
+        }
     }
 
     /// This set with `capability` added; adding a present capability is a no-op.
@@ -601,6 +613,55 @@ impl<'a> ChildDescriptor<'a> {
     }
 }
 
+/// An adapter-native process-group identifier, widened for a portable boundary.
+///
+/// Zero is rejected because POSIX spells "the calling process" as `0` in
+/// `setpgid`; a group identifier that could be zero would make "join this
+/// existing group" and "become a new leader" indistinguishable at the seam.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct ProcessGroupId(u64);
+
+impl ProcessGroupId {
+    /// Build an identifier, rejecting the reserved zero value.
+    pub const fn new(value: u64) -> Option<Self> {
+        if value == 0 { None } else { Some(Self(value)) }
+    }
+
+    /// The adapter-native identifier.
+    pub const fn get(self) -> u64 {
+        self.0
+    }
+}
+
+impl fmt::Display for ProcessGroupId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "{}", self.0)
+    }
+}
+
+/// Where a spawned child's process group comes from.
+///
+/// The runtime places every member of one pipeline in a single group so a later
+/// slice can signal, stop, and hand the terminal to the job as a unit. Group
+/// placement is decided before the first spawn and never changes afterwards.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum ProcessGroup {
+    /// Stay in the shell's own group, as an unmanaged child.
+    #[default]
+    Inherit,
+    /// Become the leader of a new group named after the child itself.
+    New,
+    /// Join an existing group established by an earlier pipeline member.
+    Join(ProcessGroupId),
+}
+
+impl ProcessGroup {
+    /// Whether honouring this placement needs [`Capability::ProcessGroups`].
+    pub const fn requires_capability(self) -> bool {
+        !matches!(self, ProcessGroup::Inherit)
+    }
+}
+
 /// A structurally valid request to execute one program directly with argv.
 ///
 /// The first argv entry is explicit rather than inferred from `executable`.
@@ -614,6 +675,7 @@ pub struct SpawnRequest<'a> {
     cwd: &'a Path,
     descriptors: &'a [ChildDescriptor<'a>],
     closed_descriptors: &'a [u32],
+    process_group: ProcessGroup,
 }
 
 impl<'a> SpawnRequest<'a> {
@@ -635,7 +697,15 @@ impl<'a> SpawnRequest<'a> {
             cwd,
             descriptors: &[],
             closed_descriptors: &[],
+            process_group: ProcessGroup::Inherit,
         })
+    }
+
+    /// Place the child in `process_group` instead of the shell's own group.
+    #[must_use]
+    pub const fn in_process_group(mut self, process_group: ProcessGroup) -> Self {
+        self.process_group = process_group;
+        self
     }
 
     /// Attach the final child descriptor mappings to this request.
@@ -710,6 +780,11 @@ impl<'a> SpawnRequest<'a> {
     /// The child descriptor numbers explicitly closed before execution.
     pub const fn closed_descriptors(self) -> &'a [u32] {
         self.closed_descriptors
+    }
+
+    /// The group placement the adapter must establish before execution.
+    pub const fn process_group(self) -> ProcessGroup {
+        self.process_group
     }
 }
 
@@ -858,6 +933,15 @@ impl std::error::Error for TerminateError {}
 pub trait ChildProcess: Send + fmt::Debug {
     /// Adapter-native process identifier, widened for a portable boundary.
     fn id(&self) -> u64;
+
+    /// The group this child was actually placed in, when it has one.
+    ///
+    /// Reported by the adapter rather than assumed by the caller: a child
+    /// spawned as [`ProcessGroup::New`] leads a group the caller cannot name in
+    /// advance, and an adapter without process groups reports `None`.
+    fn process_group(&self) -> Option<ProcessGroupId> {
+        None
+    }
 
     /// Block until the child completes and return its low-level status.
     ///
@@ -1162,9 +1246,12 @@ impl Platform for FakePlatform {
         Ok(0)
     }
 
-    fn spawn(&self, _request: &SpawnRequest<'_>) -> Result<Box<dyn ChildProcess>, SpawnError> {
+    fn spawn(&self, request: &SpawnRequest<'_>) -> Result<Box<dyn ChildProcess>, SpawnError> {
         self.require(Capability::ProcessSpawn)?;
-        Ok(Box::new(FakeChild))
+        if request.process_group().requires_capability() {
+            self.require(Capability::ProcessGroups)?;
+        }
+        Ok(Box::new(FakeChild::new(request.process_group())))
     }
 }
 
@@ -1195,7 +1282,56 @@ impl TerminalCallLog {
     }
 }
 
-/// A [`FakePlatform`] that records the terminal calls it receives.
+/// One spawn a [`RecordingPlatform`] observed, in call order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SpawnRecord {
+    requested: ProcessGroup,
+    process_group: Option<ProcessGroupId>,
+}
+
+impl SpawnRecord {
+    /// The placement the caller asked for.
+    #[must_use]
+    pub const fn requested(&self) -> ProcessGroup {
+        self.requested
+    }
+
+    /// The group the resulting child reported, when it has one.
+    #[must_use]
+    pub const fn process_group(&self) -> Option<ProcessGroupId> {
+        self.process_group
+    }
+}
+
+/// The spawns a [`RecordingPlatform`] received, in order.
+///
+/// Job control is decided before a child exists and is invisible in its exit
+/// status, so a test that only sees statuses cannot tell one process group per
+/// pipeline from none at all. The log makes the placement itself observable.
+#[derive(Clone, Debug, Default)]
+pub struct SpawnCallLog {
+    records: Arc<Mutex<Vec<SpawnRecord>>>,
+}
+
+impl SpawnCallLog {
+    /// Every spawn recorded so far, in call order.
+    #[must_use]
+    pub fn records(&self) -> Vec<SpawnRecord> {
+        self.records
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    fn push(&self, record: SpawnRecord) {
+        self.records
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(record);
+    }
+}
+
+/// A [`FakePlatform`] that records the terminal and spawn calls it receives.
 ///
 /// Every method delegates, so the wrapped platform's scripted capability set
 /// still decides whether a call succeeds; recording adds only the fact that the
@@ -1204,6 +1340,7 @@ impl TerminalCallLog {
 pub struct RecordingPlatform {
     inner: FakePlatform,
     log: TerminalCallLog,
+    spawns: SpawnCallLog,
 }
 
 impl RecordingPlatform {
@@ -1213,6 +1350,7 @@ impl RecordingPlatform {
         Self {
             inner,
             log: TerminalCallLog::default(),
+            spawns: SpawnCallLog::default(),
         }
     }
 
@@ -1220,6 +1358,12 @@ impl RecordingPlatform {
     #[must_use]
     pub fn log(&self) -> TerminalCallLog {
         self.log.clone()
+    }
+
+    /// A handle to this platform's spawn log, readable after the platform moves.
+    #[must_use]
+    pub fn spawn_log(&self) -> SpawnCallLog {
+        self.spawns.clone()
     }
 }
 
@@ -1296,7 +1440,12 @@ impl Platform for RecordingPlatform {
     }
 
     fn spawn(&self, request: &SpawnRequest<'_>) -> Result<Box<dyn ChildProcess>, SpawnError> {
-        self.inner.spawn(request)
+        let child = self.inner.spawn(request)?;
+        self.spawns.push(SpawnRecord {
+            requested: request.process_group(),
+            process_group: child.process_group(),
+        });
+        Ok(child)
     }
 }
 
@@ -1355,12 +1504,45 @@ impl DirectoryStream for EmptyDirectoryStream {
 }
 
 /// Deterministic host-free child returned by [`FakePlatform`].
-#[derive(Clone, Copy, Debug, Default)]
-pub struct FakeChild;
+///
+/// Identities are unique and nonzero because job control is built on them: a
+/// fake whose children all answered the same identifier could not distinguish
+/// "every pipeline member joined one group" from "no member moved at all".
+#[derive(Clone, Copy, Debug)]
+pub struct FakeChild {
+    id: u64,
+    process_group: Option<ProcessGroupId>,
+}
+
+impl FakeChild {
+    /// A child with a fresh identity and the group `placement` asks for.
+    #[must_use]
+    pub fn new(placement: ProcessGroup) -> Self {
+        static NEXT_ID: AtomicUsize = AtomicUsize::new(1);
+
+        let id = NEXT_ID.fetch_add(1, Ordering::Relaxed) as u64;
+        let process_group = match placement {
+            ProcessGroup::Inherit => None,
+            ProcessGroup::New => ProcessGroupId::new(id),
+            ProcessGroup::Join(group) => Some(group),
+        };
+        Self { id, process_group }
+    }
+}
+
+impl Default for FakeChild {
+    fn default() -> Self {
+        Self::new(ProcessGroup::Inherit)
+    }
+}
 
 impl ChildProcess for FakeChild {
     fn id(&self) -> u64 {
-        0
+        self.id
+    }
+
+    fn process_group(&self) -> Option<ProcessGroupId> {
+        self.process_group
     }
 
     fn wait(&mut self) -> Result<ProcessStatus, WaitError> {

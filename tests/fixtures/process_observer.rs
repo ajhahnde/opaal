@@ -4,6 +4,8 @@ use std::env;
 use std::ffi::OsStr;
 use std::fs;
 use std::os::unix::ffi::OsStrExt;
+use std::path::PathBuf;
+use std::process;
 
 fn main() {
     let report_path = env::var_os("FLASH_PROBE_REPORT").expect("report path is required");
@@ -26,12 +28,38 @@ fn main() {
     }
 
     fs::write(report_path, report).expect("report should be written");
+
+    // Written to a per-process file inside the named directory: the probe must
+    // not disturb the byte layout the argv, environment, and descriptor tests
+    // compare exactly, and two pipeline members sharing one environment must
+    // still report separately.
+    if let Some(group_directory) = env::var_os("FLASH_PROBE_GROUP_REPORT") {
+        let report = PathBuf::from(group_directory).join(format!("{}.group", process::id()));
+        fs::write(report, process_group::current().to_string())
+            .expect("group report should be written");
+    }
 }
 
 fn write_field(output: &mut Vec<u8>, value: &OsStr) {
     let bytes = value.as_bytes();
     output.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
     output.extend_from_slice(bytes);
+}
+
+#[allow(unsafe_code)]
+mod process_group {
+    use std::ffi::c_int;
+
+    unsafe extern "C" {
+        fn getpgrp() -> c_int;
+    }
+
+    /// The group this process belongs to after the adapter's placement.
+    pub(super) fn current() -> c_int {
+        // SAFETY: getpgrp takes no argument, dereferences nothing, and is
+        // specified never to fail.
+        unsafe { getpgrp() }
+    }
 }
 
 #[allow(unsafe_code)]

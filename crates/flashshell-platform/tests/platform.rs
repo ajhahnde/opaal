@@ -6,9 +6,10 @@ use std::path::Path;
 use flashshell_platform::{
     Capabilities, Capability, ChildDescriptor, ChildProcess, DescriptorEndpoint,
     DescriptorReadError, DirectoryEntry, DirectoryEntryKind, DirectoryReadError,
-    DirectoryReadRequest, FakePlatform, FileActionError, FileOpenMode, FileOpenRequest,
-    PipeEndpoints, PipeError, Platform, PlatformError, ProcessStatus, RecordingPlatform,
-    SpawnError, SpawnRequest, SpawnRequestError, WorkingDirectoryError, WorkingDirectoryRequest,
+    DirectoryReadRequest, FakeChild, FakePlatform, FileActionError, FileOpenMode, FileOpenRequest,
+    PipeEndpoints, PipeError, Platform, PlatformError, ProcessGroup, ProcessGroupId, ProcessStatus,
+    RecordingPlatform, SpawnError, SpawnRequest, SpawnRequestError, WorkingDirectoryError,
+    WorkingDirectoryRequest,
 };
 
 #[test]
@@ -270,8 +271,11 @@ fn fake_spawn_is_host_free_and_returns_an_owned_waitable_child() {
     .expect("the request is valid");
 
     let mut child = platform.spawn(&request).expect("the fake spawn succeeds");
+    let sibling = platform.spawn(&request).expect("the fake spawn succeeds");
 
-    assert_eq!(child.id(), 0);
+    assert!(child.id() > 0);
+    assert_ne!(child.id(), sibling.id());
+    assert_eq!(child.process_group(), None);
     assert_eq!(child.wait(), Ok(ProcessStatus::Exited(0)));
     assert_eq!(child.wait(), Ok(ProcessStatus::Exited(0)));
 }
@@ -581,4 +585,95 @@ fn a_directory_entry_that_is_not_a_regular_file_has_no_size() {
 
     assert_eq!(entry.kind(), DirectoryEntryKind::Directory);
     assert_eq!(entry.size(), None);
+}
+
+#[test]
+fn a_process_group_identifier_rejects_the_reserved_zero() {
+    // Zero means "the calling process" in setpgid, so a zero-valued identifier
+    // would make joining an existing group indistinguishable from leading a
+    // new one.
+    assert_eq!(ProcessGroupId::new(0), None);
+    assert_eq!(ProcessGroupId::new(41).map(ProcessGroupId::get), Some(41));
+}
+
+#[test]
+fn a_spawn_request_inherits_the_shell_group_until_it_is_told_otherwise() {
+    let argv = [OsString::from("fixture")];
+    let environment = [];
+    let request = SpawnRequest::new(Path::new("/fixture"), &argv, &environment, Path::new("/"))
+        .expect("the request is valid");
+
+    assert_eq!(request.process_group(), ProcessGroup::Inherit);
+    assert!(!request.process_group().requires_capability());
+
+    let group = ProcessGroupId::new(7).expect("seven is a usable group");
+    for placement in [ProcessGroup::New, ProcessGroup::Join(group)] {
+        let placed = request.in_process_group(placement);
+        assert_eq!(placed.process_group(), placement);
+        assert!(placed.process_group().requires_capability());
+    }
+}
+
+#[test]
+fn a_fake_child_leads_the_group_it_was_asked_to_create() {
+    let leader = FakeChild::new(ProcessGroup::New);
+    let group = leader
+        .process_group()
+        .expect("a new leader names a group after itself");
+
+    assert_eq!(group.get(), leader.id());
+    assert_eq!(
+        FakeChild::new(ProcessGroup::Join(group)).process_group(),
+        Some(group),
+    );
+    assert_eq!(FakeChild::new(ProcessGroup::Inherit).process_group(), None);
+}
+
+#[test]
+fn placing_a_child_in_a_group_requires_the_process_group_capability() {
+    // Spawn alone is not enough: a platform that can start a process but not
+    // group it must refuse the placement instead of quietly dropping it.
+    let platform = FakePlatform::new(Capabilities::empty().with(Capability::ProcessSpawn));
+    let argv = [OsString::from("fixture")];
+    let environment = [];
+    let request = SpawnRequest::new(Path::new("/fixture"), &argv, &environment, Path::new("/"))
+        .expect("the request is valid");
+
+    assert!(
+        platform.spawn(&request).is_ok(),
+        "inheriting is always fine"
+    );
+    assert_eq!(
+        platform
+            .spawn(&request.in_process_group(ProcessGroup::New))
+            .expect_err("the placement must be refused"),
+        SpawnError::Platform(PlatformError::Unsupported {
+            capability: Capability::ProcessGroups,
+        }),
+    );
+}
+
+#[test]
+fn a_recording_platform_reports_the_group_placement_of_every_spawn() {
+    let platform = RecordingPlatform::new(FakePlatform::full());
+    let spawns = platform.spawn_log();
+    let argv = [OsString::from("fixture")];
+    let environment = [];
+    let request = SpawnRequest::new(Path::new("/fixture"), &argv, &environment, Path::new("/"))
+        .expect("the request is valid");
+
+    let leader = platform
+        .spawn(&request.in_process_group(ProcessGroup::New))
+        .expect("the leader spawns");
+    let group = leader.process_group().expect("the leader leads a group");
+    platform
+        .spawn(&request.in_process_group(ProcessGroup::Join(group)))
+        .expect("the follower spawns");
+
+    let records = spawns.records();
+    assert_eq!(records.len(), 2);
+    assert_eq!(records[0].requested(), ProcessGroup::New);
+    assert_eq!(records[0].process_group(), Some(group));
+    assert_eq!(records[1].requested(), ProcessGroup::Join(group));
+    assert_eq!(records[1].process_group(), Some(group));
 }

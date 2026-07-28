@@ -21,9 +21,9 @@ use flashshell_platform::{
     Capabilities, Capability, ChildProcess, DescriptorEndpoint, DescriptorReadError,
     DescriptorWriteError, DirectoryEntry, DirectoryEntryKind, DirectoryReadError,
     DirectoryReadRequest, DirectoryStream, FileActionError, FileIoEndpoint, FileOpenMode,
-    FileOpenRequest, PipeEndpoints, PipeError, Platform, PlatformError, ProcessStatus, SpawnError,
-    SpawnRequest, TerminalModeGuard, TerminalSize, TerminateError, WaitError,
-    WorkingDirectoryError, WorkingDirectoryRequest,
+    FileOpenRequest, PipeEndpoints, PipeError, Platform, PlatformError, ProcessGroupId,
+    ProcessStatus, SpawnError, SpawnRequest, TerminalModeGuard, TerminalSize, TerminateError,
+    WaitError, WorkingDirectoryError, WorkingDirectoryRequest,
 };
 
 /// A uniquely owned POSIX descriptor with close-on-exec discipline.
@@ -108,11 +108,16 @@ pub struct PosixPlatform;
 pub struct PosixChild {
     child: Child,
     completed: Option<ProcessStatus>,
+    process_group: Option<ProcessGroupId>,
 }
 
 impl ChildProcess for PosixChild {
     fn id(&self) -> u64 {
         u64::from(self.child.id())
+    }
+
+    fn process_group(&self) -> Option<ProcessGroupId> {
+        self.process_group
     }
 
     fn wait(&mut self) -> Result<ProcessStatus, WaitError> {
@@ -294,6 +299,9 @@ impl Platform for PosixPlatform {
 
     fn spawn(&self, request: &SpawnRequest<'_>) -> Result<Box<dyn ChildProcess>, SpawnError> {
         self.require(Capability::ProcessSpawn)?;
+        if request.process_group().requires_capability() {
+            self.require(Capability::ProcessGroups)?;
+        }
 
         let cwd = std::path::absolute(request.cwd()).map_err(spawn_error)?;
         let executable = if request.executable().is_relative() {
@@ -369,14 +377,20 @@ impl Platform for PosixPlatform {
             .copied()
             .map(descriptor_number)
             .collect::<Result<Vec<_>, _>>()?;
+        // Group placement is installed before the descriptor hook so a child
+        // that fails its descriptor setup is already signallable as a member of
+        // its job's group rather than of the shell's own group.
+        child_process_group::configure(&mut command, request.process_group())?;
         child_descriptors::configure(&mut command, extra_mappings, closes);
 
         command
             .spawn()
             .map(|child| {
+                let process_group = child_process_group::adopt(&child, request.process_group());
                 Box::new(PosixChild {
                     child,
                     completed: None,
+                    process_group,
                 }) as Box<dyn ChildProcess>
             })
             .map_err(spawn_error)
@@ -503,6 +517,86 @@ fn working_directory_error(error: io::Error) -> WorkingDirectoryError {
     WorkingDirectoryError::Operation {
         kind: error.kind(),
         message: error.to_string(),
+    }
+}
+
+/// Process-group placement for a child that has not executed yet.
+///
+/// `setpgid` is applied twice on purpose: once in the child before `exec` and
+/// once in the parent after `fork`. Either call alone leaves a window in which
+/// the other side observes the wrong group — the parent may signal the job
+/// before the child has moved itself, and the child may `exec` before the
+/// parent's call lands. Both calls are idempotent, so the redundant one is a
+/// no-op rather than a correction.
+#[allow(unsafe_code)]
+mod child_process_group {
+    use std::io;
+    use std::process::Child;
+
+    use flashshell_platform::{ProcessGroup, ProcessGroupId, SpawnError};
+
+    use super::spawn_error;
+    use std::os::unix::process::CommandExt;
+    use std::process::Command;
+
+    /// Install the pre-exec hook that moves the child into its group.
+    pub(super) fn configure(
+        command: &mut Command,
+        placement: ProcessGroup,
+    ) -> Result<(), SpawnError> {
+        let target = match placement {
+            // The child is already in the shell's group; leave it there rather
+            // than calling setpgid with the shell's own identifier.
+            ProcessGroup::Inherit => return Ok(()),
+            // POSIX spells "make the caller its own leader" as pgid zero.
+            ProcessGroup::New => 0,
+            ProcessGroup::Join(group) => group_number(group)?,
+        };
+
+        // SAFETY: the hook captures one integer and calls only setpgid, which
+        // POSIX lists as async-signal-safe.
+        unsafe {
+            command.pre_exec(move || {
+                if libc::setpgid(0, target) == -1 {
+                    return Err(io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        Ok(())
+    }
+
+    /// Close the parent-side race and report the group the child now belongs to.
+    pub(super) fn adopt(child: &Child, placement: ProcessGroup) -> Option<ProcessGroupId> {
+        let group = match placement {
+            ProcessGroup::Inherit => return None,
+            // A new leader names its group after itself, so the identifier is
+            // knowable only once the child exists.
+            ProcessGroup::New => ProcessGroupId::new(u64::from(child.id()))?,
+            ProcessGroup::Join(group) => group,
+        };
+        let target = group_number(group).ok()?;
+        let pid = i32::try_from(child.id()).ok()?;
+
+        // SAFETY: setpgid takes two scalars and dereferences nothing.
+        //
+        // A failure here is not an error: EACCES means the child already
+        // executed, and ESRCH means it already exited. In both cases the
+        // child's own pre-exec call decided the group, so the parent's
+        // duplicate has nothing left to do.
+        unsafe {
+            libc::setpgid(pid, target);
+        }
+        Some(group)
+    }
+
+    fn group_number(group: ProcessGroupId) -> Result<libc::pid_t, SpawnError> {
+        libc::pid_t::try_from(group.get()).map_err(|_| {
+            spawn_error(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("process group {group} exceeds the POSIX process identifier range"),
+            ))
+        })
     }
 }
 

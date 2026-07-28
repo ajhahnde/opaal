@@ -12,8 +12,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use flashshell_platform::{
     Capability, ChildDescriptor, DirectoryEntry, DirectoryEntryKind, DirectoryReadError,
-    DirectoryReadRequest, FileOpenMode, FileOpenRequest, Platform, ProcessStatus, SpawnError,
-    SpawnRequest, TerminalSize, WorkingDirectoryError, WorkingDirectoryRequest,
+    DirectoryReadRequest, FileOpenMode, FileOpenRequest, Platform, ProcessGroup, ProcessGroupId,
+    ProcessStatus, SpawnError, SpawnRequest, TerminalSize, WorkingDirectoryError,
+    WorkingDirectoryRequest,
 };
 use flashshell_platform_posix::{OwnedDescriptor, PosixPlatform};
 
@@ -593,4 +594,141 @@ fn reading_a_file_as_a_directory_is_a_per_operation_failure() {
         .expect_err("a regular file cannot be enumerated");
 
     assert!(matches!(error, DirectoryReadError::Operation { .. }));
+}
+
+#[test]
+fn posix_spawn_places_a_new_leader_in_a_group_named_after_itself() {
+    let temp = TempDir::new("group-leader");
+    let fixture = Path::new(env!("CARGO_BIN_EXE_flashshell-process-observer-fixture"));
+    let argv = [OsString::from("leader")];
+    let environment = probe_environment(temp.path(), "leader");
+    let request = SpawnRequest::new(fixture, &argv, &environment, temp.path())
+        .expect("the spawn request is valid")
+        .in_process_group(ProcessGroup::New);
+
+    let mut child = PosixPlatform
+        .spawn(&request)
+        .expect("the fixture should spawn as a group leader");
+    let identifier = child.id();
+    let reported = child.process_group().expect("a leader reports its group");
+    assert_eq!(child.wait(), Ok(ProcessStatus::Exited(0)));
+
+    // The observed group comes from the child's own getpgrp, so this asserts
+    // where the process actually landed rather than what the adapter intended.
+    assert_eq!(reported.get(), identifier);
+    assert_eq!(read_group(temp.path(), identifier), identifier);
+    // A freshly created group is named after a live child, so it cannot be the
+    // group this test process already belonged to.
+    assert_ne!(identifier, u64::from(std::process::id()));
+}
+
+#[test]
+fn posix_spawn_puts_every_pipeline_member_in_one_group() {
+    let temp = TempDir::new("group-members");
+    let fixture = Path::new(env!("CARGO_BIN_EXE_flashshell-process-observer-fixture"));
+    let argv = [OsString::from("member")];
+
+    let leader_environment = probe_environment(temp.path(), "leader");
+    let leader_request = SpawnRequest::new(fixture, &argv, &leader_environment, temp.path())
+        .expect("the spawn request is valid")
+        .in_process_group(ProcessGroup::New);
+    let mut leader = PosixPlatform
+        .spawn(&leader_request)
+        .expect("the leader should spawn");
+    let group = leader.process_group().expect("a leader reports its group");
+
+    let follower_environment = probe_environment(temp.path(), "follower");
+    let follower_request = SpawnRequest::new(fixture, &argv, &follower_environment, temp.path())
+        .expect("the spawn request is valid")
+        .in_process_group(ProcessGroup::Join(group));
+    let mut follower = PosixPlatform
+        .spawn(&follower_request)
+        .expect("the follower should join the leader's group");
+
+    assert_eq!(leader.wait(), Ok(ProcessStatus::Exited(0)));
+    assert_eq!(follower.wait(), Ok(ProcessStatus::Exited(0)));
+
+    assert_eq!(follower.process_group(), Some(group));
+    assert_eq!(read_group(temp.path(), leader.id()), group.get());
+    assert_eq!(read_group(temp.path(), follower.id()), group.get());
+    assert_ne!(follower.id(), leader.id());
+}
+
+#[test]
+fn posix_spawn_inherits_the_shell_group_when_no_placement_is_asked_for() {
+    let temp = TempDir::new("group-inherit");
+    let fixture = Path::new(env!("CARGO_BIN_EXE_flashshell-process-observer-fixture"));
+    let argv = [OsString::from("inheritor")];
+    let environment = probe_environment(temp.path(), "inheritor");
+    let request = SpawnRequest::new(fixture, &argv, &environment, temp.path())
+        .expect("the spawn request is valid");
+
+    let mut child = PosixPlatform.spawn(&request).expect("the fixture spawns");
+    assert_eq!(child.wait(), Ok(ProcessStatus::Exited(0)));
+
+    // An unplaced child stays where fork left it, which is never its own pid.
+    assert_eq!(child.process_group(), None);
+    assert_ne!(read_group(temp.path(), child.id()), child.id());
+}
+
+#[test]
+fn posix_spawn_refuses_a_group_outside_the_process_identifier_range() {
+    let temp = TempDir::new("group-range");
+    let fixture = Path::new(env!("CARGO_BIN_EXE_flashshell-process-observer-fixture"));
+    let argv = [OsString::from("out-of-range")];
+    let environment = [];
+    let group = ProcessGroupId::new(u64::from(u32::MAX) + 1).expect("the value is nonzero");
+    let request = SpawnRequest::new(fixture, &argv, &environment, temp.path())
+        .expect("the spawn request is valid")
+        .in_process_group(ProcessGroup::Join(group));
+
+    match PosixPlatform.spawn(&request) {
+        Err(SpawnError::Operation { kind, message }) => {
+            assert_eq!(kind, std::io::ErrorKind::InvalidInput);
+            assert!(message.contains("process identifier range"), "{message}");
+        }
+        other => panic!("expected an out-of-range rejection, got {other:?}"),
+    }
+}
+
+#[test]
+fn posix_spawn_reports_a_child_that_cannot_join_its_requested_group() {
+    let temp = TempDir::new("group-missing");
+    let fixture = Path::new(env!("CARGO_BIN_EXE_flashshell-process-observer-fixture"));
+    let argv = [OsString::from("orphan")];
+    let environment = [];
+    // A group is named after a live leader, so a very high identifier belongs
+    // to no group this process may join.
+    let group = ProcessGroupId::new(0x7fff_fffe).expect("the value is nonzero");
+    let request = SpawnRequest::new(fixture, &argv, &environment, temp.path())
+        .expect("the spawn request is valid")
+        .in_process_group(ProcessGroup::Join(group));
+
+    assert!(
+        PosixPlatform.spawn(&request).is_err(),
+        "a child that cannot reach its group must fail its spawn, not run ungrouped",
+    );
+}
+
+fn probe_environment(directory: &Path, label: &str) -> Vec<(OsString, OsString)> {
+    vec![
+        (
+            OsString::from("FLASH_PROBE_REPORT"),
+            directory
+                .join(format!("{label}-report.bin"))
+                .into_os_string(),
+        ),
+        (
+            OsString::from("FLASH_PROBE_GROUP_REPORT"),
+            directory.to_path_buf().into_os_string(),
+        ),
+    ]
+}
+
+fn read_group(directory: &Path, process: u64) -> u64 {
+    fs::read_to_string(directory.join(format!("{process}.group")))
+        .expect("the fixture should report its process group")
+        .trim()
+        .parse()
+        .expect("a process group is an integer")
 }

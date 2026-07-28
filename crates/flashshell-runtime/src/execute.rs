@@ -13,8 +13,8 @@ use std::sync::mpsc;
 use std::thread;
 
 use flashshell_platform::{
-    ChildDescriptor, ChildProcess, DescriptorEndpoint, FileOpenMode, FileOpenRequest, Platform,
-    ProcessStatus, SpawnRequest,
+    Capability, ChildDescriptor, ChildProcess, DescriptorEndpoint, FileOpenMode, FileOpenRequest,
+    Platform, ProcessGroup, ProcessStatus, SpawnRequest,
 };
 use flashshell_syntax::{ConditionalChain, OutputMode, PipeOperator, Pipeline, SourceFile};
 
@@ -507,6 +507,46 @@ fn execute_preflighted_pipeline_inner(
     wait_in_source_order(children, plan, clock)
 }
 
+/// The single process group every external member of one pipeline joins.
+///
+/// The first started member leads the group and later members join it, so the
+/// whole pipeline can be signalled, stopped, and continued as one unit. A
+/// platform without process groups leaves every member in the shell's own
+/// group, which is the pre-job-control behavior.
+struct PipelineGroup {
+    placement: ProcessGroup,
+}
+
+impl PipelineGroup {
+    /// Decide the placement of the first member against the live platform.
+    fn new(platform: &dyn Platform) -> Self {
+        let placement = if platform.capabilities().supports(Capability::ProcessGroups) {
+            ProcessGroup::New
+        } else {
+            ProcessGroup::Inherit
+        };
+        Self { placement }
+    }
+
+    /// The placement the next member is spawned with.
+    const fn placement(&self) -> ProcessGroup {
+        self.placement
+    }
+
+    /// Adopt the leader's group so every later member joins it.
+    ///
+    /// An adapter that accepts [`ProcessGroup::New`] but reports no group leaves
+    /// the placement unchanged, which makes each member its own leader instead
+    /// of silently returning the pipeline to the shell's group.
+    fn adopt(&mut self, child: &dyn ChildProcess) {
+        if matches!(self.placement, ProcessGroup::New)
+            && let Some(group) = child.process_group()
+        {
+            self.placement = ProcessGroup::Join(group);
+        }
+    }
+}
+
 fn start_preflighted_pipeline(
     plan: &ExecutionPlan,
     platform: &dyn Platform,
@@ -530,6 +570,7 @@ fn start_preflighted_pipeline(
         .map(|(name, value)| (OsString::from(name), value.to_os_string()))
         .collect();
     let mut children: Vec<StartedChild> = Vec::with_capacity(plan.stages().len());
+    let mut group = PipelineGroup::new(platform);
 
     for (index, stage) in plan.stages().iter().enumerate() {
         let input = index.checked_sub(1).and_then(|edge| pipes[edge].0.take());
@@ -566,7 +607,8 @@ fn start_preflighted_pipeline(
             .with_descriptors(&descriptors)
             .expect("the final descriptor map has unique targets")
             .with_closed_descriptors(&closed_descriptors)
-            .expect("a final descriptor cannot be both mapped and closed");
+            .expect("a final descriptor cannot be both mapped and closed")
+            .in_process_group(group.placement());
         let command_span = stage.argv()[0].span();
         let started_at = clock.map(Clock::now);
         let child = platform.spawn(&request).map_err(|error| {
@@ -578,7 +620,10 @@ fn start_preflighted_pipeline(
         drop(descriptor_map);
 
         match child {
-            Ok(child) => children.push(StartedChild { child, started_at }),
+            Ok(child) => {
+                group.adopt(child.as_ref());
+                children.push(StartedChild { child, started_at });
+            }
             Err(error) => {
                 drop(pipes);
                 terminate_and_reap(&mut children);
@@ -709,6 +754,7 @@ pub(crate) fn start_mixed_pipeline(
         .collect();
     let mut children = Vec::with_capacity(plan.stages().len() - internal.len());
     let started_at = clock.now();
+    let mut group = PipelineGroup::new(platform);
 
     for (index, stage) in plan.stages().iter().enumerate() {
         if internal.contains(&index) {
@@ -742,7 +788,8 @@ pub(crate) fn start_mixed_pipeline(
             .with_descriptors(&descriptors)
             .expect("the final descriptor map has unique targets")
             .with_closed_descriptors(&closed_descriptors)
-            .expect("a final descriptor cannot be both mapped and closed");
+            .expect("a final descriptor cannot be both mapped and closed")
+            .in_process_group(group.placement());
         let child = platform
             .spawn(&request)
             .map(|child| IndexedStartedChild {
@@ -764,7 +811,10 @@ pub(crate) fn start_mixed_pipeline(
         drop(descriptor_map);
 
         match child {
-            Ok(child) => children.push(child),
+            Ok(child) => {
+                group.adopt(child.child.child.as_ref());
+                children.push(child);
+            }
             Err(error) => {
                 drop(pipes);
                 terminate_indexed_and_reap(&mut children);
