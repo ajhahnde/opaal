@@ -942,6 +942,23 @@ pub enum ProcessStatus {
     Signaled(i32),
 }
 
+/// What a blocking observation of one child reported.
+///
+/// Kept separate from [`ProcessStatus`], which is a completion type: a stopped
+/// child has not completed, and folding a non-completion state into that enum
+/// would force every site that reasons about a finished process to account for
+/// one that is still alive.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ProcessTransition {
+    /// The child stopped under this platform signal number and can be resumed.
+    Stopped {
+        /// The platform signal number that stopped the child.
+        signal: i32,
+    },
+    /// The child reached a terminal status, which the platform has consumed.
+    Completed(ProcessStatus),
+}
+
 /// Failure while waiting for an already-spawned child.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WaitError {
@@ -1020,6 +1037,15 @@ pub trait ChildProcess: Send + fmt::Debug {
     ///
     /// Calling this more than once returns the same completed status.
     fn wait(&mut self) -> Result<ProcessStatus, WaitError>;
+
+    /// Block until the child completes or stops, reporting which happened.
+    ///
+    /// Defaulted to delegate to [`wait`](ChildProcess::wait), which never
+    /// reports a stop. An adapter that cannot observe a stop is also one that
+    /// cannot deliver one, so the default is correct rather than lossy.
+    fn wait_for_transition(&mut self) -> Result<ProcessTransition, WaitError> {
+        self.wait().map(ProcessTransition::Completed)
+    }
 
     /// Request immediate termination during failure cleanup.
     fn terminate(&mut self) -> Result<(), TerminateError>;
@@ -1246,6 +1272,7 @@ pub struct FakePlatform {
     is_terminal: bool,
     is_output_terminal: bool,
     terminal_size: TerminalSize,
+    child_stops: u32,
 }
 
 impl FakePlatform {
@@ -1256,6 +1283,7 @@ impl FakePlatform {
             is_terminal: false,
             is_output_terminal: false,
             terminal_size: TerminalSize::new(80, 24),
+            child_stops: 0,
         }
     }
 
@@ -1295,6 +1323,23 @@ impl FakePlatform {
             is_terminal,
             is_output_terminal,
             terminal_size: size,
+            child_stops: 0,
+        }
+    }
+
+    /// A fake platform whose children each report `stops` stops before completing.
+    ///
+    /// Spelled out as a full struct literal rather than built from
+    /// [`FakePlatform::new`] with a functional-update tail: that shorthand is
+    /// not allowed in a `const fn`, and this constructor stays `const` so it
+    /// composes with the same call sites the other constructors do.
+    pub const fn with_stopping_children(capabilities: Capabilities, stops: u32) -> Self {
+        Self {
+            capabilities,
+            is_terminal: false,
+            is_output_terminal: false,
+            terminal_size: TerminalSize::new(80, 24),
+            child_stops: stops,
         }
     }
 }
@@ -1384,7 +1429,10 @@ impl Platform for FakePlatform {
         if request.process_group().requires_capability() {
             self.require(Capability::ProcessGroups)?;
         }
-        Ok(Box::new(FakeChild::new(request.process_group())))
+        Ok(Box::new(FakeChild::with_stops(
+            request.process_group(),
+            self.child_stops,
+        )))
     }
 }
 
@@ -1780,6 +1828,12 @@ impl DirectoryStream for EmptyDirectoryStream {
     }
 }
 
+/// The signal number [`FakeChild`] reports for a scripted stop.
+///
+/// Exported so a test asserts against this name rather than repeating a bare
+/// number that reads like a host signal and is not one.
+pub const FAKE_STOP_SIGNAL: i32 = 18;
+
 /// Deterministic host-free child returned by [`FakePlatform`].
 ///
 /// Identities are unique and nonzero because job control is built on them: a
@@ -1789,6 +1843,7 @@ impl DirectoryStream for EmptyDirectoryStream {
 pub struct FakeChild {
     id: u64,
     process_group: Option<ProcessGroupId>,
+    stops_remaining: u32,
 }
 
 impl FakeChild {
@@ -1803,7 +1858,26 @@ impl FakeChild {
             ProcessGroup::New => ProcessGroupId::new(id),
             ProcessGroup::Join(group) => Some(group),
         };
-        Self { id, process_group }
+        Self {
+            id,
+            process_group,
+            stops_remaining: 0,
+        }
+    }
+
+    /// A child that reports `stops` stops before it completes.
+    ///
+    /// The reported number is a fixed stand-in, not a host stop signal. This
+    /// crate has no access to the host's signal numbering, and that numbering
+    /// differs between the supported hosts, so a fake that claimed to reproduce
+    /// it would be wrong on one of them. Only the adapter that observes a real
+    /// stop can report a real number.
+    #[must_use]
+    pub fn with_stops(placement: ProcessGroup, stops: u32) -> Self {
+        Self {
+            stops_remaining: stops,
+            ..Self::new(placement)
+        }
     }
 }
 
@@ -1824,6 +1898,16 @@ impl ChildProcess for FakeChild {
 
     fn wait(&mut self) -> Result<ProcessStatus, WaitError> {
         Ok(ProcessStatus::Exited(0))
+    }
+
+    fn wait_for_transition(&mut self) -> Result<ProcessTransition, WaitError> {
+        if self.stops_remaining > 0 {
+            self.stops_remaining -= 1;
+            return Ok(ProcessTransition::Stopped {
+                signal: FAKE_STOP_SIGNAL,
+            });
+        }
+        self.wait().map(ProcessTransition::Completed)
     }
 
     fn terminate(&mut self) -> Result<(), TerminateError> {

@@ -6,11 +6,11 @@ use std::path::Path;
 use flashshell_platform::{
     Capabilities, Capability, ChildDescriptor, ChildProcess, DescriptorEndpoint,
     DescriptorReadError, DirectoryEntry, DirectoryEntryKind, DirectoryReadError,
-    DirectoryReadRequest, FakeChild, FakePlatform, FileActionError, FileOpenMode, FileOpenRequest,
-    JobControlSignalGuard, JobSignal, NoopJobControlSignalGuard, PipeEndpoints, PipeError,
-    Platform, PlatformError, ProcessGroup, ProcessGroupId, ProcessStatus, RecordingPlatform,
-    SignalError, SpawnError, SpawnRequest, SpawnRequestError, WorkingDirectoryError,
-    WorkingDirectoryRequest,
+    DirectoryReadRequest, FAKE_STOP_SIGNAL, FakeChild, FakePlatform, FileActionError, FileOpenMode,
+    FileOpenRequest, JobControlSignalGuard, JobSignal, NoopJobControlSignalGuard, PipeEndpoints,
+    PipeError, Platform, PlatformError, ProcessGroup, ProcessGroupId, ProcessStatus,
+    ProcessTransition, RecordingPlatform, SignalError, SpawnError, SpawnRequest, SpawnRequestError,
+    WorkingDirectoryError, WorkingDirectoryRequest,
 };
 
 #[test]
@@ -785,4 +785,59 @@ fn a_job_control_signal_guard_restores_once_however_it_is_released() {
     // Restoration is idempotent, so an explicit call followed by the drop is
     // well defined rather than a double restore.
     assert_eq!(guard.restore(), Ok(()));
+}
+
+#[test]
+fn a_child_without_stop_observation_reports_only_completion() {
+    let mut child = FakeChild::default();
+
+    assert_eq!(
+        child.wait_for_transition(),
+        Ok(ProcessTransition::Completed(ProcessStatus::Exited(0))),
+    );
+}
+
+#[test]
+fn a_scripted_child_reports_its_stops_before_completing() {
+    let mut child = FakeChild::with_stops(ProcessGroup::New, 2);
+
+    assert_eq!(
+        child.wait_for_transition(),
+        Ok(ProcessTransition::Stopped {
+            signal: FAKE_STOP_SIGNAL,
+        }),
+    );
+    assert_eq!(
+        child.wait_for_transition(),
+        Ok(ProcessTransition::Stopped {
+            signal: FAKE_STOP_SIGNAL,
+        }),
+    );
+    assert_eq!(
+        child.wait_for_transition(),
+        Ok(ProcessTransition::Completed(ProcessStatus::Exited(0))),
+    );
+}
+
+#[test]
+fn a_stopping_fake_platform_hands_out_stopping_children() {
+    let platform = FakePlatform::with_stopping_children(Capabilities::full(), 1);
+    let executable = Path::new("/usr/bin/true");
+    let argv = [OsString::from("true")];
+    let environment = [];
+    let request = SpawnRequest::new(executable, &argv, &environment, Path::new("/"))
+        .expect("the spawn request is valid");
+
+    let mut child = platform.spawn(&request).expect("a full platform spawns");
+
+    assert_eq!(
+        child.wait_for_transition(),
+        Ok(ProcessTransition::Stopped {
+            signal: FAKE_STOP_SIGNAL,
+        }),
+    );
+    assert_eq!(
+        child.wait_for_transition(),
+        Ok(ProcessTransition::Completed(ProcessStatus::Exited(0))),
+    );
 }
