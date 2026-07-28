@@ -14,6 +14,7 @@ pub mod file;
 pub mod format;
 pub mod operation;
 pub mod plan;
+pub mod presentation;
 pub mod resolve;
 mod scope;
 pub mod script;

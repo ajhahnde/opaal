@@ -18,6 +18,10 @@ flashshell-syntax = { path = "../flashshell-syntax" }
 # `indexmap`, `hashbrown`, and `equivalent` — is deliberately not enabled.
 serde = { version = "=1.0.229", default-features = false, features = ["std"] }
 serde_json = { version = "=1.0.151", default-features = false, features = ["std"] }
+# Terminal presentation measures display cells rather than bytes or Unicode
+# scalar values. Keep the small, host-free width table exactly pinned because
+# this dependency reaches the shipped Redox image.
+unicode-width = "=0.2.2"
 
 [dev-dependencies]
 flashshell-platform-posix = { path = "../flashshell-platform-posix" }
