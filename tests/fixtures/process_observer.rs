@@ -53,6 +53,17 @@ fn main() {
             fs::write(survived, b"survived").expect("survival report should be written");
         }
     }
+
+    // A stop can only be observed on a child that is still running, so the
+    // fixture waits for the parent to release it. Polling rather than blocking
+    // on a descriptor keeps the fixture free of any signal handling of its own,
+    // which is exactly what the disposition probes assert about it.
+    if let Some(release) = env::var_os("FLASH_PROBE_HOLD_UNTIL") {
+        let release = PathBuf::from(release);
+        while !release.exists() {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
 }
 
 fn write_field(output: &mut Vec<u8>, value: &OsStr) {

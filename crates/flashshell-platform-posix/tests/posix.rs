@@ -12,9 +12,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use flashshell_platform::{
     Capability, ChildDescriptor, DirectoryEntry, DirectoryEntryKind, DirectoryReadError,
-    DirectoryReadRequest, FileOpenMode, FileOpenRequest, Platform, PlatformError, ProcessGroup,
-    ProcessGroupId, ProcessStatus, SpawnError, SpawnRequest, TerminalSize, WorkingDirectoryError,
-    WorkingDirectoryRequest,
+    DirectoryReadRequest, FileOpenMode, FileOpenRequest, JobSignal, Platform, PlatformError,
+    ProcessGroup, ProcessGroupId, ProcessStatus, ProcessTransition, SignalError, SpawnError,
+    SpawnRequest, TerminalSize, WorkingDirectoryError, WorkingDirectoryRequest,
 };
 use flashshell_platform_posix::{OwnedDescriptor, PosixPlatform};
 
@@ -794,6 +794,77 @@ fn an_interactive_shell_survives_the_signals_its_children_still_answer() {
         findings.contains("child-status:Signaled(2)"),
         "a child must not inherit the shell's ignore: {findings}",
     );
+}
+
+#[test]
+fn posix_observes_a_stopped_child_and_resumes_it_through_its_group() {
+    let temp = TempDir::new("group-stop");
+    let fixture = Path::new(env!("CARGO_BIN_EXE_flashshell-process-observer-fixture"));
+    let release = temp.path().join("release");
+    let argv = [OsString::from("holder")];
+    let mut environment = probe_environment(temp.path(), "holder");
+    environment.push((
+        OsString::from("FLASH_PROBE_HOLD_UNTIL"),
+        release.clone().into_os_string(),
+    ));
+    let request = SpawnRequest::new(fixture, &argv, &environment, temp.path())
+        .expect("the spawn request is valid")
+        .in_process_group(ProcessGroup::New);
+
+    let mut child = PosixPlatform.spawn(&request).expect("the fixture spawns");
+    let group = child.process_group().expect("a leader reports its group");
+
+    PosixPlatform
+        .signal_process_group(group, JobSignal::Stop)
+        .expect("a POSIX host stops a group");
+    assert_eq!(
+        child.wait_for_transition(),
+        Ok(ProcessTransition::Stopped {
+            signal: libc::SIGSTOP
+        }),
+        "the stop is reported with the host's SIGSTOP number",
+    );
+
+    PosixPlatform
+        .signal_process_group(group, JobSignal::Continue)
+        .expect("a POSIX host resumes a group");
+    std::fs::write(&release, b"go").expect("the release marker is writable");
+
+    assert_eq!(
+        child.wait_for_transition(),
+        Ok(ProcessTransition::Completed(ProcessStatus::Exited(0))),
+    );
+}
+
+#[test]
+fn posix_reports_a_signal_to_a_group_that_does_not_exist() {
+    // A group is named after a live leader, so a very high identifier belongs
+    // to no group on this host.
+    let group = ProcessGroupId::new(0x7fff_fffe).expect("the value is nonzero");
+
+    match PosixPlatform.signal_process_group(group, JobSignal::Continue) {
+        // The host rejects delivery to a group with no members. The errno for
+        // that is ESRCH, which the standard library maps to its unnameable
+        // catch-all category rather than to a distinct kind, so the failure is
+        // matched by shape: it is an operation error, not a capability gap.
+        Err(SignalError::Operation { .. }) => {}
+        other => panic!("expected a missing-group failure, got {other:?}"),
+    }
+}
+
+#[test]
+fn posix_refuses_the_group_whose_target_means_every_process() {
+    // Group 1 negates to the target the host reads as "every process the caller
+    // may signal". A stop delivered there would freeze the session, so the
+    // adapter must refuse it instead of handing it to the host.
+    let group = ProcessGroupId::new(1).expect("the value is nonzero");
+
+    match PosixPlatform.signal_process_group(group, JobSignal::Stop) {
+        Err(SignalError::Operation { kind, .. }) => {
+            assert_eq!(kind, std::io::ErrorKind::InvalidInput);
+        }
+        other => panic!("expected the broadcast target to be refused, got {other:?}"),
+    }
 }
 
 #[test]

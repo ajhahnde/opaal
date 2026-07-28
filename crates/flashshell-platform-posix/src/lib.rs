@@ -14,17 +14,17 @@ use std::collections::BTreeSet;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd};
-use std::os::unix::process::{CommandExt, ExitStatusExt};
+use std::os::unix::process::CommandExt;
 use std::process::{Child, Command, Stdio};
 
 use flashshell_platform::{
     Capabilities, Capability, ChildProcess, DescriptorEndpoint, DescriptorReadError,
     DescriptorWriteError, DirectoryEntry, DirectoryEntryKind, DirectoryReadError,
     DirectoryReadRequest, DirectoryStream, FileActionError, FileIoEndpoint, FileOpenMode,
-    FileOpenRequest, ForegroundTerminalGuard, JobControlSignalGuard, PipeEndpoints, PipeError,
-    Platform, PlatformError, ProcessGroupId, ProcessStatus, SpawnError, SpawnRequest,
-    TerminalModeGuard, TerminalSize, TerminateError, WaitError, WorkingDirectoryError,
-    WorkingDirectoryRequest,
+    FileOpenRequest, ForegroundTerminalGuard, JobControlSignalGuard, JobSignal, PipeEndpoints,
+    PipeError, Platform, PlatformError, ProcessGroupId, ProcessStatus, ProcessTransition,
+    SignalError, SpawnError, SpawnRequest, TerminalModeGuard, TerminalSize, TerminateError,
+    WaitError, WorkingDirectoryError, WorkingDirectoryRequest,
 };
 
 /// A uniquely owned POSIX descriptor with close-on-exec discipline.
@@ -125,24 +125,56 @@ impl ChildProcess for PosixChild {
         if let Some(status) = self.completed {
             return Ok(status);
         }
+        match self.observe(0)? {
+            ProcessTransition::Completed(status) => Ok(status),
+            // Unreachable without WUNTRACED: a plain wait never reports a stop.
+            // If a host ever did, panicking here would unwind through the adapter
+            // instead, so it is reported as a wait failure.
+            ProcessTransition::Stopped { signal } => Err(WaitError::new(
+                io::ErrorKind::Other,
+                format!("the host reported a stop by signal {signal} without being asked for one"),
+            )),
+        }
+    }
 
-        let status = self
-            .child
-            .wait()
-            .map_err(|error| WaitError::new(error.kind(), error.to_string()))?;
-        let status = status
-            .code()
-            .map(ProcessStatus::Exited)
-            .or_else(|| status.signal().map(ProcessStatus::Signaled))
-            .expect("POSIX exit status has either a code or a signal");
-        self.completed = Some(status);
-        Ok(status)
+    fn wait_for_transition(&mut self) -> Result<ProcessTransition, WaitError> {
+        if let Some(status) = self.completed {
+            return Ok(ProcessTransition::Completed(status));
+        }
+        self.observe(libc::WUNTRACED)
     }
 
     fn terminate(&mut self) -> Result<(), TerminateError> {
+        // Once the adapter has reaped, std does not know the child is gone, so
+        // `Child::kill` would signal a pid the host may have already reused.
+        if self.completed.is_some() {
+            return Ok(());
+        }
         self.child
             .kill()
             .map_err(|error| TerminateError::new(error.kind(), error.to_string()))
+    }
+}
+
+impl PosixChild {
+    /// Reap the child for one transition, caching a completion.
+    ///
+    /// The adapter reaps for itself rather than through `std::process::Child`,
+    /// so the completion is recorded here and every later call short-circuits on
+    /// it. Nothing else reaps the pid, so the recorded status is the only one
+    /// the child ever produces.
+    fn observe(&mut self, flags: libc::c_int) -> Result<ProcessTransition, WaitError> {
+        let pid = libc::pid_t::try_from(self.child.id()).map_err(|_| {
+            WaitError::new(
+                io::ErrorKind::InvalidInput,
+                "the child identifier exceeds the POSIX process identifier range",
+            )
+        })?;
+        let transition = child_wait::observe(pid, flags)?;
+        if let ProcessTransition::Completed(status) = transition {
+            self.completed = Some(status);
+        }
+        Ok(transition)
     }
 }
 
@@ -232,6 +264,15 @@ impl Platform for PosixPlatform {
         self.require(Capability::Signals)?;
         job_control_signals::install()
             .map(|guard| Box::new(guard) as Box<dyn JobControlSignalGuard>)
+    }
+
+    fn signal_process_group(
+        &self,
+        group: ProcessGroupId,
+        signal: JobSignal,
+    ) -> Result<(), SignalError> {
+        self.require(Capability::Signals)?;
+        process_signals::deliver(group, signal)
     }
 
     fn resolve_working_directory(
@@ -990,6 +1031,123 @@ mod job_control_signals {
             capability: Capability::Signals,
             reason: error.to_string(),
         }
+    }
+}
+
+/// Group-directed signal delivery.
+///
+/// POSIX spells a group target as a negated identifier, which is why the
+/// adapter and not the runtime performs the negation: a platform-independent
+/// caller must never encode a host signalling convention.
+#[allow(unsafe_code)]
+mod process_signals {
+    use std::io;
+
+    use flashshell_platform::{JobSignal, ProcessGroupId, SignalError};
+
+    pub(super) fn deliver(group: ProcessGroupId, signal: JobSignal) -> Result<(), SignalError> {
+        let number = match signal {
+            JobSignal::Stop => libc::SIGSTOP,
+            JobSignal::Continue => libc::SIGCONT,
+        };
+        let target = libc::pid_t::try_from(group.get()).map_err(|_| SignalError::Operation {
+            kind: io::ErrorKind::InvalidInput,
+            message: format!("process group {group} exceeds the POSIX process identifier range"),
+        })?;
+        // Group 1 negates to the target POSIX reserves for "every process the
+        // caller may signal". Delivering a stop there would freeze the whole
+        // session, so the one identifier whose negation changes meaning is
+        // refused rather than sent.
+        if target == 1 {
+            return Err(SignalError::Operation {
+                kind: io::ErrorKind::InvalidInput,
+                message: "process group 1 is not addressable as a group".to_owned(),
+            });
+        }
+        let target = target.checked_neg().ok_or_else(|| SignalError::Operation {
+            kind: io::ErrorKind::InvalidInput,
+            message: format!("process group {group} has no negated group target"),
+        })?;
+
+        // SAFETY: kill takes two scalars and dereferences nothing.
+        if unsafe { libc::kill(target, number) } == -1 {
+            let error = io::Error::last_os_error();
+            return Err(SignalError::Operation {
+                kind: error.kind(),
+                message: error.to_string(),
+            });
+        }
+        Ok(())
+    }
+}
+
+/// Blocking child observation.
+///
+/// `std::process::Child::wait` is `waitpid` without `WUNTRACED`, so a stopped
+/// child reports nothing and the caller blocks until it dies. The adapter
+/// therefore reaps for itself. `Child` is kept only to own the pid and its
+/// standard streams; std installs no `Drop` that reaps, so nothing the adapter
+/// has already reaped is ever waited a second time.
+///
+/// One thing std's own wait does that this does not is close the child's input
+/// handle before blocking, which is what stops a parent still holding that
+/// handle from waiting on a child that is waiting on the parent. Nothing here
+/// holds one: every spawned stream is handed over as an owned descriptor rather
+/// than kept as a pipe, so the handles are already absent. A change that starts
+/// retaining a child's input handle has to close it here before waiting.
+#[allow(unsafe_code)]
+mod child_wait {
+    use std::ffi::c_int;
+    use std::io;
+
+    use flashshell_platform::{ProcessStatus, ProcessTransition, WaitError};
+
+    pub(super) fn observe(pid: c_int, flags: c_int) -> Result<ProcessTransition, WaitError> {
+        let mut status: c_int = 0;
+        loop {
+            // SAFETY: waitpid writes only through the status pointer, which
+            // points at a live local for the whole call.
+            let result = unsafe { libc::waitpid(pid, &raw mut status, flags) };
+            if result != -1 {
+                break;
+            }
+            let error = io::Error::last_os_error();
+            // A signal delivered to the shell while it waits is not a wait
+            // failure; the observation is simply not finished yet.
+            if error.kind() == io::ErrorKind::Interrupted {
+                continue;
+            }
+            return Err(WaitError::new(error.kind(), error.to_string()));
+        }
+        decode(status)
+    }
+
+    /// Classify one raw wait status.
+    ///
+    /// Exit is tested rather than inferred from the other two failing. Only
+    /// `WCONTINUED` could add a fourth state, and it is never requested — but a
+    /// caller who added it would otherwise read an exit code off a continued
+    /// status and report a plausible-looking wrong number.
+    fn decode(status: c_int) -> Result<ProcessTransition, WaitError> {
+        if libc::WIFSTOPPED(status) {
+            return Ok(ProcessTransition::Stopped {
+                signal: libc::WSTOPSIG(status),
+            });
+        }
+        if libc::WIFSIGNALED(status) {
+            return Ok(ProcessTransition::Completed(ProcessStatus::Signaled(
+                libc::WTERMSIG(status),
+            )));
+        }
+        if libc::WIFEXITED(status) {
+            return Ok(ProcessTransition::Completed(ProcessStatus::Exited(
+                libc::WEXITSTATUS(status),
+            )));
+        }
+        Err(WaitError::new(
+            io::ErrorKind::Other,
+            format!("the host reported an unrecognized wait status {status:#x}"),
+        ))
     }
 }
 
