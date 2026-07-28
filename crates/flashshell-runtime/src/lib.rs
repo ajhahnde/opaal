@@ -13,6 +13,7 @@ pub mod execute;
 pub mod file;
 pub mod format;
 pub mod internal;
+pub mod job;
 pub mod operation;
 pub mod plan;
 pub mod presentation;

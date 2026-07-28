@@ -53,5 +53,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   capture, in scripts and interactive sessions. Mixed pipelines preserve
   source-ordered stage statuses and `pipefail`, and stop pulling an internal
   producer when an external consumer closes early.
+- Add the checked lifecycle foundation for process-backed jobs: stable shell
+  job identities, an all-members startup barrier, foreground/background and
+  stopped states, per-process completion observations, prompt-safe notice
+  retention, and explicit acknowledged record removal.
 
 ---
