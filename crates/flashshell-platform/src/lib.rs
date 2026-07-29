@@ -676,9 +676,8 @@ impl ProcessGroup {
 /// Inbound observations keep their raw number, because they report what the host
 /// already did and must not be narrowed to what the shell happens to model.
 ///
-/// The set grows again when the `kill` built-in lands, which is also what gives
-/// `Stop` its first caller outside the adapter's own tests: the shell resumes a
-/// stopped job long before it has a reason to stop one itself.
+/// `Stop` and the termination signals become runtime callers when the `kill`
+/// built-in lands; the shell resumes and hangs up stopped jobs before then.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum JobSignal {
     /// Stop the group unconditionally.
@@ -690,6 +689,12 @@ pub enum JobSignal {
     /// Sent only after the shell has resumed the group, because a stopped
     /// process cannot act on a hang-up it never receives.
     Hangup,
+    /// Interrupt the group as if requested from its controlling terminal.
+    Interrupt,
+    /// Ask the group to terminate cleanly.
+    Terminate,
+    /// Terminate the group unconditionally.
+    Kill,
 }
 
 /// Failure while delivering a signal to a process group.

@@ -920,6 +920,43 @@ fn posix_hangs_up_a_group_and_observes_the_termination() {
 }
 
 #[test]
+fn posix_maps_portable_termination_signals_to_the_exact_host_signals() {
+    for (signal, expected, label) in [
+        (JobSignal::Interrupt, libc::SIGINT, "interrupt"),
+        (JobSignal::Terminate, libc::SIGTERM, "terminate"),
+        (JobSignal::Kill, libc::SIGKILL, "kill"),
+    ] {
+        let temp = TempDir::new(label);
+        let fixture = Path::new(env!("CARGO_BIN_EXE_flashshell-process-observer-fixture"));
+        let release = temp.path().join("release");
+        let argv = [OsString::from("holder")];
+        let mut environment = probe_environment(temp.path(), label);
+        environment.push((
+            OsString::from("FLASH_PROBE_HOLD_UNTIL"),
+            release.into_os_string(),
+        ));
+        let request = SpawnRequest::new(fixture, &argv, &environment, temp.path())
+            .expect("the spawn request is valid")
+            .in_process_group(ProcessGroup::New);
+
+        let mut child = PosixPlatform.spawn(&request).expect("the fixture spawns");
+        let group = child.process_group().expect("a leader reports its group");
+
+        PosixPlatform
+            .signal_process_group(group, signal)
+            .expect("a POSIX host signals the disposable group");
+
+        assert_eq!(
+            child.wait_for_transition(),
+            Ok(ProcessTransition::Completed(ProcessStatus::Signaled(
+                expected
+            ))),
+            "{signal:?} must map to host signal {expected}",
+        );
+    }
+}
+
+#[test]
 fn posix_reports_a_signal_to_a_group_that_does_not_exist() {
     // A group is named after a live leader, so a very high identifier belongs
     // to no group on this host.

@@ -1106,6 +1106,9 @@ mod process_signals {
             JobSignal::Stop => libc::SIGSTOP,
             JobSignal::Continue => libc::SIGCONT,
             JobSignal::Hangup => libc::SIGHUP,
+            JobSignal::Interrupt => libc::SIGINT,
+            JobSignal::Terminate => libc::SIGTERM,
+            JobSignal::Kill => libc::SIGKILL,
         };
         let target = libc::pid_t::try_from(group.get()).map_err(|_| SignalError::Operation {
             kind: io::ErrorKind::InvalidInput,

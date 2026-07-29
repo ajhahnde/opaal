@@ -808,13 +808,28 @@ fn a_recording_platform_reports_every_group_signal_in_call_order() {
     platform
         .signal_process_group(second, JobSignal::Continue)
         .expect("a full platform signals a group");
+    platform
+        .signal_process_group(first, JobSignal::Interrupt)
+        .expect("a full platform interrupts a group");
+    platform
+        .signal_process_group(second, JobSignal::Terminate)
+        .expect("a full platform terminates a group");
+    platform
+        .signal_process_group(first, JobSignal::Kill)
+        .expect("a full platform kills a group");
 
     let records = log.records();
-    assert_eq!(records.len(), 2);
+    assert_eq!(records.len(), 5);
     assert_eq!(records[0].group(), first);
     assert_eq!(records[0].signal(), JobSignal::Stop);
     assert_eq!(records[1].group(), second);
     assert_eq!(records[1].signal(), JobSignal::Continue);
+    assert_eq!(records[2].group(), first);
+    assert_eq!(records[2].signal(), JobSignal::Interrupt);
+    assert_eq!(records[3].group(), second);
+    assert_eq!(records[3].signal(), JobSignal::Terminate);
+    assert_eq!(records[4].group(), first);
+    assert_eq!(records[4].signal(), JobSignal::Kill);
 }
 
 #[test]
