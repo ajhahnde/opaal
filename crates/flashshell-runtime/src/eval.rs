@@ -343,6 +343,8 @@ pub enum RuntimeErrorKind {
     BackgroundObserverUnavailable { message: String },
     /// A ready observer unexpectedly refused its owned child assignment.
     BackgroundAssignmentUnavailable,
+    /// Observation of a coordinator-owned foreground job was abandoned.
+    ForegroundObservation { message: String },
     /// The background coordinator reached an invalid pure job transition.
     BackgroundJobState { message: String },
     /// A job-control command ran in a session that has no job coordinator.
@@ -622,6 +624,9 @@ impl fmt::Display for RuntimeErrorKind {
             }
             Self::BackgroundAssignmentUnavailable => {
                 formatter.write_str("a ready background observer refused its child")
+            }
+            Self::ForegroundObservation { message } => {
+                write!(formatter, "foreground child observation failed: {message}")
             }
             Self::BackgroundJobState { message } => {
                 write!(formatter, "invalid background job state: {message}")

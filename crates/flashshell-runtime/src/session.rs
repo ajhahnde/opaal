@@ -34,7 +34,7 @@ use flashshell_syntax::{
     render_diagnostic,
 };
 
-use crate::background::{BackgroundJobs, QuarantinePolicy, escape_job_label};
+use crate::background::{BackgroundJobs, ForegroundJobOutcome, QuarantinePolicy, escape_job_label};
 use crate::builtin::{SessionState, standard_registry};
 use crate::closure::OwnedClosureContext;
 use crate::command::CommandRegistry;
@@ -174,7 +174,7 @@ impl Session {
     /// Enable the interactive background-job coordinator with one owned clock.
     pub fn enable_interactive_job_control(&mut self, clock: Arc<dyn Clock>) {
         if self.jobs.is_none() {
-            self.jobs = Some(BackgroundJobs::new(clock));
+            self.jobs = Some(BackgroundJobs::new(clock, true));
         }
     }
 
@@ -184,7 +184,7 @@ impl Session {
     /// script has no prompt, so it drains notices once, at its join.
     pub fn enable_script_job_control(&mut self, clock: Arc<dyn Clock>) {
         if self.jobs.is_none() {
-            self.jobs = Some(BackgroundJobs::new(clock));
+            self.jobs = Some(BackgroundJobs::new(clock, false));
         }
     }
 
@@ -383,6 +383,12 @@ impl Session {
                     match step {
                         ChainStep::Exit(code) => return Ok(SubmitOutcome::Exit(code)),
                         ChainStep::Status(status) => state.set_current_status(Some(status)),
+                        ChainStep::Stopped(job) => {
+                            debug_assert!(
+                                jobs.as_ref().and_then(|jobs| jobs.job(job)).is_some(),
+                                "a stopped managed outcome retains its coordinator record"
+                            );
+                        }
                     }
                 }
                 _ => {
@@ -412,6 +418,7 @@ impl Session {
 /// One pipeline's control result inside a conditional chain.
 enum ChainStep {
     Status(Status),
+    Stopped(crate::job::JobId),
     Exit(u8),
 }
 
@@ -765,6 +772,15 @@ fn run_chain(
     jobs: &mut Option<BackgroundJobs>,
     output: &mut dyn Write,
 ) -> Result<ChainStep, Interrupt> {
+    if let [and_chain] = chain.or_terms()
+        && let [pipeline] = and_chain.and_terms()
+    {
+        return run_pipeline(
+            pipeline, state, scope, options, registry, source, probe, platform, clock, jobs, true,
+            output,
+        );
+    }
+
     let mut or_terms = chain.or_terms().iter();
     let first = or_terms
         .next()
@@ -775,6 +791,7 @@ fn run_chain(
     for and_chain in or_terms {
         match &step {
             ChainStep::Exit(_) => return Ok(step),
+            ChainStep::Stopped(_) => return Ok(step),
             // `||` runs the next operand only when the current one succeeded not.
             ChainStep::Status(status) if status.is_ok() => break,
             ChainStep::Status(_) => {}
@@ -806,17 +823,19 @@ fn run_and_chain(
         .next()
         .expect("a parsed and-chain contains an operand");
     let mut step = run_pipeline(
-        first, state, scope, options, registry, source, probe, platform, clock, jobs, output,
+        first, state, scope, options, registry, source, probe, platform, clock, jobs, false, output,
     )?;
     for pipeline in pipelines {
         match &step {
             ChainStep::Exit(_) => return Ok(step),
+            ChainStep::Stopped(_) => return Ok(step),
             // `&&` runs the next operand only while the current one succeeds.
             ChainStep::Status(status) if !status.is_ok() => break,
             ChainStep::Status(_) => {}
         }
         step = run_pipeline(
-            pipeline, state, scope, options, registry, source, probe, platform, clock, jobs, output,
+            pipeline, state, scope, options, registry, source, probe, platform, clock, jobs, false,
+            output,
         )?;
     }
     Ok(step)
@@ -834,6 +853,7 @@ fn run_pipeline(
     platform: &dyn Platform,
     clock: &dyn Clock,
     jobs: &mut Option<BackgroundJobs>,
+    manage_foreground: bool,
     output: &mut dyn Write,
 ) -> Result<ChainStep, Interrupt> {
     let plan = plan_pipeline_with_options(
@@ -911,6 +931,25 @@ fn run_pipeline(
         return run_mixed_pipeline(
             &plan, state, registry, source, probe, platform, clock, output,
         );
+    }
+
+    if manage_foreground
+        && jobs
+            .as_ref()
+            .is_some_and(BackgroundJobs::manages_foreground)
+    {
+        let command = source
+            .slice(plan.span())
+            .map(escape_job_label)
+            .expect("a planned pipeline span belongs to its source");
+        let outcome = jobs
+            .as_mut()
+            .expect("foreground management requires a coordinator")
+            .start_foreground(&plan, platform, command)?;
+        return Ok(match outcome {
+            ForegroundJobOutcome::Completed(status) => ChainStep::Status(status),
+            ForegroundJobOutcome::Stopped(job) => ChainStep::Stopped(job),
+        });
     }
 
     let status = execute_foreground_status(&plan, platform, clock)?;

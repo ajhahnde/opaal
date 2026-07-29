@@ -16,7 +16,10 @@ use flashshell_platform::{
 };
 
 use crate::eval::{Clock, Instant, RuntimeError, RuntimeErrorKind};
-use crate::execute::{aggregate_statuses, elapsed, language_status, start_background_pipeline};
+use crate::execute::{
+    aggregate_statuses, elapsed, language_status, release_foreground, start_background_pipeline,
+    take_foreground,
+};
 use crate::job::{
     Job, JobId, JobMemberState, JobPlacement, JobState, JobTransitionError, ProcessId,
 };
@@ -435,6 +438,15 @@ pub enum JobSnapshotState {
     Quarantined,
 }
 
+/// The terminal outcome of one coordinator-owned foreground pipeline.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum ForegroundJobOutcome {
+    /// Every member reached a terminal aggregate.
+    Completed(Status),
+    /// The complete aggregate stopped and remains addressable.
+    Stopped(JobId),
+}
+
 impl JobSnapshotState {
     /// The stable lowercase label used by the structured job table.
     #[must_use]
@@ -621,6 +633,7 @@ impl BackgroundFailure {
 /// Session-owned background job table and raw-observation coordinator.
 pub(crate) struct BackgroundJobs {
     clock: Arc<dyn Clock>,
+    manage_foreground: bool,
     event_sender: mpsc::Sender<ChildObservation>,
     event_receiver: mpsc::Receiver<ChildObservation>,
     records: BTreeMap<JobId, JobRecord>,
@@ -630,10 +643,11 @@ pub(crate) struct BackgroundJobs {
 }
 
 impl BackgroundJobs {
-    pub(crate) fn new(clock: Arc<dyn Clock>) -> Self {
+    pub(crate) fn new(clock: Arc<dyn Clock>, manage_foreground: bool) -> Self {
         let (event_sender, event_receiver) = mpsc::channel();
         Self {
             clock,
+            manage_foreground,
             event_sender,
             event_receiver,
             records: BTreeMap::new(),
@@ -641,6 +655,11 @@ impl BackgroundJobs {
             next_job: Some(1),
             next_notice: Some(1),
         }
+    }
+
+    /// Whether this coordinator belongs to an interactive job-control session.
+    pub(crate) const fn manages_foreground(&self) -> bool {
+        self.manage_foreground
     }
 
     pub(crate) fn start(
@@ -734,6 +753,125 @@ impl BackgroundJobs {
         Ok(job_id)
     }
 
+    /// Start and observe one exact all-external foreground pipeline.
+    ///
+    /// Every observer is ready before process creation. Child handles remain
+    /// directly owned through terminal handoff and complete pure-job
+    /// registration, then transfer in source order before the record is
+    /// published. Normal completion is consumed without a notice; an aggregate
+    /// stop returns to the prompt with one addressable foreground record.
+    pub(crate) fn start_foreground(
+        &mut self,
+        plan: &ExecutionPlan,
+        platform: &dyn Platform,
+        command: String,
+    ) -> Result<ForegroundJobOutcome, RuntimeError> {
+        let job_id = self.reserve_job(plan)?;
+        let mut job = Job::new(job_id);
+        job.begin_starting()
+            .map_err(|error| background_state(error, plan))?;
+
+        let mut observers = ObserverSlots::prepare(
+            plan.stages().len(),
+            Arc::clone(&self.clock),
+            self.event_sender.clone(),
+        )
+        .map_err(|error| {
+            RuntimeError::new(
+                RuntimeErrorKind::BackgroundObserverUnavailable {
+                    message: error.to_string(),
+                },
+                plan.span(),
+            )
+        })?;
+        let started = match start_background_pipeline(plan, platform, self.clock.as_ref()) {
+            Ok(started) => started,
+            Err(error) => {
+                let _ = observers.shutdown();
+                return Err(error);
+            }
+        };
+        let group = started.group();
+        let pipeline_started = started.started_at();
+        let mut members: VecDeque<_> = started.into_members().into();
+        let foreground = match take_foreground(plan, platform, Some(group)) {
+            Ok(foreground) => foreground,
+            Err(error) => {
+                cleanup_members(members);
+                let _ = observers.shutdown();
+                return Err(error);
+            }
+        };
+
+        let mut source_order = Vec::with_capacity(members.len());
+        let mut member_started = BTreeMap::new();
+        for member in &members {
+            if let Err(error) = job.add_process(member.process()) {
+                cleanup_members(members);
+                let _ = observers.shutdown();
+                let _ = release_foreground(foreground, plan);
+                return Err(background_state(error, plan));
+            }
+            source_order.push(member.process());
+            member_started.insert(member.process(), member.started_at());
+        }
+
+        while let Some(member) = members.pop_front() {
+            let (process, child, started_at) = member.into_parts();
+            let assignment = ObserverAssignment::new(job_id, process, child, started_at);
+            if let Err(assignment) = observers.assign(assignment) {
+                // Earlier transfers can be reclaimed only through the common
+                // group. Force is cleanup for failed publication, never a user
+                // escalation policy.
+                let _ = platform.signal_process_group(group, JobSignal::Kill);
+                cleanup_assignment(assignment);
+                cleanup_members(members);
+                let _ = observers.shutdown();
+                let _ = release_foreground(foreground, plan);
+                return Err(RuntimeError::new(
+                    RuntimeErrorKind::BackgroundAssignmentUnavailable,
+                    plan.span(),
+                ));
+            }
+        }
+
+        if let Err(error) = job.finish_starting(JobPlacement::Foreground) {
+            let _ = platform.signal_process_group(group, JobSignal::Kill);
+            let _ = observers.shutdown();
+            let _ = release_foreground(foreground, plan);
+            return Err(background_state(error, plan));
+        }
+        self.records.insert(
+            job_id,
+            JobRecord {
+                job,
+                group,
+                source_order,
+                member_started,
+                completed: BTreeMap::new(),
+                pipefail: plan.pipefail(),
+                pipeline_started,
+                latest_terminal: None,
+                completion: None,
+                command,
+                observation_failed: false,
+                observation_message: None,
+                resume_requested: false,
+                observers: Some(observers),
+            },
+        );
+
+        let outcome = self.wait_for_foreground(job_id, plan);
+        let released = release_foreground(foreground, plan);
+        match outcome {
+            Err(error) => Err(error),
+            Ok(outcome) => {
+                released?;
+                Ok(outcome)
+            }
+        }
+    }
+
     pub(crate) fn next_notice(&mut self) -> Option<JobNotice> {
         if let Some(notice) = self.notices.front() {
             return Some(notice.clone());
@@ -745,6 +883,51 @@ impl BackgroundJobs {
             self.apply_observation(observation);
         }
         self.notices.front().cloned()
+    }
+
+    /// Apply all coordinator events until one foreground record completes or stops.
+    fn wait_for_foreground(
+        &mut self,
+        job: JobId,
+        plan: &ExecutionPlan,
+    ) -> Result<ForegroundJobOutcome, RuntimeError> {
+        loop {
+            let record = self
+                .records
+                .get(&job)
+                .expect("the managed foreground record is published");
+            if record.observation_failed {
+                return Err(RuntimeError::new(
+                    RuntimeErrorKind::ForegroundObservation {
+                        message: record
+                            .observation_message
+                            .clone()
+                            .unwrap_or_else(|| "the observation was abandoned".to_owned()),
+                    },
+                    plan.span(),
+                ));
+            }
+            if let Some(status) = record.completion.clone() {
+                self.consume_waited_completion(job).map_err(|error| {
+                    RuntimeError::new(
+                        RuntimeErrorKind::ForegroundObservation {
+                            message: error.to_string(),
+                        },
+                        plan.span(),
+                    )
+                })?;
+                return Ok(ForegroundJobOutcome::Completed(status));
+            }
+            if matches!(record.job.state(), JobState::Stopped { .. }) {
+                return Ok(ForegroundJobOutcome::Stopped(job));
+            }
+
+            let observation = self
+                .event_receiver
+                .recv()
+                .expect("the coordinator retains its observation sender");
+            self.apply_observation(observation);
+        }
     }
 
     pub(crate) fn acknowledge(&mut self, notice: JobNoticeId) -> Result<(), JobNoticeError> {
@@ -1429,6 +1612,20 @@ fn background_state(error: JobTransitionError, plan: &ExecutionPlan) -> RuntimeE
 fn cleanup_assignment(assignment: ObserverAssignment) {
     let (_, _, child, _) = assignment.into_parts();
     cleanup_child(child);
+}
+
+fn cleanup_members(members: VecDeque<crate::execute::BackgroundMember>) {
+    let mut children = Vec::with_capacity(members.len());
+    for member in members {
+        let (_, child, _) = member.into_parts();
+        children.push(child);
+    }
+    for child in &mut children {
+        let _ = child.terminate();
+    }
+    for mut child in children {
+        let _ = child.wait();
+    }
 }
 
 fn cleanup_child(mut child: Box<dyn ChildProcess>) {

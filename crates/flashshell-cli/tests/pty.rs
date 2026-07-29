@@ -596,7 +596,7 @@ fn an_interrupt_kills_the_job_and_leaves_the_shell_at_a_prompt() {
 }
 
 #[test]
-fn a_terminal_stop_does_not_strand_a_foreground_job() {
+fn a_terminal_stop_retains_an_addressable_job_and_returns_the_prompt() {
     let cwd = unique_dir("stop");
     let mut session = interactive(&cwd);
     session.await_prompt(0);
@@ -605,18 +605,25 @@ fn a_terminal_stop_does_not_strand_a_foreground_job() {
     session.send(b"sleep 1");
     session.send(ENTER);
     thread::sleep(SETTLE);
-    // The job stops, the shell observes it and resumes it in place, so the job
-    // still finishes and the prompt still returns. A shell without stop
-    // observation blocks here until the test times out.
+    // The exact external foreground job stops into the coordinator and returns
+    // the prompt without inventing a completion. The complete job remains
+    // addressable for the job built-ins and the established exit policy.
     session.send(CTRL_Z);
+    session.expect_from(mark, "[1] Stopped  sleep 1");
     session.await_prompt(mark);
 
     let mark = session.mark();
-    session.send(b"echo resumed");
+    session.send(b"echo retained");
     session.send(ENTER);
-    session.expect_from(mark, "resumed");
+    session.expect_from(mark, "retained");
 
     session.await_prompt(mark);
+    let refusal_mark = session.mark();
+    session.send(b"exit 0");
+    session.send(ENTER);
+    session.expect_from(refusal_mark, "fsh: 1 live background job");
+    session.await_prompt(refusal_mark);
+
     session.send(b"exit 0");
     session.send(ENTER);
     assert_eq!(session.wait_code(), 0);

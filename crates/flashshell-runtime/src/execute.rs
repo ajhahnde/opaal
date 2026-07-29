@@ -703,7 +703,7 @@ pub fn start_background_pipeline(
 /// take its terminal back cannot read the next command, so the failure is
 /// surfaced instead of discarded. A pipeline error stays primary, because the
 /// failed job is the more useful diagnostic.
-fn release_foreground(
+pub(crate) fn release_foreground(
     guard: Option<Box<dyn ForegroundTerminalGuard>>,
     plan: &ExecutionPlan,
 ) -> Result<(), RuntimeError> {
@@ -715,7 +715,7 @@ fn release_foreground(
     })
 }
 
-fn take_foreground(
+pub(crate) fn take_foreground(
     plan: &ExecutionPlan,
     platform: &dyn Platform,
     group: Option<ProcessGroupId>,

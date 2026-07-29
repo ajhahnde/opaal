@@ -17,14 +17,15 @@ use std::fmt;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 
 use flashshell_platform::{
-    Capabilities, Capability, ChildProcess, DescriptorEndpoint, FakePlatform, FileActionError,
-    FileOpenRequest, JobSignal, PipeEndpoints, PipeError, Platform, PlatformError, ProcessGroup,
-    ProcessGroupId, ProcessStatus, ProcessTransition, RecordingPlatform, SignalError, SpawnError,
-    SpawnRequest, TerminalSize, TerminateError, WaitError,
+    Capabilities, Capability, ChildProcess, DescriptorEndpoint, DescriptorReadError, FakePlatform,
+    FileActionError, FileOpenRequest, ForegroundTerminalGuard, JobSignal, PipeEndpoints, PipeError,
+    Platform, PlatformError, ProcessGroup, ProcessGroupId, ProcessStatus, ProcessTransition,
+    RecordingPlatform, SignalError, SpawnError, SpawnRequest, TerminalSize, TerminateError,
+    WaitError,
 };
 use flashshell_platform_posix::PosixPlatform;
 use flashshell_runtime::eval::FakeClock;
@@ -79,6 +80,10 @@ impl DescriptorEndpoint for BackgroundEndpoint {
     fn as_any(&self) -> &dyn Any {
         self
     }
+
+    fn read(&mut self, _buffer: &mut [u8]) -> Result<usize, DescriptorReadError> {
+        Ok(0)
+    }
 }
 
 type ChildStep = Result<ProcessTransition, WaitError>;
@@ -89,6 +94,7 @@ struct BackgroundChild {
     steps: mpsc::Receiver<ChildStep>,
     wait_entries: mpsc::Sender<usize>,
     waits: usize,
+    require_observer_thread: bool,
     terminate_calls: Arc<std::sync::atomic::AtomicUsize>,
 }
 
@@ -104,6 +110,16 @@ impl fmt::Debug for BackgroundChild {
 
 impl BackgroundChild {
     fn next(&mut self) -> ChildStep {
+        if self.require_observer_thread
+            && !std::thread::current()
+                .name()
+                .is_some_and(|name| name.starts_with("flashshell-child-observer-"))
+        {
+            return Err(WaitError::new(
+                io::ErrorKind::Other,
+                "the child was not transferred to a prepared observer",
+            ));
+        }
         self.waits += 1;
         self.wait_entries
             .send(self.waits)
@@ -150,14 +166,72 @@ struct ControlledBackgroundPlatform {
     children: Mutex<VecDeque<Box<dyn ChildProcess>>>,
     signals: Mutex<Vec<(ProcessGroupId, JobSignal)>>,
     continue_completions: Mutex<Vec<(ProcessGroupId, mpsc::Sender<ChildStep>, ProcessStatus)>>,
+    foreground_attempts: AtomicUsize,
+    foreground_handovers: Mutex<Vec<ProcessGroupId>>,
+    foreground_releases: Arc<AtomicUsize>,
+    foreground_refusal: Mutex<Option<String>>,
     /// When set, every group signal is refused with this message.
     signal_refusal: Mutex<Option<String>>,
+}
+
+#[derive(Debug)]
+struct ControlledForegroundGuard {
+    releases: Arc<AtomicUsize>,
+    released: bool,
+}
+
+impl ForegroundTerminalGuard for ControlledForegroundGuard {
+    fn restore(&mut self) -> Result<(), PlatformError> {
+        if !self.released {
+            self.released = true;
+            self.releases.fetch_add(1, Ordering::SeqCst);
+        }
+        Ok(())
+    }
+
+    fn previous_owner(&self) -> Option<ProcessGroupId> {
+        None
+    }
+}
+
+impl Drop for ControlledForegroundGuard {
+    fn drop(&mut self) {
+        if !self.released {
+            self.released = true;
+            self.releases.fetch_add(1, Ordering::SeqCst);
+        }
+    }
 }
 
 impl ControlledBackgroundPlatform {
     /// Refuse every subsequent group signal, as a host with no such group would.
     fn refuse_signals(&self, message: &str) {
         *self.signal_refusal.lock().expect("refusal lock") = Some(message.to_owned());
+    }
+
+    /// Refuse every subsequent foreground-terminal handoff.
+    fn refuse_foreground(&self, message: &str) {
+        *self
+            .foreground_refusal
+            .lock()
+            .expect("foreground refusal lock") = Some(message.to_owned());
+    }
+
+    fn foreground_attempts(&self) -> usize {
+        self.foreground_attempts.load(Ordering::SeqCst)
+    }
+
+    fn foreground_handovers(&self) -> Vec<u64> {
+        self.foreground_handovers
+            .lock()
+            .expect("foreground handover lock")
+            .iter()
+            .map(|group| group.get())
+            .collect()
+    }
+
+    fn foreground_releases(&self) -> usize {
+        self.foreground_releases.load(Ordering::SeqCst)
     }
 
     /// Complete one stopped child after the shell successfully continues it.
@@ -186,6 +260,18 @@ impl ControlledBackgroundPlatform {
     /// Separate jobs need separate groups before a signal test can tell which
     /// job a delivery reached.
     fn in_groups(groups: &[&[u64]]) -> (Self, Vec<BackgroundChildControl>) {
+        Self::in_groups_with_waiter(groups, true)
+    }
+
+    /// Script children that the legacy synchronous executor must keep waiting.
+    fn in_groups_for_session(groups: &[&[u64]]) -> (Self, Vec<BackgroundChildControl>) {
+        Self::in_groups_with_waiter(groups, false)
+    }
+
+    fn in_groups_with_waiter(
+        groups: &[&[u64]],
+        require_observer_thread: bool,
+    ) -> (Self, Vec<BackgroundChildControl>) {
         let mut children: VecDeque<Box<dyn ChildProcess>> = VecDeque::new();
         let mut controls = Vec::new();
         for ids in groups {
@@ -200,6 +286,7 @@ impl ControlledBackgroundPlatform {
                     steps: step_receiver,
                     wait_entries: wait_sender,
                     waits: 0,
+                    require_observer_thread,
                     terminate_calls: Arc::clone(&terminate_calls),
                 }));
                 controls.push(BackgroundChildControl {
@@ -214,6 +301,10 @@ impl ControlledBackgroundPlatform {
                 children: Mutex::new(children),
                 signals: Mutex::new(Vec::new()),
                 continue_completions: Mutex::new(Vec::new()),
+                foreground_attempts: AtomicUsize::new(0),
+                foreground_handovers: Mutex::new(Vec::new()),
+                foreground_releases: Arc::new(AtomicUsize::new(0)),
+                foreground_refusal: Mutex::new(None),
                 signal_refusal: Mutex::new(None),
             },
             controls,
@@ -224,6 +315,10 @@ impl ControlledBackgroundPlatform {
 impl Platform for ControlledBackgroundPlatform {
     fn capabilities(&self) -> Capabilities {
         Capabilities::full()
+    }
+
+    fn is_terminal(&self) -> bool {
+        true
     }
 
     // Structured output is only rendered for an interactive terminal, so a
@@ -261,6 +356,41 @@ impl Platform for ControlledBackgroundPlatform {
         _descriptor: u32,
     ) -> Result<Box<dyn DescriptorEndpoint>, FileActionError> {
         Ok(Box::new(BackgroundEndpoint))
+    }
+
+    fn read_descriptor(
+        &self,
+        _endpoint: &dyn DescriptorEndpoint,
+        _buffer: &mut [u8],
+    ) -> Result<usize, DescriptorReadError> {
+        Ok(0)
+    }
+
+    fn enter_foreground(
+        &self,
+        group: ProcessGroupId,
+    ) -> Result<Box<dyn ForegroundTerminalGuard>, PlatformError> {
+        self.foreground_attempts.fetch_add(1, Ordering::SeqCst);
+        if let Some(reason) = self
+            .foreground_refusal
+            .lock()
+            .expect("foreground refusal lock")
+            .as_ref()
+            .cloned()
+        {
+            return Err(PlatformError::Unavailable {
+                capability: Capability::ForegroundTerminal,
+                reason,
+            });
+        }
+        self.foreground_handovers
+            .lock()
+            .expect("foreground handover lock")
+            .push(group);
+        Ok(Box::new(ControlledForegroundGuard {
+            releases: Arc::clone(&self.foreground_releases),
+            released: false,
+        }))
     }
 
     fn spawn(&self, request: &SpawnRequest<'_>) -> Result<Box<dyn ChildProcess>, SpawnError> {
@@ -2870,6 +3000,300 @@ fn wait_applies_unselected_events_without_consuming_their_notices() {
     session
         .acknowledge_job_notice(notice.id())
         .expect("clean up the unselected record");
+}
+
+#[test]
+fn an_exact_foreground_external_pipeline_is_observed_and_consumed_without_a_notice() {
+    let clock = Arc::new(FakeClock::new());
+    let mut session = session();
+    session.enable_interactive_job_control(clock.clone());
+    let (platform, controls) = ControlledBackgroundPlatform::new(&[601, 602]);
+    let probe = Probe::new(["/bin/tool", "/bin/other"]);
+    for control in &controls {
+        control
+            .steps
+            .send(Ok(ProcessTransition::Completed(ProcessStatus::Exited(0))))
+            .expect("complete the managed foreground member");
+    }
+
+    assert_eq!(
+        rendered(
+            &mut session,
+            "^tool | ^other",
+            &probe,
+            &platform,
+            clock.as_ref(),
+        ),
+        ""
+    );
+
+    for control in &controls {
+        assert_eq!(
+            control.wait_entries.recv().expect("observer-owned wait"),
+            1,
+            "every member is transferred to a prepared observer"
+        );
+    }
+    let status = session
+        .current_status()
+        .expect("foreground completion records its aggregate");
+    assert_eq!(status.code(), Some(0));
+    assert_eq!(status.stages().len(), 2);
+    assert!(session.background_job(job_id(1)).is_none());
+    assert!(
+        session.next_job_notice().is_none(),
+        "ordinary foreground completion is consumed without a Done notice"
+    );
+    assert_eq!(platform.foreground_handovers(), vec![601]);
+    assert_eq!(platform.foreground_releases(), 1);
+}
+
+#[test]
+fn an_aggregate_foreground_stop_retains_one_complete_addressable_job() {
+    let clock = Arc::new(FakeClock::new());
+    let mut session = session();
+    session.enable_interactive_job_control(clock.clone());
+    let (platform, controls) = ControlledBackgroundPlatform::new(&[611, 612]);
+    let probe = Probe::new(["/bin/tool", "/bin/other"]);
+    assert_eq!(
+        rendered(&mut session, "jobs", &probe, &platform, clock.as_ref()),
+        ""
+    );
+    let status_before_stop = session.current_status().cloned();
+    for control in &controls {
+        control
+            .steps
+            .send(Ok(ProcessTransition::Stopped { signal: 19 }))
+            .expect("stop the managed foreground member");
+    }
+
+    assert_eq!(
+        rendered(
+            &mut session,
+            "^tool | ^other",
+            &probe,
+            &platform,
+            clock.as_ref(),
+        ),
+        ""
+    );
+
+    for control in &controls {
+        assert_eq!(control.wait_entries.recv().expect("observer-owned stop"), 1);
+    }
+    assert_eq!(
+        session.current_status(),
+        status_before_stop.as_ref(),
+        "a nonterminal stop must not overwrite the last completed status"
+    );
+    let job = session
+        .background_job(job_id(1))
+        .expect("the stopped foreground job remains addressable");
+    assert!(matches!(job.state(), JobState::Stopped { .. }));
+    assert_eq!(
+        job.placement(),
+        Some(flashshell_runtime::job::JobPlacement::Foreground)
+    );
+    assert_eq!(
+        job.members().count(),
+        2,
+        "the complete pipeline is published"
+    );
+    let stopped = session
+        .next_job_notice()
+        .expect("the aggregate stop queues one notice");
+    assert_eq!(stopped.job(), job_id(1));
+    assert_eq!(stopped.kind(), &JobNoticeKind::Stopped);
+    assert_eq!(platform.foreground_handovers(), vec![611]);
+    assert_eq!(platform.foreground_releases(), 1);
+
+    for control in &controls {
+        control
+            .steps
+            .send(Ok(ProcessTransition::Completed(ProcessStatus::Exited(0))))
+            .expect("release the retained observer");
+    }
+    assert_eq!(
+        rendered(&mut session, "wait %1", &probe, &platform, clock.as_ref()),
+        ""
+    );
+    assert!(session.background_job(job_id(1)).is_none());
+}
+
+#[test]
+fn a_foreground_handoff_failure_cleans_every_started_member_without_publication() {
+    let clock = Arc::new(FakeClock::new());
+    let mut session = session();
+    session.enable_interactive_job_control(clock.clone());
+    let (platform, controls) = ControlledBackgroundPlatform::in_groups_for_session(&[&[621, 622]]);
+    platform.refuse_foreground("the test terminal refused ownership");
+    let probe = Probe::new(["/bin/tool", "/bin/other"]);
+    for control in &controls {
+        control
+            .steps
+            .send(Ok(ProcessTransition::Completed(ProcessStatus::Exited(0))))
+            .expect("let cleanup reap the started member");
+    }
+    let mut sink = Vec::new();
+
+    let error = session
+        .submit(
+            "<interactive>",
+            "^tool | ^other",
+            &probe,
+            &platform,
+            clock.as_ref(),
+            &mut sink,
+        )
+        .expect_err("a real terminal handoff refusal is fatal");
+
+    assert!(
+        error
+            .render()
+            .contains("terminal handover to the job failed"),
+        "{}",
+        error.render()
+    );
+    assert_eq!(platform.foreground_attempts(), 1);
+    assert!(platform.foreground_handovers().is_empty());
+    assert_eq!(platform.foreground_releases(), 0);
+    for control in &controls {
+        assert_eq!(
+            control.terminate_calls.load(Ordering::SeqCst),
+            1,
+            "every started child is terminated before its final wait"
+        );
+    }
+    assert!(session.background_job(job_id(1)).is_none());
+    assert!(session.next_job_notice().is_none());
+    assert!(session.current_status().is_none());
+    assert!(sink.is_empty());
+}
+
+#[test]
+fn a_managed_foreground_wait_applies_an_unrelated_background_completion() {
+    let clock = Arc::new(FakeClock::new());
+    let mut session = session();
+    session.enable_interactive_job_control(clock.clone());
+    let (platform, controls) = ControlledBackgroundPlatform::in_groups(&[&[631], &[632]]);
+    let probe = Probe::new(["/bin/tool"]);
+    launch_controlled_job(&mut session, &clock, &platform, "^tool &", &probe);
+    assert_eq!(
+        controls[0]
+            .wait_entries
+            .recv()
+            .expect("background observer wait"),
+        1
+    );
+    controls[0]
+        .steps
+        .send(Ok(ProcessTransition::Completed(ProcessStatus::Exited(3))))
+        .expect("complete the unrelated background job");
+    controls[1]
+        .steps
+        .send(Ok(ProcessTransition::Completed(ProcessStatus::Exited(0))))
+        .expect("complete the managed foreground job");
+
+    assert_eq!(
+        rendered(&mut session, "^tool", &probe, &platform, clock.as_ref()),
+        ""
+    );
+
+    assert_eq!(
+        controls[1]
+            .wait_entries
+            .recv()
+            .expect("foreground observer wait"),
+        1
+    );
+    assert!(session.background_job(job_id(2)).is_none());
+    assert_eq!(
+        session
+            .background_completion(job_id(1))
+            .and_then(Status::code),
+        Some(3),
+        "the unrelated event is applied while foreground work is awaited"
+    );
+    let notice = session
+        .next_job_notice()
+        .expect("the unrelated completion keeps its prompt-safe notice");
+    assert_eq!(notice.job(), job_id(1));
+    assert_eq!(notice.kind(), &JobNoticeKind::Completed);
+    session
+        .acknowledge_job_notice(notice.id())
+        .expect("clean up the unrelated completion");
+}
+
+#[test]
+fn a_conditional_chain_keeps_the_legacy_resume_in_place_path() {
+    let clock = Arc::new(FakeClock::new());
+    let mut session = session();
+    session.enable_interactive_job_control(clock.clone());
+    let (platform, controls) =
+        ControlledBackgroundPlatform::in_groups_for_session(&[&[641], &[642]]);
+    let probe = Probe::new(["/bin/tool", "/bin/other"]);
+    controls[0]
+        .steps
+        .send(Ok(ProcessTransition::Stopped { signal: 19 }))
+        .expect("stop the first conditional term");
+    controls[0]
+        .steps
+        .send(Ok(ProcessTransition::Completed(ProcessStatus::Exited(0))))
+        .expect("complete the resumed first term");
+    controls[1]
+        .steps
+        .send(Ok(ProcessTransition::Completed(ProcessStatus::Exited(0))))
+        .expect("complete the reached second term");
+
+    assert_eq!(
+        rendered(
+            &mut session,
+            "^tool && ^other",
+            &probe,
+            &platform,
+            clock.as_ref(),
+        ),
+        ""
+    );
+
+    assert_eq!(delivered(&platform), vec![(641, JobSignal::Continue)]);
+    assert_eq!(platform.foreground_handovers(), vec![641, 642]);
+    assert_eq!(platform.foreground_releases(), 2);
+    assert!(session.background_job(job_id(1)).is_none());
+    assert!(session.next_job_notice().is_none());
+    assert_eq!(session.current_status().and_then(Status::code), Some(0));
+}
+
+#[test]
+fn a_mixed_foreground_pipeline_keeps_the_legacy_session_executor() {
+    let clock = Arc::new(FakeClock::new());
+    let mut session = session();
+    session.enable_interactive_job_control(clock.clone());
+    let (platform, controls) = ControlledBackgroundPlatform::in_groups_for_session(&[&[651]]);
+    let probe = Probe::new(["/bin/tool"]);
+    controls[0]
+        .steps
+        .send(Ok(ProcessTransition::Completed(ProcessStatus::Exited(0))))
+        .expect("complete the mixed external member");
+
+    assert_eq!(
+        rendered(
+            &mut session,
+            "^tool | decode bytes | length",
+            &probe,
+            &platform,
+            clock.as_ref(),
+        ),
+        "0\n"
+    );
+
+    assert_eq!(platform.foreground_handovers(), vec![651]);
+    assert_eq!(platform.foreground_releases(), 1);
+    assert!(session.background_job(job_id(1)).is_none());
+    assert!(session.next_job_notice().is_none());
+    let status = session.current_status().expect("mixed status is retained");
+    assert_eq!(status.code(), Some(0));
+    assert_eq!(status.stages().len(), 3);
 }
 
 #[test]
