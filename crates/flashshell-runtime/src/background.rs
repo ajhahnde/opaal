@@ -15,13 +15,13 @@ use flashshell_platform::{
     ChildProcess, JobSignal, Platform, ProcessGroupId, ProcessStatus, ProcessTransition, WaitError,
 };
 
-use crate::Status;
 use crate::eval::{Clock, Instant, RuntimeError, RuntimeErrorKind};
 use crate::execute::{aggregate_statuses, elapsed, language_status, start_background_pipeline};
 use crate::job::{
     Job, JobId, JobMemberState, JobPlacement, JobState, JobTransitionError, ProcessId,
 };
 use crate::plan::ExecutionPlan;
+use crate::{Duration, Status};
 
 /// One immutable transition produced by a background child observer.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -530,6 +530,8 @@ pub enum JobCommandError {
     Quarantined { job: JobId },
     /// The platform refused the group delivery.
     Delivery { job: JobId, message: String },
+    /// A completed job's observer panicked while the record was consumed.
+    ObserverPanicked { job: JobId },
 }
 
 impl fmt::Display for JobCommandError {
@@ -543,6 +545,9 @@ impl fmt::Display for JobCommandError {
                 "job `%{}` could not be signalled: {message}",
                 job.get()
             ),
+            Self::ObserverPanicked { job } => {
+                write!(formatter, "job `%{}` observer panicked", job.get())
+            }
         }
     }
 }
@@ -909,6 +914,82 @@ impl BackgroundJobs {
         Ok(())
     }
 
+    /// Wait for one fixed ordered selection and consume its terminal records.
+    ///
+    /// An empty written target list snapshots every currently addressable,
+    /// observable record in identity order. Explicit targets retain source
+    /// order. Observations for every job are applied while the selected jobs
+    /// run, but only selected notices and records are consumed.
+    pub(crate) fn wait_for_jobs(
+        &mut self,
+        targets: &[JobId],
+        platform: &dyn Platform,
+    ) -> Result<Status, JobCommandError> {
+        self.apply_pending_observations();
+        let selected = if targets.is_empty() {
+            self.records
+                .iter()
+                .filter(|(_, record)| !record.observation_failed)
+                .map(|(job, _)| *job)
+                .collect::<Vec<_>>()
+        } else {
+            for &job in targets {
+                let record = self
+                    .records
+                    .get(&job)
+                    .ok_or(JobCommandError::UnknownJob { job })?;
+                if record.observation_failed {
+                    return Err(JobCommandError::Quarantined { job });
+                }
+            }
+            targets.to_vec()
+        };
+
+        if selected.is_empty() {
+            return Ok(Status::exit(0, Duration::ZERO).expect("zero is a valid empty-wait status"));
+        }
+
+        self.resume_wait_targets(&selected, platform)?;
+        loop {
+            if self.wait_targets_completed(&selected)? {
+                break;
+            }
+            // The coordinator owns a sender, so the receiver cannot disconnect.
+            // Every selected nonterminal record still owns an observer.
+            let observation = self
+                .event_receiver
+                .recv()
+                .expect("the coordinator retains its observation sender");
+            self.apply_observation(observation);
+            self.resume_wait_targets(&selected, platform)?;
+        }
+
+        let statuses = selected
+            .iter()
+            .map(|job| {
+                self.records
+                    .get(job)
+                    .and_then(|record| record.completion.clone())
+                    .expect("every selected job reached a terminal aggregate")
+            })
+            .collect::<Vec<_>>();
+        let selected_status = statuses
+            .iter()
+            .find(|status| !status.is_ok())
+            .cloned()
+            .unwrap_or_else(|| {
+                statuses
+                    .last()
+                    .expect("a nonempty selection has a last status")
+                    .clone()
+            });
+
+        for job in selected {
+            self.consume_waited_completion(job)?;
+        }
+        Ok(selected_status)
+    }
+
     /// Every job that has not reached a terminal aggregate.
     ///
     /// A completed-but-unacknowledged record is not live: it is drained by the
@@ -992,6 +1073,82 @@ impl BackgroundJobs {
         while let Ok(observation) = self.event_receiver.try_recv() {
             self.apply_observation(observation);
         }
+    }
+
+    /// Resume only stopped jobs in one fixed `wait` selection.
+    fn resume_wait_targets(
+        &mut self,
+        selected: &[JobId],
+        platform: &dyn Platform,
+    ) -> Result<(), JobCommandError> {
+        for &job in selected {
+            self.apply_pending_observations();
+            let record = self
+                .records
+                .get(&job)
+                .ok_or(JobCommandError::UnknownJob { job })?;
+            if record.observation_failed {
+                return Err(JobCommandError::Quarantined { job });
+            }
+            if record.completion.is_some()
+                || !matches!(record.job.state(), JobState::Stopped { .. })
+            {
+                continue;
+            }
+            match self.signal_job(job, JobSignal::Continue, QuarantinePolicy::Reject, platform) {
+                Ok(()) => {}
+                // A terminal observation may race the selection and the
+                // continuation. Once applied, that is a completed target, not
+                // a failed continuation.
+                Err(JobCommandError::NotStopped { .. })
+                    if self
+                        .records
+                        .get(&job)
+                        .is_some_and(|record| record.completion.is_some()) => {}
+                Err(error) => return Err(error),
+            }
+        }
+        Ok(())
+    }
+
+    /// Whether every selected record has a trustworthy terminal aggregate.
+    fn wait_targets_completed(&self, selected: &[JobId]) -> Result<bool, JobCommandError> {
+        for &job in selected {
+            let record = self
+                .records
+                .get(&job)
+                .ok_or(JobCommandError::UnknownJob { job })?;
+            if record.observation_failed {
+                return Err(JobCommandError::Quarantined { job });
+            }
+            if record.completion.is_none() {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
+    /// Consume one selected completion without leaving a duplicate notice.
+    fn consume_waited_completion(&mut self, job: JobId) -> Result<(), JobCommandError> {
+        self.notices.retain(|notice| notice.job != job);
+        let mut record = self
+            .records
+            .remove(&job)
+            .ok_or(JobCommandError::UnknownJob { job })?;
+        record
+            .job
+            .mark_notified()
+            .expect("a waited job has completed");
+        record
+            .job
+            .mark_reaped()
+            .expect("a notified waited job can be reaped");
+        if let Some(observers) = record.observers.take() {
+            observers
+                .shutdown()
+                .map_err(|_| JobCommandError::ObserverPanicked { job })?;
+        }
+        Ok(())
     }
 
     fn has_live_jobs(&self) -> bool {

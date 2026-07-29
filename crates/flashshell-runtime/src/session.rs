@@ -1039,6 +1039,12 @@ fn execute_job_builtin(
                     .map_err(|error| operation(error.to_string()))?;
             }
         }
+        "wait" => {
+            let targets = parse_job_targets(stage, command)?;
+            return coordinator
+                .wait_for_jobs(&targets, platform)
+                .map_err(|error| operation(error.to_string()));
+        }
         _ => {
             return Err(RuntimeError::new(
                 RuntimeErrorKind::Unsupported {

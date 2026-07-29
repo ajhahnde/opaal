@@ -149,6 +149,7 @@ struct BackgroundChildControl {
 struct ControlledBackgroundPlatform {
     children: Mutex<VecDeque<Box<dyn ChildProcess>>>,
     signals: Mutex<Vec<(ProcessGroupId, JobSignal)>>,
+    continue_completions: Mutex<Vec<(ProcessGroupId, mpsc::Sender<ChildStep>, ProcessStatus)>>,
     /// When set, every group signal is refused with this message.
     signal_refusal: Mutex<Option<String>>,
 }
@@ -157,6 +158,23 @@ impl ControlledBackgroundPlatform {
     /// Refuse every subsequent group signal, as a host with no such group would.
     fn refuse_signals(&self, message: &str) {
         *self.signal_refusal.lock().expect("refusal lock") = Some(message.to_owned());
+    }
+
+    /// Complete one stopped child after the shell successfully continues it.
+    fn complete_on_continue(
+        &self,
+        group: u64,
+        control: &BackgroundChildControl,
+        status: ProcessStatus,
+    ) {
+        self.continue_completions
+            .lock()
+            .expect("continue completion lock")
+            .push((
+                ProcessGroupId::new(group).expect("test group is nonzero"),
+                control.steps.clone(),
+                status,
+            ));
     }
 
     fn new(ids: &[u64]) -> (Self, Vec<BackgroundChildControl>) {
@@ -195,6 +213,7 @@ impl ControlledBackgroundPlatform {
             Self {
                 children: Mutex::new(children),
                 signals: Mutex::new(Vec::new()),
+                continue_completions: Mutex::new(Vec::new()),
                 signal_refusal: Mutex::new(None),
             },
             controls,
@@ -278,6 +297,21 @@ impl Platform for ControlledBackgroundPlatform {
             .lock()
             .expect("signal lock")
             .push((group, signal));
+        if signal == JobSignal::Continue {
+            let completion = {
+                let mut completions = self
+                    .continue_completions
+                    .lock()
+                    .expect("continue completion lock");
+                completions
+                    .iter()
+                    .position(|(candidate, _, _)| *candidate == group)
+                    .map(|index| completions.remove(index))
+            };
+            if let Some((_, steps, status)) = completion {
+                let _ = steps.send(Ok(ProcessTransition::Completed(status)));
+            }
+        }
         Ok(())
     }
 }
@@ -2483,6 +2517,359 @@ fn kill_signals_a_quarantined_group_without_repairing_it() {
         listed.contains("\"state\": \"quarantined\""),
         "a delivered signal is not a terminal observation:\n{listed}"
     );
+}
+
+#[test]
+fn wait_without_targets_uses_job_identity_order_and_consumes_completions() {
+    let clock = Arc::new(FakeClock::new());
+    let mut session = session();
+    session.enable_interactive_job_control(clock.clone());
+    let (platform, controls) = ControlledBackgroundPlatform::in_groups(&[&[441], &[442]]);
+    let probe = Probe::new(["/bin/tool"]);
+    launch_controlled_job(&mut session, &clock, &platform, "^tool &", &probe);
+    launch_controlled_job(&mut session, &clock, &platform, "^tool &", &probe);
+    assert_eq!(controls[0].wait_entries.recv().expect("first wait"), 1);
+    assert_eq!(controls[1].wait_entries.recv().expect("second wait"), 1);
+    controls[1]
+        .steps
+        .send(Ok(ProcessTransition::Completed(ProcessStatus::Exited(7))))
+        .expect("complete the newer job first");
+    controls[0]
+        .steps
+        .send(Ok(ProcessTransition::Completed(ProcessStatus::Exited(5))))
+        .expect("complete the older job second");
+
+    assert_eq!(
+        rendered(&mut session, "wait", &probe, &platform, clock.as_ref()),
+        ""
+    );
+
+    assert_eq!(
+        session.current_status().and_then(Status::code),
+        Some(5),
+        "the first unsuccessful aggregate in JobId order wins"
+    );
+    assert!(session.background_job(job_id(1)).is_none());
+    assert!(session.background_job(job_id(2)).is_none());
+    assert!(
+        session.next_job_notice().is_none(),
+        "wait consumes every selected completion notice"
+    );
+}
+
+#[test]
+fn wait_explicit_targets_preserve_source_order() {
+    let clock = Arc::new(FakeClock::new());
+    let mut session = session();
+    session.enable_interactive_job_control(clock.clone());
+    let (platform, controls) = ControlledBackgroundPlatform::in_groups(&[&[451], &[452]]);
+    let probe = Probe::new(["/bin/tool"]);
+    launch_controlled_job(&mut session, &clock, &platform, "^tool &", &probe);
+    launch_controlled_job(&mut session, &clock, &platform, "^tool &", &probe);
+    assert_eq!(controls[0].wait_entries.recv().expect("first wait"), 1);
+    assert_eq!(controls[1].wait_entries.recv().expect("second wait"), 1);
+    controls[0]
+        .steps
+        .send(Ok(ProcessTransition::Completed(ProcessStatus::Exited(3))))
+        .expect("complete job one");
+    controls[1]
+        .steps
+        .send(Ok(ProcessTransition::Completed(ProcessStatus::Exited(8))))
+        .expect("complete job two");
+
+    assert_eq!(
+        rendered(
+            &mut session,
+            "wait %2 %1",
+            &probe,
+            &platform,
+            clock.as_ref()
+        ),
+        ""
+    );
+
+    assert_eq!(
+        session.current_status().and_then(Status::code),
+        Some(8),
+        "the first failure in written target order wins"
+    );
+}
+
+#[test]
+fn wait_includes_a_completed_but_unacknowledged_record() {
+    let clock = Arc::new(FakeClock::new());
+    let mut session = session();
+    session.enable_interactive_job_control(clock.clone());
+    let (platform, controls) = ControlledBackgroundPlatform::new(&[461]);
+    let probe = Probe::new(["/bin/tool"]);
+    launch_controlled_job(&mut session, &clock, &platform, "^tool &", &probe);
+    assert_eq!(controls[0].wait_entries.recv().expect("first wait"), 1);
+    controls[0]
+        .steps
+        .send(Ok(ProcessTransition::Completed(ProcessStatus::Exited(6))))
+        .expect("complete the job");
+    assert_eq!(
+        wait_for_notice(&mut session).kind(),
+        &JobNoticeKind::Completed,
+        "the completion is visible but deliberately unacknowledged"
+    );
+
+    assert_eq!(
+        rendered(&mut session, "wait %1", &probe, &platform, clock.as_ref()),
+        ""
+    );
+
+    assert_eq!(session.current_status().and_then(Status::code), Some(6));
+    assert!(session.background_job(job_id(1)).is_none());
+    assert!(
+        session.next_job_notice().is_none(),
+        "the pending completion cannot render again after wait"
+    );
+}
+
+#[test]
+fn wait_with_an_empty_snapshot_returns_zero_immediately() {
+    let clock = Arc::new(FakeClock::at(100));
+    let mut session = session();
+    session.enable_interactive_job_control(clock.clone());
+
+    assert_eq!(
+        rendered(
+            &mut session,
+            "wait",
+            &Probe::default(),
+            &terminal_platform(),
+            clock.as_ref(),
+        ),
+        ""
+    );
+
+    let status = session
+        .current_status()
+        .expect("empty wait records a status");
+    assert_eq!(status.code(), Some(0));
+    assert_eq!(status.duration(), Duration::ZERO);
+}
+
+#[test]
+fn wait_resumes_a_stopped_target_in_background_and_drops_its_stale_notice() {
+    let clock = Arc::new(FakeClock::new());
+    let mut session = session();
+    session.enable_interactive_job_control(clock.clone());
+    let (platform, controls) = ControlledBackgroundPlatform::new(&[471]);
+    let probe = Probe::new(["/bin/tool"]);
+    launch_controlled_job(&mut session, &clock, &platform, "^tool &", &probe);
+    assert_eq!(controls[0].wait_entries.recv().expect("first wait"), 1);
+    stop_controlled_job(&mut session, &controls[0], 1);
+    platform.complete_on_continue(471, &controls[0], ProcessStatus::Exited(0));
+
+    let mut sink = Vec::new();
+    let outcome = session.submit(
+        "<interactive>",
+        "wait %1",
+        &probe,
+        &platform,
+        clock.as_ref(),
+        &mut sink,
+    );
+    if outcome.is_err() {
+        release(&controls);
+    }
+    outcome.expect("wait should resume and complete the selected job");
+
+    assert_eq!(delivered(&platform), vec![(471, JobSignal::Continue)]);
+    assert_eq!(session.current_status().and_then(Status::code), Some(0));
+    assert!(session.background_job(job_id(1)).is_none());
+    assert!(
+        session.next_job_notice().is_none(),
+        "the selected stopped and completed notices are stale after wait"
+    );
+}
+
+#[test]
+fn wait_accepts_a_completion_that_races_command_entry() {
+    let clock = Arc::new(FakeClock::new());
+    let mut session = session();
+    session.enable_interactive_job_control(clock.clone());
+    let (platform, controls) = ControlledBackgroundPlatform::new(&[481]);
+    let probe = Probe::new(["/bin/tool"]);
+    launch_controlled_job(&mut session, &clock, &platform, "^tool &", &probe);
+    assert_eq!(controls[0].wait_entries.recv().expect("first wait"), 1);
+    controls[0]
+        .steps
+        .send(Ok(ProcessTransition::Completed(ProcessStatus::Exited(9))))
+        .expect("race completion against wait entry");
+
+    assert_eq!(
+        rendered(&mut session, "wait %1", &probe, &platform, clock.as_ref()),
+        ""
+    );
+
+    assert_eq!(session.current_status().and_then(Status::code), Some(9));
+    assert!(session.background_job(job_id(1)).is_none());
+}
+
+#[test]
+fn wait_returns_the_first_unsuccessful_selected_status() {
+    let clock = Arc::new(FakeClock::new());
+    let mut session = session();
+    session.enable_interactive_job_control(clock.clone());
+    let (platform, controls) = ControlledBackgroundPlatform::in_groups(&[&[491], &[492], &[493]]);
+    let probe = Probe::new(["/bin/tool"]);
+    for _ in 0..3 {
+        launch_controlled_job(&mut session, &clock, &platform, "^tool &", &probe);
+    }
+    for control in &controls {
+        assert_eq!(control.wait_entries.recv().expect("initial wait"), 1);
+    }
+    for (control, code) in controls.iter().zip([0, 4, 7]) {
+        control
+            .steps
+            .send(Ok(ProcessTransition::Completed(ProcessStatus::Exited(
+                code,
+            ))))
+            .expect("complete the selected job");
+    }
+
+    assert_eq!(
+        rendered(
+            &mut session,
+            "wait %1 %2 %3",
+            &probe,
+            &platform,
+            clock.as_ref(),
+        ),
+        ""
+    );
+
+    assert_eq!(session.current_status().and_then(Status::code), Some(4));
+}
+
+#[test]
+fn wait_returns_the_last_status_when_every_selected_job_succeeds() {
+    let clock = Arc::new(FakeClock::new());
+    let mut session = session();
+    session.enable_interactive_job_control(clock.clone());
+    let (platform, controls) = ControlledBackgroundPlatform::in_groups(&[&[501], &[502]]);
+    let probe = Probe::new(["/bin/tool"]);
+    launch_controlled_job(&mut session, &clock, &platform, "^tool &", &probe);
+    launch_controlled_job(&mut session, &clock, &platform, "^tool &", &probe);
+    assert_eq!(controls[0].wait_entries.recv().expect("first wait"), 1);
+    assert_eq!(controls[1].wait_entries.recv().expect("second wait"), 1);
+    clock.advance(10);
+    controls[0]
+        .steps
+        .send(Ok(ProcessTransition::Completed(ProcessStatus::Exited(0))))
+        .expect("complete job one");
+    while session.background_completion(job_id(1)).is_none() {
+        session.refresh_background_jobs();
+        std::thread::yield_now();
+    }
+    clock.advance(15);
+    controls[1]
+        .steps
+        .send(Ok(ProcessTransition::Completed(ProcessStatus::Exited(0))))
+        .expect("complete job two");
+
+    assert_eq!(
+        rendered(
+            &mut session,
+            "wait %1 %2",
+            &probe,
+            &platform,
+            clock.as_ref(),
+        ),
+        ""
+    );
+
+    let status = session
+        .current_status()
+        .expect("wait records its selection");
+    assert_eq!(status.code(), Some(0));
+    assert_eq!(
+        status.duration(),
+        Duration::from_nanos(25),
+        "the exact last selected aggregate is returned"
+    );
+}
+
+#[test]
+fn wait_rejects_a_quarantined_target_without_signalling_it() {
+    let clock = Arc::new(FakeClock::new());
+    let mut session = session();
+    session.enable_interactive_job_control(clock.clone());
+    let (platform, controls) = ControlledBackgroundPlatform::new(&[511]);
+    let probe = Probe::new(["/bin/tool"]);
+    launch_controlled_job(&mut session, &clock, &platform, "^tool &", &probe);
+    assert_eq!(controls[0].wait_entries.recv().expect("first wait"), 1);
+    controls[0]
+        .steps
+        .send(Err(WaitError::new(
+            io::ErrorKind::Interrupted,
+            "initial failure",
+        )))
+        .expect("fail the initial observation");
+    assert_eq!(controls[0].wait_entries.recv().expect("cleanup wait"), 2);
+    controls[0]
+        .steps
+        .send(Err(WaitError::new(io::ErrorKind::Other, "cleanup failure")))
+        .expect("fail the cleanup wait");
+    assert!(matches!(
+        wait_for_notice(&mut session).kind(),
+        JobNoticeKind::ObservationFailed { .. }
+    ));
+
+    let rendered = rejected(&mut session, "wait %1", &probe, &platform, clock.as_ref());
+
+    assert!(
+        rendered.contains("wait: job `%1` is quarantined"),
+        "wait cannot block on an abandoned observer:\n{rendered}"
+    );
+    assert!(delivered(&platform).is_empty());
+    assert!(session.background_job(job_id(1)).is_some());
+}
+
+#[test]
+fn wait_applies_unselected_events_without_consuming_their_notices() {
+    let clock = Arc::new(FakeClock::new());
+    let mut session = session();
+    session.enable_interactive_job_control(clock.clone());
+    let (platform, controls) = ControlledBackgroundPlatform::in_groups(&[&[521], &[522]]);
+    let probe = Probe::new(["/bin/tool"]);
+    launch_controlled_job(&mut session, &clock, &platform, "^tool &", &probe);
+    launch_controlled_job(&mut session, &clock, &platform, "^tool &", &probe);
+    assert_eq!(controls[0].wait_entries.recv().expect("first wait"), 1);
+    assert_eq!(controls[1].wait_entries.recv().expect("second wait"), 1);
+    controls[0]
+        .steps
+        .send(Ok(ProcessTransition::Completed(ProcessStatus::Exited(3))))
+        .expect("complete the unselected job");
+    controls[1]
+        .steps
+        .send(Ok(ProcessTransition::Completed(ProcessStatus::Exited(0))))
+        .expect("complete the selected job");
+
+    assert_eq!(
+        rendered(&mut session, "wait %2", &probe, &platform, clock.as_ref()),
+        ""
+    );
+
+    assert!(session.background_job(job_id(2)).is_none());
+    assert_eq!(
+        session
+            .background_completion(job_id(1))
+            .and_then(Status::code),
+        Some(3),
+        "the unrelated observation is still applied"
+    );
+    let notice = session
+        .next_job_notice()
+        .expect("the unrelated completion notice remains queued");
+    assert_eq!(notice.job(), job_id(1));
+    assert_eq!(notice.kind(), &JobNoticeKind::Completed);
+    session
+        .acknowledge_job_notice(notice.id())
+        .expect("clean up the unselected record");
 }
 
 #[test]
