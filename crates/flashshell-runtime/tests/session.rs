@@ -292,6 +292,111 @@ fn submit(session: &mut Session, text: &str, probe: &dyn ExecutableProbe) -> Sub
         .expect("submission should succeed")
 }
 
+fn submit_error(text: &str) -> String {
+    let mut session = session();
+    let mut sink = Vec::new();
+    session
+        .submit(
+            "<interactive>",
+            text,
+            &Probe::default(),
+            &terminal_platform(),
+            &FakeClock::new(),
+            &mut sink,
+        )
+        .expect_err("submission should be rejected")
+        .render()
+        .to_owned()
+}
+
+#[test]
+fn job_specs_are_exact_and_argument_anchored() {
+    for (source, message, location) in [
+        (
+            "fg %0",
+            "job identity must be a nonzero decimal number",
+            "<interactive>:1:4",
+        ),
+        (
+            "fg 1",
+            "job arguments use `%n`, not a bare process or job number",
+            "<interactive>:1:4",
+        ),
+        (
+            "fg %-1",
+            "job identity must contain only ASCII decimal digits",
+            "<interactive>:1:4",
+        ),
+        (
+            "fg %+",
+            "job identity must contain only ASCII decimal digits",
+            "<interactive>:1:4",
+        ),
+        (
+            "fg %1x",
+            "job identity must contain only ASCII decimal digits",
+            "<interactive>:1:4",
+        ),
+        ("wait %1 %1", "job `%1` is repeated", "<interactive>:1:9"),
+    ] {
+        let rendered = submit_error(source);
+        assert!(
+            rendered.contains(message),
+            "`{source}` should report `{message}`:\n{rendered}"
+        );
+        assert!(
+            rendered.contains(location),
+            "`{source}` should anchor at {location}:\n{rendered}"
+        );
+    }
+}
+
+#[test]
+fn job_command_arity_and_kill_selectors_are_source_anchored() {
+    for (source, message, location) in [
+        (
+            "jobs %1",
+            "jobs accepts no job arguments",
+            "<interactive>:1:6",
+        ),
+        (
+            "fg %1 %2",
+            "fg accepts at most one job argument",
+            "<interactive>:1:7",
+        ),
+        (
+            "kill --bogus %1",
+            "unknown signal selector `--bogus`",
+            "<interactive>:1:6",
+        ),
+        (
+            "kill --stop --kill %1",
+            "kill accepts only one signal selector",
+            "<interactive>:1:13",
+        ),
+        (
+            "kill %1 --stop",
+            "a signal selector must precede every job argument",
+            "<interactive>:1:9",
+        ),
+        (
+            "kill --stop",
+            "kill requires at least one explicit `%n` target",
+            "<interactive>:1:1",
+        ),
+    ] {
+        let rendered = submit_error(source);
+        assert!(
+            rendered.contains(message),
+            "`{source}` should report `{message}`:\n{rendered}"
+        );
+        assert!(
+            rendered.contains(location),
+            "`{source}` should anchor at {location}:\n{rendered}"
+        );
+    }
+}
+
 #[test]
 fn pure_bindings_persist_across_submissions() {
     let mut session = session();

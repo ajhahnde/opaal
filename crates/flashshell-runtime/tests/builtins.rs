@@ -82,9 +82,9 @@ fn standard_registry_has_exact_carrier_contracts() {
     assert_eq!(
         registry.names().collect::<Vec<_>>(),
         [
-            "cd", "check", "collect", "command", "decode", "each", "encode", "exit", "first",
-            "from", "get", "last", "length", "lines", "ls", "open", "pwd", "save", "select",
-            "sort", "to", "update", "where", "which"
+            "bg", "cd", "check", "collect", "command", "decode", "each", "encode", "exit", "fg",
+            "first", "from", "get", "jobs", "kill", "last", "length", "lines", "ls", "open", "pwd",
+            "save", "select", "sort", "to", "update", "wait", "where", "which"
         ]
     );
 
@@ -95,6 +95,28 @@ fn standard_registry_has_exact_carrier_contracts() {
     assert_eq!(fixed("command"), CommandOutput::Fixed(Carrier::ByteStream));
     assert_eq!(fixed("exit"), CommandOutput::Fixed(Carrier::Empty));
     assert_eq!(fixed("check"), CommandOutput::SameAsInput);
+    assert_eq!(fixed("jobs"), CommandOutput::Fixed(Carrier::ValueStream));
+    for name in ["fg", "bg", "wait", "kill"] {
+        assert_eq!(fixed(name), CommandOutput::Fixed(Carrier::Empty));
+    }
+    for name in ["jobs", "fg", "bg", "wait", "kill"] {
+        let signature = registry.lookup(name).expect("job command is registered");
+        assert!(signature.accepts(Carrier::Empty));
+        assert!(!signature.accepts(Carrier::ByteStream));
+        assert!(!signature.accepts(Carrier::Value));
+        assert!(!signature.accepts(Carrier::ValueStream));
+    }
+    assert_eq!(
+        registry.lookup("kill").unwrap().flags().collect::<Vec<_>>(),
+        [
+            "--continue",
+            "--hangup",
+            "--interrupt",
+            "--kill",
+            "--stop",
+            "--terminate"
+        ]
+    );
     assert!(registry.lookup("command").unwrap().accepts(Carrier::Empty));
     assert!(
         registry

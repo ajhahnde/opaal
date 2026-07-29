@@ -16,8 +16,10 @@
 //! unredirected interactive output terminal. An all-external pipeline retains
 //! the existing process executor.
 
+use std::collections::BTreeSet;
 use std::ffi::OsString;
 use std::io::{self, Write};
+use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -838,6 +840,7 @@ fn run_pipeline(
         probe,
         options,
     )?;
+    validate_job_builtin_arguments(&plan)?;
 
     if plan
         .stages()
@@ -896,6 +899,199 @@ fn run_pipeline(
 
     let status = execute_foreground_status(&plan, platform, clock)?;
     Ok(ChainStep::Status(status))
+}
+
+fn validate_job_builtin_arguments(plan: &ExecutionPlan) -> Result<(), RuntimeError> {
+    for stage in plan.stages() {
+        let PlannedResolution::Internal { name } = stage.resolution() else {
+            continue;
+        };
+        match name.as_str() {
+            "jobs" => validate_jobs_arguments(stage)?,
+            "fg" => validate_optional_job_argument(stage, "fg")?,
+            "bg" => validate_optional_job_argument(stage, "bg")?,
+            "wait" => validate_job_targets(stage, "wait")?,
+            "kill" => validate_kill_arguments(stage)?,
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+fn validate_jobs_arguments(stage: &PlannedStage) -> Result<(), RuntimeError> {
+    if let Some(argument) = stage.arguments().first() {
+        return Err(job_argument_error(
+            "jobs",
+            "jobs accepts no job arguments",
+            argument.span(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_optional_job_argument(
+    stage: &PlannedStage,
+    command: &'static str,
+) -> Result<(), RuntimeError> {
+    if let Some(argument) = stage.arguments().get(1) {
+        return Err(job_argument_error(
+            command,
+            format!("{command} accepts at most one job argument"),
+            argument.span(),
+        ));
+    }
+    validate_job_targets(stage, command)
+}
+
+fn validate_job_targets(stage: &PlannedStage, command: &'static str) -> Result<(), RuntimeError> {
+    let mut seen = BTreeSet::new();
+    for argument in stage.arguments() {
+        let job = parse_job_target(command, argument)?;
+        if !seen.insert(job) {
+            return Err(job_argument_error(
+                command,
+                format!("job `%{}` is repeated", job.get()),
+                argument.span(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_kill_arguments(stage: &PlannedStage) -> Result<(), RuntimeError> {
+    let mut selector = None;
+    let mut targets_started = false;
+    let mut targets = BTreeSet::new();
+
+    for argument in stage.arguments() {
+        let word = job_word("kill", argument)?;
+        let bytes = word.value().as_bytes();
+        if bytes.starts_with(b"--") {
+            let rendered = String::from_utf8_lossy(bytes);
+            if targets_started {
+                return Err(job_argument_error(
+                    "kill",
+                    "a signal selector must precede every job argument",
+                    argument.span(),
+                ));
+            }
+            if !matches!(
+                bytes,
+                b"--hangup"
+                    | b"--interrupt"
+                    | b"--terminate"
+                    | b"--kill"
+                    | b"--stop"
+                    | b"--continue"
+            ) {
+                return Err(job_argument_error(
+                    "kill",
+                    format!("unknown signal selector `{rendered}`"),
+                    argument.span(),
+                ));
+            }
+            if selector.replace(bytes).is_some() {
+                return Err(job_argument_error(
+                    "kill",
+                    "kill accepts only one signal selector",
+                    argument.span(),
+                ));
+            }
+            continue;
+        }
+
+        targets_started = true;
+        let job = parse_job_target_word("kill", word)?;
+        if !targets.insert(job) {
+            return Err(job_argument_error(
+                "kill",
+                format!("job `%{}` is repeated", job.get()),
+                argument.span(),
+            ));
+        }
+    }
+
+    if targets.is_empty() {
+        return Err(job_argument_error(
+            "kill",
+            "kill requires at least one explicit `%n` target",
+            stage.span(),
+        ));
+    }
+    Ok(())
+}
+
+fn parse_job_target(
+    command: &'static str,
+    argument: &crate::plan::PlannedArgument,
+) -> Result<crate::job::JobId, RuntimeError> {
+    parse_job_target_word(command, job_word(command, argument)?)
+}
+
+fn parse_job_target_word(
+    command: &'static str,
+    word: &ExpandedWord,
+) -> Result<crate::job::JobId, RuntimeError> {
+    let bytes = word.value().as_bytes();
+    if !bytes.starts_with(b"%") {
+        return Err(job_argument_error(
+            command,
+            "job arguments use `%n`, not a bare process or job number",
+            word.span(),
+        ));
+    }
+    let digits = &bytes[1..];
+    if digits.is_empty() || !digits.iter().all(u8::is_ascii_digit) {
+        return Err(job_argument_error(
+            command,
+            "job identity must contain only ASCII decimal digits",
+            word.span(),
+        ));
+    }
+    let value = std::str::from_utf8(digits)
+        .expect("ASCII digits are valid UTF-8")
+        .parse::<u64>()
+        .map_err(|_| {
+            job_argument_error(
+                command,
+                "job identity exceeds the supported range",
+                word.span(),
+            )
+        })?;
+    crate::job::JobId::new(value).ok_or_else(|| {
+        job_argument_error(
+            command,
+            "job identity must be a nonzero decimal number",
+            word.span(),
+        )
+    })
+}
+
+fn job_word<'a>(
+    command: &'static str,
+    argument: &'a crate::plan::PlannedArgument,
+) -> Result<&'a ExpandedWord, RuntimeError> {
+    argument.as_word().ok_or_else(|| {
+        job_argument_error(
+            command,
+            "expected a word job argument, found a typed value",
+            argument.span(),
+        )
+    })
+}
+
+fn job_argument_error(
+    command: &'static str,
+    message: impl Into<String>,
+    span: Span,
+) -> RuntimeError {
+    RuntimeError::new(
+        RuntimeErrorKind::BuiltinArgument {
+            command,
+            message: message.into(),
+        },
+        span,
+    )
 }
 
 #[allow(clippy::too_many_arguments)]

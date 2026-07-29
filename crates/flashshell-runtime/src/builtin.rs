@@ -213,6 +213,22 @@ pub fn standard_registry() -> CommandRegistry {
         // stages (see `file`).
         CommandSignature::new("open", [Carrier::Empty], Carrier::ByteStream),
         CommandSignature::new("save", [Carrier::ByteStream], Carrier::Empty),
+        // Job-control commands need the session-owned coordinator rather than
+        // the clonable `SessionState` used by ordinary built-ins. Their
+        // signatures still belong in the standard registry so planning,
+        // preflight, and editor completion see the real carrier contract.
+        CommandSignature::new("jobs", [Carrier::Empty], Carrier::ValueStream),
+        CommandSignature::new("fg", [Carrier::Empty], Carrier::Empty),
+        CommandSignature::new("bg", [Carrier::Empty], Carrier::Empty),
+        CommandSignature::new("wait", [Carrier::Empty], Carrier::Empty),
+        CommandSignature::new("kill", [Carrier::Empty], Carrier::Empty).with_flags([
+            "--hangup",
+            "--interrupt",
+            "--terminate",
+            "--kill",
+            "--stop",
+            "--continue",
+        ]),
     ] {
         assert!(
             registry.register(signature),
