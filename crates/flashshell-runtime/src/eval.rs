@@ -345,6 +345,16 @@ pub enum RuntimeErrorKind {
     BackgroundAssignmentUnavailable,
     /// The background coordinator reached an invalid pure job transition.
     BackgroundJobState { message: String },
+    /// A job-control command ran in a session that has no job coordinator.
+    ///
+    /// Distinct from an unimplemented feature: the command exists, and the
+    /// session it was typed into simply owns no job table.
+    JobControlUnavailable { command: &'static str },
+    /// A job-control command shared a pipeline with an external stage.
+    ///
+    /// Job commands run against the session-owned coordinator, which the mixed
+    /// process executor deliberately cannot reach.
+    JobControlNotInternal { command: &'static str },
     /// A stopped job could not be resumed, so waiting on it could not continue.
     ///
     /// Distinct from a wait failure: the job exists and is merely stopped. A
@@ -604,6 +614,15 @@ impl fmt::Display for RuntimeErrorKind {
             }
             Self::BackgroundJobState { message } => {
                 write!(formatter, "invalid background job state: {message}")
+            }
+            Self::JobControlUnavailable { command } => {
+                write!(formatter, "`{command}` requires a session with job control")
+            }
+            Self::JobControlNotInternal { command } => {
+                write!(
+                    formatter,
+                    "`{command}` cannot share a pipeline with an external command"
+                )
             }
             Self::JobSignal(error) => {
                 write!(formatter, "resuming the stopped job failed: {error}")

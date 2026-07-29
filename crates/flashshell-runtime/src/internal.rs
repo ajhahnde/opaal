@@ -88,7 +88,6 @@ pub enum InternalPipelineOutcome {
 }
 
 /// Execute a preplanned pipeline containing only internal stages.
-#[allow(clippy::too_many_arguments)]
 pub fn execute_internal_pipeline(
     plan: &ExecutionPlan,
     state: &mut SessionState,
@@ -98,15 +97,46 @@ pub fn execute_internal_pipeline(
     source: &SourceFile,
 ) -> Result<InternalPipelineOutcome, RuntimeError> {
     preflight(plan)?;
-    let mut payload = InternalPayload::Empty;
-    let mut statuses = Vec::with_capacity(plan.stages().len());
+    execute_internal_suffix(
+        plan,
+        0,
+        InternalPayload::Empty,
+        Vec::new(),
+        state,
+        registry,
+        probe,
+        platform,
+        source,
+    )
+}
+
+/// Execute the stages from `start`, continuing a head this module did not run.
+///
+/// A session-owned producer — one whose command needs state the ordinary
+/// built-in executor never receives — runs its own head, then hands the
+/// resulting payload and that head's stage statuses here so the rest of the
+/// pipeline stays the ordinary lazy path. The caller is responsible for
+/// preflighting the complete plan before producing the payload.
+#[allow(clippy::too_many_arguments)]
+pub fn execute_internal_suffix(
+    plan: &ExecutionPlan,
+    start: usize,
+    mut payload: InternalPayload,
+    mut statuses: Vec<Status>,
+    state: &mut SessionState,
+    registry: &CommandRegistry,
+    probe: &dyn ExecutableProbe,
+    platform: &dyn Platform,
+    source: &SourceFile,
+) -> Result<InternalPipelineOutcome, RuntimeError> {
+    statuses.reserve(plan.stages().len().saturating_sub(start));
     let closure_context = OwnedClosureContext::new(
         source.clone(),
         state.environment().clone(),
         EvalLimits::default(),
     );
 
-    for stage in plan.stages() {
+    for stage in plan.stages().iter().skip(start) {
         let PlannedResolution::Internal { name } = stage.resolution() else {
             return Err(RuntimeError::new(
                 RuntimeErrorKind::Unsupported {

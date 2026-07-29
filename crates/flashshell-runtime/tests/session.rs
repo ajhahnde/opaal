@@ -197,6 +197,13 @@ impl Platform for ControlledBackgroundPlatform {
         Capabilities::full()
     }
 
+    // Structured output is only rendered for an interactive terminal, so a
+    // controlled job table has to be inspectable through the same boundary a
+    // real session uses.
+    fn is_output_terminal(&self) -> bool {
+        true
+    }
+
     fn shell_executable(&self) -> Result<PathBuf, PlatformError> {
         self.require(Capability::ShellExecutable)?;
         Ok(PathBuf::from("/fake/fsh"))
@@ -1594,6 +1601,337 @@ fn observer_cleanup_recovery_completes_but_unrecoverable_failure_is_quarantined(
         .acknowledge_job_notice(failure.id())
         .expect("acknowledge failure diagnostic");
     assert!(failed.background_job(launch.job()).is_some());
+}
+
+/// Submit one buffer against a controlled platform and return its rendered text.
+fn rendered(
+    session: &mut Session,
+    text: &str,
+    probe: &Probe,
+    platform: &dyn Platform,
+    clock: &FakeClock,
+) -> String {
+    let mut sink = Vec::new();
+    session
+        .submit("<interactive>", text, probe, platform, clock, &mut sink)
+        .expect("the submission should succeed");
+    String::from_utf8(sink).expect("rendered structured output is UTF-8")
+}
+
+/// Complete every scripted child so no observer outlives the test blocked on a
+/// transition the test would otherwise never release.
+fn release(controls: &[BackgroundChildControl]) {
+    for control in controls {
+        let _ = control
+            .steps
+            .send(Ok(ProcessTransition::Completed(ProcessStatus::Exited(0))));
+    }
+}
+
+#[test]
+fn jobs_requires_a_session_job_coordinator() {
+    let rendered = submit_error("jobs");
+
+    assert!(
+        rendered.contains("`jobs` requires a session with job control"),
+        "a session without a coordinator must say so:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("<interactive>:1:1"),
+        "the diagnostic anchors at the command:\n{rendered}"
+    );
+}
+
+#[test]
+fn jobs_reports_nothing_when_no_record_is_addressable() {
+    let clock = Arc::new(FakeClock::new());
+    let mut session = session();
+    session.enable_interactive_job_control(clock.clone());
+
+    let listed = rendered(
+        &mut session,
+        "jobs",
+        &Probe::default(),
+        &terminal_platform(),
+        clock.as_ref(),
+    );
+
+    assert_eq!(listed, "");
+    assert_eq!(
+        session.current_status().and_then(Status::code),
+        Some(0),
+        "an empty snapshot still succeeds"
+    );
+}
+
+#[test]
+fn jobs_lists_every_addressable_record_in_identity_order() {
+    let clock = Arc::new(FakeClock::new());
+    let mut session = session();
+    session.enable_interactive_job_control(clock.clone());
+    let (platform, controls) = ControlledBackgroundPlatform::new(&[211, 212]);
+    let probe = Probe::new(["/bin/tool"]);
+    launch_controlled_job(&mut session, &clock, &platform, "^tool &", &probe);
+    launch_controlled_job(&mut session, &clock, &platform, "^tool &", &probe);
+    assert_eq!(controls[0].wait_entries.recv().expect("first wait"), 1);
+    assert_eq!(controls[1].wait_entries.recv().expect("second wait"), 1);
+
+    controls[0]
+        .steps
+        .send(Ok(ProcessTransition::Stopped { signal: 19 }))
+        .expect("release the stop");
+    assert_eq!(controls[0].wait_entries.recv().expect("stop applied"), 2);
+    assert_eq!(
+        wait_for_notice(&mut session).kind(),
+        &JobNoticeKind::Stopped
+    );
+
+    assert_eq!(
+        rendered(
+            &mut session,
+            "jobs | get job | collect",
+            &probe,
+            &platform,
+            clock.as_ref(),
+        ),
+        "[\"%1\", \"%2\"]\n"
+    );
+    assert_eq!(
+        rendered(
+            &mut session,
+            "jobs | get state | collect",
+            &probe,
+            &platform,
+            clock.as_ref(),
+        ),
+        "[\"stopped\", \"running\"]\n"
+    );
+
+    release(&controls);
+}
+
+#[test]
+fn a_running_job_row_carries_the_stable_seven_field_schema() {
+    let clock = Arc::new(FakeClock::new());
+    let mut session = session();
+    session.enable_interactive_job_control(clock.clone());
+    let (platform, controls) = ControlledBackgroundPlatform::new(&[221]);
+    let probe = Probe::new(["/bin/tool"]);
+    launch_controlled_job(&mut session, &clock, &platform, "^tool &", &probe);
+    assert_eq!(controls[0].wait_entries.recv().expect("first wait"), 1);
+
+    assert_eq!(
+        rendered(&mut session, "jobs", &probe, &platform, clock.as_ref()),
+        "{\"job\": \"%1\", \"state\": \"running\", \"placement\": \"background\", \
+         \"group\": \"221\", \"command\": \"^tool\", \"status\": null, \"signal\": null}\n",
+        "host identities stay strings and absent fields stay null"
+    );
+
+    release(&controls);
+}
+
+#[test]
+fn a_stopped_row_reports_its_raw_stop_signal_and_resume_placement() {
+    let clock = Arc::new(FakeClock::new());
+    let mut session = session();
+    session.enable_interactive_job_control(clock.clone());
+    let (platform, controls) = ControlledBackgroundPlatform::new(&[231]);
+    let probe = Probe::new(["/bin/tool"]);
+    launch_controlled_job(&mut session, &clock, &platform, "^tool &", &probe);
+    assert_eq!(controls[0].wait_entries.recv().expect("first wait"), 1);
+    controls[0]
+        .steps
+        .send(Ok(ProcessTransition::Stopped { signal: 19 }))
+        .expect("release the stop");
+    assert_eq!(controls[0].wait_entries.recv().expect("stop applied"), 2);
+    assert_eq!(
+        wait_for_notice(&mut session).kind(),
+        &JobNoticeKind::Stopped
+    );
+
+    assert_eq!(
+        rendered(&mut session, "jobs", &probe, &platform, clock.as_ref()),
+        "{\"job\": \"%1\", \"state\": \"stopped\", \"placement\": \"background\", \
+         \"group\": \"231\", \"command\": \"^tool\", \"status\": null, \"signal\": 19}\n",
+        "a stopped row carries the raw platform stop number"
+    );
+
+    release(&controls);
+}
+
+#[test]
+fn a_completed_row_is_listed_without_consuming_its_notice() {
+    let clock = Arc::new(FakeClock::new());
+    let mut session = session();
+    session.enable_interactive_job_control(clock.clone());
+    let (platform, controls) = ControlledBackgroundPlatform::new(&[241]);
+    let probe = Probe::new(["/bin/tool"]);
+    launch_controlled_job(&mut session, &clock, &platform, "^tool &", &probe);
+    assert_eq!(controls[0].wait_entries.recv().expect("first wait"), 1);
+    controls[0]
+        .steps
+        .send(Ok(ProcessTransition::Completed(ProcessStatus::Exited(3))))
+        .expect("complete the controlled child");
+    let completion = wait_for_notice(&mut session);
+    assert_eq!(completion.kind(), &JobNoticeKind::Completed);
+
+    let listed = rendered(&mut session, "jobs", &probe, &platform, clock.as_ref());
+
+    assert!(
+        listed.contains("\"state\": \"completed\""),
+        "a completed record stays addressable until it is acknowledged:\n{listed}"
+    );
+    assert!(
+        listed.contains("\"status\": status(code: 3"),
+        "a completed row carries its aggregate status:\n{listed}"
+    );
+    assert!(
+        listed.contains("\"signal\": null"),
+        "a completed aggregate has no stop signal:\n{listed}"
+    );
+    assert_eq!(
+        session.next_job_notice().as_ref().map(|notice| notice.id()),
+        Some(completion.id()),
+        "listing a record must not acknowledge its pending notice"
+    );
+}
+
+#[test]
+fn a_quarantined_record_is_listed_as_quarantined() {
+    let clock = Arc::new(FakeClock::new());
+    let mut session = session();
+    session.enable_interactive_job_control(clock.clone());
+    let (platform, controls) = ControlledBackgroundPlatform::new(&[251]);
+    let probe = Probe::new(["/bin/tool"]);
+    launch_controlled_job(&mut session, &clock, &platform, "^tool &", &probe);
+    assert_eq!(controls[0].wait_entries.recv().expect("first wait"), 1);
+    controls[0]
+        .steps
+        .send(Err(WaitError::new(
+            io::ErrorKind::Interrupted,
+            "initial failure",
+        )))
+        .expect("fail the initial observation");
+    assert_eq!(controls[0].wait_entries.recv().expect("cleanup wait"), 2);
+    controls[0]
+        .steps
+        .send(Err(WaitError::new(io::ErrorKind::Other, "cleanup failure")))
+        .expect("fail the cleanup wait");
+    assert!(matches!(
+        wait_for_notice(&mut session).kind(),
+        JobNoticeKind::ObservationFailed { .. }
+    ));
+
+    let listed = rendered(&mut session, "jobs", &probe, &platform, clock.as_ref());
+
+    assert!(
+        listed.contains("\"state\": \"quarantined\""),
+        "an unobservable record is shown honestly, not as completed:\n{listed}"
+    );
+    assert!(
+        listed.contains("\"status\": null"),
+        "quarantine never invents a completion status:\n{listed}"
+    );
+}
+
+#[test]
+fn jobs_feeds_the_ordinary_lazy_internal_suffix() {
+    let clock = Arc::new(FakeClock::new());
+    let mut session = session();
+    session.enable_interactive_job_control(clock.clone());
+    let (platform, controls) = ControlledBackgroundPlatform::new(&[261, 262]);
+    let probe = Probe::new(["/bin/tool"]);
+    launch_controlled_job(&mut session, &clock, &platform, "^tool &", &probe);
+    launch_controlled_job(&mut session, &clock, &platform, "^tool &", &probe);
+    assert_eq!(controls[0].wait_entries.recv().expect("first wait"), 1);
+    assert_eq!(controls[1].wait_entries.recv().expect("second wait"), 1);
+    controls[1]
+        .steps
+        .send(Ok(ProcessTransition::Stopped { signal: 19 }))
+        .expect("release the stop");
+    assert_eq!(controls[1].wait_entries.recv().expect("stop applied"), 2);
+    assert_eq!(
+        wait_for_notice(&mut session).kind(),
+        &JobNoticeKind::Stopped
+    );
+
+    assert_eq!(
+        rendered(
+            &mut session,
+            "jobs | where {|row| $row.state == 'stopped'} | get job | first 1",
+            &probe,
+            &platform,
+            clock.as_ref(),
+        ),
+        "%2\n",
+        "a read-only snapshot heads the ordinary lazy structured suffix"
+    );
+    let status = session
+        .current_status()
+        .expect("the composed pipeline records a status");
+    assert_eq!(status.code(), Some(0));
+    assert_eq!(
+        status.stages().len(),
+        4,
+        "the snapshot head contributes its own stage status"
+    );
+
+    release(&controls);
+}
+
+#[test]
+fn a_job_command_cannot_share_a_pipeline_with_an_external_stage() {
+    let clock = Arc::new(FakeClock::new());
+    let mut session = session();
+    session.enable_interactive_job_control(clock.clone());
+    let mut sink = Vec::new();
+
+    let error = session
+        .submit(
+            "<interactive>",
+            "jobs | to json | ^cat",
+            &Probe::new(["/bin/cat"]),
+            &terminal_platform(),
+            clock.as_ref(),
+            &mut sink,
+        )
+        .expect_err("a session-only command must not enter the mixed executor");
+
+    let rendered = error.render();
+    assert!(
+        rendered.contains("`jobs` cannot share a pipeline with an external command"),
+        "the refusal names the job command:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("<interactive>:1:1"),
+        "the diagnostic anchors at the job command:\n{rendered}"
+    );
+    assert!(sink.is_empty());
+}
+
+#[test]
+fn redirected_jobs_output_still_requires_explicit_serialization() {
+    let clock = Arc::new(FakeClock::new());
+    let mut session = session();
+    session.enable_interactive_job_control(clock.clone());
+    let mut sink = Vec::new();
+
+    let error = session
+        .submit(
+            "<interactive>",
+            "jobs > out.txt",
+            &Probe::default(),
+            &terminal_platform(),
+            clock.as_ref(),
+            &mut sink,
+        )
+        .expect_err("redirected structured output must require serialization");
+
+    let rendered = error.render();
+    assert!(rendered.contains("redirected output"), "{rendered}");
+    assert!(rendered.contains("explicit `encode`/`to`"), "{rendered}");
+    assert!(sink.is_empty());
+    assert!(session.current_status().is_none());
 }
 
 #[test]

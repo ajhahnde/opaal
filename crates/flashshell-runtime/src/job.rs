@@ -171,6 +171,16 @@ impl Job {
         self.state
     }
 
+    /// The placement retained since the job was published.
+    ///
+    /// A completed record keeps the placement it last ran under, so a table row
+    /// can report where the job lived without inferring it from the aggregate
+    /// state, which no longer carries one.
+    #[must_use]
+    pub const fn placement(&self) -> Option<JobPlacement> {
+        self.placement
+    }
+
     /// Whether a stop or completion notice still needs acknowledgement.
     #[must_use]
     pub const fn notice_pending(&self) -> bool {

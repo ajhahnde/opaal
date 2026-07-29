@@ -44,22 +44,23 @@ use crate::eval::{
 use crate::execute::{execute_foreground_status, start_mixed_pipeline};
 use crate::internal::{
     InternalPayload, InternalPipelineOutcome, StageOutcome, execute_internal_pipeline,
-    execute_stage,
+    execute_internal_suffix, execute_stage,
 };
+use crate::job::JobPlacement;
 use crate::plan::{
     ExecutionPlan, PlannedResolution, PlannedStage, RedirectionAction, SessionOptions,
-    plan_pipeline_with_options,
+    plan_pipeline_with_options, preflight,
 };
 use crate::presentation::{
     OutputDestination, TerminalPresentation, render_table, select_terminal_presentation,
 };
 use crate::resolve::ExecutableProbe;
-use crate::stream::{BytePull, ByteStream, StreamPull};
-use crate::{Environment, ScopeStack, Status, Value};
+use crate::stream::{BytePull, ByteStream, StreamPull, ValueStream};
+use crate::{Duration, Environment, Record, ScopeStack, Status, Value};
 
 pub use crate::background::{
     BackgroundFailure, BackgroundFailureReason, JobNotice, JobNoticeError, JobNoticeId,
-    JobNoticeKind, LiveJob, LiveJobState,
+    JobNoticeKind, JobSnapshot, JobSnapshotState, LiveJob, LiveJobState,
 };
 
 /// The control decision produced by one submitted edit buffer.
@@ -375,7 +376,7 @@ impl Session {
                     }
                     let step = run_chain(
                         &job.chain, state, scope, options, registry, &source, probe, platform,
-                        clock, output,
+                        clock, jobs, output,
                     )
                     .map_err(|interrupt| interrupt.into_submit(&source))?;
                     match step {
@@ -760,6 +761,7 @@ fn run_chain(
     probe: &dyn ExecutableProbe,
     platform: &dyn Platform,
     clock: &dyn Clock,
+    jobs: &mut Option<BackgroundJobs>,
     output: &mut dyn Write,
 ) -> Result<ChainStep, Interrupt> {
     let mut or_terms = chain.or_terms().iter();
@@ -767,7 +769,7 @@ fn run_chain(
         .next()
         .expect("a parsed conditional chain contains an operand");
     let mut step = run_and_chain(
-        first, state, scope, options, registry, source, probe, platform, clock, output,
+        first, state, scope, options, registry, source, probe, platform, clock, jobs, output,
     )?;
     for and_chain in or_terms {
         match &step {
@@ -777,7 +779,8 @@ fn run_chain(
             ChainStep::Status(_) => {}
         }
         step = run_and_chain(
-            and_chain, state, scope, options, registry, source, probe, platform, clock, output,
+            and_chain, state, scope, options, registry, source, probe, platform, clock, jobs,
+            output,
         )?;
     }
     Ok(step)
@@ -794,6 +797,7 @@ fn run_and_chain(
     probe: &dyn ExecutableProbe,
     platform: &dyn Platform,
     clock: &dyn Clock,
+    jobs: &mut Option<BackgroundJobs>,
     output: &mut dyn Write,
 ) -> Result<ChainStep, Interrupt> {
     let mut pipelines = chain.and_terms().iter();
@@ -801,7 +805,7 @@ fn run_and_chain(
         .next()
         .expect("a parsed and-chain contains an operand");
     let mut step = run_pipeline(
-        first, state, scope, options, registry, source, probe, platform, clock, output,
+        first, state, scope, options, registry, source, probe, platform, clock, jobs, output,
     )?;
     for pipeline in pipelines {
         match &step {
@@ -811,7 +815,7 @@ fn run_and_chain(
             ChainStep::Status(_) => {}
         }
         step = run_pipeline(
-            pipeline, state, scope, options, registry, source, probe, platform, clock, output,
+            pipeline, state, scope, options, registry, source, probe, platform, clock, jobs, output,
         )?;
     }
     Ok(step)
@@ -828,6 +832,7 @@ fn run_pipeline(
     probe: &dyn ExecutableProbe,
     platform: &dyn Platform,
     clock: &dyn Clock,
+    jobs: &mut Option<BackgroundJobs>,
     output: &mut dyn Write,
 ) -> Result<ChainStep, Interrupt> {
     let plan = plan_pipeline_with_options(
@@ -861,14 +866,19 @@ fn run_pipeline(
         // state before presentation would leave a successful status behind a
         // failed pipeline.
         let mut pending_state = state.clone();
-        let outcome = execute_internal_pipeline(
-            &plan,
-            &mut pending_state,
-            registry,
-            probe,
-            platform,
-            source,
-        )?;
+        let outcome = if is_job_table_head(&plan) {
+            execute_job_table_pipeline(
+                &plan,
+                &mut pending_state,
+                registry,
+                probe,
+                platform,
+                source,
+                jobs,
+            )?
+        } else {
+            execute_internal_pipeline(&plan, &mut pending_state, registry, probe, platform, source)?
+        };
         return match outcome {
             InternalPipelineOutcome::Exit(code) => {
                 *state = pending_state;
@@ -902,20 +912,136 @@ fn run_pipeline(
 }
 
 fn validate_job_builtin_arguments(plan: &ExecutionPlan) -> Result<(), RuntimeError> {
+    let has_external = plan
+        .stages()
+        .iter()
+        .any(|stage| !matches!(stage.resolution(), PlannedResolution::Internal { .. }));
     for stage in plan.stages() {
         let PlannedResolution::Internal { name } = stage.resolution() else {
             continue;
         };
-        match name.as_str() {
+        let Some(command) = job_command_name(name.as_str()) else {
+            continue;
+        };
+        // Job commands run against the session-owned coordinator, which the
+        // mixed executor cannot reach. Refusing the plan keeps the boundary a
+        // diagnostic instead of a half-executed pipeline.
+        if has_external {
+            return Err(RuntimeError::new(
+                RuntimeErrorKind::JobControlNotInternal { command },
+                stage.span(),
+            ));
+        }
+        match command {
             "jobs" => validate_jobs_arguments(stage)?,
-            "fg" => validate_optional_job_argument(stage, "fg")?,
-            "bg" => validate_optional_job_argument(stage, "bg")?,
-            "wait" => validate_job_targets(stage, "wait")?,
-            "kill" => validate_kill_arguments(stage)?,
-            _ => {}
+            "fg" | "bg" => validate_optional_job_argument(stage, command)?,
+            "wait" => validate_job_targets(stage, command)?,
+            _ => validate_kill_arguments(stage)?,
         }
     }
     Ok(())
+}
+
+/// The job-control command spelled by this internal stage name.
+fn job_command_name(name: &str) -> Option<&'static str> {
+    match name {
+        "jobs" => Some("jobs"),
+        "fg" => Some("fg"),
+        "bg" => Some("bg"),
+        "wait" => Some("wait"),
+        "kill" => Some("kill"),
+        _ => None,
+    }
+}
+
+/// Whether this all-internal plan begins with the read-only job table.
+fn is_job_table_head(plan: &ExecutionPlan) -> bool {
+    plan.stages().first().is_some_and(|stage| {
+        matches!(stage.resolution(), PlannedResolution::Internal { name } if name == "jobs")
+    })
+}
+
+/// Execute a `jobs` head and hand its snapshot to the ordinary internal suffix.
+///
+/// The snapshot is produced here rather than in the built-in executor because
+/// the coordinator is deliberately outside the clonable [`SessionState`] that
+/// ordinary lazy built-ins roll back.
+fn execute_job_table_pipeline(
+    plan: &ExecutionPlan,
+    state: &mut SessionState,
+    registry: &CommandRegistry,
+    probe: &dyn ExecutableProbe,
+    platform: &dyn Platform,
+    source: &SourceFile,
+    jobs: &mut Option<BackgroundJobs>,
+) -> Result<InternalPipelineOutcome, RuntimeError> {
+    let head = plan
+        .stages()
+        .first()
+        .expect("a job-table head was just observed");
+    preflight(plan)?;
+    let Some(coordinator) = jobs.as_mut() else {
+        return Err(RuntimeError::new(
+            RuntimeErrorKind::JobControlUnavailable { command: "jobs" },
+            head.span(),
+        ));
+    };
+    let rows = coordinator
+        .snapshot()
+        .iter()
+        .map(job_table_row)
+        .collect::<Vec<_>>();
+    let status = Status::exit(0, Duration::ZERO).expect("zero is a valid snapshot status");
+    execute_internal_suffix(
+        plan,
+        1,
+        InternalPayload::ValueStream(ValueStream::from_values(rows)),
+        vec![status],
+        state,
+        registry,
+        probe,
+        platform,
+        source,
+    )
+}
+
+/// Render one addressable job as its stable seven-field record.
+///
+/// Host identities stay strings: the platform's widened unsigned identifiers do
+/// not fit the language's signed `Int` without narrowing them.
+fn job_table_row(snapshot: &JobSnapshot) -> Value {
+    let entries = vec![
+        (
+            "job".to_owned(),
+            Value::string(format!("%{}", snapshot.job().get())),
+        ),
+        ("state".to_owned(), Value::string(snapshot.state().label())),
+        (
+            "placement".to_owned(),
+            Value::string(match snapshot.placement() {
+                JobPlacement::Foreground => "foreground",
+                JobPlacement::Background => "background",
+            }),
+        ),
+        (
+            "group".to_owned(),
+            Value::string(snapshot.group().get().to_string()),
+        ),
+        ("command".to_owned(), Value::string(snapshot.command())),
+        (
+            "status".to_owned(),
+            snapshot
+                .status()
+                .map_or(Value::Null, |status| Value::Status(status.clone())),
+        ),
+        (
+            "signal".to_owned(),
+            snapshot
+                .signal()
+                .map_or(Value::Null, |signal| Value::Int(i64::from(signal))),
+        ),
+    ];
+    Value::Record(Record::new(entries).expect("the job row keys are distinct"))
 }
 
 fn validate_jobs_arguments(stage: &PlannedStage) -> Result<(), RuntimeError> {

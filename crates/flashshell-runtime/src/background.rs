@@ -18,7 +18,9 @@ use flashshell_platform::{
 use crate::Status;
 use crate::eval::{Clock, Instant, RuntimeError, RuntimeErrorKind};
 use crate::execute::{aggregate_statuses, elapsed, language_status, start_background_pipeline};
-use crate::job::{Job, JobId, JobPlacement, JobState, JobTransitionError, ProcessId};
+use crate::job::{
+    Job, JobId, JobMemberState, JobPlacement, JobState, JobTransitionError, ProcessId,
+};
 use crate::plan::ExecutionPlan;
 
 /// One immutable transition produced by a background child observer.
@@ -416,6 +418,95 @@ impl LiveJob {
     }
 }
 
+/// The externally reported state of one addressable job-table row.
+///
+/// Deliberately coarser than [`JobState`]: the lifecycle's `Notified` and
+/// `Reaped` steps are acknowledgement bookkeeping, and a record that failed
+/// observation keeps its pure state while reporting quarantine.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum JobSnapshotState {
+    /// The job is running under its retained placement.
+    Running,
+    /// Every live member is stopped.
+    Stopped,
+    /// Every member completed and the aggregate is retained.
+    Completed,
+    /// Observation was abandoned, so no trustworthy state can be published.
+    Quarantined,
+}
+
+impl JobSnapshotState {
+    /// The stable lowercase label used by the structured job table.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Running => "running",
+            Self::Stopped => "stopped",
+            Self::Completed => "completed",
+            Self::Quarantined => "quarantined",
+        }
+    }
+}
+
+/// One immutable addressable job row.
+///
+/// The snapshot is taken by value because the reader composes it into a lazy
+/// structured pipeline that must not borrow the coordinator.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct JobSnapshot {
+    job: JobId,
+    state: JobSnapshotState,
+    placement: JobPlacement,
+    group: ProcessGroupId,
+    command: String,
+    status: Option<Status>,
+    signal: Option<i32>,
+}
+
+impl JobSnapshot {
+    /// The stable shell-assigned identity.
+    #[must_use]
+    pub const fn job(&self) -> JobId {
+        self.job
+    }
+
+    /// The reported lifecycle state.
+    #[must_use]
+    pub const fn state(&self) -> JobSnapshotState {
+        self.state
+    }
+
+    /// Where the job runs, or where a continuation would resume it.
+    #[must_use]
+    pub const fn placement(&self) -> JobPlacement {
+        self.placement
+    }
+
+    /// The retained process group of every external member.
+    #[must_use]
+    pub const fn group(&self) -> ProcessGroupId {
+        self.group
+    }
+
+    /// The stored display-safe command label.
+    #[must_use]
+    pub fn command(&self) -> &str {
+        &self.command
+    }
+
+    /// The aggregate status, present only for a completed aggregate.
+    #[must_use]
+    pub const fn status(&self) -> Option<&Status> {
+        self.status.as_ref()
+    }
+
+    /// The raw platform stop number, present only for a stopped aggregate.
+    #[must_use]
+    pub const fn signal(&self) -> Option<i32> {
+        self.signal
+    }
+}
+
 /// Why one background job is reported as failing at a session boundary.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum BackgroundFailureReason {
@@ -659,6 +750,48 @@ impl BackgroundJobs {
 
     pub(crate) fn group(&self, job: JobId) -> Option<ProcessGroupId> {
         self.records.get(&job).map(|record| record.group)
+    }
+
+    /// Every addressable record, in increasing job identity, read-only.
+    ///
+    /// Queued observations are applied first, so the rows describe what the
+    /// platform has already reported rather than what was true at the last
+    /// prompt. Nothing is acknowledged or removed: a completed row listed here
+    /// still owes its ordinary notice.
+    pub(crate) fn snapshot(&mut self) -> Vec<JobSnapshot> {
+        self.apply_pending_observations();
+        self.records
+            .iter()
+            .map(|(id, record)| {
+                let state = if record.observation_failed {
+                    JobSnapshotState::Quarantined
+                } else if record.completion.is_some() {
+                    JobSnapshotState::Completed
+                } else if matches!(record.job.state(), JobState::Stopped { .. }) {
+                    JobSnapshotState::Stopped
+                } else {
+                    JobSnapshotState::Running
+                };
+                JobSnapshot {
+                    job: *id,
+                    state,
+                    placement: record
+                        .job
+                        .placement()
+                        .expect("a published job always retains its placement"),
+                    group: record.group,
+                    command: record.command.clone(),
+                    status: match state {
+                        JobSnapshotState::Completed => record.completion.clone(),
+                        _ => None,
+                    },
+                    signal: match state {
+                        JobSnapshotState::Stopped => aggregate_stop_signal(record),
+                        _ => None,
+                    },
+                }
+            })
+            .collect()
     }
 
     /// Every job that has not reached a terminal aggregate.
@@ -959,6 +1092,23 @@ impl BackgroundJobs {
             self.queue_notice(job_id, kind, command);
         }
     }
+}
+
+/// The stop number of the first stopped member in pipeline source order.
+///
+/// A stopped aggregate can hold members stopped by different signals, so the
+/// reported number is anchored to the source the reader wrote rather than to
+/// the platform's process-identity order.
+fn aggregate_stop_signal(record: &JobRecord) -> Option<i32> {
+    record.source_order.iter().find_map(|process| {
+        record
+            .job
+            .members()
+            .find_map(|(candidate, state)| match state {
+                JobMemberState::Stopped { signal } if candidate == *process => Some(*signal),
+                _ => None,
+            })
+    })
 }
 
 /// Escape a command label into one printable terminal line.
