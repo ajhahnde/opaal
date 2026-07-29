@@ -333,6 +333,15 @@ pub enum RuntimeErrorKind {
     BackgroundProcessGroupUnavailable,
     /// A started child reported the reserved zero process identity.
     InvalidProcessIdentity,
+    /// The session exhausted its monotonic background job or notice identity
+    /// space.
+    BackgroundIdentityExhausted,
+    /// Idle background observer preparation failed before process creation.
+    BackgroundObserverUnavailable { message: String },
+    /// A ready observer unexpectedly refused its owned child assignment.
+    BackgroundAssignmentUnavailable,
+    /// The background coordinator reached an invalid pure job transition.
+    BackgroundJobState { message: String },
     /// A stopped job could not be resumed, so waiting on it could not continue.
     ///
     /// Distinct from a wait failure: the job exists and is merely stopped. A
@@ -574,6 +583,21 @@ impl fmt::Display for RuntimeErrorKind {
             }
             Self::InvalidProcessIdentity => {
                 formatter.write_str("the platform reported the reserved zero process identity")
+            }
+            Self::BackgroundIdentityExhausted => {
+                formatter.write_str("background job identity space is exhausted")
+            }
+            Self::BackgroundObserverUnavailable { message } => {
+                write!(
+                    formatter,
+                    "background child observation is unavailable: {message}"
+                )
+            }
+            Self::BackgroundAssignmentUnavailable => {
+                formatter.write_str("a ready background observer refused its child")
+            }
+            Self::BackgroundJobState { message } => {
+                write!(formatter, "invalid background job state: {message}")
             }
             Self::JobSignal(error) => {
                 write!(formatter, "resuming the stopped job failed: {error}")

@@ -10,20 +10,29 @@
 //! host-free `FakePlatform`; file-boundary acceptance uses the POSIX adapter
 //! against isolated temporary directories.
 
+use std::any::Any;
+use std::collections::VecDeque;
 use std::ffi::{OsStr, OsString};
+use std::fmt;
 use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, mpsc};
 
 use flashshell_platform::{
-    Capabilities, FakePlatform, Platform, ProcessStatus, SpawnRequest, TerminalSize,
+    Capabilities, ChildProcess, DescriptorEndpoint, FakePlatform, FileActionError, FileOpenRequest,
+    JobSignal, PipeEndpoints, PipeError, Platform, ProcessGroup, ProcessGroupId, ProcessStatus,
+    ProcessTransition, RecordingPlatform, SignalError, SpawnError, SpawnRequest, TerminalSize,
+    TerminateError, WaitError,
 };
 use flashshell_platform_posix::PosixPlatform;
 use flashshell_runtime::eval::FakeClock;
+use flashshell_runtime::job::{JobMemberState, JobState, ProcessId};
 use flashshell_runtime::plan::SessionOptions;
 use flashshell_runtime::resolve::ExecutableProbe;
-use flashshell_runtime::session::{Session, SubmitOutcome};
-use flashshell_runtime::{Environment, Status};
+use flashshell_runtime::session::{JobNoticeKind, Session, SubmitOutcome};
+use flashshell_runtime::{Duration, Environment, Status};
 
 #[derive(Default)]
 struct Probe {
@@ -59,6 +68,182 @@ fn session() -> Session {
 
 fn terminal_platform() -> FakePlatform {
     FakePlatform::with_terminal(Capabilities::full(), true, TerminalSize::new(80, 24))
+}
+
+#[derive(Debug)]
+struct BackgroundEndpoint;
+
+impl DescriptorEndpoint for BackgroundEndpoint {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
+
+type ChildStep = Result<ProcessTransition, WaitError>;
+
+struct BackgroundChild {
+    id: u64,
+    group: ProcessGroupId,
+    steps: mpsc::Receiver<ChildStep>,
+    wait_entries: mpsc::Sender<usize>,
+    waits: usize,
+    terminate_calls: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl fmt::Debug for BackgroundChild {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("BackgroundChild")
+            .field("id", &self.id)
+            .field("group", &self.group)
+            .finish_non_exhaustive()
+    }
+}
+
+impl BackgroundChild {
+    fn next(&mut self) -> ChildStep {
+        self.waits += 1;
+        self.wait_entries
+            .send(self.waits)
+            .expect("the test retains the wait-entry receiver");
+        self.steps.recv().expect("the test releases every wait")
+    }
+}
+
+impl ChildProcess for BackgroundChild {
+    fn id(&self) -> u64 {
+        self.id
+    }
+
+    fn process_group(&self) -> Option<ProcessGroupId> {
+        Some(self.group)
+    }
+
+    fn wait(&mut self) -> Result<ProcessStatus, WaitError> {
+        loop {
+            match self.next()? {
+                ProcessTransition::Stopped { .. } => {}
+                ProcessTransition::Completed(status) => return Ok(status),
+            }
+        }
+    }
+
+    fn wait_for_transition(&mut self) -> Result<ProcessTransition, WaitError> {
+        self.next()
+    }
+
+    fn terminate(&mut self) -> Result<(), TerminateError> {
+        self.terminate_calls.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }
+}
+
+struct BackgroundChildControl {
+    steps: mpsc::Sender<ChildStep>,
+    wait_entries: mpsc::Receiver<usize>,
+    terminate_calls: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+struct ControlledBackgroundPlatform {
+    children: Mutex<VecDeque<Box<dyn ChildProcess>>>,
+    signals: Mutex<Vec<(ProcessGroupId, JobSignal)>>,
+}
+
+impl ControlledBackgroundPlatform {
+    fn new(ids: &[u64]) -> (Self, Vec<BackgroundChildControl>) {
+        let group = ProcessGroupId::new(ids[0]).expect("test group is nonzero");
+        let mut children: VecDeque<Box<dyn ChildProcess>> = VecDeque::new();
+        let mut controls = Vec::new();
+        for &id in ids {
+            let (step_sender, step_receiver) = mpsc::channel();
+            let (wait_sender, wait_receiver) = mpsc::channel();
+            let terminate_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            children.push_back(Box::new(BackgroundChild {
+                id,
+                group,
+                steps: step_receiver,
+                wait_entries: wait_sender,
+                waits: 0,
+                terminate_calls: Arc::clone(&terminate_calls),
+            }));
+            controls.push(BackgroundChildControl {
+                steps: step_sender,
+                wait_entries: wait_receiver,
+                terminate_calls,
+            });
+        }
+        (
+            Self {
+                children: Mutex::new(children),
+                signals: Mutex::new(Vec::new()),
+            },
+            controls,
+        )
+    }
+}
+
+impl Platform for ControlledBackgroundPlatform {
+    fn capabilities(&self) -> Capabilities {
+        Capabilities::full()
+    }
+
+    fn pipe(&self) -> Result<PipeEndpoints, PipeError> {
+        Ok(PipeEndpoints::new(
+            Box::new(BackgroundEndpoint),
+            Box::new(BackgroundEndpoint),
+        ))
+    }
+
+    fn open_file(
+        &self,
+        _request: FileOpenRequest<'_>,
+    ) -> Result<Box<dyn DescriptorEndpoint>, FileActionError> {
+        Ok(Box::new(BackgroundEndpoint))
+    }
+
+    fn inherit_descriptor(
+        &self,
+        _descriptor: u32,
+    ) -> Result<Box<dyn DescriptorEndpoint>, FileActionError> {
+        Ok(Box::new(BackgroundEndpoint))
+    }
+
+    fn spawn(&self, request: &SpawnRequest<'_>) -> Result<Box<dyn ChildProcess>, SpawnError> {
+        let child = self
+            .children
+            .lock()
+            .expect("child queue lock")
+            .pop_front()
+            .expect("one child is scripted per stage");
+        match request.process_group() {
+            ProcessGroup::New | ProcessGroup::Join(_) => Ok(child),
+            ProcessGroup::Inherit => panic!("background startup must request a process group"),
+        }
+    }
+
+    fn signal_process_group(
+        &self,
+        group: ProcessGroupId,
+        signal: JobSignal,
+    ) -> Result<(), SignalError> {
+        self.signals
+            .lock()
+            .expect("signal lock")
+            .push((group, signal));
+        Ok(())
+    }
+}
+
+fn wait_for_notice(session: &mut Session) -> flashshell_runtime::session::JobNotice {
+    (0..10_000)
+        .find_map(|_| {
+            let notice = session.next_job_notice();
+            if notice.is_none() {
+                std::thread::yield_now();
+            }
+            notice
+        })
+        .expect("the scripted child should produce a notice")
 }
 
 /// Submit one buffer with a fresh throwaway output sink, asserting success.
@@ -141,6 +326,458 @@ fn external_commands_execute_and_record_their_status() {
         session.current_status().and_then(|status| status.code()),
         Some(0)
     );
+}
+
+#[test]
+fn background_work_without_interactive_opt_in_is_rejected_at_the_marker() {
+    let mut session = session();
+    let probe = Probe::new(["/bin/tool"]);
+    let mut sink = Vec::new();
+
+    let error = session
+        .submit(
+            "<script>",
+            "^tool &",
+            &probe,
+            &terminal_platform(),
+            &FakeClock::new(),
+            &mut sink,
+        )
+        .expect_err("background script work should remain unsupported");
+
+    assert!(error.render().contains("interactive"));
+    assert!(error.render().contains("^tool &"));
+}
+
+#[test]
+fn a_background_conditional_chain_is_rejected_at_its_operator() {
+    let clock = Arc::new(FakeClock::new());
+    let mut session = session();
+    session.enable_interactive_job_control(clock.clone());
+    let probe = Probe::new(["/bin/tool", "/bin/other"]);
+    let mut sink = Vec::new();
+
+    let error = session
+        .submit(
+            "<interactive>",
+            "^tool && ^other &",
+            &probe,
+            &terminal_platform(),
+            clock.as_ref(),
+            &mut sink,
+        )
+        .expect_err("background conditional chains need an owned supervisor");
+
+    assert!(error.render().contains("conditional"));
+    assert!(error.render().contains("&&"));
+}
+
+#[test]
+fn a_background_internal_stage_is_rejected_at_the_command() {
+    let clock = Arc::new(FakeClock::new());
+    let mut session = session();
+    session.enable_interactive_job_control(clock.clone());
+    let mut sink = Vec::new();
+
+    let error = session
+        .submit(
+            "<interactive>",
+            "pwd &",
+            &Probe::default(),
+            &terminal_platform(),
+            clock.as_ref(),
+            &mut sink,
+        )
+        .expect_err("background internal commands remain unsupported");
+
+    assert!(error.render().contains("internal"));
+    assert!(error.render().contains("pwd &"));
+}
+
+#[test]
+fn interactive_background_pipelines_publish_complete_jobs_and_zero_launch_status() {
+    let clock = Arc::new(FakeClock::at(100));
+    let mut session = session();
+    session.enable_interactive_job_control(clock.clone());
+    let probe = Probe::new(["/bin/tool", "/bin/other"]);
+    let platform = RecordingPlatform::new(terminal_platform());
+    let terminal = platform.log();
+    let mut sink = Vec::new();
+
+    assert_eq!(
+        session
+            .submit(
+                "<interactive>",
+                "^tool | ^other &",
+                &probe,
+                &platform,
+                clock.as_ref(),
+                &mut sink,
+            )
+            .expect("the background external pipeline should launch"),
+        SubmitOutcome::Continued
+    );
+    assert_eq!(
+        session.current_status(),
+        Some(&Status::exit(0, Duration::ZERO).expect("zero duration is valid"))
+    );
+    assert!(terminal.foreground_handovers().is_empty());
+
+    let started = session
+        .next_job_notice()
+        .expect("background launch queues a notice");
+    assert_eq!(started.job().get(), 1);
+    assert_eq!(started.id().get(), 1);
+    assert!(matches!(started.kind(), JobNoticeKind::Started { .. }));
+    let job = session
+        .background_job(started.job())
+        .expect("the complete job is addressable before its notice");
+    assert_eq!(job.state(), JobState::Background);
+    assert_eq!(job.members().count(), 2);
+    assert_eq!(
+        session.next_job_notice().as_ref().map(|notice| notice.id()),
+        Some(started.id()),
+        "retrieval must not acknowledge a notice"
+    );
+    session
+        .acknowledge_job_notice(started.id())
+        .expect("the rendered launch notice should acknowledge");
+
+    let completed = (0..10_000)
+        .find_map(|_| {
+            let notice = session.next_job_notice();
+            if notice.is_none() {
+                std::thread::yield_now();
+            }
+            notice
+        })
+        .expect("the fake background children should complete");
+    assert_eq!(completed.job(), started.job());
+    assert_eq!(completed.id().get(), 2);
+    assert_eq!(completed.kind(), &JobNoticeKind::Completed);
+    assert_eq!(
+        session
+            .background_completion(completed.job())
+            .expect("completion remains addressable until acknowledgement")
+            .stages()
+            .len(),
+        2
+    );
+    session
+        .acknowledge_job_notice(completed.id())
+        .expect("completion acknowledgement should reap the record");
+    assert!(session.background_job(completed.job()).is_none());
+}
+
+#[test]
+fn background_completion_aggregates_source_order_pipefail_and_latest_time() {
+    let clock = Arc::new(FakeClock::at(100));
+    let mut session = Session::new(
+        "/work",
+        environment(),
+        SessionOptions::default().with_pipefail(true),
+    );
+    session.enable_interactive_job_control(clock.clone());
+    let probe = Probe::new(["/bin/tool", "/bin/other"]);
+    let (platform, controls) = ControlledBackgroundPlatform::new(&[101, 102]);
+    let mut sink = Vec::new();
+
+    session
+        .submit(
+            "<interactive>",
+            "^tool | ^other &",
+            &probe,
+            &platform,
+            clock.as_ref(),
+            &mut sink,
+        )
+        .expect("the controlled pipeline should launch");
+    assert_eq!(controls[0].wait_entries.recv().expect("first wait"), 1);
+    assert_eq!(controls[1].wait_entries.recv().expect("second wait"), 1);
+    let started = session.next_job_notice().expect("launch notice");
+    session
+        .acknowledge_job_notice(started.id())
+        .expect("acknowledge launch");
+
+    clock.advance(20);
+    controls[1]
+        .steps
+        .send(Ok(ProcessTransition::Completed(ProcessStatus::Exited(7))))
+        .expect("complete the second source stage first");
+    for _ in 0..10_000 {
+        assert!(
+            session.next_job_notice().is_none(),
+            "a partial completion must not publish a notice"
+        );
+        let second_completed = session
+            .background_job(started.job())
+            .and_then(|job| {
+                job.members()
+                    .find(|(process, _)| *process == ProcessId::new(102).unwrap())
+                    .map(|(_, state)| matches!(state, JobMemberState::Completed(_)))
+            })
+            .unwrap_or(false);
+        if second_completed {
+            break;
+        }
+        std::thread::yield_now();
+    }
+    clock.advance(10);
+    controls[0]
+        .steps
+        .send(Ok(ProcessTransition::Completed(ProcessStatus::Exited(0))))
+        .expect("complete the first source stage last");
+
+    let completed = wait_for_notice(&mut session);
+    assert_eq!(completed.kind(), &JobNoticeKind::Completed);
+    let status = session
+        .background_completion(started.job())
+        .expect("aggregate completion remains addressable");
+    assert_eq!(status.code(), Some(7));
+    assert_eq!(status.duration(), Duration::from_nanos(30));
+    assert_eq!(
+        status
+            .stages()
+            .iter()
+            .map(|stage| (stage.code(), stage.duration()))
+            .collect::<Vec<_>>(),
+        vec![
+            (Some(0), Duration::from_nanos(30)),
+            (Some(7), Duration::from_nanos(20)),
+        ]
+    );
+    assert_eq!(
+        session.current_status(),
+        Some(&Status::exit(0, Duration::ZERO).expect("zero status is valid")),
+        "background completion must not overwrite the launch status"
+    );
+    session
+        .acknowledge_job_notice(completed.id())
+        .expect("completion acknowledgement should reap the job");
+}
+
+#[test]
+fn a_stopped_background_job_is_not_resumed_and_remains_after_notice_acknowledgement() {
+    let clock = Arc::new(FakeClock::new());
+    let mut session = session();
+    session.enable_interactive_job_control(clock.clone());
+    let (platform, controls) = ControlledBackgroundPlatform::new(&[111]);
+    let mut sink = Vec::new();
+
+    session
+        .submit(
+            "<interactive>",
+            "^tool &",
+            &Probe::new(["/bin/tool"]),
+            &platform,
+            clock.as_ref(),
+            &mut sink,
+        )
+        .expect("the controlled job should launch");
+    assert_eq!(controls[0].wait_entries.recv().expect("first wait"), 1);
+    let started = session.next_job_notice().expect("launch notice");
+    session
+        .acknowledge_job_notice(started.id())
+        .expect("acknowledge launch");
+
+    controls[0]
+        .steps
+        .send(Ok(ProcessTransition::Stopped { signal: 19 }))
+        .expect("release the stop");
+    assert_eq!(controls[0].wait_entries.recv().expect("second wait"), 2);
+    let stopped = wait_for_notice(&mut session);
+    assert_eq!(stopped.kind(), &JobNoticeKind::Stopped);
+    assert_eq!(
+        session.next_job_notice().as_ref().map(|notice| notice.id()),
+        Some(stopped.id())
+    );
+    let job = session
+        .background_job(started.job())
+        .expect("stopped job remains addressable");
+    assert!(matches!(job.state(), JobState::Stopped { .. }));
+    assert!(matches!(
+        job.members().next().map(|(_, state)| state),
+        Some(JobMemberState::Stopped { signal: 19 })
+    ));
+    assert!(
+        platform.signals.lock().expect("signal lock").is_empty(),
+        "a background stop must not be automatically resumed"
+    );
+    session
+        .acknowledge_job_notice(stopped.id())
+        .expect("acknowledge stopped notice");
+    assert!(session.background_job(started.job()).is_some());
+
+    controls[0]
+        .steps
+        .send(Ok(ProcessTransition::Completed(ProcessStatus::Exited(0))))
+        .expect("finish the stopped test child");
+    let completed = wait_for_notice(&mut session);
+    assert_eq!(completed.kind(), &JobNoticeKind::Completed);
+    assert_eq!(
+        session.next_job_notice().as_ref().map(|notice| notice.id()),
+        Some(completed.id()),
+        "completion retrieval must remain repeatable until acknowledgement"
+    );
+    session
+        .acknowledge_job_notice(completed.id())
+        .expect("reap the completed record");
+}
+
+#[test]
+fn background_job_and_notice_identities_increase_across_launches() {
+    let clock = Arc::new(FakeClock::new());
+    let mut session = session();
+    session.enable_interactive_job_control(clock.clone());
+    let probe = Probe::new(["/bin/tool"]);
+    let mut sink = Vec::new();
+
+    for _ in 0..2 {
+        session
+            .submit(
+                "<interactive>",
+                "^tool &",
+                &probe,
+                &terminal_platform(),
+                clock.as_ref(),
+                &mut sink,
+            )
+            .expect("each fake job should launch");
+    }
+
+    let first = session.next_job_notice().expect("first launch notice");
+    assert_eq!((first.job().get(), first.id().get()), (1, 1));
+    session
+        .acknowledge_job_notice(first.id())
+        .expect("acknowledge first launch");
+    let second = session.next_job_notice().expect("second launch notice");
+    assert_eq!((second.job().get(), second.id().get()), (2, 2));
+    session
+        .acknowledge_job_notice(second.id())
+        .expect("acknowledge second launch");
+
+    for _ in 0..2 {
+        let completion = wait_for_notice(&mut session);
+        session
+            .acknowledge_job_notice(completion.id())
+            .expect("reap each fake job");
+    }
+}
+
+#[test]
+fn observer_cleanup_recovery_completes_but_unrecoverable_failure_is_quarantined() {
+    let clock = Arc::new(FakeClock::new());
+    let mut recovered = session();
+    recovered.enable_interactive_job_control(clock.clone());
+    let (recovered_platform, recovered_controls) = ControlledBackgroundPlatform::new(&[121]);
+    let mut sink = Vec::new();
+    recovered
+        .submit(
+            "<interactive>",
+            "^tool &",
+            &Probe::new(["/bin/tool"]),
+            &recovered_platform,
+            clock.as_ref(),
+            &mut sink,
+        )
+        .expect("the recovered job should launch");
+    assert_eq!(
+        recovered_controls[0]
+            .wait_entries
+            .recv()
+            .expect("initial wait"),
+        1
+    );
+    let launch = recovered.next_job_notice().expect("launch notice");
+    recovered
+        .acknowledge_job_notice(launch.id())
+        .expect("acknowledge launch");
+    recovered_controls[0]
+        .steps
+        .send(Err(WaitError::new(
+            io::ErrorKind::Interrupted,
+            "initial failure",
+        )))
+        .expect("fail initial observation");
+    assert_eq!(
+        recovered_controls[0]
+            .wait_entries
+            .recv()
+            .expect("cleanup wait"),
+        2
+    );
+    recovered_controls[0]
+        .steps
+        .send(Ok(ProcessTransition::Completed(ProcessStatus::Exited(4))))
+        .expect("recover terminal status");
+    let completion = wait_for_notice(&mut recovered);
+    assert_eq!(completion.kind(), &JobNoticeKind::Completed);
+    assert_eq!(
+        recovered_controls[0].terminate_calls.load(Ordering::SeqCst),
+        1
+    );
+    recovered
+        .acknowledge_job_notice(completion.id())
+        .expect("reap recovered job");
+
+    let mut failed = session();
+    failed.enable_interactive_job_control(clock.clone());
+    let (failed_platform, failed_controls) = ControlledBackgroundPlatform::new(&[131]);
+    failed
+        .submit(
+            "<interactive>",
+            "^tool &",
+            &Probe::new(["/bin/tool"]),
+            &failed_platform,
+            clock.as_ref(),
+            &mut sink,
+        )
+        .expect("the failing job should launch");
+    assert_eq!(
+        failed_controls[0]
+            .wait_entries
+            .recv()
+            .expect("initial wait"),
+        1
+    );
+    let launch = failed.next_job_notice().expect("launch notice");
+    failed
+        .acknowledge_job_notice(launch.id())
+        .expect("acknowledge launch");
+    failed_controls[0]
+        .steps
+        .send(Err(WaitError::new(
+            io::ErrorKind::Interrupted,
+            "initial failure",
+        )))
+        .expect("fail initial observation");
+    assert_eq!(
+        failed_controls[0]
+            .wait_entries
+            .recv()
+            .expect("cleanup wait"),
+        2
+    );
+    failed_controls[0]
+        .steps
+        .send(Err(WaitError::new(io::ErrorKind::Other, "cleanup failure")))
+        .expect("fail cleanup");
+    let failure = wait_for_notice(&mut failed);
+    assert!(matches!(
+        failure.kind(),
+        JobNoticeKind::ObservationFailed { .. }
+    ));
+    assert!(matches!(
+        failed
+            .background_job(launch.job())
+            .expect("failed job remains addressable")
+            .state(),
+        JobState::Background
+    ));
+    failed
+        .acknowledge_job_notice(failure.id())
+        .expect("acknowledge failure diagnostic");
+    assert!(failed.background_job(launch.job()).is_some());
 }
 
 #[test]

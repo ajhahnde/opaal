@@ -10,7 +10,9 @@ use std::sync::{Arc, mpsc};
 use flashshell_platform::{
     ChildProcess, ProcessStatus, ProcessTransition, TerminateError, WaitError,
 };
-use flashshell_runtime::background::{ChildObservation, ObserverAssignment, ObserverSlots};
+use flashshell_runtime::background::{
+    ChildObservation, ObserverAssignment, ObserverSlots, escape_job_label,
+};
 use flashshell_runtime::eval::{FakeClock, Instant};
 use flashshell_runtime::job::{JobId, ProcessId};
 
@@ -314,5 +316,13 @@ fn a_wait_failure_terminates_then_performs_one_final_wait() {
             error: initial,
             cleanup: Some(cleanup),
         }
+    );
+}
+
+#[test]
+fn command_labels_escape_controls_and_preserve_printable_unicode() {
+    assert_eq!(
+        escape_job_label("one\n\rtwo\t\u{1b}\u{7} café"),
+        "one\\n\\rtwo\\t\\x1b\\u{7} café"
     );
 }

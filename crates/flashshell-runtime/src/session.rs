@@ -18,15 +18,17 @@
 
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use flashshell_platform::{
-    DescriptorEndpoint, DescriptorReadError, DescriptorWriteError, Platform,
+    DescriptorEndpoint, DescriptorReadError, DescriptorWriteError, Platform, ProcessGroupId,
 };
 use flashshell_syntax::{
     Diagnostic, ParseOutcome, Script, Severity, SourceFile, SourceId, StatementKind, parse,
     render_diagnostic,
 };
 
+use crate::background::{BackgroundJobs, escape_job_label};
 use crate::builtin::{SessionState, standard_registry};
 use crate::closure::OwnedClosureContext;
 use crate::command::CommandRegistry;
@@ -47,6 +49,8 @@ use crate::presentation::{
 use crate::resolve::ExecutableProbe;
 use crate::stream::{BytePull, ByteStream, StreamPull};
 use crate::{Environment, ScopeStack, Status, Value};
+
+pub use crate::background::{JobNotice, JobNoticeError, JobNoticeId, JobNoticeKind};
 
 /// The control decision produced by one submitted edit buffer.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -91,6 +95,7 @@ pub struct Session {
     options: SessionOptions,
     registry: CommandRegistry,
     next_source: u32,
+    jobs: Option<BackgroundJobs>,
 }
 
 impl Session {
@@ -132,6 +137,7 @@ impl Session {
             options,
             registry,
             next_source: 1,
+            jobs: None,
         }
     }
 
@@ -151,6 +157,44 @@ impl Session {
     #[must_use]
     pub const fn current_status(&self) -> Option<&Status> {
         self.state.current_status()
+    }
+
+    /// Enable the interactive background-job coordinator with one owned clock.
+    pub fn enable_interactive_job_control(&mut self, clock: Arc<dyn Clock>) {
+        if self.jobs.is_none() {
+            self.jobs = Some(BackgroundJobs::new(clock));
+        }
+    }
+
+    /// Peek the next structured job notice without acknowledging it.
+    pub fn next_job_notice(&mut self) -> Option<JobNotice> {
+        self.jobs.as_mut().and_then(BackgroundJobs::next_notice)
+    }
+
+    /// Acknowledge one successfully rendered job notice.
+    pub fn acknowledge_job_notice(&mut self, notice: JobNoticeId) -> Result<(), JobNoticeError> {
+        self.jobs
+            .as_mut()
+            .ok_or(JobNoticeError::NotPending { notice })?
+            .acknowledge(notice)
+    }
+
+    /// Inspect one addressable background job.
+    #[must_use]
+    pub fn background_job(&self, job: crate::job::JobId) -> Option<&crate::job::Job> {
+        self.jobs.as_ref().and_then(|jobs| jobs.job(job))
+    }
+
+    /// Inspect one completed aggregate while its notice remains unacknowledged.
+    #[must_use]
+    pub fn background_completion(&self, job: crate::job::JobId) -> Option<&Status> {
+        self.jobs.as_ref().and_then(|jobs| jobs.completion(job))
+    }
+
+    /// Inspect the process group retained for one addressable background job.
+    #[must_use]
+    pub fn background_group(&self, job: crate::job::JobId) -> Option<ProcessGroupId> {
+        self.jobs.as_ref().and_then(|jobs| jobs.group(job))
     }
 
     /// Evaluate one submitted edit buffer against the retained session state.
@@ -191,20 +235,60 @@ impl Session {
             state,
             options,
             registry,
+            jobs,
             ..
         } = self;
 
         for statement in script.statements() {
             match statement.kind() {
                 StatementKind::Job(job) => {
-                    if job.background_span.is_some() {
-                        let error = RuntimeError::new(
-                            RuntimeErrorKind::Unsupported {
-                                feature: "background job execution",
-                            },
-                            statement.span(),
-                        );
-                        return Err(runtime(&source, &error));
+                    if let Some(background_span) = job.background_span {
+                        let Some(jobs) = jobs.as_mut() else {
+                            let error = RuntimeError::new(
+                                RuntimeErrorKind::Unsupported {
+                                    feature: "background execution in a non-interactive session",
+                                },
+                                background_span,
+                            );
+                            return Err(runtime(&source, &error));
+                        };
+                        let pipeline = match one_background_pipeline(&job.chain) {
+                            Ok(pipeline) => pipeline,
+                            Err(error) => return Err(runtime(&source, &error)),
+                        };
+                        let plan = plan_pipeline_with_options(
+                            pipeline,
+                            state.cwd(),
+                            &source,
+                            scope,
+                            state.environment(),
+                            registry,
+                            probe,
+                            options,
+                        )
+                        .map_err(|error| runtime(&source, &error))?;
+                        if let Some(stage) = plan.stages().iter().find(|stage| {
+                            matches!(stage.resolution(), PlannedResolution::Internal { .. })
+                        }) {
+                            let error = RuntimeError::new(
+                                RuntimeErrorKind::Unsupported {
+                                    feature: "background internal-command execution",
+                                },
+                                stage.span(),
+                            );
+                            return Err(runtime(&source, &error));
+                        }
+                        let command = source
+                            .slice(job.chain.span())
+                            .map(escape_job_label)
+                            .expect("a parsed chain span belongs to its source");
+                        jobs.start(&plan, platform, command)
+                            .map_err(|error| runtime(&source, &error))?;
+                        state.set_current_status(Some(
+                            Status::exit(0, crate::Duration::ZERO)
+                                .expect("zero is a valid launch status"),
+                        ));
+                        continue;
                     }
                     let step = run_chain(
                         &job.chain, state, scope, options, registry, &source, probe, platform,
@@ -250,6 +334,35 @@ enum ChainStep {
 enum Interrupt {
     Runtime(RuntimeError),
     Output(io::Error),
+}
+
+fn one_background_pipeline(
+    chain: &flashshell_syntax::ConditionalChain,
+) -> Result<&flashshell_syntax::Pipeline, RuntimeError> {
+    if let Some(operator) = chain.operators().first() {
+        return Err(RuntimeError::new(
+            RuntimeErrorKind::Unsupported {
+                feature: "background conditional-chain execution",
+            },
+            operator.span(),
+        ));
+    }
+    let and_chain = chain
+        .or_terms()
+        .first()
+        .expect("a parsed conditional chain contains an operand");
+    if let Some(operator) = and_chain.operators().first() {
+        return Err(RuntimeError::new(
+            RuntimeErrorKind::Unsupported {
+                feature: "background conditional-chain execution",
+            },
+            operator.span(),
+        ));
+    }
+    Ok(and_chain
+        .and_terms()
+        .first()
+        .expect("a parsed and-chain contains an operand"))
 }
 
 impl Interrupt {

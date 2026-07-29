@@ -367,21 +367,7 @@ fn aggregate_language_status(
         .into_iter()
         .map(|completion| language_status(completion.status, completion.duration))
         .collect();
-
-    if let [stage] = stages.as_slice() {
-        return stage.clone();
-    }
-
-    let selected = if plan.pipefail() {
-        stages
-            .iter()
-            .rposition(|stage| !stage.is_ok())
-            .unwrap_or(stages.len() - 1)
-    } else {
-        stages.len() - 1
-    };
-    Status::aggregate(stages, selected, pipeline_duration)
-        .expect("executor completion satisfies aggregate status invariants")
+    aggregate_statuses(stages, plan.pipefail(), pipeline_duration)
 }
 
 /// Plan and execute a foreground external-command conditional chain.
@@ -1455,11 +1441,11 @@ fn read_capture_chunk(
         .map_err(|error| RuntimeError::new(RuntimeErrorKind::CaptureRead(error), producer_span))
 }
 
-fn elapsed(start: Instant, end: Instant) -> Duration {
+pub(crate) fn elapsed(start: Instant, end: Instant) -> Duration {
     Duration::from_nanos(i128::from(end.as_nanos().saturating_sub(start.as_nanos())))
 }
 
-fn language_status(status: ProcessStatus, duration: Duration) -> Status {
+pub(crate) fn language_status(status: ProcessStatus, duration: Duration) -> Status {
     match status {
         ProcessStatus::Exited(code) => Status::exit(i64::from(code), duration),
         ProcessStatus::Signaled(number) => Status::signaled(
@@ -1469,4 +1455,26 @@ fn language_status(status: ProcessStatus, duration: Duration) -> Status {
         ),
     }
     .expect("monotonic execution durations are valid")
+}
+
+/// Aggregate source-ordered leaf statuses with the shared pipeline-selection
+/// rule.
+pub(crate) fn aggregate_statuses(
+    stages: Vec<Status>,
+    pipefail: bool,
+    pipeline_duration: Duration,
+) -> Status {
+    if let [stage] = stages.as_slice() {
+        return stage.clone();
+    }
+    let selected = if pipefail {
+        stages
+            .iter()
+            .rposition(|stage| !stage.is_ok())
+            .unwrap_or(stages.len() - 1)
+    } else {
+        stages.len() - 1
+    };
+    Status::aggregate(stages, selected, pipeline_duration)
+        .expect("executor completion satisfies aggregate status invariants")
 }
