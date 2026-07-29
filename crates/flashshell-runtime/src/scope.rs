@@ -3,7 +3,7 @@ use std::error::Error;
 use std::fmt;
 use std::sync::Arc;
 
-use crate::Value;
+use crate::{Environment, NativePath, Value};
 
 /// Whether a lexical binding cell may be reassigned.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -35,6 +35,20 @@ impl ScopeStack {
         Self {
             frames: vec![ScopeFrame::default()],
         }
+    }
+
+    pub(crate) fn from_environment(environment: &Environment) -> Self {
+        let mut scope = Self::new();
+        for (name, value) in environment.iter() {
+            scope
+                .declare(
+                    name,
+                    BindingMutability::Immutable,
+                    Value::Path(NativePath::new(value.to_os_string())),
+                )
+                .expect("environment entry names are unique");
+        }
+        scope
     }
 
     #[must_use]

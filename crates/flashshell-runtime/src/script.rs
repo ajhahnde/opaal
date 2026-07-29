@@ -77,14 +77,79 @@ pub fn execute_script(
     platform: &dyn Platform,
     clock: Arc<dyn Clock>,
 ) -> Result<ScriptCompletion, ScriptError> {
-    let mut session = Session::with_scope_and_registry(
+    execute_source(
+        name,
+        text,
+        cwd,
+        environment,
         ScopeStack::new(),
+        registry,
+        probe,
+        options,
+        platform,
+        clock,
+        true,
+    )
+}
+
+/// Execute one isolated conditional chain without creating a background-job
+/// coordinator.
+///
+/// Environment entries become the child's complete immutable lexical seed, and
+/// every external process inherits the caller's process group.
+#[allow(clippy::too_many_arguments)]
+pub fn execute_chain_subshell(
+    name: impl Into<String>,
+    text: impl Into<String>,
+    cwd: &Path,
+    environment: &mut Environment,
+    registry: &CommandRegistry,
+    probe: &dyn ExecutableProbe,
+    options: &SessionOptions,
+    platform: &dyn Platform,
+    clock: Arc<dyn Clock>,
+) -> Result<ScriptCompletion, ScriptError> {
+    let options = options.inherit_process_group();
+    let scope = ScopeStack::from_environment(environment);
+    execute_source(
+        name,
+        text,
+        cwd,
+        environment,
+        scope,
+        registry,
+        probe,
+        &options,
+        platform,
+        clock,
+        false,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn execute_source(
+    name: impl Into<String>,
+    text: impl Into<String>,
+    cwd: &Path,
+    environment: &mut Environment,
+    scope: ScopeStack,
+    registry: &CommandRegistry,
+    probe: &dyn ExecutableProbe,
+    options: &SessionOptions,
+    platform: &dyn Platform,
+    clock: Arc<dyn Clock>,
+    enable_background_jobs: bool,
+) -> Result<ScriptCompletion, ScriptError> {
+    let mut session = Session::with_scope_and_registry(
+        scope,
         cwd,
         environment.clone(),
         *options,
         registry.clone(),
     );
-    session.enable_script_job_control(Arc::clone(&clock));
+    if enable_background_jobs {
+        session.enable_script_job_control(Arc::clone(&clock));
+    }
     let mut output = io::stdout().lock();
     let outcome = session.submit(name, text, probe, platform, clock.as_ref(), &mut output);
 

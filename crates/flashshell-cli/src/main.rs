@@ -35,7 +35,7 @@ use flashshell_platform_posix::PosixPlatform;
 use flashshell_runtime::eval::{Clock, SystemClock};
 use flashshell_runtime::plan::SessionOptions;
 use flashshell_runtime::resolve::ExecutableProbe;
-use flashshell_runtime::script::execute_script;
+use flashshell_runtime::script::{execute_chain_subshell, execute_script};
 use flashshell_runtime::session::{
     BackgroundFailure, JobNoticeId, Session, SubmitError, SubmitOutcome,
 };
@@ -71,6 +71,11 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         Mode::Script { path } => run_script(&path),
+        Mode::AsyncChain {
+            text,
+            pipefail,
+            capture_limit,
+        } => run_async_chain(text, pipefail, capture_limit),
         Mode::Interactive => run_interactive(invocation.no_config, invocation.no_history),
     }
 }
@@ -435,6 +440,48 @@ fn run_script(path: &Path) -> ExitCode {
         &registry,
         &NativeExecutableProbe,
         &SessionOptions::default(),
+        &PosixPlatform,
+        Arc::new(SystemClock::new()) as Arc<dyn Clock>,
+    );
+
+    match result {
+        Ok(completion) => completion.status().map_or(ExitCode::SUCCESS, status_exit),
+        Err(error) => {
+            eprint!("{}", error.render());
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn run_async_chain(text: String, pipefail: bool, capture_limit: usize) -> ExitCode {
+    match PosixPlatform.ignore_hangup() {
+        Ok(()) | Err(PlatformError::Unsupported { .. }) => {}
+        Err(error) => {
+            eprintln!("fsh: cannot ignore hang-up in the background child: {error}");
+            return ExitCode::FAILURE;
+        }
+    }
+
+    let cwd = match env::current_dir() {
+        Ok(cwd) => cwd,
+        Err(error) => {
+            eprintln!("fsh: cannot read the current directory: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let mut environment = process_environment();
+    let registry = flashshell_runtime::builtin::standard_registry();
+    let options = SessionOptions::default()
+        .with_pipefail(pipefail)
+        .with_capture_limit(capture_limit);
+    let result = execute_chain_subshell(
+        "<background-chain>",
+        text,
+        &cwd,
+        &mut environment,
+        &registry,
+        &NativeExecutableProbe,
+        &options,
         &PosixPlatform,
         Arc::new(SystemClock::new()) as Arc<dyn Clock>,
     );

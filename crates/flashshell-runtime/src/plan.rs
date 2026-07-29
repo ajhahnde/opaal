@@ -45,6 +45,7 @@ pub struct ExecutionPlan {
     edges: Vec<PipelineEdge>,
     pipefail: bool,
     capture_limit: usize,
+    process_group_policy: ProcessGroupPolicy,
     span: Span,
 }
 
@@ -76,6 +77,7 @@ impl ExecutionPlan {
             edges: Vec::new(),
             pipefail,
             capture_limit,
+            process_group_policy: ProcessGroupPolicy::Isolate,
             span,
         }
     }
@@ -121,6 +123,10 @@ impl ExecutionPlan {
     #[must_use]
     pub const fn capture_limit(&self) -> usize {
         self.capture_limit
+    }
+
+    pub(crate) const fn process_group_policy(&self) -> ProcessGroupPolicy {
+        self.process_group_policy
     }
 
     /// The whole-pipeline source span.
@@ -198,6 +204,13 @@ impl ExecutionPlan {
 pub struct SessionOptions {
     pipefail: bool,
     capture_limit: usize,
+    process_group_policy: ProcessGroupPolicy,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ProcessGroupPolicy {
+    Isolate,
+    Inherit,
 }
 
 impl SessionOptions {
@@ -239,6 +252,11 @@ impl SessionOptions {
     pub const fn set_capture_limit(&mut self, limit: usize) {
         self.capture_limit = limit;
     }
+
+    pub(crate) const fn inherit_process_group(mut self) -> Self {
+        self.process_group_policy = ProcessGroupPolicy::Inherit;
+        self
+    }
 }
 
 impl Default for SessionOptions {
@@ -246,6 +264,7 @@ impl Default for SessionOptions {
         Self {
             pipefail: false,
             capture_limit: Self::DEFAULT_CAPTURE_LIMIT,
+            process_group_policy: ProcessGroupPolicy::Isolate,
         }
     }
 }
@@ -586,6 +605,7 @@ pub fn plan_pipeline_with_options(
         edges,
         pipefail: options.pipefail(),
         capture_limit: options.capture_limit(),
+        process_group_policy: options.process_group_policy,
         span: pipeline.span(),
     })
 }

@@ -23,8 +23,8 @@ use crate::command::CommandRegistry;
 use crate::eval::{Clock, Instant, RuntimeError, RuntimeErrorKind};
 use crate::job::ProcessId;
 use crate::plan::{
-    ExecutionPlan, PlannedRedirection, PlannedResolution, RedirectionAction, SessionOptions,
-    plan_pipeline_with_options, preflight,
+    ExecutionPlan, PlannedRedirection, PlannedResolution, ProcessGroupPolicy, RedirectionAction,
+    SessionOptions, plan_pipeline_with_options, preflight,
 };
 use crate::resolve::ExecutableProbe;
 use crate::{Duration, Environment, ScopeStack, Signal, Status};
@@ -520,11 +520,14 @@ struct PipelineGroup {
 
 impl PipelineGroup {
     /// Decide the placement of the first member against the live platform.
-    fn new(platform: &dyn Platform) -> Self {
-        let placement = if platform.capabilities().supports(Capability::ProcessGroups) {
-            ProcessGroup::New
-        } else {
-            ProcessGroup::Inherit
+    fn new(platform: &dyn Platform, policy: ProcessGroupPolicy) -> Self {
+        let placement = match policy {
+            ProcessGroupPolicy::Isolate
+                if platform.capabilities().supports(Capability::ProcessGroups) =>
+            {
+                ProcessGroup::New
+            }
+            ProcessGroupPolicy::Isolate | ProcessGroupPolicy::Inherit => ProcessGroup::Inherit,
         };
         Self { placement }
     }
@@ -782,7 +785,7 @@ fn start_preflighted_pipeline(
         .map(|(name, value)| (OsString::from(name), value.to_os_string()))
         .collect();
     let mut children: Vec<StartedChild> = Vec::with_capacity(plan.stages().len());
-    let mut group = PipelineGroup::new(platform);
+    let mut group = PipelineGroup::new(platform, plan.process_group_policy());
 
     for (index, stage) in plan.stages().iter().enumerate() {
         let input = index.checked_sub(1).and_then(|edge| pipes[edge].0.take());
@@ -1025,7 +1028,7 @@ pub(crate) fn start_mixed_pipeline(
         .collect();
     let mut children = Vec::with_capacity(plan.stages().len() - internal.len());
     let started_at = clock.now();
-    let mut group = PipelineGroup::new(platform);
+    let mut group = PipelineGroup::new(platform, plan.process_group_policy());
 
     for (index, stage) in plan.stages().iter().enumerate() {
         if internal.contains(&index) {

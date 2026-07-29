@@ -53,7 +53,7 @@ use crate::presentation::{
 };
 use crate::resolve::ExecutableProbe;
 use crate::stream::{BytePull, ByteStream, StreamPull};
-use crate::{BindingMutability, Environment, NativePath, ScopeStack, Status, Value};
+use crate::{Environment, ScopeStack, Status, Value};
 
 pub use crate::background::{
     BackgroundFailure, BackgroundFailureReason, JobNotice, JobNoticeError, JobNoticeId,
@@ -326,7 +326,7 @@ impl Session {
                         ) {
                             return Err(runtime(&source, &error));
                         }
-                        let mut child_scope = scope_from_environment(state.environment());
+                        let mut child_scope = ScopeStack::from_environment(state.environment());
                         let direct_pipeline =
                             one_background_pipeline(&job.chain).filter(|pipeline| {
                                 pipeline_is_all_external(
@@ -687,20 +687,6 @@ fn pipeline_is_all_external(
         };
         !registry.contains(name)
     })
-}
-
-fn scope_from_environment(environment: &Environment) -> ScopeStack {
-    let mut scope = ScopeStack::new();
-    for (name, value) in environment.iter() {
-        scope
-            .declare(
-                name,
-                BindingMutability::Immutable,
-                Value::Path(NativePath::new(value.to_os_string())),
-            )
-            .expect("environment entry names are unique");
-    }
-    scope
 }
 
 fn background_shell_plan(

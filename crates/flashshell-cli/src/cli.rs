@@ -17,6 +17,12 @@ pub enum Mode {
     Version,
     /// Run one script file non-interactively.
     Script { path: PathBuf },
+    /// Run one isolated chain supplied by the parent shell.
+    AsyncChain {
+        text: String,
+        pipefail: bool,
+        capture_limit: usize,
+    },
     /// Start an interactive session.
     Interactive,
 }
@@ -36,6 +42,14 @@ pub enum CliError {
     UnknownOption(String),
     /// More than one positional argument.
     UnexpectedArgument(String),
+    /// An option that requires a following value had none.
+    MissingOptionValue(&'static str),
+    /// An option's value could not be decoded or parsed.
+    InvalidOptionValue { option: &'static str, value: String },
+    /// A reserved mode omitted one of its required options.
+    MissingRequiredOption(&'static str),
+    /// A singleton option appeared more than once.
+    DuplicateOption(&'static str),
 }
 
 impl CliError {
@@ -45,6 +59,14 @@ impl CliError {
         match self {
             Self::UnknownOption(option) => format!("unknown option '{option}'"),
             Self::UnexpectedArgument(_) => "expected one script path".to_owned(),
+            Self::MissingOptionValue(option) => format!("option '{option}' requires a value"),
+            Self::InvalidOptionValue { option, value } => {
+                format!("invalid value '{value}' for option '{option}'")
+            }
+            Self::MissingRequiredOption(option) => {
+                format!("reserved invocation requires option '{option}'")
+            }
+            Self::DuplicateOption(option) => format!("option '{option}' may appear only once"),
         }
     }
 }
@@ -64,9 +86,13 @@ where
     let mut no_config = false;
     let mut no_history = false;
     let mut script: Option<PathBuf> = None;
+    let mut async_chain: Option<String> = None;
+    let mut async_pipefail = false;
+    let mut async_capture_limit: Option<usize> = None;
     let mut options_ended = false;
+    let mut arguments = arguments.into_iter();
 
-    for argument in arguments {
+    while let Some(argument) = arguments.next() {
         if script.is_some() {
             return Err(CliError::UnexpectedArgument(
                 argument.to_string_lossy().into_owned(),
@@ -74,6 +100,11 @@ where
         }
 
         if options_ended {
+            if async_chain.is_some() || async_pipefail || async_capture_limit.is_some() {
+                return Err(CliError::UnexpectedArgument(
+                    argument.to_string_lossy().into_owned(),
+                ));
+            }
             script = Some(PathBuf::from(argument));
             continue;
         }
@@ -83,6 +114,42 @@ where
             Some("--version" | "-V") => version = true,
             Some("--no-config") => no_config = true,
             Some("--no-history") => no_history = true,
+            Some("--async-chain") => {
+                let value = arguments
+                    .next()
+                    .ok_or(CliError::MissingOptionValue("--async-chain"))?;
+                let text = value
+                    .into_string()
+                    .map_err(|value| CliError::InvalidOptionValue {
+                        option: "--async-chain",
+                        value: value.to_string_lossy().into_owned(),
+                    })?;
+                if async_chain.replace(text).is_some() {
+                    return Err(CliError::DuplicateOption("--async-chain"));
+                }
+            }
+            Some("--async-pipefail") => {
+                if async_pipefail {
+                    return Err(CliError::DuplicateOption("--async-pipefail"));
+                }
+                async_pipefail = true;
+            }
+            Some("--async-capture-limit") => {
+                let value = arguments
+                    .next()
+                    .ok_or(CliError::MissingOptionValue("--async-capture-limit"))?;
+                let rendered = value.to_string_lossy().into_owned();
+                let limit =
+                    rendered
+                        .parse::<usize>()
+                        .map_err(|_| CliError::InvalidOptionValue {
+                            option: "--async-capture-limit",
+                            value: rendered,
+                        })?;
+                if async_capture_limit.replace(limit).is_some() {
+                    return Err(CliError::DuplicateOption("--async-capture-limit"));
+                }
+            }
             Some("--") => options_ended = true,
             Some(text) if text.starts_with('-') && text != "-" => {
                 return Err(CliError::UnknownOption(text.to_owned()));
@@ -95,6 +162,20 @@ where
         Mode::Help
     } else if version {
         Mode::Version
+    } else if let Some(text) = async_chain {
+        if let Some(path) = script {
+            return Err(CliError::UnexpectedArgument(
+                path.to_string_lossy().into_owned(),
+            ));
+        }
+        Mode::AsyncChain {
+            text,
+            pipefail: async_pipefail,
+            capture_limit: async_capture_limit
+                .ok_or(CliError::MissingRequiredOption("--async-capture-limit"))?,
+        }
+    } else if async_pipefail || async_capture_limit.is_some() {
+        return Err(CliError::MissingRequiredOption("--async-chain"));
     } else if let Some(path) = script {
         Mode::Script { path }
     } else {
@@ -191,6 +272,60 @@ mod tests {
         assert_eq!(
             parse(&["run.fsh", "--no-config"]),
             Err(CliError::UnexpectedArgument("--no-config".to_owned()))
+        );
+    }
+
+    #[test]
+    fn the_reserved_chain_mode_carries_its_text_and_options() {
+        let invocation = parse(&[
+            "--async-chain",
+            "^tool && ^other",
+            "--async-pipefail",
+            "--async-capture-limit",
+            "4096",
+        ])
+        .expect("the reserved invocation is valid");
+        assert_eq!(
+            invocation.mode,
+            Mode::AsyncChain {
+                text: "^tool && ^other".to_owned(),
+                pipefail: true,
+                capture_limit: 4096,
+            }
+        );
+    }
+
+    #[test]
+    fn reserved_chain_values_are_required_and_validated() {
+        assert_eq!(
+            parse(&["--async-chain"]),
+            Err(CliError::MissingOptionValue("--async-chain"))
+        );
+        assert_eq!(
+            parse(&["--async-chain", "^tool"]),
+            Err(CliError::MissingRequiredOption("--async-capture-limit"))
+        );
+        assert_eq!(
+            parse(&["--async-chain", "^tool", "--async-capture-limit", "many"]),
+            Err(CliError::InvalidOptionValue {
+                option: "--async-capture-limit",
+                value: "many".to_owned(),
+            })
+        );
+        assert_eq!(
+            parse(&["--async-pipefail"]),
+            Err(CliError::MissingRequiredOption("--async-chain"))
+        );
+        assert_eq!(
+            parse(&[
+                "--async-chain",
+                "^tool",
+                "--async-pipefail",
+                "--async-pipefail",
+                "--async-capture-limit",
+                "4096",
+            ]),
+            Err(CliError::DuplicateOption("--async-pipefail"))
         );
     }
 }

@@ -91,6 +91,74 @@ fn help_describes_the_script_cli() {
 }
 
 #[test]
+fn the_help_text_does_not_advertise_the_reserved_chain_mode() {
+    let output = fsh(&["--help"]);
+
+    assert!(output.status.success());
+    let rendered = String::from_utf8(output.stdout).expect("help output should be UTF-8");
+    assert!(!rendered.contains("async-chain"));
+}
+
+#[test]
+fn the_reserved_chain_mode_uses_the_environment_and_short_circuits() {
+    let temp = TempDir::new("reserved-chain");
+    let marker = temp.path().join("unreached.txt");
+    let source = format!(
+        "^{} exit $FLASH_OK || ^{} late 0 {} 9",
+        status_fixture(),
+        status_fixture(),
+        marker.display()
+    );
+    let output = Command::new(env!("CARGO_BIN_EXE_fsh"))
+        .args([
+            "--async-chain",
+            source.as_str(),
+            "--async-pipefail",
+            "--async-capture-limit",
+            "4096",
+        ])
+        .current_dir(temp.path())
+        .env("PATH", fixture_directory())
+        .env("FLASH_OK", "0")
+        .output()
+        .expect("fsh should start");
+
+    assert!(output.status.success(), "{output:?}");
+    assert!(output.stdout.is_empty());
+    assert!(output.stderr.is_empty());
+    assert!(
+        !marker.exists(),
+        "the successful left side must skip the right"
+    );
+}
+
+#[test]
+fn a_script_runs_and_joins_a_background_conditional_chain() {
+    let temp = TempDir::new("background-chain");
+    let marker = temp.path().join("reached.txt");
+    let script = temp.script(
+        "background-chain.fsh",
+        &format!(
+            "^{} exit 7 || ^{} late 0 {} 0 &\n^{} exit 0\n",
+            status_fixture(),
+            status_fixture(),
+            marker.display(),
+            status_fixture(),
+        ),
+    );
+
+    let output = run_script(&script, temp.path(), fixture_directory());
+
+    assert!(output.status.success(), "{output:?}");
+    assert!(output.stdout.is_empty());
+    assert!(output.stderr.is_empty());
+    assert!(
+        marker.exists(),
+        "the child shell should reach and complete the right side"
+    );
+}
+
+#[test]
 fn script_preserves_empty_space_and_unicode_arguments() {
     let temp = TempDir::new("argv");
     let report = temp.path().join("report.bin");
