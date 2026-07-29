@@ -12,8 +12,8 @@ use std::sync::{Arc, Mutex};
 
 use flashshell_platform::{
     Capabilities, Capability, ChildProcess, DescriptorEndpoint, FakePlatform, FileActionError,
-    FileOpenRequest, PipeEndpoints, PipeError, Platform, ProcessGroup, ProcessStatus,
-    RecordingPlatform, SpawnError, SpawnRequest, TerminateError, WaitError,
+    FileOpenRequest, JobSignal, PipeEndpoints, PipeError, Platform, ProcessGroup, ProcessStatus,
+    RecordingPlatform, SignalError, SpawnError, SpawnRequest, TerminateError, WaitError,
 };
 use flashshell_platform_posix::PosixPlatform;
 use flashshell_runtime::command::CommandRegistry;
@@ -857,4 +857,109 @@ fn a_platform_without_terminal_ownership_still_runs_a_foreground_pipeline() {
     // Terminal ownership is a capability, not a requirement: without it the
     // job runs in the shell's terminal exactly as it did before job control.
     assert!(log.foreground_handovers().is_empty());
+}
+
+/// Plan one external stage per entry of `stages`, each running the fixture with
+/// the given arguments.
+///
+/// The fixture is never actually executed by these tests, which drive a fake
+/// platform; it supplies a path a real executable probe accepts, so the plan is
+/// the same shape a real pipeline would produce.
+fn fixture_pipeline_plan(stages: &[&str]) -> ExecutionPlan {
+    let fixture = PathBuf::from(env!("CARGO_BIN_EXE_flashshell-stream-fixture"));
+    let directory = fixture.parent().expect("fixture has a parent").to_owned();
+    let name = fixture.file_name().expect("fixture has a name");
+    let text = stages
+        .iter()
+        .map(|arguments| format!("^{} {arguments}", name.to_string_lossy()))
+        .collect::<Vec<_>>()
+        .join(" | ");
+    let file = source(&text);
+    let syntax = pipeline(&file);
+    plan_pipeline(
+        &syntax,
+        &directory,
+        &file,
+        &mut ScopeStack::new(),
+        &Environment::from_snapshot([("PATH", directory.as_os_str().to_os_string())]),
+        &CommandRegistry::new(),
+        &ExactProbe(fixture),
+    )
+    .expect("the fixture pipeline plan should build")
+}
+
+#[test]
+fn a_stopped_foreground_job_is_resumed_in_place_and_still_completes() {
+    let platform = RecordingPlatform::new(FakePlatform::with_stopping_children(
+        Capabilities::full(),
+        1,
+    ));
+    let signals = platform.signal_log();
+    let spawns = platform.spawn_log();
+    let plan = fixture_pipeline_plan(&["source 0 0", "sink 0 0"]);
+
+    let statuses = execute_foreground_pipeline(&plan, &platform).expect("the pipeline completes");
+
+    assert_eq!(
+        statuses,
+        vec![ProcessStatus::Exited(0), ProcessStatus::Exited(0)]
+    );
+    let leader = spawns.records()[0]
+        .process_group()
+        .expect("the first member leads the group");
+    let records = signals.records();
+    // One resume per observed stop, each addressed to the group the pipeline
+    // actually joined rather than to any group at all. The fake gives every
+    // child its own stop counter, so a two-stage pipeline reports two
+    // independent stops; that a single real resume signal reaches every member
+    // at once is a host property, proven by the adapter rather than here.
+    assert_eq!(records.len(), 2);
+    for record in &records {
+        assert_eq!(record.signal(), JobSignal::Continue);
+        assert_eq!(record.group(), leader);
+    }
+}
+
+#[test]
+fn a_stop_that_cannot_be_resumed_is_an_error_rather_than_a_spin() {
+    let platform =
+        FakePlatform::with_stopping_children(Capabilities::full_without(Capability::Signals), 1);
+    let plan = fixture_pipeline_plan(&["source 0 0"]);
+
+    match execute_foreground_pipeline(&plan, &platform) {
+        // The group exists here, so only the missing capability can produce
+        // this: a platform error rather than a host delivery failure.
+        Err(error) => assert!(
+            matches!(
+                error.kind(),
+                RuntimeErrorKind::JobSignal(SignalError::Platform(_)),
+            ),
+            "expected a signal capability failure, got {:?}",
+            error.kind(),
+        ),
+        Ok(statuses) => panic!("a job that cannot be resumed must not report {statuses:?}"),
+    }
+}
+
+#[test]
+fn a_stop_without_an_established_group_is_an_error_rather_than_a_spin() {
+    // Without process groups every member stays in the shell's own group, so a
+    // terminal stop would have stopped the shell too. Observing one anyway is a
+    // state the executor must report rather than retry forever. The kind is
+    // asserted exactly, so this cannot pass for the missing-capability reason
+    // the neighbouring test pins.
+    let platform = FakePlatform::with_stopping_children(
+        Capabilities::full_without(Capability::ProcessGroups),
+        1,
+    );
+    let plan = fixture_pipeline_plan(&["source 0 0"]);
+
+    match execute_foreground_pipeline(&plan, &platform) {
+        Err(error) => assert!(
+            matches!(error.kind(), RuntimeErrorKind::UngroupedStop),
+            "expected an ungrouped stop, got {:?}",
+            error.kind(),
+        ),
+        Ok(statuses) => panic!("an ungrouped stop must not report {statuses:?}"),
+    }
 }

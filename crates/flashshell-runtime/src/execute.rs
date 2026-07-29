@@ -14,7 +14,8 @@ use std::thread;
 
 use flashshell_platform::{
     Capability, ChildDescriptor, ChildProcess, DescriptorEndpoint, FileOpenMode, FileOpenRequest,
-    ForegroundTerminalGuard, Platform, ProcessGroup, ProcessGroupId, ProcessStatus, SpawnRequest,
+    ForegroundTerminalGuard, JobSignal, Platform, ProcessGroup, ProcessGroupId, ProcessStatus,
+    ProcessTransition, SpawnRequest,
 };
 use flashshell_syntax::{ConditionalChain, OutputMode, PipeOperator, Pipeline, SourceFile};
 
@@ -150,6 +151,7 @@ where
     // Held across the drain and the wait; `Drop` is the backstop that returns
     // the terminal even when the drain callback panics.
     let foreground = take_foreground(plan, platform, started.group)?;
+    let group = started.group;
     let children = started.children;
 
     let (wait_result, drain_result) = thread::scope(|scope| {
@@ -159,7 +161,7 @@ where
         ready_receiver
             .recv()
             .expect("the drain task signals before returning");
-        let wait_result = wait_in_source_order(children, plan, Some(clock));
+        let wait_result = wait_in_source_order(children, plan, platform, group, Some(clock));
         let drain_result = drain_task
             .join()
             .expect("a drain callback panic is an implementation failure");
@@ -511,7 +513,8 @@ fn execute_preflighted_pipeline_inner(
 ) -> Result<Vec<StageCompletion>, RuntimeError> {
     let started = start_preflighted_pipeline(plan, platform, clock, None)?;
     let foreground = take_foreground(plan, platform, started.group)?;
-    let waited = wait_in_source_order(started.children, plan, clock);
+    let group = started.group;
+    let waited = wait_in_source_order(started.children, plan, platform, group, clock);
     let released = release_foreground(foreground, plan);
     let completions = waited?;
     released?;
@@ -619,6 +622,31 @@ fn take_foreground(
     })
 }
 
+/// Resume a stopped job where it was, so the wait can continue.
+///
+/// Until the job table can hold a stopped job and the built-ins can address it,
+/// leaving one stopped would strand a process the session cannot reach. One
+/// signal goes to the group rather than to each member, because the terminal
+/// stops every member at once: resuming only the member currently being waited
+/// on would release a producer whose consumer is still stopped, and the wait
+/// would then block on a pipe nothing is draining.
+///
+/// A job with no group and a platform that cannot signal are both reported
+/// rather than retried, because neither can be made to progress by observing
+/// the job again.
+fn resume_stopped_job(
+    platform: &dyn Platform,
+    group: Option<ProcessGroupId>,
+    span: flashshell_syntax::Span,
+) -> Result<(), RuntimeError> {
+    let Some(group) = group else {
+        return Err(RuntimeError::new(RuntimeErrorKind::UngroupedStop, span));
+    };
+    platform
+        .signal_process_group(group, JobSignal::Continue)
+        .map_err(|error| RuntimeError::new(RuntimeErrorKind::JobSignal(error), span))
+}
+
 fn start_preflighted_pipeline(
     plan: &ExecutionPlan,
     platform: &dyn Platform,
@@ -723,6 +751,9 @@ pub(crate) struct MixedPipeline {
     /// its own, and it must not take the terminal back before the external
     /// members have finished with it.
     foreground: Option<Box<dyn ForegroundTerminalGuard>>,
+    /// The group the external members share, when the platform established one.
+    /// Retained so a member that reports a stop can be resumed as one job.
+    group: Option<ProcessGroupId>,
     input: Option<Box<dyn DescriptorEndpoint>>,
     output: Option<Box<dyn DescriptorEndpoint>>,
     started_at: Instant,
@@ -743,14 +774,41 @@ impl MixedPipeline {
     pub(crate) fn wait(
         self,
         plan: &ExecutionPlan,
+        platform: &dyn Platform,
         clock: &dyn Clock,
     ) -> Result<(Vec<(usize, Status)>, Duration), RuntimeError> {
         let mut statuses = Vec::with_capacity(self.children.len());
         let mut first_error = None;
         let foreground = self.foreground;
+        let group = self.group;
         for mut started in self.children {
             let stage = &plan.stages()[started.index];
-            match started.child.child.wait() {
+            let waited = loop {
+                match started.child.child.wait_for_transition() {
+                    Ok(ProcessTransition::Completed(status)) => break Ok(status),
+                    Ok(ProcessTransition::Stopped { .. }) => {
+                        if let Err(error) = resume_stopped_job(platform, group, stage.span()) {
+                            // Unlike the source-ordered wait, nothing here is
+                            // blocked on this member's descriptors: the
+                            // internal island finished before the wait began.
+                            // Reaping still matters, because a stop nothing can
+                            // lift would leave the member alive and stopped
+                            // after the shell moves on, holding whatever it
+                            // inherited.
+                            let _ = started.child.child.terminate();
+                            let _ = started.child.child.wait();
+                            break Err(error);
+                        }
+                    }
+                    Err(error) => {
+                        break Err(RuntimeError::new(
+                            RuntimeErrorKind::ProcessWait(error),
+                            stage.span(),
+                        ));
+                    }
+                }
+            };
+            match waited {
                 Ok(status) => {
                     let duration = started
                         .child
@@ -759,10 +817,7 @@ impl MixedPipeline {
                     statuses.push((started.index, language_status(status, duration)));
                 }
                 Err(error) if first_error.is_none() => {
-                    first_error = Some(RuntimeError::new(
-                        RuntimeErrorKind::ProcessWait(error),
-                        stage.span(),
-                    ));
+                    first_error = Some(error);
                 }
                 Err(_) => {}
             }
@@ -912,10 +967,12 @@ pub(crate) fn start_mixed_pipeline(
     }
 
     drop(pipes);
-    let foreground = take_foreground(plan, platform, group.established())?;
+    let established = group.established();
+    let foreground = take_foreground(plan, platform, established)?;
     Ok(MixedPipeline {
         children,
         foreground,
+        group: established,
         input,
         output,
         started_at,
@@ -1167,12 +1224,37 @@ impl StageDescriptorMap {
 fn wait_in_source_order(
     children: Vec<StartedChild>,
     plan: &ExecutionPlan,
+    platform: &dyn Platform,
+    group: Option<ProcessGroupId>,
     clock: Option<&dyn Clock>,
 ) -> Result<Vec<StageCompletion>, RuntimeError> {
     let mut statuses = Vec::with_capacity(children.len());
     let mut first_error = None;
     for (mut child, stage) in children.into_iter().zip(plan.stages()) {
-        match child.child.wait() {
+        let waited = loop {
+            match child.child.wait_for_transition() {
+                Ok(ProcessTransition::Completed(status)) => break Ok(status),
+                Ok(ProcessTransition::Stopped { .. }) => {
+                    if let Err(error) = resume_stopped_job(platform, group, stage.span()) {
+                        // A stop nothing can lift would otherwise hold the
+                        // stage's descriptors for the life of the host,
+                        // including a capture pipe a reader is still draining
+                        // to end of file. Termination reaches a stopped
+                        // process, so ending it here releases them.
+                        let _ = child.child.terminate();
+                        let _ = child.child.wait();
+                        break Err(error);
+                    }
+                }
+                Err(error) => {
+                    break Err(RuntimeError::new(
+                        RuntimeErrorKind::ProcessWait(error),
+                        stage.span(),
+                    ));
+                }
+            }
+        };
+        match waited {
             Ok(status) => {
                 let duration = match (child.started_at, clock) {
                     (Some(started_at), Some(clock)) => elapsed(started_at, clock.now()),
@@ -1182,10 +1264,7 @@ fn wait_in_source_order(
             }
             Err(error) => {
                 if first_error.is_none() {
-                    first_error = Some(RuntimeError::new(
-                        RuntimeErrorKind::ProcessWait(error),
-                        stage.span(),
-                    ));
+                    first_error = Some(error);
                 }
             }
         }

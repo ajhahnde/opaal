@@ -15,7 +15,7 @@ use std::time::Instant as SystemInstant;
 
 use flashshell_platform::{
     DescriptorReadError, DescriptorWriteError, DirectoryReadError, FileActionError, PipeError,
-    PlatformError, SpawnError, WaitError, WorkingDirectoryError,
+    PlatformError, SignalError, SpawnError, WaitError, WorkingDirectoryError,
 };
 use flashshell_syntax::{
     AndChain, Assignment, BinaryOperator, Block, CallExpression, Closure, ConditionalChain,
@@ -328,6 +328,21 @@ pub enum RuntimeErrorKind {
     /// them without the terminal would send every keyboard interrupt to the
     /// shell instead of to the job.
     ForegroundTerminal(PlatformError),
+    /// A stopped job could not be resumed, so waiting on it could not continue.
+    ///
+    /// Distinct from a wait failure: the job exists and is merely stopped. A
+    /// stop is reported to the observer once, so waiting again without resuming
+    /// the job would block until something else resumed it, and in a session
+    /// with no way to address a stopped job nothing ever would.
+    JobSignal(SignalError),
+    /// A job reported a stop without belonging to a process group.
+    ///
+    /// Resuming addresses the group, so there is nothing to send the resume to.
+    /// Every member stays in the shell's own group when process groups are
+    /// unavailable, which means a terminal stop would have stopped the shell as
+    /// well; observing one anyway is a state the executor reports rather than
+    /// one it can act on.
+    UngroupedStop,
 }
 
 /// Renders a carrier set as a human list: `A`, `A or B`, or `A, B, or C`.
@@ -548,6 +563,12 @@ impl fmt::Display for RuntimeErrorKind {
             Self::ProcessWait(error) => error.fmt(formatter),
             Self::ForegroundTerminal(error) => {
                 write!(formatter, "terminal handover to the job failed: {error}")
+            }
+            Self::JobSignal(error) => {
+                write!(formatter, "resuming the stopped job failed: {error}")
+            }
+            Self::UngroupedStop => {
+                formatter.write_str("the stopped job has no process group to resume")
             }
         }
     }

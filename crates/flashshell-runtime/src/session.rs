@@ -536,7 +536,7 @@ fn run_mixed_pipeline(
         return Ok(exit);
     }
 
-    let (external_statuses, pipeline_duration) = mixed.wait(plan, clock)?;
+    let (external_statuses, pipeline_duration) = mixed.wait(plan, platform, clock)?;
     indexed_statuses.extend(external_statuses);
     indexed_statuses.sort_by_key(|(index, _)| *index);
     let statuses: Vec<Status> = indexed_statuses
