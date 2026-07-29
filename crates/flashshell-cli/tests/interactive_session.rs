@@ -6,7 +6,7 @@ use std::rc::Rc;
 
 use flashshell_cli::editor::{EditorError, EditorEvent, EditorPrompt, LineEditor};
 use flashshell_cli::interactive::{
-    EvaluationControl, InteractiveDiagnostic, InteractiveEvaluator, InteractiveExit,
+    EvaluationControl, ExitDecision, InteractiveDiagnostic, InteractiveEvaluator, InteractiveExit,
     InteractiveNotice, InteractiveNoticeError, InteractiveNoticeId, InteractiveSessionError,
     format_job_notice, run_interactive_session,
 };
@@ -39,6 +39,59 @@ impl ScriptedEditor {
         Self {
             calls: Some(calls),
             ..Self::new(events)
+        }
+    }
+
+    fn notices(&self) -> &[String] {
+        &self.notices
+    }
+}
+
+/// An evaluator that refuses the first `refusals` exit attempts.
+struct GatedEvaluator {
+    refusals: usize,
+    rendered: String,
+    exit_requests: usize,
+}
+
+impl GatedEvaluator {
+    fn refusing_once(rendered: &str) -> Self {
+        Self {
+            refusals: 1,
+            rendered: rendered.to_owned(),
+            exit_requests: 0,
+        }
+    }
+
+    fn permitting() -> Self {
+        Self {
+            refusals: 0,
+            rendered: String::new(),
+            exit_requests: 0,
+        }
+    }
+
+    const fn exit_requests(&self) -> usize {
+        self.exit_requests
+    }
+}
+
+impl InteractiveEvaluator for GatedEvaluator {
+    fn request_exit(&mut self) -> ExitDecision {
+        self.exit_requests += 1;
+        if self.refusals == 0 {
+            return ExitDecision::Permitted;
+        }
+        self.refusals -= 1;
+        ExitDecision::Refused {
+            rendered: self.rendered.clone(),
+        }
+    }
+
+    fn evaluate(&mut self, source: &str) -> Result<EvaluationControl, InteractiveDiagnostic> {
+        match source {
+            "exit 0" => Ok(EvaluationControl::Exit(0)),
+            _ => Ok(EvaluationControl::Continue),
         }
     }
 }
@@ -366,4 +419,66 @@ fn structured_job_notices_have_stable_prompt_safe_formatting() {
         ),
         "[1] Failed   command: wait failed\n"
     );
+}
+
+#[test]
+fn a_refused_exit_writes_the_refusal_and_keeps_the_session_alive() {
+    let mut editor = ScriptedEditor::new(vec![EditorEvent::EndOfInput, EditorEvent::EndOfInput]);
+    let mut evaluator = GatedEvaluator::refusing_once("fsh: 1 live background job\n");
+    let mut diagnostics = Vec::new();
+
+    let exit = run_interactive_session(
+        &mut editor,
+        &mut evaluator,
+        &EditorPrompt::default(),
+        &mut diagnostics,
+    )
+    .expect("a refused exit is not a failure");
+
+    assert_eq!(exit, InteractiveExit::EndOfInput);
+    assert_eq!(
+        editor.notices(),
+        ["fsh: 1 live background job\n".to_owned()],
+        "the refusal must be written through the editor, not the diagnostic stream"
+    );
+    assert_eq!(evaluator.exit_requests(), 2);
+    assert!(diagnostics.is_empty());
+}
+
+#[test]
+fn a_refused_explicit_exit_is_also_gated() {
+    let mut editor = ScriptedEditor::new(vec![
+        EditorEvent::Submitted("exit 0".to_owned()),
+        EditorEvent::Submitted("exit 0".to_owned()),
+    ]);
+    let mut evaluator = GatedEvaluator::refusing_once("fsh: 1 live background job\n");
+
+    let exit = run_interactive_session(
+        &mut editor,
+        &mut evaluator,
+        &EditorPrompt::default(),
+        &mut Vec::new(),
+    )
+    .expect("a refused exit is not a failure");
+
+    assert_eq!(exit, InteractiveExit::Requested(0));
+    assert_eq!(evaluator.exit_requests(), 2);
+}
+
+#[test]
+fn a_permitted_exit_asks_once_and_writes_nothing() {
+    let mut editor = ScriptedEditor::new(vec![EditorEvent::EndOfInput]);
+    let mut evaluator = GatedEvaluator::permitting();
+
+    let exit = run_interactive_session(
+        &mut editor,
+        &mut evaluator,
+        &EditorPrompt::default(),
+        &mut Vec::new(),
+    )
+    .expect("a permitted exit is not a failure");
+
+    assert_eq!(exit, InteractiveExit::EndOfInput);
+    assert_eq!(evaluator.exit_requests(), 1);
+    assert!(editor.notices().is_empty());
 }

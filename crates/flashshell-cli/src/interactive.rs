@@ -1,8 +1,8 @@
 use std::error::Error;
-use std::fmt;
+use std::fmt::{self, Write as _};
 use std::io::{self, Write};
 
-use flashshell_runtime::background::JobNoticeKind;
+use flashshell_runtime::background::{JobNoticeKind, LiveJob, LiveJobState};
 use flashshell_runtime::job::JobId;
 
 use crate::editor::{EditorError, EditorEvent, EditorPrompt, LineEditor};
@@ -138,11 +138,55 @@ pub fn format_job_notice(job: JobId, kind: &JobNoticeKind, command: &str) -> Str
     }
 }
 
+/// Render one refusal listing for the live jobs a session would abandon.
+#[must_use]
+pub fn format_live_jobs(jobs: &[LiveJob]) -> String {
+    let mut rendered = format!(
+        "fsh: {} live background job{}\n",
+        jobs.len(),
+        if jobs.len() == 1 { "" } else { "s" }
+    );
+    for live in jobs {
+        let state = match live.state() {
+            LiveJobState::Running => "Running",
+            LiveJobState::Stopped => "Stopped",
+        };
+        let _ = writeln!(
+            rendered,
+            "[{}] {state}  {}",
+            live.job().get(),
+            live.command()
+        );
+    }
+    rendered.push_str("fsh: exit again to hang up\n");
+    rendered
+}
+
+/// Whether an interactive session may end, and what to show if it may not.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ExitDecision {
+    /// The session may end now.
+    Permitted,
+    /// The session may not end yet; the text is one complete shell-owned notice.
+    Refused {
+        /// One complete refusal notice, newline-terminated.
+        rendered: String,
+    },
+}
+
 /// Stateful evaluation boundary owned for the lifetime of an interactive session.
 pub trait InteractiveEvaluator {
     /// Peek one notice to present before the next prompt.
     fn next_notice(&mut self) -> Option<InteractiveNotice> {
         None
+    }
+
+    /// Decide whether the session may end.
+    ///
+    /// Asked at every exit route. A refusal is presented through the editor, so
+    /// the editor keeps sole ownership of terminal writes at this boundary.
+    fn request_exit(&mut self) -> ExitDecision {
+        ExitDecision::Permitted
     }
 
     /// Acknowledge one notice only after the editor has written it successfully.
@@ -230,15 +274,23 @@ pub fn run_interactive_session(
         match event {
             EditorEvent::Submitted(source) => match evaluator.evaluate(&source) {
                 Ok(EvaluationControl::Continue) => {}
-                Ok(EvaluationControl::Exit(status)) => {
-                    return Ok(InteractiveExit::Requested(status));
-                }
+                Ok(EvaluationControl::Exit(status)) => match evaluator.request_exit() {
+                    ExitDecision::Permitted => return Ok(InteractiveExit::Requested(status)),
+                    ExitDecision::Refused { rendered } => editor
+                        .write_notice(&rendered)
+                        .map_err(InteractiveSessionError::Editor)?,
+                },
                 Err(diagnostic) => diagnostic_output
                     .write_all(diagnostic.rendered().as_bytes())
                     .map_err(InteractiveSessionError::DiagnosticOutput)?,
             },
             EditorEvent::Cancelled => {}
-            EditorEvent::EndOfInput => return Ok(InteractiveExit::EndOfInput),
+            EditorEvent::EndOfInput => match evaluator.request_exit() {
+                ExitDecision::Permitted => return Ok(InteractiveExit::EndOfInput),
+                ExitDecision::Refused { rendered } => editor
+                    .write_notice(&rendered)
+                    .map_err(InteractiveSessionError::Editor)?,
+            },
             EditorEvent::HostCommand(_) => {
                 return Err(InteractiveSessionError::UnsupportedEditorEvent(
                     "host command",
