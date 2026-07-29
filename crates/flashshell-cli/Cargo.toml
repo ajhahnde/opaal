@@ -19,6 +19,13 @@ bench = false
 doc = false
 
 [[bin]]
+name = "flashshell-e2e-hangup-observer-fixture"
+path = "tests/fixtures/hangup_observer.rs"
+test = false
+bench = false
+doc = false
+
+[[bin]]
 name = "flashshell-e2e-status-fixture"
 path = "../../tests/fixtures/status.rs"
 test = false

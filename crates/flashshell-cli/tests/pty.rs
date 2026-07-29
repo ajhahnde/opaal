@@ -21,11 +21,12 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use rustix::fs::{Mode, OFlags, open};
-use rustix::process::{Pid, Signal, kill_process};
+use rustix::process::{Pid, Signal, kill_process, kill_process_group, test_kill_process};
 use rustix::pty::{OpenptFlags, grantpt, openpt, ptsname, unlockpt};
 use rustix::termios::{Winsize, tcsetwinsize};
 
 const FSH: &str = env!("CARGO_BIN_EXE_fsh");
+const HANGUP_OBSERVER: &str = env!("CARGO_BIN_EXE_flashshell-e2e-hangup-observer-fixture");
 const PROCESS_OBSERVER: &str = env!("CARGO_BIN_EXE_flashshell-e2e-process-observer-fixture");
 const ENTER: &[u8] = b"\r";
 const CTRL_C: &[u8] = b"\x03";
@@ -202,6 +203,13 @@ impl Pty {
         }
     }
 
+    fn is_running(&mut self) -> bool {
+        self.child
+            .try_wait()
+            .expect("inspect the shell process")
+            .is_none()
+    }
+
     fn rendered(&self) -> String {
         let bytes = self.output.lock().unwrap().clone();
         strip_ansi(&String::from_utf8_lossy(&bytes))
@@ -309,6 +317,87 @@ fn await_group_reports(directory: &Path, count: usize) -> Vec<u64> {
             groups.len()
         );
         thread::sleep(Duration::from_millis(10));
+    }
+}
+
+fn await_one_process_group_report(directory: &Path) -> (Pid, Pid) {
+    let deadline = Instant::now() + TIMEOUT;
+    loop {
+        let reports: Vec<_> = fs::read_dir(directory)
+            .expect("read the group report directory")
+            .map(|entry| entry.expect("read one group report entry").path())
+            .filter(|path| {
+                path.extension()
+                    .is_some_and(|extension| extension == "group")
+            })
+            .collect();
+        if reports.len() == 1 {
+            let path = &reports[0];
+            let process = path
+                .file_stem()
+                .and_then(|stem| stem.to_str())
+                .and_then(|stem| stem.parse::<i32>().ok())
+                .and_then(Pid::from_raw)
+                .expect("the group report name contains a live process id");
+            let group = fs::read_to_string(path)
+                .expect("read the process group report")
+                .parse::<i32>()
+                .ok()
+                .and_then(Pid::from_raw)
+                .expect("the process group report contains a valid id");
+            return (process, group);
+        }
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for one process-group report; found {}",
+            reports.len()
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
+fn await_process_exit(process: Pid) {
+    let deadline = Instant::now() + TIMEOUT;
+    loop {
+        match test_kill_process(process) {
+            Err(rustix::io::Errno::SRCH) => return,
+            Ok(()) => {}
+            Err(error) => panic!("cannot inspect process {process}: {error}"),
+        }
+        assert!(
+            Instant::now() < deadline,
+            "process {} remained alive after the shell exited",
+            process.as_raw_nonzero()
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
+struct ProcessGroupCleanup(Option<Pid>);
+
+impl ProcessGroupCleanup {
+    fn new(group: Pid) -> Self {
+        Self(Some(group))
+    }
+
+    fn disarm(&mut self) {
+        self.0 = None;
+    }
+}
+
+impl Drop for ProcessGroupCleanup {
+    fn drop(&mut self) {
+        if let Some(group) = self.0 {
+            let _ = kill_process_group(group, Signal::KILL);
+        }
+    }
+}
+
+struct ReleaseOnDrop(PathBuf);
+
+impl Drop for ReleaseOnDrop {
+    fn drop(&mut self) {
+        let _ = fs::write(&self.0, b"release");
     }
 }
 
@@ -665,6 +754,235 @@ fn a_background_pipeline_has_one_job_identity_and_one_completion_notice() {
         !completion.contains("[2] Done"),
         "pipeline members must not publish separate completions:\n{completion}"
     );
+
+    session.send(b"exit 0");
+    session.send(ENTER);
+    assert_eq!(session.wait_code(), 0);
+}
+
+#[test]
+fn a_background_and_chain_reaches_an_internal_command_before_completion() {
+    let cwd = unique_dir("background-chain-and");
+    let report = cwd.join("report.bin");
+    let release = cwd.join("release");
+    let report_text = report.to_str().expect("test report path is UTF-8");
+    let release_text = release.to_str().expect("test release path is UTF-8");
+    let cwd_text = cwd.to_str().expect("test directory path is UTF-8");
+    let environment = [
+        ("FLASH_PROBE_REPORT", report_text),
+        ("FLASH_PROBE_GROUP_REPORT", cwd_text),
+        ("FLASH_PROBE_HOLD_UNTIL", release_text),
+    ];
+    let mut session = Pty::spawn(&["--no-config", "--no-history"], &environment, &cwd);
+    let _release_on_drop = ReleaseOnDrop(release.clone());
+    session.await_prompt(0);
+
+    let command = format!("^{PROCESS_OBSERVER} && pwd &");
+    let launch_mark = session.mark();
+    session.send(command.as_bytes());
+    session.send(ENTER);
+    session.expect_from(launch_mark, "[1] ");
+    session.await_prompt(launch_mark);
+    assert_eq!(await_group_reports(&cwd, 1).len(), 1);
+
+    let result_mark = session.mark();
+    fs::write(&release, b"complete").expect("release the left side");
+    let component = cwd.file_name().unwrap().to_string_lossy().into_owned();
+    session.expect_from(result_mark, &component);
+
+    thread::sleep(SETTLE);
+    let completion_mark = session.mark();
+    session.send(CTRL_C);
+    session.expect_from(completion_mark, "[1] Done");
+    session.expect_from(completion_mark, "fsh> ");
+    let completion = session.rendered_from(completion_mark);
+    assert_notice_precedes_prompt(&completion, "[1] Done");
+
+    session.send(b"exit 0");
+    session.send(ENTER);
+    assert_eq!(session.wait_code(), 0);
+}
+
+#[test]
+fn a_background_or_chain_short_circuits_before_its_internal_command() {
+    let cwd = unique_dir("background-chain-or");
+    let report = cwd.join("report.bin");
+    let release = cwd.join("release");
+    let report_text = report.to_str().expect("test report path is UTF-8");
+    let release_text = release.to_str().expect("test release path is UTF-8");
+    let cwd_text = cwd.to_str().expect("test directory path is UTF-8");
+    let environment = [
+        ("FLASH_PROBE_REPORT", report_text),
+        ("FLASH_PROBE_GROUP_REPORT", cwd_text),
+        ("FLASH_PROBE_HOLD_UNTIL", release_text),
+    ];
+    let mut session = Pty::spawn(&["--no-config", "--no-history"], &environment, &cwd);
+    let _release_on_drop = ReleaseOnDrop(release.clone());
+    session.await_prompt(0);
+
+    let command = format!("^{PROCESS_OBSERVER} || pwd &");
+    let launch_mark = session.mark();
+    session.send(command.as_bytes());
+    session.send(ENTER);
+    session.expect_from(launch_mark, "[1] ");
+    session.await_prompt(launch_mark);
+    assert_eq!(await_group_reports(&cwd, 1).len(), 1);
+
+    let result_mark = session.mark();
+    fs::write(&release, b"complete").expect("release the successful left side");
+    thread::sleep(SETTLE);
+    let completion_mark = session.mark();
+    session.send(CTRL_C);
+    session.expect_from(completion_mark, "[1] Done");
+    session.expect_from(completion_mark, "fsh> ");
+    let result = session.rendered_from(result_mark);
+    let component = cwd.file_name().unwrap().to_string_lossy();
+    assert!(
+        !result.contains(component.as_ref()),
+        "the successful left side must skip the internal right side:\n{result}"
+    );
+    let completion = session.rendered_from(completion_mark);
+    assert_notice_precedes_prompt(&completion, "[1] Done");
+
+    session.send(b"exit 0");
+    session.send(ENTER);
+    assert_eq!(session.wait_code(), 0);
+}
+
+#[test]
+fn a_background_chain_supervisor_survives_hangup_to_wait_for_its_grandchild() {
+    let cwd = unique_dir("background-chain-hangup");
+    let release = cwd.join("never-release");
+    let release_text = release.to_str().expect("test release path is UTF-8");
+    let cwd_text = cwd.to_str().expect("test directory path is UTF-8");
+    let environment = [
+        ("FLASH_PROBE_GROUP_REPORT", cwd_text),
+        ("FLASH_PROBE_HOLD_UNTIL", release_text),
+    ];
+    let mut session = Pty::spawn(&["--no-config", "--no-history"], &environment, &cwd);
+    let _release_on_drop = ReleaseOnDrop(release.clone());
+    session.await_prompt(0);
+
+    let command = format!("^{HANGUP_OBSERVER} && pwd &");
+    let launch_mark = session.mark();
+    session.send(command.as_bytes());
+    session.send(ENTER);
+    session.expect_from(launch_mark, "[1] ");
+    session.await_prompt(launch_mark);
+
+    let (grandchild, group) = await_one_process_group_report(&cwd);
+    assert_ne!(
+        grandchild, group,
+        "the observer must be a grandchild of the supervising group leader"
+    );
+    let mut cleanup = ProcessGroupCleanup::new(group);
+
+    let refusal_mark = session.mark();
+    session.send(b"exit 0");
+    session.send(ENTER);
+    session.expect_from(refusal_mark, "fsh: 1 live background job");
+    session.expect_from(refusal_mark, "fsh: exit again to hang up");
+    session.await_prompt(refusal_mark);
+
+    session.send(b"exit 0");
+    session.send(ENTER);
+    thread::sleep(SETTLE);
+    assert!(
+        session.is_running(),
+        "the supervising child must survive hang-up and wait for its grandchild"
+    );
+
+    fs::write(&release, b"complete").expect("release the ignored grandchild");
+    assert_eq!(session.wait_code(), 0);
+    await_process_exit(grandchild);
+    cleanup.disarm();
+}
+
+#[test]
+fn hanging_up_a_background_chain_ends_its_external_grandchild() {
+    let cwd = unique_dir("background-chain-grandchild-hangup");
+    let report = cwd.join("report.bin");
+    let release = cwd.join("never-release");
+    let report_text = report.to_str().expect("test report path is UTF-8");
+    let release_text = release.to_str().expect("test release path is UTF-8");
+    let cwd_text = cwd.to_str().expect("test directory path is UTF-8");
+    let environment = [
+        ("FLASH_PROBE_REPORT", report_text),
+        ("FLASH_PROBE_GROUP_REPORT", cwd_text),
+        ("FLASH_PROBE_HOLD_UNTIL", release_text),
+    ];
+    let mut session = Pty::spawn(&["--no-config", "--no-history"], &environment, &cwd);
+    let _release_on_drop = ReleaseOnDrop(release.clone());
+    session.await_prompt(0);
+
+    let command = format!("^{PROCESS_OBSERVER} && pwd &");
+    let launch_mark = session.mark();
+    session.send(command.as_bytes());
+    session.send(ENTER);
+    session.expect_from(launch_mark, "[1] ");
+    session.await_prompt(launch_mark);
+
+    let (grandchild, group) = await_one_process_group_report(&cwd);
+    assert_ne!(
+        grandchild, group,
+        "the observer must be a grandchild of the supervising group leader"
+    );
+    let mut cleanup = ProcessGroupCleanup::new(group);
+
+    let refusal_mark = session.mark();
+    session.send(b"exit 0");
+    session.send(ENTER);
+    session.expect_from(refusal_mark, "fsh: 1 live background job");
+    session.expect_from(refusal_mark, "fsh: exit again to hang up");
+    session.await_prompt(refusal_mark);
+
+    session.send(b"exit 0");
+    session.send(ENTER);
+    assert_eq!(session.wait_code(), 0);
+    await_process_exit(grandchild);
+    cleanup.disarm();
+}
+
+#[test]
+fn an_external_grandchild_restores_the_default_hangup_disposition() {
+    let cwd = unique_dir("background-chain-default-hangup");
+    let report = cwd.join("report.bin");
+    let report_text = report.to_str().expect("test report path is UTF-8");
+    let cwd_text = cwd.to_str().expect("test directory path is UTF-8");
+    let environment = [
+        ("FLASH_PROBE_REPORT", report_text),
+        ("FLASH_PROBE_GROUP_REPORT", cwd_text),
+        ("FLASH_PROBE_RAISE", "1"),
+    ];
+    let mut session = Pty::spawn(&["--no-config", "--no-history"], &environment, &cwd);
+    session.await_prompt(0);
+
+    let command = format!("^{PROCESS_OBSERVER} && pwd &");
+    let launch_mark = session.mark();
+    session.send(command.as_bytes());
+    session.send(ENTER);
+    session.expect_from(launch_mark, "[1] ");
+    session.await_prompt(launch_mark);
+
+    let (grandchild, group) = await_one_process_group_report(&cwd);
+    assert_ne!(
+        grandchild, group,
+        "the observer must be a grandchild of the supervising group leader"
+    );
+    let mut cleanup = ProcessGroupCleanup::new(group);
+
+    thread::sleep(SETTLE);
+    let completion_mark = session.mark();
+    session.send(CTRL_C);
+    session.expect_from(completion_mark, "[1] Done");
+    session.expect_from(completion_mark, "fsh> ");
+    let survived = cwd.join(format!("{}.survived", grandchild.as_raw_nonzero()));
+    assert!(
+        !survived.exists(),
+        "an external grandchild must not inherit the supervisor's ignored hang-up"
+    );
+    await_process_exit(grandchild);
+    cleanup.disarm();
 
     session.send(b"exit 0");
     session.send(ENTER);

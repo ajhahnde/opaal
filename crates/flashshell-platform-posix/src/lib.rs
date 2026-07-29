@@ -632,8 +632,14 @@ mod child_signal_dispositions {
     use std::os::unix::process::CommandExt;
     use std::process::Command;
 
-    /// The signals an interactive shell arranges and a child must not inherit.
-    const RESET: [libc::c_int; 5] = [
+    /// Signal dispositions a spawned program must not inherit from its shell.
+    ///
+    /// The interactive shell arranges the five job-control signals for its own
+    /// survival. A reserved background-chain supervisor additionally ignores
+    /// hang-up so it can wait for its descendants after the parent signals the
+    /// group; ordinary external descendants must restore the default instead.
+    const RESET: [libc::c_int; 6] = [
+        libc::SIGHUP,
         libc::SIGINT,
         libc::SIGQUIT,
         libc::SIGTSTP,
