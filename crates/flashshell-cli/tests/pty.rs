@@ -10,7 +10,7 @@
 //! `--no-config` so the developer's real configuration is never consulted, and
 //! history is isolated to a per-test state directory.
 
-use std::fs::File;
+use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
@@ -26,6 +26,7 @@ use rustix::pty::{OpenptFlags, grantpt, openpt, ptsname, unlockpt};
 use rustix::termios::{Winsize, tcsetwinsize};
 
 const FSH: &str = env!("CARGO_BIN_EXE_fsh");
+const PROCESS_OBSERVER: &str = env!("CARGO_BIN_EXE_flashshell-e2e-process-observer-fixture");
 const ENTER: &[u8] = b"\r";
 const CTRL_C: &[u8] = b"\x03";
 const CTRL_D: &[u8] = b"\x04";
@@ -205,6 +206,12 @@ impl Pty {
         let bytes = self.output.lock().unwrap().clone();
         strip_ansi(&String::from_utf8_lossy(&bytes))
     }
+
+    fn rendered_from(&self, start: usize) -> String {
+        let bytes = self.output.lock().unwrap().clone();
+        let tail = bytes.get(start..).unwrap_or(&[]);
+        strip_ansi(&String::from_utf8_lossy(tail))
+    }
 }
 
 impl Drop for Pty {
@@ -273,6 +280,46 @@ fn unique_dir(tag: &str) -> PathBuf {
 
 fn interactive(cwd: &Path) -> Pty {
     Pty::spawn(&["--no-config", "--no-history"], &[], cwd)
+}
+
+fn await_group_reports(directory: &Path, count: usize) -> Vec<u64> {
+    let deadline = Instant::now() + TIMEOUT;
+    loop {
+        let mut groups: Vec<_> = fs::read_dir(directory)
+            .expect("read the group report directory")
+            .map(|entry| entry.expect("read one group report entry").path())
+            .filter(|path| {
+                path.extension()
+                    .is_some_and(|extension| extension == "group")
+            })
+            .map(|path| {
+                fs::read_to_string(path)
+                    .expect("read one group report")
+                    .parse::<u64>()
+                    .expect("the process group report is numeric")
+            })
+            .collect();
+        if groups.len() == count {
+            groups.sort_unstable();
+            return groups;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for {count} process-group reports; found {}",
+            groups.len()
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
+fn assert_notice_precedes_prompt(rendered: &str, notice: &str) {
+    let notice_start = rendered
+        .find(notice)
+        .unwrap_or_else(|| panic!("missing notice {notice:?} in:\n{rendered}"));
+    assert!(
+        rendered[notice_start + notice.len()..].contains("fsh> "),
+        "the next prompt must follow {notice:?}; rendered:\n{rendered}"
+    );
 }
 
 #[test]
@@ -507,6 +554,167 @@ fn an_interrupt_aimed_at_the_shell_does_not_end_the_session() {
     session.expect_from(mark, "intact");
 
     session.await_prompt(mark);
+    session.send(b"exit 0");
+    session.send(ENTER);
+    assert_eq!(session.wait_code(), 0);
+}
+
+#[test]
+fn a_background_command_returns_a_prompt_and_completes_after_foreground_work() {
+    let cwd = unique_dir("background-prompt");
+    let mut session = interactive(&cwd);
+    session.await_prompt(0);
+
+    let launched_at = Instant::now();
+    let launch_mark = session.mark();
+    session.send(b"sleep 1 &");
+    session.send(ENTER);
+    session.expect_from(launch_mark, "[1] ");
+    session.await_prompt(launch_mark);
+    let launch = session.rendered_from(launch_mark);
+    assert!(
+        launched_at.elapsed() < Duration::from_secs(1),
+        "the fresh prompt must return before sleep can complete"
+    );
+    assert!(
+        !launch.contains("[1] Done"),
+        "the launch and fresh prompt must precede completion:\n{launch}"
+    );
+
+    let foreground_mark = session.mark();
+    session.send(b"echo foreground-while-background-runs");
+    session.send(ENTER);
+    session.expect_from(foreground_mark, "foreground-while-background-runs");
+    session.await_prompt(foreground_mark);
+    let foreground = session.rendered_from(foreground_mark);
+    assert!(
+        !foreground.contains("[1] Done"),
+        "foreground work should finish while the background command remains live:\n{foreground}"
+    );
+
+    let blocked_editor_mark = session.mark();
+    thread::sleep(Duration::from_millis(1200).saturating_sub(launched_at.elapsed()));
+    assert!(
+        !session
+            .rendered_from(blocked_editor_mark)
+            .contains("[1] Done"),
+        "completion must remain queued while the editor owns the prompt"
+    );
+    let completion_mark = session.mark();
+    session.send(CTRL_C);
+    session.expect_from(completion_mark, "[1] Done     sleep 1");
+    session.expect_from(completion_mark, "fsh> ");
+    let completion = session.rendered_from(completion_mark);
+    assert_notice_precedes_prompt(&completion, "[1] Done     sleep 1");
+    assert_eq!(completion.matches("[1] Done").count(), 1);
+
+    session.send(b"exit 0");
+    session.send(ENTER);
+    assert_eq!(session.wait_code(), 0);
+}
+
+#[test]
+fn a_background_pipeline_has_one_job_identity_and_one_completion_notice() {
+    let cwd = unique_dir("background-pipeline");
+    let report = cwd.join("report.bin");
+    let release = cwd.join("release");
+    let report_text = report.to_str().expect("test report path is UTF-8");
+    let release_text = release.to_str().expect("test release path is UTF-8");
+    let cwd_text = cwd.to_str().expect("test directory path is UTF-8");
+    let environment = [
+        ("FLASH_PROBE_REPORT", report_text),
+        ("FLASH_PROBE_GROUP_REPORT", cwd_text),
+        ("FLASH_PROBE_HOLD_UNTIL", release_text),
+    ];
+    let mut session = Pty::spawn(&["--no-config", "--no-history"], &environment, &cwd);
+    session.await_prompt(0);
+
+    let command = format!("^{PROCESS_OBSERVER} | ^{PROCESS_OBSERVER} &");
+    let launch_mark = session.mark();
+    session.send(command.as_bytes());
+    session.send(ENTER);
+    session.expect_from(launch_mark, "[1] ");
+    session.expect_from(launch_mark, "fsh> ");
+    let launch = session.rendered_from(launch_mark);
+    let groups = await_group_reports(&cwd, 2);
+    assert_eq!(groups[0], groups[1], "both stages share one process group");
+    assert_eq!(
+        launch.matches("[1] ").count(),
+        1,
+        "one pipeline should publish one launch notice:\n{launch}"
+    );
+    assert!(
+        !launch.contains("[2] "),
+        "pipeline members must not receive separate job identities:\n{launch}"
+    );
+
+    fs::write(&release, b"complete").expect("release both pipeline members");
+    thread::sleep(SETTLE);
+    let completion_mark = session.mark();
+    session.send(CTRL_C);
+    session.expect_from(completion_mark, "[1] Done");
+    session.expect_from(completion_mark, "fsh> ");
+    let completion = session.rendered_from(completion_mark);
+    assert_notice_precedes_prompt(&completion, "[1] Done");
+    assert_eq!(
+        completion.matches("[1] Done").count(),
+        1,
+        "one pipeline should publish one aggregate completion:\n{completion}"
+    );
+    assert!(
+        !completion.contains("[2] Done"),
+        "pipeline members must not publish separate completions:\n{completion}"
+    );
+
+    session.send(b"exit 0");
+    session.send(ENTER);
+    assert_eq!(session.wait_code(), 0);
+}
+
+#[test]
+fn a_completion_notice_never_appears_inside_an_active_edit_buffer() {
+    let cwd = unique_dir("background-buffer");
+    let report = cwd.join("report.bin");
+    let release = cwd.join("release");
+    let report_text = report.to_str().expect("test report path is UTF-8");
+    let release_text = release.to_str().expect("test release path is UTF-8");
+    let cwd_text = cwd.to_str().expect("test directory path is UTF-8");
+    let environment = [
+        ("FLASH_PROBE_REPORT", report_text),
+        ("FLASH_PROBE_GROUP_REPORT", cwd_text),
+        ("FLASH_PROBE_HOLD_UNTIL", release_text),
+    ];
+    let mut session = Pty::spawn(&["--no-config", "--no-history"], &environment, &cwd);
+    session.await_prompt(0);
+
+    let command = format!("^{PROCESS_OBSERVER} &");
+    let launch_mark = session.mark();
+    session.send(command.as_bytes());
+    session.send(ENTER);
+    session.expect_from(launch_mark, "[1] ");
+    session.await_prompt(launch_mark);
+    let groups = await_group_reports(&cwd, 1);
+    assert_ne!(groups[0], 0);
+
+    let buffer_mark = session.mark();
+    session.send(b"echo distinctive-active-buffer");
+    session.expect_from(buffer_mark, "distinctive-active-buffer");
+    fs::write(&release, b"complete").expect("release the background child");
+    thread::sleep(SETTLE);
+    let while_editing = session.rendered_from(buffer_mark);
+    assert!(
+        !while_editing.contains("[1] Done"),
+        "a shell notice must not corrupt the active edit buffer:\n{while_editing}"
+    );
+
+    let completion_mark = session.mark();
+    session.send(CTRL_C);
+    session.expect_from(completion_mark, "[1] Done");
+    session.expect_from(completion_mark, "fsh> ");
+    let completion = session.rendered_from(completion_mark);
+    assert_notice_precedes_prompt(&completion, "[1] Done");
+    assert_eq!(completion.matches("[1] Done").count(), 1);
+
     session.send(b"exit 0");
     session.send(ENTER);
     assert_eq!(session.wait_code(), 0);
