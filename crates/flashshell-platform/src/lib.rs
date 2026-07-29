@@ -58,11 +58,15 @@ pub enum Capability {
     /// no partial support, so an adapter that can open a file but cannot list a
     /// directory needs its own bit to say so.
     DirectoryRead,
+    /// The path of the running shell executable, for re-execution.
+    ShellExecutable,
+    /// Installing this process's own hang-up disposition.
+    HangupDisposition,
 }
 
 impl Capability {
     /// Every capability, in declaration order.
-    pub const ALL: [Capability; 12] = [
+    pub const ALL: [Capability; 14] = [
         Capability::Environment,
         Capability::WorkingDirectory,
         Capability::FileActions,
@@ -75,6 +79,8 @@ impl Capability {
         Capability::MonotonicClock,
         Capability::StandardDirectories,
         Capability::DirectoryRead,
+        Capability::ShellExecutable,
+        Capability::HangupDisposition,
     ];
 
     /// The single set bit that represents this capability.
@@ -1197,6 +1203,29 @@ pub trait Platform: Send + Sync {
         Ok(Box::new(NoopJobControlSignalGuard))
     }
 
+    /// The path of the running shell executable.
+    ///
+    /// A background conditional chain re-executes the shell as its own
+    /// supervisor, so the shell must be able to name itself. Deliberately not
+    /// derived from argv zero, which a caller controls.
+    fn shell_executable(&self) -> Result<PathBuf, PlatformError> {
+        Err(PlatformError::Unsupported {
+            capability: Capability::ShellExecutable,
+        })
+    }
+
+    /// Ignore hang-up for this process from here on.
+    ///
+    /// Installed by a chain subshell on itself. A group-directed hang-up
+    /// reaches the subshell and its current child together; the subshell must
+    /// survive it to reap that child, or the wait returns while a grandchild is
+    /// still alive.
+    fn ignore_hangup(&self) -> Result<(), PlatformError> {
+        Err(PlatformError::Unsupported {
+            capability: Capability::HangupDisposition,
+        })
+    }
+
     /// Resolve and validate one logical working directory.
     fn resolve_working_directory(
         &self,
@@ -1367,6 +1396,15 @@ impl Platform for FakePlatform {
         Ok(self.terminal_size)
     }
 
+    fn shell_executable(&self) -> Result<PathBuf, PlatformError> {
+        self.require(Capability::ShellExecutable)?;
+        Ok(PathBuf::from("/fake/fsh"))
+    }
+
+    fn ignore_hangup(&self) -> Result<(), PlatformError> {
+        self.require(Capability::HangupDisposition)
+    }
+
     fn resolve_working_directory(
         &self,
         request: WorkingDirectoryRequest<'_>,
@@ -1522,13 +1560,27 @@ impl Drop for RecordingForegroundGuard {
 }
 
 /// One spawn a [`RecordingPlatform`] observed, in call order.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SpawnRecord {
+    executable: PathBuf,
+    argv: Vec<OsString>,
     requested: ProcessGroup,
     process_group: Option<ProcessGroupId>,
 }
 
 impl SpawnRecord {
+    /// The executable path passed to the platform.
+    #[must_use]
+    pub fn executable(&self) -> &Path {
+        &self.executable
+    }
+
+    /// The complete native argv passed to the platform.
+    #[must_use]
+    pub fn argv(&self) -> &[OsString] {
+        &self.argv
+    }
+
     /// The placement the caller asked for.
     #[must_use]
     pub const fn requested(&self) -> ProcessGroup {
@@ -1709,6 +1761,14 @@ impl Platform for RecordingPlatform {
         }))
     }
 
+    fn shell_executable(&self) -> Result<PathBuf, PlatformError> {
+        self.inner.shell_executable()
+    }
+
+    fn ignore_hangup(&self) -> Result<(), PlatformError> {
+        self.inner.ignore_hangup()
+    }
+
     fn resolve_working_directory(
         &self,
         request: WorkingDirectoryRequest<'_>,
@@ -1759,6 +1819,8 @@ impl Platform for RecordingPlatform {
     fn spawn(&self, request: &SpawnRequest<'_>) -> Result<Box<dyn ChildProcess>, SpawnError> {
         let child = self.inner.spawn(request)?;
         self.spawns.push(SpawnRecord {
+            executable: request.executable().to_owned(),
+            argv: request.argv().to_vec(),
             requested: request.process_group(),
             process_group: child.process_group(),
         });

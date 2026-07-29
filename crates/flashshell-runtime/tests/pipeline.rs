@@ -12,8 +12,9 @@ use std::sync::{Arc, Mutex};
 
 use flashshell_platform::{
     Capabilities, Capability, ChildProcess, DescriptorEndpoint, FakePlatform, FileActionError,
-    FileOpenRequest, JobSignal, PipeEndpoints, PipeError, Platform, ProcessGroup, ProcessStatus,
-    RecordingPlatform, SignalError, SpawnError, SpawnRequest, TerminateError, WaitError,
+    FileOpenRequest, JobSignal, PipeEndpoints, PipeError, Platform, PlatformError, ProcessGroup,
+    ProcessStatus, RecordingPlatform, SignalError, SpawnError, SpawnRequest, TerminateError,
+    WaitError,
 };
 use flashshell_platform_posix::PosixPlatform;
 use flashshell_runtime::command::CommandRegistry;
@@ -135,6 +136,15 @@ impl RecordingPipelinePlatform {
 impl Platform for RecordingPipelinePlatform {
     fn capabilities(&self) -> Capabilities {
         self.capabilities
+    }
+
+    fn shell_executable(&self) -> Result<PathBuf, PlatformError> {
+        self.require(Capability::ShellExecutable)?;
+        Ok(PathBuf::from("/fake/fsh"))
+    }
+
+    fn ignore_hangup(&self) -> Result<(), PlatformError> {
+        self.require(Capability::HangupDisposition)
     }
 
     fn pipe(&self) -> Result<PipeEndpoints, PipeError> {

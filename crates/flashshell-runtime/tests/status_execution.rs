@@ -11,9 +11,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use flashshell_platform::{
-    Capabilities, ChildProcess, DescriptorEndpoint, FileActionError, FileOpenRequest,
-    PipeEndpoints, PipeError, Platform, ProcessStatus, SpawnError, SpawnRequest, TerminateError,
-    WaitError,
+    Capabilities, Capability, ChildProcess, DescriptorEndpoint, FileActionError, FileOpenRequest,
+    PipeEndpoints, PipeError, Platform, PlatformError, ProcessStatus, SpawnError, SpawnRequest,
+    TerminateError, WaitError,
 };
 use flashshell_runtime::command::CommandRegistry;
 use flashshell_runtime::eval::{FakeClock, RuntimeErrorKind};
@@ -93,6 +93,15 @@ impl ScriptedPlatform {
 impl Platform for ScriptedPlatform {
     fn capabilities(&self) -> Capabilities {
         Capabilities::full()
+    }
+
+    fn shell_executable(&self) -> Result<PathBuf, PlatformError> {
+        self.require(Capability::ShellExecutable)?;
+        Ok(PathBuf::from("/fake/fsh"))
+    }
+
+    fn ignore_hangup(&self) -> Result<(), PlatformError> {
+        self.require(Capability::HangupDisposition)
     }
 
     fn pipe(&self) -> Result<PipeEndpoints, PipeError> {
@@ -347,6 +356,15 @@ fn wait_failures_remain_runtime_errors_in_status_execution() {
     impl Platform for WaitFailurePlatform {
         fn capabilities(&self) -> Capabilities {
             Capabilities::full()
+        }
+
+        fn shell_executable(&self) -> Result<PathBuf, PlatformError> {
+            self.require(Capability::ShellExecutable)?;
+            Ok(PathBuf::from("/fake/fsh"))
+        }
+
+        fn ignore_hangup(&self) -> Result<(), PlatformError> {
+            self.require(Capability::HangupDisposition)
         }
 
         fn pipe(&self) -> Result<PipeEndpoints, PipeError> {

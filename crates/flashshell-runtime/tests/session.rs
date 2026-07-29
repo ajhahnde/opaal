@@ -21,10 +21,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 
 use flashshell_platform::{
-    Capabilities, ChildProcess, DescriptorEndpoint, FakePlatform, FileActionError, FileOpenRequest,
-    JobSignal, PipeEndpoints, PipeError, Platform, ProcessGroup, ProcessGroupId, ProcessStatus,
-    ProcessTransition, RecordingPlatform, SignalError, SpawnError, SpawnRequest, TerminalSize,
-    TerminateError, WaitError,
+    Capabilities, Capability, ChildProcess, DescriptorEndpoint, FakePlatform, FileActionError,
+    FileOpenRequest, JobSignal, PipeEndpoints, PipeError, Platform, PlatformError, ProcessGroup,
+    ProcessGroupId, ProcessStatus, ProcessTransition, RecordingPlatform, SignalError, SpawnError,
+    SpawnRequest, TerminalSize, TerminateError, WaitError,
 };
 use flashshell_platform_posix::PosixPlatform;
 use flashshell_runtime::eval::FakeClock;
@@ -195,6 +195,15 @@ impl ControlledBackgroundPlatform {
 impl Platform for ControlledBackgroundPlatform {
     fn capabilities(&self) -> Capabilities {
         Capabilities::full()
+    }
+
+    fn shell_executable(&self) -> Result<PathBuf, PlatformError> {
+        self.require(Capability::ShellExecutable)?;
+        Ok(PathBuf::from("/fake/fsh"))
+    }
+
+    fn ignore_hangup(&self) -> Result<(), PlatformError> {
+        self.require(Capability::HangupDisposition)
     }
 
     fn pipe(&self) -> Result<PipeEndpoints, PipeError> {

@@ -8,6 +8,7 @@ use std::os::unix::ffi::OsStringExt;
 use std::os::unix::fs::symlink;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use flashshell_platform::{
@@ -29,6 +30,54 @@ fn posix_platform_supports_every_capability() {
         );
         assert_eq!(platform.require(capability), Ok(()));
     }
+}
+
+#[test]
+fn the_adapter_names_the_running_executable() {
+    let reported = PosixPlatform
+        .shell_executable()
+        .expect("a POSIX host can name its own executable");
+    let expected = std::env::current_exe().expect("the test binary has a path");
+
+    assert_eq!(reported, expected);
+}
+
+#[test]
+fn the_adapter_advertises_both_new_capabilities() {
+    let capabilities = PosixPlatform.capabilities();
+
+    assert!(capabilities.supports(Capability::ShellExecutable));
+    assert!(capabilities.supports(Capability::HangupDisposition));
+}
+
+#[test]
+fn a_child_that_installs_the_hangup_ignore_survives_its_own_hangup() {
+    const CHILD: &str = "FLASHSHELL_TEST_HANGUP_IGNORE_CHILD";
+
+    if std::env::var_os(CHILD).is_some() {
+        PosixPlatform
+            .ignore_hangup()
+            .expect("the POSIX adapter should install the hang-up ignore");
+        // SAFETY: `raise` sends SIGHUP to this disposable subprocess. The
+        // disposition was installed immediately above, and no shared parent
+        // process state is mutated.
+        assert_eq!(unsafe { libc::raise(libc::SIGHUP) }, 0);
+        return;
+    }
+
+    let status = Command::new(std::env::current_exe().expect("the test binary has a path"))
+        .args([
+            "--exact",
+            "a_child_that_installs_the_hangup_ignore_survives_its_own_hangup",
+        ])
+        .env(CHILD, "1")
+        .status()
+        .expect("the hang-up probe child should run");
+
+    assert!(
+        status.success(),
+        "the child should survive after installing the hang-up ignore"
+    );
 }
 
 #[test]

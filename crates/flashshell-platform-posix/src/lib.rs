@@ -266,6 +266,19 @@ impl Platform for PosixPlatform {
             .map(|guard| Box::new(guard) as Box<dyn JobControlSignalGuard>)
     }
 
+    fn shell_executable(&self) -> Result<std::path::PathBuf, PlatformError> {
+        self.require(Capability::ShellExecutable)?;
+        std::env::current_exe().map_err(|error| PlatformError::Unavailable {
+            capability: Capability::ShellExecutable,
+            reason: format!("determining the running executable failed: {error}"),
+        })
+    }
+
+    fn ignore_hangup(&self) -> Result<(), PlatformError> {
+        self.require(Capability::HangupDisposition)?;
+        hangup_disposition::ignore()
+    }
+
     fn signal_process_group(
         &self,
         group: ProcessGroupId,
@@ -879,6 +892,43 @@ mod foreground_terminal {
             return Err(io::Error::from_raw_os_error(result));
         }
         Ok(())
+    }
+}
+
+/// The asynchronous-chain subshell's own hang-up disposition.
+///
+/// This is separate from the interactive shell's job-control arrangement:
+/// only the re-executed child ignores hang-up, so it can survive long enough to
+/// reap a grandchild that receives the same group-directed signal.
+#[allow(unsafe_code)]
+mod hangup_disposition {
+    use std::io;
+
+    use flashshell_platform::{Capability, PlatformError};
+
+    pub(super) fn ignore() -> Result<(), PlatformError> {
+        // SAFETY: an all-zero pattern is valid for `sigaction`, whose fields are
+        // integers and a function pointer; sigemptyset initializes the live
+        // mask field before sigaction reads the complete disposition.
+        let mut ignore: libc::sigaction = unsafe { std::mem::zeroed() };
+        ignore.sa_sigaction = libc::SIG_IGN;
+        // SAFETY: the pointer targets the live mask field of `ignore`.
+        if unsafe { libc::sigemptyset(&raw mut ignore.sa_mask) } == -1 {
+            return Err(unavailable(io::Error::last_os_error()));
+        }
+        // SAFETY: the input pointer targets the fully initialized disposition
+        // above, and the null output pointer asks for no previous disposition.
+        if unsafe { libc::sigaction(libc::SIGHUP, &raw const ignore, std::ptr::null_mut()) } == -1 {
+            return Err(unavailable(io::Error::last_os_error()));
+        }
+        Ok(())
+    }
+
+    fn unavailable(error: io::Error) -> PlatformError {
+        PlatformError::Unavailable {
+            capability: Capability::HangupDisposition,
+            reason: error.to_string(),
+        }
     }
 }
 

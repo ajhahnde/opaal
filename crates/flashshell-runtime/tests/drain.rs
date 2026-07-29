@@ -10,9 +10,9 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use flashshell_platform::{
-    Capabilities, ChildProcess, DescriptorEndpoint, DescriptorReadError, FileActionError,
-    FileOpenRequest, PipeEndpoints, PipeError, Platform, ProcessStatus, SpawnError, SpawnRequest,
-    TerminateError, WaitError,
+    Capabilities, Capability, ChildProcess, DescriptorEndpoint, DescriptorReadError,
+    FileActionError, FileOpenRequest, PipeEndpoints, PipeError, Platform, PlatformError,
+    ProcessStatus, SpawnError, SpawnRequest, TerminateError, WaitError,
 };
 use flashshell_platform_posix::PosixPlatform;
 use flashshell_runtime::command::CommandRegistry;
@@ -134,6 +134,15 @@ impl DrainPlatform {
 impl Platform for DrainPlatform {
     fn capabilities(&self) -> Capabilities {
         Capabilities::full()
+    }
+
+    fn shell_executable(&self) -> Result<PathBuf, PlatformError> {
+        self.require(Capability::ShellExecutable)?;
+        Ok(PathBuf::from("/fake/fsh"))
+    }
+
+    fn ignore_hangup(&self) -> Result<(), PlatformError> {
+        self.require(Capability::HangupDisposition)
     }
 
     fn pipe(&self) -> Result<PipeEndpoints, PipeError> {

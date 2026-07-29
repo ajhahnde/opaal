@@ -50,6 +50,30 @@ fn require_rejects_an_unsupported_capability_naming_it() {
 }
 
 #[test]
+fn an_adapter_without_the_shell_executable_capability_says_so() {
+    let platform = FakePlatform::new(Capabilities::full_without(Capability::ShellExecutable));
+
+    assert!(matches!(
+        platform.shell_executable(),
+        Err(PlatformError::Unsupported {
+            capability: Capability::ShellExecutable
+        })
+    ));
+}
+
+#[test]
+fn an_adapter_without_the_hangup_capability_says_so() {
+    let platform = FakePlatform::new(Capabilities::full_without(Capability::HangupDisposition));
+
+    assert!(matches!(
+        platform.ignore_hangup(),
+        Err(PlatformError::Unsupported {
+            capability: Capability::HangupDisposition
+        })
+    ));
+}
+
+#[test]
 fn full_supports_every_capability_and_empty_supports_none() {
     let full = FakePlatform::full();
     let none = FakePlatform::none();
@@ -466,8 +490,8 @@ fn a_recording_platform_answers_exactly_as_the_platform_it_wraps() {
     // The recorder overrides every method so it can observe two of them. That
     // makes it structurally able to drift: a method whose override is dropped
     // silently falls back to the trait default instead of the wrapped
-    // platform, and the three methods below are exactly the ones whose
-    // defaults differ from `FakePlatform`'s answers.
+    // platform. The methods below are the ones whose defaults differ from
+    // `FakePlatform`'s answers.
     let inner = FakePlatform::with_terminal(Capabilities::full(), true, TerminalSize::new(132, 43));
     let recording = RecordingPlatform::new(inner);
 
@@ -475,6 +499,8 @@ fn a_recording_platform_answers_exactly_as_the_platform_it_wraps() {
     assert_eq!(recording.is_terminal(), inner.is_terminal());
     assert_eq!(recording.is_output_terminal(), inner.is_output_terminal());
     assert_eq!(recording.terminal_size(), inner.terminal_size());
+    assert_eq!(recording.shell_executable(), inner.shell_executable());
+    assert_eq!(recording.ignore_hangup(), inner.ignore_hangup());
     assert_eq!(
         recording.resolve_working_directory(WorkingDirectoryRequest::new(
             Path::new("/tmp"),
@@ -486,9 +512,8 @@ fn a_recording_platform_answers_exactly_as_the_platform_it_wraps() {
         ))
     );
 
-    // The fifth and last override that can be deleted without a compile error.
-    // Its trait default returns InvalidEndpoint where the wrapped fake returns
-    // Ok(0), so a dropped delegation would change the answer silently.
+    // The trait default returns InvalidEndpoint where the wrapped fake returns
+    // Ok(0), so a dropped read delegation would change the answer silently.
     let (reader, _writer) = inner.pipe().expect("the fake pipe exists").into_parts();
     let mut buffer = [0u8; 8];
     assert_eq!(
@@ -677,6 +702,20 @@ fn a_recording_platform_reports_the_group_placement_of_every_spawn() {
     assert_eq!(records[0].process_group(), Some(group));
     assert_eq!(records[1].requested(), ProcessGroup::Join(group));
     assert_eq!(records[1].process_group(), Some(group));
+}
+
+#[test]
+fn a_spawn_record_carries_the_executable_and_argv_it_received() {
+    let platform = RecordingPlatform::new(FakePlatform::full());
+    let argv = [OsString::from("fsh"), OsString::from("--probe")];
+    let request = SpawnRequest::new(Path::new("/usr/bin/fsh"), &argv, &[], Path::new("/"))
+        .expect("argv zero is present");
+    let _ = platform.spawn(&request);
+
+    let records = platform.spawn_log().records();
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].executable(), Path::new("/usr/bin/fsh"));
+    assert_eq!(records[0].argv(), argv.as_slice());
 }
 
 #[test]
