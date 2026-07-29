@@ -31,7 +31,9 @@ use flashshell_runtime::eval::FakeClock;
 use flashshell_runtime::job::{JobMemberState, JobState, ProcessId};
 use flashshell_runtime::plan::SessionOptions;
 use flashshell_runtime::resolve::ExecutableProbe;
-use flashshell_runtime::session::{JobNoticeKind, Session, SubmitOutcome};
+use flashshell_runtime::session::{
+    BackgroundFailureReason, JobNoticeKind, LiveJobState, Session, SubmitOutcome,
+};
 use flashshell_runtime::{Duration, Environment, Status};
 
 #[derive(Default)]
@@ -147,9 +149,16 @@ struct BackgroundChildControl {
 struct ControlledBackgroundPlatform {
     children: Mutex<VecDeque<Box<dyn ChildProcess>>>,
     signals: Mutex<Vec<(ProcessGroupId, JobSignal)>>,
+    /// When set, every group signal is refused with this message.
+    signal_refusal: Mutex<Option<String>>,
 }
 
 impl ControlledBackgroundPlatform {
+    /// Refuse every subsequent group signal, as a host with no such group would.
+    fn refuse_signals(&self, message: &str) {
+        *self.signal_refusal.lock().expect("refusal lock") = Some(message.to_owned());
+    }
+
     fn new(ids: &[u64]) -> (Self, Vec<BackgroundChildControl>) {
         let group = ProcessGroupId::new(ids[0]).expect("test group is nonzero");
         let mut children: VecDeque<Box<dyn ChildProcess>> = VecDeque::new();
@@ -176,6 +185,7 @@ impl ControlledBackgroundPlatform {
             Self {
                 children: Mutex::new(children),
                 signals: Mutex::new(Vec::new()),
+                signal_refusal: Mutex::new(None),
             },
             controls,
         )
@@ -226,6 +236,18 @@ impl Platform for ControlledBackgroundPlatform {
         group: ProcessGroupId,
         signal: JobSignal,
     ) -> Result<(), SignalError> {
+        if let Some(message) = self
+            .signal_refusal
+            .lock()
+            .expect("refusal lock")
+            .as_ref()
+            .cloned()
+        {
+            return Err(SignalError::Operation {
+                kind: io::ErrorKind::NotFound,
+                message,
+            });
+        }
         self.signals
             .lock()
             .expect("signal lock")
@@ -662,6 +684,218 @@ fn background_job_and_notice_identities_increase_across_launches() {
             .acknowledge_job_notice(completion.id())
             .expect("reap each fake job");
     }
+}
+
+/// Launch one controlled background job and acknowledge its launch notice.
+///
+/// Every lifetime test starts from the same place: a live job whose transitions
+/// the test still owns, and an empty notice queue.
+fn launch_controlled_job(
+    session: &mut Session,
+    clock: &Arc<FakeClock>,
+    platform: &ControlledBackgroundPlatform,
+    source: &str,
+    probe: &Probe,
+) {
+    let mut sink = Vec::new();
+    session
+        .submit(
+            "<interactive>",
+            source,
+            probe,
+            platform,
+            clock.as_ref(),
+            &mut sink,
+        )
+        .expect("the controlled background job should launch");
+    let started = session.next_job_notice().expect("launch notice");
+    session
+        .acknowledge_job_notice(started.id())
+        .expect("acknowledge launch");
+}
+
+#[test]
+fn a_session_without_job_control_reports_no_live_jobs() {
+    let session = session();
+
+    assert!(
+        session.live_background_jobs().is_empty(),
+        "a session that cannot start background work has none to report"
+    );
+}
+
+#[test]
+fn a_join_waits_every_live_member_and_reports_a_nonzero_aggregate() {
+    let clock = Arc::new(FakeClock::at(100));
+    let mut session = session();
+    session.enable_interactive_job_control(clock.clone());
+    let (platform, controls) = ControlledBackgroundPlatform::new(&[131, 132]);
+    launch_controlled_job(
+        &mut session,
+        &clock,
+        &platform,
+        "^tool | ^other &",
+        &Probe::new(["/bin/tool", "/bin/other"]),
+    );
+    assert_eq!(controls[0].wait_entries.recv().expect("first wait"), 1);
+    assert_eq!(controls[1].wait_entries.recv().expect("second wait"), 1);
+    assert_eq!(session.live_background_jobs().len(), 1);
+
+    // Released but deliberately not drained: the observations queue up, so the
+    // record is still live when the join starts and the join is what consumes
+    // them.
+    controls[0]
+        .steps
+        .send(Ok(ProcessTransition::Completed(ProcessStatus::Exited(0))))
+        .expect("complete the first stage");
+    controls[1]
+        .steps
+        .send(Ok(ProcessTransition::Completed(ProcessStatus::Exited(3))))
+        .expect("complete the last stage");
+
+    let failures = session.join_background_jobs(&platform);
+
+    assert_eq!(failures.len(), 1, "a nonzero aggregate is one failure");
+    assert_eq!(failures[0].job().get(), 1);
+    assert!(
+        matches!(
+            failures[0].reason(),
+            BackgroundFailureReason::Exited(status) if status.code() == Some(3)
+        ),
+        "the aggregate must carry the failing member's code: {:?}",
+        failures[0].reason()
+    );
+    assert!(session.live_background_jobs().is_empty());
+}
+
+#[test]
+fn a_join_resumes_a_stopped_job_before_waiting_on_it() {
+    let clock = Arc::new(FakeClock::new());
+    let mut session = session();
+    session.enable_interactive_job_control(clock.clone());
+    let (platform, controls) = ControlledBackgroundPlatform::new(&[141]);
+    launch_controlled_job(
+        &mut session,
+        &clock,
+        &platform,
+        "^tool &",
+        &Probe::new(["/bin/tool"]),
+    );
+    assert_eq!(controls[0].wait_entries.recv().expect("first wait"), 1);
+
+    controls[0]
+        .steps
+        .send(Ok(ProcessTransition::Stopped { signal: 19 }))
+        .expect("release the stop");
+    assert_eq!(controls[0].wait_entries.recv().expect("second wait"), 2);
+    let stopped = wait_for_notice(&mut session);
+    session
+        .acknowledge_job_notice(stopped.id())
+        .expect("acknowledge the stop");
+    assert_eq!(
+        session.live_background_jobs()[0].state(),
+        LiveJobState::Stopped
+    );
+
+    controls[0]
+        .steps
+        .send(Ok(ProcessTransition::Completed(ProcessStatus::Exited(0))))
+        .expect("the resumed child finishes");
+    let failures = session.join_background_jobs(&platform);
+
+    assert!(
+        failures.is_empty(),
+        "a resumed job that exits zero is not a failure: {failures:?}"
+    );
+    assert_eq!(
+        *platform.signals.lock().expect("signal lock"),
+        vec![(
+            ProcessGroupId::new(141).expect("test group is nonzero"),
+            JobSignal::Continue
+        )],
+        "a stopped job must be resumed exactly once, and never hung up by a join"
+    );
+}
+
+#[test]
+fn a_hang_up_resumes_then_hangs_up_every_live_group() {
+    let clock = Arc::new(FakeClock::new());
+    let mut session = session();
+    session.enable_interactive_job_control(clock.clone());
+    let (platform, controls) = ControlledBackgroundPlatform::new(&[151]);
+    launch_controlled_job(
+        &mut session,
+        &clock,
+        &platform,
+        "^tool &",
+        &Probe::new(["/bin/tool"]),
+    );
+    assert_eq!(controls[0].wait_entries.recv().expect("first wait"), 1);
+
+    controls[0]
+        .steps
+        .send(Ok(ProcessTransition::Stopped { signal: 19 }))
+        .expect("release the stop");
+    assert_eq!(controls[0].wait_entries.recv().expect("second wait"), 2);
+    let stopped = wait_for_notice(&mut session);
+    session
+        .acknowledge_job_notice(stopped.id())
+        .expect("acknowledge the stop");
+
+    controls[0]
+        .steps
+        .send(Ok(ProcessTransition::Completed(ProcessStatus::Signaled(1))))
+        .expect("the hung-up child dies");
+    let failures = session.hang_up_background_jobs(&platform);
+
+    let group = ProcessGroupId::new(151).expect("test group is nonzero");
+    assert_eq!(
+        *platform.signals.lock().expect("signal lock"),
+        vec![(group, JobSignal::Continue), (group, JobSignal::Hangup)],
+        "a stopped group must be resumed before it can act on a hang-up"
+    );
+    assert_eq!(failures.len(), 1, "a signalled death is a reported failure");
+    assert!(session.live_background_jobs().is_empty());
+}
+
+#[test]
+fn a_signal_failure_quarantines_the_record_without_blocking_exit() {
+    let clock = Arc::new(FakeClock::new());
+    let mut session = session();
+    session.enable_interactive_job_control(clock.clone());
+    let (platform, controls) = ControlledBackgroundPlatform::new(&[161]);
+    launch_controlled_job(
+        &mut session,
+        &clock,
+        &platform,
+        "^tool &",
+        &Probe::new(["/bin/tool"]),
+    );
+    assert_eq!(controls[0].wait_entries.recv().expect("first wait"), 1);
+    platform.refuse_signals("the host refused the group");
+
+    let failures = session.hang_up_background_jobs(&platform);
+
+    assert_eq!(failures.len(), 1);
+    assert!(
+        matches!(
+            failures[0].reason(),
+            BackgroundFailureReason::Signal(message) if message.contains("refused")
+        ),
+        "an unsignallable job is quarantined, not claimed reaped: {:?}",
+        failures[0].reason()
+    );
+    assert!(
+        session.live_background_jobs().is_empty(),
+        "a quarantined record must not keep the wait alive"
+    );
+
+    // Release the child so its observer thread ends with the test rather than
+    // outliving it blocked on a scripted transition.
+    controls[0]
+        .steps
+        .send(Ok(ProcessTransition::Completed(ProcessStatus::Exited(0))))
+        .expect("release the quarantined child");
 }
 
 #[test]

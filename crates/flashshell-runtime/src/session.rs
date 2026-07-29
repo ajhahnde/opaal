@@ -50,7 +50,10 @@ use crate::resolve::ExecutableProbe;
 use crate::stream::{BytePull, ByteStream, StreamPull};
 use crate::{Environment, ScopeStack, Status, Value};
 
-pub use crate::background::{JobNotice, JobNoticeError, JobNoticeId, JobNoticeKind};
+pub use crate::background::{
+    BackgroundFailure, BackgroundFailureReason, JobNotice, JobNoticeError, JobNoticeId,
+    JobNoticeKind, LiveJob, LiveJobState,
+};
 
 /// The control decision produced by one submitted edit buffer.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -164,6 +167,44 @@ impl Session {
         if self.jobs.is_none() {
             self.jobs = Some(BackgroundJobs::new(clock));
         }
+    }
+
+    /// Every background job that has not reached a terminal aggregate.
+    #[must_use]
+    pub fn live_background_jobs(&self) -> Vec<LiveJob> {
+        self.jobs
+            .as_ref()
+            .map(BackgroundJobs::live_jobs)
+            .unwrap_or_default()
+    }
+
+    /// Resume, wait, and drain every background job this session started.
+    ///
+    /// Returns one entry per failing job in job-identity order. A successful
+    /// job produces no entry and no output.
+    pub fn join_background_jobs(&mut self, platform: &dyn Platform) -> Vec<BackgroundFailure> {
+        let Some(jobs) = self.jobs.as_mut() else {
+            return Vec::new();
+        };
+        let failures = jobs.wait_for_quiescence(platform);
+        // Draining moves every completion through `Notified` and `Reaped`, so a
+        // mode that never reaches a prompt still runs the whole lifecycle.
+        jobs.drain_notices();
+        failures
+    }
+
+    /// Resume, hang up, wait, and drain every background job before exit.
+    ///
+    /// The asymmetry with the join is deliberate: an interactive loop has
+    /// already rendered its pending notices through the editor, so the drain
+    /// here only clears what the hang-up itself produced.
+    pub fn hang_up_background_jobs(&mut self, platform: &dyn Platform) -> Vec<BackgroundFailure> {
+        let Some(jobs) = self.jobs.as_mut() else {
+            return Vec::new();
+        };
+        let failures = jobs.hang_up_all(platform);
+        jobs.drain_notices();
+        failures
     }
 
     /// Peek the next structured job notice without acknowledging it.

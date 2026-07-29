@@ -12,7 +12,7 @@ use std::sync::{Arc, mpsc};
 use std::thread;
 
 use flashshell_platform::{
-    ChildProcess, Platform, ProcessGroupId, ProcessStatus, ProcessTransition, WaitError,
+    ChildProcess, JobSignal, Platform, ProcessGroupId, ProcessStatus, ProcessTransition, WaitError,
 };
 
 use crate::Status;
@@ -365,7 +365,119 @@ struct JobRecord {
     completion: Option<Status>,
     command: String,
     observation_failed: bool,
+    /// Why observation was abandoned, retained for the lifetime report.
+    ///
+    /// The notice queue carries the same text, but a notice is consumed by
+    /// rendering while a join must still be able to say what it skipped.
+    observation_message: Option<String>,
+    /// Whether a resume has been requested for the current stop.
+    ///
+    /// A stop is only cleared by a later observation, so without this the
+    /// repeated resume pass inside a wait would signal the same stopped group
+    /// once per loop turn.
+    resume_requested: bool,
     observers: Option<ObserverSlots>,
+}
+
+/// Whether a live background job is running or stopped.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LiveJobState {
+    /// The job is running.
+    Running,
+    /// The job is stopped and will not proceed until it is resumed.
+    Stopped,
+}
+
+/// One background job that has not reached a terminal aggregate.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LiveJob {
+    job: JobId,
+    state: LiveJobState,
+    command: String,
+}
+
+impl LiveJob {
+    /// The job identity.
+    #[must_use]
+    pub const fn job(&self) -> JobId {
+        self.job
+    }
+
+    /// Whether the job is running or stopped.
+    #[must_use]
+    pub const fn state(&self) -> LiveJobState {
+        self.state
+    }
+
+    /// The stored display-safe command label.
+    #[must_use]
+    pub fn command(&self) -> &str {
+        &self.command
+    }
+}
+
+/// Why one background job is reported as failing at a session boundary.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum BackgroundFailureReason {
+    /// The job completed with a nonzero aggregate status.
+    Exited(Status),
+    /// Observation failed unrecoverably; the record is quarantined.
+    Observation(String),
+    /// The group could not be signalled; the record is quarantined.
+    Signal(String),
+}
+
+/// One background job whose outcome a session boundary must report.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BackgroundFailure {
+    job: JobId,
+    command: String,
+    reason: BackgroundFailureReason,
+}
+
+impl BackgroundFailure {
+    /// The job identity.
+    #[must_use]
+    pub const fn job(&self) -> JobId {
+        self.job
+    }
+
+    /// The stored display-safe command label.
+    #[must_use]
+    pub fn command(&self) -> &str {
+        &self.command
+    }
+
+    /// Why the job is reported.
+    #[must_use]
+    pub const fn reason(&self) -> &BackgroundFailureReason {
+        &self.reason
+    }
+
+    /// One complete diagnostic line, without a trailing newline.
+    #[must_use]
+    pub fn render(&self) -> String {
+        match &self.reason {
+            BackgroundFailureReason::Exited(status) => format!(
+                "[{}] {} exited with status {}",
+                self.job.get(),
+                self.command,
+                status
+                    .code()
+                    .map_or_else(|| "unknown".to_owned(), |code| code.to_string())
+            ),
+            BackgroundFailureReason::Observation(message) => format!(
+                "[{}] {} was not observed: {message}",
+                self.job.get(),
+                self.command
+            ),
+            BackgroundFailureReason::Signal(message) => format!(
+                "[{}] {} could not be signalled: {message}",
+                self.job.get(),
+                self.command
+            ),
+        }
+    }
 }
 
 /// Session-owned background job table and raw-observation coordinator.
@@ -470,6 +582,8 @@ impl BackgroundJobs {
                 completion: None,
                 command: command.clone(),
                 observation_failed: false,
+                observation_message: None,
+                resume_requested: false,
                 observers: Some(observers),
             },
         );
@@ -547,6 +661,166 @@ impl BackgroundJobs {
         self.records.get(&job).map(|record| record.group)
     }
 
+    /// Every job that has not reached a terminal aggregate.
+    ///
+    /// A completed-but-unacknowledged record is not live: it is drained by the
+    /// notice path rather than waited on. A quarantined record is not live
+    /// either, because no further observation of it will ever arrive.
+    pub(crate) fn live_jobs(&self) -> Vec<LiveJob> {
+        self.records
+            .iter()
+            .filter(|(_, record)| record.completion.is_none() && !record.observation_failed)
+            .map(|(id, record)| LiveJob {
+                job: *id,
+                state: if matches!(record.job.state(), JobState::Stopped { .. }) {
+                    LiveJobState::Stopped
+                } else {
+                    LiveJobState::Running
+                },
+                command: record.command.clone(),
+            })
+            .collect()
+    }
+
+    /// Resume every stopped job, then wait every live job to a terminal status.
+    ///
+    /// Resuming first is what keeps the wait from deadlocking: a session that
+    /// is ending has no terminal from which a stopped job could be resumed by
+    /// hand, so an unresumed stop would never reach a terminal status.
+    pub(crate) fn wait_for_quiescence(
+        &mut self,
+        platform: &dyn Platform,
+    ) -> Vec<BackgroundFailure> {
+        let mut failures = Vec::new();
+        self.resume_stopped(platform, &mut failures);
+        // The table owns `event_sender`, so `recv` can only block, never
+        // disconnect. Every live record therefore still has an observer that
+        // will report, and the loop ends when the last one does.
+        while self.has_live_jobs() {
+            let Ok(observation) = self.event_receiver.recv() else {
+                break;
+            };
+            self.apply_observation(observation);
+            self.resume_stopped(platform, &mut failures);
+        }
+        self.collect_failures(&mut failures);
+        failures
+    }
+
+    /// Resume, hang up, and then wait every live job to a terminal status.
+    pub(crate) fn hang_up_all(&mut self, platform: &dyn Platform) -> Vec<BackgroundFailure> {
+        let mut failures = Vec::new();
+        // Resume first: a stopped process cannot act on a hang-up.
+        self.resume_stopped(platform, &mut failures);
+        for live in self.live_jobs() {
+            self.signal_or_quarantine(live.job, JobSignal::Hangup, platform, &mut failures);
+        }
+        let mut waited = self.wait_for_quiescence(platform);
+        failures.append(&mut waited);
+        failures.sort_by_key(BackgroundFailure::job);
+        failures.dedup_by_key(|failure| failure.job());
+        failures
+    }
+
+    /// Acknowledge every queued notice without rendering it.
+    ///
+    /// A mode with no prompt still has to move each completion through
+    /// `Notified` and `Reaped`, or the lifecycle would differ by caller and the
+    /// queue would grow without bound.
+    pub(crate) fn drain_notices(&mut self) {
+        while let Some(notice) = self.next_notice() {
+            if self.acknowledge(notice.id()).is_err() {
+                break;
+            }
+        }
+    }
+
+    fn has_live_jobs(&self) -> bool {
+        self.records
+            .values()
+            .any(|record| record.completion.is_none() && !record.observation_failed)
+    }
+
+    /// Resume every stopped live group whose resume has not been sent yet.
+    fn resume_stopped(&mut self, platform: &dyn Platform, failures: &mut Vec<BackgroundFailure>) {
+        let stopped: Vec<JobId> = self
+            .records
+            .iter()
+            .filter(|(_, record)| {
+                record.completion.is_none()
+                    && !record.observation_failed
+                    && !record.resume_requested
+                    && matches!(record.job.state(), JobState::Stopped { .. })
+            })
+            .map(|(id, _)| *id)
+            .collect();
+        for job in stopped {
+            if let Some(record) = self.records.get_mut(&job) {
+                record.resume_requested = true;
+            }
+            self.signal_or_quarantine(job, JobSignal::Continue, platform, failures);
+        }
+    }
+
+    /// Deliver one signal, or quarantine the record and report why.
+    ///
+    /// A shell must not claim it hung up what it could not signal, so a refused
+    /// delivery ends the record here rather than leaving a wait that no
+    /// observation will ever end.
+    fn signal_or_quarantine(
+        &mut self,
+        job: JobId,
+        signal: JobSignal,
+        platform: &dyn Platform,
+        failures: &mut Vec<BackgroundFailure>,
+    ) {
+        let Some(record) = self.records.get_mut(&job) else {
+            return;
+        };
+        let group = record.group;
+        if let Err(error) = platform.signal_process_group(group, signal) {
+            let message = escape_job_label(&error.to_string());
+            record.observation_failed = true;
+            record.observation_message = Some(message.clone());
+            failures.push(BackgroundFailure {
+                job,
+                command: record.command.clone(),
+                reason: BackgroundFailureReason::Signal(message),
+            });
+        }
+    }
+
+    /// Report every record that failed and is not already reported by identity.
+    fn collect_failures(&self, failures: &mut Vec<BackgroundFailure>) {
+        for (id, record) in &self.records {
+            if failures.iter().any(|failure| failure.job == *id) {
+                continue;
+            }
+            let reason = if record.observation_failed {
+                BackgroundFailureReason::Observation(
+                    record
+                        .observation_message
+                        .clone()
+                        .unwrap_or_else(|| "the observation was abandoned".to_owned()),
+                )
+            } else {
+                match &record.completion {
+                    // A status with no code did not exit normally, which is a
+                    // failure the join must still report rather than skip.
+                    Some(status) if status.code() != Some(0) => {
+                        BackgroundFailureReason::Exited(status.clone())
+                    }
+                    _ => continue,
+                }
+            };
+            failures.push(BackgroundFailure {
+                job: *id,
+                command: record.command.clone(),
+                reason,
+            });
+        }
+    }
+
     fn reserve_job(&mut self, plan: &ExecutionPlan) -> Result<JobId, RuntimeError> {
         let Some(value) = self.next_job else {
             return Err(RuntimeError::new(
@@ -609,6 +883,8 @@ impl BackgroundJobs {
                     && !was_stopped
                     && matches!(record.job.state(), JobState::Stopped { .. })
                 {
+                    // A newly observed stop is a stop no resume has answered.
+                    record.resume_requested = false;
                     queued = Some(JobNoticeKind::Stopped);
                 }
             }
@@ -660,9 +936,9 @@ impl BackgroundJobs {
                         || error.to_string(),
                         |cleanup| format!("{error}; cleanup failed: {cleanup}"),
                     );
-                    queued = Some(JobNoticeKind::ObservationFailed {
-                        message: escape_job_label(&message),
-                    });
+                    let message = escape_job_label(&message);
+                    record.observation_message = Some(message.clone());
+                    queued = Some(JobNoticeKind::ObservationFailed { message });
                 }
             }
         }
