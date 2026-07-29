@@ -328,6 +328,11 @@ pub enum RuntimeErrorKind {
     /// them without the terminal would send every keyboard interrupt to the
     /// shell instead of to the job.
     ForegroundTerminal(PlatformError),
+    /// Background startup could not establish and verify one process group for
+    /// every pipeline member.
+    BackgroundProcessGroupUnavailable,
+    /// A started child reported the reserved zero process identity.
+    InvalidProcessIdentity,
     /// A stopped job could not be resumed, so waiting on it could not continue.
     ///
     /// Distinct from a wait failure: the job exists and is merely stopped. A
@@ -563,6 +568,12 @@ impl fmt::Display for RuntimeErrorKind {
             Self::ProcessWait(error) => error.fmt(formatter),
             Self::ForegroundTerminal(error) => {
                 write!(formatter, "terminal handover to the job failed: {error}")
+            }
+            Self::BackgroundProcessGroupUnavailable => {
+                formatter.write_str("background execution requires one established process group")
+            }
+            Self::InvalidProcessIdentity => {
+                formatter.write_str("the platform reported the reserved zero process identity")
             }
             Self::JobSignal(error) => {
                 write!(formatter, "resuming the stopped job failed: {error}")

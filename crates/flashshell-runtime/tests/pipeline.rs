@@ -17,8 +17,8 @@ use flashshell_platform::{
 };
 use flashshell_platform_posix::PosixPlatform;
 use flashshell_runtime::command::CommandRegistry;
-use flashshell_runtime::eval::RuntimeErrorKind;
-use flashshell_runtime::execute::execute_foreground_pipeline;
+use flashshell_runtime::eval::{Clock, Instant, RuntimeErrorKind};
+use flashshell_runtime::execute::{execute_foreground_pipeline, start_background_pipeline};
 use flashshell_runtime::plan::{ExecutionPlan, RedirectionAction, plan_pipeline};
 use flashshell_runtime::resolve::ExecutableProbe;
 use flashshell_runtime::{Environment, ScopeStack};
@@ -104,6 +104,7 @@ struct RecordingPipelinePlatform {
     file_action_error_at: Option<usize>,
     spawn_error_at: Option<usize>,
     wait_error_at: Option<usize>,
+    report_process_groups: bool,
 }
 
 impl RecordingPipelinePlatform {
@@ -126,6 +127,7 @@ impl RecordingPipelinePlatform {
             file_action_error_at: None,
             spawn_error_at: None,
             wait_error_at: None,
+            report_process_groups: true,
         }
     }
 }
@@ -213,6 +215,15 @@ impl Platform for RecordingPipelinePlatform {
         });
         Ok(Box::new(RecordingChild {
             index,
+            id: index as u64 + 1,
+            process_group: self
+                .report_process_groups
+                .then_some(request.process_group())
+                .and_then(|placement| match placement {
+                    ProcessGroup::New => flashshell_platform::ProcessGroupId::new(index as u64 + 1),
+                    ProcessGroup::Join(group) => Some(group),
+                    ProcessGroup::Inherit => None,
+                }),
             status: self.statuses[index],
             wait_error: self.wait_error_at == Some(index),
             expected_spawns: self.expected_spawn_calls,
@@ -228,6 +239,8 @@ impl Platform for RecordingPipelinePlatform {
 #[derive(Debug)]
 struct RecordingChild {
     index: usize,
+    id: u64,
+    process_group: Option<flashshell_platform::ProcessGroupId>,
     status: ProcessStatus,
     wait_error: bool,
     expected_spawns: usize,
@@ -240,7 +253,11 @@ struct RecordingChild {
 
 impl ChildProcess for RecordingChild {
     fn id(&self) -> u64 {
-        self.index as u64
+        self.id
+    }
+
+    fn process_group(&self) -> Option<flashshell_platform::ProcessGroupId> {
+        self.process_group
     }
 
     fn wait(&mut self) -> Result<ProcessStatus, WaitError> {
@@ -272,6 +289,145 @@ impl ChildProcess for RecordingChild {
             .push(self.index);
         Ok(())
     }
+}
+
+#[derive(Debug)]
+struct StepClock {
+    next: AtomicU64,
+}
+
+impl StepClock {
+    const fn new(first: u64) -> Self {
+        Self {
+            next: AtomicU64::new(first),
+        }
+    }
+}
+
+impl Clock for StepClock {
+    fn now(&self) -> Instant {
+        Instant::from_nanos(self.next.fetch_add(1, Ordering::SeqCst))
+    }
+}
+
+#[test]
+fn background_pipeline_returns_owned_grouped_members_without_waiting() {
+    let plan = build("^tool | ^other");
+    let platform =
+        RecordingPipelinePlatform::new(vec![ProcessStatus::Exited(7), ProcessStatus::Exited(9)]);
+    let clock = StepClock::new(100);
+
+    let started = start_background_pipeline(&plan, &platform, &clock)
+        .expect("the background pipeline should start");
+
+    let group = started.group();
+    assert_eq!(group.get(), 1);
+    assert_eq!(started.started_at(), Instant::from_nanos(100));
+    assert_eq!(
+        started
+            .members()
+            .iter()
+            .map(|member| (member.process().get(), member.started_at()))
+            .collect::<Vec<_>>(),
+        vec![(1, Instant::from_nanos(101)), (2, Instant::from_nanos(102)),]
+    );
+    assert!(
+        platform.wait_order.lock().expect("wait lock").is_empty(),
+        "background startup must return every child without waiting"
+    );
+
+    for member in started.into_members() {
+        let (_, mut child, _) = member.into_parts();
+        assert_eq!(child.process_group(), Some(group));
+        child.wait().expect("test cleanup should reap the child");
+    }
+    assert_eq!(*platform.wait_order.lock().expect("wait lock"), vec![0, 1]);
+}
+
+#[test]
+fn background_pipeline_requires_process_groups_before_platform_work() {
+    let plan = build("^tool | ^other");
+    let platform = RecordingPipelinePlatform {
+        capabilities: Capabilities::full_without(Capability::ProcessGroups),
+        ..RecordingPipelinePlatform::new(vec![ProcessStatus::Exited(0); 2])
+    };
+
+    let error = start_background_pipeline(&plan, &platform, &StepClock::new(0))
+        .expect_err("background startup requires process groups");
+
+    assert!(matches!(
+        error.kind(),
+        RuntimeErrorKind::BackgroundProcessGroupUnavailable
+    ));
+    assert_eq!(platform.pipe_count.load(Ordering::SeqCst), 0);
+    assert_eq!(platform.spawn_count.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn background_pipe_creation_failure_spawns_no_child() {
+    let plan = build("^tool | ^other | ^tool");
+    let platform = RecordingPipelinePlatform {
+        pipe_error_at: Some(1),
+        ..RecordingPipelinePlatform::new(vec![ProcessStatus::Exited(0); 3])
+    };
+
+    let error = start_background_pipeline(&plan, &platform, &StepClock::new(0))
+        .expect_err("the second pipe should fail");
+
+    assert!(matches!(error.kind(), RuntimeErrorKind::PipeCreate(_)));
+    assert_eq!(platform.spawn_count.load(Ordering::SeqCst), 0);
+    assert!(platform.wait_order.lock().expect("wait lock").is_empty());
+    assert!(
+        platform
+            .terminate_order
+            .lock()
+            .expect("terminate lock")
+            .is_empty()
+    );
+}
+
+#[test]
+fn background_later_spawn_failure_terminates_and_reaps_started_members() {
+    let plan = build("^tool | ^other | ^tool");
+    let platform = RecordingPipelinePlatform {
+        expected_spawn_calls: 2,
+        spawn_error_at: Some(1),
+        ..RecordingPipelinePlatform::new(vec![ProcessStatus::Exited(0); 3])
+    };
+
+    let error = start_background_pipeline(&plan, &platform, &StepClock::new(0))
+        .expect_err("the second spawn should fail");
+
+    assert!(matches!(error.kind(), RuntimeErrorKind::ProcessSpawn(_)));
+    assert_eq!(
+        *platform.terminate_order.lock().expect("terminate lock"),
+        vec![0]
+    );
+    assert_eq!(*platform.wait_order.lock().expect("wait lock"), vec![0]);
+}
+
+#[test]
+fn background_unestablished_group_terminates_and_reaps_the_started_child() {
+    let plan = build("^tool | ^other");
+    let platform = RecordingPipelinePlatform {
+        expected_spawn_calls: 1,
+        expected_endpoint_drops: 2,
+        report_process_groups: false,
+        ..RecordingPipelinePlatform::new(vec![ProcessStatus::Exited(0); 2])
+    };
+
+    let error = start_background_pipeline(&plan, &platform, &StepClock::new(0))
+        .expect_err("background startup requires an established process group");
+
+    assert!(matches!(
+        error.kind(),
+        RuntimeErrorKind::BackgroundProcessGroupUnavailable
+    ));
+    assert_eq!(
+        *platform.terminate_order.lock().expect("terminate lock"),
+        vec![0]
+    );
+    assert_eq!(*platform.wait_order.lock().expect("wait lock"), vec![0]);
 }
 
 #[test]

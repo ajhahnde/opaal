@@ -21,6 +21,7 @@ use flashshell_syntax::{ConditionalChain, OutputMode, PipeOperator, Pipeline, So
 
 use crate::command::CommandRegistry;
 use crate::eval::{Clock, Instant, RuntimeError, RuntimeErrorKind};
+use crate::job::ProcessId;
 use crate::plan::{
     ExecutionPlan, PlannedRedirection, PlannedResolution, RedirectionAction, SessionOptions,
     plan_pipeline_with_options, preflight,
@@ -147,7 +148,7 @@ where
         .map_err(|error| RuntimeError::new(RuntimeErrorKind::CapturePipe(error), producer_span))?
         .into_parts();
     let pipeline_started = clock.now();
-    let started = start_preflighted_pipeline(plan, platform, Some(clock), Some(writer))?;
+    let started = start_preflighted_pipeline(plan, platform, Some(clock), Some(writer), false)?;
     // Held across the drain and the wait; `Drop` is the backstop that returns
     // the terminal even when the drain callback panics.
     let foreground = take_foreground(plan, platform, started.group)?;
@@ -511,7 +512,7 @@ fn execute_preflighted_pipeline_inner(
     platform: &dyn Platform,
     clock: Option<&dyn Clock>,
 ) -> Result<Vec<StageCompletion>, RuntimeError> {
-    let started = start_preflighted_pipeline(plan, platform, clock, None)?;
+    let started = start_preflighted_pipeline(plan, platform, clock, None, false)?;
     let foreground = take_foreground(plan, platform, started.group)?;
     let group = started.group;
     let waited = wait_in_source_order(started.children, plan, platform, group, clock);
@@ -573,6 +574,130 @@ impl PipelineGroup {
 struct StartedPipeline {
     children: Vec<StartedChild>,
     group: Option<ProcessGroupId>,
+}
+
+/// One uniquely owned member of a started background pipeline.
+#[derive(Debug)]
+pub struct BackgroundMember {
+    process: ProcessId,
+    child: Box<dyn ChildProcess>,
+    started_at: Instant,
+}
+
+impl BackgroundMember {
+    /// The nonzero platform process identity.
+    #[must_use]
+    pub const fn process(&self) -> ProcessId {
+        self.process
+    }
+
+    /// The clock reading taken immediately before this member was spawned.
+    #[must_use]
+    pub const fn started_at(&self) -> Instant {
+        self.started_at
+    }
+
+    /// Consume the member into its process identity, child handle, and start
+    /// reading.
+    #[must_use]
+    pub fn into_parts(self) -> (ProcessId, Box<dyn ChildProcess>, Instant) {
+        (self.process, self.child, self.started_at)
+    }
+}
+
+/// A completely started background external pipeline.
+#[derive(Debug)]
+pub struct BackgroundPipeline {
+    members: Vec<BackgroundMember>,
+    group: ProcessGroupId,
+    started_at: Instant,
+}
+
+impl BackgroundPipeline {
+    /// Members in source order.
+    #[must_use]
+    pub fn members(&self) -> &[BackgroundMember] {
+        &self.members
+    }
+
+    /// The common process group established for every member.
+    #[must_use]
+    pub const fn group(&self) -> ProcessGroupId {
+        self.group
+    }
+
+    /// The clock reading taken when pipeline startup began.
+    #[must_use]
+    pub const fn started_at(&self) -> Instant {
+        self.started_at
+    }
+
+    /// Consume the pipeline into source-ordered members.
+    #[must_use]
+    pub fn into_members(self) -> Vec<BackgroundMember> {
+        self.members
+    }
+}
+
+/// Start an all-external pipeline for background observation without waiting.
+///
+/// Background startup requires process-group support and verifies that every
+/// member joined the group led by the first child. Any startup failure
+/// terminates and waits every child that was successfully spawned.
+pub fn start_background_pipeline(
+    plan: &ExecutionPlan,
+    platform: &dyn Platform,
+    clock: &dyn Clock,
+) -> Result<BackgroundPipeline, RuntimeError> {
+    preflight(plan)?;
+    if !platform.capabilities().supports(Capability::ProcessGroups) {
+        return Err(RuntimeError::new(
+            RuntimeErrorKind::BackgroundProcessGroupUnavailable,
+            plan.span(),
+        ));
+    }
+
+    let pipeline_started = clock.now();
+    let mut started = start_preflighted_pipeline(plan, platform, Some(clock), None, true)?;
+    let Some(group) = started.group else {
+        terminate_and_reap(&mut started.children);
+        return Err(RuntimeError::new(
+            RuntimeErrorKind::BackgroundProcessGroupUnavailable,
+            plan.span(),
+        ));
+    };
+
+    if started
+        .children
+        .iter()
+        .any(|child| ProcessId::new(child.child.id()).is_none())
+    {
+        terminate_and_reap(&mut started.children);
+        return Err(RuntimeError::new(
+            RuntimeErrorKind::InvalidProcessIdentity,
+            plan.span(),
+        ));
+    }
+
+    let mut members = Vec::with_capacity(started.children.len());
+    for child in started.children {
+        let process = ProcessId::new(child.child.id())
+            .expect("background process identities were validated before ownership transfer");
+        let started_at = child
+            .started_at
+            .expect("background startup always records a member start reading");
+        members.push(BackgroundMember {
+            process,
+            child: child.child,
+            started_at,
+        });
+    }
+
+    Ok(BackgroundPipeline {
+        members,
+        group,
+        started_at: pipeline_started,
+    })
 }
 
 /// Hand the terminal to `group` for as long as the returned guard lives.
@@ -652,6 +777,7 @@ fn start_preflighted_pipeline(
     platform: &dyn Platform,
     clock: Option<&dyn Clock>,
     mut final_output: Option<Box<dyn DescriptorEndpoint>>,
+    require_group: bool,
 ) -> Result<StartedPipeline, RuntimeError> {
     validate_preflighted_external_plan(plan)?;
 
@@ -702,13 +828,14 @@ fn start_preflighted_pipeline(
             .iter()
             .map(|argument| argument.value().to_os_string())
             .collect();
+        let placement = group.placement();
         let request = SpawnRequest::new(path, &argv, &environment, plan.cwd())
             .expect("a planned command always carries argv zero")
             .with_descriptors(&descriptors)
             .expect("the final descriptor map has unique targets")
             .with_closed_descriptors(&closed_descriptors)
             .expect("a final descriptor cannot be both mapped and closed")
-            .in_process_group(group.placement());
+            .in_process_group(placement);
         let command_span = stage.argv()[0].span();
         let started_at = clock.map(Clock::now);
         let child = platform.spawn(&request).map_err(|error| {
@@ -721,6 +848,21 @@ fn start_preflighted_pipeline(
 
         match child {
             Ok(child) => {
+                let reported_group = child.process_group();
+                let group_is_valid = match placement {
+                    ProcessGroup::New => reported_group.is_some(),
+                    ProcessGroup::Join(expected) => reported_group == Some(expected),
+                    ProcessGroup::Inherit => !require_group,
+                };
+                if require_group && !group_is_valid {
+                    children.push(StartedChild { child, started_at });
+                    drop(pipes);
+                    terminate_and_reap(&mut children);
+                    return Err(RuntimeError::new(
+                        RuntimeErrorKind::BackgroundProcessGroupUnavailable,
+                        command_span,
+                    ));
+                }
                 group.adopt(child.as_ref());
                 children.push(StartedChild { child, started_at });
             }
