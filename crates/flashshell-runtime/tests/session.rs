@@ -160,26 +160,36 @@ impl ControlledBackgroundPlatform {
     }
 
     fn new(ids: &[u64]) -> (Self, Vec<BackgroundChildControl>) {
-        let group = ProcessGroupId::new(ids[0]).expect("test group is nonzero");
+        Self::in_groups(&[ids])
+    }
+
+    /// Script one process group per inner slice, sharing that slice's first id.
+    ///
+    /// Separate jobs need separate groups before a signal test can tell which
+    /// job a delivery reached.
+    fn in_groups(groups: &[&[u64]]) -> (Self, Vec<BackgroundChildControl>) {
         let mut children: VecDeque<Box<dyn ChildProcess>> = VecDeque::new();
         let mut controls = Vec::new();
-        for &id in ids {
-            let (step_sender, step_receiver) = mpsc::channel();
-            let (wait_sender, wait_receiver) = mpsc::channel();
-            let terminate_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-            children.push_back(Box::new(BackgroundChild {
-                id,
-                group,
-                steps: step_receiver,
-                wait_entries: wait_sender,
-                waits: 0,
-                terminate_calls: Arc::clone(&terminate_calls),
-            }));
-            controls.push(BackgroundChildControl {
-                steps: step_sender,
-                wait_entries: wait_receiver,
-                terminate_calls,
-            });
+        for ids in groups {
+            let group = ProcessGroupId::new(ids[0]).expect("test group is nonzero");
+            for &id in *ids {
+                let (step_sender, step_receiver) = mpsc::channel();
+                let (wait_sender, wait_receiver) = mpsc::channel();
+                let terminate_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+                children.push_back(Box::new(BackgroundChild {
+                    id,
+                    group,
+                    steps: step_receiver,
+                    wait_entries: wait_sender,
+                    waits: 0,
+                    terminate_calls: Arc::clone(&terminate_calls),
+                }));
+                controls.push(BackgroundChildControl {
+                    steps: step_sender,
+                    wait_entries: wait_receiver,
+                    terminate_calls,
+                });
+            }
         }
         (
             Self {
@@ -1932,6 +1942,573 @@ fn redirected_jobs_output_still_requires_explicit_serialization() {
     assert!(rendered.contains("explicit `encode`/`to`"), "{rendered}");
     assert!(sink.is_empty());
     assert!(session.current_status().is_none());
+}
+
+/// The identity the coordinator assigns to the `nth` job of a session.
+fn job_id(nth: u64) -> flashshell_runtime::job::JobId {
+    flashshell_runtime::job::JobId::new(nth).expect("test job identities are nonzero")
+}
+
+/// Stop one controlled child and consume the resulting stopped notice.
+fn stop_controlled_job(
+    session: &mut Session,
+    control: &BackgroundChildControl,
+    waits_so_far: usize,
+) {
+    control
+        .steps
+        .send(Ok(ProcessTransition::Stopped { signal: 19 }))
+        .expect("release the stop");
+    assert_eq!(
+        control.wait_entries.recv().expect("stop applied"),
+        waits_so_far + 1
+    );
+    assert_eq!(wait_for_notice(session).kind(), &JobNoticeKind::Stopped);
+}
+
+/// Submit one buffer expecting a recoverable diagnostic, and return it.
+fn rejected(
+    session: &mut Session,
+    text: &str,
+    probe: &Probe,
+    platform: &dyn Platform,
+    clock: &FakeClock,
+) -> String {
+    let mut sink = Vec::new();
+    session
+        .submit("<interactive>", text, probe, platform, clock, &mut sink)
+        .expect_err("the submission should be rejected")
+        .render()
+        .to_owned()
+}
+
+/// Every group signal the platform recorded, in delivery order.
+fn delivered(platform: &ControlledBackgroundPlatform) -> Vec<(u64, JobSignal)> {
+    platform
+        .signals
+        .lock()
+        .expect("signal lock")
+        .iter()
+        .map(|(group, signal)| (group.get(), *signal))
+        .collect()
+}
+
+#[test]
+fn bg_continues_the_newest_stopped_job_by_default() {
+    let clock = Arc::new(FakeClock::new());
+    let mut session = session();
+    session.enable_interactive_job_control(clock.clone());
+    let (platform, controls) = ControlledBackgroundPlatform::in_groups(&[&[311], &[312]]);
+    let probe = Probe::new(["/bin/tool"]);
+    launch_controlled_job(&mut session, &clock, &platform, "^tool &", &probe);
+    launch_controlled_job(&mut session, &clock, &platform, "^tool &", &probe);
+    assert_eq!(controls[0].wait_entries.recv().expect("first wait"), 1);
+    assert_eq!(controls[1].wait_entries.recv().expect("second wait"), 1);
+    stop_controlled_job(&mut session, &controls[1], 1);
+
+    assert_eq!(
+        rendered(&mut session, "bg", &probe, &platform, clock.as_ref()),
+        "",
+        "bg produces no output of its own"
+    );
+
+    assert_eq!(
+        delivered(&platform),
+        vec![(312, JobSignal::Continue)],
+        "the newest stopped job is the default target"
+    );
+    assert_eq!(
+        session
+            .background_job(job_id(2))
+            .expect("the continued job stays addressable")
+            .state(),
+        JobState::Background
+    );
+    assert!(
+        session.next_job_notice().is_none(),
+        "a successful continuation removes the stale stopped notice"
+    );
+    assert_eq!(session.current_status().and_then(Status::code), Some(0));
+
+    release(&controls);
+}
+
+#[test]
+fn bg_continues_an_explicit_stopped_target() {
+    let clock = Arc::new(FakeClock::new());
+    let mut session = session();
+    session.enable_interactive_job_control(clock.clone());
+    let (platform, controls) = ControlledBackgroundPlatform::in_groups(&[&[321], &[322]]);
+    let probe = Probe::new(["/bin/tool"]);
+    launch_controlled_job(&mut session, &clock, &platform, "^tool &", &probe);
+    launch_controlled_job(&mut session, &clock, &platform, "^tool &", &probe);
+    assert_eq!(controls[0].wait_entries.recv().expect("first wait"), 1);
+    assert_eq!(controls[1].wait_entries.recv().expect("second wait"), 1);
+    stop_controlled_job(&mut session, &controls[0], 1);
+
+    assert_eq!(
+        rendered(&mut session, "bg %1", &probe, &platform, clock.as_ref()),
+        ""
+    );
+
+    assert_eq!(delivered(&platform), vec![(321, JobSignal::Continue)]);
+    assert_eq!(
+        session
+            .background_job(job_id(1))
+            .expect("the continued job stays addressable")
+            .state(),
+        JobState::Background
+    );
+
+    release(&controls);
+}
+
+#[test]
+fn bg_rejects_a_target_that_is_not_stopped() {
+    let clock = Arc::new(FakeClock::new());
+    let mut session = session();
+    session.enable_interactive_job_control(clock.clone());
+    let (platform, controls) = ControlledBackgroundPlatform::in_groups(&[&[331], &[332]]);
+    let probe = Probe::new(["/bin/tool"]);
+    launch_controlled_job(&mut session, &clock, &platform, "^tool &", &probe);
+    launch_controlled_job(&mut session, &clock, &platform, "^tool &", &probe);
+    assert_eq!(controls[0].wait_entries.recv().expect("first wait"), 1);
+    assert_eq!(controls[1].wait_entries.recv().expect("second wait"), 1);
+
+    let running = rejected(&mut session, "bg %1", &probe, &platform, clock.as_ref());
+    assert!(
+        running.contains("bg: job `%1` is not stopped"),
+        "a running job cannot be continued:\n{running}"
+    );
+
+    controls[1]
+        .steps
+        .send(Ok(ProcessTransition::Completed(ProcessStatus::Exited(0))))
+        .expect("complete the second job");
+    assert_eq!(
+        wait_for_notice(&mut session).kind(),
+        &JobNoticeKind::Completed
+    );
+    let completed = rejected(&mut session, "bg %2", &probe, &platform, clock.as_ref());
+    assert!(
+        completed.contains("bg: job `%2` is not stopped"),
+        "a completed job cannot be continued:\n{completed}"
+    );
+
+    let unknown = rejected(&mut session, "bg %9", &probe, &platform, clock.as_ref());
+    assert!(
+        unknown.contains("bg: unknown job `%9`"),
+        "an unaddressable identity is named:\n{unknown}"
+    );
+    assert!(
+        delivered(&platform).is_empty(),
+        "a rejected bg delivers nothing"
+    );
+
+    release(&controls);
+}
+
+#[test]
+fn bg_without_an_eligible_job_is_an_error() {
+    let clock = Arc::new(FakeClock::new());
+    let mut session = session();
+    session.enable_interactive_job_control(clock.clone());
+    let (platform, controls) = ControlledBackgroundPlatform::new(&[341]);
+    let probe = Probe::new(["/bin/tool"]);
+    launch_controlled_job(&mut session, &clock, &platform, "^tool &", &probe);
+    assert_eq!(controls[0].wait_entries.recv().expect("first wait"), 1);
+
+    let rendered = rejected(&mut session, "bg", &probe, &platform, clock.as_ref());
+
+    assert!(
+        rendered.contains("bg: no stopped job to continue"),
+        "an absent default target is an error, not a silent success:\n{rendered}"
+    );
+
+    release(&controls);
+}
+
+#[test]
+fn bg_rejects_a_quarantined_record() {
+    let clock = Arc::new(FakeClock::new());
+    let mut session = session();
+    session.enable_interactive_job_control(clock.clone());
+    let (platform, controls) = ControlledBackgroundPlatform::new(&[351]);
+    let probe = Probe::new(["/bin/tool"]);
+    launch_controlled_job(&mut session, &clock, &platform, "^tool &", &probe);
+    assert_eq!(controls[0].wait_entries.recv().expect("first wait"), 1);
+    controls[0]
+        .steps
+        .send(Err(WaitError::new(
+            io::ErrorKind::Interrupted,
+            "initial failure",
+        )))
+        .expect("fail the initial observation");
+    assert_eq!(controls[0].wait_entries.recv().expect("cleanup wait"), 2);
+    controls[0]
+        .steps
+        .send(Err(WaitError::new(io::ErrorKind::Other, "cleanup failure")))
+        .expect("fail the cleanup wait");
+    assert!(matches!(
+        wait_for_notice(&mut session).kind(),
+        JobNoticeKind::ObservationFailed { .. }
+    ));
+
+    let rendered = rejected(&mut session, "bg %1", &probe, &platform, clock.as_ref());
+
+    assert!(
+        rendered.contains("bg: job `%1` is quarantined"),
+        "an unobservable record cannot be moved:\n{rendered}"
+    );
+    assert!(delivered(&platform).is_empty());
+}
+
+#[test]
+fn a_refused_continue_leaves_the_record_stopped_and_its_notice_pending() {
+    let clock = Arc::new(FakeClock::new());
+    let mut session = session();
+    session.enable_interactive_job_control(clock.clone());
+    let (platform, controls) = ControlledBackgroundPlatform::new(&[361]);
+    let probe = Probe::new(["/bin/tool"]);
+    launch_controlled_job(&mut session, &clock, &platform, "^tool &", &probe);
+    assert_eq!(controls[0].wait_entries.recv().expect("first wait"), 1);
+    stop_controlled_job(&mut session, &controls[0], 1);
+    platform.refuse_signals("the host refused the group");
+
+    let rendered = rejected(&mut session, "bg %1", &probe, &platform, clock.as_ref());
+
+    assert!(
+        rendered.contains("bg: job `%1` could not be signalled"),
+        "a refused delivery is reported, not absorbed:\n{rendered}"
+    );
+    assert!(matches!(
+        session
+            .background_job(job_id(1))
+            .expect("the record survives a refused delivery")
+            .state(),
+        JobState::Stopped { .. }
+    ));
+    assert_eq!(
+        session
+            .next_job_notice()
+            .map(|notice| notice.kind().clone()),
+        Some(JobNoticeKind::Stopped),
+        "a failed continuation must not consume the stopped notice"
+    );
+    assert_eq!(
+        session.live_background_jobs().len(),
+        1,
+        "a user delivery failure never quarantines the record"
+    );
+
+    release(&controls);
+}
+
+#[test]
+fn kill_defaults_to_terminate_and_delivers_in_source_order() {
+    let clock = Arc::new(FakeClock::new());
+    let mut session = session();
+    session.enable_interactive_job_control(clock.clone());
+    let (platform, controls) = ControlledBackgroundPlatform::in_groups(&[&[371], &[372]]);
+    let probe = Probe::new(["/bin/tool"]);
+    launch_controlled_job(&mut session, &clock, &platform, "^tool &", &probe);
+    launch_controlled_job(&mut session, &clock, &platform, "^tool &", &probe);
+    assert_eq!(controls[0].wait_entries.recv().expect("first wait"), 1);
+    assert_eq!(controls[1].wait_entries.recv().expect("second wait"), 1);
+
+    assert_eq!(
+        rendered(
+            &mut session,
+            "kill %2 %1",
+            &probe,
+            &platform,
+            clock.as_ref()
+        ),
+        ""
+    );
+
+    assert_eq!(
+        delivered(&platform),
+        vec![(372, JobSignal::Terminate), (371, JobSignal::Terminate)],
+        "an omitted selector terminates, and targets are processed as written"
+    );
+    assert_eq!(
+        session.live_background_jobs().len(),
+        2,
+        "delivery is not a terminal observation"
+    );
+
+    release(&controls);
+}
+
+#[test]
+fn kill_delivers_each_named_selector() {
+    let clock = Arc::new(FakeClock::new());
+    let mut session = session();
+    session.enable_interactive_job_control(clock.clone());
+    let (platform, controls) = ControlledBackgroundPlatform::new(&[381]);
+    let probe = Probe::new(["/bin/tool"]);
+    launch_controlled_job(&mut session, &clock, &platform, "^tool &", &probe);
+    assert_eq!(controls[0].wait_entries.recv().expect("first wait"), 1);
+
+    for selector in ["--stop", "--interrupt", "--hangup", "--kill", "--terminate"] {
+        assert_eq!(
+            rendered(
+                &mut session,
+                &format!("kill {selector} %1"),
+                &probe,
+                &platform,
+                clock.as_ref(),
+            ),
+            ""
+        );
+    }
+
+    assert_eq!(
+        delivered(&platform),
+        vec![
+            (381, JobSignal::Stop),
+            (381, JobSignal::Interrupt),
+            (381, JobSignal::Hangup),
+            (381, JobSignal::Kill),
+            (381, JobSignal::Terminate),
+        ]
+    );
+
+    release(&controls);
+}
+
+#[test]
+fn kill_continues_a_stopped_target_before_a_terminating_signal() {
+    let clock = Arc::new(FakeClock::new());
+    let mut session = session();
+    session.enable_interactive_job_control(clock.clone());
+    let (platform, controls) = ControlledBackgroundPlatform::new(&[391]);
+    let probe = Probe::new(["/bin/tool"]);
+    launch_controlled_job(&mut session, &clock, &platform, "^tool &", &probe);
+    assert_eq!(controls[0].wait_entries.recv().expect("first wait"), 1);
+    stop_controlled_job(&mut session, &controls[0], 1);
+
+    assert_eq!(
+        rendered(
+            &mut session,
+            "kill --hangup %1",
+            &probe,
+            &platform,
+            clock.as_ref(),
+        ),
+        ""
+    );
+
+    assert_eq!(
+        delivered(&platform),
+        vec![(391, JobSignal::Continue), (391, JobSignal::Hangup)],
+        "a stopped process cannot act on a hang-up until it is continued"
+    );
+    assert!(
+        matches!(
+            session
+                .background_job(job_id(1))
+                .expect("the record is unchanged")
+                .state(),
+            JobState::Stopped { .. }
+        ),
+        "only the observer may publish what the signal did"
+    );
+
+    release(&controls);
+}
+
+#[test]
+fn kill_kills_a_stopped_target_without_a_preliminary_continue() {
+    let clock = Arc::new(FakeClock::new());
+    let mut session = session();
+    session.enable_interactive_job_control(clock.clone());
+    let (platform, controls) = ControlledBackgroundPlatform::new(&[401]);
+    let probe = Probe::new(["/bin/tool"]);
+    launch_controlled_job(&mut session, &clock, &platform, "^tool &", &probe);
+    assert_eq!(controls[0].wait_entries.recv().expect("first wait"), 1);
+    stop_controlled_job(&mut session, &controls[0], 1);
+
+    assert_eq!(
+        rendered(
+            &mut session,
+            "kill --kill %1",
+            &probe,
+            &platform,
+            clock.as_ref(),
+        ),
+        ""
+    );
+
+    assert_eq!(
+        delivered(&platform),
+        vec![(401, JobSignal::Kill)],
+        "an unconditional kill needs no continuation"
+    );
+
+    release(&controls);
+}
+
+#[test]
+fn kill_continue_moves_a_stopped_job_to_background() {
+    let clock = Arc::new(FakeClock::new());
+    let mut session = session();
+    session.enable_interactive_job_control(clock.clone());
+    let (platform, controls) = ControlledBackgroundPlatform::new(&[411]);
+    let probe = Probe::new(["/bin/tool"]);
+    launch_controlled_job(&mut session, &clock, &platform, "^tool &", &probe);
+    assert_eq!(controls[0].wait_entries.recv().expect("first wait"), 1);
+    stop_controlled_job(&mut session, &controls[0], 1);
+
+    assert_eq!(
+        rendered(
+            &mut session,
+            "kill --continue %1",
+            &probe,
+            &platform,
+            clock.as_ref(),
+        ),
+        ""
+    );
+
+    assert_eq!(delivered(&platform), vec![(411, JobSignal::Continue)]);
+    assert_eq!(
+        session
+            .background_job(job_id(1))
+            .expect("the continued job stays addressable")
+            .state(),
+        JobState::Background,
+        "an explicit continuation shares the bg transition"
+    );
+    assert!(session.next_job_notice().is_none());
+
+    let running = rejected(
+        &mut session,
+        "kill --continue %1",
+        &probe,
+        &platform,
+        clock.as_ref(),
+    );
+    assert!(
+        running.contains("kill: job `%1` is not stopped"),
+        "continuing a running job is refused like bg:\n{running}"
+    );
+
+    release(&controls);
+}
+
+#[test]
+fn kill_aborts_at_the_first_delivery_failure() {
+    let clock = Arc::new(FakeClock::new());
+    let mut session = session();
+    session.enable_interactive_job_control(clock.clone());
+    let (platform, controls) = ControlledBackgroundPlatform::in_groups(&[&[421], &[422]]);
+    let probe = Probe::new(["/bin/tool"]);
+    launch_controlled_job(&mut session, &clock, &platform, "^tool &", &probe);
+    launch_controlled_job(&mut session, &clock, &platform, "^tool &", &probe);
+    assert_eq!(controls[0].wait_entries.recv().expect("first wait"), 1);
+    assert_eq!(controls[1].wait_entries.recv().expect("second wait"), 1);
+    platform.refuse_signals("the host refused the group");
+
+    let rendered = rejected(
+        &mut session,
+        "kill %1 %2",
+        &probe,
+        &platform,
+        clock.as_ref(),
+    );
+
+    assert!(
+        rendered.contains("kill: job `%1` could not be signalled"),
+        "the first failing target ends the operation:\n{rendered}"
+    );
+    assert!(
+        delivered(&platform).is_empty(),
+        "a refused delivery records nothing"
+    );
+    assert_eq!(
+        session.live_background_jobs().len(),
+        2,
+        "a user delivery failure never quarantines a record"
+    );
+
+    release(&controls);
+}
+
+#[test]
+fn kill_signals_a_quarantined_group_without_repairing_it() {
+    let clock = Arc::new(FakeClock::new());
+    let mut session = session();
+    session.enable_interactive_job_control(clock.clone());
+    let (platform, controls) = ControlledBackgroundPlatform::new(&[431]);
+    let probe = Probe::new(["/bin/tool"]);
+    launch_controlled_job(&mut session, &clock, &platform, "^tool &", &probe);
+    assert_eq!(controls[0].wait_entries.recv().expect("first wait"), 1);
+    controls[0]
+        .steps
+        .send(Err(WaitError::new(
+            io::ErrorKind::Interrupted,
+            "initial failure",
+        )))
+        .expect("fail the initial observation");
+    assert_eq!(controls[0].wait_entries.recv().expect("cleanup wait"), 2);
+    controls[0]
+        .steps
+        .send(Err(WaitError::new(io::ErrorKind::Other, "cleanup failure")))
+        .expect("fail the cleanup wait");
+    assert!(matches!(
+        wait_for_notice(&mut session).kind(),
+        JobNoticeKind::ObservationFailed { .. }
+    ));
+
+    assert_eq!(
+        rendered(
+            &mut session,
+            "kill --kill %1",
+            &probe,
+            &platform,
+            clock.as_ref(),
+        ),
+        ""
+    );
+
+    assert_eq!(
+        delivered(&platform),
+        vec![(431, JobSignal::Kill)],
+        "the retained group is the only honest control identity"
+    );
+    let listed = rendered(&mut session, "jobs", &probe, &platform, clock.as_ref());
+    assert!(
+        listed.contains("\"state\": \"quarantined\""),
+        "a delivered signal is not a terminal observation:\n{listed}"
+    );
+}
+
+#[test]
+fn a_state_changing_job_command_must_be_the_only_pipeline_stage() {
+    let clock = Arc::new(FakeClock::new());
+    let mut session = session();
+    session.enable_interactive_job_control(clock.clone());
+    let mut sink = Vec::new();
+
+    let error = session
+        .submit(
+            "<interactive>",
+            "bg | bg",
+            &Probe::default(),
+            &terminal_platform(),
+            clock.as_ref(),
+            &mut sink,
+        )
+        .expect_err("a process-effect command cannot be a pipeline member");
+
+    let rendered = error.render();
+    assert!(
+        rendered.contains("`bg` must be the only stage of its pipeline"),
+        "the refusal names the command:\n{rendered}"
+    );
+    assert!(sink.is_empty());
 }
 
 #[test]

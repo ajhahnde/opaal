@@ -24,7 +24,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use flashshell_platform::{
-    DescriptorEndpoint, DescriptorReadError, DescriptorWriteError, Platform, ProcessGroupId,
+    DescriptorEndpoint, DescriptorReadError, DescriptorWriteError, JobSignal, Platform,
+    ProcessGroupId,
 };
 use flashshell_syntax::{
     Closure, CommandHeadKind, CommandItemKind, ConditionalChain, Diagnostic, Expression,
@@ -33,7 +34,7 @@ use flashshell_syntax::{
     render_diagnostic,
 };
 
-use crate::background::{BackgroundJobs, escape_job_label};
+use crate::background::{BackgroundJobs, QuarantinePolicy, escape_job_label};
 use crate::builtin::{SessionState, standard_registry};
 use crate::closure::OwnedClosureContext;
 use crate::command::CommandRegistry;
@@ -59,8 +60,8 @@ use crate::stream::{BytePull, ByteStream, StreamPull, ValueStream};
 use crate::{Duration, Environment, Record, ScopeStack, Status, Value};
 
 pub use crate::background::{
-    BackgroundFailure, BackgroundFailureReason, JobNotice, JobNoticeError, JobNoticeId,
-    JobNoticeKind, JobSnapshot, JobSnapshotState, LiveJob, LiveJobState,
+    BackgroundFailure, BackgroundFailureReason, JobCommandError, JobNotice, JobNoticeError,
+    JobNoticeId, JobNoticeKind, JobSnapshot, JobSnapshotState, LiveJob, LiveJobState,
 };
 
 /// The control decision produced by one submitted edit buffer.
@@ -847,6 +848,11 @@ fn run_pipeline(
     )?;
     validate_job_builtin_arguments(&plan)?;
 
+    if let Some((command, stage)) = sole_job_command(&plan) {
+        let status = execute_job_builtin(command, stage, jobs, platform)?;
+        return Ok(ChainStep::Status(status));
+    }
+
     if plan
         .stages()
         .iter()
@@ -932,11 +938,25 @@ fn validate_job_builtin_arguments(plan: &ExecutionPlan) -> Result<(), RuntimeErr
                 stage.span(),
             ));
         }
+        // The read-only table may head a structured pipeline; the four commands
+        // with process or terminal effects may not be composed at all.
+        if command != "jobs" && plan.stages().len() > 1 {
+            return Err(RuntimeError::new(
+                RuntimeErrorKind::JobControlNotSoleStage { command },
+                stage.span(),
+            ));
+        }
         match command {
             "jobs" => validate_jobs_arguments(stage)?,
-            "fg" | "bg" => validate_optional_job_argument(stage, command)?,
-            "wait" => validate_job_targets(stage, command)?,
-            _ => validate_kill_arguments(stage)?,
+            "fg" | "bg" => {
+                parse_optional_job_target(stage, command)?;
+            }
+            "wait" => {
+                parse_job_targets(stage, command)?;
+            }
+            _ => {
+                parse_kill_arguments(stage)?;
+            }
         }
     }
     Ok(())
@@ -952,6 +972,83 @@ fn job_command_name(name: &str) -> Option<&'static str> {
         "kill" => Some("kill"),
         _ => None,
     }
+}
+
+/// The state-changing job command this plan consists of, if any.
+///
+/// Validation has already refused these commands as a pipeline member, so a
+/// match here is the complete pipeline.
+fn sole_job_command(plan: &ExecutionPlan) -> Option<(&'static str, &PlannedStage)> {
+    let [stage] = plan.stages() else {
+        return None;
+    };
+    let PlannedResolution::Internal { name } = stage.resolution() else {
+        return None;
+    };
+    match job_command_name(name.as_str()) {
+        Some("jobs") | None => None,
+        Some(command) => Some((command, stage)),
+    }
+}
+
+/// Run one job command against the session-owned coordinator.
+///
+/// These commands never produce a payload; their result is the stage status.
+fn execute_job_builtin(
+    command: &'static str,
+    stage: &PlannedStage,
+    jobs: &mut Option<BackgroundJobs>,
+    platform: &dyn Platform,
+) -> Result<Status, RuntimeError> {
+    let Some(coordinator) = jobs.as_mut() else {
+        return Err(RuntimeError::new(
+            RuntimeErrorKind::JobControlUnavailable { command },
+            stage.span(),
+        ));
+    };
+    let operation = |message: String| {
+        RuntimeError::new(
+            RuntimeErrorKind::JobOperation { command, message },
+            stage.span(),
+        )
+    };
+    match command {
+        "bg" => {
+            let target = match parse_optional_job_target(stage, command)? {
+                Some(target) => target,
+                None => coordinator
+                    .newest_stopped()
+                    .ok_or_else(|| operation("no stopped job to continue".to_owned()))?,
+            };
+            coordinator
+                .signal_job(
+                    target,
+                    JobSignal::Continue,
+                    QuarantinePolicy::Reject,
+                    platform,
+                )
+                .map_err(|error| operation(error.to_string()))?;
+        }
+        "kill" => {
+            let (signal, targets) = parse_kill_arguments(stage)?;
+            for target in targets {
+                // Source order, and a refusal ends the operation: a later
+                // delivery must not be reported as if the earlier one happened.
+                coordinator
+                    .signal_job(target, signal, QuarantinePolicy::Deliver, platform)
+                    .map_err(|error| operation(error.to_string()))?;
+            }
+        }
+        _ => {
+            return Err(RuntimeError::new(
+                RuntimeErrorKind::Unsupported {
+                    feature: "this job-control command in the live session",
+                },
+                stage.span(),
+            ));
+        }
+    }
+    Ok(Status::exit(0, Duration::ZERO).expect("zero is a valid job-command status"))
 }
 
 /// Whether this all-internal plan begins with the read-only job table.
@@ -1055,10 +1152,10 @@ fn validate_jobs_arguments(stage: &PlannedStage) -> Result<(), RuntimeError> {
     Ok(())
 }
 
-fn validate_optional_job_argument(
+fn parse_optional_job_target(
     stage: &PlannedStage,
     command: &'static str,
-) -> Result<(), RuntimeError> {
+) -> Result<Option<crate::job::JobId>, RuntimeError> {
     if let Some(argument) = stage.arguments().get(1) {
         return Err(job_argument_error(
             command,
@@ -1066,11 +1163,16 @@ fn validate_optional_job_argument(
             argument.span(),
         ));
     }
-    validate_job_targets(stage, command)
+    Ok(parse_job_targets(stage, command)?.first().copied())
 }
 
-fn validate_job_targets(stage: &PlannedStage, command: &'static str) -> Result<(), RuntimeError> {
+/// The written targets in source order, rejecting a repeated identity.
+fn parse_job_targets(
+    stage: &PlannedStage,
+    command: &'static str,
+) -> Result<Vec<crate::job::JobId>, RuntimeError> {
     let mut seen = BTreeSet::new();
+    let mut targets = Vec::with_capacity(stage.arguments().len());
     for argument in stage.arguments() {
         let job = parse_job_target(command, argument)?;
         if !seen.insert(job) {
@@ -1080,14 +1182,19 @@ fn validate_job_targets(stage: &PlannedStage, command: &'static str) -> Result<(
                 argument.span(),
             ));
         }
+        targets.push(job);
     }
-    Ok(())
+    Ok(targets)
 }
 
-fn validate_kill_arguments(stage: &PlannedStage) -> Result<(), RuntimeError> {
+/// The selected signal and the written targets in source order.
+fn parse_kill_arguments(
+    stage: &PlannedStage,
+) -> Result<(JobSignal, Vec<crate::job::JobId>), RuntimeError> {
     let mut selector = None;
     let mut targets_started = false;
-    let mut targets = BTreeSet::new();
+    let mut seen = BTreeSet::new();
+    let mut targets = Vec::new();
 
     for argument in stage.arguments() {
         let word = job_word("kill", argument)?;
@@ -1128,13 +1235,14 @@ fn validate_kill_arguments(stage: &PlannedStage) -> Result<(), RuntimeError> {
 
         targets_started = true;
         let job = parse_job_target_word("kill", word)?;
-        if !targets.insert(job) {
+        if !seen.insert(job) {
             return Err(job_argument_error(
                 "kill",
                 format!("job `%{}` is repeated", job.get()),
                 argument.span(),
             ));
         }
+        targets.push(job);
     }
 
     if targets.is_empty() {
@@ -1144,7 +1252,16 @@ fn validate_kill_arguments(stage: &PlannedStage) -> Result<(), RuntimeError> {
             stage.span(),
         ));
     }
-    Ok(())
+    let signal = match selector {
+        Some(b"--hangup") => JobSignal::Hangup,
+        Some(b"--interrupt") => JobSignal::Interrupt,
+        Some(b"--kill") => JobSignal::Kill,
+        Some(b"--stop") => JobSignal::Stop,
+        Some(b"--continue") => JobSignal::Continue,
+        // An omitted selector terminates: the accepted set was already checked.
+        _ => JobSignal::Terminate,
+    };
+    Ok((signal, targets))
 }
 
 fn parse_job_target(

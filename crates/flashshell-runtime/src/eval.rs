@@ -355,6 +355,17 @@ pub enum RuntimeErrorKind {
     /// Job commands run against the session-owned coordinator, which the mixed
     /// process executor deliberately cannot reach.
     JobControlNotInternal { command: &'static str },
+    /// A job-control command with process or terminal effects was not alone.
+    ///
+    /// Ordinary internal stages run against a clone of the session state that a
+    /// failure rolls back. A delivered signal cannot be rolled back, so these
+    /// commands may not be a member of a longer pipeline.
+    JobControlNotSoleStage { command: &'static str },
+    /// A job-control command failed against an addressable record.
+    JobOperation {
+        command: &'static str,
+        message: String,
+    },
     /// A stopped job could not be resumed, so waiting on it could not continue.
     ///
     /// Distinct from a wait failure: the job exists and is merely stopped. A
@@ -623,6 +634,15 @@ impl fmt::Display for RuntimeErrorKind {
                     formatter,
                     "`{command}` cannot share a pipeline with an external command"
                 )
+            }
+            Self::JobControlNotSoleStage { command } => {
+                write!(
+                    formatter,
+                    "`{command}` must be the only stage of its pipeline"
+                )
+            }
+            Self::JobOperation { command, message } => {
+                write!(formatter, "{command}: {message}")
             }
             Self::JobSignal(error) => {
                 write!(formatter, "resuming the stopped job failed: {error}")

@@ -507,6 +507,48 @@ impl JobSnapshot {
     }
 }
 
+/// Whether a caller may act on a record whose observation was abandoned.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum QuarantinePolicy {
+    /// Refuse the operation; the record's state cannot be trusted.
+    Reject,
+    /// Deliver anyway, without reading or changing the record's state.
+    ///
+    /// The retained process group stays the only honest control identity, so an
+    /// explicit signal may still reach it. Nothing about the record is repaired.
+    Deliver,
+}
+
+/// A job-command failure that the session renders as a recoverable diagnostic.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum JobCommandError {
+    /// No record with this identity is addressable.
+    UnknownJob { job: JobId },
+    /// A continuation was asked of a job that is not stopped.
+    NotStopped { job: JobId },
+    /// The record's observation was abandoned, so it cannot be moved.
+    Quarantined { job: JobId },
+    /// The platform refused the group delivery.
+    Delivery { job: JobId, message: String },
+}
+
+impl fmt::Display for JobCommandError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnknownJob { job } => write!(formatter, "unknown job `%{}`", job.get()),
+            Self::NotStopped { job } => write!(formatter, "job `%{}` is not stopped", job.get()),
+            Self::Quarantined { job } => write!(formatter, "job `%{}` is quarantined", job.get()),
+            Self::Delivery { job, message } => write!(
+                formatter,
+                "job `%{}` could not be signalled: {message}",
+                job.get()
+            ),
+        }
+    }
+}
+
+impl Error for JobCommandError {}
+
 /// Why one background job is reported as failing at a session boundary.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum BackgroundFailureReason {
@@ -792,6 +834,79 @@ impl BackgroundJobs {
                 }
             })
             .collect()
+    }
+
+    /// The newest addressable job that is stopped and still observable.
+    pub(crate) fn newest_stopped(&mut self) -> Option<JobId> {
+        self.apply_pending_observations();
+        self.records
+            .iter()
+            .rev()
+            .find(|(_, record)| {
+                record.completion.is_none()
+                    && !record.observation_failed
+                    && matches!(record.job.state(), JobState::Stopped { .. })
+            })
+            .map(|(id, _)| *id)
+    }
+
+    /// Deliver one user-requested group signal to an addressable record.
+    ///
+    /// Deliberately not [`Self::signal_or_quarantine`]: that policy belongs to
+    /// the exit path, where a refused delivery must end a wait no observation
+    /// can end. A user request that the host refuses leaves the record exactly
+    /// as it was, with its observer still able to report a later transition.
+    ///
+    /// A stopped target is continued first for the terminating signals, because
+    /// a stopped process cannot act on them. Only a successful `Continue` moves
+    /// the pure job; every other delivery leaves the state to the observer.
+    pub(crate) fn signal_job(
+        &mut self,
+        job: JobId,
+        signal: JobSignal,
+        quarantine: QuarantinePolicy,
+        platform: &dyn Platform,
+    ) -> Result<(), JobCommandError> {
+        self.apply_pending_observations();
+        let record = self
+            .records
+            .get(&job)
+            .ok_or(JobCommandError::UnknownJob { job })?;
+        let quarantined = record.observation_failed;
+        if quarantined && quarantine == QuarantinePolicy::Reject {
+            return Err(JobCommandError::Quarantined { job });
+        }
+        let group = record.group;
+        // A quarantined record's state was never established, so it is neither
+        // read for a precondition nor continued before a terminating signal.
+        let stopped = !quarantined && matches!(record.job.state(), JobState::Stopped { .. });
+        let continuing = signal == JobSignal::Continue;
+        if continuing && !quarantined && !stopped {
+            return Err(JobCommandError::NotStopped { job });
+        }
+        if stopped
+            && matches!(
+                signal,
+                JobSignal::Hangup | JobSignal::Interrupt | JobSignal::Terminate
+            )
+        {
+            deliver(platform, group, JobSignal::Continue, job)?;
+        }
+        deliver(platform, group, signal, job)?;
+        if continuing && !quarantined {
+            let record = self
+                .records
+                .get_mut(&job)
+                .expect("the record was just observed");
+            record
+                .job
+                .continue_in(JobPlacement::Background)
+                .expect("a stopped job accepts a continuation");
+            record.resume_requested = false;
+            self.notices
+                .retain(|notice| notice.job != job || notice.kind != JobNoticeKind::Stopped);
+        }
+        Ok(())
     }
 
     /// Every job that has not reached a terminal aggregate.
@@ -1092,6 +1207,21 @@ impl BackgroundJobs {
             self.queue_notice(job_id, kind, command);
         }
     }
+}
+
+/// Deliver one group signal, naming the job in any refusal.
+fn deliver(
+    platform: &dyn Platform,
+    group: ProcessGroupId,
+    signal: JobSignal,
+    job: JobId,
+) -> Result<(), JobCommandError> {
+    platform
+        .signal_process_group(group, signal)
+        .map_err(|error| JobCommandError::Delivery {
+            job,
+            message: escape_job_label(&error.to_string()),
+        })
 }
 
 /// The stop number of the first stopped member in pipeline source order.
