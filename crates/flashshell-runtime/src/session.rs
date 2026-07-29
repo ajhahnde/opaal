@@ -169,6 +169,16 @@ impl Session {
         }
     }
 
+    /// Enable the background-job coordinator for a non-interactive session.
+    ///
+    /// The coordinator is identical; only the rendering boundary differs. A
+    /// script has no prompt, so it drains notices once, at its join.
+    pub fn enable_script_job_control(&mut self, clock: Arc<dyn Clock>) {
+        if self.jobs.is_none() {
+            self.jobs = Some(BackgroundJobs::new(clock));
+        }
+    }
+
     /// Every background job that has not reached a terminal aggregate.
     #[must_use]
     pub fn live_background_jobs(&self) -> Vec<LiveJob> {
@@ -287,7 +297,7 @@ impl Session {
                         let Some(jobs) = jobs.as_mut() else {
                             let error = RuntimeError::new(
                                 RuntimeErrorKind::Unsupported {
-                                    feature: "background execution in a non-interactive session",
+                                    feature: "background execution in a session without job control",
                                 },
                                 background_span,
                             );

@@ -268,6 +268,100 @@ fn the_last_completed_status_becomes_the_fsh_exit_status() {
     assert!(output.stderr.is_empty());
 }
 
+#[test]
+fn a_script_joins_a_background_job_before_it_ends() {
+    let temp = TempDir::new("script-join");
+    let marker = temp.path().join("late.txt");
+    let script = temp.script(
+        "join.fsh",
+        &format!(
+            "^{} late 300 {} 0 &\n^{} exit 0\n",
+            status_fixture(),
+            marker.display(),
+            status_fixture(),
+        ),
+    );
+
+    let output = run_script(&script, temp.path(), fixture_directory());
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        marker.exists(),
+        "the script must not exit before the job it started has finished"
+    );
+}
+
+#[test]
+fn a_failing_background_job_makes_the_script_exit_nonzero() {
+    let temp = TempDir::new("script-join-failure");
+    let script = temp.script(
+        "fail.fsh",
+        &format!(
+            "^{} exit 7 &\n^{} exit 0\n",
+            status_fixture(),
+            status_fixture(),
+        ),
+    );
+
+    let output = run_script(&script, temp.path(), fixture_directory());
+
+    assert_eq!(
+        output.status.code(),
+        Some(7),
+        "the background failure must reach the exit code: {output:?}"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("exited with status 7"),
+        "the failure must be reported: {stderr}"
+    );
+}
+
+#[test]
+fn an_explicit_mid_script_exit_still_joins() {
+    let temp = TempDir::new("script-join-exit");
+    let marker = temp.path().join("late.txt");
+    let script = temp.script(
+        "exit.fsh",
+        &format!(
+            "^{} late 300 {} 0 &\nexit 0\n",
+            status_fixture(),
+            marker.display(),
+        ),
+    );
+
+    let output = run_script(&script, temp.path(), fixture_directory());
+
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert!(marker.exists(), "an explicit exit must not skip the join");
+}
+
+#[test]
+fn a_successful_background_job_is_silent_in_a_script() {
+    let temp = TempDir::new("script-join-silent");
+    let script = temp.script(
+        "silent.fsh",
+        &format!(
+            "^{} exit 0 &\n^{} exit 0\n",
+            status_fixture(),
+            status_fixture(),
+        ),
+    );
+
+    let output = run_script(&script, temp.path(), fixture_directory());
+
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(
+        String::from_utf8_lossy(&output.stderr),
+        "",
+        "a script has no prompt boundary and must not narrate successful jobs"
+    );
+}
+
 #[derive(Debug)]
 struct ProcessReport {
     cwd: Vec<u8>,

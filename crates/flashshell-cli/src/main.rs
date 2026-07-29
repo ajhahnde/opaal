@@ -32,7 +32,7 @@ use flashshell_cli::interactive::{
 };
 use flashshell_platform::{Platform, PlatformError};
 use flashshell_platform_posix::PosixPlatform;
-use flashshell_runtime::eval::SystemClock;
+use flashshell_runtime::eval::{Clock, SystemClock};
 use flashshell_runtime::plan::SessionOptions;
 use flashshell_runtime::resolve::ExecutableProbe;
 use flashshell_runtime::script::execute_script;
@@ -390,7 +390,7 @@ fn run_script(path: &Path) -> ExitCode {
         &NativeExecutableProbe,
         &SessionOptions::default(),
         &PosixPlatform,
-        &SystemClock::new(),
+        Arc::new(SystemClock::new()) as Arc<dyn Clock>,
     );
 
     match result {

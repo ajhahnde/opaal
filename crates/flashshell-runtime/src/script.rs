@@ -3,6 +3,7 @@
 use std::fmt;
 use std::io;
 use std::path::Path;
+use std::sync::Arc;
 
 use flashshell_platform::Platform;
 
@@ -10,7 +11,9 @@ use crate::command::CommandRegistry;
 use crate::eval::Clock;
 use crate::plan::SessionOptions;
 use crate::resolve::ExecutableProbe;
-use crate::session::{Session, SubmitError, SubmitOutcome};
+use crate::session::{
+    BackgroundFailure, BackgroundFailureReason, Session, SubmitError, SubmitOutcome,
+};
 use crate::{Environment, ScopeStack, Status};
 
 /// The normally completed result of one non-interactive source file.
@@ -72,7 +75,7 @@ pub fn execute_script(
     probe: &dyn ExecutableProbe,
     options: &SessionOptions,
     platform: &dyn Platform,
-    clock: &dyn Clock,
+    clock: Arc<dyn Clock>,
 ) -> Result<ScriptCompletion, ScriptError> {
     let mut session = Session::with_scope_and_registry(
         ScopeStack::new(),
@@ -81,17 +84,41 @@ pub fn execute_script(
         *options,
         registry.clone(),
     );
+    session.enable_script_job_control(Arc::clone(&clock));
     let mut output = io::stdout().lock();
-    let outcome = session
-        .submit(name, text, probe, platform, clock, &mut output)
-        .map_err(ScriptError::submit)?;
-    let status = match outcome {
+    let outcome = session.submit(name, text, probe, platform, clock.as_ref(), &mut output);
+
+    // The join runs on every exit route, including a failing one: a script must
+    // not orphan a child because one of its later statements failed.
+    let failures = session.join_background_jobs(platform);
+    for failure in &failures {
+        eprintln!("fsh: {}", failure.render());
+    }
+
+    let outcome = outcome.map_err(ScriptError::submit)?;
+    let foreground = match outcome {
         SubmitOutcome::Continued => session.current_status().cloned(),
         SubmitOutcome::Exit(code) => Some(
             Status::exit(i64::from(code), crate::Duration::ZERO)
                 .expect("an explicit script exit is a valid status"),
         ),
     };
+    let status = background_exit_status(&failures).or(foreground);
     *environment = session.environment().clone();
     Ok(ScriptCompletion { status })
+}
+
+/// The exit status a failing background job imposes on its script.
+///
+/// The first failure in job-identity order wins. A quarantined record has no
+/// aggregate status the platform ever established, so it contributes the
+/// generic failure code rather than a status the shell would be inventing.
+fn background_exit_status(failures: &[BackgroundFailure]) -> Option<Status> {
+    let first = failures.first()?;
+    match first.reason() {
+        BackgroundFailureReason::Exited(status) => Some(status.clone()),
+        BackgroundFailureReason::Observation(_) | BackgroundFailureReason::Signal(_) => {
+            Some(Status::exit(1, crate::Duration::ZERO).expect("one is a valid failure status"))
+        }
+    }
 }

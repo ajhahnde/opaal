@@ -351,7 +351,7 @@ fn external_commands_execute_and_record_their_status() {
 }
 
 #[test]
-fn background_work_without_interactive_opt_in_is_rejected_at_the_marker() {
+fn background_work_without_a_job_control_opt_in_is_rejected_at_the_marker() {
     let mut session = session();
     let probe = Probe::new(["/bin/tool"]);
     let mut sink = Vec::new();
@@ -365,9 +365,11 @@ fn background_work_without_interactive_opt_in_is_rejected_at_the_marker() {
             &FakeClock::new(),
             &mut sink,
         )
-        .expect_err("background script work should remain unsupported");
+        .expect_err("background work needs a coordinator");
 
-    assert!(error.render().contains("interactive"));
+    // Not "interactive": a script may now opt in as well, so the missing thing
+    // is job control itself rather than a terminal.
+    assert!(error.render().contains("without job control"));
     assert!(error.render().contains("^tool &"));
 }
 
