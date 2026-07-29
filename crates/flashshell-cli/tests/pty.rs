@@ -719,3 +719,111 @@ fn a_completion_notice_never_appears_inside_an_active_edit_buffer() {
     session.send(ENTER);
     assert_eq!(session.wait_code(), 0);
 }
+
+#[test]
+fn exiting_with_a_live_job_is_refused_once_then_hangs_up() {
+    let cwd = unique_dir("exit-refusal");
+    let mut session = interactive(&cwd);
+    session.await_prompt(0);
+
+    let launch_mark = session.mark();
+    session.send(b"sleep 30 &");
+    session.send(ENTER);
+    session.expect_from(launch_mark, "[1] ");
+    session.await_prompt(launch_mark);
+
+    let refusal_mark = session.mark();
+    session.send(b"exit 0");
+    session.send(ENTER);
+    session.expect_from(refusal_mark, "fsh: 1 live background job");
+    session.expect_from(refusal_mark, "[1] Running  sleep 30");
+    session.expect_from(refusal_mark, "fsh: exit again to hang up");
+    session.await_prompt(refusal_mark);
+
+    let exit_mark = session.mark();
+    session.send(b"exit 0");
+    session.send(ENTER);
+    assert_eq!(session.wait_code(), 0);
+    let rendered = session.rendered_from(exit_mark);
+    assert_eq!(
+        rendered.matches("live background job").count(),
+        0,
+        "the second attempt must not warn again:\n{rendered}"
+    );
+}
+
+#[test]
+fn a_submission_between_two_exit_attempts_resets_the_refusal() {
+    let cwd = unique_dir("exit-reset");
+    let mut session = interactive(&cwd);
+    session.await_prompt(0);
+
+    let launch_mark = session.mark();
+    session.send(b"sleep 30 &");
+    session.send(ENTER);
+    session.expect_from(launch_mark, "[1] ");
+    session.await_prompt(launch_mark);
+
+    let first = session.mark();
+    session.send(b"exit 0");
+    session.send(ENTER);
+    session.expect_from(first, "fsh: exit again to hang up");
+    session.await_prompt(first);
+
+    let between = session.mark();
+    session.send(b"echo still-here");
+    session.send(ENTER);
+    session.expect_from(between, "still-here");
+    session.await_prompt(between);
+
+    let second = session.mark();
+    session.send(b"exit 0");
+    session.send(ENTER);
+    session.expect_from(second, "fsh: 1 live background job");
+    session.await_prompt(second);
+
+    session.send(b"exit 0");
+    session.send(ENTER);
+    assert_eq!(session.wait_code(), 0);
+}
+
+#[test]
+fn end_of_input_is_gated_exactly_like_the_exit_builtin() {
+    let cwd = unique_dir("exit-eof");
+    let mut session = interactive(&cwd);
+    session.await_prompt(0);
+
+    let launch_mark = session.mark();
+    session.send(b"sleep 30 &");
+    session.send(ENTER);
+    session.expect_from(launch_mark, "[1] ");
+    session.await_prompt(launch_mark);
+
+    let refusal_mark = session.mark();
+    session.send(CTRL_D);
+    session.expect_from(refusal_mark, "fsh: 1 live background job");
+    session.await_prompt(refusal_mark);
+
+    session.send(CTRL_D);
+    assert_eq!(session.wait_code(), 0);
+}
+
+#[test]
+fn an_unacknowledged_completion_is_rendered_before_exit() {
+    let cwd = unique_dir("exit-completion");
+    let mut session = interactive(&cwd);
+    session.await_prompt(0);
+
+    let launch_mark = session.mark();
+    session.send(b"sleep 1 &");
+    session.send(ENTER);
+    session.expect_from(launch_mark, "[1] ");
+    session.await_prompt(launch_mark);
+
+    thread::sleep(Duration::from_millis(1400));
+    let exit_mark = session.mark();
+    session.send(b"exit 0");
+    session.send(ENTER);
+    session.expect_from(exit_mark, "[1] Done     sleep 1");
+    assert_eq!(session.wait_code(), 0);
+}
