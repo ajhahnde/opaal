@@ -250,6 +250,26 @@ impl Error for InteractiveSessionError {
     }
 }
 
+/// Write and acknowledge every notice the evaluator currently holds.
+///
+/// Run at the prompt boundary and again before a permitted exit, so a completion
+/// observed while the editor owned the prompt is still shown to the user rather
+/// than discarded with the session.
+fn render_pending_notices(
+    editor: &mut dyn LineEditor,
+    evaluator: &mut dyn InteractiveEvaluator,
+) -> Result<(), InteractiveSessionError> {
+    while let Some(notice) = evaluator.next_notice() {
+        editor
+            .write_notice(notice.rendered())
+            .map_err(InteractiveSessionError::Editor)?;
+        evaluator
+            .acknowledge_notice(&notice)
+            .map_err(InteractiveSessionError::NoticeAcknowledgement)?;
+    }
+    Ok(())
+}
+
 /// Runs one synchronous interactive session with persistent editor and evaluator state.
 pub fn run_interactive_session(
     editor: &mut dyn LineEditor,
@@ -258,14 +278,7 @@ pub fn run_interactive_session(
     diagnostic_output: &mut dyn Write,
 ) -> Result<InteractiveExit, InteractiveSessionError> {
     loop {
-        while let Some(notice) = evaluator.next_notice() {
-            editor
-                .write_notice(notice.rendered())
-                .map_err(InteractiveSessionError::Editor)?;
-            evaluator
-                .acknowledge_notice(&notice)
-                .map_err(InteractiveSessionError::NoticeAcknowledgement)?;
-        }
+        render_pending_notices(editor, evaluator)?;
 
         let event = editor
             .read_line(prompt)
@@ -275,7 +288,10 @@ pub fn run_interactive_session(
             EditorEvent::Submitted(source) => match evaluator.evaluate(&source) {
                 Ok(EvaluationControl::Continue) => {}
                 Ok(EvaluationControl::Exit(status)) => match evaluator.request_exit() {
-                    ExitDecision::Permitted => return Ok(InteractiveExit::Requested(status)),
+                    ExitDecision::Permitted => {
+                        render_pending_notices(editor, evaluator)?;
+                        return Ok(InteractiveExit::Requested(status));
+                    }
                     ExitDecision::Refused { rendered } => editor
                         .write_notice(&rendered)
                         .map_err(InteractiveSessionError::Editor)?,
@@ -286,7 +302,10 @@ pub fn run_interactive_session(
             },
             EditorEvent::Cancelled => {}
             EditorEvent::EndOfInput => match evaluator.request_exit() {
-                ExitDecision::Permitted => return Ok(InteractiveExit::EndOfInput),
+                ExitDecision::Permitted => {
+                    render_pending_notices(editor, evaluator)?;
+                    return Ok(InteractiveExit::EndOfInput);
+                }
                 ExitDecision::Refused { rendered } => editor
                     .write_notice(&rendered)
                     .map_err(InteractiveSessionError::Editor)?,

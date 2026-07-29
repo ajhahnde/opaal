@@ -735,6 +735,17 @@ impl BackgroundJobs {
         }
     }
 
+    /// Apply every observation already queued, without blocking.
+    ///
+    /// A record only stops being live once its observation is applied, so a
+    /// decision taken straight off the table would read a job that has already
+    /// finished as still running.
+    pub(crate) fn apply_pending_observations(&mut self) {
+        while let Ok(observation) = self.event_receiver.try_recv() {
+            self.apply_observation(observation);
+        }
+    }
+
     fn has_live_jobs(&self) -> bool {
         self.records
             .values()

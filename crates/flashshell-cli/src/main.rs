@@ -26,9 +26,9 @@ use flashshell_cli::editor::EditorPrompt;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 use flashshell_cli::history::{HistoryPlatform, ProcessHistoryEnvironment, select_history};
 use flashshell_cli::interactive::{
-    EvaluationControl, InteractiveDiagnostic, InteractiveEvaluator, InteractiveExit,
+    EvaluationControl, ExitDecision, InteractiveDiagnostic, InteractiveEvaluator, InteractiveExit,
     InteractiveNotice, InteractiveNoticeError, InteractiveNoticeId, InteractiveSessionError,
-    format_job_notice, run_interactive_session,
+    format_job_notice, format_live_jobs, run_interactive_session,
 };
 use flashshell_platform::{Platform, PlatformError};
 use flashshell_platform_posix::PosixPlatform;
@@ -36,7 +36,9 @@ use flashshell_runtime::eval::{Clock, SystemClock};
 use flashshell_runtime::plan::SessionOptions;
 use flashshell_runtime::resolve::ExecutableProbe;
 use flashshell_runtime::script::execute_script;
-use flashshell_runtime::session::{JobNoticeId, Session, SubmitError, SubmitOutcome};
+use flashshell_runtime::session::{
+    BackgroundFailure, JobNoticeId, Session, SubmitError, SubmitOutcome,
+};
 use flashshell_runtime::{Environment, ScopeStack, Status};
 
 const HELP: &str = "FlashShell command shell
@@ -174,10 +176,7 @@ fn run_interactive(no_config: bool, no_history: bool) -> ExitCode {
     ) {
         Ok(InteractiveExit::EndOfInput) => ExitCode::SUCCESS,
         Ok(InteractiveExit::Requested(code)) => ExitCode::from(code),
-        Err(error) => {
-            report_session_error(&error);
-            ExitCode::FAILURE
-        }
+        Err(error) => fatal_interactive_exit(&mut evaluator, &error),
     }
 }
 
@@ -247,11 +246,23 @@ fn run_interactive(_no_config: bool, _no_history: bool) -> ExitCode {
     match outcome {
         Ok(InteractiveExit::EndOfInput) => ExitCode::SUCCESS,
         Ok(InteractiveExit::Requested(code)) => ExitCode::from(code),
-        Err(error) => {
-            report_session_error(&error);
-            ExitCode::FAILURE
-        }
+        Err(error) => fatal_interactive_exit(&mut evaluator, &error),
     }
+}
+
+/// End a fatal interactive session, hanging up every live job first.
+///
+/// A fatal failure has no second attempt to offer, so it never refuses: it hangs
+/// up unconditionally and then propagates the original failure.
+fn fatal_interactive_exit(
+    evaluator: &mut SessionEvaluator,
+    error: &InteractiveSessionError,
+) -> ExitCode {
+    for failure in evaluator.hang_up(&PosixPlatform) {
+        eprintln!("fsh: {}", failure.render());
+    }
+    report_session_error(error);
+    ExitCode::FAILURE
 }
 
 fn report_session_error(error: &InteractiveSessionError) {
@@ -273,6 +284,8 @@ struct SessionEvaluator {
     platform: PosixPlatform,
     clock: Arc<SystemClock>,
     pending_notice: Option<JobNoticeId>,
+    /// Whether the immediately preceding submission was a refused exit.
+    exit_refused: bool,
 }
 
 impl SessionEvaluator {
@@ -285,7 +298,13 @@ impl SessionEvaluator {
             platform: PosixPlatform,
             clock,
             pending_notice: None,
+            exit_refused: false,
         }
+    }
+
+    /// Resume, hang up, and wait every live job before the session ends.
+    fn hang_up(&mut self, platform: &dyn Platform) -> Vec<BackgroundFailure> {
+        self.session.hang_up_background_jobs(platform)
     }
 }
 
@@ -325,6 +344,26 @@ impl InteractiveEvaluator for SessionEvaluator {
         Ok(())
     }
 
+    fn request_exit(&mut self) -> ExitDecision {
+        // Decide on the current table, not on one still holding observations
+        // that arrived while the editor owned the prompt.
+        self.session.refresh_background_jobs();
+        let live = self.session.live_background_jobs();
+        if live.is_empty() {
+            return ExitDecision::Permitted;
+        }
+        if !self.exit_refused {
+            self.exit_refused = true;
+            return ExitDecision::Refused {
+                rendered: format_live_jobs(&live),
+            };
+        }
+        for failure in self.session.hang_up_background_jobs(&self.platform) {
+            eprintln!("fsh: {}", failure.render());
+        }
+        ExitDecision::Permitted
+    }
+
     fn evaluate(&mut self, source: &str) -> Result<EvaluationControl, InteractiveDiagnostic> {
         let stdout = io::stdout();
         let mut output = stdout.lock();
@@ -336,6 +375,13 @@ impl InteractiveEvaluator for SessionEvaluator {
             self.clock.as_ref(),
             &mut output,
         );
+        // Any submitted input that is not itself an exit request, successful or
+        // failing, clears the refusal: the warning must describe the state the
+        // user is actually leaving. An `exit` submission is the second attempt,
+        // not input between two of them, so it must not clear its own gate.
+        if !matches!(outcome, Ok(SubmitOutcome::Exit(_))) {
+            self.exit_refused = false;
+        }
         match outcome {
             Ok(SubmitOutcome::Continued) => {
                 let _ = output.flush();

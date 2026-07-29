@@ -179,6 +179,16 @@ impl Session {
         }
     }
 
+    /// Apply every background observation already queued, without blocking.
+    ///
+    /// Call before asking which jobs are live: an observation that has arrived
+    /// but not been applied still reads as a running job.
+    pub fn refresh_background_jobs(&mut self) {
+        if let Some(jobs) = self.jobs.as_mut() {
+            jobs.apply_pending_observations();
+        }
+    }
+
     /// Every background job that has not reached a terminal aggregate.
     #[must_use]
     pub fn live_background_jobs(&self) -> Vec<LiveJob> {
