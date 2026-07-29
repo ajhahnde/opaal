@@ -24,6 +24,15 @@ impl<R: BufRead> RawLineEditor<R> {
 }
 
 impl<R: BufRead> LineEditor for RawLineEditor<R> {
+    fn write_notice(&mut self, rendered: &str) -> Result<(), EditorError> {
+        let stdout = io::stdout();
+        let mut output = stdout.lock();
+        output
+            .write_all(rendered.as_bytes())
+            .and_then(|()| output.flush())
+            .map_err(|error| EditorError::with_source("notice write failed", error))
+    }
+
     fn read_line(&mut self, prompt: &EditorPrompt) -> Result<EditorEvent, EditorError> {
         let mut output = io::stdout();
         let _ = output.write_all(prompt.primary().as_bytes());

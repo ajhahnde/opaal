@@ -9,9 +9,15 @@ use flashshell_cli::history::HistorySelection;
 struct RecordingEditor {
     event: Option<EditorEvent>,
     prompts: Vec<EditorPrompt>,
+    notices: Vec<String>,
 }
 
 impl LineEditor for RecordingEditor {
+    fn write_notice(&mut self, rendered: &str) -> Result<(), EditorError> {
+        self.notices.push(rendered.to_owned());
+        Ok(())
+    }
+
     fn read_line(&mut self, prompt: &EditorPrompt) -> Result<EditorEvent, EditorError> {
         self.prompts.push(prompt.clone());
         self.event
@@ -26,6 +32,7 @@ fn session_code_consumes_editor_owned_events_without_a_terminal() {
     let mut editor = RecordingEditor {
         event: Some(EditorEvent::Submitted("echo hello".to_owned())),
         prompts: Vec::new(),
+        notices: Vec::new(),
     };
 
     assert_eq!(

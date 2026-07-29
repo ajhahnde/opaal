@@ -96,6 +96,10 @@ fn needs_continuation(source: &str) -> bool {
 }
 
 impl<P: Platform, R: Read, W: Write> LineEditor for TerminalEditor<P, R, W> {
+    fn write_notice(&mut self, rendered: &str) -> Result<(), EditorError> {
+        self.draw(rendered)
+    }
+
     fn read_line(&mut self, prompt: &EditorPrompt) -> Result<EditorEvent, EditorError> {
         // Raw mode lasts only for this call, so evaluation runs cooked.
         let guard = self.platform.enter_raw_mode().ok();

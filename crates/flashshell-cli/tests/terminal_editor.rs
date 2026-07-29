@@ -471,6 +471,17 @@ fn a_typed_line_submits_its_text() {
 }
 
 #[test]
+fn a_notice_is_written_through_the_editors_retained_output() {
+    let mut editor = editor(b"");
+
+    editor
+        .write_notice("[1] Done     command\n")
+        .expect("notice output should be writable");
+
+    assert_eq!(editor.drawn(), b"[1] Done     command\n");
+}
+
+#[test]
 fn backspace_edits_the_submitted_text() {
     let mut editor = editor(b"echo hallo\x7f\x7fx\r");
 

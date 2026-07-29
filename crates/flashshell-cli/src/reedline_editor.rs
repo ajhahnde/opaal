@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+use std::io::{self, Write};
 
 use flashshell_syntax::{ParseOutcome, SourceFile, SourceId, parse};
 use nu_ansi_term::{Color, Style};
@@ -74,6 +75,15 @@ impl Default for ReedlineEditor {
 }
 
 impl LineEditor for ReedlineEditor {
+    fn write_notice(&mut self, rendered: &str) -> Result<(), EditorError> {
+        let stdout = io::stdout();
+        let mut output = stdout.lock();
+        output
+            .write_all(rendered.as_bytes())
+            .and_then(|()| output.flush())
+            .map_err(|error| EditorError::with_source("notice write failed", error))
+    }
+
     fn read_line(&mut self, prompt: &EditorPrompt) -> Result<EditorEvent, EditorError> {
         let prompt = ReedlinePrompt { prompt };
         let signal = self

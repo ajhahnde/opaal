@@ -7,6 +7,7 @@ use std::io::{self, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::process::ExitCode;
+use std::sync::Arc;
 
 #[cfg(target_os = "redox")]
 use flashshell_cli::RawLineEditor;
@@ -26,7 +27,8 @@ use flashshell_cli::editor::EditorPrompt;
 use flashshell_cli::history::{HistoryPlatform, ProcessHistoryEnvironment, select_history};
 use flashshell_cli::interactive::{
     EvaluationControl, InteractiveDiagnostic, InteractiveEvaluator, InteractiveExit,
-    InteractiveSessionError, run_interactive_session,
+    InteractiveNotice, InteractiveNoticeError, InteractiveNoticeId, InteractiveSessionError,
+    format_job_notice, run_interactive_session,
 };
 use flashshell_platform::{Platform, PlatformError};
 use flashshell_platform_posix::PosixPlatform;
@@ -34,7 +36,7 @@ use flashshell_runtime::eval::SystemClock;
 use flashshell_runtime::plan::SessionOptions;
 use flashshell_runtime::resolve::ExecutableProbe;
 use flashshell_runtime::script::execute_script;
-use flashshell_runtime::session::{Session, SubmitError, SubmitOutcome};
+use flashshell_runtime::session::{JobNoticeId, Session, SubmitError, SubmitOutcome};
 use flashshell_runtime::{Environment, ScopeStack, Status};
 
 const HELP: &str = "FlashShell command shell
@@ -269,21 +271,60 @@ struct SessionEvaluator {
     session: Session,
     probe: NativeExecutableProbe,
     platform: PosixPlatform,
-    clock: SystemClock,
+    clock: Arc<SystemClock>,
+    pending_notice: Option<JobNoticeId>,
 }
 
 impl SessionEvaluator {
-    fn new(session: Session) -> Self {
+    fn new(mut session: Session) -> Self {
+        let clock = Arc::new(SystemClock::new());
+        session.enable_interactive_job_control(clock.clone());
         Self {
             session,
             probe: NativeExecutableProbe,
             platform: PosixPlatform,
-            clock: SystemClock::new(),
+            clock,
+            pending_notice: None,
         }
     }
 }
 
 impl InteractiveEvaluator for SessionEvaluator {
+    fn next_notice(&mut self) -> Option<InteractiveNotice> {
+        let notice = self.session.next_job_notice()?;
+        let id = notice.id();
+        let rendered = format_job_notice(notice.job(), notice.kind(), notice.command());
+        let interactive_id = InteractiveNoticeId::new(id.get())?;
+        self.pending_notice = Some(id);
+        Some(InteractiveNotice::new(interactive_id, rendered))
+    }
+
+    fn acknowledge_notice(
+        &mut self,
+        notice: &InteractiveNotice,
+    ) -> Result<(), InteractiveNoticeError> {
+        let pending = self.pending_notice.ok_or_else(|| {
+            InteractiveNoticeError::new(format!("job notice {} is not pending", notice.id().get()))
+        })?;
+        if pending.get() != notice.id().get() {
+            return Err(InteractiveNoticeError::new(format!(
+                "job notice {} does not match pending notice {}",
+                notice.id().get(),
+                pending.get()
+            )));
+        }
+        self.session
+            .acknowledge_job_notice(pending)
+            .map_err(|error| {
+                InteractiveNoticeError::with_source(
+                    format!("cannot acknowledge job notice {}", pending.get()),
+                    error,
+                )
+            })?;
+        self.pending_notice = None;
+        Ok(())
+    }
+
     fn evaluate(&mut self, source: &str) -> Result<EvaluationControl, InteractiveDiagnostic> {
         let stdout = io::stdout();
         let mut output = stdout.lock();
@@ -292,7 +333,7 @@ impl InteractiveEvaluator for SessionEvaluator {
             source,
             &self.probe,
             &self.platform,
-            &self.clock,
+            self.clock.as_ref(),
             &mut output,
         );
         match outcome {

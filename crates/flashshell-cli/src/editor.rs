@@ -96,5 +96,8 @@ impl Error for EditorError {
 
 /// Synchronous input boundary consumed by an interactive FlashShell session.
 pub trait LineEditor {
+    /// Write and flush one complete shell-owned notice before drawing a prompt.
+    fn write_notice(&mut self, rendered: &str) -> Result<(), EditorError>;
+
     fn read_line(&mut self, prompt: &EditorPrompt) -> Result<EditorEvent, EditorError>;
 }
