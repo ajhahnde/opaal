@@ -2,6 +2,7 @@
 
 //! Platform-independent runtime contracts for FlashShell.
 
+pub mod background;
 pub mod builtin;
 pub mod closure;
 pub mod command;
