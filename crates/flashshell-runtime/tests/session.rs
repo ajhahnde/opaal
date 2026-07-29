@@ -406,6 +406,251 @@ fn a_background_conditional_chain_is_rejected_at_its_operator() {
 }
 
 #[test]
+fn a_background_chain_reading_a_shell_local_binding_is_rejected_before_launch() {
+    let clock = Arc::new(FakeClock::at(100));
+    let mut session = session();
+    session.enable_interactive_job_control(clock.clone());
+    let probe = Probe::new(["/bin/tool"]);
+    let platform = RecordingPlatform::new(terminal_platform());
+    let mut sink = Vec::new();
+
+    session
+        .submit(
+            "<interactive>",
+            "let n = 5",
+            &probe,
+            &platform,
+            clock.as_ref(),
+            &mut sink,
+        )
+        .expect("the declaration should succeed");
+
+    let error = session
+        .submit(
+            "<interactive>",
+            "^tool $n &",
+            &probe,
+            &platform,
+            clock.as_ref(),
+            &mut sink,
+        )
+        .expect_err("a shell-local read cannot cross into the subshell");
+
+    assert!(error.render().contains("$n"));
+    assert!(
+        platform.spawn_log().records().is_empty(),
+        "the rejection must happen before any process exists"
+    );
+}
+
+#[test]
+fn a_background_chain_reading_an_environment_backed_binding_is_accepted() {
+    let clock = Arc::new(FakeClock::at(100));
+    let mut session = session();
+    session.enable_interactive_job_control(clock.clone());
+    let probe = Probe::new(["/bin/tool"]);
+    let platform = RecordingPlatform::new(terminal_platform());
+    let mut sink = Vec::new();
+
+    session
+        .submit(
+            "<interactive>",
+            "let NAME = 'value'\nexport NAME = $NAME",
+            &probe,
+            &platform,
+            clock.as_ref(),
+            &mut sink,
+        )
+        .expect("the environment-backed binding should be established");
+
+    assert_eq!(
+        session
+            .submit(
+                "<interactive>",
+                "^tool $NAME &",
+                &probe,
+                &platform,
+                clock.as_ref(),
+                &mut sink,
+            )
+            .expect("an environment-backed read can cross into the subshell"),
+        SubmitOutcome::Continued
+    );
+}
+
+#[test]
+fn background_chain_validation_reaches_spreads_redirections_and_braced_words() {
+    for (declaration, background, reference) in [
+        ("let args = ['one']", "^tool ...$args &", "$args"),
+        ("let file = 'output'", "^tool > $file &", "$file"),
+        ("let n = 5", "^tool pre${$n}post &", "$n"),
+    ] {
+        let clock = Arc::new(FakeClock::at(100));
+        let mut session = session();
+        session.enable_interactive_job_control(clock.clone());
+        let probe = Probe::new(["/bin/tool"]);
+        let platform = RecordingPlatform::new(terminal_platform());
+        let mut sink = Vec::new();
+
+        session
+            .submit(
+                "<interactive>",
+                declaration,
+                &probe,
+                &platform,
+                clock.as_ref(),
+                &mut sink,
+            )
+            .expect("the shell-local binding should be established");
+
+        let error = session
+            .submit(
+                "<interactive>",
+                background,
+                &probe,
+                &platform,
+                clock.as_ref(),
+                &mut sink,
+            )
+            .expect_err("every parent-only read should be rejected before launch");
+
+        assert!(error.render().contains(reference));
+        assert!(
+            platform.spawn_log().records().is_empty(),
+            "{background:?} must fail before spawning"
+        );
+    }
+}
+
+#[test]
+fn a_background_command_shadowed_by_a_shell_function_is_rejected_before_launch() {
+    let clock = Arc::new(FakeClock::at(100));
+    let mut session = session();
+    session.enable_interactive_job_control(clock.clone());
+    let probe = Probe::new(["/bin/mark"]);
+    let platform = RecordingPlatform::new(terminal_platform());
+    let mut sink = Vec::new();
+
+    session
+        .submit(
+            "<interactive>",
+            "def mark() {\n    0\n}",
+            &probe,
+            &platform,
+            clock.as_ref(),
+            &mut sink,
+        )
+        .expect("the function definition should succeed");
+
+    let error = session
+        .submit(
+            "<interactive>",
+            "mark &",
+            &probe,
+            &platform,
+            clock.as_ref(),
+            &mut sink,
+        )
+        .expect_err("a shell function cannot cross into the subshell");
+
+    assert!(error.render().contains("shell function"));
+    assert!(error.render().contains("mark"));
+    assert!(platform.spawn_log().records().is_empty());
+}
+
+#[test]
+fn a_forced_external_background_command_bypasses_a_same_named_shell_function() {
+    let clock = Arc::new(FakeClock::at(100));
+    let mut session = session();
+    session.enable_interactive_job_control(clock.clone());
+    let probe = Probe::new(["/bin/mark"]);
+    let platform = RecordingPlatform::new(terminal_platform());
+    let mut sink = Vec::new();
+
+    session
+        .submit(
+            "<interactive>",
+            "def mark() {\n    0\n}",
+            &probe,
+            &platform,
+            clock.as_ref(),
+            &mut sink,
+        )
+        .expect("the function definition should succeed");
+
+    assert_eq!(
+        session
+            .submit(
+                "<interactive>",
+                "^mark &",
+                &probe,
+                &platform,
+                clock.as_ref(),
+                &mut sink,
+            )
+            .expect("forced external resolution should bypass the function"),
+        SubmitOutcome::Continued
+    );
+}
+
+#[test]
+fn a_background_function_call_is_rejected_as_parent_only_state() {
+    let clock = Arc::new(FakeClock::at(100));
+    let mut session = session();
+    session.enable_interactive_job_control(clock.clone());
+    let platform = RecordingPlatform::new(terminal_platform());
+    let mut sink = Vec::new();
+
+    session
+        .submit(
+            "<interactive>",
+            "def mark() {\n    0\n}",
+            &Probe::default(),
+            &platform,
+            clock.as_ref(),
+            &mut sink,
+        )
+        .expect("the function definition should succeed");
+
+    let error = session
+        .submit(
+            "<interactive>",
+            "mark() &",
+            &Probe::default(),
+            &platform,
+            clock.as_ref(),
+            &mut sink,
+        )
+        .expect_err("a shell function call cannot cross into the subshell");
+
+    assert!(error.render().contains("shell function"));
+    assert!(error.render().contains("mark()"));
+    assert!(platform.spawn_log().records().is_empty());
+}
+
+#[test]
+fn a_background_closure_parameter_is_not_treated_as_parent_state() {
+    let clock = Arc::new(FakeClock::at(100));
+    let mut session = session();
+    session.enable_interactive_job_control(clock.clone());
+    let mut sink = Vec::new();
+
+    let error = session
+        .submit(
+            "<interactive>",
+            "which pwd | each {|row| $row} &",
+            &Probe::default(),
+            &terminal_platform(),
+            clock.as_ref(),
+            &mut sink,
+        )
+        .expect_err("background internal-command execution remains unsupported");
+
+    assert!(error.render().contains("internal"));
+    assert!(!error.render().contains("subshell environment"));
+}
+
+#[test]
 fn a_background_internal_stage_is_rejected_at_the_command() {
     let clock = Arc::new(FakeClock::new());
     let mut session = session();

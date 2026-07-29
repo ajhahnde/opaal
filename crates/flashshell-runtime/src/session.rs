@@ -24,7 +24,9 @@ use flashshell_platform::{
     DescriptorEndpoint, DescriptorReadError, DescriptorWriteError, Platform, ProcessGroupId,
 };
 use flashshell_syntax::{
-    Diagnostic, ParseOutcome, Script, Severity, SourceFile, SourceId, StatementKind, parse,
+    Closure, CommandHeadKind, CommandItemKind, ConditionalChain, Diagnostic, Expression,
+    ExpressionKind, LiteralKind, ParseOutcome, RecordKey, RedirectionKind, Script, Severity,
+    SourceFile, SourceId, Span, StageKind, StatementKind, Word, WordPart, WordPartKind, parse,
     render_diagnostic,
 };
 
@@ -313,6 +315,14 @@ impl Session {
                             );
                             return Err(runtime(&source, &error));
                         };
+                        if let Err(error) = validate_background_chain(
+                            &job.chain,
+                            &source,
+                            scope,
+                            state.environment(),
+                        ) {
+                            return Err(runtime(&source, &error));
+                        }
                         let pipeline = match one_background_pipeline(&job.chain) {
                             Ok(pipeline) => pipeline,
                             Err(error) => return Err(runtime(&source, &error)),
@@ -395,6 +405,234 @@ enum ChainStep {
 enum Interrupt {
     Runtime(RuntimeError),
     Output(io::Error),
+}
+
+fn validate_background_chain(
+    chain: &ConditionalChain,
+    source: &SourceFile,
+    scope: &ScopeStack,
+    environment: &Environment,
+) -> Result<(), RuntimeError> {
+    BackgroundChainValidator {
+        source,
+        scope,
+        environment,
+        local_bindings: Vec::new(),
+    }
+    .chain(chain)
+}
+
+struct BackgroundChainValidator<'a> {
+    source: &'a SourceFile,
+    scope: &'a ScopeStack,
+    environment: &'a Environment,
+    local_bindings: Vec<String>,
+}
+
+impl BackgroundChainValidator<'_> {
+    fn chain(&mut self, chain: &ConditionalChain) -> Result<(), RuntimeError> {
+        for and_chain in chain.or_terms() {
+            for pipeline in and_chain.and_terms() {
+                for stage in pipeline.stages() {
+                    match stage.kind() {
+                        StageKind::Command(command) => {
+                            self.word(command.head.word())?;
+                            if command.head.kind() != CommandHeadKind::ForcedExternal {
+                                self.command_head_function(command.head.word())?;
+                            }
+                            for item in &command.items {
+                                match item.kind() {
+                                    CommandItemKind::Word(word) => self.word(word)?,
+                                    CommandItemKind::Spread(variable) => {
+                                        self.variable(variable.name.span(), variable.span)?;
+                                    }
+                                    CommandItemKind::Closure(closure) => {
+                                        self.closure(closure)?;
+                                    }
+                                    CommandItemKind::Redirection(redirection) => {
+                                        self.redirection(redirection.kind())?;
+                                    }
+                                }
+                            }
+                        }
+                        StageKind::Expression(expression) => self.expression(expression)?,
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn command_head_function(&self, word: &Word) -> Result<(), RuntimeError> {
+        let mut scope = self.scope.clone();
+        let Ok(expanded) = crate::eval::expand_word(word, self.source, &mut scope) else {
+            return Ok(());
+        };
+        let Some(name) = expanded.value().to_str() else {
+            return Ok(());
+        };
+        if self.is_shell_function(name) {
+            return Err(self.shell_function(word.span()));
+        }
+        Ok(())
+    }
+
+    fn word(&mut self, word: &Word) -> Result<(), RuntimeError> {
+        for part in word.parts() {
+            self.word_part(part)?;
+        }
+        Ok(())
+    }
+
+    fn word_part(&mut self, part: &WordPart) -> Result<(), RuntimeError> {
+        match part.kind() {
+            WordPartKind::Variable(identifier) => self.variable(identifier.span(), part.span()),
+            WordPartKind::DoubleQuoted(parts) => {
+                for part in parts {
+                    self.word_part(part)?;
+                }
+                Ok(())
+            }
+            WordPartKind::BracedInterpolation(expression) => self.expression(expression),
+            WordPartKind::CommandSubstitution(chain) => self.chain(chain),
+            WordPartKind::Bare
+            | WordPartKind::BareEscape
+            | WordPartKind::SingleQuoted
+            | WordPartKind::DoubleText
+            | WordPartKind::DoubleEscape => Ok(()),
+        }
+    }
+
+    fn redirection(&mut self, redirection: &RedirectionKind) -> Result<(), RuntimeError> {
+        match redirection {
+            RedirectionKind::Input { target, .. } => self.word(target),
+            RedirectionKind::File(file) => self.word(&file.target),
+            RedirectionKind::Duplicate { .. } | RedirectionKind::Close { .. } => Ok(()),
+        }
+    }
+
+    fn expression(&mut self, expression: &Expression) -> Result<(), RuntimeError> {
+        match expression.kind() {
+            ExpressionKind::Literal(literal) => {
+                if let LiteralKind::DoubleQuoted(parts) = literal.kind() {
+                    for part in parts {
+                        self.word_part(part)?;
+                    }
+                }
+                Ok(())
+            }
+            ExpressionKind::Variable(variable) => {
+                self.variable(variable.name.span(), variable.span)
+            }
+            ExpressionKind::Symbol(_) => Ok(()),
+            ExpressionKind::List(elements) => {
+                for element in elements {
+                    self.expression(element)?;
+                }
+                Ok(())
+            }
+            ExpressionKind::Record(entries) => {
+                for entry in entries {
+                    if let RecordKey::DoubleQuoted(part) = &entry.key {
+                        self.word_part(part)?;
+                    }
+                    self.expression(&entry.value)?;
+                }
+                Ok(())
+            }
+            ExpressionKind::Closure(closure) => self.closure(closure),
+            ExpressionKind::CommandSubstitution(chain) | ExpressionKind::GroupedJob(chain) => {
+                self.chain(chain)
+            }
+            ExpressionKind::Call(call) => {
+                if let ExpressionKind::Symbol(identifier) = call.callee.kind() {
+                    let name = self.text(identifier.span());
+                    if !self.is_local(name) && self.is_shell_function(name) {
+                        return Err(self.shell_function(call.callee.span()));
+                    }
+                }
+                self.expression(&call.callee)?;
+                for argument in &call.arguments {
+                    self.expression(argument)?;
+                }
+                Ok(())
+            }
+            ExpressionKind::Index(index) => {
+                self.expression(&index.target)?;
+                self.expression(&index.index)
+            }
+            ExpressionKind::Member(member) => self.expression(&member.target),
+            ExpressionKind::Unary(unary) => self.expression(&unary.operand),
+            ExpressionKind::Binary(binary) => {
+                self.expression(&binary.left)?;
+                self.expression(&binary.right)
+            }
+        }
+    }
+
+    fn closure(&mut self, closure: &Closure) -> Result<(), RuntimeError> {
+        let outer_count = self.local_bindings.len();
+        for parameter in &closure.parameters {
+            self.local_bindings
+                .push(self.text(parameter.name.span()).to_owned());
+        }
+        let result = self.chain(&closure.body);
+        self.local_bindings.truncate(outer_count);
+        result
+    }
+
+    fn variable(&self, name_span: Span, reference_span: Span) -> Result<(), RuntimeError> {
+        let name = self.text(name_span);
+        if self.is_local(name) {
+            return Ok(());
+        }
+        if let Some(Value::Callable(callable)) = self.scope.get(name) {
+            return Err(if callable.family() == "function" {
+                self.shell_function(reference_span)
+            } else {
+                self.unavailable_binding(reference_span)
+            });
+        }
+        if self.environment.contains(name) {
+            return Ok(());
+        }
+        Err(self.unavailable_binding(reference_span))
+    }
+
+    fn is_local(&self, name: &str) -> bool {
+        self.local_bindings.iter().rev().any(|local| local == name)
+    }
+
+    fn is_shell_function(&self, name: &str) -> bool {
+        matches!(
+            self.scope.get(name),
+            Some(Value::Callable(callable)) if callable.family() == "function"
+        )
+    }
+
+    fn unavailable_binding(&self, span: Span) -> RuntimeError {
+        RuntimeError::new(
+            RuntimeErrorKind::Unsupported {
+                feature: "a binding unavailable in the background subshell environment",
+            },
+            span,
+        )
+    }
+
+    fn shell_function(&self, span: Span) -> RuntimeError {
+        RuntimeError::new(
+            RuntimeErrorKind::Unsupported {
+                feature: "a shell function in a background subshell",
+            },
+            span,
+        )
+    }
+
+    fn text(&self, span: Span) -> &str {
+        self.source
+            .slice(span)
+            .expect("a parsed syntax span belongs to its source")
+    }
 }
 
 fn one_background_pipeline(
