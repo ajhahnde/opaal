@@ -21,6 +21,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use rustix::fs::{Mode, OFlags, open};
+use rustix::process::{Pid, Signal, kill_process};
 use rustix::pty::{OpenptFlags, grantpt, openpt, ptsname, unlockpt};
 use rustix::termios::{Winsize, tcsetwinsize};
 
@@ -28,6 +29,7 @@ const FSH: &str = env!("CARGO_BIN_EXE_fsh");
 const ENTER: &[u8] = b"\r";
 const CTRL_C: &[u8] = b"\x03";
 const CTRL_D: &[u8] = b"\x04";
+const CTRL_Z: &[u8] = b"\x1a";
 const UP_ARROW: &[u8] = b"\x1b[A";
 const TAB: &[u8] = b"\t";
 const TIMEOUT: Duration = Duration::from_secs(10);
@@ -427,4 +429,85 @@ fn tab_completes_a_command_name() {
     // The completion menu surfaces the standard `pwd` command name. The session
     // is torn down by the harness rather than through a menu-active exit path.
     session.expect_from(mark, "pwd");
+}
+
+#[test]
+fn an_interrupt_kills_the_job_and_leaves_the_shell_at_a_prompt() {
+    let cwd = unique_dir("interrupt");
+    let mut session = interactive(&cwd);
+    session.await_prompt(0);
+
+    let mark = session.mark();
+    session.send(b"sleep 30");
+    session.send(ENTER);
+    thread::sleep(SETTLE);
+    // The job owns the terminal by now, so the interrupt is delivered to it and
+    // must actually end it: a job that had inherited the shell's ignored
+    // disposition would outlive the interrupt, and no further prompt would be
+    // drawn for the remaining thirty seconds.
+    session.send(CTRL_C);
+    session.await_prompt(mark);
+
+    let mark = session.mark();
+    session.send(b"echo alive");
+    session.send(ENTER);
+    session.expect_from(mark, "alive");
+
+    session.await_prompt(mark);
+    session.send(b"exit 0");
+    session.send(ENTER);
+    assert_eq!(session.wait_code(), 0);
+}
+
+#[test]
+fn a_terminal_stop_does_not_strand_a_foreground_job() {
+    let cwd = unique_dir("stop");
+    let mut session = interactive(&cwd);
+    session.await_prompt(0);
+
+    let mark = session.mark();
+    session.send(b"sleep 1");
+    session.send(ENTER);
+    thread::sleep(SETTLE);
+    // The job stops, the shell observes it and resumes it in place, so the job
+    // still finishes and the prompt still returns. A shell without stop
+    // observation blocks here until the test times out.
+    session.send(CTRL_Z);
+    session.await_prompt(mark);
+
+    let mark = session.mark();
+    session.send(b"echo resumed");
+    session.send(ENTER);
+    session.expect_from(mark, "resumed");
+
+    session.await_prompt(mark);
+    session.send(b"exit 0");
+    session.send(ENTER);
+    assert_eq!(session.wait_code(), 0);
+}
+
+#[test]
+fn an_interrupt_aimed_at_the_shell_does_not_end_the_session() {
+    let cwd = unique_dir("shell-interrupt");
+    let mut session = interactive(&cwd);
+    session.await_prompt(0);
+
+    // No keystroke can exercise this: while a job runs the terminal signals the
+    // job's own group, and while the editor reads it suppresses signal
+    // generation altogether. Signalling the shell process directly is therefore
+    // the only way to observe the shell's own disposition, and an unarranged
+    // shell is killed outright by it.
+    let pid = Pid::from_raw(i32::try_from(session.child.id()).expect("the child pid fits in i32"))
+        .expect("a live child has a valid pid");
+    kill_process(pid, Signal::INT).expect("signal the shell");
+
+    let mark = session.mark();
+    session.send(b"echo intact");
+    session.send(ENTER);
+    session.expect_from(mark, "intact");
+
+    session.await_prompt(mark);
+    session.send(b"exit 0");
+    session.send(ENTER);
+    assert_eq!(session.wait_code(), 0);
 }

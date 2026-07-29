@@ -28,8 +28,7 @@ use flashshell_cli::interactive::{
     EvaluationControl, InteractiveDiagnostic, InteractiveEvaluator, InteractiveExit,
     InteractiveSessionError, run_interactive_session,
 };
-#[cfg(target_os = "redox")]
-use flashshell_platform::Platform;
+use flashshell_platform::{Platform, PlatformError};
 use flashshell_platform_posix::PosixPlatform;
 use flashshell_runtime::eval::SystemClock;
 use flashshell_runtime::plan::SessionOptions;
@@ -88,6 +87,27 @@ fn run_interactive(no_config: bool, no_history: bool) -> ExitCode {
             eprintln!("fsh: cannot read the current directory: {error}");
             return ExitCode::FAILURE;
         }
+    };
+
+    // Only a shell holding the keyboard arranges anything. A shell reading a
+    // redirected input is still interrupted along with the terminal's foreground
+    // group, and that is what should happen to it: one that ignored the
+    // interrupt could not be stopped from the keyboard that started it. Where it
+    // is installed the arrangement lasts the whole session, and the guard puts
+    // the previous handling back on every exit path including a panic. A
+    // platform without the capability delivers no terminal signals either, so an
+    // unsupported result is not a startup failure.
+    let _signals = if PosixPlatform.is_terminal() {
+        match PosixPlatform.install_job_control_signals() {
+            Ok(guard) => Some(guard),
+            Err(PlatformError::Unsupported { .. }) => None,
+            Err(error) => {
+                eprintln!("fsh: cannot arrange terminal signals: {error}");
+                return ExitCode::FAILURE;
+            }
+        }
+    } else {
+        None
     };
 
     // Consider configuration exactly once, before any editor or prompt work.
@@ -168,6 +188,28 @@ fn run_interactive(_no_config: bool, _no_history: bool) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+
+    // Only a shell holding the keyboard arranges anything. A shell reading a
+    // redirected input is still interrupted along with the terminal's foreground
+    // group, and that is what should happen to it: one that ignored the
+    // interrupt could not be stopped from the keyboard that started it. Where it
+    // is installed the arrangement lasts the whole session, and the guard puts
+    // the previous handling back on every exit path including a panic. A
+    // platform without the capability delivers no terminal signals either, so an
+    // unsupported result is not a startup failure.
+    let _signals = if PosixPlatform.is_terminal() {
+        match PosixPlatform.install_job_control_signals() {
+            Ok(guard) => Some(guard),
+            Err(PlatformError::Unsupported { .. }) => None,
+            Err(error) => {
+                eprintln!("fsh: cannot arrange terminal signals: {error}");
+                return ExitCode::FAILURE;
+            }
+        }
+    } else {
+        None
+    };
+
     let session = Session::with_scope(
         ScopeStack::new(),
         cwd,
