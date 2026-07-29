@@ -299,6 +299,9 @@ pub enum RuntimeErrorKind {
     /// The platform could not supply the terminal information needed to select
     /// width-aware presentation.
     TerminalPresentation(PlatformError),
+    /// The platform could not identify the running shell executable needed for
+    /// an isolated background chain.
+    ShellExecutable(PlatformError),
     /// The platform rejected or failed creation of an anonymous pipeline edge.
     PipeCreate(PipeError),
     /// The platform rejected or failed creation of the stdout capture pipe.
@@ -547,6 +550,9 @@ impl fmt::Display for RuntimeErrorKind {
             Self::Presentation(error) => error.fmt(formatter),
             Self::TerminalPresentation(error) => {
                 write!(formatter, "terminal presentation is unavailable: {error}")
+            }
+            Self::ShellExecutable(error) => {
+                write!(formatter, "shell re-execution is unavailable: {error}")
             }
             Self::PipeCreate(error) => error.fmt(formatter),
             Self::CapturePipe(error) => error.fmt(formatter),
@@ -1163,6 +1169,15 @@ pub struct ExpandedWord {
 }
 
 impl ExpandedWord {
+    /// Build one runtime-supplied argument with source provenance.
+    pub(crate) fn synthetic(value: OsString, span: Span) -> Self {
+        Self {
+            value,
+            span,
+            parts: vec![span],
+        }
+    }
+
     /// The concatenated native argument.
     #[must_use]
     pub fn value(&self) -> &OsStr {

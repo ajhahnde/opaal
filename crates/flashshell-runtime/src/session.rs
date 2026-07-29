@@ -16,6 +16,7 @@
 //! unredirected interactive output terminal. An all-external pipeline retains
 //! the existing process executor.
 
+use std::ffi::OsString;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -35,7 +36,8 @@ use crate::builtin::{SessionState, standard_registry};
 use crate::closure::OwnedClosureContext;
 use crate::command::CommandRegistry;
 use crate::eval::{
-    Clock, Completion, EvalLimits, RuntimeError, RuntimeErrorKind, evaluate_in_environment,
+    Clock, Completion, EvalLimits, ExpandedWord, RuntimeError, RuntimeErrorKind,
+    evaluate_in_environment, expand_word,
 };
 use crate::execute::{execute_foreground_status, start_mixed_pipeline};
 use crate::internal::{
@@ -43,14 +45,15 @@ use crate::internal::{
     execute_stage,
 };
 use crate::plan::{
-    PlannedResolution, PlannedStage, RedirectionAction, SessionOptions, plan_pipeline_with_options,
+    ExecutionPlan, PlannedResolution, PlannedStage, RedirectionAction, SessionOptions,
+    plan_pipeline_with_options,
 };
 use crate::presentation::{
     OutputDestination, TerminalPresentation, render_table, select_terminal_presentation,
 };
 use crate::resolve::ExecutableProbe;
 use crate::stream::{BytePull, ByteStream, StreamPull};
-use crate::{Environment, ScopeStack, Status, Value};
+use crate::{BindingMutability, Environment, NativePath, ScopeStack, Status, Value};
 
 pub use crate::background::{
     BackgroundFailure, BackgroundFailureReason, JobNotice, JobNoticeError, JobNoticeId,
@@ -323,32 +326,39 @@ impl Session {
                         ) {
                             return Err(runtime(&source, &error));
                         }
-                        let pipeline = match one_background_pipeline(&job.chain) {
-                            Ok(pipeline) => pipeline,
-                            Err(error) => return Err(runtime(&source, &error)),
+                        let mut child_scope = scope_from_environment(state.environment());
+                        let direct_pipeline =
+                            one_background_pipeline(&job.chain).filter(|pipeline| {
+                                pipeline_is_all_external(
+                                    pipeline,
+                                    &source,
+                                    &mut child_scope,
+                                    registry,
+                                )
+                            });
+                        let plan = if let Some(pipeline) = direct_pipeline {
+                            plan_pipeline_with_options(
+                                pipeline,
+                                state.cwd(),
+                                &source,
+                                &mut child_scope,
+                                state.environment(),
+                                registry,
+                                probe,
+                                options,
+                            )
+                            .map_err(|error| runtime(&source, &error))?
+                        } else {
+                            background_shell_plan(
+                                &job.chain,
+                                &source,
+                                state.cwd(),
+                                state.environment(),
+                                options,
+                                platform,
+                            )
+                            .map_err(|error| runtime(&source, &error))?
                         };
-                        let plan = plan_pipeline_with_options(
-                            pipeline,
-                            state.cwd(),
-                            &source,
-                            scope,
-                            state.environment(),
-                            registry,
-                            probe,
-                            options,
-                        )
-                        .map_err(|error| runtime(&source, &error))?;
-                        if let Some(stage) = plan.stages().iter().find(|stage| {
-                            matches!(stage.resolution(), PlannedResolution::Internal { .. })
-                        }) {
-                            let error = RuntimeError::new(
-                                RuntimeErrorKind::Unsupported {
-                                    feature: "background internal-command execution",
-                                },
-                                stage.span(),
-                            );
-                            return Err(runtime(&source, &error));
-                        }
                         let command = source
                             .slice(job.chain.span())
                             .map(escape_job_label)
@@ -637,31 +647,103 @@ impl BackgroundChainValidator<'_> {
 
 fn one_background_pipeline(
     chain: &flashshell_syntax::ConditionalChain,
-) -> Result<&flashshell_syntax::Pipeline, RuntimeError> {
-    if let Some(operator) = chain.operators().first() {
-        return Err(RuntimeError::new(
-            RuntimeErrorKind::Unsupported {
-                feature: "background conditional-chain execution",
-            },
-            operator.span(),
-        ));
+) -> Option<&flashshell_syntax::Pipeline> {
+    if !chain.operators().is_empty() {
+        return None;
     }
     let and_chain = chain
         .or_terms()
         .first()
         .expect("a parsed conditional chain contains an operand");
-    if let Some(operator) = and_chain.operators().first() {
-        return Err(RuntimeError::new(
-            RuntimeErrorKind::Unsupported {
-                feature: "background conditional-chain execution",
-            },
-            operator.span(),
+    if !and_chain.operators().is_empty() {
+        return None;
+    }
+    Some(
+        and_chain
+            .and_terms()
+            .first()
+            .expect("a parsed and-chain contains an operand"),
+    )
+}
+
+fn pipeline_is_all_external(
+    pipeline: &flashshell_syntax::Pipeline,
+    source: &SourceFile,
+    scope: &mut ScopeStack,
+    registry: &CommandRegistry,
+) -> bool {
+    pipeline.stages().iter().all(|stage| {
+        let StageKind::Command(command) = stage.kind() else {
+            return false;
+        };
+        if command.head.kind() == CommandHeadKind::ForcedExternal {
+            return true;
+        }
+        let Ok(head) = expand_word(command.head.word(), source, scope) else {
+            return false;
+        };
+        let Some(name) = head.value().to_str() else {
+            return true;
+        };
+        !registry.contains(name)
+    })
+}
+
+fn scope_from_environment(environment: &Environment) -> ScopeStack {
+    let mut scope = ScopeStack::new();
+    for (name, value) in environment.iter() {
+        scope
+            .declare(
+                name,
+                BindingMutability::Immutable,
+                Value::Path(NativePath::new(value.to_os_string())),
+            )
+            .expect("environment entry names are unique");
+    }
+    scope
+}
+
+fn background_shell_plan(
+    chain: &ConditionalChain,
+    source: &SourceFile,
+    cwd: &Path,
+    environment: &Environment,
+    options: &SessionOptions,
+    platform: &dyn Platform,
+) -> Result<ExecutionPlan, RuntimeError> {
+    let span = chain.span();
+    let executable = platform
+        .shell_executable()
+        .map_err(|error| RuntimeError::new(RuntimeErrorKind::ShellExecutable(error), span))?;
+    let text = source
+        .slice(span)
+        .expect("a parsed chain span belongs to its source");
+
+    let mut argv = vec![
+        ExpandedWord::synthetic(executable.as_os_str().to_os_string(), span),
+        ExpandedWord::synthetic(OsString::from("--async-chain"), span),
+        ExpandedWord::synthetic(OsString::from(text), span),
+    ];
+    if options.pipefail() {
+        argv.push(ExpandedWord::synthetic(
+            OsString::from("--async-pipefail"),
+            span,
         ));
     }
-    Ok(and_chain
-        .and_terms()
-        .first()
-        .expect("a parsed and-chain contains an operand"))
+    argv.extend([
+        ExpandedWord::synthetic(OsString::from("--async-capture-limit"), span),
+        ExpandedWord::synthetic(OsString::from(options.capture_limit().to_string()), span),
+    ]);
+
+    Ok(ExecutionPlan::single_external(
+        executable,
+        argv,
+        cwd.to_owned(),
+        environment.clone(),
+        options.pipefail(),
+        options.capture_limit(),
+        span,
+    ))
 }
 
 impl Interrupt {

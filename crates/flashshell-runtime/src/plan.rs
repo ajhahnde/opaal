@@ -49,6 +49,37 @@ pub struct ExecutionPlan {
 }
 
 impl ExecutionPlan {
+    /// Build a one-stage external plan whose argument vector is already known.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn single_external(
+        path: PathBuf,
+        argv: Vec<ExpandedWord>,
+        cwd: PathBuf,
+        environment: Environment,
+        pipefail: bool,
+        capture_limit: usize,
+        span: Span,
+    ) -> Self {
+        assert!(!argv.is_empty(), "an external plan requires argv zero");
+        Self {
+            cwd,
+            environment,
+            stages: vec![PlannedStage {
+                resolution: PlannedResolution::External { path },
+                input_carriers: BTreeSet::from([Carrier::ByteStream]),
+                output_carrier: Carrier::ByteStream,
+                argv,
+                arguments: Vec::new(),
+                redirections: Vec::new(),
+                span,
+            }],
+            edges: Vec::new(),
+            pipefail,
+            capture_limit,
+            span,
+        }
+    }
+
     /// The working directory every stage would run in.
     #[must_use]
     pub fn cwd(&self) -> &Path {

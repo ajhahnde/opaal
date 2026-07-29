@@ -383,11 +383,178 @@ fn background_work_without_a_job_control_opt_in_is_rejected_at_the_marker() {
 }
 
 #[test]
-fn a_background_conditional_chain_is_rejected_at_its_operator() {
-    let clock = Arc::new(FakeClock::new());
+fn a_background_conditional_chain_launches_exactly_one_shell_member() {
+    let clock = Arc::new(FakeClock::at(100));
     let mut session = session();
     session.enable_interactive_job_control(clock.clone());
     let probe = Probe::new(["/bin/tool", "/bin/other"]);
+    let platform = RecordingPlatform::new(terminal_platform());
+    let mut sink = Vec::new();
+
+    assert_eq!(
+        session
+            .submit(
+                "<interactive>",
+                "^tool && ^other &",
+                &probe,
+                &platform,
+                clock.as_ref(),
+                &mut sink,
+            )
+            .expect("a background conditional chain should launch"),
+        SubmitOutcome::Continued
+    );
+
+    let started = session
+        .next_job_notice()
+        .expect("background launch queues a notice");
+    let job = session
+        .background_job(started.job())
+        .expect("the complete job is addressable before its notice");
+    assert_eq!(
+        job.members().count(),
+        1,
+        "one shell process supervises the complete chain"
+    );
+
+    let records = platform.spawn_log().records();
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].executable(), Path::new("/fake/fsh"));
+    assert_eq!(
+        records[0].argv(),
+        [
+            OsString::from("/fake/fsh"),
+            OsString::from("--async-chain"),
+            OsString::from("^tool && ^other"),
+            OsString::from("--async-capture-limit"),
+            OsString::from(SessionOptions::DEFAULT_CAPTURE_LIMIT.to_string()),
+        ]
+    );
+    assert_eq!(records[0].requested(), ProcessGroup::New);
+}
+
+#[test]
+fn a_single_external_background_pipeline_still_spawns_directly() {
+    let clock = Arc::new(FakeClock::at(100));
+    let mut session = session();
+    session.enable_interactive_job_control(clock.clone());
+    let probe = Probe::new(["/bin/tool", "/bin/other"]);
+    let platform = RecordingPlatform::new(terminal_platform());
+    let mut sink = Vec::new();
+
+    assert_eq!(
+        session
+            .submit(
+                "<interactive>",
+                "^tool | ^other &",
+                &probe,
+                &platform,
+                clock.as_ref(),
+                &mut sink,
+            )
+            .expect("an external background pipeline should launch directly"),
+        SubmitOutcome::Continued
+    );
+
+    let started = session
+        .next_job_notice()
+        .expect("background launch queues a notice");
+    let job = session
+        .background_job(started.job())
+        .expect("the complete job is addressable before its notice");
+    assert_eq!(job.members().count(), 2);
+
+    let records = platform.spawn_log().records();
+    assert_eq!(records.len(), 2);
+    assert!(
+        records
+            .iter()
+            .all(|record| record.executable() != Path::new("/fake/fsh")),
+        "the established external-pipeline path must not add a shell process"
+    );
+}
+
+#[test]
+fn a_direct_background_pipeline_expands_environment_backed_names() {
+    let clock = Arc::new(FakeClock::at(100));
+    let mut session = session();
+    session.enable_interactive_job_control(clock.clone());
+    let probe = Probe::new(["/bin/tool"]);
+    let platform = RecordingPlatform::new(terminal_platform());
+    let mut sink = Vec::new();
+
+    session
+        .submit(
+            "<interactive>",
+            "^tool $HOME &",
+            &probe,
+            &platform,
+            clock.as_ref(),
+            &mut sink,
+        )
+        .expect("the inherited environment should supply the direct argument");
+
+    let records = platform.spawn_log().records();
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].executable(), Path::new("/bin/tool"));
+    assert_eq!(
+        records[0].argv(),
+        [OsString::from("tool"), OsString::from("/home/me")]
+    );
+}
+
+#[test]
+fn a_background_shell_launch_forwards_session_options() {
+    let clock = Arc::new(FakeClock::at(100));
+    let mut session = Session::new(
+        "/work",
+        environment(),
+        SessionOptions::default()
+            .with_pipefail(true)
+            .with_capture_limit(4096),
+    );
+    session.enable_interactive_job_control(clock.clone());
+    let probe = Probe::new(["/bin/tool", "/bin/other"]);
+    let platform = RecordingPlatform::new(terminal_platform());
+    let mut sink = Vec::new();
+
+    session
+        .submit(
+            "<interactive>",
+            "^tool || ^other &",
+            &probe,
+            &platform,
+            clock.as_ref(),
+            &mut sink,
+        )
+        .expect("the configured background chain should launch");
+
+    let records = platform.spawn_log().records();
+    assert_eq!(records.len(), 1);
+    assert_eq!(
+        records[0].argv(),
+        [
+            OsString::from("/fake/fsh"),
+            OsString::from("--async-chain"),
+            OsString::from("^tool || ^other"),
+            OsString::from("--async-pipefail"),
+            OsString::from("--async-capture-limit"),
+            OsString::from("4096"),
+        ]
+    );
+}
+
+#[test]
+fn an_unavailable_shell_executable_rejects_the_chain_before_launch() {
+    let clock = Arc::new(FakeClock::at(100));
+    let mut session = session();
+    session.enable_interactive_job_control(clock.clone());
+    let probe = Probe::new(["/bin/tool", "/bin/other"]);
+    let platform = RecordingPlatform::new(FakePlatform::with_terminal(
+        Capabilities::full_without(Capability::ShellExecutable),
+        true,
+        TerminalSize::new(80, 24),
+    ));
     let mut sink = Vec::new();
 
     let error = session
@@ -395,14 +562,16 @@ fn a_background_conditional_chain_is_rejected_at_its_operator() {
             "<interactive>",
             "^tool && ^other &",
             &probe,
-            &terminal_platform(),
+            &platform,
             clock.as_ref(),
             &mut sink,
         )
-        .expect_err("background conditional chains need an owned supervisor");
+        .expect_err("the parent needs its executable path before launch");
 
-    assert!(error.render().contains("conditional"));
-    assert!(error.render().contains("&&"));
+    assert!(error.render().contains("shell re-execution"));
+    assert!(error.render().contains("^tool && ^other"));
+    assert!(platform.spawn_log().records().is_empty());
+    assert!(session.next_job_notice().is_none());
 }
 
 #[test]
@@ -633,43 +802,95 @@ fn a_background_closure_parameter_is_not_treated_as_parent_state() {
     let clock = Arc::new(FakeClock::at(100));
     let mut session = session();
     session.enable_interactive_job_control(clock.clone());
+    let platform = RecordingPlatform::new(terminal_platform());
     let mut sink = Vec::new();
 
-    let error = session
-        .submit(
-            "<interactive>",
-            "which pwd | each {|row| $row} &",
-            &Probe::default(),
-            &terminal_platform(),
-            clock.as_ref(),
-            &mut sink,
-        )
-        .expect_err("background internal-command execution remains unsupported");
-
-    assert!(error.render().contains("internal"));
-    assert!(!error.render().contains("subshell environment"));
+    assert_eq!(
+        session
+            .submit(
+                "<interactive>",
+                "which pwd | each {|row| $row} &",
+                &Probe::default(),
+                &platform,
+                clock.as_ref(),
+                &mut sink,
+            )
+            .expect("the closure-local reference should launch in the child shell"),
+        SubmitOutcome::Continued
+    );
+    let records = platform.spawn_log().records();
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].executable(), Path::new("/fake/fsh"));
 }
 
 #[test]
-fn a_background_internal_stage_is_rejected_at_the_command() {
-    let clock = Arc::new(FakeClock::new());
+fn a_background_internal_pipeline_launches_through_the_shell() {
+    let clock = Arc::new(FakeClock::at(100));
     let mut session = session();
     session.enable_interactive_job_control(clock.clone());
+    let platform = RecordingPlatform::new(terminal_platform());
     let mut sink = Vec::new();
 
-    let error = session
+    assert_eq!(
+        session
+            .submit(
+                "<interactive>",
+                "pwd &",
+                &Probe::default(),
+                &platform,
+                clock.as_ref(),
+                &mut sink,
+            )
+            .expect("the child shell should own the internal pipeline"),
+        SubmitOutcome::Continued
+    );
+
+    let started = session
+        .next_job_notice()
+        .expect("background launch queues a notice");
+    let job = session
+        .background_job(started.job())
+        .expect("the complete job is addressable before its notice");
+    assert_eq!(job.members().count(), 1);
+
+    let records = platform.spawn_log().records();
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].executable(), Path::new("/fake/fsh"));
+    assert!(
+        records[0].argv().iter().any(|argument| argument == "pwd"),
+        "the child shell receives the internal pipeline source"
+    );
+}
+
+#[test]
+fn a_mixed_background_pipeline_launches_through_the_shell() {
+    let clock = Arc::new(FakeClock::at(100));
+    let mut session = session();
+    session.enable_interactive_job_control(clock.clone());
+    let probe = Probe::new(["/bin/tool"]);
+    let platform = RecordingPlatform::new(terminal_platform());
+    let mut sink = Vec::new();
+
+    session
         .submit(
             "<interactive>",
-            "pwd &",
-            &Probe::default(),
-            &terminal_platform(),
+            "which pwd | ^tool &",
+            &probe,
+            &platform,
             clock.as_ref(),
             &mut sink,
         )
-        .expect_err("background internal commands remain unsupported");
+        .expect("the child shell should own the mixed pipeline");
 
-    assert!(error.render().contains("internal"));
-    assert!(error.render().contains("pwd &"));
+    let records = platform.spawn_log().records();
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].executable(), Path::new("/fake/fsh"));
+    assert!(
+        records[0]
+            .argv()
+            .iter()
+            .any(|argument| argument == "which pwd | ^tool")
+    );
 }
 
 #[test]
