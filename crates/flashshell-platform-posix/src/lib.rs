@@ -1049,6 +1049,7 @@ mod process_signals {
         let number = match signal {
             JobSignal::Stop => libc::SIGSTOP,
             JobSignal::Continue => libc::SIGCONT,
+            JobSignal::Hangup => libc::SIGHUP,
         };
         let target = libc::pid_t::try_from(group.get()).map_err(|_| SignalError::Operation {
             kind: io::ErrorKind::InvalidInput,

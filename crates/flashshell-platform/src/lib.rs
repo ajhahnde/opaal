@@ -670,7 +670,7 @@ impl ProcessGroup {
 /// Inbound observations keep their raw number, because they report what the host
 /// already did and must not be narrowed to what the shell happens to model.
 ///
-/// The set grows when the `kill` built-in lands, which is also what gives
+/// The set grows again when the `kill` built-in lands, which is also what gives
 /// `Stop` its first caller outside the adapter's own tests: the shell resumes a
 /// stopped job long before it has a reason to stop one itself.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -679,6 +679,11 @@ pub enum JobSignal {
     Stop,
     /// Resume a stopped group.
     Continue,
+    /// Hang up the group because its session is ending.
+    ///
+    /// Sent only after the shell has resumed the group, because a stopped
+    /// process cannot act on a hang-up it never receives.
+    Hangup,
 }
 
 /// Failure while delivering a signal to a process group.
