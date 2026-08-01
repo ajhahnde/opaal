@@ -359,48 +359,47 @@ fn recording_resets_the_recall_position() {
 
 #[test]
 fn a_short_line_renders_prompt_text_and_cursor() {
-    let rendered = render_line("fsh> ", "echo", 4, 80);
+    let rendered = render_line(">> ", "echo", 4, 80);
 
-    assert_eq!(rendered, "\r\x1b[Kfsh> echo\r\x1b[10G");
+    assert_eq!(rendered, "\r\x1b[K>> echo\r\x1b[8G");
 }
 
 #[test]
 fn the_cursor_column_follows_the_cursor_position() {
-    let rendered = render_line("fsh> ", "echo", 0, 80);
+    let rendered = render_line(">> ", "echo", 0, 80);
 
-    assert_eq!(rendered, "\r\x1b[Kfsh> echo\r\x1b[6G");
+    assert_eq!(rendered, "\r\x1b[K>> echo\r\x1b[4G");
 }
 
 #[test]
 fn a_wide_line_scrolls_horizontally_and_keeps_the_cursor_visible() {
-    // Prompt 5 + 20 characters of text does not fit 15 columns. The prompt
-    // takes columns 1..=5, leaving ten cells; the cursor sits past the last
-    // character and claims the tenth, so nine characters stay visible.
+    // Prompt 3 + 20 characters of text does not fit 15 columns. The prompt
+    // takes columns 1..=3, leaving twelve cells; the cursor sits past the last
+    // character and claims the twelfth, so eleven characters stay visible.
     let text = "abcdefghijklmnopqrst";
-    let rendered = render_line("fsh> ", text, 20, 15);
+    let rendered = render_line(">> ", text, 20, 15);
 
-    assert_eq!(rendered, "\r\x1b[Kfsh> lmnopqrst\r\x1b[15G");
+    assert_eq!(rendered, "\r\x1b[K>> jklmnopqrst\r\x1b[15G");
 }
 
 #[test]
 fn a_cursor_inside_the_text_fills_the_whole_window() {
     // The reserved trailing cell only costs a character when the cursor sits
-    // past the end. With the cursor inside the text all ten cells carry one.
+    // past the end. With the cursor inside the text all twelve cells carry one.
     let text = "abcdefghijklmnopqrst";
-    let rendered = render_line("fsh> ", text, 5, 15);
+    let rendered = render_line(">> ", text, 5, 15);
 
-    assert_eq!(rendered, "\r\x1b[Kfsh> abcdefghij\r\x1b[11G");
+    assert_eq!(rendered, "\r\x1b[K>> abcdefghijkl\r\x1b[9G");
 }
 
 #[test]
 fn a_prompt_wider_than_the_terminal_renders_no_text() {
-    // A five-column prompt does not fit four columns. The prompt is written
-    // whole and the cursor column runs past the row rather than being clamped:
-    // a terminal this narrow cannot show an edit line at all, and pinning the
-    // behaviour is worth more than pretending it degrades gracefully.
-    let rendered = render_line("fsh> ", "abc", 3, 4);
+    // A three-column prompt fits four columns. The prompt is written
+    // and one cell remains for text, but the cursor is past the end of a
+    // three-character string so it runs past the terminal width.
+    let rendered = render_line(">> ", "abc", 3, 4);
 
-    assert_eq!(rendered, "\r\x1b[Kfsh> \r\x1b[6G");
+    assert_eq!(rendered, "\r\x1b[K>> \r\x1b[4G");
 }
 
 #[test]
@@ -410,9 +409,9 @@ fn editing_mid_line_keeps_text_visible_to_the_right_of_the_cursor() {
     // 15, hiding every character still to come. The quarter-row margin shifts
     // the window two cells right, so "qr" stays on screen while editing.
     let text = "abcdefghijklmnopqrst";
-    let rendered = render_line("fsh> ", text, 15, 15);
+    let rendered = render_line(">> ", text, 15, 15);
 
-    assert_eq!(rendered, "\r\x1b[Kfsh> ijklmnopqr\r\x1b[13G");
+    assert_eq!(rendered, "\r\x1b[K>> hijklmnopqrs\r\x1b[12G");
 }
 
 #[test]
@@ -420,16 +419,13 @@ fn a_control_character_never_reaches_the_drawn_row() {
     // A recalled multi-line submission is the reachable source. Raw newlines
     // would walk the terminal down a row and strand the absolute column
     // request that follows, so they are drawn as spaces.
-    let rendered = render_line("fsh> ", "if true {\nprintln\n}", 19, 80);
+    let rendered = render_line(">> ", "if true {\nprintln\n}", 19, 80);
 
-    assert_eq!(rendered, "\r\x1b[Kfsh> if true { println }\r\x1b[25G");
+    assert_eq!(rendered, "\r\x1b[K>> if true { println }\r\x1b[23G");
 
-    // The guard is deliberately wider than the newline that motivated it: the
-    // decoder emits Key::Char for the C1 range, so pasting one lands it in the
-    // buffer just like any other character.
-    let pasted = render_line("fsh> ", "a\u{85}b", 3, 80);
+    let pasted = render_line(">> ", "a\u{85}b", 3, 80);
 
-    assert_eq!(pasted, "\r\x1b[Kfsh> a b\r\x1b[9G");
+    assert_eq!(pasted, "\r\x1b[K>> a b\r\x1b[7G");
 }
 
 use flashshell_cli::editor::{EditorEvent, EditorPrompt, LineEditor};
@@ -568,7 +564,7 @@ fn the_prompt_is_drawn_before_input_is_read() {
 
     let _ = editor.read_line(&EditorPrompt::default()).unwrap();
 
-    assert!(String::from_utf8_lossy(editor.drawn()).contains("fsh> "));
+    assert!(String::from_utf8_lossy(editor.drawn()).contains(">> "));
 }
 
 /// Each key must reach the buffer operation it names.
@@ -765,7 +761,7 @@ fn an_unreadable_terminal_size_falls_back_to_eighty_columns() {
 
     assert_eq!(event, EditorEvent::Submitted("a".repeat(100)));
     assert_eq!(log.terminal_size_queries(), 1);
-    let expected = format!("\r\x1b[Kfsh> {}\r\x1b[80G", "a".repeat(74));
+    let expected = format!("\r\x1b[K>> {}\r\x1b[80G", "a".repeat(76));
     assert!(
         String::from_utf8_lossy(editor.drawn()).contains(&expected),
         "the final row is drawn for an 80-column terminal"

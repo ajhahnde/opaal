@@ -153,7 +153,7 @@ impl Pty {
 
     /// Wait for a freshly drawn prompt after `mark`, then let it settle.
     fn await_prompt(&self, mark: usize) {
-        self.expect_from(mark, "fsh> ");
+        self.expect_from(mark, ">> ");
         thread::sleep(SETTLE);
     }
 
@@ -406,7 +406,7 @@ fn assert_notice_precedes_prompt(rendered: &str, notice: &str) {
         .find(notice)
         .unwrap_or_else(|| panic!("missing notice {notice:?} in:\n{rendered}"));
     assert!(
-        rendered[notice_start + notice.len()..].contains("fsh> "),
+        rendered[notice_start + notice.len()..].contains(">> "),
         "the next prompt must follow {notice:?}; rendered:\n{rendered}"
     );
 }
@@ -415,7 +415,7 @@ fn assert_notice_precedes_prompt(rendered: &str, notice: &str) {
 fn draws_the_primary_prompt_and_runs_a_command() {
     let cwd = unique_dir("prompt");
     let mut session = interactive(&cwd);
-    session.expect("fsh> ");
+    session.expect(">> ");
 
     session.send(b"pwd");
     session.send(ENTER);
@@ -433,7 +433,7 @@ fn draws_the_primary_prompt_and_runs_a_command() {
 fn shows_the_continuation_prompt_for_incomplete_input() {
     let cwd = unique_dir("continuation");
     let mut session = interactive(&cwd);
-    session.expect("fsh> ");
+    session.expect(">> ");
 
     session.send(b"if true {");
     session.send(ENTER);
@@ -478,7 +478,7 @@ fn ctrl_c_cancels_the_line_and_keeps_the_session_alive() {
 fn ctrl_d_on_an_empty_buffer_exits_successfully() {
     let cwd = unique_dir("ctrld");
     let mut session = interactive(&cwd);
-    session.expect("fsh> ");
+    session.expect(">> ");
 
     session.send(CTRL_D);
     assert_eq!(session.wait_code(), 0);
@@ -488,7 +488,7 @@ fn ctrl_d_on_an_empty_buffer_exits_successfully() {
 fn the_exit_builtin_propagates_its_status() {
     let cwd = unique_dir("exit");
     let mut session = interactive(&cwd);
-    session.expect("fsh> ");
+    session.expect(">> ");
 
     session.send(b"exit 7");
     session.send(ENTER);
@@ -499,7 +499,7 @@ fn the_exit_builtin_propagates_its_status() {
 fn a_runtime_error_is_reported_and_the_session_recovers() {
     let cwd = unique_dir("recovery");
     let mut session = interactive(&cwd);
-    session.expect("fsh> ");
+    session.expect(">> ");
 
     session.send(b"$missing");
     session.send(ENTER);
@@ -515,7 +515,7 @@ fn a_runtime_error_is_reported_and_the_session_recovers() {
 fn the_session_survives_a_terminal_resize() {
     let cwd = unique_dir("resize");
     let mut session = interactive(&cwd);
-    session.expect("fsh> ");
+    session.expect(">> ");
 
     session.resize(40, 100);
     session.send(b"exit 3");
@@ -699,7 +699,7 @@ fn a_background_command_returns_a_prompt_and_completes_after_foreground_work() {
     let completion_mark = session.mark();
     session.send(CTRL_C);
     session.expect_from(completion_mark, "[1] Done     sleep 1");
-    session.expect_from(completion_mark, "fsh> ");
+    session.expect_from(completion_mark, ">> ");
     let completion = session.rendered_from(completion_mark);
     assert_notice_precedes_prompt(&completion, "[1] Done     sleep 1");
     assert_eq!(completion.matches("[1] Done").count(), 1);
@@ -730,7 +730,7 @@ fn a_background_pipeline_has_one_job_identity_and_one_completion_notice() {
     session.send(command.as_bytes());
     session.send(ENTER);
     session.expect_from(launch_mark, "[1] ");
-    session.expect_from(launch_mark, "fsh> ");
+    session.expect_from(launch_mark, ">> ");
     let launch = session.rendered_from(launch_mark);
     let groups = await_group_reports(&cwd, 2);
     assert_eq!(groups[0], groups[1], "both stages share one process group");
@@ -749,7 +749,7 @@ fn a_background_pipeline_has_one_job_identity_and_one_completion_notice() {
     let completion_mark = session.mark();
     session.send(CTRL_C);
     session.expect_from(completion_mark, "[1] Done");
-    session.expect_from(completion_mark, "fsh> ");
+    session.expect_from(completion_mark, ">> ");
     let completion = session.rendered_from(completion_mark);
     assert_notice_precedes_prompt(&completion, "[1] Done");
     assert_eq!(
@@ -801,7 +801,7 @@ fn a_background_and_chain_reaches_an_internal_command_before_completion() {
     let completion_mark = session.mark();
     session.send(CTRL_C);
     session.expect_from(completion_mark, "[1] Done");
-    session.expect_from(completion_mark, "fsh> ");
+    session.expect_from(completion_mark, ">> ");
     let completion = session.rendered_from(completion_mark);
     assert_notice_precedes_prompt(&completion, "[1] Done");
 
@@ -841,7 +841,7 @@ fn a_background_or_chain_short_circuits_before_its_internal_command() {
     let completion_mark = session.mark();
     session.send(CTRL_C);
     session.expect_from(completion_mark, "[1] Done");
-    session.expect_from(completion_mark, "fsh> ");
+    session.expect_from(completion_mark, ">> ");
     let result = session.rendered_from(result_mark);
     let component = cwd.file_name().unwrap().to_string_lossy();
     assert!(
@@ -982,7 +982,7 @@ fn an_external_grandchild_restores_the_default_hangup_disposition() {
     let completion_mark = session.mark();
     session.send(CTRL_C);
     session.expect_from(completion_mark, "[1] Done");
-    session.expect_from(completion_mark, "fsh> ");
+    session.expect_from(completion_mark, ">> ");
     let survived = cwd.join(format!("{}.survived", grandchild.as_raw_nonzero()));
     assert!(
         !survived.exists(),
@@ -1035,7 +1035,7 @@ fn a_completion_notice_never_appears_inside_an_active_edit_buffer() {
     let completion_mark = session.mark();
     session.send(CTRL_C);
     session.expect_from(completion_mark, "[1] Done");
-    session.expect_from(completion_mark, "fsh> ");
+    session.expect_from(completion_mark, ">> ");
     let completion = session.rendered_from(completion_mark);
     assert_notice_precedes_prompt(&completion, "[1] Done");
     assert_eq!(completion.matches("[1] Done").count(), 1);
