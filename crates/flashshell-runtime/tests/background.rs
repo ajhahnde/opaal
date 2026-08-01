@@ -172,6 +172,84 @@ fn every_observer_is_ready_before_a_child_can_be_assigned() {
 }
 
 #[test]
+fn serialized_observation_rotates_members_without_overlapping_waits() {
+    let clock = Arc::new(FakeClock::at(15));
+    let (event_sender, event_receiver) = mpsc::channel();
+    let mut slots = ObserverSlots::prepare_serialized(2, clock, event_sender)
+        .expect("the job observer should become ready");
+    let (first_child, first) = controlled_child(45);
+    let (second_child, second) = controlled_child(46);
+
+    slots
+        .assign(ObserverAssignment::new(
+            job(5),
+            process(45),
+            first_child,
+            Instant::from_nanos(1),
+        ))
+        .expect("the job observer should accept its first child");
+    assert_eq!(first.wait_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(second.wait_calls.load(Ordering::SeqCst), 0);
+    slots
+        .assign(ObserverAssignment::new(
+            job(5),
+            process(46),
+            second_child,
+            Instant::from_nanos(2),
+        ))
+        .expect("the job observer should accept its second child");
+
+    assert_eq!(first.wait_entries.recv().expect("first member wait"), 1);
+    assert_eq!(second.wait_calls.load(Ordering::SeqCst), 0);
+    first
+        .transitions
+        .send(Ok(ProcessTransition::Stopped { signal: 19 }))
+        .expect("stop the first member");
+    assert_eq!(
+        event_receiver.recv().expect("first stop"),
+        ChildObservation::Stopped {
+            job: job(5),
+            process: process(45),
+            signal: 19,
+        }
+    );
+
+    assert_eq!(second.wait_entries.recv().expect("second member wait"), 1);
+    second
+        .transitions
+        .send(Ok(ProcessTransition::Stopped { signal: 20 }))
+        .expect("stop the second member");
+    assert_eq!(
+        event_receiver.recv().expect("second stop"),
+        ChildObservation::Stopped {
+            job: job(5),
+            process: process(46),
+            signal: 20,
+        }
+    );
+
+    assert_eq!(first.wait_entries.recv().expect("rotated first wait"), 2);
+    first
+        .transitions
+        .send(Ok(ProcessTransition::Completed(ProcessStatus::Exited(0))))
+        .expect("complete the first member");
+    assert!(matches!(
+        event_receiver.recv().expect("first completion"),
+        ChildObservation::Completed { process: observed, .. } if observed == process(45)
+    ));
+    assert_eq!(second.wait_entries.recv().expect("rotated second wait"), 2);
+    second
+        .transitions
+        .send(Ok(ProcessTransition::Completed(ProcessStatus::Exited(0))))
+        .expect("complete the second member");
+    slots.shutdown().expect("the job observer should join");
+    assert!(matches!(
+        event_receiver.recv().expect("second completion"),
+        ChildObservation::Completed { process: observed, .. } if observed == process(46)
+    ));
+}
+
+#[test]
 fn completion_is_waited_and_queued_without_a_coordinator_drain() {
     let clock = Arc::new(FakeClock::at(20));
     let (event_sender, event_receiver) = mpsc::channel();

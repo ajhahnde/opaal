@@ -165,8 +165,17 @@ impl Error for ObserverShutdownError {}
 
 /// Prepared observer workers awaiting source-ordered child assignments.
 pub struct ObserverSlots {
-    assignments: VecDeque<mpsc::SyncSender<ObserverAssignment>>,
+    assignments: ObserverAssignmentSlots,
     workers: Vec<thread::JoinHandle<()>>,
+}
+
+enum ObserverAssignmentSlots {
+    #[cfg(not(target_os = "redox"))]
+    PerChild(VecDeque<mpsc::SyncSender<ObserverAssignment>>),
+    PerJob {
+        sender: Option<mpsc::Sender<ObserverAssignment>>,
+        remaining: usize,
+    },
 }
 
 impl ObserverSlots {
@@ -175,6 +184,22 @@ impl ObserverSlots {
     /// Failure closes every assignment channel and joins every worker created
     /// before the failure, so the caller can return before creating a child.
     pub fn prepare(
+        count: usize,
+        clock: Arc<dyn Clock>,
+        events: mpsc::Sender<ChildObservation>,
+    ) -> Result<Self, ObserverPrepareError> {
+        #[cfg(target_os = "redox")]
+        {
+            Self::prepare_serialized(count, clock, events)
+        }
+        #[cfg(not(target_os = "redox"))]
+        {
+            Self::prepare_parallel(count, clock, events)
+        }
+    }
+
+    #[cfg(not(target_os = "redox"))]
+    fn prepare_parallel(
         count: usize,
         clock: Arc<dyn Clock>,
         events: mpsc::Sender<ChildObservation>,
@@ -221,15 +246,58 @@ impl ObserverSlots {
         }
 
         Ok(Self {
-            assignments,
+            assignments: ObserverAssignmentSlots::PerChild(assignments),
             workers,
+        })
+    }
+
+    /// Prepare one worker that observes every child without overlapping waits.
+    ///
+    /// Redox routes child waits through one process-level interface and can
+    /// strand one of multiple simultaneous blocking waits issued by sibling
+    /// threads. Collecting the complete job before observing it preserves child
+    /// ownership and transition reporting while ensuring only one wait is live
+    /// for that job. A nonterminal transition rotates the member to the back,
+    /// so an aggregate stop can still be observed across the complete pipeline.
+    #[doc(hidden)]
+    pub fn prepare_serialized(
+        count: usize,
+        clock: Arc<dyn Clock>,
+        events: mpsc::Sender<ChildObservation>,
+    ) -> Result<Self, ObserverPrepareError> {
+        let (assignment_sender, assignment_receiver) = mpsc::channel();
+        let (ready_sender, ready_receiver) = mpsc::sync_channel(0);
+        let worker = thread::Builder::new()
+            .name("flashshell-child-observer-0".to_owned())
+            .spawn(move || {
+                if ready_sender.send(()).is_err() {
+                    return;
+                }
+                observe_job(count, assignment_receiver, clock.as_ref(), &events);
+            })
+            .map_err(ObserverPrepareError::ThreadSpawn)?;
+        if ready_receiver.recv().is_err() {
+            let _ = worker.join();
+            return Err(ObserverPrepareError::WorkerUnavailable);
+        }
+
+        Ok(Self {
+            assignments: ObserverAssignmentSlots::PerJob {
+                sender: Some(assignment_sender),
+                remaining: count,
+            },
+            workers: vec![worker],
         })
     }
 
     /// The number of ready workers that have not received a child.
     #[must_use]
     pub fn remaining(&self) -> usize {
-        self.assignments.len()
+        match &self.assignments {
+            #[cfg(not(target_os = "redox"))]
+            ObserverAssignmentSlots::PerChild(assignments) => assignments.len(),
+            ObserverAssignmentSlots::PerJob { remaining, .. } => *remaining,
+        }
     }
 
     /// Transfer one child to the next source-ordered observer.
@@ -237,10 +305,29 @@ impl ObserverSlots {
     /// A failed transfer returns the complete assignment so the coordinator can
     /// terminate and wait the child without losing ownership.
     pub fn assign(&mut self, assignment: ObserverAssignment) -> Result<(), ObserverAssignment> {
-        let Some(sender) = self.assignments.pop_front() else {
-            return Err(assignment);
-        };
-        sender.send(assignment).map_err(|error| error.0)
+        match &mut self.assignments {
+            #[cfg(not(target_os = "redox"))]
+            ObserverAssignmentSlots::PerChild(assignments) => {
+                let Some(sender) = assignments.pop_front() else {
+                    return Err(assignment);
+                };
+                sender.send(assignment).map_err(|error| error.0)
+            }
+            ObserverAssignmentSlots::PerJob { sender, remaining } => {
+                if *remaining == 0 {
+                    return Err(assignment);
+                }
+                let Some(active) = sender.as_ref() else {
+                    return Err(assignment);
+                };
+                active.send(assignment).map_err(|error| error.0)?;
+                *remaining -= 1;
+                if *remaining == 0 {
+                    sender.take();
+                }
+                Ok(())
+            }
+        }
     }
 
     /// Close idle assignment channels and join every observer worker.
@@ -249,7 +336,13 @@ impl ObserverSlots {
     /// shutdown; a worker assigned a live child remains responsible for waiting
     /// it.
     pub fn shutdown(mut self) -> Result<(), ObserverShutdownError> {
-        self.assignments.clear();
+        match &mut self.assignments {
+            #[cfg(not(target_os = "redox"))]
+            ObserverAssignmentSlots::PerChild(assignments) => assignments.clear(),
+            ObserverAssignmentSlots::PerJob { sender, .. } => {
+                sender.take();
+            }
+        }
         let mut panicked = false;
         for worker in self.workers.drain(..) {
             panicked |= worker.join().is_err();
@@ -790,11 +883,12 @@ impl BackgroundJobs {
 
     /// Start and observe one exact all-external foreground pipeline.
     ///
-    /// Every observer is ready before process creation. Child handles remain
-    /// directly owned through terminal handoff and complete pure-job
-    /// registration, then transfer in source order before the record is
-    /// published. Normal completion is consumed without a notice; an aggregate
-    /// stop returns to the prompt with one addressable foreground record.
+    /// On ordinary targets every observer is ready before process creation. On
+    /// Redox the session thread retains the children and observes them inline.
+    /// Either way, child handles remain directly owned through terminal handoff
+    /// and complete pure-job registration. Normal completion is consumed
+    /// without a notice; an aggregate stop returns to the prompt with one
+    /// addressable foreground record.
     pub(crate) fn start_foreground(
         &mut self,
         plan: &ExecutionPlan,
@@ -806,23 +900,36 @@ impl BackgroundJobs {
         job.begin_starting()
             .map_err(|error| background_state(error, plan))?;
 
-        let mut observers = ObserverSlots::prepare(
-            plan.stages().len(),
-            Arc::clone(&self.clock),
-            self.event_sender.clone(),
-        )
-        .map_err(|error| {
-            RuntimeError::new(
-                RuntimeErrorKind::BackgroundObserverUnavailable {
-                    message: error.to_string(),
-                },
-                plan.span(),
+        // Redox child notifications are process-scoped. Waiting from a helper
+        // thread can strand a fast foreground child even when only one wait is
+        // live, so foreground transitions stay on the spawning session thread.
+        // A stopped job is transferred to a serialized worker before the prompt
+        // returns; background jobs and other targets keep prepared observers.
+        let mut observers = if cfg!(target_os = "redox") {
+            None
+        } else {
+            Some(
+                ObserverSlots::prepare(
+                    plan.stages().len(),
+                    Arc::clone(&self.clock),
+                    self.event_sender.clone(),
+                )
+                .map_err(|error| {
+                    RuntimeError::new(
+                        RuntimeErrorKind::BackgroundObserverUnavailable {
+                            message: error.to_string(),
+                        },
+                        plan.span(),
+                    )
+                })?,
             )
-        })?;
+        };
         let started = match start_background_pipeline(plan, platform, self.clock.as_ref()) {
             Ok(started) => started,
             Err(error) => {
-                let _ = observers.shutdown();
+                if let Some(observers) = observers.take() {
+                    let _ = observers.shutdown();
+                }
                 return Err(error);
             }
         };
@@ -833,7 +940,9 @@ impl BackgroundJobs {
             Ok(foreground) => foreground,
             Err(error) => {
                 cleanup_members(members);
-                let _ = observers.shutdown();
+                if let Some(observers) = observers.take() {
+                    let _ = observers.shutdown();
+                }
                 return Err(error);
             }
         };
@@ -843,7 +952,9 @@ impl BackgroundJobs {
         for member in &members {
             if let Err(error) = job.add_process(member.process()) {
                 cleanup_members(members);
-                let _ = observers.shutdown();
+                if let Some(observers) = observers.take() {
+                    let _ = observers.shutdown();
+                }
                 let _ = release_foreground(foreground, plan);
                 return Err(background_state(error, plan));
             }
@@ -851,17 +962,27 @@ impl BackgroundJobs {
             member_started.insert(member.process(), member.started_at());
         }
 
+        let mut inline_assignments = VecDeque::new();
         while let Some(member) = members.pop_front() {
             let (process, child, started_at) = member.into_parts();
             let assignment = ObserverAssignment::new(job_id, process, child, started_at);
-            if let Err(assignment) = observers.assign(assignment) {
+            let assigned = match observers.as_mut() {
+                Some(observers) => observers.assign(assignment),
+                None => {
+                    inline_assignments.push_back(assignment);
+                    Ok(())
+                }
+            };
+            if let Err(assignment) = assigned {
                 // Earlier transfers can be reclaimed only through the common
                 // group. Force is cleanup for failed publication, never a user
                 // escalation policy.
                 let _ = platform.signal_process_group(group, JobSignal::Kill);
                 cleanup_assignment(assignment);
                 cleanup_members(members);
-                let _ = observers.shutdown();
+                if let Some(observers) = observers.take() {
+                    let _ = observers.shutdown();
+                }
                 let _ = release_foreground(foreground, plan);
                 return Err(RuntimeError::new(
                     RuntimeErrorKind::BackgroundAssignmentUnavailable,
@@ -872,7 +993,12 @@ impl BackgroundJobs {
 
         if let Err(error) = job.finish_starting(JobPlacement::Foreground) {
             let _ = platform.signal_process_group(group, JobSignal::Kill);
-            let _ = observers.shutdown();
+            for assignment in inline_assignments {
+                cleanup_assignment(assignment);
+            }
+            if let Some(observers) = observers.take() {
+                let _ = observers.shutdown();
+            }
             let _ = release_foreground(foreground, plan);
             return Err(background_state(error, plan));
         }
@@ -892,11 +1018,16 @@ impl BackgroundJobs {
                 observation_failed: false,
                 observation_message: None,
                 resume_requested: false,
-                observers: Some(observers),
+                observers,
             },
         );
 
-        let outcome = self.wait_for_foreground(job_id).map_err(|error| {
+        let outcome = if cfg!(target_os = "redox") {
+            self.wait_for_foreground_inline(job_id, inline_assignments, platform)
+        } else {
+            self.wait_for_foreground(job_id)
+        }
+        .map_err(|error| {
             RuntimeError::new(
                 RuntimeErrorKind::ForegroundObservation {
                     message: error.to_string(),
@@ -957,6 +1088,107 @@ impl BackgroundJobs {
                 .expect("the coordinator retains its observation sender");
             self.apply_observation(observation);
         }
+    }
+
+    /// Observe a Redox foreground job on the session thread that spawned it.
+    ///
+    /// Once every live member is stopped, ownership moves to the ordinary
+    /// serialized worker before the prompt returns. Completed members are
+    /// removed as their terminal observations are applied.
+    fn wait_for_foreground_inline(
+        &mut self,
+        job: JobId,
+        mut assignments: VecDeque<ObserverAssignment>,
+        platform: &dyn Platform,
+    ) -> Result<ForegroundJobOutcome, JobCommandError> {
+        while let Some(assignment) = assignments.pop_front() {
+            let process = assignment.process;
+            let retained =
+                observe_one_transition(assignment, self.clock.as_ref(), &self.event_sender)
+                    .map_err(|()| JobCommandError::Observation {
+                        job,
+                        message: "the foreground observation channel closed".to_owned(),
+                    })?;
+
+            loop {
+                let observation = self
+                    .event_receiver
+                    .recv()
+                    .expect("the coordinator retains its observation sender");
+                let observed_member = observation_job_process(&observation);
+                self.apply_observation(observation);
+                if observed_member == (job, process) {
+                    break;
+                }
+            }
+            if let Some(assignment) = retained {
+                assignments.push_back(assignment);
+            }
+
+            let record = self
+                .records
+                .get(&job)
+                .expect("the managed foreground record is published");
+            if record.observation_failed {
+                let group = record.group;
+                let message = record
+                    .observation_message
+                    .clone()
+                    .unwrap_or_else(|| "the observation was abandoned".to_owned());
+                let _ = platform.signal_process_group(group, JobSignal::Kill);
+                for assignment in assignments {
+                    cleanup_assignment(assignment);
+                }
+                return Err(JobCommandError::Observation { job, message });
+            }
+            if let Some(status) = record.completion.clone() {
+                debug_assert!(assignments.is_empty());
+                self.consume_waited_completion(job)?;
+                return Ok(ForegroundJobOutcome::Completed(status));
+            }
+            if matches!(record.job.state(), JobState::Stopped { .. }) {
+                let group = record.group;
+                let mut observers = ObserverSlots::prepare_serialized(
+                    assignments.len(),
+                    Arc::clone(&self.clock),
+                    self.event_sender.clone(),
+                )
+                .map_err(|error| {
+                    let _ = platform.signal_process_group(group, JobSignal::Kill);
+                    for assignment in assignments.drain(..) {
+                        cleanup_assignment(assignment);
+                    }
+                    JobCommandError::Observation {
+                        job,
+                        message: error.to_string(),
+                    }
+                })?;
+                while let Some(assignment) = assignments.pop_front() {
+                    if let Err(assignment) = observers.assign(assignment) {
+                        let _ = platform.signal_process_group(group, JobSignal::Kill);
+                        cleanup_assignment(assignment);
+                        for assignment in assignments {
+                            cleanup_assignment(assignment);
+                        }
+                        let _ = observers.shutdown();
+                        return Err(JobCommandError::Observation {
+                            job,
+                            message: "a stopped child could not reach its observer".to_owned(),
+                        });
+                    }
+                }
+                self.records
+                    .get_mut(&job)
+                    .expect("the stopped foreground record remains published")
+                    .observers = Some(observers);
+                return Ok(ForegroundJobOutcome::Stopped(job));
+            }
+        }
+
+        Err(JobCommandError::Observation {
+            job,
+            message: "foreground observation ended before the job completed".to_owned(),
+        })
     }
 
     pub(crate) fn acknowledge(&mut self, notice: JobNoticeId) -> Result<(), JobNoticeError> {
@@ -1771,6 +2003,7 @@ fn cleanup_child(mut child: Box<dyn ChildProcess>) {
     let _ = child.wait();
 }
 
+#[cfg(not(target_os = "redox"))]
 fn close_and_join(
     assignments: VecDeque<mpsc::SyncSender<ObserverAssignment>>,
     workers: Vec<thread::JoinHandle<()>>,
@@ -1781,75 +2014,121 @@ fn close_and_join(
     }
 }
 
-fn observe_child(
-    assignment: ObserverAssignment,
+fn observe_job(
+    count: usize,
+    assignments: mpsc::Receiver<ObserverAssignment>,
     clock: &dyn Clock,
     events: &mpsc::Sender<ChildObservation>,
 ) {
-    let ObserverAssignment {
-        job,
-        process,
-        mut child,
-        started_at: _started_at,
-    } = assignment;
+    let mut children = VecDeque::with_capacity(count);
+    for _ in 0..count {
+        let Ok(assignment) = assignments.recv() else {
+            for assignment in children {
+                cleanup_assignment(assignment);
+            }
+            return;
+        };
+        children.push_back(assignment);
+    }
 
+    while let Some(assignment) = children.pop_front() {
+        match observe_one_transition(assignment, clock, events) {
+            Ok(Some(assignment)) => children.push_back(assignment),
+            Ok(None) => {}
+            Err(()) => {
+                for assignment in children {
+                    cleanup_assignment(assignment);
+                }
+                return;
+            }
+        }
+    }
+}
+
+fn observation_job_process(observation: &ChildObservation) -> (JobId, ProcessId) {
+    match observation {
+        ChildObservation::Stopped { job, process, .. }
+        | ChildObservation::Continued { job, process }
+        | ChildObservation::Completed { job, process, .. }
+        | ChildObservation::Failed { job, process, .. } => (*job, *process),
+    }
+}
+
+#[cfg(not(target_os = "redox"))]
+fn observe_child(
+    mut assignment: ObserverAssignment,
+    clock: &dyn Clock,
+    events: &mpsc::Sender<ChildObservation>,
+) {
     loop {
-        match child.wait_for_transition() {
-            Ok(ProcessTransition::Stopped { signal }) => {
-                if events
-                    .send(ChildObservation::Stopped {
-                        job,
-                        process,
-                        signal,
-                    })
-                    .is_err()
-                {
-                    let _ = child.terminate();
-                    let _ = child.wait();
-                    return;
-                }
+        match observe_one_transition(assignment, clock, events) {
+            Ok(Some(returned)) => assignment = returned,
+            Ok(None) | Err(()) => return,
+        }
+    }
+}
+
+fn observe_one_transition(
+    mut assignment: ObserverAssignment,
+    clock: &dyn Clock,
+    events: &mpsc::Sender<ChildObservation>,
+) -> Result<Option<ObserverAssignment>, ()> {
+    let job = assignment.job;
+    let process = assignment.process;
+    match assignment.child.wait_for_transition() {
+        Ok(ProcessTransition::Stopped { signal }) => {
+            if events
+                .send(ChildObservation::Stopped {
+                    job,
+                    process,
+                    signal,
+                })
+                .is_err()
+            {
+                cleanup_assignment(assignment);
+                return Err(());
             }
-            Ok(ProcessTransition::Continued) => {
-                if events
-                    .send(ChildObservation::Continued { job, process })
-                    .is_err()
-                {
-                    let _ = child.terminate();
-                    let _ = child.wait();
-                    return;
-                }
+            Ok(Some(assignment))
+        }
+        Ok(ProcessTransition::Continued) => {
+            if events
+                .send(ChildObservation::Continued { job, process })
+                .is_err()
+            {
+                cleanup_assignment(assignment);
+                return Err(());
             }
-            Ok(ProcessTransition::Completed(status)) => {
-                let _ = events.send(ChildObservation::Completed {
+            Ok(Some(assignment))
+        }
+        Ok(ProcessTransition::Completed(status)) => {
+            events
+                .send(ChildObservation::Completed {
                     job,
                     process,
                     status,
                     observed_at: clock.now(),
-                });
-                return;
-            }
-            Err(error) => {
-                let _ = child.terminate();
-                match child.wait() {
-                    Ok(status) => {
-                        let _ = events.send(ChildObservation::Completed {
-                            job,
-                            process,
-                            status,
-                            observed_at: clock.now(),
-                        });
-                    }
-                    Err(cleanup) => {
-                        let _ = events.send(ChildObservation::Failed {
-                            job,
-                            process,
-                            error,
-                            cleanup: Some(cleanup),
-                        });
-                    }
-                }
-                return;
-            }
+                })
+                .map_err(|_| ())?;
+            Ok(None)
+        }
+        Err(error) => {
+            let _ = assignment.child.terminate();
+            let observation = match assignment.child.wait() {
+                Ok(status) => ChildObservation::Completed {
+                    job,
+                    process,
+                    status,
+                    observed_at: clock.now(),
+                },
+                Err(cleanup) => ChildObservation::Failed {
+                    job,
+                    process,
+                    error,
+                    cleanup: Some(cleanup),
+                },
+            };
+            events.send(observation).map_err(|_| ())?;
+            Ok(None)
         }
     }
 }
