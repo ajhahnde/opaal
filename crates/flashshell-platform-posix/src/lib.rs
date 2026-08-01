@@ -145,7 +145,14 @@ impl ChildProcess for PosixChild {
         if let Some(status) = self.completed {
             return Ok(ProcessTransition::Completed(status));
         }
-        self.observe(libc::WUNTRACED | libc::WCONTINUED)
+        #[cfg(target_os = "macos")]
+        let transition = child_wait::observe_transition(self.pid()?)?;
+        #[cfg(not(target_os = "macos"))]
+        let transition = child_wait::observe(self.pid()?, libc::WUNTRACED | libc::WCONTINUED)?;
+        if let ProcessTransition::Completed(status) = transition {
+            self.completed = Some(status);
+        }
+        Ok(transition)
     }
 
     fn terminate(&mut self) -> Result<(), TerminateError> {
@@ -161,6 +168,15 @@ impl ChildProcess for PosixChild {
 }
 
 impl PosixChild {
+    fn pid(&self) -> Result<libc::pid_t, WaitError> {
+        libc::pid_t::try_from(self.child.id()).map_err(|_| {
+            WaitError::new(
+                io::ErrorKind::InvalidInput,
+                "the child identifier exceeds the POSIX process identifier range",
+            )
+        })
+    }
+
     /// Reap the child for one transition, caching a completion.
     ///
     /// The adapter reaps for itself rather than through `std::process::Child`,
@@ -168,12 +184,7 @@ impl PosixChild {
     /// it. Nothing else reaps the pid, so the recorded status is the only one
     /// the child ever produces.
     fn observe(&mut self, flags: libc::c_int) -> Result<ProcessTransition, WaitError> {
-        let pid = libc::pid_t::try_from(self.child.id()).map_err(|_| {
-            WaitError::new(
-                io::ErrorKind::InvalidInput,
-                "the child identifier exceeds the POSIX process identifier range",
-            )
-        })?;
+        let pid = self.pid()?;
         let transition = child_wait::observe(pid, flags)?;
         if let ProcessTransition::Completed(status) = transition {
             self.completed = Some(status);
@@ -1163,6 +1174,8 @@ mod process_signals {
 mod child_wait {
     use std::ffi::c_int;
     use std::io;
+    #[cfg(target_os = "macos")]
+    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 
     use flashshell_platform::{ProcessStatus, ProcessTransition, WaitError};
 
@@ -1184,6 +1197,126 @@ mod child_wait {
             return Err(WaitError::new(error.kind(), error.to_string()));
         }
         decode(status)
+    }
+
+    #[cfg(target_os = "macos")]
+    pub(super) fn observe_transition(pid: c_int) -> Result<ProcessTransition, WaitError> {
+        if let Some(transition) = observe_nonblocking(pid)? {
+            return Ok(transition);
+        }
+
+        // Darwin's blocking waitpid can remain asleep when a terminal-stopped
+        // child is resumed by another process. EVFILT_PROC supplies the missing
+        // wakeup without a signal handler, timer, or polling loop; waitpid still
+        // remains the sole consumer and classifier of child status.
+        // SAFETY: kqueue takes no arguments and returns a new descriptor or -1.
+        let descriptor = unsafe { libc::kqueue() };
+        if descriptor == -1 {
+            let error = io::Error::last_os_error();
+            return Err(WaitError::new(error.kind(), error.to_string()));
+        }
+        // SAFETY: the descriptor was just created successfully and ownership
+        // transfers exactly once into this guard.
+        let queue = unsafe { OwnedFd::from_raw_fd(descriptor) };
+        // SAFETY: an all-zero kevent is a valid base that is fully initialized
+        // below before the kernel reads it.
+        let mut change: libc::kevent = unsafe { std::mem::zeroed() };
+        change.ident = pid as libc::uintptr_t;
+        change.filter = libc::EVFILT_PROC;
+        change.flags = (libc::EV_ADD | libc::EV_ENABLE | libc::EV_CLEAR) as libc::c_ushort;
+        change.fflags = libc::NOTE_SIGNAL | libc::NOTE_EXIT;
+
+        // SAFETY: change points to one initialized event, the output list is
+        // absent with count zero, and the queue descriptor remains owned.
+        let registered = unsafe {
+            libc::kevent(
+                queue.as_raw_fd(),
+                &raw const change,
+                1,
+                std::ptr::null_mut(),
+                0,
+                std::ptr::null(),
+            )
+        };
+        if registered == -1 {
+            let error = io::Error::last_os_error();
+            if error.raw_os_error() == Some(libc::ESRCH) {
+                // A short-lived child can exit between the nonblocking wait and
+                // registration. It still owns a waitable terminal status even
+                // though kqueue can no longer attach to the live process.
+                return observe(pid, libc::WUNTRACED | libc::WCONTINUED);
+            }
+            return Err(WaitError::new(error.kind(), error.to_string()));
+        }
+
+        loop {
+            if let Some(transition) = observe_nonblocking(pid)? {
+                return Ok(transition);
+            }
+
+            // SAFETY: kevent initializes every returned event field; zeroing
+            // the destination first also leaves a valid value on failure.
+            let mut event: libc::kevent = unsafe { std::mem::zeroed() };
+            // SAFETY: event points to space for exactly one result, no change
+            // list is supplied, and a null timeout requests an event-driven
+            // blocking wait.
+            let received = unsafe {
+                libc::kevent(
+                    queue.as_raw_fd(),
+                    std::ptr::null(),
+                    0,
+                    &raw mut event,
+                    1,
+                    std::ptr::null(),
+                )
+            };
+            if received == 1 {
+                if event.flags & libc::EV_ERROR as libc::c_ushort != 0 {
+                    let code = i32::try_from(event.data).unwrap_or(libc::EINVAL);
+                    let error = io::Error::from_raw_os_error(code);
+                    return Err(WaitError::new(error.kind(), error.to_string()));
+                }
+                continue;
+            }
+            if received == 0 {
+                return Err(WaitError::new(
+                    io::ErrorKind::Other,
+                    "kqueue returned no process event without a timeout",
+                ));
+            }
+            let error = io::Error::last_os_error();
+            if received == -1 && error.kind() == io::ErrorKind::Interrupted {
+                continue;
+            }
+            return Err(WaitError::new(error.kind(), error.to_string()));
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn observe_nonblocking(pid: c_int) -> Result<Option<ProcessTransition>, WaitError> {
+        let mut status: c_int = 0;
+        loop {
+            // SAFETY: waitpid writes only through the status pointer, which
+            // points at a live local for the whole call.
+            let result = unsafe {
+                libc::waitpid(
+                    pid,
+                    &raw mut status,
+                    libc::WNOHANG | libc::WUNTRACED | libc::WCONTINUED,
+                )
+            };
+            if result == pid {
+                return decode(status).map(Some);
+            }
+            if result == 0 {
+                return Ok(None);
+            }
+            let error = io::Error::last_os_error();
+            if error.kind() == io::ErrorKind::Interrupted {
+                continue;
+            }
+            return Err(WaitError::new(error.kind(), error.to_string()));
+        }
     }
 
     /// Classify one raw wait status.

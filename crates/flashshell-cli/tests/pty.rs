@@ -711,6 +711,99 @@ fn job_builtins_stop_list_bg_and_fg_a_real_foreground_job() {
 }
 
 #[test]
+fn an_externally_continued_job_reports_running_at_a_real_terminal() {
+    let cwd = unique_dir("job-external-continue");
+    let report = cwd.join("report.bin");
+    let release = cwd.join("release");
+    let report_text = report.to_str().expect("test report path is UTF-8");
+    let release_text = release.to_str().expect("test release path is UTF-8");
+    let cwd_text = cwd.to_str().expect("test directory path is UTF-8");
+    let environment = [
+        ("FLASH_PROBE_REPORT", report_text),
+        ("FLASH_PROBE_GROUP_REPORT", cwd_text),
+        ("FLASH_PROBE_HOLD_UNTIL", release_text),
+    ];
+    let mut session = Pty::spawn(&["--no-config", "--no-history"], &environment, &cwd);
+    let _release_on_drop = ReleaseOnDrop(release.clone());
+    session.await_prompt(0);
+
+    let command = format!("^{PROCESS_OBSERVER}");
+    let stop_mark = session.mark();
+    session.send(command.as_bytes());
+    session.send(ENTER);
+    let (process, group) = await_one_process_group_report(&cwd);
+    let mut cleanup = ProcessGroupCleanup::new(group);
+
+    session.send(CTRL_Z);
+    session.expect_from(stop_mark, "[1] Stopped");
+    session.await_prompt(stop_mark);
+    assert_eq!(
+        session
+            .rendered_from(stop_mark)
+            .matches("[1] Stopped")
+            .count(),
+        1,
+        "the terminal stop must publish exactly one notice"
+    );
+
+    let continued_mark = session.mark();
+    kill_process_group(group, Signal::CONT).expect("continue the fixture from the controller");
+
+    let deadline = Instant::now() + TIMEOUT;
+    loop {
+        let jobs_mark = session.mark();
+        session.send(b"jobs");
+        session.send(ENTER);
+        session.await_prompt(jobs_mark);
+        if session
+            .rendered_from(jobs_mark)
+            .contains("%1  | running | foreground")
+        {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the externally continued job never became running:\n{}",
+            session.rendered_from(continued_mark)
+        );
+    }
+    assert_eq!(
+        session
+            .rendered_from(continued_mark)
+            .matches("[1] Stopped")
+            .count(),
+        0,
+        "an observed continuation must not republish a stale stop notice"
+    );
+
+    let completion_mark = session.mark();
+    fs::write(&release, b"complete").expect("release the continued fixture");
+    await_process_exit(process);
+
+    let deadline = Instant::now() + TIMEOUT;
+    loop {
+        let prompt_mark = session.mark();
+        session.send(b"jobs");
+        session.send(ENTER);
+        session.await_prompt(prompt_mark);
+        let completion = session.rendered_from(completion_mark);
+        if completion.contains("[1] Done") {
+            assert_notice_precedes_prompt(&completion, "[1] Done");
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the continued fixture completed without a prompt-boundary notice:\n{completion}"
+        );
+    }
+    cleanup.disarm();
+
+    session.send(b"exit 0");
+    session.send(ENTER);
+    assert_eq!(session.wait_code(), 0);
+}
+
+#[test]
 fn job_builtins_wait_consumes_an_exit_and_diagnostics_are_recoverable() {
     let cwd = unique_dir("job-wait");
     let report = cwd.join("report.bin");
