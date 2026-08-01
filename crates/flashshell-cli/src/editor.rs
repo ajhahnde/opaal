@@ -1,7 +1,7 @@
 use std::error::Error;
 use std::fmt;
 
-pub const DEFAULT_PRIMARY_PROMPT: &str = ">> ";
+pub const DEFAULT_PRIMARY_PROMPT: &str = "fsh> ";
 pub const DEFAULT_CONTINUATION_PROMPT: &str = "...> ";
 
 /// Text rendered around one interactive edit buffer.

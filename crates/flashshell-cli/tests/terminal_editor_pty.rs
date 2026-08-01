@@ -154,7 +154,7 @@ impl Pty {
     /// appears after `mark` also proves the terminal is raw again and the next
     /// keystroke will not be swallowed by the line discipline.
     fn await_prompt(&self, mark: usize) -> String {
-        self.wait_for_from(mark, ">> ")
+        self.wait_for_from(mark, "fsh> ")
     }
 
     /// Wait for a prompt drawn after the last occurrence of `needle`.
@@ -168,7 +168,7 @@ impl Pty {
         loop {
             let text = self.rendered_from(0);
             if let Some(index) = text.rfind(needle)
-                && text[index + needle.len()..].contains(">> ")
+                && text[index + needle.len()..].contains("fsh> ")
             {
                 return text;
             }
@@ -336,7 +336,7 @@ fn exit_cleanly(pty: &mut Pty) {
 #[test]
 fn backspace_edits_the_line_before_submission() {
     let mut pty = Pty::spawn(FIXTURE);
-    pty.wait_for(">> ");
+    pty.wait_for("fsh> ");
 
     // The text is sent and awaited before the erasures, and the awaited string
     // is a whole editor-drawn row. Waiting only on the submitted text would
@@ -345,7 +345,7 @@ fn backspace_edits_the_line_before_submission() {
     // the assertion would hold with raw mode off and the backspace arm gutted.
     // A prompt with the text on the same row is drawn by this editor alone.
     pty.send(b"echo hallo");
-    pty.wait_for(">> echo hallo");
+    pty.wait_for("fsh> echo hallo");
 
     pty.send(b"\x7f\x7fx\r");
 
@@ -357,7 +357,7 @@ fn backspace_edits_the_line_before_submission() {
 #[test]
 fn the_up_arrow_recalls_the_previous_submission() {
     let mut pty = Pty::spawn(FIXTURE);
-    pty.wait_for(">> ");
+    pty.wait_for("fsh> ");
     pty.send(b"echo one\r");
     pty.await_prompt_after("submitted: echo one");
 
@@ -367,7 +367,7 @@ fn the_up_arrow_recalls_the_previous_submission() {
     // editor really recalled the entry into its own buffer.
     let mark = pty.mark();
     pty.send(b"\x1b[A");
-    pty.wait_for_from(mark, ">> echo one");
+    pty.wait_for_from(mark, "fsh> echo one");
 
     pty.send(b"\r");
 
@@ -379,7 +379,7 @@ fn the_up_arrow_recalls_the_previous_submission() {
 #[test]
 fn ctrl_c_abandons_the_line_and_reprompts() {
     let mut pty = Pty::spawn(FIXTURE);
-    pty.wait_for(">> ");
+    pty.wait_for("fsh> ");
     pty.send(b"echo hallo");
     pty.wait_for("echo hallo");
 
@@ -411,13 +411,13 @@ fn ctrl_c_abandons_the_line_and_reprompts() {
 #[test]
 fn incomplete_source_draws_the_continuation_prompt() {
     let mut pty = Pty::spawn(FIXTURE);
-    pty.wait_for(">> ");
+    pty.wait_for("fsh> ");
 
     // Raw mode is held across the whole block, so the continuation line needs
     // no resynchronization before it is typed — but each row still has to be
     // seen drawn by the editor rather than echoed by the line discipline.
     pty.send(b"if true {");
-    pty.wait_for(">> if true {");
+    pty.wait_for("fsh> if true {");
     pty.send(b"\r");
 
     pty.wait_for("...> ");
