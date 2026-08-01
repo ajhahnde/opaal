@@ -28,7 +28,7 @@ impl LineEditor for RecordingEditor {
 
 #[test]
 fn session_code_consumes_editor_owned_events_without_a_terminal() {
-    let prompt = EditorPrompt::new("fsh> ", "...> ");
+    let prompt = EditorPrompt::new(">> ", "...> ");
     let mut editor = RecordingEditor {
         event: Some(EditorEvent::Submitted("echo hello".to_owned())),
         prompts: Vec::new(),
@@ -48,7 +48,7 @@ fn session_code_consumes_editor_owned_events_without_a_terminal() {
 fn default_prompt_has_stable_primary_and_continuation_text() {
     let prompt = EditorPrompt::default();
 
-    assert_eq!(prompt.primary(), "fsh> ");
+    assert_eq!(prompt.primary(), ">> ");
     assert_eq!(prompt.continuation(), "...> ");
 }
 

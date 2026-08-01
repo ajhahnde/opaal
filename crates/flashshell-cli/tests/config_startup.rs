@@ -104,7 +104,7 @@ fn parse_and_evaluation_failures_discard_the_complete_overlay() {
         );
         assert!(startup.scope().get("partial").is_none());
         assert_eq!(startup.environment().get("MODE"), Some(OsStr::new("base")));
-        assert_eq!(startup.prompt().primary(), "fsh[safe]> ");
+        assert_eq!(startup.prompt().primary(), "[SAFE] >> ");
         assert!(startup.diagnostic().is_some());
     }
 }

@@ -290,10 +290,10 @@ mod tests {
 
     #[test]
     fn prompt_bridge_preserves_primary_and_continuation_text() {
-        let prompt = EditorPrompt::new("fsh> ", "...> ");
+        let prompt = EditorPrompt::new(">> ", "...> ");
         let bridge = ReedlinePrompt { prompt: &prompt };
 
-        assert_eq!(bridge.render_prompt_left(), "fsh> ");
+        assert_eq!(bridge.render_prompt_left(), ">> ");
         assert_eq!(bridge.render_prompt_multiline_indicator(), "...> ");
     }
 

@@ -653,7 +653,7 @@ fn safe_startup(
             selected_path,
             failure: Some(failure),
         },
-        prompt: EditorPrompt::new("fsh[safe]> ", "...> "),
+        prompt: EditorPrompt::new("[SAFE] >> ", "...> "),
         diagnostic: Some(diagnostic),
     }
 }
