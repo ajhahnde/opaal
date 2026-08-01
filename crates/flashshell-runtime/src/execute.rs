@@ -917,6 +917,7 @@ impl MixedPipeline {
             let waited = loop {
                 match started.child.child.wait_for_transition() {
                     Ok(ProcessTransition::Completed(status)) => break Ok(status),
+                    Ok(ProcessTransition::Continued) => {}
                     Ok(ProcessTransition::Stopped { .. }) => {
                         if let Err(error) = resume_stopped_job(platform, group, stage.span()) {
                             // Unlike the source-ordered wait, nothing here is
@@ -1365,6 +1366,7 @@ fn wait_in_source_order(
         let waited = loop {
             match child.child.wait_for_transition() {
                 Ok(ProcessTransition::Completed(status)) => break Ok(status),
+                Ok(ProcessTransition::Continued) => {}
                 Ok(ProcessTransition::Stopped { .. }) => {
                     if let Err(error) = resume_stopped_job(platform, group, stage.span()) {
                         // A stop nothing can lift would otherwise hold the

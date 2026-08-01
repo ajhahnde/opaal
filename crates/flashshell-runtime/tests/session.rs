@@ -141,6 +141,7 @@ impl ChildProcess for BackgroundChild {
         loop {
             match self.next()? {
                 ProcessTransition::Stopped { .. } => {}
+                ProcessTransition::Continued => {}
                 ProcessTransition::Completed(status) => return Ok(status),
             }
         }
@@ -3263,7 +3264,7 @@ fn a_foreground_handoff_failure_cleans_every_started_member_without_publication(
 }
 
 #[test]
-fn a_managed_foreground_wait_applies_an_unrelated_background_completion() {
+fn a_managed_foreground_wait_preserves_an_unrelated_background_completion() {
     let clock = Arc::new(FakeClock::new());
     let mut session = session();
     session.enable_interactive_job_control(clock.clone());
@@ -3299,21 +3300,120 @@ fn a_managed_foreground_wait_applies_an_unrelated_background_completion() {
         1
     );
     assert!(session.background_job(job_id(2)).is_none());
+    let notice = wait_for_notice(&mut session);
     assert_eq!(
         session
             .background_completion(job_id(1))
             .and_then(Status::code),
         Some(3),
-        "the unrelated event is applied while foreground work is awaited"
+        "the unrelated event is eventually applied without a cross-worker ordering assumption"
     );
-    let notice = session
-        .next_job_notice()
-        .expect("the unrelated completion keeps its prompt-safe notice");
     assert_eq!(notice.job(), job_id(1));
     assert_eq!(notice.kind(), &JobNoticeKind::Completed);
     session
         .acknowledge_job_notice(notice.id())
         .expect("clean up the unrelated completion");
+}
+
+#[test]
+fn an_observed_external_continuation_clears_stopped_state_and_notice() {
+    let clock = Arc::new(FakeClock::new());
+    let mut session = session();
+    session.enable_interactive_job_control(clock.clone());
+    let (platform, controls) = ControlledBackgroundPlatform::new(&[641]);
+    let probe = Probe::new(["/bin/tool"]);
+    launch_controlled_job(&mut session, &clock, &platform, "^tool &", &probe);
+    assert_eq!(controls[0].wait_entries.recv().expect("initial wait"), 1);
+
+    controls[0]
+        .steps
+        .send(Ok(ProcessTransition::Stopped { signal: 19 }))
+        .expect("stop the background job");
+    assert_eq!(controls[0].wait_entries.recv().expect("continued wait"), 2);
+    assert_eq!(
+        wait_for_notice(&mut session).kind(),
+        &JobNoticeKind::Stopped
+    );
+
+    controls[0]
+        .steps
+        .send(Ok(ProcessTransition::Continued))
+        .expect("report an external continuation");
+    assert_eq!(controls[0].wait_entries.recv().expect("completion wait"), 3);
+    for _ in 0..10_000 {
+        session.refresh_background_jobs();
+        if session
+            .background_job(job_id(1))
+            .is_some_and(|job| job.state() == JobState::Background)
+        {
+            break;
+        }
+        std::thread::yield_now();
+    }
+
+    assert_eq!(
+        session
+            .background_job(job_id(1))
+            .expect("the externally continued job remains addressable")
+            .state(),
+        JobState::Background
+    );
+    assert!(
+        session.next_job_notice().is_none(),
+        "the continuation removes the stale stopped notice without adding one"
+    );
+
+    release(&controls);
+}
+
+#[test]
+fn a_queued_stop_continuation_and_completion_leave_only_the_completion_notice() {
+    let clock = Arc::new(FakeClock::new());
+    let mut session = session();
+    session.enable_interactive_job_control(clock.clone());
+    let (platform, controls) = ControlledBackgroundPlatform::new(&[651]);
+    let probe = Probe::new(["/bin/tool"]);
+    launch_controlled_job(&mut session, &clock, &platform, "^tool &", &probe);
+    assert_eq!(controls[0].wait_entries.recv().expect("initial wait"), 1);
+
+    controls[0]
+        .steps
+        .send(Ok(ProcessTransition::Stopped { signal: 19 }))
+        .expect("queue the stop");
+    assert_eq!(controls[0].wait_entries.recv().expect("continued wait"), 2);
+    controls[0]
+        .steps
+        .send(Ok(ProcessTransition::Continued))
+        .expect("queue the continuation");
+    assert_eq!(controls[0].wait_entries.recv().expect("completion wait"), 3);
+    controls[0]
+        .steps
+        .send(Ok(ProcessTransition::Completed(ProcessStatus::Exited(4))))
+        .expect("queue the completion");
+
+    for _ in 0..10_000 {
+        session.refresh_background_jobs();
+        if session.background_completion(job_id(1)).is_some() {
+            break;
+        }
+        std::thread::yield_now();
+    }
+
+    assert_eq!(
+        session
+            .background_completion(job_id(1))
+            .and_then(Status::code),
+        Some(4)
+    );
+    let completion = session
+        .next_job_notice()
+        .expect("the terminal transition leaves one notice");
+    assert_eq!(completion.job(), job_id(1));
+    assert_eq!(completion.kind(), &JobNoticeKind::Completed);
+    session
+        .acknowledge_job_notice(completion.id())
+        .expect("remove the completed record");
+    assert!(session.next_job_notice().is_none());
 }
 
 #[test]

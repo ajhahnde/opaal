@@ -971,6 +971,8 @@ pub enum ProcessTransition {
         /// The platform signal number that stopped the child.
         signal: i32,
     },
+    /// The child continued after a job-control stop.
+    Continued,
     /// The child reached a terminal status, which the platform has consumed.
     Completed(ProcessStatus),
 }

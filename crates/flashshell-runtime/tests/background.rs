@@ -56,6 +56,7 @@ impl ChildProcess for ControlledChild {
         loop {
             match self.next_transition()? {
                 ProcessTransition::Stopped { .. } => {}
+                ProcessTransition::Continued => {}
                 ProcessTransition::Completed(status) => return Ok(status),
             }
         }
@@ -208,7 +209,7 @@ fn completion_is_waited_and_queued_without_a_coordinator_drain() {
 }
 
 #[test]
-fn multiple_stops_are_queued_in_order_before_completion() {
+fn stopped_continued_and_completed_transitions_are_queued_in_child_order() {
     let clock = Arc::new(FakeClock::at(30));
     let (event_sender, event_receiver) = mpsc::channel();
     let mut slots =
@@ -231,9 +232,14 @@ fn multiple_stops_are_queued_in_order_before_completion() {
     assert_eq!(control.wait_entries.recv().expect("second wait"), 2);
     control
         .transitions
+        .send(Ok(ProcessTransition::Continued))
+        .expect("release the continuation");
+    assert_eq!(control.wait_entries.recv().expect("third wait"), 3);
+    control
+        .transitions
         .send(Ok(ProcessTransition::Stopped { signal: 20 }))
         .expect("release the second stop");
-    assert_eq!(control.wait_entries.recv().expect("third wait"), 3);
+    assert_eq!(control.wait_entries.recv().expect("fourth wait"), 4);
     clock.advance(9);
     control
         .transitions
@@ -250,6 +256,10 @@ fn multiple_stops_are_queued_in_order_before_completion() {
                 job: job(3),
                 process: process(61),
                 signal: 19,
+            },
+            ChildObservation::Continued {
+                job: job(3),
+                process: process(61),
             },
             ChildObservation::Stopped {
                 job: job(3),

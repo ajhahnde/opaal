@@ -39,6 +39,13 @@ pub enum ChildObservation {
         /// Platform signal number that stopped the child.
         signal: i32,
     },
+    /// The child continued after a job-control stop.
+    Continued {
+        /// Shell-assigned job identity.
+        job: JobId,
+        /// Platform process identity.
+        process: ProcessId,
+    },
     /// The child completed and was reaped by the blocking observation.
     Completed {
         /// Shell-assigned job identity.
@@ -1583,10 +1590,12 @@ impl BackgroundJobs {
     fn apply_observation(&mut self, observation: ChildObservation) {
         let (job_id, process) = match &observation {
             ChildObservation::Stopped { job, process, .. }
+            | ChildObservation::Continued { job, process }
             | ChildObservation::Completed { job, process, .. }
             | ChildObservation::Failed { job, process, .. } => (*job, *process),
         };
         let mut queued = None;
+        let mut clear_stopped_notice = false;
         let Some(record) = self.records.get_mut(&job_id) else {
             return;
         };
@@ -1600,6 +1609,12 @@ impl BackgroundJobs {
                     // A newly observed stop is a stop no resume has answered.
                     record.resume_requested = false;
                     queued = Some(JobNoticeKind::Stopped);
+                }
+            }
+            ChildObservation::Continued { .. } => {
+                if record.job.observe_continued(process).is_ok() {
+                    record.resume_requested = false;
+                    clear_stopped_notice = true;
                 }
             }
             ChildObservation::Completed {
@@ -1656,10 +1671,18 @@ impl BackgroundJobs {
                 }
             }
         }
+        let command = queued.as_ref().map(|_| record.command.clone());
+        let _ = record;
+        if clear_stopped_notice {
+            self.notices
+                .retain(|notice| notice.job != job_id || notice.kind != JobNoticeKind::Stopped);
+        }
         if let Some(kind) = queued {
-            let command = record.command.clone();
-            let _ = record;
-            self.queue_notice(job_id, kind, command);
+            self.queue_notice(
+                job_id,
+                kind,
+                command.expect("a queued notice retains its command label"),
+            );
         }
     }
 }
@@ -1779,6 +1802,16 @@ fn observe_child(
                         process,
                         signal,
                     })
+                    .is_err()
+                {
+                    let _ = child.terminate();
+                    let _ = child.wait();
+                    return;
+                }
+            }
+            Ok(ProcessTransition::Continued) => {
+                if events
+                    .send(ChildObservation::Continued { job, process })
                     .is_err()
                 {
                     let _ = child.terminate();

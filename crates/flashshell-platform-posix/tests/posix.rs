@@ -877,6 +877,11 @@ fn posix_observes_a_stopped_child_and_resumes_it_through_its_group() {
     PosixPlatform
         .signal_process_group(group, JobSignal::Continue)
         .expect("a POSIX host resumes a group");
+    assert_eq!(
+        child.wait_for_transition(),
+        Ok(ProcessTransition::Continued),
+        "the continuation is reported before the held child can complete",
+    );
     std::fs::write(&release, b"go").expect("the release marker is writable");
 
     assert_eq!(

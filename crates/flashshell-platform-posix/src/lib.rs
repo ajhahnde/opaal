@@ -127,12 +127,16 @@ impl ChildProcess for PosixChild {
         }
         match self.observe(0)? {
             ProcessTransition::Completed(status) => Ok(status),
-            // Unreachable without WUNTRACED: a plain wait never reports a stop.
-            // If a host ever did, panicking here would unwind through the adapter
-            // instead, so it is reported as a wait failure.
+            // Unreachable without WUNTRACED or WCONTINUED: a plain wait never
+            // reports a nonterminal transition. If a host ever did, report an
+            // adapter failure rather than unwinding or fabricating completion.
             ProcessTransition::Stopped { signal } => Err(WaitError::new(
                 io::ErrorKind::Other,
                 format!("the host reported a stop by signal {signal} without being asked for one"),
+            )),
+            ProcessTransition::Continued => Err(WaitError::new(
+                io::ErrorKind::Other,
+                "the host reported a continuation without being asked for one",
             )),
         }
     }
@@ -141,7 +145,7 @@ impl ChildProcess for PosixChild {
         if let Some(status) = self.completed {
             return Ok(ProcessTransition::Completed(status));
         }
-        self.observe(libc::WUNTRACED)
+        self.observe(libc::WUNTRACED | libc::WCONTINUED)
     }
 
     fn terminate(&mut self) -> Result<(), TerminateError> {
@@ -1185,10 +1189,13 @@ mod child_wait {
     /// Classify one raw wait status.
     ///
     /// Exit is tested rather than inferred from the other two failing. Only
-    /// `WCONTINUED` could add a fourth state, and it is never requested — but a
-    /// caller who added it would otherwise read an exit code off a continued
-    /// status and report a plausible-looking wrong number.
+    /// Continued is checked explicitly before the terminal classifications so
+    /// no host representation can reach an exit-code macro and produce a
+    /// plausible-looking wrong number.
     fn decode(status: c_int) -> Result<ProcessTransition, WaitError> {
+        if libc::WIFCONTINUED(status) {
+            return Ok(ProcessTransition::Continued);
+        }
         if libc::WIFSTOPPED(status) {
             return Ok(ProcessTransition::Stopped {
                 signal: libc::WSTOPSIG(status),
