@@ -630,6 +630,223 @@ fn a_terminal_stop_retains_an_addressable_job_and_returns_the_prompt() {
 }
 
 #[test]
+fn job_builtins_stop_list_bg_and_fg_a_real_foreground_job() {
+    let cwd = unique_dir("job-lifecycle");
+    let report = cwd.join("report.bin");
+    let release = cwd.join("release");
+    let report_text = report.to_str().expect("test report path is UTF-8");
+    let release_text = release.to_str().expect("test release path is UTF-8");
+    let cwd_text = cwd.to_str().expect("test directory path is UTF-8");
+    let environment = [
+        ("FLASH_PROBE_REPORT", report_text),
+        ("FLASH_PROBE_GROUP_REPORT", cwd_text),
+        ("FLASH_PROBE_HOLD_UNTIL", release_text),
+    ];
+    let mut session = Pty::spawn(&["--no-config", "--no-history"], &environment, &cwd);
+    let _release_on_drop = ReleaseOnDrop(release.clone());
+    session.await_prompt(0);
+
+    let command = format!("^{PROCESS_OBSERVER}");
+    let stop_mark = session.mark();
+    session.send(command.as_bytes());
+    session.send(ENTER);
+    let (process, group) = await_one_process_group_report(&cwd);
+    let mut cleanup = ProcessGroupCleanup::new(group);
+
+    session.send(CTRL_Z);
+    session.expect_from(stop_mark, "[1] Stopped");
+    session.await_prompt(stop_mark);
+    let stopped = session.rendered_from(stop_mark);
+    assert_eq!(
+        stopped.matches("[1] Stopped").count(),
+        1,
+        "one terminal stop must publish one notice:\n{stopped}"
+    );
+
+    let stopped_jobs_mark = session.mark();
+    session.send(b"jobs");
+    session.send(ENTER);
+    session.expect_from(stopped_jobs_mark, "\"job\": \"%1\"");
+    session.expect_from(stopped_jobs_mark, "\"state\": \"stopped\"");
+    session.await_prompt(stopped_jobs_mark);
+
+    let bg_mark = session.mark();
+    session.send(b"bg %1");
+    session.send(ENTER);
+    session.await_prompt(bg_mark);
+
+    let running_jobs_mark = session.mark();
+    session.send(b"jobs");
+    session.send(ENTER);
+    session.expect_from(running_jobs_mark, "\"state\": \"running\"");
+    session.expect_from(running_jobs_mark, "\"placement\": \"background\"");
+    session.await_prompt(running_jobs_mark);
+
+    let fg_mark = session.mark();
+    session.send(b"fg %1");
+    session.send(ENTER);
+    thread::sleep(SETTLE);
+    assert!(
+        test_kill_process(process).is_ok(),
+        "the held fixture must still be live while fg waits"
+    );
+    fs::write(&release, b"complete").expect("release the foreground fixture");
+    session.await_prompt(fg_mark);
+    await_process_exit(process);
+    cleanup.disarm();
+    let foreground = session.rendered_from(fg_mark);
+    assert!(
+        !foreground.contains("[1] Done"),
+        "fg consumes the selected terminal aggregate:\n{foreground}"
+    );
+
+    let returned_mark = session.mark();
+    session.send(b"echo terminal-returned");
+    session.send(ENTER);
+    session.expect_from(returned_mark, "terminal-returned");
+    session.await_prompt(returned_mark);
+
+    session.send(b"exit 0");
+    session.send(ENTER);
+    assert_eq!(session.wait_code(), 0);
+}
+
+#[test]
+fn job_builtins_wait_consumes_an_exit_and_diagnostics_are_recoverable() {
+    let cwd = unique_dir("job-wait");
+    let report = cwd.join("report.bin");
+    let release = cwd.join("release");
+    let report_text = report.to_str().expect("test report path is UTF-8");
+    let release_text = release.to_str().expect("test release path is UTF-8");
+    let cwd_text = cwd.to_str().expect("test directory path is UTF-8");
+    let environment = [
+        ("FLASH_PROBE_REPORT", report_text),
+        ("FLASH_PROBE_GROUP_REPORT", cwd_text),
+        ("FLASH_PROBE_HOLD_UNTIL", release_text),
+    ];
+    let mut session = Pty::spawn(&["--no-config", "--no-history"], &environment, &cwd);
+    let _release_on_drop = ReleaseOnDrop(release.clone());
+    session.await_prompt(0);
+
+    let command = format!("^{PROCESS_OBSERVER} &");
+    let launch_mark = session.mark();
+    session.send(command.as_bytes());
+    session.send(ENTER);
+    session.expect_from(launch_mark, "[1] ");
+    session.await_prompt(launch_mark);
+    let (process, group) = await_one_process_group_report(&cwd);
+    let mut cleanup = ProcessGroupCleanup::new(group);
+
+    let wait_mark = session.mark();
+    session.send(b"wait %1");
+    session.send(ENTER);
+    thread::sleep(SETTLE);
+    assert!(
+        test_kill_process(process).is_ok(),
+        "wait must remain blocked on the held fixture"
+    );
+    fs::write(&release, b"complete").expect("release the waited fixture");
+    session.await_prompt(wait_mark);
+    await_process_exit(process);
+    cleanup.disarm();
+    let waited = session.rendered_from(wait_mark);
+    assert!(
+        !waited.contains("[1] Done"),
+        "wait consumes the completion instead of publishing a duplicate notice:\n{waited}"
+    );
+
+    let removed_mark = session.mark();
+    session.send(b"wait %1");
+    session.send(ENTER);
+    session.expect_from(removed_mark, "wait: unknown job `%1`");
+    session.await_prompt(removed_mark);
+
+    let invalid_mark = session.mark();
+    session.send(b"fg %0");
+    session.send(ENTER);
+    session.expect_from(
+        invalid_mark,
+        "job identity must be a nonzero decimal number",
+    );
+    session.await_prompt(invalid_mark);
+
+    let recovery_mark = session.mark();
+    session.send(b"echo job-errors-are-recoverable");
+    session.send(ENTER);
+    session.expect_from(recovery_mark, "job-errors-are-recoverable");
+    session.await_prompt(recovery_mark);
+
+    session.send(b"exit 0");
+    session.send(ENTER);
+    assert_eq!(session.wait_code(), 0);
+}
+
+fn assert_kill_ends_held_fixture(tag: &str, selector: Option<&str>) {
+    let cwd = unique_dir(tag);
+    let report = cwd.join("report.bin");
+    let release = cwd.join("release");
+    let report_text = report.to_str().expect("test report path is UTF-8");
+    let release_text = release.to_str().expect("test release path is UTF-8");
+    let cwd_text = cwd.to_str().expect("test directory path is UTF-8");
+    let environment = [
+        ("FLASH_PROBE_REPORT", report_text),
+        ("FLASH_PROBE_GROUP_REPORT", cwd_text),
+        ("FLASH_PROBE_HOLD_UNTIL", release_text),
+    ];
+    let mut session = Pty::spawn(&["--no-config", "--no-history"], &environment, &cwd);
+    let _release_on_drop = ReleaseOnDrop(release.clone());
+    session.await_prompt(0);
+
+    let command = format!("^{PROCESS_OBSERVER} &");
+    let launch_mark = session.mark();
+    session.send(command.as_bytes());
+    session.send(ENTER);
+    session.expect_from(launch_mark, "[1] ");
+    session.await_prompt(launch_mark);
+    let (process, group) = await_one_process_group_report(&cwd);
+    let mut cleanup = ProcessGroupCleanup::new(group);
+
+    let kill_mark = session.mark();
+    let command = selector.map_or_else(|| "kill %1".to_owned(), |flag| format!("kill {flag} %1"));
+    session.send(command.as_bytes());
+    session.send(ENTER);
+    session.await_prompt(kill_mark);
+    await_process_exit(process);
+    assert!(
+        !release.exists(),
+        "the signal must end the fixture without its cooperative release"
+    );
+    cleanup.disarm();
+
+    if !session.rendered_from(kill_mark).contains("[1] Done") {
+        let completion_mark = session.mark();
+        session.send(CTRL_C);
+        session.expect_from(completion_mark, "[1] Done");
+        session.await_prompt(completion_mark);
+    }
+    let completion = session.rendered_from(kill_mark);
+    assert_eq!(
+        completion.matches("[1] Done").count(),
+        1,
+        "the terminated fixture has one acknowledged completion:\n{completion}"
+    );
+
+    session.send(b"exit 0");
+    session.send(ENTER);
+    assert_eq!(session.wait_code(), 0);
+}
+
+#[test]
+fn job_builtins_kill_defaults_to_terminate_for_a_real_group() {
+    assert_kill_ends_held_fixture("job-terminate", None);
+}
+
+#[test]
+fn job_builtins_kill_kill_ends_a_real_group() {
+    assert_kill_ends_held_fixture("job-kill", Some("--kill"));
+}
+
+#[test]
 fn an_interrupt_aimed_at_the_shell_does_not_end_the_session() {
     let cwd = unique_dir("shell-interrupt");
     let mut session = interactive(&cwd);
