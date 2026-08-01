@@ -44,8 +44,8 @@ use crate::eval::{
 };
 use crate::execute::{execute_foreground_status, start_mixed_pipeline};
 use crate::internal::{
-    InternalPayload, InternalPipelineOutcome, StageOutcome, execute_internal_pipeline,
-    execute_internal_suffix, execute_stage,
+    DEFAULT_MATERIALIZATION_LIMIT, InternalPayload, InternalPipelineOutcome, StageOutcome,
+    execute_internal_pipeline, execute_internal_suffix, execute_stage,
 };
 use crate::job::JobPlacement;
 use crate::plan::{
@@ -57,7 +57,7 @@ use crate::presentation::{
 };
 use crate::resolve::ExecutableProbe;
 use crate::stream::{BytePull, ByteStream, StreamPull, ValueStream};
-use crate::{Duration, Environment, Record, ScopeStack, Status, Value};
+use crate::{Duration, Environment, Record, ScopeStack, Status, Table, Value};
 
 pub use crate::background::{
     BackgroundFailure, BackgroundFailureReason, JobCommandError, JobNotice, JobNoticeError,
@@ -1686,14 +1686,42 @@ fn render_payload(
         InternalPayload::ValueStream(mut values) => {
             let presentation =
                 presentation.expect("a ValueStream carrier has terminal-presentation proof");
+            let mut records = Vec::new();
             loop {
                 match values.pull() {
+                    StreamPull::Item(Value::Record(record)) => {
+                        if records.len() == DEFAULT_MATERIALIZATION_LIMIT {
+                            return Err(Interrupt::Runtime(RuntimeError::new(
+                                RuntimeErrorKind::StructuredCommand {
+                                    command: "presentation",
+                                    message: format!(
+                                        "record table exceeds the {}-item materialization limit",
+                                        DEFAULT_MATERIALIZATION_LIMIT
+                                    ),
+                                },
+                                span,
+                            )));
+                        }
+                        records.push(record);
+                    }
                     StreamPull::Item(value) => {
+                        write_record_table(&mut records, presentation, sink)
+                            .map_err(Interrupt::Output)?;
                         write_value(&value, presentation, sink).map_err(Interrupt::Output)?;
                     }
-                    StreamPull::End => return Ok(()),
-                    StreamPull::Failed(error) => return Err(Interrupt::Runtime(error)),
+                    StreamPull::End => {
+                        write_record_table(&mut records, presentation, sink)
+                            .map_err(Interrupt::Output)?;
+                        return Ok(());
+                    }
+                    StreamPull::Failed(error) => {
+                        write_record_table(&mut records, presentation, sink)
+                            .map_err(Interrupt::Output)?;
+                        return Err(Interrupt::Runtime(error));
+                    }
                     StreamPull::Cancelled(reason) => {
+                        write_record_table(&mut records, presentation, sink)
+                            .map_err(Interrupt::Output)?;
                         return Err(Interrupt::Runtime(RuntimeError::new(
                             RuntimeErrorKind::StreamCancelled { reason },
                             span,
@@ -1716,6 +1744,23 @@ fn render_payload(
             }
         },
     }
+}
+
+/// Present one consecutive run of records as a single width-aware table.
+///
+/// Record streams remain lazy throughout the pipeline. Only their final human
+/// presentation materializes a bounded run, because column widths and the
+/// first-seen union of record keys cannot be known before the run is complete.
+fn write_record_table(
+    records: &mut Vec<Record>,
+    presentation: &TerminalPresentation,
+    sink: &mut dyn Write,
+) -> io::Result<()> {
+    if records.is_empty() {
+        return Ok(());
+    }
+    let table = Table::from_records(std::mem::take(records));
+    writeln!(sink, "{}", render_table(&table, presentation.columns()))
 }
 
 fn write_value(

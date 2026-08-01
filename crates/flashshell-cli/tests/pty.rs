@@ -666,8 +666,8 @@ fn job_builtins_stop_list_bg_and_fg_a_real_foreground_job() {
     let stopped_jobs_mark = session.mark();
     session.send(b"jobs");
     session.send(ENTER);
-    session.expect_from(stopped_jobs_mark, "\"job\": \"%1\"");
-    session.expect_from(stopped_jobs_mark, "\"state\": \"stopped\"");
+    session.expect_from(stopped_jobs_mark, "job | state");
+    session.expect_from(stopped_jobs_mark, "%1  | stopped | foreground");
     session.await_prompt(stopped_jobs_mark);
 
     let bg_mark = session.mark();
@@ -678,8 +678,7 @@ fn job_builtins_stop_list_bg_and_fg_a_real_foreground_job() {
     let running_jobs_mark = session.mark();
     session.send(b"jobs");
     session.send(ENTER);
-    session.expect_from(running_jobs_mark, "\"state\": \"running\"");
-    session.expect_from(running_jobs_mark, "\"placement\": \"background\"");
+    session.expect_from(running_jobs_mark, "%1  | running | background");
     session.await_prompt(running_jobs_mark);
 
     let fg_mark = session.mark();

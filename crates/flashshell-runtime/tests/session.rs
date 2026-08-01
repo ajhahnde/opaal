@@ -1985,8 +1985,9 @@ fn a_running_job_row_carries_the_stable_seven_field_schema() {
 
     assert_eq!(
         rendered(&mut session, "jobs", &probe, &platform, clock.as_ref()),
-        "{\"job\": \"%1\", \"state\": \"running\", \"placement\": \"background\", \
-         \"group\": \"221\", \"command\": \"^tool\", \"status\": null, \"signal\": null}\n",
+        "job | state   | placement  | group | command | status | signal\n\
+         ----+---------+------------+-------+---------+--------+-------\n\
+         %1  | running | background | 221   | ^tool   | null   | null  \n",
         "host identities stay strings and absent fields stay null"
     );
 
@@ -2014,8 +2015,9 @@ fn a_stopped_row_reports_its_raw_stop_signal_and_resume_placement() {
 
     assert_eq!(
         rendered(&mut session, "jobs", &probe, &platform, clock.as_ref()),
-        "{\"job\": \"%1\", \"state\": \"stopped\", \"placement\": \"background\", \
-         \"group\": \"231\", \"command\": \"^tool\", \"status\": null, \"signal\": 19}\n",
+        "job | state   | placement  | group | command | status | signal\n\
+         ----+---------+------------+-------+---------+--------+-------\n\
+         %1  | stopped | background | 231   | ^tool   | null   |     19\n",
         "a stopped row carries the raw platform stop number"
     );
 
@@ -2041,16 +2043,12 @@ fn a_completed_row_is_listed_without_consuming_its_notice() {
     let listed = rendered(&mut session, "jobs", &probe, &platform, clock.as_ref());
 
     assert!(
-        listed.contains("\"state\": \"completed\""),
+        listed.contains("| completed |"),
         "a completed record stays addressable until it is acknowledged:\n{listed}"
     );
     assert!(
-        listed.contains("\"status\": status(code: 3"),
+        listed.contains("| exit 3 | null"),
         "a completed row carries its aggregate status:\n{listed}"
-    );
-    assert!(
-        listed.contains("\"signal\": null"),
-        "a completed aggregate has no stop signal:\n{listed}"
     );
     assert_eq!(
         session.next_job_notice().as_ref().map(|notice| notice.id()),
@@ -2088,11 +2086,11 @@ fn a_quarantined_record_is_listed_as_quarantined() {
     let listed = rendered(&mut session, "jobs", &probe, &platform, clock.as_ref());
 
     assert!(
-        listed.contains("\"state\": \"quarantined\""),
+        listed.contains("| quarantined |"),
         "an unobservable record is shown honestly, not as completed:\n{listed}"
     );
     assert!(
-        listed.contains("\"status\": null"),
+        listed.contains("| null   | null"),
         "quarantine never invents a completion status:\n{listed}"
     );
 }
@@ -2733,7 +2731,7 @@ fn kill_signals_a_quarantined_group_without_repairing_it() {
     );
     let listed = rendered(&mut session, "jobs", &probe, &platform, clock.as_ref());
     assert!(
-        listed.contains("\"state\": \"quarantined\""),
+        listed.contains("| quarantined |"),
         "a delivered signal is not a terminal observation:\n{listed}"
     );
 }
@@ -3795,6 +3793,29 @@ fn an_internal_structured_pipeline_preserves_values_until_final_presentation() {
     let status = session.current_status().expect("pipeline records a status");
     assert_eq!(status.code(), Some(0));
     assert_eq!(status.stages().len(), 4);
+}
+
+#[test]
+fn a_terminal_record_stream_renders_as_one_table() {
+    let mut session = session();
+    let probe = Probe::default();
+    let mut sink = Vec::new();
+
+    session
+        .submit(
+            "<interactive>",
+            "which pwd missing",
+            &probe,
+            &terminal_platform(),
+            &FakeClock::new(),
+            &mut sink,
+        )
+        .expect("the record stream should be presentable");
+
+    assert_eq!(
+        String::from_utf8(sink).unwrap(),
+        "name    | kind     | path\n--------+----------+-----\npwd     | internal | null\nmissing | missing  | null\n"
+    );
 }
 
 #[test]
