@@ -16,7 +16,7 @@ use flashshell_platform::{
     ProcessTransition, WaitError,
 };
 
-use crate::eval::{Clock, Instant, RuntimeError, RuntimeErrorKind};
+use crate::eval::{AUTOMATIC_RESUME_LIMIT, Clock, Instant, RuntimeError, RuntimeErrorKind};
 use crate::execute::{
     aggregate_statuses, elapsed, language_status, release_foreground, start_background_pipeline,
     take_foreground,
@@ -653,6 +653,8 @@ pub enum JobCommandError {
     Observation { job: JobId, message: String },
     /// The platform refused the group delivery.
     Delivery { job: JobId, message: String },
+    /// One member stopped again after this wait exhausted its automatic resumes.
+    RepeatedStop { job: JobId, signal: i32 },
     /// A completed job's observer panicked while the record was consumed.
     ObserverPanicked { job: JobId },
 }
@@ -683,6 +685,11 @@ impl fmt::Display for JobCommandError {
             Self::Delivery { job, message } => write!(
                 formatter,
                 "job `%{}` could not be signalled: {message}",
+                job.get()
+            ),
+            Self::RepeatedStop { job, signal } => write!(
+                formatter,
+                "job `%{}` stopped repeatedly (latest signal {signal})",
                 job.get()
             ),
             Self::ObserverPanicked { job } => {
@@ -1486,7 +1493,8 @@ impl BackgroundJobs {
             return Ok(Status::exit(0, Duration::ZERO).expect("zero is a valid empty-wait status"));
         }
 
-        self.resume_wait_targets(&selected, platform)?;
+        let mut automatic_resumes = BTreeMap::new();
+        self.resume_wait_targets(&selected, platform, &mut automatic_resumes)?;
         loop {
             if self.wait_targets_completed(&selected)? {
                 break;
@@ -1498,7 +1506,7 @@ impl BackgroundJobs {
                 .recv()
                 .expect("the coordinator retains its observation sender");
             self.apply_observation(observation);
-            self.resume_wait_targets(&selected, platform)?;
+            self.resume_wait_targets(&selected, platform, &mut automatic_resumes)?;
         }
 
         let statuses = selected
@@ -1617,6 +1625,7 @@ impl BackgroundJobs {
         &mut self,
         selected: &[JobId],
         platform: &dyn Platform,
+        automatic_resumes: &mut BTreeMap<(JobId, ProcessId), usize>,
     ) -> Result<(), JobCommandError> {
         for &job in selected {
             self.apply_pending_observations();
@@ -1632,8 +1641,32 @@ impl BackgroundJobs {
             {
                 continue;
             }
+            let stopped_members = record
+                .job
+                .members()
+                .filter_map(|(process, state)| match state {
+                    JobMemberState::Stopped { signal } => Some((process, *signal)),
+                    JobMemberState::Running | JobMemberState::Completed(_) => None,
+                })
+                .collect::<Vec<_>>();
+            if let Some((_, signal)) = stopped_members.iter().find(|(process, _)| {
+                automatic_resumes
+                    .get(&(job, *process))
+                    .copied()
+                    .unwrap_or(0)
+                    >= AUTOMATIC_RESUME_LIMIT
+            }) {
+                return Err(JobCommandError::RepeatedStop {
+                    job,
+                    signal: *signal,
+                });
+            }
             match self.signal_job(job, JobSignal::Continue, QuarantinePolicy::Reject, platform) {
-                Ok(()) => {}
+                Ok(()) => {
+                    for (process, _) in stopped_members {
+                        *automatic_resumes.entry((job, process)).or_default() += 1;
+                    }
+                }
                 // A terminal observation may race the selection and the
                 // continuation. Once applied, that is a completed target, not
                 // a failed continuation.

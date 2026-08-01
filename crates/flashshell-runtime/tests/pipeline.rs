@@ -11,10 +11,10 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use flashshell_platform::{
-    Capabilities, Capability, ChildProcess, DescriptorEndpoint, FakePlatform, FileActionError,
-    FileOpenRequest, JobSignal, PipeEndpoints, PipeError, Platform, PlatformError, ProcessGroup,
-    ProcessStatus, RecordingPlatform, SignalError, SpawnError, SpawnRequest, TerminateError,
-    WaitError,
+    Capabilities, Capability, ChildProcess, DescriptorEndpoint, FAKE_STOP_SIGNAL, FakePlatform,
+    FileActionError, FileOpenRequest, JobSignal, PipeEndpoints, PipeError, Platform, PlatformError,
+    ProcessGroup, ProcessStatus, RecordingPlatform, SignalError, SpawnError, SpawnRequest,
+    TerminateError, WaitError,
 };
 use flashshell_platform_posix::PosixPlatform;
 use flashshell_runtime::command::CommandRegistry;
@@ -1084,6 +1084,44 @@ fn a_stopped_foreground_job_is_resumed_in_place_and_still_completes() {
         assert_eq!(record.signal(), JobSignal::Continue);
         assert_eq!(record.group(), leader);
     }
+}
+
+#[test]
+fn a_foreground_wait_allows_sixteen_automatic_resumptions_per_member() {
+    let platform = RecordingPlatform::new(FakePlatform::with_stopping_children(
+        Capabilities::full(),
+        16,
+    ));
+    let signals = platform.signal_log();
+    let plan = fixture_pipeline_plan(&["source 0 0"]);
+
+    assert_eq!(
+        execute_foreground_pipeline(&plan, &platform),
+        Ok(vec![ProcessStatus::Exited(0)])
+    );
+    assert_eq!(signals.records().len(), 16);
+}
+
+#[test]
+fn a_foreground_wait_rejects_a_seventeenth_stop_without_another_resume() {
+    let platform = RecordingPlatform::new(FakePlatform::with_stopping_children(
+        Capabilities::full(),
+        17,
+    ));
+    let signals = platform.signal_log();
+    let plan = fixture_pipeline_plan(&["source 0 0"]);
+
+    let error = execute_foreground_pipeline(&plan, &platform)
+        .expect_err("the seventeenth stop must end the blocking operation");
+
+    assert!(matches!(
+        error.kind(),
+        RuntimeErrorKind::RepeatedStop {
+            signal: FAKE_STOP_SIGNAL
+        }
+    ));
+    assert_eq!(error.span(), plan.stages()[0].span());
+    assert_eq!(signals.records().len(), 16);
 }
 
 #[test]

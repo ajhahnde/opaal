@@ -87,6 +87,11 @@ impl DescriptorEndpoint for BackgroundEndpoint {
 }
 
 type ChildStep = Result<ProcessTransition, WaitError>;
+type ContinuedSteps = (
+    ProcessGroupId,
+    mpsc::Sender<ChildStep>,
+    Vec<ProcessTransition>,
+);
 
 struct BackgroundChild {
     id: u64,
@@ -167,7 +172,7 @@ struct ControlledBackgroundPlatform {
     children: Mutex<VecDeque<Box<dyn ChildProcess>>>,
     signals: Mutex<Vec<(ProcessGroupId, JobSignal)>>,
     operations: Arc<Mutex<Vec<ForegroundOperation>>>,
-    continue_steps: Mutex<Vec<(ProcessGroupId, mpsc::Sender<ChildStep>, ProcessTransition)>>,
+    continue_steps: Mutex<Vec<ContinuedSteps>>,
     foreground_steps: Mutex<Vec<(ProcessGroupId, mpsc::Sender<ChildStep>, ProcessTransition)>>,
     foreground_attempts: AtomicUsize,
     foreground_handovers: Mutex<Vec<ProcessGroupId>>,
@@ -289,13 +294,23 @@ impl ControlledBackgroundPlatform {
         control: &BackgroundChildControl,
         transition: ProcessTransition,
     ) {
+        self.steps_on_continue(group, control, vec![transition]);
+    }
+
+    /// Publish controlled transitions after one successful group continuation.
+    fn steps_on_continue(
+        &self,
+        group: u64,
+        control: &BackgroundChildControl,
+        transitions: Vec<ProcessTransition>,
+    ) {
         self.continue_steps
             .lock()
             .expect("continue step lock")
             .push((
                 ProcessGroupId::new(group).expect("test group is nonzero"),
                 control.steps.clone(),
-                transition,
+                transitions,
             ));
     }
 
@@ -527,8 +542,10 @@ impl Platform for ControlledBackgroundPlatform {
                     .position(|(candidate, _, _)| *candidate == group)
                     .map(|index| steps.remove(index))
             };
-            if let Some((_, steps, transition)) = transition {
-                let _ = steps.send(Ok(transition));
+            if let Some((_, steps, transitions)) = transition {
+                for transition in transitions {
+                    let _ = steps.send(Ok(transition));
+                }
             }
         }
         Ok(())
@@ -1667,6 +1684,60 @@ fn a_join_resumes_a_stopped_job_before_waiting_on_it() {
         )],
         "a stopped job must be resumed exactly once, and never hung up by a join"
     );
+}
+
+#[test]
+fn a_join_remains_unbounded_after_sixteen_automatic_resumptions() {
+    let clock = Arc::new(FakeClock::new());
+    let mut session = session();
+    session.enable_interactive_job_control(clock.clone());
+    let (platform, controls) = ControlledBackgroundPlatform::new(&[146]);
+    launch_controlled_job(
+        &mut session,
+        &clock,
+        &platform,
+        "^tool &",
+        &Probe::new(["/bin/tool"]),
+    );
+    assert_eq!(controls[0].wait_entries.recv().expect("first wait"), 1);
+    controls[0]
+        .steps
+        .send(Ok(ProcessTransition::Stopped { signal: 19 }))
+        .expect("release the initial stop");
+    assert_eq!(controls[0].wait_entries.recv().expect("second wait"), 2);
+    let stopped = wait_for_notice(&mut session);
+    session
+        .acknowledge_job_notice(stopped.id())
+        .expect("acknowledge the stop");
+
+    for signal in 20..36 {
+        platform.steps_on_continue(
+            146,
+            &controls[0],
+            vec![
+                ProcessTransition::Continued,
+                ProcessTransition::Stopped { signal },
+            ],
+        );
+    }
+    platform.steps_on_continue(
+        146,
+        &controls[0],
+        vec![
+            ProcessTransition::Continued,
+            ProcessTransition::Completed(ProcessStatus::Exited(0)),
+        ],
+    );
+
+    let failures = session.join_background_jobs(&platform);
+
+    assert!(failures.is_empty());
+    assert_eq!(
+        delivered(&platform),
+        vec![(146, JobSignal::Continue); 17],
+        "lifetime join does not inherit the command-level resume bound"
+    );
+    assert_eq!(controls[0].terminate_calls.load(Ordering::SeqCst), 0);
 }
 
 #[test]
@@ -2904,6 +2975,61 @@ fn wait_resumes_a_stopped_target_in_background_and_drops_its_stale_notice() {
 }
 
 #[test]
+fn wait_rejects_a_seventeenth_stop_without_consuming_the_stopped_job() {
+    let clock = Arc::new(FakeClock::new());
+    let mut session = session();
+    session.enable_interactive_job_control(clock.clone());
+    let (platform, controls) = ControlledBackgroundPlatform::new(&[476]);
+    let probe = Probe::new(["/bin/tool"]);
+    launch_controlled_job(&mut session, &clock, &platform, "^tool &", &probe);
+    assert_eq!(controls[0].wait_entries.recv().expect("first wait"), 1);
+    stop_controlled_job(&mut session, &controls[0], 1);
+
+    for signal in 20..=35 {
+        platform.steps_on_continue(
+            476,
+            &controls[0],
+            vec![
+                ProcessTransition::Continued,
+                ProcessTransition::Stopped { signal },
+            ],
+        );
+    }
+
+    let diagnostic = rejected(&mut session, "wait %1", &probe, &platform, clock.as_ref());
+
+    assert!(
+        diagnostic.contains("wait: job `%1` stopped repeatedly (latest signal 35)"),
+        "the repeated-stop diagnostic retains the latest raw signal:\n{diagnostic}"
+    );
+    assert_eq!(
+        delivered(&platform),
+        vec![(476, JobSignal::Continue); 16],
+        "the seventeenth stop does not trigger another continuation"
+    );
+    let job = session
+        .background_job(job_id(1))
+        .expect("the selected job remains addressable");
+    assert!(matches!(job.state(), JobState::Stopped { .. }));
+    assert_eq!(
+        job.members().next(),
+        Some((
+            ProcessId::new(476).expect("test process is nonzero"),
+            &JobMemberState::Stopped { signal: 35 },
+        ))
+    );
+    assert_eq!(
+        session
+            .next_job_notice()
+            .map(|notice| notice.kind().clone()),
+        Some(JobNoticeKind::Stopped),
+        "the latest stopped notice remains pending"
+    );
+
+    release(&controls);
+}
+
+#[test]
 fn wait_accepts_a_completion_that_races_command_entry() {
     let clock = Arc::new(FakeClock::new());
     let mut session = session();
@@ -3690,6 +3816,59 @@ fn a_conditional_chain_keeps_the_legacy_resume_in_place_path() {
 }
 
 #[test]
+fn a_source_ordered_foreground_wait_cleans_up_after_the_seventeenth_stop() {
+    let clock = Arc::new(FakeClock::new());
+    let mut session = session();
+    session.enable_interactive_job_control(clock.clone());
+    let (platform, controls) = ControlledBackgroundPlatform::in_groups_for_session(&[&[646]]);
+    let probe = Probe::new(["/bin/tool", "/bin/other"]);
+    for signal in 60..=76 {
+        controls[0]
+            .steps
+            .send(Ok(ProcessTransition::Stopped { signal }))
+            .expect("queue the next stop");
+        if signal < 76 {
+            controls[0]
+                .steps
+                .send(Ok(ProcessTransition::Continued))
+                .expect("queue the observed continuation");
+        }
+    }
+    controls[0]
+        .steps
+        .send(Ok(ProcessTransition::Completed(ProcessStatus::Exited(0))))
+        .expect("let failure cleanup reap the child");
+    let mut sink = Vec::new();
+
+    let error = session
+        .submit(
+            "<interactive>",
+            "^tool && ^other",
+            &probe,
+            &platform,
+            clock.as_ref(),
+            &mut sink,
+        )
+        .expect_err("the source-ordered wait must reject the seventeenth stop");
+
+    assert!(
+        error
+            .render()
+            .contains("the job stopped repeatedly (latest signal 76)"),
+        "{}",
+        error.render()
+    );
+    assert_eq!(delivered(&platform), vec![(646, JobSignal::Continue); 16]);
+    assert_eq!(controls[0].terminate_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        controls[0].wait_entries.try_iter().count(),
+        34,
+        "the bounded wait terminates and performs one final cleanup wait"
+    );
+    assert!(sink.is_empty());
+}
+
+#[test]
 fn a_mixed_foreground_pipeline_keeps_the_legacy_session_executor() {
     let clock = Arc::new(FakeClock::new());
     let mut session = session();
@@ -3719,6 +3898,59 @@ fn a_mixed_foreground_pipeline_keeps_the_legacy_session_executor() {
     let status = session.current_status().expect("mixed status is retained");
     assert_eq!(status.code(), Some(0));
     assert_eq!(status.stages().len(), 3);
+}
+
+#[test]
+fn a_mixed_foreground_wait_cleans_up_after_the_seventeenth_stop() {
+    let clock = Arc::new(FakeClock::new());
+    let mut session = session();
+    session.enable_interactive_job_control(clock.clone());
+    let (platform, controls) = ControlledBackgroundPlatform::in_groups_for_session(&[&[656]]);
+    let probe = Probe::new(["/bin/tool"]);
+    for signal in 40..=56 {
+        controls[0]
+            .steps
+            .send(Ok(ProcessTransition::Stopped { signal }))
+            .expect("queue the next stop");
+        if signal < 56 {
+            controls[0]
+                .steps
+                .send(Ok(ProcessTransition::Continued))
+                .expect("queue the observed continuation");
+        }
+    }
+    controls[0]
+        .steps
+        .send(Ok(ProcessTransition::Completed(ProcessStatus::Exited(0))))
+        .expect("let failure cleanup reap the child");
+    let mut sink = Vec::new();
+
+    let error = session
+        .submit(
+            "<interactive>",
+            "^tool | decode bytes | length",
+            &probe,
+            &platform,
+            clock.as_ref(),
+            &mut sink,
+        )
+        .expect_err("the mixed wait must reject the seventeenth stop");
+
+    assert!(
+        error
+            .render()
+            .contains("the job stopped repeatedly (latest signal 56)"),
+        "{}",
+        error.render()
+    );
+    assert_eq!(delivered(&platform), vec![(656, JobSignal::Continue); 16]);
+    assert_eq!(controls[0].terminate_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        controls[0].wait_entries.try_iter().count(),
+        34,
+        "the bounded wait terminates and performs one final cleanup wait"
+    );
+    assert_eq!(sink, b"0\n");
 }
 
 #[test]

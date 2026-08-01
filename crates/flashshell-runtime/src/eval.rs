@@ -28,6 +28,9 @@ use flashshell_syntax::{
 use crate::operation::{self, OperationError};
 use crate::{BindingMutability, Callable, Environment, Record, ScopeError, ScopeStack, Value};
 
+/// Successful automatic continuations allowed for one member in one blocking operation.
+pub(crate) const AUTOMATIC_RESUME_LIMIT: usize = 16;
+
 /// A source-anchored runtime evaluation failure.
 ///
 /// The `kind` and primary `span` identify the failing node. `frames` records the
@@ -325,6 +328,8 @@ pub enum RuntimeErrorKind {
     ProcessSpawn(SpawnError),
     /// Waiting for a successfully spawned external process failed.
     ProcessWait(WaitError),
+    /// One member stopped again after the operation exhausted its automatic resumes.
+    RepeatedStop { signal: i32 },
     /// The terminal could not be handed to a foreground job that must own it.
     ///
     /// Distinct from a spawn failure: the job's processes exist, and running
@@ -604,6 +609,12 @@ impl fmt::Display for RuntimeErrorKind {
             Self::RedirectionSetup(error) => error.fmt(formatter),
             Self::ProcessSpawn(error) => error.fmt(formatter),
             Self::ProcessWait(error) => error.fmt(formatter),
+            Self::RepeatedStop { signal } => {
+                write!(
+                    formatter,
+                    "the job stopped repeatedly (latest signal {signal})"
+                )
+            }
             Self::ForegroundTerminal(error) => {
                 write!(formatter, "terminal handover to the job failed: {error}")
             }

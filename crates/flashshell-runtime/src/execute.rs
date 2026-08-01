@@ -20,7 +20,7 @@ use flashshell_platform::{
 use flashshell_syntax::{ConditionalChain, OutputMode, PipeOperator, Pipeline, SourceFile};
 
 use crate::command::CommandRegistry;
-use crate::eval::{Clock, Instant, RuntimeError, RuntimeErrorKind};
+use crate::eval::{AUTOMATIC_RESUME_LIMIT, Clock, Instant, RuntimeError, RuntimeErrorKind};
 use crate::job::ProcessId;
 use crate::plan::{
     ExecutionPlan, PlannedRedirection, PlannedResolution, ProcessGroupPolicy, RedirectionAction,
@@ -751,14 +751,24 @@ pub(crate) fn take_foreground(
 fn resume_stopped_job(
     platform: &dyn Platform,
     group: Option<ProcessGroupId>,
+    signal: i32,
+    automatic_resumes: &mut usize,
     span: flashshell_syntax::Span,
 ) -> Result<(), RuntimeError> {
+    if *automatic_resumes >= AUTOMATIC_RESUME_LIMIT {
+        return Err(RuntimeError::new(
+            RuntimeErrorKind::RepeatedStop { signal },
+            span,
+        ));
+    }
     let Some(group) = group else {
         return Err(RuntimeError::new(RuntimeErrorKind::UngroupedStop, span));
     };
     platform
         .signal_process_group(group, JobSignal::Continue)
-        .map_err(|error| RuntimeError::new(RuntimeErrorKind::JobSignal(error), span))
+        .map_err(|error| RuntimeError::new(RuntimeErrorKind::JobSignal(error), span))?;
+    *automatic_resumes += 1;
+    Ok(())
 }
 
 fn start_preflighted_pipeline(
@@ -914,12 +924,19 @@ impl MixedPipeline {
         let group = self.group;
         for mut started in self.children {
             let stage = &plan.stages()[started.index];
+            let mut automatic_resumes = 0;
             let waited = loop {
                 match started.child.child.wait_for_transition() {
                     Ok(ProcessTransition::Completed(status)) => break Ok(status),
                     Ok(ProcessTransition::Continued) => {}
-                    Ok(ProcessTransition::Stopped { .. }) => {
-                        if let Err(error) = resume_stopped_job(platform, group, stage.span()) {
+                    Ok(ProcessTransition::Stopped { signal }) => {
+                        if let Err(error) = resume_stopped_job(
+                            platform,
+                            group,
+                            signal,
+                            &mut automatic_resumes,
+                            stage.span(),
+                        ) {
                             // Unlike the source-ordered wait, nothing here is
                             // blocked on this member's descriptors: the
                             // internal island finished before the wait began.
@@ -1363,12 +1380,19 @@ fn wait_in_source_order(
     let mut statuses = Vec::with_capacity(children.len());
     let mut first_error = None;
     for (mut child, stage) in children.into_iter().zip(plan.stages()) {
+        let mut automatic_resumes = 0;
         let waited = loop {
             match child.child.wait_for_transition() {
                 Ok(ProcessTransition::Completed(status)) => break Ok(status),
                 Ok(ProcessTransition::Continued) => {}
-                Ok(ProcessTransition::Stopped { .. }) => {
-                    if let Err(error) = resume_stopped_job(platform, group, stage.span()) {
+                Ok(ProcessTransition::Stopped { signal }) => {
+                    if let Err(error) = resume_stopped_job(
+                        platform,
+                        group,
+                        signal,
+                        &mut automatic_resumes,
+                        stage.span(),
+                    ) {
                         // A stop nothing can lift would otherwise hold the
                         // stage's descriptors for the life of the host,
                         // including a capture pipe a reader is still draining
