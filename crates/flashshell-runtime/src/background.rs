@@ -12,7 +12,8 @@ use std::sync::{Arc, mpsc};
 use std::thread;
 
 use flashshell_platform::{
-    ChildProcess, JobSignal, Platform, ProcessGroupId, ProcessStatus, ProcessTransition, WaitError,
+    Capability, ChildProcess, JobSignal, Platform, PlatformError, ProcessGroupId, ProcessStatus,
+    ProcessTransition, WaitError,
 };
 
 use crate::eval::{Clock, Instant, RuntimeError, RuntimeErrorKind};
@@ -538,8 +539,18 @@ pub enum JobCommandError {
     UnknownJob { job: JobId },
     /// A continuation was asked of a job that is not stopped.
     NotStopped { job: JobId },
+    /// The selected record already has a terminal aggregate.
+    Completed { job: JobId },
+    /// The selected record cannot be moved into the foreground.
+    NotForegroundable { job: JobId },
     /// The record's observation was abandoned, so it cannot be moved.
     Quarantined { job: JobId },
+    /// Foreground movement was requested without a usable controlling terminal.
+    ForegroundTerminalRequired,
+    /// Giving the terminal to the job or restoring it to the shell failed.
+    ForegroundTerminal { error: PlatformError },
+    /// Observation failed after a job had entered the foreground.
+    Observation { job: JobId, message: String },
     /// The platform refused the group delivery.
     Delivery { job: JobId, message: String },
     /// A completed job's observer panicked while the record was consumed.
@@ -551,7 +562,24 @@ impl fmt::Display for JobCommandError {
         match self {
             Self::UnknownJob { job } => write!(formatter, "unknown job `%{}`", job.get()),
             Self::NotStopped { job } => write!(formatter, "job `%{}` is not stopped", job.get()),
+            Self::Completed { job } => write!(formatter, "job `%{}` has completed", job.get()),
+            Self::NotForegroundable { job } => write!(
+                formatter,
+                "job `%{}` is neither stopped nor running in the background",
+                job.get()
+            ),
             Self::Quarantined { job } => write!(formatter, "job `%{}` is quarantined", job.get()),
+            Self::ForegroundTerminalRequired => {
+                formatter.write_str("a foreground terminal is required")
+            }
+            Self::ForegroundTerminal { error } => {
+                write!(formatter, "terminal ownership failed: {error}")
+            }
+            Self::Observation { job, message } => write!(
+                formatter,
+                "job `%{}` observation failed: {message}",
+                job.get()
+            ),
             Self::Delivery { job, message } => write!(
                 formatter,
                 "job `%{}` could not be signalled: {message}",
@@ -861,7 +889,14 @@ impl BackgroundJobs {
             },
         );
 
-        let outcome = self.wait_for_foreground(job_id, plan);
+        let outcome = self.wait_for_foreground(job_id).map_err(|error| {
+            RuntimeError::new(
+                RuntimeErrorKind::ForegroundObservation {
+                    message: error.to_string(),
+                },
+                plan.span(),
+            )
+        });
         let released = release_foreground(foreground, plan);
         match outcome {
             Err(error) => Err(error),
@@ -886,36 +921,23 @@ impl BackgroundJobs {
     }
 
     /// Apply all coordinator events until one foreground record completes or stops.
-    fn wait_for_foreground(
-        &mut self,
-        job: JobId,
-        plan: &ExecutionPlan,
-    ) -> Result<ForegroundJobOutcome, RuntimeError> {
+    fn wait_for_foreground(&mut self, job: JobId) -> Result<ForegroundJobOutcome, JobCommandError> {
         loop {
             let record = self
                 .records
                 .get(&job)
                 .expect("the managed foreground record is published");
             if record.observation_failed {
-                return Err(RuntimeError::new(
-                    RuntimeErrorKind::ForegroundObservation {
-                        message: record
-                            .observation_message
-                            .clone()
-                            .unwrap_or_else(|| "the observation was abandoned".to_owned()),
-                    },
-                    plan.span(),
-                ));
+                return Err(JobCommandError::Observation {
+                    job,
+                    message: record
+                        .observation_message
+                        .clone()
+                        .unwrap_or_else(|| "the observation was abandoned".to_owned()),
+                });
             }
             if let Some(status) = record.completion.clone() {
-                self.consume_waited_completion(job).map_err(|error| {
-                    RuntimeError::new(
-                        RuntimeErrorKind::ForegroundObservation {
-                            message: error.to_string(),
-                        },
-                        plan.span(),
-                    )
-                })?;
+                self.consume_waited_completion(job)?;
                 return Ok(ForegroundJobOutcome::Completed(status));
             }
             if matches!(record.job.state(), JobState::Stopped { .. }) {
@@ -1036,6 +1058,99 @@ impl BackgroundJobs {
                     && matches!(record.job.state(), JobState::Stopped { .. })
             })
             .map(|(id, _)| *id)
+    }
+
+    /// The newest stopped or running-background job that can enter foreground.
+    pub(crate) fn newest_foreground_eligible(&mut self) -> Option<JobId> {
+        self.apply_pending_observations();
+        self.records
+            .iter()
+            .rev()
+            .find(|(_, record)| {
+                record.completion.is_none()
+                    && !record.observation_failed
+                    && matches!(
+                        record.job.state(),
+                        JobState::Stopped { .. } | JobState::Background
+                    )
+            })
+            .map(|(id, _)| *id)
+    }
+
+    /// Move one stopped or running-background record into the foreground.
+    ///
+    /// Terminal ownership is transferred before a stopped group is continued.
+    /// The same guard restores the shell on completion, another stop, an
+    /// observation failure, a delivery failure, or unwind. A primary job error
+    /// remains primary when restoration also fails; otherwise restoration
+    /// failure is the operation's error.
+    pub(crate) fn foreground_job(
+        &mut self,
+        job: JobId,
+        platform: &dyn Platform,
+    ) -> Result<ForegroundJobOutcome, JobCommandError> {
+        self.apply_pending_observations();
+        let record = self
+            .records
+            .get(&job)
+            .ok_or(JobCommandError::UnknownJob { job })?;
+        if record.observation_failed {
+            return Err(JobCommandError::Quarantined { job });
+        }
+        if record.completion.is_some() {
+            return Err(JobCommandError::Completed { job });
+        }
+        let stopped = matches!(record.job.state(), JobState::Stopped { .. });
+        let running_background = record.job.state() == JobState::Background;
+        if !stopped && !running_background {
+            return Err(JobCommandError::NotForegroundable { job });
+        }
+        if !platform.is_terminal()
+            || !platform
+                .capabilities()
+                .supports(Capability::ForegroundTerminal)
+        {
+            return Err(JobCommandError::ForegroundTerminalRequired);
+        }
+        let group = record.group;
+        let mut foreground = platform
+            .enter_foreground(group)
+            .map_err(|error| JobCommandError::ForegroundTerminal { error })?;
+
+        let outcome = (|| {
+            if stopped {
+                deliver(platform, group, JobSignal::Continue, job)?;
+                let record = self
+                    .records
+                    .get_mut(&job)
+                    .expect("the selected record remains session-owned");
+                record
+                    .job
+                    .continue_in(JobPlacement::Foreground)
+                    .expect("a stopped job accepts a foreground continuation");
+                record.resume_requested = false;
+                self.notices
+                    .retain(|notice| notice.job != job || notice.kind != JobNoticeKind::Stopped);
+            } else {
+                self.records
+                    .get_mut(&job)
+                    .expect("the selected record remains session-owned")
+                    .job
+                    .move_to(JobPlacement::Foreground)
+                    .expect("a running background job accepts foreground placement");
+            }
+            self.wait_for_foreground(job)
+        })();
+        let restored = foreground
+            .restore()
+            .map_err(|error| JobCommandError::ForegroundTerminal { error });
+        match outcome {
+            Err(error) => Err(error),
+            Ok(outcome) => {
+                restored?;
+                Ok(outcome)
+            }
+        }
     }
 
     /// Deliver one user-requested group signal to an addressable record.

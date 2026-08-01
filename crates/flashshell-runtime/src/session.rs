@@ -869,8 +869,7 @@ fn run_pipeline(
     validate_job_builtin_arguments(&plan)?;
 
     if let Some((command, stage)) = sole_job_command(&plan) {
-        let status = execute_job_builtin(command, stage, jobs, platform)?;
-        return Ok(ChainStep::Status(status));
+        return execute_job_builtin(command, stage, jobs, platform).map_err(Interrupt::from);
     }
 
     if plan
@@ -1038,7 +1037,7 @@ fn execute_job_builtin(
     stage: &PlannedStage,
     jobs: &mut Option<BackgroundJobs>,
     platform: &dyn Platform,
-) -> Result<Status, RuntimeError> {
+) -> Result<ChainStep, RuntimeError> {
     let Some(coordinator) = jobs.as_mut() else {
         return Err(RuntimeError::new(
             RuntimeErrorKind::JobControlUnavailable { command },
@@ -1052,6 +1051,21 @@ fn execute_job_builtin(
         )
     };
     match command {
+        "fg" => {
+            let target = match parse_optional_job_target(stage, command)? {
+                Some(target) => target,
+                None => coordinator.newest_foreground_eligible().ok_or_else(|| {
+                    operation("no stopped or running background job to foreground".to_owned())
+                })?,
+            };
+            return coordinator
+                .foreground_job(target, platform)
+                .map(|outcome| match outcome {
+                    ForegroundJobOutcome::Completed(status) => ChainStep::Status(status),
+                    ForegroundJobOutcome::Stopped(job) => ChainStep::Stopped(job),
+                })
+                .map_err(|error| operation(error.to_string()));
+        }
         "bg" => {
             let target = match parse_optional_job_target(stage, command)? {
                 Some(target) => target,
@@ -1082,6 +1096,7 @@ fn execute_job_builtin(
             let targets = parse_job_targets(stage, command)?;
             return coordinator
                 .wait_for_jobs(&targets, platform)
+                .map(ChainStep::Status)
                 .map_err(|error| operation(error.to_string()));
         }
         _ => {
@@ -1093,7 +1108,9 @@ fn execute_job_builtin(
             ));
         }
     }
-    Ok(Status::exit(0, Duration::ZERO).expect("zero is a valid job-command status"))
+    Ok(ChainStep::Status(
+        Status::exit(0, Duration::ZERO).expect("zero is a valid job-command status"),
+    ))
 }
 
 /// Whether this all-internal plan begins with the read-only job table.
