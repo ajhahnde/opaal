@@ -16,14 +16,14 @@ use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Barrier, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use rustix::fs::{Mode, OFlags, open};
 use rustix::process::{Pid, Signal, kill_process, kill_process_group, test_kill_process};
 use rustix::pty::{OpenptFlags, grantpt, openpt, ptsname, unlockpt};
-use rustix::termios::{Winsize, tcsetwinsize};
+use rustix::termios::{Winsize, tcgetpgrp, tcsetwinsize};
 
 const FSH: &str = env!("CARGO_BIN_EXE_fsh");
 const HANGUP_OBSERVER: &str = env!("CARGO_BIN_EXE_flashshell-e2e-hangup-observer-fixture");
@@ -149,6 +149,28 @@ impl Pty {
     fn resize(&self, rows: u16, cols: u16) {
         let user = self.control_user.as_ref().expect("user side is open");
         tcsetwinsize(user, winsize(rows, cols)).expect("resize");
+    }
+
+    fn shell_group(&self) -> Pid {
+        let process = i32::try_from(self.child.id()).expect("the shell pid fits in i32");
+        Pid::from_raw(process).expect("a live shell has a nonzero process group")
+    }
+
+    fn await_terminal_owner(&self, expected: Pid, context: &str) {
+        let deadline = Instant::now() + TIMEOUT;
+        loop {
+            let observed = tcgetpgrp(&self.writer).expect("query the pty foreground process group");
+            if observed == expected {
+                return;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "terminal owner did not become {expected} during {context}; \
+                 last owner was {observed}; rendered so far:\n{}",
+                self.rendered()
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
     }
 
     /// Wait for a freshly drawn prompt after `mark`, then let it settle.
@@ -290,10 +312,10 @@ fn interactive(cwd: &Path) -> Pty {
     Pty::spawn(&["--no-config", "--no-history"], &[], cwd)
 }
 
-fn await_group_reports(directory: &Path, count: usize) -> Vec<u64> {
+fn await_process_group_reports(directory: &Path, count: usize) -> Vec<(Pid, Pid)> {
     let deadline = Instant::now() + TIMEOUT;
     loop {
-        let mut groups: Vec<_> = fs::read_dir(directory)
+        let mut reports: Vec<_> = fs::read_dir(directory)
             .expect("read the group report directory")
             .map(|entry| entry.expect("read one group report entry").path())
             .filter(|path| {
@@ -301,72 +323,65 @@ fn await_group_reports(directory: &Path, count: usize) -> Vec<u64> {
                     .is_some_and(|extension| extension == "group")
             })
             .map(|path| {
-                fs::read_to_string(path)
+                let process = path
+                    .file_stem()
+                    .and_then(|stem| stem.to_str())
+                    .and_then(|stem| stem.parse::<i32>().ok())
+                    .and_then(Pid::from_raw)
+                    .expect("the group report name contains a live process id");
+                let group = fs::read_to_string(path)
                     .expect("read one group report")
-                    .parse::<u64>()
-                    .expect("the process group report is numeric")
+                    .parse::<i32>()
+                    .ok()
+                    .and_then(Pid::from_raw)
+                    .expect("the process group report contains a valid id");
+                (process, group)
             })
             .collect();
-        if groups.len() == count {
-            groups.sort_unstable();
-            return groups;
+        if reports.len() == count {
+            reports.sort_unstable_by_key(|(process, _)| process.as_raw_nonzero());
+            return reports;
         }
         assert!(
             Instant::now() < deadline,
-            "timed out waiting for {count} process-group reports; found {}",
-            groups.len()
-        );
-        thread::sleep(Duration::from_millis(10));
-    }
-}
-
-fn await_one_process_group_report(directory: &Path) -> (Pid, Pid) {
-    let deadline = Instant::now() + TIMEOUT;
-    loop {
-        let reports: Vec<_> = fs::read_dir(directory)
-            .expect("read the group report directory")
-            .map(|entry| entry.expect("read one group report entry").path())
-            .filter(|path| {
-                path.extension()
-                    .is_some_and(|extension| extension == "group")
-            })
-            .collect();
-        if reports.len() == 1 {
-            let path = &reports[0];
-            let process = path
-                .file_stem()
-                .and_then(|stem| stem.to_str())
-                .and_then(|stem| stem.parse::<i32>().ok())
-                .and_then(Pid::from_raw)
-                .expect("the group report name contains a live process id");
-            let group = fs::read_to_string(path)
-                .expect("read the process group report")
-                .parse::<i32>()
-                .ok()
-                .and_then(Pid::from_raw)
-                .expect("the process group report contains a valid id");
-            return (process, group);
-        }
-        assert!(
-            Instant::now() < deadline,
-            "timed out waiting for one process-group report; found {}",
+            "timed out waiting for {count} process-group reports in {}; found {}",
+            directory.display(),
             reports.len()
         );
         thread::sleep(Duration::from_millis(10));
     }
 }
 
+fn await_group_reports(directory: &Path, count: usize) -> Vec<u64> {
+    await_process_group_reports(directory, count)
+        .into_iter()
+        .map(|(_, group)| {
+            u64::try_from(group.as_raw_nonzero().get()).expect("a process group is positive")
+        })
+        .collect()
+}
+
+fn await_one_process_group_report(directory: &Path) -> (Pid, Pid) {
+    await_process_group_reports(directory, 1)
+        .pop()
+        .expect("one process-group report was returned")
+}
+
 fn await_process_exit(process: Pid) {
+    await_process_exit_during(process, "fixture cleanup");
+}
+
+fn await_process_exit_during(process: Pid, context: &str) {
     let deadline = Instant::now() + TIMEOUT;
     loop {
         match test_kill_process(process) {
             Err(rustix::io::Errno::SRCH) => return,
             Ok(()) => {}
-            Err(error) => panic!("cannot inspect process {process}: {error}"),
+            Err(error) => panic!("cannot inspect process {process} during {context}: {error}"),
         }
         assert!(
             Instant::now() < deadline,
-            "process {} remained alive after the shell exited",
+            "process {} remained alive during {context}",
             process.as_raw_nonzero()
         );
         thread::sleep(Duration::from_millis(10));
@@ -399,6 +414,92 @@ impl Drop for ReleaseOnDrop {
     fn drop(&mut self) {
         let _ = fs::write(&self.0, b"release");
     }
+}
+
+const DEFAULT_STRESS_SEEDS: &[u64] = &[
+    0x1020_3040_5060_7080,
+    0x1357_9bdf_2468_ace1,
+    0x5eed_fade_cafe_beef,
+    0xfedc_ba98_7654_3210,
+];
+
+fn stress_seeds() -> Vec<u64> {
+    let Some(configured) = std::env::var_os("FLASHSHELL_PTY_STRESS_SEEDS") else {
+        return DEFAULT_STRESS_SEEDS.to_vec();
+    };
+    let configured = configured
+        .into_string()
+        .expect("FLASHSHELL_PTY_STRESS_SEEDS must be UTF-8");
+    assert!(
+        !configured.trim().is_empty(),
+        "FLASHSHELL_PTY_STRESS_SEEDS must name at least one nonzero seed"
+    );
+
+    configured
+        .split(',')
+        .map(|raw| {
+            let token = raw.trim();
+            assert!(
+                !token.is_empty(),
+                "FLASHSHELL_PTY_STRESS_SEEDS contains an empty seed"
+            );
+            let parsed = token.strip_prefix("0x").map_or_else(
+                || token.parse::<u64>(),
+                |digits| u64::from_str_radix(digits, 16),
+            );
+            let seed =
+                parsed.unwrap_or_else(|error| panic!("invalid PTY stress seed {token:?}: {error}"));
+            assert_ne!(seed, 0, "PTY stress seeds must be nonzero");
+            seed
+        })
+        .collect()
+}
+
+struct SeededSchedule(u64);
+
+impl SeededSchedule {
+    fn new(seed: u64) -> Self {
+        assert_ne!(seed, 0, "PTY stress seeds must be nonzero");
+        Self(seed)
+    }
+
+    fn next(&mut self) -> u64 {
+        let mut value = self.0;
+        value ^= value << 13;
+        value ^= value >> 7;
+        value ^= value << 17;
+        self.0 = value;
+        value
+    }
+
+    fn choose(&mut self, upper: usize) -> usize {
+        assert!(upper > 0, "a schedule choice needs a nonempty range");
+        usize::try_from(self.next() % u64::try_from(upper).unwrap()).unwrap()
+    }
+
+    fn coin(&mut self) -> bool {
+        self.next() & 1 == 1
+    }
+
+    fn shuffle<T>(&mut self, values: &mut [T]) {
+        for upper in (1..values.len()).rev() {
+            let other = self.choose(upper + 1);
+            values.swap(upper, other);
+        }
+    }
+}
+
+fn export_path(session: &mut Pty, name: &str, path: &Path) {
+    let value = path.to_str().expect("the test path is UTF-8");
+    assert!(
+        !value.contains(['\'', '\n']),
+        "the PTY fixture path must fit one single-quoted word"
+    );
+    let mark = session.mark();
+    let source = format!("export {name} = '{value}'");
+    session.send(source.as_bytes());
+    session.send(ENTER);
+    session.await_prompt(mark);
 }
 
 fn assert_notice_precedes_prompt(rendered: &str, notice: &str) {
@@ -645,6 +746,7 @@ fn job_builtins_stop_list_bg_and_fg_a_real_foreground_job() {
     let mut session = Pty::spawn(&["--no-config", "--no-history"], &environment, &cwd);
     let _release_on_drop = ReleaseOnDrop(release.clone());
     session.await_prompt(0);
+    session.await_terminal_owner(session.shell_group(), "the initial job lifecycle prompt");
 
     let command = format!("^{PROCESS_OBSERVER}");
     let stop_mark = session.mark();
@@ -652,10 +754,12 @@ fn job_builtins_stop_list_bg_and_fg_a_real_foreground_job() {
     session.send(ENTER);
     let (process, group) = await_one_process_group_report(&cwd);
     let mut cleanup = ProcessGroupCleanup::new(group);
+    session.await_terminal_owner(group, "the initial foreground job");
 
     session.send(CTRL_Z);
     session.expect_from(stop_mark, "[1] Stopped");
     session.await_prompt(stop_mark);
+    session.await_terminal_owner(session.shell_group(), "the prompt after Ctrl-Z");
     let stopped = session.rendered_from(stop_mark);
     assert_eq!(
         stopped.matches("[1] Stopped").count(),
@@ -674,6 +778,7 @@ fn job_builtins_stop_list_bg_and_fg_a_real_foreground_job() {
     session.send(b"bg %1");
     session.send(ENTER);
     session.await_prompt(bg_mark);
+    session.await_terminal_owner(session.shell_group(), "the prompt after bg");
 
     let running_jobs_mark = session.mark();
     session.send(b"jobs");
@@ -684,13 +789,17 @@ fn job_builtins_stop_list_bg_and_fg_a_real_foreground_job() {
     let fg_mark = session.mark();
     session.send(b"fg %1");
     session.send(ENTER);
-    thread::sleep(SETTLE);
+    session.await_terminal_owner(group, "the job resumed through fg");
     assert!(
         test_kill_process(process).is_ok(),
         "the held fixture must still be live while fg waits"
     );
     fs::write(&release, b"complete").expect("release the foreground fixture");
     session.await_prompt(fg_mark);
+    session.await_terminal_owner(
+        session.shell_group(),
+        "the prompt after foreground completion",
+    );
     await_process_exit(process);
     cleanup.disarm();
     let foreground = session.rendered_from(fg_mark);
@@ -1460,4 +1569,430 @@ fn an_unacknowledged_completion_is_rendered_before_exit() {
     session.send(ENTER);
     session.expect_from(exit_mark, "[1] Done     sleep 1");
     assert_eq!(session.wait_code(), 0);
+}
+
+#[test]
+fn stress_replayable_job_control_cycles_restore_the_terminal_and_reap_the_child() {
+    for seed in stress_seeds() {
+        eprintln!("PTY lifecycle stress seed {seed:#018x}");
+        let cwd = unique_dir(&format!("stress-cycle-{seed:016x}"));
+        let report = cwd.join("report.bin");
+        let release = cwd.join("release");
+        let report_text = report.to_str().expect("test report path is UTF-8");
+        let release_text = release.to_str().expect("test release path is UTF-8");
+        let cwd_text = cwd.to_str().expect("test directory path is UTF-8");
+        let environment = [
+            ("FLASH_PROBE_REPORT", report_text),
+            ("FLASH_PROBE_GROUP_REPORT", cwd_text),
+            ("FLASH_PROBE_HOLD_UNTIL", release_text),
+        ];
+        let mut schedule = SeededSchedule::new(seed);
+        let mut session = Pty::spawn(&["--no-config", "--no-history"], &environment, &cwd);
+        let _release_on_drop = ReleaseOnDrop(release.clone());
+        session.await_prompt(0);
+        session.await_terminal_owner(
+            session.shell_group(),
+            &format!("the initial lifecycle prompt for seed {seed:#018x}"),
+        );
+
+        let edit_mark = session.mark();
+        session.send(b"exit 99");
+        session.expect_from(edit_mark, "exit 99");
+        session.send(CTRL_C);
+        session.await_prompt(edit_mark);
+        session.await_terminal_owner(
+            session.shell_group(),
+            &format!("editor Ctrl-C for seed {seed:#018x}"),
+        );
+
+        let command = format!("^{PROCESS_OBSERVER}");
+        session.send(command.as_bytes());
+        session.send(ENTER);
+        let (process, group) = await_one_process_group_report(&cwd);
+        let mut cleanup = ProcessGroupCleanup::new(group);
+        session.await_terminal_owner(
+            group,
+            &format!("initial foreground ownership for seed {seed:#018x}"),
+        );
+
+        let stop_cycles = 1 + schedule.choose(3);
+        let complete_in_background = schedule.coin();
+        for cycle in 0..stop_cycles {
+            let stop_mark = session.mark();
+            session.send(CTRL_Z);
+            session.expect_from(stop_mark, "[1] Stopped");
+            session.await_prompt(stop_mark);
+            session.await_terminal_owner(
+                session.shell_group(),
+                &format!("the prompt after stop {} for seed {seed:#018x}", cycle + 1),
+            );
+            assert_eq!(
+                session
+                    .rendered_from(stop_mark)
+                    .matches("[1] Stopped")
+                    .count(),
+                1,
+                "one stop notice is owed in cycle {} for seed {seed:#018x}:\n{}",
+                cycle + 1,
+                session.rendered_from(stop_mark)
+            );
+
+            let final_cycle = cycle + 1 == stop_cycles;
+            let move_through_background = complete_in_background && final_cycle || schedule.coin();
+            if move_through_background {
+                let bg_mark = session.mark();
+                session.send(b"bg %1");
+                session.send(ENTER);
+                session.await_prompt(bg_mark);
+                session.await_terminal_owner(
+                    session.shell_group(),
+                    &format!("the prompt after bg for seed {seed:#018x}"),
+                );
+
+                if schedule.coin() {
+                    let jobs_mark = session.mark();
+                    session.send(b"jobs");
+                    session.send(ENTER);
+                    session.expect_from(jobs_mark, "%1  | running | background");
+                    session.await_prompt(jobs_mark);
+                    session.await_terminal_owner(
+                        session.shell_group(),
+                        &format!("the jobs prompt for seed {seed:#018x}"),
+                    );
+                }
+            }
+
+            if complete_in_background && final_cycle {
+                let completion_mark = session.mark();
+                fs::write(&release, b"complete").expect("release the background fixture");
+                await_process_exit_during(
+                    process,
+                    &format!("background completion for seed {seed:#018x}"),
+                );
+                assert!(
+                    !session.rendered_from(completion_mark).contains("[1] Done"),
+                    "a completion notice entered the active prompt for seed {seed:#018x}:\n{}",
+                    session.rendered_from(completion_mark)
+                );
+                session.send(CTRL_C);
+                session.expect_from(completion_mark, "[1] Done");
+                session.await_prompt(completion_mark);
+                let completion = session.rendered_from(completion_mark);
+                assert_eq!(
+                    completion.matches("[1] Done").count(),
+                    1,
+                    "background completion was not exactly once for seed {seed:#018x}:\n{completion}"
+                );
+                assert_notice_precedes_prompt(&completion, "[1] Done");
+                session.await_terminal_owner(
+                    session.shell_group(),
+                    &format!("background completion for seed {seed:#018x}"),
+                );
+                break;
+            }
+
+            let fg_mark = session.mark();
+            session.send(b"fg %1");
+            session.send(ENTER);
+            session.await_terminal_owner(
+                group,
+                &format!("foreground resume {} for seed {seed:#018x}", cycle + 1),
+            );
+
+            if final_cycle {
+                if schedule.coin() {
+                    session.send(CTRL_C);
+                } else {
+                    fs::write(&release, b"complete").expect("release the foreground fixture");
+                }
+                session.await_prompt(fg_mark);
+                session.await_terminal_owner(
+                    session.shell_group(),
+                    &format!("foreground completion for seed {seed:#018x}"),
+                );
+                await_process_exit_during(
+                    process,
+                    &format!("foreground completion for seed {seed:#018x}"),
+                );
+                assert!(
+                    !session.rendered_from(fg_mark).contains("[1] Done"),
+                    "fg did not consume completion for seed {seed:#018x}:\n{}",
+                    session.rendered_from(fg_mark)
+                );
+            }
+        }
+
+        await_process_exit_during(
+            process,
+            &format!("final lifecycle cleanup for seed {seed:#018x}"),
+        );
+        cleanup.disarm();
+
+        let recovery_mark = session.mark();
+        session.send(b"echo stress-cycle-alive");
+        session.send(ENTER);
+        session.expect_from(recovery_mark, "stress-cycle-alive");
+        session.await_prompt(recovery_mark);
+        session.await_terminal_owner(
+            session.shell_group(),
+            &format!("the recovery prompt for seed {seed:#018x}"),
+        );
+
+        session.send(b"exit 0");
+        session.send(ENTER);
+        assert_eq!(
+            session.wait_code(),
+            0,
+            "the lifecycle shell failed for seed {seed:#018x}"
+        );
+    }
+}
+
+#[test]
+fn stress_concurrent_completions_remain_prompt_safe_and_exactly_once() {
+    for seed in stress_seeds() {
+        eprintln!("PTY concurrent-completion stress seed {seed:#018x}");
+        let cwd = unique_dir(&format!("stress-completions-{seed:016x}"));
+        let report = cwd.join("report.bin");
+        let report_text = report.to_str().expect("test report path is UTF-8");
+        let cwd_text = cwd.to_str().expect("test directory path is UTF-8");
+        let environment = [
+            ("FLASH_PROBE_REPORT", report_text),
+            ("FLASH_PROBE_GROUP_REPORT", cwd_text),
+        ];
+        let mut schedule = SeededSchedule::new(seed);
+        let mut session = Pty::spawn(&["--no-config", "--no-history"], &environment, &cwd);
+        session.await_prompt(0);
+        session.await_terminal_owner(
+            session.shell_group(),
+            &format!("the initial completion prompt for seed {seed:#018x}"),
+        );
+
+        let releases: Vec<_> = (1..=3)
+            .map(|job| cwd.join(format!("release-{job}")))
+            .collect();
+        let release_guards: Vec<_> = releases.iter().cloned().map(ReleaseOnDrop).collect();
+        for (index, release) in releases.iter().enumerate() {
+            export_path(&mut session, "FLASH_PROBE_HOLD_UNTIL", release);
+            let launch_mark = session.mark();
+            let command = format!("^{PROCESS_OBSERVER} &");
+            session.send(command.as_bytes());
+            session.send(ENTER);
+            session.expect_from(launch_mark, &format!("[{}] ", index + 1));
+            session.await_prompt(launch_mark);
+            session.await_terminal_owner(
+                session.shell_group(),
+                &format!("background launch {} for seed {seed:#018x}", index + 1),
+            );
+        }
+
+        let reports = await_process_group_reports(&cwd, 3);
+        let mut cleanups: Vec<_> = reports
+            .iter()
+            .map(|(_, group)| ProcessGroupCleanup::new(*group))
+            .collect();
+
+        let buffer_mark = session.mark();
+        session.send(b"echo concurrent-completion-buffer");
+        session.expect_from(buffer_mark, "concurrent-completion-buffer");
+
+        let mut release_order = releases.clone();
+        schedule.shuffle(&mut release_order);
+        let barrier = Arc::new(Barrier::new(release_order.len() + 1));
+        let writers: Vec<_> = release_order
+            .into_iter()
+            .enumerate()
+            .map(|(rank, release)| {
+                let barrier = Arc::clone(&barrier);
+                thread::spawn(move || {
+                    barrier.wait();
+                    for _ in 0..rank {
+                        thread::yield_now();
+                    }
+                    fs::write(release, b"complete").expect("release one background fixture");
+                })
+            })
+            .collect();
+        barrier.wait();
+        for writer in writers {
+            writer.join().expect("join one release writer");
+        }
+        for (process, _) in &reports {
+            await_process_exit_during(
+                *process,
+                &format!("concurrent completion for seed {seed:#018x}"),
+            );
+        }
+
+        assert!(
+            !session.rendered_from(buffer_mark).contains("Done"),
+            "a concurrent completion entered the active buffer for seed {seed:#018x}:\n{}",
+            session.rendered_from(buffer_mark)
+        );
+
+        let completion_mark = session.mark();
+        session.send(CTRL_C);
+        session.await_prompt(completion_mark);
+        let deadline = Instant::now() + TIMEOUT;
+        loop {
+            let completion = session.rendered_from(completion_mark);
+            if (1..=3).all(|job| completion.contains(&format!("[{job}] Done"))) {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "concurrent completion notices did not converge for seed {seed:#018x}:\n{completion}"
+            );
+            let refresh_mark = session.mark();
+            session.send(b"jobs");
+            session.send(ENTER);
+            session.await_prompt(refresh_mark);
+        }
+
+        let completion = session.rendered_from(completion_mark);
+        for job in 1..=3 {
+            let notice = format!("[{job}] Done");
+            assert_eq!(
+                completion.matches(&notice).count(),
+                1,
+                "completion {job} was not exactly once for seed {seed:#018x}:\n{completion}"
+            );
+            assert_notice_precedes_prompt(&completion, &notice);
+        }
+        session.await_terminal_owner(
+            session.shell_group(),
+            &format!("concurrent completion delivery for seed {seed:#018x}"),
+        );
+        for cleanup in &mut cleanups {
+            cleanup.disarm();
+        }
+        drop(release_guards);
+
+        session.send(b"exit 0");
+        session.send(ENTER);
+        assert_eq!(
+            session.wait_code(),
+            0,
+            "the concurrent-completion shell failed for seed {seed:#018x}"
+        );
+    }
+}
+
+#[test]
+fn stress_replayable_live_job_exit_hangs_up_and_reaps_every_group() {
+    for seed in stress_seeds() {
+        eprintln!("PTY live-job exit stress seed {seed:#018x}");
+        let cwd = unique_dir(&format!("stress-exit-{seed:016x}"));
+        let report = cwd.join("report.bin");
+        let report_text = report.to_str().expect("test report path is UTF-8");
+        let cwd_text = cwd.to_str().expect("test directory path is UTF-8");
+        let environment = [
+            ("FLASH_PROBE_REPORT", report_text),
+            ("FLASH_PROBE_GROUP_REPORT", cwd_text),
+        ];
+        let mut schedule = SeededSchedule::new(seed);
+        let mut session = Pty::spawn(&["--no-config", "--no-history"], &environment, &cwd);
+        session.await_prompt(0);
+
+        let background_release = cwd.join("background-release");
+        let stopped_release = cwd.join("stopped-release");
+        let _background_release_on_drop = ReleaseOnDrop(background_release.clone());
+        let _stopped_release_on_drop = ReleaseOnDrop(stopped_release.clone());
+
+        export_path(&mut session, "FLASH_PROBE_HOLD_UNTIL", &background_release);
+        let background_mark = session.mark();
+        let command = format!("^{PROCESS_OBSERVER} &");
+        session.send(command.as_bytes());
+        session.send(ENTER);
+        session.expect_from(background_mark, "[1] ");
+        session.await_prompt(background_mark);
+        let (background_process, background_group) = await_process_group_reports(&cwd, 1)[0];
+        let mut background_cleanup = ProcessGroupCleanup::new(background_group);
+
+        export_path(&mut session, "FLASH_PROBE_HOLD_UNTIL", &stopped_release);
+        let command = format!("^{PROCESS_OBSERVER}");
+        session.send(command.as_bytes());
+        session.send(ENTER);
+        let reports = await_process_group_reports(&cwd, 2);
+        let (stopped_process, stopped_group) = reports
+            .into_iter()
+            .find(|(process, _)| *process != background_process)
+            .expect("the foreground fixture has its own report");
+        let mut stopped_cleanup = ProcessGroupCleanup::new(stopped_group);
+        session.await_terminal_owner(
+            stopped_group,
+            &format!("the exit fixture foreground for seed {seed:#018x}"),
+        );
+
+        let stop_mark = session.mark();
+        session.send(CTRL_Z);
+        session.expect_from(stop_mark, "[2] Stopped");
+        session.await_prompt(stop_mark);
+        session.await_terminal_owner(
+            session.shell_group(),
+            &format!("the stopped-job prompt for seed {seed:#018x}"),
+        );
+
+        let first_refusal = session.mark();
+        session.send(b"exit 0");
+        session.send(ENTER);
+        session.expect_from(first_refusal, "fsh: 2 live background jobs");
+        session.expect_from(first_refusal, "fsh: exit again to hang up");
+        session.await_prompt(first_refusal);
+        session.await_terminal_owner(
+            session.shell_group(),
+            &format!("the first exit refusal for seed {seed:#018x}"),
+        );
+
+        if schedule.coin() {
+            fs::write(&background_release, b"complete")
+                .expect("release the independent background fixture");
+            await_process_exit_during(
+                background_process,
+                &format!("independent completion for seed {seed:#018x}"),
+            );
+            background_cleanup.disarm();
+        }
+
+        if schedule.coin() {
+            let reset_mark = session.mark();
+            session.send(b"echo reset-exit-refusal");
+            session.send(ENTER);
+            session.expect_from(reset_mark, "reset-exit-refusal");
+            session.await_prompt(reset_mark);
+            session.await_terminal_owner(
+                session.shell_group(),
+                &format!("the refusal reset for seed {seed:#018x}"),
+            );
+
+            let second_refusal = session.mark();
+            session.send(b"exit 0");
+            session.send(ENTER);
+            session.expect_from(second_refusal, "live background job");
+            session.expect_from(second_refusal, "fsh: exit again to hang up");
+            session.await_prompt(second_refusal);
+            session.await_terminal_owner(
+                session.shell_group(),
+                &format!("the second exit refusal for seed {seed:#018x}"),
+            );
+        }
+
+        session.send(b"exit 0");
+        session.send(ENTER);
+        assert_eq!(
+            session.wait_code(),
+            0,
+            "the live-job exit failed for seed {seed:#018x}"
+        );
+        await_process_exit_during(
+            background_process,
+            &format!("background hang-up for seed {seed:#018x}"),
+        );
+        await_process_exit_during(
+            stopped_process,
+            &format!("stopped-job hang-up for seed {seed:#018x}"),
+        );
+        background_cleanup.disarm();
+        stopped_cleanup.disarm();
+    }
 }
