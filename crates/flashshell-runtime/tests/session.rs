@@ -2974,6 +2974,10 @@ fn wait_applies_unselected_events_without_consuming_their_notices() {
         .steps
         .send(Ok(ProcessTransition::Completed(ProcessStatus::Exited(3))))
         .expect("complete the unselected job");
+    while session.background_completion(job_id(1)).is_none() {
+        session.refresh_background_jobs();
+        std::thread::yield_now();
+    }
     controls[1]
         .steps
         .send(Ok(ProcessTransition::Completed(ProcessStatus::Exited(0))))
