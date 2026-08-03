@@ -1,116 +1,124 @@
-<div align="center">
+# FlashShell
 
-<h1>FlashShell</h1>
+[FlashOS](../../README.md) › FlashShell
 
-<h3>A command shell and scripting language, written in Rust</h3>
+FlashShell (`fsh`) is the primary interactive shell and scripting interface of FlashOS. It is a non-POSIX command language built around structured runtime values, explicit process invocation, and a shared syntax and execution core for interactive input and `.fsh` scripts. This page provides a component overview; detailed language, scripting, architecture, and development documentation is available under [`docs/`](docs/README.md).
 
-<p>
-  <img src="https://img.shields.io/badge/version-v0.1.0-f59e0b?style=flat-square" alt="Version">
-  <img src="https://img.shields.io/badge/license-Apache--2.0-lightgrey?style=flat-square" alt="License">
-</p>
+> **Project status:** FlashOS as a complete operating system remains pre-alpha software. However, FlashShell component documentation defines the intended stable FlashShell v1.0 contract. Note that not every v1 feature is automatically available in every current FlashOS image or on every target platform, and execution on a Linux or macOS development host is not automatic proof of FlashOS target support.
 
-<p>
-  <b>README</b> ·
-  <a href="CHANGELOG.md"><b>Changelog</b></a> ·
-  <a href="LICENSE"><b>License</b></a>
-</p>
+## On this page
 
-</div>
+- [Role in FlashOS](#role-in-flashos)
+- [Design boundaries](#design-boundaries)
+- [FlashShell v1 contract](#flashshell-v1-contract)
+- [Current implementation](#current-implementation)
+- [Using `fsh`](#using-fsh)
+- [Development and verification](#development-and-verification)
+- [Documentation](#documentation)
+- [License](#license)
 
----
+## Role in FlashOS
 
-## About
+The FlashOS x86_64 image configuration includes the `flashshell` package and assigns `/usr/bin/fsh` as the login shell for the configured root and user accounts.
 
-FlashShell is a command shell and scripting language designed from first
-principles to make command-line workflows ergonomic, safe, and composable.
+Running `fsh` without a script starts an interactive session. Passing a script path evaluates the UTF-8 source file as a FlashShell program; FlashShell scripts conventionally use the `.fsh` extension.
 
-The executable is `fsh`, and scripts use the `.fsh` extension. Scripts and the
-interactive prompt share the same parser and evaluator, ensuring identical
-behavior in both contexts.
+FlashShell provides the language and execution environment, but it does not replace the rest of the userspace. External commands remain separate executables supplied by the system image and are launched through the platform integration layer.
 
-FlashShell composes conventional Unix-style programs that communicate through
-byte streams. Alongside them, it provides built-in commands that exchange
-streams of typed values. Every conversion between structured values and
-external byte streams is explicit.
+## Design boundaries
 
-FlashShell deliberately does not aim for POSIX compatibility. Its semantics are
-based on typed values, explicit conversions, and predictable expansion rules,
-as described in the [Design](#design) section.
+FlashShell intentionally does not claim compatibility with POSIX shells such as `sh` or Bash. POSIX shell scripts should not be expected to run as FlashShell programs, and FlashShell syntax should not be passed to another shell interpreter.
 
-The engine is implemented in safe Rust and interacts with the underlying platform
-through a narrow, well-defined interface.
+The component follows several implementation boundaries:
 
-## Design
+- Interactive input and script execution use the same syntax and runtime crates, but their front ends are not required to expose identical editing, history, or startup behavior on every target.
+- Structured values belong to the FlashShell runtime. At an external process boundary, commands still use argument vectors, environment variables, working directories, file descriptors, and byte-oriented standard streams.
+- External executables are launched directly through the platform interface rather than by translating FlashShell source into another shell language.
+- Successful behavior on a macOS or Linux development host does not by itself establish equivalent behavior in a FlashOS image. Target compilation and image-level execution require separate verification.
 
-```fsh
-let name = "FlashShell"             # immutable binding
-mut count = 0                       # mutable binding
+## FlashShell v1 contract
 
-echo "hello $name"                  # expansion, never splitting
-let args = ["status", "--short"]
-^git ...$args                       # ^ forces an external command; ... spreads a list
+The public FlashShell documentation defines the intended v1 language, runtime, and tooling contract. That contract covers the existing value, command, pipeline, status, and job model together with maintainable multi-file scripts, explicit module boundaries, script arguments, typed function metadata, discoverable help, canonical formatting, non-executing static checks, language-server integration, and explicit platform capabilities.
 
-open users.json
-    | from json
-    | where {|user| user.active}
-    | select name email
-    | sort name
+A particular FlashOS release may expose only the parts of that contract that are implemented and qualified for its target environment. Unsupported or unqualified capabilities must remain visible rather than being silently replaced with weaker host-specific behavior.
 
-^build && echo success || echo failed
-```
+The detailed responsibilities are divided between the [Language Guide](docs/language-guide.md), [Scripting Guide](docs/scripting.md), [Architecture Guide](docs/architecture.md), and [Development Guide](docs/development.md).
 
-- **No implicit word splitting**. `$name` expands to exactly one argument.
-  A list expands to multiple arguments only through an explicit `...$list`
-  spread.
-- **No strings as code**. FlashShell has no `eval`. Command substitution
-  captures output as a value and never reparses it as source code.
-- Direct execution. External commands are launched directly with an
-  argument vector. FlashShell never routes command strings through `/bin/sh`.
-- **Typed pipelines**. External-to-external pipelines remain ordinary byte
-  streams, while built-in commands exchange streams of typed values. Ambiguous
-  boundaries are rejected with a suggested explicit converter, such as
-  `from json` or `to json`.
-- **Statuses, not exceptions**. A nonzero exit code produces a normal Status
-  value, and `&&` / `||` branch on that value. The check command explicitly
-  converts an unsuccessful status into a catchable error. Process-spawning,
-  redirection, and type failures are runtime errors with precise source spans.
-- **Explicit globbing**. `glob "src/**/*.rs"` is an expression. A bare `*.rs`
-  pattern is never expanded implicitly.
-- **Precise diagnostics**. Lossless lexing and byte-accurate source spans power
-  every diagnostic, the canonical formatter, and eventually syntax
-  highlighting and completion. There are no competing tokenizers.
+## Current implementation
 
-## Building
+FlashShell is maintained as an independent Rust workspace inside the FlashOS repository. The workspace manifest at [`Cargo.toml`](Cargo.toml) is authoritative for current membership; the table below describes the principal implementation responsibilities rather than a permanent crate count.
 
-Requires the Rust toolchain pinned in `rust-toolchain.toml` (rustup picks it
-up automatically).
+| Path                                | Responsibility                                                                          |
+| ----------------------------------- | --------------------------------------------------------------------------------------- |
+| `crates/flashshell-syntax/`         | Source representation, lexical analysis, parsing, syntax trees, and diagnostics         |
+| `crates/flashshell-runtime/`        | Runtime values, evaluation, built-ins, execution planning, sessions, and jobs           |
+| `crates/flashshell-platform/`       | Platform capability contracts used by the runtime                                       |
+| `crates/flashshell-platform-posix/` | Process, filesystem, descriptor, signal, and terminal integration for supported targets |
+| `crates/flashshell-cli/`            | The `fsh` executable and its interactive and script entry points                        |
+
+The separation between syntax, runtime, platform contracts, operating-system integration, and the command-line interface is intended to keep language semantics independent from target-specific terminal and process handling.
+
+FlashShell is implemented in Rust. The CLI prohibits unsafe code, while the low-level platform adapter permits explicitly scoped unsafe sections for operations such as process-group, signal, and file-descriptor setup.
+
+## Using `fsh`
+
+On an installed FlashOS image, the executable is available as `/usr/bin/fsh`.
 
 ```sh
-cargo build                     # build fsh into target/debug
-cargo run -p flashshell-cli -- --version
+# Start an interactive session.
+fsh
 
-cargo test --workspace          # unit, integration, golden, and property tests
-cargo fmt --check               # formatting gate
-cargo clippy --workspace --all-targets --all-features -- -D warnings
+# Run a FlashShell script.
+fsh program.fsh
 
-./fuzz/run-smoke.sh             # bounded lexer/parser fuzz run (needs nightly + cargo-fuzz)
+# Show the supported command-line options.
+fsh --help
 ```
 
-## Layout
+Language syntax and runtime behavior are documented in the [Language Guide](docs/language-guide.md). Guidance for organizing and executing `.fsh` files belongs in the [Scripting Guide](docs/scripting.md).
 
-```text
-crates/flashshell-syntax/           spans, lexer, parser, AST, diagnostics, formatter
-crates/flashshell-runtime/          values, scopes, evaluation (in progress)
-crates/flashshell-platform/         platform trait and portable process contracts
-crates/flashshell-platform-posix/   macOS/Linux process, fd, signal, terminal adapter
-crates/flashshell-cli/              the fsh binary
-tests/golden/                       golden .fsh sources with expected ASTs and diagnostics
-tests/fixtures/                     helper executables for execution tests
-tests/e2e/                          black-box and PTY tests
-fuzz/                               lexer/parser fuzz targets (separate workspace)
+## Development and verification
+
+Run workspace checks from the FlashShell component directory:
+
+```sh
+cd components/flashshell
+cargo test --workspace
+cargo clippy --workspace --all-targets -- -D warnings
 ```
 
-Dependency direction is strict: `syntax ← runtime ← cli`, with the platform
-adapters behind the platform contract.
+Target compilation is a separate check:
+
+```sh
+redoxer build -p flashshell-cli --bin fsh
+```
+
+These checks establish different properties:
+
+- Host tests exercise portable syntax, runtime, and CLI behavior on the development system.
+- A `redoxer` build verifies that the selected binary compiles for the Redox target environment.
+- FlashOS image construction and QEMU execution verify package integration, installation, login-shell configuration, and behavior inside the assembled system.
+
+For the component-specific workflow, test layout, and maintenance guidance, see [FlashShell Development](docs/development.md). For the repository-wide distinction between host checks, target checks, image validation, and runtime evidence, see [FlashOS Verification](../../docs/verification.md).
+
+## Documentation
+
+The FlashShell documentation is organized as follows:
+
+- [FlashShell documentation index](docs/README.md) — entry point for the component documentation
+- [Language Guide](docs/language-guide.md) — language concepts, modules, name resolution, function metadata, commands, and typed pipelines
+- [Scripting Guide](docs/scripting.md) — `.fsh` execution, script arguments, static checking, formatting, external processes, statuses, and jobs
+- [Architecture](docs/architecture.md) — internal responsibilities, analysis services, platform capabilities, adapters, and lifecycle boundaries
+- [Development](docs/development.md) — workspace setup, tests, formatter and checker gates, language-server development, target builds, and maintenance workflow
+
+For building and booting FlashOS as a complete system, begin with the [FlashOS Getting Started Guide](../../docs/getting-started.md).
+
+## License
+
+The FlashShell workspace is licensed under the [Apache License 2.0](LICENSE).
+
+Other FlashOS components and incorporated third-party materials may be subject to separate terms. See the repository-level [NOTICE](../../NOTICE) and the applicable license files for attribution and licensing details.
 
 ---
+
+[← Previous: Upstream References](../../docs/upstream/README.md) · [FlashOS README](../../README.md) · [Next: FlashShell Documentation →](docs/README.md)
