@@ -126,21 +126,21 @@ Script {
                                                     [
                                                         AstNode {
                                                             kind: DoubleText,
-                                                            span: Span(99..109),
+                                                            span: Span(99..104),
                                                         },
                                                     ],
                                                 ),
-                                                span: Span(98..110),
+                                                span: Span(98..105),
                                             },
                                         ),
-                                        span: Span(98..110),
+                                        span: Span(98..105),
                                     },
-                                    span: Span(92..110),
+                                    span: Span(92..105),
                                 },
                                 RecordEntry {
                                     key: Identifier(
                                         Identifier {
-                                            span: Span(116..120),
+                                            span: Span(111..115),
                                         },
                                     ),
                                     value: AstNode {
@@ -153,14 +153,14 @@ Script {
                                                                 [
                                                                     AstNode {
                                                                         kind: DoubleText,
-                                                                        span: Span(124..129),
+                                                                        span: Span(119..124),
                                                                     },
                                                                 ],
                                                             ),
-                                                            span: Span(123..130),
+                                                            span: Span(118..125),
                                                         },
                                                     ),
-                                                    span: Span(123..130),
+                                                    span: Span(118..125),
                                                 },
                                                 AstNode {
                                                     kind: Literal(
@@ -169,25 +169,25 @@ Script {
                                                                 [
                                                                     AstNode {
                                                                         kind: DoubleText,
-                                                                        span: Span(133..138),
+                                                                        span: Span(128..133),
                                                                     },
                                                                 ],
                                                             ),
-                                                            span: Span(132..139),
+                                                            span: Span(127..134),
                                                         },
                                                     ),
-                                                    span: Span(132..139),
+                                                    span: Span(127..134),
                                                 },
                                             ],
                                         ),
-                                        span: Span(122..140),
+                                        span: Span(117..135),
                                     },
-                                    span: Span(116..140),
+                                    span: Span(111..135),
                                 },
                                 RecordEntry {
                                     key: Identifier(
                                         Identifier {
-                                            span: Span(146..154),
+                                            span: Span(141..149),
                                         },
                                     ),
                                     value: AstNode {
@@ -196,7 +196,7 @@ Script {
                                                 RecordEntry {
                                                     key: Identifier(
                                                         Identifier {
-                                                            span: Span(157..163),
+                                                            span: Span(152..158),
                                                         },
                                                     ),
                                                     value: AstNode {
@@ -205,27 +205,27 @@ Script {
                                                                 kind: Boolean(
                                                                     false,
                                                                 ),
-                                                                span: Span(165..170),
+                                                                span: Span(160..165),
                                                             },
                                                         ),
-                                                        span: Span(165..170),
+                                                        span: Span(160..165),
                                                     },
-                                                    span: Span(157..170),
+                                                    span: Span(152..165),
                                                 },
                                             ],
                                         ),
-                                        span: Span(156..171),
+                                        span: Span(151..166),
                                     },
-                                    span: Span(146..171),
+                                    span: Span(141..166),
                                 },
                             ],
                         ),
-                        span: Span(86..174),
+                        span: Span(86..169),
                     },
                 },
             ),
-            span: Span(72..174),
+            span: Span(72..169),
         },
     ],
-    span: Span(0..175),
+    span: Span(0..170),
 }

@@ -677,12 +677,12 @@ Use the following files when evaluating or changing an architectural contract:
 | Lazy byte and value streams                           | [`stream.rs`](../crates/flash-runtime/src/stream.rs)                                |
 | Background-job coordination                           | [`background.rs`](../crates/flash-runtime/src/background.rs)                        |
 | Job identities and states                             | [`job.rs`](../crates/flash-runtime/src/job.rs)                                      |
-| Platform capabilities and test adapters               | [`flash-platform/src/lib.rs`](../crates/flash-platform/src/lib.rs)             |
-| Concrete Unix-like platform operations                | [`flash-platform-posix/src/lib.rs`](../crates/flash-platform-posix/src/lib.rs) |
-| CLI assembly and target selection                     | [`flash-cli/src/main.rs`](../crates/flash-cli/src/main.rs)                     |
-| Interactive editor contract                           | [`editor.rs`](../crates/flash-cli/src/editor.rs)                                    |
-| Interactive control loop                              | [`interactive.rs`](../crates/flash-cli/src/interactive.rs)                          |
-| FlashOS package construction                          | [`recipe.toml`](../../../recipes/terminal/flash/recipe.toml)                        |
+| Platform capabilities and test adapters               | [`flash-platform/src/lib.rs`](../crates/flash-platform/src/lib.rs)                     |
+| Concrete Unix-like platform operations                | [`flash-platform-posix/src/lib.rs`](../crates/flash-platform-posix/src/lib.rs)         |
+| CLI assembly and target selection                     | [`flash-cli/src/main.rs`](../crates/flash-cli/src/main.rs)                             |
+| Interactive editor contract                           | [`editor.rs`](../crates/flash-cli/src/editor.rs)                                       |
+| Interactive control loop                              | [`interactive.rs`](../crates/flash-cli/src/interactive.rs)                             |
+| FlashOS package construction                          | [`recipe.toml`](../../../recipes/terminal/flash/recipe.toml)                           |
 | FlashOS product integration                           | [FlashOS Architecture](../../../docs/architecture.md)                                    |
 
 When descriptive documentation and executable behavior disagree, inspect the current source, manifests, tests, package recipe, and target evidence before changing the public architectural claim.

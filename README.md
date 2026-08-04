@@ -48,8 +48,8 @@ The detailed responsibilities are divided between the [Language Guide](docs/lang
 
 Flash is maintained as an independent Rust workspace inside the FlashOS repository. The workspace manifest at [`Cargo.toml`](Cargo.toml) is authoritative for current membership; the table below describes the principal implementation responsibilities rather than a permanent crate count.
 
-| Path                                | Responsibility                                                                          |
-| ----------------------------------- | --------------------------------------------------------------------------------------- |
+| Path                           | Responsibility                                                                          |
+| ------------------------------ | --------------------------------------------------------------------------------------- |
 | `crates/flash-syntax/`         | Source representation, lexical analysis, parsing, syntax trees, and diagnostics         |
 | `crates/flash-runtime/`        | Runtime values, evaluation, built-ins, execution planning, sessions, and jobs           |
 | `crates/flash-platform/`       | Platform capability contracts used by the runtime                                       |

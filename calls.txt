@@ -1,3 +1,0 @@
-\u003c!-- CALL 0 --\u003e
-\u003ccall:default_api:multi_replace_file_content{"TargetFile": "/Users/antonhahn/FlashOS/components/flash/CHANGELOG.md", "Instruction": "Rename flashshell to flash", "Description": "Rename flashshell to flash", "ReplacementChunks": [{"AllowMultiple": true, "StartLine": 21, "EndLine": 21, "TargetContent": "- Renamed FlashShell to Flash across the codebase.\n", "ReplacementContent": "- Renamed Flash to Flash across the codebase.\n"}], "toolSummary": "Edit CHANGELOG.md", "toolAction": "Editing CHANGELOG.md"}\u003e
-Total calls: 1

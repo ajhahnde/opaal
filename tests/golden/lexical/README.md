@@ -8,7 +8,5 @@ expected classification reason.
 `incomplete` is valid input that needs more source. `invalid` can be rejected
 without more source.
 
-into a second test table.
 Lexer and parser tests consume these files directly. Do not copy the source into
 a second test table.
-into a second test table.

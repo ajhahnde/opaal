@@ -23,56 +23,56 @@ Script {
                                     [
                                         AstNode {
                                             kind: DoubleText,
-                                            span: Span(20..30),
+                                            span: Span(20..25),
                                         },
                                     ],
                                 ),
-                                span: Span(19..31),
+                                span: Span(19..26),
                             },
                         ),
-                        span: Span(19..31),
+                        span: Span(19..26),
                     },
                 },
             ),
-            span: Span(0..31),
+            span: Span(0..26),
         },
         AstNode {
             kind: Declaration(
                 Declaration {
                     mutable: true,
                     name: Identifier {
-                        span: Span(36..41),
+                        span: Span(31..36),
                     },
                     type_annotation: Some(
                         TypeReference {
                             name: Identifier {
-                                span: Span(43..46),
+                                span: Span(38..41),
                             },
                             arguments: [],
-                            span: Span(43..46),
+                            span: Span(38..41),
                         },
                     ),
                     value: AstNode {
                         kind: Literal(
                             Literal {
                                 kind: Integer,
-                                span: Span(49..50),
+                                span: Span(44..45),
                             },
                         ),
-                        span: Span(49..50),
+                        span: Span(44..45),
                     },
                 },
             ),
-            span: Span(32..50),
+            span: Span(27..45),
         },
         AstNode {
             kind: Assignment(
                 Assignment {
                     target: VariableReference {
                         name: Identifier {
-                            span: Span(52..57),
+                            span: Span(47..52),
                         },
-                        span: Span(51..57),
+                        span: Span(46..52),
                     },
                     value: AstNode {
                         kind: Binary(
@@ -81,56 +81,56 @@ Script {
                                     kind: Variable(
                                         VariableReference {
                                             name: Identifier {
-                                                span: Span(61..66),
+                                                span: Span(56..61),
                                             },
-                                            span: Span(60..66),
+                                            span: Span(55..61),
                                         },
                                     ),
-                                    span: Span(60..66),
+                                    span: Span(55..61),
                                 },
                                 operator: AstNode {
                                     kind: Add,
-                                    span: Span(67..68),
+                                    span: Span(62..63),
                                 },
                                 right: AstNode {
                                     kind: Literal(
                                         Literal {
                                             kind: Integer,
-                                            span: Span(69..70),
+                                            span: Span(64..65),
                                         },
                                     ),
-                                    span: Span(69..70),
+                                    span: Span(64..65),
                                 },
                             },
                         ),
-                        span: Span(60..70),
+                        span: Span(55..65),
                     },
                 },
             ),
-            span: Span(51..70),
+            span: Span(46..65),
         },
         AstNode {
             kind: Declaration(
                 Declaration {
                     mutable: false,
                     name: Identifier {
-                        span: Span(75..80),
+                        span: Span(70..75),
                     },
                     type_annotation: Some(
                         TypeReference {
                             name: Identifier {
-                                span: Span(82..86),
+                                span: Span(77..81),
                             },
                             arguments: [
                                 TypeReference {
                                     name: Identifier {
-                                        span: Span(87..93),
+                                        span: Span(82..88),
                                     },
                                     arguments: [],
-                                    span: Span(87..93),
+                                    span: Span(82..88),
                                 },
                             ],
-                            span: Span(82..94),
+                            span: Span(77..89),
                         },
                     ),
                     value: AstNode {
@@ -143,14 +143,14 @@ Script {
                                                 [
                                                     AstNode {
                                                         kind: DoubleText,
-                                                        span: Span(99..102),
+                                                        span: Span(94..97),
                                                     },
                                                 ],
                                             ),
-                                            span: Span(98..103),
+                                            span: Span(93..98),
                                         },
                                     ),
-                                    span: Span(98..103),
+                                    span: Span(93..98),
                                 },
                                 AstNode {
                                     kind: Literal(
@@ -159,23 +159,23 @@ Script {
                                                 [
                                                     AstNode {
                                                         kind: DoubleText,
-                                                        span: Span(106..109),
+                                                        span: Span(101..104),
                                                     },
                                                 ],
                                             ),
-                                            span: Span(105..110),
+                                            span: Span(100..105),
                                         },
                                     ),
-                                    span: Span(105..110),
+                                    span: Span(100..105),
                                 },
                             ],
                         ),
-                        span: Span(97..111),
+                        span: Span(92..106),
                     },
                 },
             ),
-            span: Span(71..111),
+            span: Span(66..106),
         },
     ],
-    span: Span(0..112),
+    span: Span(0..107),
 }

@@ -58,7 +58,7 @@ Development evidence is layered:
 | Host tests                 | Portable behavior and supported host-platform integration                |
 | Fuzzing                    | Resilience of selected syntax entry points against generated inputs      |
 | `redoxer` build            | Compilation of the `fsh` binary for the Redox target environment         |
-| Package build              | Construction of the pinned Flash package through the FlashOS recipe |
+| Package build              | Construction of the pinned Flash package through the FlashOS recipe      |
 | Image build                | Inclusion of that package in an assembled FlashOS image                  |
 | QEMU or hardware execution | Runtime behavior in the produced system                                  |
 
