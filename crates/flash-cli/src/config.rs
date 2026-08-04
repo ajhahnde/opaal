@@ -474,8 +474,8 @@ pub fn initialize_config(
         return Ok(clean_startup(ConfigStatus::Disabled, None, defaults));
     }
 
-    let path = match config_path(request.platform, environment) {
-        Some(path) => path,
+    let paths = match config_paths(request.platform, environment) {
+        Some(paths) => paths,
         None => {
             return Ok(safe_startup(
                 None,
@@ -491,26 +491,29 @@ pub fn initialize_config(
         }
     };
 
-    let text = match source.load(&path, limits.source_limit) {
-        Ok(ConfigFile::Absent) => {
-            return Ok(clean_startup(ConfigStatus::Absent, Some(path), defaults));
-        }
-        Ok(ConfigFile::Source(text)) => text,
+    let (path, text) = match source.load(&paths.primary, limits.source_limit) {
+        Ok(ConfigFile::Absent) => match source.load(&paths.legacy, limits.source_limit) {
+            Ok(ConfigFile::Absent) => {
+                return Ok(clean_startup(
+                    ConfigStatus::Absent,
+                    Some(paths.primary),
+                    defaults,
+                ));
+            }
+            Ok(ConfigFile::Source(text)) => (paths.legacy, text),
+            Err(error) => {
+                return Ok(safe_startup(
+                    Some(paths.legacy),
+                    file_failure(error),
+                    defaults,
+                ));
+            }
+        },
+        Ok(ConfigFile::Source(text)) => (paths.primary, text),
         Err(error) => {
-            let kind = match error.kind {
-                ConfigFileErrorKind::Trust => ConfigFailureKind::ConfigTrust,
-                ConfigFileErrorKind::Read => ConfigFailureKind::ConfigRead,
-                ConfigFileErrorKind::Budget => ConfigFailureKind::ConfigBudget,
-            };
             return Ok(safe_startup(
-                Some(path),
-                ConfigFailure {
-                    kind,
-                    detail: error.detail.clone(),
-                    capability: None,
-                    span: None,
-                    cause: ConfigFailureCause::File(error),
-                },
+                Some(paths.primary),
+                file_failure(error),
                 defaults,
             ));
         }
@@ -595,7 +598,15 @@ pub fn initialize_config(
     }
 }
 
-fn config_path(platform: ConfigPlatform, environment: &dyn ConfigEnvironment) -> Option<PathBuf> {
+struct ConfigPaths {
+    primary: PathBuf,
+    legacy: PathBuf,
+}
+
+fn config_paths(
+    platform: ConfigPlatform,
+    environment: &dyn ConfigEnvironment,
+) -> Option<ConfigPaths> {
     let root = environment
         .value(OsStr::new("XDG_CONFIG_HOME"))
         .filter(|value| !value.is_empty() && Path::new(value).is_absolute())
@@ -610,7 +621,25 @@ fn config_path(platform: ConfigPlatform, environment: &dyn ConfigEnvironment) ->
                     ConfigPlatform::MacOs => home.join("Library/Application Support"),
                 })
         })?;
-    Some(root.join("flash/config.fsh"))
+    Some(ConfigPaths {
+        primary: root.join("flash/config.fsh"),
+        legacy: root.join("flashshell/config.fsh"),
+    })
+}
+
+fn file_failure(error: ConfigFileError) -> ConfigFailure {
+    let kind = match error.kind {
+        ConfigFileErrorKind::Trust => ConfigFailureKind::ConfigTrust,
+        ConfigFileErrorKind::Read => ConfigFailureKind::ConfigRead,
+        ConfigFileErrorKind::Budget => ConfigFailureKind::ConfigBudget,
+    };
+    ConfigFailure {
+        kind,
+        detail: error.detail.clone(),
+        capability: None,
+        span: None,
+        cause: ConfigFailureCause::File(error),
+    }
 }
 
 fn clean_startup(

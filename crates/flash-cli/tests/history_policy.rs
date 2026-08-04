@@ -4,7 +4,7 @@
 use std::cell::RefCell;
 use std::ffi::{OsStr, OsString};
 use std::fs;
-use std::os::unix::fs::{MetadataExt, PermissionsExt};
+use std::os::unix::fs::{MetadataExt, PermissionsExt, symlink};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -48,7 +48,10 @@ fn platform_paths_use_state_roots_and_disabled_mode_bypasses_discovery() {
     assert_eq!(
         select_history(false, HistoryPlatform::Linux, &linux_override)
             .expect("absolute XDG state root should work"),
-        HistorySelection::Persistent(PathBuf::from("/state/flash/history"))
+        HistorySelection::Persistent {
+            primary: PathBuf::from("/state/flash/history"),
+            legacy: PathBuf::from("/state/flashshell/history"),
+        }
     );
     assert_eq!(
         linux_override.requested.into_inner(),
@@ -60,16 +63,20 @@ fn platform_paths_use_state_roots_and_disabled_mode_bypasses_discovery() {
     assert_eq!(
         select_history(false, HistoryPlatform::Linux, &linux_fallback)
             .expect("relative override should fall back to home"),
-        HistorySelection::Persistent(PathBuf::from("/home/user/.local/state/flash/history"))
+        HistorySelection::Persistent {
+            primary: PathBuf::from("/home/user/.local/state/flash/history"),
+            legacy: PathBuf::from("/home/user/.local/state/flashshell/history"),
+        }
     );
 
     let macos_fallback = FakeEnvironment::with([("HOME", "/Users/user")]);
     assert_eq!(
         select_history(false, HistoryPlatform::MacOs, &macos_fallback)
             .expect("macOS home should select Application Support"),
-        HistorySelection::Persistent(PathBuf::from(
-            "/Users/user/Library/Application Support/flash/history"
-        ))
+        HistorySelection::Persistent {
+            primary: PathBuf::from("/Users/user/Library/Application Support/flash/history"),
+            legacy: PathBuf::from("/Users/user/Library/Application Support/flashshell/history"),
+        }
     );
 
     struct NoAccess;
@@ -100,16 +107,20 @@ fn disabled_history_records_nothing_and_persistent_history_is_exactly_bounded() 
 
     let directory = TempDirectory::new("bounded");
     let path = directory.path().join("flash/history");
-    let mut history = EditorHistory::open(HistorySelection::Persistent(path.clone()))
-        .expect("private history should initialize");
+    let legacy = directory.path().join("flashshell/history");
+    let selection = HistorySelection::Persistent {
+        primary: path.clone(),
+        legacy: legacy.clone(),
+    };
+    let mut history =
+        EditorHistory::open(selection.clone()).expect("private history should initialize");
     assert_eq!(history.capacity(), DEFAULT_HISTORY_CAPACITY);
     for index in 0..(DEFAULT_HISTORY_CAPACITY + 2) {
         history
             .record(&format!("entry {index}"))
             .expect("bounded entry should synchronize");
     }
-    let reopened = EditorHistory::open(HistorySelection::Persistent(path))
-        .expect("bounded history should reopen");
+    let reopened = EditorHistory::open(selection).expect("bounded history should reopen");
     let entries = reopened.entries().expect("bounded entries should load");
     assert_eq!(entries.len(), DEFAULT_HISTORY_CAPACITY);
     assert_eq!(entries.first().map(String::as_str), Some("entry 2"));
@@ -120,7 +131,11 @@ fn disabled_history_records_nothing_and_persistent_history_is_exactly_bounded() 
 fn persistence_preserves_multiline_source_deduplicates_adjacent_entries_and_searches() {
     let directory = TempDirectory::new("roundtrip");
     let path = directory.path().join("flash/history");
-    let selection = HistorySelection::Persistent(path.clone());
+    let legacy = directory.path().join("flashshell/history");
+    let selection = HistorySelection::Persistent {
+        primary: path,
+        legacy,
+    };
     let multiline = "if true {\n    echo exact \\\\n \\\\r \\\\0\r\n}";
 
     let mut first = EditorHistory::open(selection.clone()).expect("first session opens");
@@ -154,7 +169,11 @@ fn persistence_preserves_multiline_source_deduplicates_adjacent_entries_and_sear
 fn concurrent_sessions_merge_each_submission_without_lost_entries() {
     let directory = TempDirectory::new("concurrent");
     let path = directory.path().join("flash/history");
-    let selection = HistorySelection::Persistent(path);
+    let legacy = directory.path().join("flashshell/history");
+    let selection = HistorySelection::Persistent {
+        primary: path,
+        legacy,
+    };
     let mut first = EditorHistory::open(selection.clone()).expect("first session opens");
     let mut second = EditorHistory::open(selection.clone()).expect("second session opens");
 
@@ -180,7 +199,11 @@ fn concurrent_sessions_merge_each_submission_without_lost_entries() {
 fn history_objects_are_private_and_unsafe_existing_files_are_rejected() {
     let directory = TempDirectory::new("permissions");
     let path = directory.path().join("flash/history");
-    let selection = HistorySelection::Persistent(path.clone());
+    let legacy = directory.path().join("flashshell/history");
+    let selection = HistorySelection::Persistent {
+        primary: path.clone(),
+        legacy,
+    };
     drop(EditorHistory::open(selection.clone()).expect("history initializes"));
 
     let parent = fs::symlink_metadata(path.parent().expect("history has parent"))
@@ -196,6 +219,97 @@ fn history_objects_are_private_and_unsafe_existing_files_are_rejected() {
         .expect("test can make file unsafe");
     let error = EditorHistory::open(selection).expect_err("public history must be rejected");
     assert!(error.to_string().contains("mode 0600"), "{error}");
+}
+
+#[test]
+fn legacy_history_fallback_policy_and_validation() {
+    let directory = TempDirectory::new("legacy-fallback");
+    let primary_dir = directory.path().join("flash");
+    let legacy_dir = directory.path().join("flashshell");
+    let primary_path = primary_dir.join("history");
+    let legacy_path = legacy_dir.join("history");
+    let selection = HistorySelection::Persistent {
+        primary: primary_path.clone(),
+        legacy: legacy_path.clone(),
+    };
+
+    // 6: Sind beide Dateien nicht vorhanden, wird nur flash/history erzeugt.
+    // 7: Die neu erzeugte Directory- und File-Permission ist weiterhin 0700 beziehungsweise 0600.
+    let history_new =
+        EditorHistory::open(selection.clone()).expect("creates primary when both missing");
+    assert!(primary_path.is_file());
+    assert!(!legacy_path.exists());
+    let parent_meta = fs::symlink_metadata(&primary_dir).unwrap();
+    let file_meta = fs::symlink_metadata(&primary_path).unwrap();
+    assert_eq!(parent_meta.mode() & 0o777, 0o700);
+    assert_eq!(file_meta.mode() & 0o777, 0o600);
+    drop(history_new);
+    fs::remove_dir_all(&primary_dir).unwrap();
+
+    // 8: Existiert nur die Legacy-Datei, werden deren bestehende Einträge geladen.
+    // 9: Nach dem Laden der Legacy-Datei werden neue Einträge in die Legacy-Datei geschrieben.
+    // 10: Beim Legacy-Fallback wird kein neuer kanonischer History-Pfad erzeugt.
+    fs::create_dir_all(&legacy_dir).unwrap();
+    fs::set_permissions(&legacy_dir, fs::Permissions::from_mode(0o700)).unwrap();
+    fs::write(&legacy_path, "legacy entry\n").unwrap();
+    fs::set_permissions(&legacy_path, fs::Permissions::from_mode(0o600)).unwrap();
+
+    let mut legacy_history =
+        EditorHistory::open(selection.clone()).expect("opens existing legacy history");
+    assert_eq!(legacy_history.entries().unwrap(), vec!["legacy entry"]);
+    legacy_history.record("new via legacy").unwrap();
+    drop(legacy_history);
+    assert!(!primary_path.exists());
+    let legacy_contents = fs::read_to_string(&legacy_path).unwrap();
+    assert!(legacy_contents.contains("new via legacy"));
+
+    // 11: Existieren beide Dateien, werden nur Einträge der kanonischen Datei geladen.
+    // 12: Existieren beide Dateien, wird die Legacy-Datei weder verändert noch zusammengeführt.
+    fs::create_dir_all(&primary_dir).unwrap();
+    fs::set_permissions(&primary_dir, fs::Permissions::from_mode(0o700)).unwrap();
+    fs::write(&primary_path, "primary entry\n").unwrap();
+    fs::set_permissions(&primary_path, fs::Permissions::from_mode(0o600)).unwrap();
+
+    let mut both_history =
+        EditorHistory::open(selection.clone()).expect("opens primary when both exist");
+    assert_eq!(both_history.entries().unwrap(), vec!["primary entry"]);
+    both_history.record("another primary").unwrap();
+    drop(both_history);
+    let unchanged_legacy = fs::read_to_string(&legacy_path).unwrap();
+    assert_eq!(unchanged_legacy, legacy_contents);
+
+    // 13: Eine ungültige kanonische Datei verhindert jeden Legacy-Fallback.
+    fs::write(&primary_path, "\\z_invalid_escape\n").unwrap();
+    fs::set_permissions(&primary_path, fs::Permissions::from_mode(0o600)).unwrap();
+    assert!(EditorHistory::open(selection.clone()).is_err());
+    assert_eq!(fs::read_to_string(&legacy_path).unwrap(), unchanged_legacy);
+
+    // 14: Eine kanonische Symlink-Datei verhindert jeden Legacy-Fallback.
+    fs::remove_file(&primary_path).unwrap();
+    let target = directory.path().join("target");
+    fs::write(&target, "target\n").unwrap();
+    symlink(&target, &primary_path).unwrap();
+    assert!(EditorHistory::open(selection.clone()).is_err());
+
+    // 15: Eine falsche kanonische Permission verhindert jeden Legacy-Fallback.
+    fs::remove_file(&primary_path).unwrap();
+    fs::write(&primary_path, "primary entry\n").unwrap();
+    fs::set_permissions(&primary_path, fs::Permissions::from_mode(0o644)).unwrap();
+    assert!(EditorHistory::open(selection.clone()).is_err());
+
+    // Remove primary completely to test failing legacy file cases when primary is absent:
+    fs::remove_dir_all(&primary_dir).unwrap();
+
+    // 16: Fehlt die kanonische Datei und ist die Legacy-Datei ein Symlink, schlägt das Öffnen fehl.
+    fs::remove_file(&legacy_path).unwrap();
+    symlink(&target, &legacy_path).unwrap();
+    assert!(EditorHistory::open(selection.clone()).is_err());
+
+    // 17: Fehlt die kanonische Datei und hat die Legacy-Datei falsche Berechtigungen, schlägt das Öffnen fehl.
+    fs::remove_file(&legacy_path).unwrap();
+    fs::write(&legacy_path, "legacy entry\n").unwrap();
+    fs::set_permissions(&legacy_path, fs::Permissions::from_mode(0o644)).unwrap();
+    assert!(EditorHistory::open(selection.clone()).is_err());
 }
 
 static NEXT_TEMP_ID: AtomicU64 = AtomicU64::new(0);
