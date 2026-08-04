@@ -1,10 +1,10 @@
-# FlashShell Architecture
+# Flash Architecture
 
-[FlashOS](../../../README.md) › [FlashShell](../README.md) › [Documentation](README.md) › Architecture
+[FlashOS](../../../README.md) › [Flash](../README.md) › [Documentation](README.md) › Architecture
 
-This document describes the internal architecture of FlashShell: crate boundaries, source processing, runtime state, command planning, pipeline execution, platform capabilities, interactive front ends, and process lifecycle management. It is intended for maintainers and developers extending the implementation; language usage belongs in the [Language Guide](language-guide.md), while build and test procedures belong in [Development](development.md).
+This document describes the internal architecture of Flash: crate boundaries, source processing, runtime state, command planning, pipeline execution, platform capabilities, interactive front ends, and process lifecycle management. It is intended for maintainers and developers extending the implementation; language usage belongs in the [Language Guide](language-guide.md), while build and test procedures belong in [Development](development.md).
 
-> **Project status:** FlashOS as a complete operating system remains pre-alpha software. However, this FlashShell Architecture Guide describes the intended stable FlashShell v1.0 architecture and component contracts. Note that not every v1 feature or platform capability is automatically available in every current FlashOS image or on every target platform, and successful execution on a Linux or macOS development host is not automatic proof of FlashOS target support.
+> **Project status:** FlashOS as a complete operating system remains pre-alpha software. However, this Flash Architecture Guide describes the intended stable Flash v1.0 architecture and component contracts. Note that not every v1 feature or platform capability is automatically available in every current FlashOS image or on every target platform, and successful execution on a Linux or macOS development host is not automatic proof of FlashOS target support.
 
 ## On this page
 
@@ -27,7 +27,7 @@ This document describes the internal architecture of FlashShell: crate boundarie
 
 ## Architectural scope
 
-FlashShell is a userspace command-language implementation. It owns parsing, evaluation, structured values, internal commands, process orchestration, interactive session behavior, and the `fsh` executable.
+Flash is a userspace command-language implementation. It owns parsing, evaluation, structured values, internal commands, process orchestration, interactive session behavior, and the `fsh` executable.
 
 It does not own:
 
@@ -68,7 +68,7 @@ operating-system processes, files, pipes, signals, and terminal
 
 ### One language front end
 
-Scripts, interactive submissions, formatting, input classification, and editor services use the same syntax crate. FlashShell does not maintain a separate interactive grammar or translate source into another shell language.
+Scripts, interactive submissions, formatting, input classification, and editor services use the same syntax crate. Flash does not maintain a separate interactive grammar or translate source into another shell language.
 
 ### Planning before execution
 
@@ -89,7 +89,7 @@ The runtime does not implicitly display, serialize, decode, encode, collect, wra
 
 ### Direct external execution
 
-External commands receive an executable path, native argument vector, environment snapshot, working directory, descriptor map, and process-group placement. FlashShell does not render the command back into source text or route it through `/bin/sh`.
+External commands receive an executable path, native argument vector, environment snapshot, working directory, descriptor map, and process-group placement. Flash does not render the command back into source text or route it through `/bin/sh`.
 
 ### Capability-based platform access
 
@@ -103,15 +103,15 @@ Streams remain lazy wherever the operation permits it. Operations that must reta
 
 ## Workspace and dependency direction
 
-FlashShell is a nested Cargo workspace rooted at [`components/flashshell/`](../Cargo.toml). The workspace manifest is authoritative for current package membership. The architecture is defined by responsibilities and dependency direction rather than by a permanent number of crates.
+Flash is a nested Cargo workspace rooted at [`components/flash/`](../Cargo.toml). The workspace manifest is authoritative for current package membership. The architecture is defined by responsibilities and dependency direction rather than by a permanent number of crates.
 
 | Responsibility | Current owner |
 | --- | --- |
-| Source representation, spans, lexical analysis, parsing, syntax trees, formatting, and source diagnostics | [`flashshell-syntax`](../crates/flashshell-syntax/) |
-| Values, scopes, evaluation, functions, command metadata, planning, pipelines, sessions, jobs, module analysis, and shared semantic services | [`flashshell-runtime`](../crates/flashshell-runtime/) and syntax-owned analysis interfaces |
-| Portable operating-system capability contracts and deterministic test adapters | [`flashshell-platform`](../crates/flashshell-platform/) |
-| Unix-like process, descriptor, filesystem, signal, and terminal integration | [`flashshell-platform-posix`](../crates/flashshell-platform-posix/) |
-| Command-line modes, interactive front ends, configuration, history, tooling entry points, and `fsh` assembly | [`flashshell-cli`](../crates/flashshell-cli/) |
+| Source representation, spans, lexical analysis, parsing, syntax trees, formatting, and source diagnostics | [`flash-syntax`](../crates/flash-syntax/) |
+| Values, scopes, evaluation, functions, command metadata, planning, pipelines, sessions, jobs, module analysis, and shared semantic services | [`flash-runtime`](../crates/flash-runtime/) and syntax-owned analysis interfaces |
+| Portable operating-system capability contracts and deterministic test adapters | [`flash-platform`](../crates/flash-platform/) |
+| Unix-like process, descriptor, filesystem, signal, and terminal integration | [`flash-platform-posix`](../crates/flash-platform-posix/) |
+| Command-line modes, interactive front ends, configuration, history, tooling entry points, and `fsh` assembly | [`flash-cli`](../crates/flash-cli/) |
 
 Portable language semantics depend on syntax and abstract platform contracts, not on a concrete operating-system adapter. Concrete adapters depend on the abstract capability interface. The executable selects and assembles the appropriate adapter and user-facing services.
 
@@ -119,7 +119,7 @@ New crates may be introduced as implementation responsibilities grow, but they m
 
 ## Source and syntax front end
 
-The [`flashshell-syntax`](../crates/flashshell-syntax/src/lib.rs) crate is the sole owner of FlashShell source structure.
+The [`flash-syntax`](../crates/flash-syntax/src/lib.rs) crate is the sole owner of Flash source structure.
 
 Its public model includes:
 
@@ -137,7 +137,7 @@ A source file owns its name and text. Syntax nodes retain spans into that source
 
 The same spans flow into later runtime stages. Expansion, command planning, redirection handling, carrier validation, process failures, and structured-data errors can therefore attach diagnostics to the source construct that caused the failure.
 
-Paths and external arguments may contain native non-UTF-8 units, but FlashShell source itself remains UTF-8. The source model and the platform-native data model are deliberately separate.
+Paths and external arguments may contain native non-UTF-8 units, but Flash source itself remains UTF-8. The source model and the platform-native data model are deliberately separate.
 
 ### Parsing outcomes
 
@@ -155,7 +155,7 @@ This distinction is reused by interactive validation rather than approximated wi
 
 ### Shared editor services
 
-Syntax highlighting, completion context, formatter behavior, and multiline validation are built from FlashShell tokens, spans, parse outcomes, and command metadata.
+Syntax highlighting, completion context, formatter behavior, and multiline validation are built from Flash tokens, spans, parse outcomes, and command metadata.
 
 These services may present different user interfaces on different targets, but they do not define alternative language semantics.
 
@@ -180,15 +180,15 @@ Analysis must not depend on executing user code to discover names or signatures.
 
 The formatter, `fsh check`, help output, interactive editor features, and language server use the same source model, parser, syntax tree, module graph, name resolution, function metadata, and diagnostic types.
 
-No tooling frontend may maintain a second FlashShell grammar or a competing name resolver. A language change is implemented in the shared language services first and then exposed through the relevant CLI, editor, and protocol adapters.
+No tooling frontend may maintain a second Flash grammar or a competing name resolver. A language change is implemented in the shared language services first and then exposed through the relevant CLI, editor, and protocol adapters.
 
 Execution remains a separate stage. Formatting, checking, help lookup, completion, navigation, and language-server requests must not start external commands or mutate the active shell session merely to obtain analysis results.
 
 ## Runtime and session state
 
-The [`flashshell-runtime`](../crates/flashshell-runtime/src/lib.rs) crate owns language evaluation and execution coordination.
+The [`flash-runtime`](../crates/flash-runtime/src/lib.rs) crate owns language evaluation and execution coordination.
 
-A long-lived [`Session`](../crates/flashshell-runtime/src/session.rs) retains:
+A long-lived [`Session`](../crates/flash-runtime/src/session.rs) retains:
 
 - the lexical `ScopeStack`;
 - the logical working directory;
@@ -198,7 +198,7 @@ A long-lived [`Session`](../crates/flashshell-runtime/src/session.rs) retains:
 - the most recent normally completed status;
 - background-job state when job control is enabled.
 
-Interactive submissions and complete script files both use this session driver. Script execution creates a session, submits the source, joins the jobs started by that script, and converts the resulting FlashShell status into a process exit result.
+Interactive submissions and complete script files both use this session driver. Script execution creates a session, submits the source, joins the jobs started by that script, and converts the resulting Flash status into a process exit result.
 
 ### Lexical state and process state
 
@@ -206,7 +206,7 @@ Lexical bindings and child-process environment entries remain separate:
 
 ```text
 ScopeStack
-    └── FlashShell bindings, functions, and closures
+    └── Flash bindings, functions, and closures
 
 Environment
     └── native values inherited by external processes
@@ -214,7 +214,7 @@ Environment
 
 The runtime may copy an environment entry into a lexical seed for an isolated child-shell execution path, but ordinary lexical declarations are not automatically exported.
 
-The logical working directory also belongs to the FlashShell session. External stages and platform-backed internal commands receive the session's directory explicitly rather than depending on process-global directory mutation throughout the runtime.
+The logical working directory also belongs to the Flash session. External stages and platform-backed internal commands receive the session's directory explicitly rather than depending on process-global directory mutation throughout the runtime.
 
 ### Pure evaluation and command execution
 
@@ -242,7 +242,7 @@ Pipeline carrier
 
 A `Bytes` value is finite data held as one value. A `ByteStream` is a lazy, single-consumer execution resource. Similarly, a `List` is not automatically treated as a `ValueStream`.
 
-The concrete lazy stream implementations live in [`stream.rs`](../crates/flashshell-runtime/src/stream.rs). Pulling a stream yields an item or chunk, normal exhaustion, a source-spanned failure, or cancellation.
+The concrete lazy stream implementations live in [`stream.rs`](../crates/flash-runtime/src/stream.rs). Pulling a stream yields an item or chunk, normal exhaustion, a source-spanned failure, or cancellation.
 
 ## Command resolution and execution planning
 
@@ -264,7 +264,7 @@ preflight
 
 ### Command registry
 
-The [`CommandRegistry`](../crates/flashshell-runtime/src/command.rs) maps internal command names to signatures.
+The [`CommandRegistry`](../crates/flash-runtime/src/command.rs) maps internal command names to signatures.
 
 A signature declares:
 
@@ -284,7 +284,7 @@ The resolver does not return rendered shell source. Its result is either an inte
 
 ### Execution plans
 
-An [`ExecutionPlan`](../crates/flashshell-runtime/src/plan.rs) records:
+An [`ExecutionPlan`](../crates/flash-runtime/src/plan.rs) records:
 
 - the working directory;
 - the complete child environment;
@@ -323,7 +323,7 @@ The runtime selects among three execution shapes.
 
 ### All-internal pipelines
 
-The [`internal`](../crates/flashshell-runtime/src/internal.rs) executor moves owned carriers directly between internal commands:
+The [`internal`](../crates/flash-runtime/src/internal.rs) executor moves owned carriers directly between internal commands:
 
 ```text
 InternalPayload::Empty
@@ -340,7 +340,7 @@ Commands that need session state, such as directory changes or explicit exit han
 
 ### All-external pipelines
 
-The [`execute`](../crates/flashshell-runtime/src/execute.rs) module creates operating-system pipes, builds each child's final descriptor map, applies source-ordered redirections, and starts external stages directly through the platform interface.
+The [`execute`](../crates/flash-runtime/src/execute.rs) module creates operating-system pipes, builds each child's final descriptor map, applies source-ordered redirections, and starts external stages directly through the platform interface.
 
 All required stages are started before the executor waits for completion. This prevents a producer from filling a pipe while its consumer has not yet started.
 
@@ -379,9 +379,9 @@ Terminal tables and other display forms are presentation, not serialization. Red
 
 ## Platform capability boundary
 
-The [`flashshell-platform`](../crates/flashshell-platform/src/lib.rs) crate defines the interface between portable runtime logic and operating-system operations.
+The [`flash-platform`](../crates/flash-platform/src/lib.rs) crate defines the interface between portable runtime logic and operating-system operations.
 
-The `Platform` trait is synchronous and blocking. Concurrency is arranged by the runtime with threads where required; FlashShell does not impose an asynchronous runtime on the CLI or target adapter.
+The `Platform` trait is synchronous and blocking. Concurrency is arranged by the runtime with threads where required; Flash does not impose an asynchronous runtime on the CLI or target adapter.
 
 ### Capability groups
 
@@ -437,9 +437,9 @@ Restoration is also performed when a guard is dropped, providing a cleanup bound
 
 A concrete adapter implements the abstract platform capability contract for one operating-system environment.
 
-[`flashshell-platform-posix`](../crates/flashshell-platform-posix/src/lib.rs) provides the Unix-like host and target integration used by the current executable where that adapter is selected. Its behavior on Linux or macOS is host evidence, not automatic FlashOS qualification.
+[`flash-platform-posix`](../crates/flash-platform-posix/src/lib.rs) provides the Unix-like host and target integration used by the current executable where that adapter is selected. Its behavior on Linux or macOS is host evidence, not automatic FlashOS qualification.
 
-The v1 architecture also reserves a FlashOS-specific adapter role. That adapter maps FlashShell capabilities to the actual FlashOS ABI and classifies each capability as native, adapted, deliberately unsupported, temporarily unavailable, or not yet qualified. A concrete public implementation is referenced only when it is part of the current workspace.
+The v1 architecture also reserves a FlashOS-specific adapter role. That adapter maps Flash capabilities to the actual FlashOS ABI and classifies each capability as native, adapted, deliberately unsupported, temporarily unavailable, or not yet qualified. A concrete public implementation is referenced only when it is part of the current workspace.
 
 The runtime depends only on the abstract capability contract. It must not silently emulate a missing target capability with weaker POSIX behavior. Release and target evidence determine which adapter capabilities may be claimed publicly.
 
@@ -460,7 +460,7 @@ This keeps most runtime verification independent from the POSIX adapter and rese
 
 ## Interactive front end
 
-The [`flashshell-cli`](../crates/flashshell-cli/src/lib.rs) crate combines the runtime and selected platform adapter into the `fsh` executable.
+The [`flash-cli`](../crates/flash-cli/src/lib.rs) crate combines the runtime and selected platform adapter into the `fsh` executable.
 
 Its top-level modes are:
 
@@ -476,7 +476,7 @@ The reserved child-shell path supports background conditional chains and is not 
 
 ### Editor boundary
 
-The interactive loop depends on the synchronous [`LineEditor`](../crates/flashshell-cli/src/editor.rs) boundary rather than on a specific terminal-editing library.
+The interactive loop depends on the synchronous [`LineEditor`](../crates/flash-cli/src/editor.rs) boundary rather than on a specific terminal-editing library.
 
 An editor produces events such as:
 
@@ -490,7 +490,7 @@ The interactive loop owns the sequencing of prompts, notices, diagnostics, evalu
 
 macOS and Linux builds use the Reedline-backed adapter for parser-driven multiline validation, highlighting, completion, history, and hints.
 
-The Redox path uses the FlashShell terminal editor when both input and output are terminals. A canonical line reader remains available as a fallback when raw terminal editing is unavailable or output is redirected.
+The Redox path uses the Flash terminal editor when both input and output are terminals. A canonical line reader remains available as a fallback when raw terminal editing is unavailable or output is redirected.
 
 These adapters share the same session evaluator and syntax implementation. Differences in editor facilities do not create different script semantics.
 
@@ -518,7 +518,7 @@ Terminal ownership is held by a guard and restored before the next prompt. A fai
 
 ### Background jobs
 
-A background job receives a stable FlashShell job identity that is separate from operating-system process and process-group identifiers.
+A background job receives a stable Flash job identity that is separate from operating-system process and process-group identifiers.
 
 The coordinator owns:
 
@@ -561,7 +561,7 @@ Destructive termination is an explicit job operation rather than an automatic ti
 
 ## Diagnostics and failure containment
 
-FlashShell keeps several outcome classes separate:
+Flash keeps several outcome classes separate:
 
 ```text
 parse outcome
@@ -608,18 +608,18 @@ Cleanup failures do not automatically replace the more informative originating f
 
 Preflight prevents many failures before execution begins, but process and filesystem execution is not a transaction.
 
-For example, a source-ordered redirection may successfully create or truncate one file before a later file action fails. FlashShell cleans up owned resources, but it does not claim to reverse completed operating-system side effects.
+For example, a source-ordered redirection may successfully create or truncate one file before a later file action fails. Flash cleans up owned resources, but it does not claim to reverse completed operating-system side effects.
 
 ## Safety and portability boundaries
 
-FlashShell is implemented in Rust, but it is not accurate to describe the entire component as containing no unsafe code.
+Flash is implemented in Rust, but it is not accurate to describe the entire component as containing no unsafe code.
 
 The crates containing language semantics and frontend orchestration prohibit unsafe code:
 
-- `flashshell-syntax`;
-- `flashshell-runtime`;
-- `flashshell-platform`;
-- `flashshell-cli`.
+- `flash-syntax`;
+- `flash-runtime`;
+- `flash-platform`;
+- `flash-cli`.
 
 The POSIX adapter denies unsafe code by default and permits it only in explicitly scoped implementation areas that require low-level system interfaces, including descriptor installation, process-group operations, terminal control, signal disposition, and child-status observation.
 
@@ -637,18 +637,18 @@ Additional portability boundaries include:
 
 ## FlashOS integration
 
-FlashShell is integrated into the FlashOS system through the package recipe at [`recipes/terminal/flashshell/recipe.toml`](../../../recipes/terminal/flashshell/recipe.toml).
+Flash is integrated into the FlashOS system through the package recipe at [`recipes/terminal/flash/recipe.toml`](../../../recipes/terminal/flash/recipe.toml).
 
-The recipe selects the `flashshell-cli` package, builds the `fsh` binary for the active target, and installs it into the image package. The active x86_64 product profiles include the package and configure `/usr/bin/fsh` as the login shell.
+The recipe selects the `flash-cli` package, builds the `fsh` binary for the active target, and installs it into the image package. The active x86_64 product profiles include the package and configure `/usr/bin/fsh` as the login shell.
 
 ```text
-FlashShell workspace
+Flash workspace
     ↓
-flashshell-cli package
+flash-cli package
     ↓
 fsh target binary
     ↓
-FlashShell package recipe
+Flash package recipe
     ↓
 FlashOS image
     ↓
@@ -657,7 +657,7 @@ login starts /usr/bin/fsh
 
 The package recipe pins the repository revision used for image construction. A newer component working tree is not automatically included in an image until the recipe revision and associated verification expectations are updated.
 
-System-level package selection, image assembly, boot flow, and login configuration remain documented in [FlashOS Architecture](../../../docs/architecture.md). This document owns the internal architecture of the FlashShell component after its executable starts.
+System-level package selection, image assembly, boot flow, and login configuration remain documented in [FlashOS Architecture](../../../docs/architecture.md). This document owns the internal architecture of the Flash component after its executable starts.
 
 ## Sources of truth
 
@@ -666,23 +666,23 @@ Use the following files when evaluating or changing an architectural contract:
 | Concern                                               | Primary source                                                                           |
 | ----------------------------------------------------- | ---------------------------------------------------------------------------------------- |
 | Workspace membership and shared metadata              | [`Cargo.toml`](../Cargo.toml)                                                            |
-| Source, syntax trees, classification, and diagnostics | [`flashshell-syntax/src/lib.rs`](../crates/flashshell-syntax/src/lib.rs)                 |
-| Runtime module boundaries                             | [`flashshell-runtime/src/lib.rs`](../crates/flashshell-runtime/src/lib.rs)               |
-| Session ownership and submitted-source flow           | [`session.rs`](../crates/flashshell-runtime/src/session.rs)                              |
-| Script execution and background joining               | [`script.rs`](../crates/flashshell-runtime/src/script.rs)                                |
-| Command signatures and registry                       | [`command.rs`](../crates/flashshell-runtime/src/command.rs)                              |
-| Command planning and preflight                        | [`plan.rs`](../crates/flashshell-runtime/src/plan.rs)                                    |
-| External and mixed execution                          | [`execute.rs`](../crates/flashshell-runtime/src/execute.rs)                              |
-| Internal structured execution                         | [`internal.rs`](../crates/flashshell-runtime/src/internal.rs)                            |
-| Lazy byte and value streams                           | [`stream.rs`](../crates/flashshell-runtime/src/stream.rs)                                |
-| Background-job coordination                           | [`background.rs`](../crates/flashshell-runtime/src/background.rs)                        |
-| Job identities and states                             | [`job.rs`](../crates/flashshell-runtime/src/job.rs)                                      |
-| Platform capabilities and test adapters               | [`flashshell-platform/src/lib.rs`](../crates/flashshell-platform/src/lib.rs)             |
-| Concrete Unix-like platform operations                | [`flashshell-platform-posix/src/lib.rs`](../crates/flashshell-platform-posix/src/lib.rs) |
-| CLI assembly and target selection                     | [`flashshell-cli/src/main.rs`](../crates/flashshell-cli/src/main.rs)                     |
-| Interactive editor contract                           | [`editor.rs`](../crates/flashshell-cli/src/editor.rs)                                    |
-| Interactive control loop                              | [`interactive.rs`](../crates/flashshell-cli/src/interactive.rs)                          |
-| FlashOS package construction                          | [`recipe.toml`](../../../recipes/terminal/flashshell/recipe.toml)                        |
+| Source, syntax trees, classification, and diagnostics | [`flash-syntax/src/lib.rs`](../crates/flash-syntax/src/lib.rs)                 |
+| Runtime module boundaries                             | [`flash-runtime/src/lib.rs`](../crates/flash-runtime/src/lib.rs)               |
+| Session ownership and submitted-source flow           | [`session.rs`](../crates/flash-runtime/src/session.rs)                              |
+| Script execution and background joining               | [`script.rs`](../crates/flash-runtime/src/script.rs)                                |
+| Command signatures and registry                       | [`command.rs`](../crates/flash-runtime/src/command.rs)                              |
+| Command planning and preflight                        | [`plan.rs`](../crates/flash-runtime/src/plan.rs)                                    |
+| External and mixed execution                          | [`execute.rs`](../crates/flash-runtime/src/execute.rs)                              |
+| Internal structured execution                         | [`internal.rs`](../crates/flash-runtime/src/internal.rs)                            |
+| Lazy byte and value streams                           | [`stream.rs`](../crates/flash-runtime/src/stream.rs)                                |
+| Background-job coordination                           | [`background.rs`](../crates/flash-runtime/src/background.rs)                        |
+| Job identities and states                             | [`job.rs`](../crates/flash-runtime/src/job.rs)                                      |
+| Platform capabilities and test adapters               | [`flash-platform/src/lib.rs`](../crates/flash-platform/src/lib.rs)                     |
+| Concrete Unix-like platform operations                | [`flash-platform-posix/src/lib.rs`](../crates/flash-platform-posix/src/lib.rs)         |
+| CLI assembly and target selection                     | [`flash-cli/src/main.rs`](../crates/flash-cli/src/main.rs)                             |
+| Interactive editor contract                           | [`editor.rs`](../crates/flash-cli/src/editor.rs)                                       |
+| Interactive control loop                              | [`interactive.rs`](../crates/flash-cli/src/interactive.rs)                             |
+| FlashOS package construction                          | [`recipe.toml`](../../../recipes/terminal/flash/recipe.toml)                           |
 | FlashOS product integration                           | [FlashOS Architecture](../../../docs/architecture.md)                                    |
 
 When descriptive documentation and executable behavior disagree, inspect the current source, manifests, tests, package recipe, and target evidence before changing the public architectural claim.
@@ -692,10 +692,10 @@ When descriptive documentation and executable behavior disagree, inspect the cur
 - [Language Guide](language-guide.md) — Language syntax, values, bindings, expressions, commands, and structured-data semantics.
 - [Scripting](scripting.md) — Script execution, external processes, redirections, statuses, and job control.
 - [Development](development.md) — Workspace builds, tests, linting, fuzzing, fixtures, and local API documentation.
-- [FlashShell overview](../README.md) — Component purpose, public boundaries, and documentation entry point.
+- [Flash overview](../README.md) — Component purpose, public boundaries, and documentation entry point.
 - [FlashOS Architecture](../../../docs/architecture.md) — System layers, image construction, package integration, and boot-to-shell flow.
 - [FlashOS Verification](../../../docs/verification.md) — Evidence boundaries between host checks, target builds, images, QEMU, and hardware.
 
 ---
 
-[← Previous: Scripting](scripting.md) · [FlashShell documentation](README.md) · [Next: Development →](development.md)
+[← Previous: Scripting](scripting.md) · [Flash documentation](README.md) · [Next: Development →](development.md)

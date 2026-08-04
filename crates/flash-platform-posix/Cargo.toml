@@ -1,0 +1,29 @@
+[package]
+name = "flash-platform-posix"
+description = "macOS and Linux platform adapter for Flash"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+flash-platform = { path = "../flash-platform" }
+libc = "0.2"
+
+[[bin]]
+name = "flash-process-observer-fixture"
+path = "../../tests/fixtures/process_observer.rs"
+test = false
+bench = false
+doc = false
+
+[[bin]]
+name = "flash-signal-guard-fixture"
+path = "tests/fixtures/signal_guard.rs"
+test = false
+bench = false
+doc = false
+
+[lints]
+workspace = true

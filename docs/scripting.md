@@ -1,10 +1,10 @@
-# FlashShell Scripting
+# Flash Scripting
 
-[FlashOS](../../../README.md) › [FlashShell](../README.md) › [Documentation](README.md) › Scripting
+[FlashOS](../../../README.md) › [Flash](../README.md) › [Documentation](README.md) › Scripting
 
 This guide explains how to run and inspect `.fsh` programs, pass script arguments, use non-executing checks and canonical formatting, invoke external processes, connect pipeline stages, redirect file descriptors, handle command statuses, and manage background jobs. Language syntax, values, bindings, expressions, modules, function metadata, and structured-data operations are documented in the [Language Guide](language-guide.md).
 
-> **Project status:** FlashOS as a complete operating system remains pre-alpha software. However, this FlashShell Scripting Guide defines the intended stable FlashShell v1.0 contract for scripting and execution. Note that not every v1 feature is automatically available in every current FlashOS image or on every target platform, and successful execution on a Linux or macOS development host is not automatic proof of FlashOS target support.
+> **Project status:** FlashOS as a complete operating system remains pre-alpha software. However, this Flash Scripting Guide defines the intended stable Flash v1.0 contract for scripting and execution. Note that not every v1 feature is automatically available in every current FlashOS image or on every target platform, and successful execution on a Linux or macOS development host is not automatic proof of FlashOS target support.
 
 ## On this page
 
@@ -25,7 +25,7 @@ This guide explains how to run and inspect `.fsh` programs, pass script argument
 
 ## Running scripts
 
-The FlashShell executable is named `fsh`. Run a UTF-8 source file by passing its path:
+The Flash executable is named `fsh`. Run a UTF-8 source file by passing its path:
 
 ```bash
 fsh program.fsh
@@ -46,30 +46,30 @@ fsh --help
 fsh --version
 ```
 
-FlashShell reports command-line invocation errors before opening a script. File read failures, invalid UTF-8, parse failures, and runtime failures are reported separately.
+Flash reports command-line invocation errors before opening a script. File read failures, invalid UTF-8, parse failures, and runtime failures are reported separately.
 
 ### Source files
 
-FlashShell scripts conventionally use the `.fsh` extension. Source files:
+Flash scripts conventionally use the `.fsh` extension. Source files:
 
 - must contain UTF-8 text;
 - may use LF or CRLF line endings;
 - use the same grammar and evaluator as interactive submissions;
-- are parsed as FlashShell rather than POSIX shell source.
+- are parsed as Flash rather than POSIX shell source.
 
 A `.fsh` file is not a Bash or `sh` program. Do not use POSIX-specific syntax unless an external POSIX shell is invoked explicitly.
 
 ## Script arguments
 
-FlashShell v1 exposes arguments supplied to a `.fsh` program through its script-argument interface. The interface preserves argument order and cardinality so that an empty argument remains one argument and multiple arguments do not collapse into one string.
+Flash v1 exposes arguments supplied to a `.fsh` program through its script-argument interface. The interface preserves argument order and cardinality so that an empty argument remains one argument and multiple arguments do not collapse into one string.
 
-Script arguments are data. They are not reparsed as FlashShell source, do not undergo implicit whitespace splitting, and do not trigger implicit wildcard expansion. A script must request any later parsing, conversion, or explicit collection expansion itself.
+Script arguments are data. They are not reparsed as Flash source, do not undergo implicit whitespace splitting, and do not trigger implicit wildcard expansion. A script must request any later parsing, conversion, or explicit collection expansion itself.
 
 The `fsh` command-line parser distinguishes shell options, the script path, and the arguments belonging to that script. An option terminator may be used where an operand could otherwise be interpreted as an `fsh` option. Concrete argument-access syntax follows the language grammar and must not be inferred from POSIX-shell conventions.
 
 ## Script and interactive execution
 
-Interactive input and scripts share the FlashShell parser, value model, command planner, and evaluator. The surrounding session behavior is intentionally different.
+Interactive input and scripts share the Flash parser, value model, command planner, and evaluator. The surrounding session behavior is intentionally different.
 
 | Behavior                                  | Interactive session  | Script execution          |
 | ----------------------------------------- | -------------------- | ------------------------- |
@@ -93,7 +93,7 @@ starts an interactive session without loading its startup configuration. The `--
 
 ## Checking and formatting without execution
 
-FlashShell v1 provides inspection modes for validating and normalizing source without running the program.
+Flash v1 provides inspection modes for validating and normalizing source without running the program.
 
 ### Static checking
 
@@ -105,9 +105,9 @@ Checker diagnostics and process status are intended for local development, edito
 
 ### Canonical formatting
 
-The FlashShell formatter provides a check mode and a write mode. Check mode reports source that differs from canonical formatting without rewriting it. Write mode rewrites source to the canonical representation.
+The Flash formatter provides a check mode and a write mode. Check mode reports source that differs from canonical formatting without rewriting it. Write mode rewrites source to the canonical representation.
 
-Formatting must be idempotent: formatting already formatted source must not produce another change. The formatted result must preserve the parsed program structure and must remain valid FlashShell source.
+Formatting must be idempotent: formatting already formatted source must not produce another change. The formatted result must preserve the parsed program structure and must remain valid Flash source.
 
 The exact command-line spelling of formatter options belongs to the `fsh` CLI contract and must match the executable's help and tests; it must not be inferred from another formatter.
 
@@ -155,7 +155,7 @@ let mode = "release"
 export BUILD_MODE = $mode
 ```
 
-The lexical binding `$mode` is available to FlashShell evaluation. The exported `BUILD_MODE` entry is included in the environment of external processes started later.
+The lexical binding `$mode` is available to Flash evaluation. The exported `BUILD_MODE` entry is included in the environment of external processes started later.
 
 Remove an environment entry with `unset`:
 
@@ -163,13 +163,13 @@ Remove an environment entry with `unset`:
 unset BUILD_MODE
 ```
 
-Environment changes belong to the running FlashShell session. They do not modify the environment of the process that started `fsh`.
+Environment changes belong to the running Flash session. They do not modify the environment of the process that started `fsh`.
 
 ## Invoking commands
 
 A bare command name is resolved in this order:
 
-1. a registered FlashShell internal command;
+1. a registered Flash internal command;
 2. an external executable.
 
 ```text
@@ -177,7 +177,7 @@ pwd
 ls
 ```
 
-In this example, `pwd` and `ls` select the FlashShell internal commands when those commands are registered.
+In this example, `pwd` and `ls` select the Flash internal commands when those commands are registered.
 
 ### Forcing external execution
 
@@ -187,7 +187,7 @@ Prefix a command with `^` to bypass the internal-command registry:
 ^ls -la
 ```
 
-The caret is FlashShell syntax and is not included in the external process argument vector.
+The caret is Flash syntax and is not included in the external process argument vector.
 
 Use `command` when the executable name is selected at runtime:
 
@@ -202,14 +202,14 @@ command $program ...$arguments
 
 ### Direct process launch
 
-FlashShell starts external executables directly. It constructs a native executable path, argument vector, environment, working directory, and descriptor map without passing rendered command text through `/bin/sh`.
+Flash starts external executables directly. It constructs a native executable path, argument vector, environment, working directory, and descriptor map without passing rendered command text through `/bin/sh`.
 
 Consequently:
 
 - spaces inside one argument remain inside that argument;
 - pipeline and redirection characters produced by interpolation remain data;
 - an interpolated string cannot introduce another command;
-- external commands receive exactly the arguments produced by FlashShell expansion.
+- external commands receive exactly the arguments produced by Flash expansion.
 
 Running another shell is always explicit:
 
@@ -217,7 +217,7 @@ Running another shell is always explicit:
 ^sh -c "external shell source"
 ```
 
-The quoted source in this example is interpreted by `sh`, not by FlashShell.
+The quoted source in this example is interpreted by `sh`, not by Flash.
 
 ### Executable lookup
 
@@ -236,7 +236,7 @@ A bare external name is searched through the inherited `PATH` entries in source 
 
 Empty `PATH` entries do not mean the current working directory. Use an explicit relative path such as `./example` when that behavior is intended.
 
-Failure to locate an executable is a runtime error. FlashShell does not manufacture a successful process launch with a synthetic exit status such as `127`.
+Failure to locate an executable is a runtime error. Flash does not manufacture a successful process launch with a synthetic exit status such as `127`.
 
 ### Argument cardinality
 
@@ -302,7 +302,7 @@ let version = "$(^program --version 2> version-errors.log)"
 
 A nonzero command exit still produces captured output paired with its actual status. It does not become a runtime error merely because the command was unsuccessful.
 
-Capture is bounded by the session capture limit. If the output exceeds that limit, FlashShell continues draining and reaping the started processes before returning a capture-limit runtime error. This prevents the memory bound from causing a pipe deadlock.
+Capture is bounded by the session capture limit. If the output exceeds that limit, Flash continues draining and reaping the started processes before returning a capture-limit runtime error. This prevents the memory bound from causing a pipe deadlock.
 
 Invalid UTF-8 similarly produces a runtime error rather than silently replacing bytes. Use byte-oriented pipelines and explicit decoding when arbitrary binary output is expected.
 
@@ -314,7 +314,7 @@ The `|` operator connects one stage to the next:
 ^producer | ^consumer
 ```
 
-External stages exchange byte streams through operating-system pipes. FlashShell starts the required stages before waiting for their completion, allowing producers and consumers to run concurrently.
+External stages exchange byte streams through operating-system pipes. Flash starts the required stages before waiting for their completion, allowing producers and consumers to run concurrently.
 
 ### Standard error pipelines
 
@@ -371,7 +371,7 @@ Common conversion families are:
 | `to`      | Structured values to serialized bytes      |
 | `collect` | Lazy value stream to one materialized list |
 
-FlashShell rejects incompatible pipeline edges rather than guessing a conversion.
+Flash rejects incompatible pipeline edges rather than guessing a conversion.
 
 Interactive rendering of a record, list, or table is for human inspection. It is not a stable serialization format. Use an explicit encoder or formatter when a file or external process requires bytes.
 
@@ -385,7 +385,7 @@ All required stages are reaped before a completed aggregate status is returned.
 
 ## Redirections
 
-FlashShell supports source-ordered descriptor redirections.
+Flash supports source-ordered descriptor redirections.
 
 | Form       | Meaning                                        |
 | ---------- | ---------------------------------------------- |
@@ -472,17 +472,17 @@ Redirect targets do not support implicit wildcard expansion or list spreading.
 
 ### Preparation and failure
 
-FlashShell completes expansion and execution preflight before it opens redirect targets or starts pipeline stages. Once file actions begin, however, they are not a filesystem transaction.
+Flash completes expansion and execution preflight before it opens redirect targets or starts pipeline stages. Once file actions begin, however, they are not a filesystem transaction.
 
-For example, an earlier `>` action may create or truncate a file even when a later redirection for the same stage fails. FlashShell closes resources and cancels or reaps already started sibling stages, but it does not pretend to roll back completed filesystem effects.
+For example, an earlier `>` action may create or truncate a file even when a later redirection for the same stage fails. Flash closes resources and cancels or reaps already started sibling stages, but it does not pretend to roll back completed filesystem effects.
 
 A failed open, descriptor duplication, descriptor assignment, or descriptor close is a runtime error. The affected command is not represented as a normal nonzero process status.
 
-FlashShell does not implicitly provide POSIX here-documents, here-strings, `&>`, or a `noclobber` mode through these operators.
+Flash does not implicitly provide POSIX here-documents, here-strings, `&>`, or a `noclobber` mode through these operators.
 
 ## Statuses and failures
 
-FlashShell distinguishes normal unsuccessful completion from structural failure.
+Flash distinguishes normal unsuccessful completion from structural failure.
 
 | Outcome | Meaning | Selects <code>&#124;&#124;</code>? |
 |---|---|---|
@@ -532,7 +532,7 @@ if ^program --probe {
 
 A successful status acts as true. A nonzero exit or signal status acts as false.
 
-Pure expression conditions must evaluate to `Bool`. FlashShell does not treat zero, an empty string, `null`, or an empty collection as implicitly false.
+Pure expression conditions must evaluate to `Bool`. Flash does not treat zero, an empty string, `null`, or an empty collection as implicitly false.
 
 ### Converting failure into an error
 
@@ -583,7 +583,7 @@ A trailing `&` backgrounds the complete conditional chain:
 
 The launch returns immediately with a successful launch status once the job has been published. Its later completion does not asynchronously replace the current foreground status.
 
-Each background chain receives one stable, nonzero FlashShell job identity. A language job identity is distinct from operating-system process and process-group identifiers.
+Each background chain receives one stable, nonzero Flash job identity. A language job identity is distinct from operating-system process and process-group identifiers.
 
 ### Redirect background output
 
@@ -597,13 +597,13 @@ Background jobs do not receive foreground terminal ownership. Programs that requ
 
 ### Script lifetime
 
-A script does not orphan jobs that it started. Before the script ends, FlashShell joins its remaining background jobs on every exit path, including:
+A script does not orphan jobs that it started. Before the script ends, Flash joins its remaining background jobs on every exit path, including:
 
 - normal end of source;
 - an explicit `exit`;
 - a runtime failure.
 
-A stopped background job is continued before the script waits for it. FlashShell then waits for all of its members to reach terminal completion.
+A stopped background job is continued before the script waits for it. Flash then waits for all of its members to reach terminal completion.
 
 When every joined job succeeds, the script retains its foreground result. When a background job fails, that failure participates in the final script exit result; the first failing job in job-identity order is selected.
 
@@ -611,7 +611,7 @@ The join does not impose an automatic timeout or destructive escalation. A progr
 
 ## Job commands
 
-FlashShell provides five internal commands for addressable jobs:
+Flash provides five internal commands for addressable jobs:
 
 | Command | Purpose                                           |
 | ------- | ------------------------------------------------- |
@@ -621,7 +621,7 @@ FlashShell provides five internal commands for addressable jobs:
 | `wait`  | Wait for selected jobs                            |
 | `kill`  | Send a selected signal to job process groups      |
 
-A job reference has the exact form `%n`, where `n` is a nonzero decimal FlashShell job identity:
+A job reference has the exact form `%n`, where `n` is a nonzero decimal Flash job identity:
 
 ```text
 %1
@@ -735,7 +735,7 @@ Multiple targets are processed in source order:
 kill --terminate %2 %4
 ```
 
-Destructive escalation is explicit. FlashShell does not silently replace a failed graceful request with `--kill`.
+Destructive escalation is explicit. Flash does not silently replace a failed graceful request with `--kill`.
 
 ## Interactive job control
 
@@ -745,14 +745,14 @@ On a terminal with job-control capabilities:
 
 - one external pipeline runs in one operating-system process group;
 - a foreground job owns the terminal while it runs;
-- FlashShell restores terminal ownership before drawing the next prompt;
+- Flash restores terminal ownership before drawing the next prompt;
 - terminal-generated interrupts target the foreground process group;
 - background jobs remain outside foreground terminal ownership;
 - stopped and completed job notices are displayed at prompt-safe boundaries.
 
 A top-level foreground chain consisting of exactly one all-external pipeline can be retained as an addressable stopped job when suspended from the terminal. It can later be inspected with `jobs`, continued with `bg`, or resumed with `fg`.
 
-More complex execution shapes, including mixed internal/external pipelines and longer conditional chains, do not claim identical suspend-and-retain behavior. FlashShell preserves cleanup and terminal ownership rather than pretending that every internal execution island can be suspended like an external process group.
+More complex execution shapes, including mixed internal/external pipelines and longer conditional chains, do not claim identical suspend-and-retain behavior. Flash preserves cleanup and terminal ownership rather than pretending that every internal execution island can be suspended like an external process group.
 
 ### Leaving an interactive session
 
@@ -777,13 +777,13 @@ These editor behaviors do not apply to non-interactive script input.
 
 ### Language versus platform behavior
 
-FlashShell language parsing, expansion, values, control flow, and status rules are platform-independent contracts. Process execution, files, native paths, signals, process groups, terminal ownership, clocks, and configuration directories cross an explicit platform boundary.
+Flash language parsing, expansion, values, control flow, and status rules are platform-independent contracts. Process execution, files, native paths, signals, process groups, terminal ownership, clocks, and configuration directories cross an explicit platform boundary.
 
-A target may support ordinary foreground execution while lacking a more advanced capability such as terminal ownership or process groups. FlashShell should report or deliberately degrade the affected capability rather than silently claim full job-control behavior.
+A target may support ordinary foreground execution while lacking a more advanced capability such as terminal ownership or process groups. Flash should report or deliberately degrade the affected capability rather than silently claim full job-control behavior.
 
 ### Native paths and arguments
 
-FlashShell source is UTF-8, but operating-system paths, environment values, and external argument units are preserved through the native platform representation where supported.
+Flash source is UTF-8, but operating-system paths, environment values, and external argument units are preserved through the native platform representation where supported.
 
 A value containing a null byte cannot cross an external process, environment, or filesystem boundary that rejects it. Such conversion failures are runtime errors rather than string truncation.
 
@@ -793,7 +793,7 @@ A script should not assume that every development-host utility is installed in F
 
 Prefer:
 
-- FlashShell internal commands for behavior owned by the language;
+- Flash internal commands for behavior owned by the language;
 - explicit executable paths when the deployment layout guarantees them;
 - `which` when a script needs to inspect command resolution;
 - clear failure handling for optional external tools.
@@ -802,7 +802,7 @@ Successful execution on macOS or Linux does not by itself establish that the sam
 
 ### No implicit shell compatibility
 
-FlashShell deliberately does not provide:
+Flash deliberately does not provide:
 
 - POSIX source compatibility;
 - implicit whitespace splitting;
@@ -818,11 +818,11 @@ These boundaries are part of the scripting model rather than optional safety mod
 
 - [Language Guide](language-guide.md) — Syntax, values, bindings, expressions, commands, expansion, functions, function metadata, modules, and structured pipelines.
 - [Architecture](architecture.md) — Parser, runtime, platform, process, and CLI boundaries.
-- [Development](development.md) — Build, test, lint, fuzz, checker, formatter, language-server gates, and verification procedures for the FlashShell workspace.
-- [FlashShell overview](../README.md) — Component role, design boundaries, and integration with FlashOS.
+- [Development](development.md) — Build, test, lint, fuzz, checker, formatter, language-server gates, and verification procedures for the Flash workspace.
+- [Flash overview](../README.md) — Component role, design boundaries, and integration with FlashOS.
 - [FlashOS Getting Started](../../../docs/getting-started.md) — Build and boot a FlashOS image.
 - [FlashOS Verification](../../../docs/verification.md) — Distinguish host checks, target builds, image validation, and runtime evidence.
 
 ---
 
-[← Previous: Language Guide](language-guide.md) · [FlashShell documentation](README.md) · [Next: Architecture →](architecture.md)
+[← Previous: Language Guide](language-guide.md) · [Flash documentation](README.md) · [Next: Architecture →](architecture.md)

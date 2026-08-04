@@ -1,11 +1,11 @@
 [workspace]
 resolver = "3"
 members = [
-    "crates/flashshell-syntax",
-    "crates/flashshell-runtime",
-    "crates/flashshell-platform",
-    "crates/flashshell-platform-posix",
-    "crates/flashshell-cli",
+    "crates/flash-syntax",
+    "crates/flash-runtime",
+    "crates/flash-platform",
+    "crates/flash-platform-posix",
+    "crates/flash-cli",
 ]
 
 [workspace.package]

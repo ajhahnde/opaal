@@ -168,45 +168,45 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5baebc0774151f905a1a2cc41989300b1e6fbb29aff0ceffa1064fdd3088d582"
 
 [[package]]
-name = "flashshell-cli"
+name = "flash-cli"
 version = "0.1.0"
 dependencies = [
  "fd-lock",
- "flashshell-platform",
- "flashshell-platform-posix",
- "flashshell-runtime",
- "flashshell-syntax",
+ "flash-platform",
+ "flash-platform-posix",
+ "flash-runtime",
+ "flash-syntax",
  "nu-ansi-term",
  "reedline",
  "rustix",
 ]
 
 [[package]]
-name = "flashshell-platform"
+name = "flash-platform"
 version = "0.1.0"
 
 [[package]]
-name = "flashshell-platform-posix"
+name = "flash-platform-posix"
 version = "0.1.0"
 dependencies = [
- "flashshell-platform",
+ "flash-platform",
  "libc",
 ]
 
 [[package]]
-name = "flashshell-runtime"
+name = "flash-runtime"
 version = "0.1.0"
 dependencies = [
- "flashshell-platform",
- "flashshell-platform-posix",
- "flashshell-syntax",
+ "flash-platform",
+ "flash-platform-posix",
+ "flash-syntax",
  "serde",
  "serde_json",
  "unicode-width",
 ]
 
 [[package]]
-name = "flashshell-syntax"
+name = "flash-syntax"
 version = "0.1.0"
 
 [[package]]

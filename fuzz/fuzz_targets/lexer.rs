@@ -1,6 +1,6 @@
 #![no_main]
 
-use flashshell_syntax::{SourceFile, SourceId, classify_tokens, lex};
+use flash_syntax::{SourceFile, SourceId, classify_tokens, lex};
 use libfuzzer_sys::fuzz_target;
 
 fuzz_target!(|data: &[u8]| {

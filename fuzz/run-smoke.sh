@@ -11,7 +11,7 @@ case "$runs" in
         ;;
 esac
 
-work=$(mktemp -d "${TMPDIR:-/tmp}/flashshell-fuzz.XXXXXX")
+work=$(mktemp -d "${TMPDIR:-/tmp}/flash-fuzz.XXXXXX")
 trap 'rm -rf "$work"' EXIT HUP INT TERM
 
 for target in lexer parser; do

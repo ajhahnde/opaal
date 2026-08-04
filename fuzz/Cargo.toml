@@ -1,5 +1,5 @@
 [package]
-name = "flashshell-fuzz"
+name = "flash-fuzz"
 version = "0.0.0"
 publish = false
 edition = "2024"
@@ -8,7 +8,7 @@ edition = "2024"
 cargo-fuzz = true
 
 [dependencies]
-flashshell-syntax = { path = "../crates/flashshell-syntax" }
+flash-syntax = { path = "../crates/flash-syntax" }
 libfuzzer-sys = "0.4"
 
 [[bin]]
