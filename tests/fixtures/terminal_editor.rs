@@ -13,14 +13,14 @@ use std::env;
 use std::io::{self, Write};
 use std::process::ExitCode;
 
-use flashshell_cli::editor::EditorPrompt;
-use flashshell_cli::interactive::{
+use flash_cli::editor::EditorPrompt;
+use flash_cli::interactive::{
     EvaluationControl, InteractiveDiagnostic, InteractiveEvaluator, InteractiveExit,
     run_interactive_session,
 };
-use flashshell_cli::terminal_editor::TerminalEditor;
-use flashshell_platform::Platform;
-use flashshell_platform_posix::PosixPlatform;
+use flash_cli::terminal_editor::TerminalEditor;
+use flash_platform::Platform;
+use flash_platform_posix::PosixPlatform;
 
 fn main() -> ExitCode {
     // The adapter answers the two ends from two different descriptors, and

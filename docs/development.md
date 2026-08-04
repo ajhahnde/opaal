@@ -1,10 +1,10 @@
-# FlashShell Development
+# Flash Development
 
-[FlashOS](../../../README.md) › [FlashShell](../README.md) › [Documentation](README.md) › Development
+[FlashOS](../../../README.md) › [Flash](../README.md) › [Documentation](README.md) › Development
 
-This guide describes the component-specific workflow for building, testing, documenting, and integrating FlashShell. It is intended for developers changing the language implementation, runtime, platform adapters, interactive front end, or `fsh` executable; repository-wide image development and verification policy remain documented under the main FlashOS documentation.
+This guide describes the component-specific workflow for building, testing, documenting, and integrating Flash. It is intended for developers changing the language implementation, runtime, platform adapters, interactive front end, or `fsh` executable; repository-wide image development and verification policy remain documented under the main FlashOS documentation.
 
-> **Project status:** FlashOS as a complete operating system remains pre-alpha software. However, this FlashShell Development Guide supports the intended stable FlashShell v1.0 contract. Note that not every v1 feature is automatically available in every current FlashOS image or on every target platform, and successful test execution on a Linux or macOS development host is not automatic proof of FlashOS target support.
+> **Project status:** FlashOS as a complete operating system remains pre-alpha software. However, this Flash Development Guide supports the intended stable Flash v1.0 contract. Note that not every v1 feature is automatically available in every current FlashOS image or on every target platform, and successful test execution on a Linux or macOS development host is not automatic proof of FlashOS target support.
 
 ## On this page
 
@@ -30,10 +30,10 @@ This guide describes the component-specific workflow for building, testing, docu
 
 ## Development scope
 
-FlashShell is maintained as an independent Cargo workspace under:
+Flash is maintained as an independent Cargo workspace under:
 
 ```text
-components/flashshell/
+components/flash/
 ```
 
 The workspace has its own:
@@ -48,7 +48,7 @@ The workspace has its own:
 - fuzz workspace;
 - component documentation.
 
-Run component-level Cargo commands from `components/flashshell/`. Running Cargo from the FlashOS repository root addresses the separate root build-system package and does not exercise the FlashShell workspace.
+Run component-level Cargo commands from `components/flash/`. Running Cargo from the FlashOS repository root addresses the separate root build-system package and does not exercise the Flash workspace.
 
 Development evidence is layered:
 
@@ -58,7 +58,7 @@ Development evidence is layered:
 | Host tests                 | Portable behavior and supported host-platform integration                |
 | Fuzzing                    | Resilience of selected syntax entry points against generated inputs      |
 | `redoxer` build            | Compilation of the `fsh` binary for the Redox target environment         |
-| Package build              | Construction of the pinned FlashShell package through the FlashOS recipe |
+| Package build              | Construction of the pinned Flash package through the FlashOS recipe |
 | Image build                | Inclusion of that package in an assembled FlashOS image                  |
 | QEMU or hardware execution | Runtime behavior in the produced system                                  |
 
@@ -75,7 +75,7 @@ The main workspace pins its compiler and required components in [`rust-toolchain
 Verify the selected tools with:
 
 ```bash
-cd components/flashshell
+cd components/flash
 
 rustc --version
 cargo --version
@@ -83,7 +83,7 @@ cargo fmt --version
 cargo clippy --version
 ```
 
-Do not silently substitute the FlashOS root toolchain. The root repository and FlashShell are separate Cargo workspaces and may intentionally pin different compiler versions.
+Do not silently substitute the FlashOS root toolchain. The root repository and Flash are separate Cargo workspaces and may intentionally pin different compiler versions.
 
 The normal component workflow requires:
 
@@ -120,21 +120,21 @@ A developer working only on portable syntax or runtime code may begin with host 
 
 ## Workspace layout
 
-The current workspace membership is defined by [`components/flashshell/Cargo.toml`](../Cargo.toml). Do not treat a fixed crate count as a permanent project contract.
+The current workspace membership is defined by [`components/flash/Cargo.toml`](../Cargo.toml). Do not treat a fixed crate count as a permanent project contract.
 
 The principal implementation responsibilities are:
 
 | Concern | Current owner |
 | --- | --- |
-| Source files, spans, lexer, parser, syntax trees, canonical formatting, and diagnostics | `flashshell-syntax` |
-| Values, scopes, evaluation, functions, command metadata, planning, pipelines, modules, sessions, and jobs | `flashshell-runtime` and shared analysis interfaces |
-| Portable operating-system capability contracts and deterministic test adapters | `flashshell-platform` |
-| Unix-like process, descriptor, filesystem, signal, and terminal operations | `flashshell-platform-posix` |
-| CLI modes, interactive editing, configuration, history, tooling entry points, and executable assembly | `flashshell-cli` |
+| Source files, spans, lexer, parser, syntax trees, canonical formatting, and diagnostics | `flash-syntax` |
+| Values, scopes, evaluation, functions, command metadata, planning, pipelines, modules, sessions, and jobs | `flash-runtime` and shared analysis interfaces |
+| Portable operating-system capability contracts and deterministic test adapters | `flash-platform` |
+| Unix-like process, descriptor, filesystem, signal, and terminal operations | `flash-platform-posix` |
+| CLI modes, interactive editing, configuration, history, tooling entry points, and executable assembly | `flash-cli` |
 
 Supporting directories hold component documentation, fuzz targets, end-to-end tests, fixture executables, and golden corpora. Inspect the workspace manifest and the relevant directory before documenting an exact package or test inventory.
 
-Read [FlashShell Architecture](architecture.md) before moving behavior across responsibility boundaries or introducing a dependency in the opposite direction.
+Read [Flash Architecture](architecture.md) before moving behavior across responsibility boundaries or introducing a dependency in the opposite direction.
 
 ## Local development loop
 
@@ -143,7 +143,7 @@ Use the narrowest relevant tests while iterating, then run the complete componen
 A normal loop is:
 
 ```bash
-cd components/flashshell
+cd components/flash
 
 cargo fmt --all
 cargo test -p affected-package --locked
@@ -153,9 +153,9 @@ cargo clippy -p affected-package --all-targets -- -D warnings
 Replace `affected-package` with the owning package, for example:
 
 ```bash
-cargo test -p flashshell-syntax --locked
-cargo test -p flashshell-runtime --locked
-cargo test -p flashshell-cli --locked
+cargo test -p flash-syntax --locked
+cargo test -p flash-runtime --locked
+cargo test -p flash-cli --locked
 ```
 
 Before completing the change, run the full host gate:
@@ -190,9 +190,9 @@ Do not regenerate `Cargo.lock` as an incidental side effect of an unrelated chan
 Build the executable on the host:
 
 ```bash
-cd components/flashshell
+cd components/flash
 
-cargo build -p flashshell-cli --bin fsh --locked
+cargo build -p flash-cli --bin fsh --locked
 ```
 
 The development binary is written below the component workspace:
@@ -204,20 +204,20 @@ target/debug/fsh
 Run an interactive host session through Cargo:
 
 ```bash
-cargo run -p flashshell-cli --bin fsh
+cargo run -p flash-cli --bin fsh
 ```
 
 Run a script:
 
 ```bash
-cargo run -p flashshell-cli --bin fsh -- path/to/program.fsh
+cargo run -p flash-cli --bin fsh -- path/to/program.fsh
 ```
 
 Inspect the command-line interface:
 
 ```bash
-cargo run -p flashshell-cli --bin fsh -- --help
-cargo run -p flashshell-cli --bin fsh -- --version
+cargo run -p flash-cli --bin fsh -- --help
+cargo run -p flash-cli --bin fsh -- --version
 ```
 
 Host execution is useful for language and frontend iteration. It does not establish that the same terminal facilities, executables, filesystem layout, or process capabilities are available inside FlashOS.
@@ -239,28 +239,28 @@ The workspace combines unit tests, crate integration tests, declarative golden c
 Run a named integration test with Cargo's `--test` selector:
 
 ```bash
-cargo test -p flashshell-syntax --test parser
-cargo test -p flashshell-runtime --test pipeline
-cargo test -p flashshell-cli --test e2e
+cargo test -p flash-syntax --test parser
+cargo test -p flash-runtime --test pipeline
+cargo test -p flash-cli --test e2e
 ```
 
 Pass a test-name filter after the target when narrowing a failure:
 
 ```bash
-cargo test -p flashshell-runtime --test pipeline pipeline_name_fragment
+cargo test -p flash-runtime --test pipeline pipeline_name_fragment
 ```
 
 Use `--nocapture` when a test intentionally writes useful diagnostic output:
 
 ```bash
-cargo test -p flashshell-cli --test pty -- --nocapture
+cargo test -p flash-cli --test pty -- --nocapture
 ```
 
 Do not treat a single filtered test as the final gate. Tests in adjacent layers often enforce the same public contract from different boundaries.
 
 ## Develop syntax and parsing
 
-Changes to tokens, grammar, precedence, input completeness, syntax trees, source formatting, or diagnostics belong primarily in `flashshell-syntax`.
+Changes to tokens, grammar, precedence, input completeness, syntax trees, source formatting, or diagnostics belong primarily in `flash-syntax`.
 
 The syntax tests include focused targets for:
 
@@ -326,14 +326,14 @@ A grammar change should normally include:
 Run the focused corpus tests with:
 
 ```bash
-cargo test -p flashshell-syntax --test lexical_golden
-cargo test -p flashshell-syntax --test grammar_golden
+cargo test -p flash-syntax --test lexical_golden
+cargo test -p flash-syntax --test grammar_golden
 ```
 
 Then run all syntax tests:
 
 ```bash
-cargo test -p flashshell-syntax --locked
+cargo test -p flash-syntax --locked
 ```
 
 ### Preserve diagnostics and formatting
@@ -392,7 +392,7 @@ Help lookup is inspection-only and must not execute the documented callable.
 
 ### Language-server contract
 
-The FlashShell language server is required for the v1 tooling surface. It must reuse the shared parser, syntax tree, module graph, name resolution, signatures, and diagnostics rather than implementing another version of the language.
+The Flash language server is required for the v1 tooling surface. It must reuse the shared parser, syntax tree, module graph, name resolution, signatures, and diagnostics rather than implementing another version of the language.
 
 Language-server development should include:
 
@@ -409,7 +409,7 @@ Existing editor-local highlighting or completion does not replace the language-s
 
 ## Develop the runtime
 
-Runtime changes belong in `flashshell-runtime` when they affect:
+Runtime changes belong in `flash-runtime` when they affect:
 
 - values or conversions;
 - scopes and bindings;
@@ -429,17 +429,17 @@ The runtime tests are organized by behavior rather than by one monolithic integr
 Examples:
 
 ```bash
-cargo test -p flashshell-runtime --test values
-cargo test -p flashshell-runtime --test expansion
-cargo test -p flashshell-runtime --test plan
-cargo test -p flashshell-runtime --test preflight
-cargo test -p flashshell-runtime --test structured
-cargo test -p flashshell-runtime --test jobs
+cargo test -p flash-runtime --test values
+cargo test -p flash-runtime --test expansion
+cargo test -p flash-runtime --test plan
+cargo test -p flash-runtime --test preflight
+cargo test -p flash-runtime --test structured
+cargo test -p flash-runtime --test jobs
 ```
 
 ### Prefer platform test doubles
 
-Portable runtime tests should use the fake or recording implementations from `flashshell-platform` when the contract can be expressed through platform requests and responses.
+Portable runtime tests should use the fake or recording implementations from `flash-platform` when the contract can be expressed through platform requests and responses.
 
 This makes tests:
 
@@ -486,20 +486,20 @@ Side effects belong to the executor after successful planning and preflight.
 
 ## Develop platform integration
 
-Changes to capability contracts, owned process handles, descriptors, clocks, directory streams, or test adapters belong in `flashshell-platform`.
+Changes to capability contracts, owned process handles, descriptors, clocks, directory streams, or test adapters belong in `flash-platform`.
 
-Changes that call concrete operating-system interfaces belong in `flashshell-platform-posix`.
+Changes that call concrete operating-system interfaces belong in `flash-platform-posix`.
 
 Run the platform-contract tests with:
 
 ```bash
-cargo test -p flashshell-platform --locked
+cargo test -p flash-platform --locked
 ```
 
 Run the concrete-adapter tests with:
 
 ```bash
-cargo test -p flashshell-platform-posix --locked
+cargo test -p flash-platform-posix --locked
 ```
 
 The concrete adapter tests exercise behavior such as:
@@ -542,7 +542,7 @@ This distinction is required for useful diagnostics and target-specific degradat
 
 ## Develop the CLI and interactive session
 
-Changes to command-line parsing, startup modes, configuration, prompts, completion, highlighting, history, line editing, interactive recovery, or top-level session control belong in `flashshell-cli`.
+Changes to command-line parsing, startup modes, configuration, prompts, completion, highlighting, history, line editing, interactive recovery, or top-level session control belong in `flash-cli`.
 
 The CLI tests include focused coverage for:
 
@@ -560,12 +560,12 @@ The CLI tests include focused coverage for:
 Run focused tests with commands such as:
 
 ```bash
-cargo test -p flashshell-cli --test config_startup
-cargo test -p flashshell-cli --test context_aware_completion
-cargo test -p flashshell-cli --test interactive_session
-cargo test -p flashshell-cli --test terminal_editor
-cargo test -p flashshell-cli --test e2e
-cargo test -p flashshell-cli --test pty
+cargo test -p flash-cli --test config_startup
+cargo test -p flash-cli --test context_aware_completion
+cargo test -p flash-cli --test interactive_session
+cargo test -p flash-cli --test terminal_editor
+cargo test -p flash-cli --test e2e
+cargo test -p flash-cli --test pty
 ```
 
 Some interactive and PTY tests are host-specific. Cargo's target configuration controls whether host-only dependencies and tests are compiled.
@@ -629,7 +629,7 @@ When adding a fixture:
 - register the binary only in the crates whose tests need it;
 - document a shared fixture in [`tests/fixtures/README.md`](../tests/fixtures/README.md).
 
-A fixture is test infrastructure, not part of the installed FlashShell package.
+A fixture is test infrastructure, not part of the installed Flash package.
 
 ## Fuzzing
 
@@ -644,7 +644,7 @@ Both targets accept arbitrary bytes:
 From the component workspace, run the bounded smoke campaign:
 
 ```bash
-cd components/flashshell
+cd components/flash
 ./fuzz/run-smoke.sh
 ```
 
@@ -683,8 +683,8 @@ Generated fuzz artifacts, coverage files, and fuzz build output are ignored by G
 Build the `fsh` executable for the Redox target with:
 
 ```bash
-cd components/flashshell
-redoxer build -p flashshell-cli --bin fsh
+cd components/flash
+redoxer build -p flash-cli --bin fsh
 ```
 
 From the repository root, the helper equivalent is:
@@ -716,25 +716,25 @@ Those properties require an assembled image and target-side runtime evidence.
 
 ## FlashOS image integration
 
-FlashShell is packaged through:
+Flash is packaged through:
 
 ```text
-recipes/terminal/flashshell/recipe.toml
+recipes/terminal/flash/recipe.toml
 ```
 
-The recipe fetches the FlashOS repository at a pinned Git revision and builds the `fsh` binary from `flashshell-cli`.
+The recipe fetches the FlashOS repository at a pinned Git revision and builds the `fsh` binary from `flash-cli`.
 
 This has an important consequence:
 
 > Uncommitted component changes in the current checkout are not automatically consumed by a normal FlashOS recipe build.
 
-To integrate a new FlashShell revision:
+To integrate a new Flash revision:
 
 1. complete the component host checks;
 2. complete the Redox target build where required;
 3. commit the intended component state;
 4. update the recipe's pinned revision deliberately;
-5. rebuild the FlashShell package;
+5. rebuild the Flash package;
 6. rebuild the image from its declared profile;
 7. run the required target-side verification.
 
@@ -743,7 +743,7 @@ Using the repository helper:
 ```bash
 source ./flashos.sh
 
-flashos recipe rebuild flashshell
+flashos recipe rebuild flash
 flashos build disk
 flashos smoke disk
 ```
@@ -774,7 +774,7 @@ The workspace policy checks:
 With `cargo-deny` installed, run the component policy locally:
 
 ```bash
-cd components/flashshell
+cd components/flash
 cargo deny check advisories bans licenses sources
 ```
 
@@ -792,27 +792,27 @@ When adding or updating a dependency:
 
 A dependency that works on a Linux development host may still be unsuitable for the Redox target.
 
-The hosted security workflow also evaluates the FlashShell manifest independently from the root Cargo workspace. The detailed hosted contract belongs in [CI/CD Contracts](../../../ci/README.md).
+The hosted security workflow also evaluates the Flash manifest independently from the root Cargo workspace. The detailed hosted contract belongs in [CI/CD Contracts](../../../ci/README.md).
 
 ## Generate API documentation
 
-Generate local Rust API documentation for all FlashShell crates with:
+Generate local Rust API documentation for all Flash crates with:
 
 ```bash
-cd components/flashshell
+cd components/flash
 cargo doc --workspace --no-deps
 ```
 
 The generated documentation is written below:
 
 ```text
-components/flashshell/target/doc/
+components/flash/target/doc/
 ```
 
 Open the CLI crate index at:
 
 ```text
-target/doc/flashshell_cli/index.html
+target/doc/flash_cli/index.html
 ```
 
 Use the generated crate documentation when working with public Rust types, traits, and module boundaries. The Markdown guides remain responsible for cross-crate concepts, public language behavior, and development workflow.
@@ -829,10 +829,10 @@ A behavior change may require updates in more than one document.
 | Script execution, script arguments, checking, formatting, redirections, statuses, or jobs | [Scripting](scripting.md) |
 | Dependency direction, analysis services, platform interfaces, adapters, or process lifecycle | [Architecture](architecture.md) |
 | Formatter, checker, help, language-server, test, fixture, fuzzing, or integration workflow | This guide |
-| Component purpose, v1 boundary, or public availability wording | [FlashShell overview](../README.md) |
+| Component purpose, v1 boundary, or public availability wording | [Flash overview](../README.md) |
 | Image package, target evidence, or system integration | Main [FlashOS documentation](../../../docs/README.md) |
 
-Examples in public documentation must use supported FlashShell syntax. Verify them against the parser, runtime, tests, or executable behavior rather than adapting POSIX shell examples by appearance.
+Examples in public documentation must use supported Flash syntax. Verify them against the parser, runtime, tests, or executable behavior rather than adapting POSIX shell examples by appearance.
 
 Keep exact versions, test counts, and other frequently changing values in their authoritative manifests or inventories unless a reader needs the value to perform the documented procedure.
 
@@ -843,7 +843,7 @@ Select the checks required by the affected layer rather than treating every comm
 ### Every Rust change
 
 ```bash
-cd components/flashshell
+cd components/flash
 
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
@@ -928,7 +928,7 @@ Also verify:
 
 ```bash
 cargo deny check advisories bans licenses sources
-redoxer build -p flashshell-cli --bin fsh
+redoxer build -p flash-cli --bin fsh
 ```
 
 Review `Cargo.lock` and the target-visible transitive graph.
@@ -958,11 +958,11 @@ Before finalizing the change, review the working tree for:
 - [Language Guide](language-guide.md) — Language syntax, values, expressions, commands, and structured pipelines.
 - [Scripting](scripting.md) — Script execution, external processes, redirections, statuses, and jobs.
 - [Architecture](architecture.md) — Crate boundaries, execution planning, platform capabilities, and process lifecycle.
-- [FlashShell overview](../README.md) — Component purpose, public boundaries, and documentation entry point.
+- [Flash overview](../README.md) — Component purpose, public boundaries, and documentation entry point.
 - [FlashOS Development](../../../docs/development.md) — Repository, package, profile, and image development.
 - [FlashOS Verification](../../../docs/verification.md) — Evidence layers and qualification boundaries.
 - [CI/CD Contracts](../../../ci/README.md) — Local CI scripts and hosted workflow contracts.
 
 ---
 
-[← Previous: Architecture](architecture.md) · [FlashShell documentation](README.md) · [Next: CI/CD Contracts →](../../../ci/README.md)
+[← Previous: Architecture](architecture.md) · [Flash documentation](README.md) · [Next: CI/CD Contracts →](../../../ci/README.md)

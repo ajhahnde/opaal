@@ -1,10 +1,10 @@
-# FlashShell Language Guide
+# Flash Language Guide
 
-[FlashOS](../../../README.md) › [FlashShell](../README.md) › [Documentation](README.md) › Language Guide
+[FlashOS](../../../README.md) › [Flash](../README.md) › [Documentation](README.md) › Language Guide
 
-This guide documents the FlashShell 1.0 language: source text, runtime values, bindings, expressions, commands, expansion, control flow, functions, function metadata, modules, name resolution, and typed pipelines. Practical script invocation, process execution, redirection, static checking, formatting, status handling, and job control are covered in the [Scripting Guide](scripting.md).
+This guide documents the Flash 1.0 language: source text, runtime values, bindings, expressions, commands, expansion, control flow, functions, function metadata, modules, name resolution, and typed pipelines. Practical script invocation, process execution, redirection, static checking, formatting, status handling, and job control are covered in the [Scripting Guide](scripting.md).
 
-> **Project status:** FlashOS as a complete operating system remains pre-alpha software. However, this FlashShell Language Guide defines the intended stable FlashShell v1.0 contract. Note that not every v1 feature is automatically available in every current FlashOS image or on every target platform, and successful execution on a Linux or macOS development host is not automatic proof of FlashOS target support.
+> **Project status:** FlashOS as a complete operating system remains pre-alpha software. However, this Flash Language Guide defines the intended stable Flash v1.0 contract. Note that not every v1 feature is automatically available in every current FlashOS image or on every target platform, and successful execution on a Linux or macOS development host is not automatic proof of FlashOS target support.
 
 ## On this page
 
@@ -23,11 +23,11 @@ This guide documents the FlashShell 1.0 language: source text, runtime values, b
 
 ## Language model
 
-FlashShell is a non-POSIX command language. It is not intended to parse or execute `sh`, Bash, or other POSIX shell programs.
+Flash is a non-POSIX command language. It is not intended to parse or execute `sh`, Bash, or other POSIX shell programs.
 
 The language follows several central rules:
 
-- Source text is parsed as FlashShell syntax rather than passed through another shell.
+- Source text is parsed as Flash syntax rather than passed through another shell.
 - Runtime values retain their types until an explicit conversion is requested.
 - An ordinary command word produces exactly one argument.
 - Variables are not implicitly split on whitespace.
@@ -36,27 +36,27 @@ The language follows several central rules:
 - External processes exchange byte streams; structured pipeline stages use typed values.
 - Conditions accept only Boolean or status values rather than applying general truthiness rules.
 
-These rules keep data, command arguments, and executable source distinct. A string produced at runtime is data and is not reparsed as FlashShell code.
+These rules keep data, command arguments, and executable source distinct. A string produced at runtime is data and is not reparsed as Flash code.
 
 ## Source text and statements
 
 ### Encoding and line endings
 
-FlashShell source files are UTF-8 text. Both LF and CRLF line endings are accepted.
+Flash source files are UTF-8 text. Both LF and CRLF line endings are accepted.
 
-A lone carriage return is invalid. FlashShell scripts conventionally use the `.fsh` extension.
+A lone carriage return is invalid. Flash scripts conventionally use the `.fsh` extension.
 
 Statements are normally separated by a newline:
 
 ```text
-let name = "FlashShell"
+let name = "Flash"
 let version = 1
 ```
 
 A semicolon may separate statements on the same line:
 
 ```text
-let name = "FlashShell"; let version = 1
+let name = "Flash"; let version = 1
 ```
 
 A backslash followed immediately by a line ending continues the current logical line. Open delimiters and unfinished operators may also cause interactive input to remain incomplete until the construct is closed.
@@ -108,7 +108,7 @@ A `#` embedded in an existing word is part of that word rather than the start of
 
 ### Quoting
 
-FlashShell provides bare, single-quoted, and double-quoted words.
+Flash provides bare, single-quoted, and double-quoted words.
 
 | Form           | Behavior                                                        |
 | -------------- | --------------------------------------------------------------- |
@@ -177,7 +177,7 @@ Process behavior and substitution failures are described in the [Scripting Guide
 
 ## Values and literals
 
-FlashShell evaluates source into structured runtime values.
+Flash evaluates source into structured runtime values.
 
 | Value family | Purpose                                         |
 | ------------ | ----------------------------------------------- |
@@ -195,7 +195,7 @@ FlashShell evaluates source into structured runtime values.
 | `Table`      | Structured tabular data                         |
 | `Range`      | Integer range                                   |
 | `Status`     | Result of command execution                     |
-| `Function`   | Named FlashShell function                       |
+| `Function`   | Named Flash function                       |
 | `Closure`    | Anonymous callable value with captured bindings |
 
 ### Scalar literals
@@ -207,13 +207,13 @@ false
 42
 -17
 3.5
-"FlashShell"
+"Flash"
 'exact text'
 ```
 
 Integers use checked signed arithmetic. An operation that exceeds the supported integer range produces a runtime error.
 
-Floating-point values are finite. Non-finite values such as NaN and positive or negative infinity are not regular FlashShell values.
+Floating-point values are finite. Non-finite values such as NaN and positive or negative infinity are not regular Flash values.
 
 ### Lists
 
@@ -232,7 +232,7 @@ A record associates ordered field names with values:
 
 ```text
 let project = {
-    name: "FlashShell",
+    name: "Flash",
     version: 1,
     stable: true
 }
@@ -415,7 +415,7 @@ The conditional operators `&&` and `||` operate on complete expressions or comma
 
 ### Arithmetic
 
-Arithmetic operators accept numeric values. FlashShell does not implicitly parse strings as numbers or concatenate strings through numeric addition.
+Arithmetic operators accept numeric values. Flash does not implicitly parse strings as numbers or concatenate strings through numeric addition.
 
 Integer division rounds toward negative infinity. Division by zero and checked-arithmetic overflow are runtime errors.
 
@@ -426,8 +426,8 @@ The `in` operator supports defined membership relationships:
 ```text
 let selected = 3 in 1..=5
 let known = "fsh" in ["fsh", "sh"]
-let contained = "Shell" in "FlashShell"
-let has_name = "name" in {name: "FlashShell"}
+let contained = "Shell" in "Flash"
+let has_name = "name" in {name: "Flash"}
 ```
 
 Supported forms include:
@@ -475,7 +475,7 @@ The same identifier followed by command words begins a command:
 process $value
 ```
 
-Bare command names are resolved against FlashShell internal commands first. If no internal command matches, FlashShell attempts to start an external executable.
+Bare command names are resolved against Flash internal commands first. If no internal command matches, Flash attempts to start an external executable.
 
 Prefix a command name with `^` to require external execution:
 
@@ -483,7 +483,7 @@ Prefix a command name with `^` to require external execution:
 ^program argument
 ```
 
-The prefix is part of FlashShell syntax and is not included in the external argument vector.
+The prefix is part of Flash syntax and is not included in the external argument vector.
 
 For a command name selected at runtime, use the `command` internal command:
 
@@ -503,7 +503,7 @@ let label = "two words"
 command "example-program" $label
 ```
 
-The value of `$label` remains one argument. FlashShell does not split it at the space.
+The value of `$label` remains one argument. Flash does not split it at the space.
 
 An ordinary interpolated value must be one of these scalar families:
 
@@ -749,7 +749,7 @@ ls | where {|entry| $entry.type == "file"}
 
 ### Typed function metadata
 
-FlashShell v1 associates functions with parameter and result information that can be inspected without executing the function. The metadata supports name and signature validation, help output, editor tooling, and pipeline analysis.
+Flash v1 associates functions with parameter and result information that can be inspected without executing the function. The metadata supports name and signature validation, help output, editor tooling, and pipeline analysis.
 
 A signature describes the callable contract exposed to analysis tools. It does not turn every runtime value into a fully statically proven value or provide stronger static type guarantees than those defined by the language specification.
 
@@ -763,7 +763,7 @@ Help must remain inspection-only. Requesting help must not execute a function bo
 
 ## Modules and name resolution
 
-FlashShell v1 supports maintainable multi-file programs through explicit module boundaries. Module loading and name resolution are analysis responsibilities that must be understandable before program execution begins.
+Flash v1 supports maintainable multi-file programs through explicit module boundaries. Module loading and name resolution are analysis responsibilities that must be understandable before program execution begins.
 
 ### Canonical module identity
 
@@ -799,7 +799,7 @@ Redirection syntax, pipeline status aggregation, background jobs, and terminal c
 
 ### Pipeline carriers
 
-FlashShell distinguishes four pipeline carrier forms:
+Flash distinguishes four pipeline carrier forms:
 
 | Carrier       | Meaning                      |
 | ------------- | ---------------------------- |
@@ -810,7 +810,7 @@ FlashShell distinguishes four pipeline carrier forms:
 
 External processes consume and produce byte streams. Internal commands declare the carrier forms they accept and return.
 
-FlashShell does not automatically:
+Flash does not automatically:
 
 - decode bytes as text;
 - parse serialized data;
@@ -866,7 +866,7 @@ Use `^ls` when the external executable named `ls` is required instead of the int
 
 ### Common structured operations
 
-FlashShell provides internal operations for common data-flow tasks, including:
+Flash provides internal operations for common data-flow tasks, including:
 
 - `first` and `last`;
 - `collect` and `length`;
@@ -901,10 +901,10 @@ An unsuccessful status is not automatically a runtime error. Use the `check` com
 
 ### Error categories
 
-FlashShell distinguishes several kinds of failure:
+Flash distinguishes several kinds of failure:
 
 - **Incomplete source** needs more input, such as an unclosed delimiter in an interactive session.
-- **Invalid source** cannot form a valid FlashShell program.
+- **Invalid source** cannot form a valid Flash program.
 - **Runtime errors** include unknown bindings, invalid operand types, unsupported conversions, arithmetic failures, and invalid pipeline edges.
 - **Unsuccessful statuses** represent commands that completed without success.
 - **Cancellation** represents interrupted execution.
@@ -917,10 +917,10 @@ Diagnostics preserve source locations where available so that syntax and evaluat
 
 - [Scripting](scripting.md) — Run `.fsh` files, pass script arguments, perform non-executing `fsh check` validation, apply canonical formatting, invoke external processes, redirect streams, inspect statuses, and manage jobs.
 - [Architecture](architecture.md) — Understand parser, runtime, platform, and CLI boundaries.
-- [Development](development.md) — Build, test, lint, fuzz, and maintain the FlashShell workspace.
-- [FlashShell overview](../README.md) — Review the component's role in FlashOS and its implementation boundaries.
+- [Development](development.md) — Build, test, lint, fuzz, and maintain the Flash workspace.
+- [Flash overview](../README.md) — Review the component's role in FlashOS and its implementation boundaries.
 - [FlashOS Verification](../../../docs/verification.md) — Distinguish host tests, target compilation, image construction, and runtime qualification.
 
 ---
 
-[← Previous: Documentation Index](README.md) · [FlashShell documentation](README.md) · [Next: Scripting →](scripting.md)
+[← Previous: Documentation Index](README.md) · [Flash documentation](README.md) · [Next: Scripting →](scripting.md)
