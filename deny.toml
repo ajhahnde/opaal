@@ -14,7 +14,7 @@ ignore = []
 [licenses]
 version = 2
 confidence-threshold = 0.9
-# Flash itself ships Apache-2.0. Dependencies may use this reviewed set of
+# Flash itself ships under MIT. Dependencies may use this reviewed set of
 # permissive licenses; Unicode-3.0 covers data tables in unicode-ident.
 allow = [
     "Apache-2.0",

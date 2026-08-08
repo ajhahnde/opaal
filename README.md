@@ -115,7 +115,7 @@ For building and booting FlashOS as a complete system, begin with the [FlashOS G
 
 ## License
 
-The Flash workspace is licensed under the [Apache License 2.0](LICENSE).
+The Flash workspace is licensed under the [MIT License](LICENSE).
 
 Other FlashOS components and incorporated third-party materials may be subject to separate terms. See the repository-level [NOTICE](../../NOTICE) and the applicable license files for attribution and licensing details.
 
