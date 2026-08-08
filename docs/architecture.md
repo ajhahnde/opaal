@@ -655,7 +655,11 @@ FlashOS image
 login starts /usr/bin/fsh
 ```
 
-The package recipe pins the repository revision used for image construction. A newer component working tree is not automatically included in an image until the recipe revision and associated verification expectations are updated.
+The package recipe snapshots tracked and non-ignored files from the current
+`components/flash/` workspace. A clean image build therefore uses the Flash
+tree from the exact outer FlashOS checkout without a self-referential recipe
+SHA. Local uncommitted component files are included only when they are not
+ignored, allowing pre-commit image testing while excluding generated targets.
 
 System-level package selection, image assembly, boot flow, and login configuration remain documented in [FlashOS Architecture](../../../docs/architecture.md). This document owns the internal architecture of the Flash component after its executable starts.
 

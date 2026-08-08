@@ -58,7 +58,7 @@ Development evidence is layered:
 | Host tests                 | Portable behavior and supported host-platform integration                |
 | Fuzzing                    | Resilience of selected syntax entry points against generated inputs      |
 | `redoxer` build            | Compilation of the `fsh` binary for the Redox target environment         |
-| Package build              | Construction of the pinned Flash package through the FlashOS recipe      |
+| Package build              | Construction of the checkout-bound Flash workspace through the FlashOS recipe |
 | Image build                | Inclusion of that package in an assembled FlashOS image                  |
 | QEMU or hardware execution | Runtime behavior in the produced system                                  |
 
@@ -722,21 +722,24 @@ Flash is packaged through:
 recipes/terminal/flash/recipe.toml
 ```
 
-The recipe fetches the FlashOS repository at a pinned Git revision and builds the `fsh` binary from `flash-cli`.
+The recipe snapshots tracked and non-ignored files from the current
+`components/flash/` workspace and builds the `fsh` binary from `flash-cli`.
 
 This has an important consequence:
 
-> Uncommitted component changes in the current checkout are not automatically consumed by a normal FlashOS recipe build.
+> Intentional uncommitted component changes can be consumed by a local recipe
+> build, while ignored generated outputs are excluded. CI and release builds
+> use a clean exact checkout.
 
-To integrate a new Flash revision:
+To integrate a Flash change:
 
 1. complete the component host checks;
 2. complete the Redox target build where required;
-3. commit the intended component state;
-4. update the recipe's pinned revision deliberately;
-5. rebuild the Flash package;
-6. rebuild the image from its declared profile;
-7. run the required target-side verification.
+3. inspect the component workspace inputs with `git status`;
+4. rebuild the Flash package;
+5. rebuild the image from its declared profile;
+6. run the required target-side verification;
+7. commit the component and integration changes together.
 
 Using the repository helper:
 
@@ -752,7 +755,8 @@ A package push into an existing development image can shorten an iteration cycle
 
 For the repository-level package and image workflow, see [FlashOS Development](../../../docs/development.md). For the meaning of package, image, QEMU, and hardware evidence, see [FlashOS Verification](../../../docs/verification.md).
 
-Do not replace the recipe revision with a floating branch. Image construction must resolve the shell source to an immutable revision.
+Do not replace the workspace source with a floating branch. Image construction
+must resolve Flash from the same exact checkout that defines the image.
 
 ## Dependencies and supply-chain policy
 
