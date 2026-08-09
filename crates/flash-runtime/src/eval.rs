@@ -41,6 +41,7 @@ pub struct RuntimeError {
     kind: RuntimeErrorKind,
     span: Span,
     frames: Vec<CallFrame>,
+    source: Option<Arc<SourceFile>>,
 }
 
 impl RuntimeError {
@@ -50,6 +51,7 @@ impl RuntimeError {
             kind,
             span,
             frames: Vec::new(),
+            source: None,
         }
     }
 
@@ -69,6 +71,18 @@ impl RuntimeError {
         &self.frames
     }
 
+    /// The source retained by the evaluator that raised this error, when the
+    /// error originated inside pure evaluation.
+    #[must_use]
+    pub fn source(&self) -> Option<&SourceFile> {
+        self.source.as_deref()
+    }
+
+    fn with_source(mut self, source: Arc<SourceFile>) -> Self {
+        self.source = Some(source);
+        self
+    }
+
     /// Appends an enclosing call frame as the error unwinds outward.
     #[must_use]
     fn with_frame(mut self, frame: CallFrame) -> Self {
@@ -82,15 +96,20 @@ impl RuntimeError {
 pub struct CallFrame {
     callee: FrameCallee,
     call_site: Span,
+    source: Arc<SourceFile>,
 }
 
 impl CallFrame {
-    fn new(name: Option<&str>, call_site: Span) -> Self {
+    fn new(name: Option<&str>, call_site: Span, source: Arc<SourceFile>) -> Self {
         let callee = match name {
             Some(name) => FrameCallee::Function(name.to_owned()),
             None => FrameCallee::Closure,
         };
-        Self { callee, call_site }
+        Self {
+            callee,
+            call_site,
+            source,
+        }
     }
 
     /// The identity of the called function or closure.
@@ -103,6 +122,12 @@ impl CallFrame {
     #[must_use]
     pub const fn call_site(&self) -> Span {
         self.call_site
+    }
+
+    /// The source containing this call expression.
+    #[must_use]
+    pub fn source(&self) -> &SourceFile {
+        &self.source
     }
 }
 
@@ -1068,6 +1093,16 @@ pub fn evaluate_in_environment(
     env: &mut Environment,
     limits: &EvalLimits,
 ) -> Result<Completion, RuntimeError> {
+    evaluate_in_environment_owned(script, Arc::new(source.clone()), scope, env, limits)
+}
+
+pub(crate) fn evaluate_in_environment_owned(
+    script: &flash_syntax::Script,
+    source: Arc<SourceFile>,
+    scope: &mut ScopeStack,
+    env: &mut Environment,
+    limits: &EvalLimits,
+) -> Result<Completion, RuntimeError> {
     let mut evaluator = Evaluator {
         source,
         cancel: limits.cancel.clone(),
@@ -1126,7 +1161,7 @@ pub fn evaluate_closure_argument(
     let limits = EvalLimits::default();
     let mut env = Environment::new();
     let evaluator = Evaluator {
-        source,
+        source: Arc::new(source.clone()),
         cancel: limits.cancel,
         budget: limits.budget,
         policy: limits.policy,
@@ -1187,7 +1222,7 @@ pub fn apply_callable(
     }
 
     let mut evaluator = Evaluator {
-        source,
+        source: Arc::new(source.clone()),
         cancel: limits.cancel.clone(),
         budget: limits.budget,
         policy: limits.policy,
@@ -1268,7 +1303,7 @@ pub fn expand_word(
     // Word expansion never touches the environment; a throwaway is sufficient.
     let mut env = Environment::new();
     let mut evaluator = Evaluator {
-        source,
+        source: Arc::new(source.clone()),
         cancel: limits.cancel.clone(),
         budget: limits.budget,
         policy: limits.policy,
@@ -1302,7 +1337,7 @@ pub fn expand_spread(
     // Spread expansion never touches the environment; a throwaway is sufficient.
     let mut env = Environment::new();
     let mut evaluator = Evaluator {
-        source,
+        source: Arc::new(source.clone()),
         cancel: limits.cancel.clone(),
         budget: limits.budget,
         policy: limits.policy,
@@ -1345,15 +1380,15 @@ enum Flow {
     Return(Value, Span),
 }
 
-struct Evaluator<'source> {
-    source: &'source SourceFile,
+struct Evaluator<'environment> {
+    source: Arc<SourceFile>,
     cancel: CancellationToken,
     budget: ResourceBudget,
     policy: EvaluationPolicy,
-    env: &'source mut Environment,
+    env: &'environment mut Environment,
 }
 
-impl<'source> Evaluator<'source> {
+impl Evaluator<'_> {
     /// Aborts with a cancellation when the token trips at a boundary.
     fn check_cancel(&self, span: Span) -> Eval<()> {
         if self.cancel.is_cancelled() {
@@ -1465,8 +1500,8 @@ impl<'source> Evaluator<'source> {
                 self.env.set(name, encoded);
             }
             EnvironmentStatement::Unset { name } => {
-                let name = self.text(name.span());
-                self.env.remove(name);
+                let name = self.text(name.span()).to_owned();
+                self.env.remove(&name);
             }
         }
         Ok(())
@@ -1506,13 +1541,13 @@ impl<'source> Evaluator<'source> {
 
     fn for_statement(&mut self, statement: &ForStatement, scope: &mut ScopeStack) -> Eval<Flow> {
         let iterable = self.expression(&statement.iterable, scope)?;
-        let name = self.text(statement.binding.span());
+        let name = self.text(statement.binding.span()).to_owned();
         let boundary = statement.iterable.span();
         match iterable {
             Value::List(items) => {
                 for item in items.iter() {
                     self.check_cancel(boundary)?;
-                    match self.iteration(name, item.clone(), &statement.body, scope)? {
+                    match self.iteration(&name, item.clone(), &statement.body, scope)? {
                         Flow::Break(_) => break,
                         Flow::Continue(_) | Flow::Fallthrough(_) => {}
                         transfer @ Flow::Return(..) => return Ok(transfer),
@@ -1523,7 +1558,7 @@ impl<'source> Evaluator<'source> {
                 let mut current = range.start();
                 while range.contains(current) {
                     self.check_cancel(boundary)?;
-                    match self.iteration(name, Value::Int(current), &statement.body, scope)? {
+                    match self.iteration(&name, Value::Int(current), &statement.body, scope)? {
                         Flow::Break(_) => break,
                         Flow::Continue(_) | Flow::Fallthrough(_) => {}
                         transfer @ Flow::Return(..) => return Ok(transfer),
@@ -2123,7 +2158,7 @@ impl<'source> Evaluator<'source> {
         Ok(words)
     }
 
-    fn text(&self, span: Span) -> &'source str {
+    fn text(&self, span: Span) -> &str {
         self.source
             .slice(span)
             .expect("ast spans always address their own source")
@@ -2131,7 +2166,7 @@ impl<'source> Evaluator<'source> {
 
     /// Builds a runtime-error abort anchored at `span`.
     fn error(&self, kind: RuntimeErrorKind, span: Span) -> Abort {
-        Abort::Error(RuntimeError::new(kind, span))
+        Abort::Error(RuntimeError::new(kind, span).with_source(Arc::clone(&self.source)))
     }
 
     fn unsupported(&self, feature: &'static str, span: Span) -> Abort {
@@ -2154,6 +2189,7 @@ impl<'source> Evaluator<'source> {
             parameters,
             body: CallableBody::Block(definition.body.clone()),
             captured: scope.captured_snapshot(),
+            source: Arc::clone(&self.source),
             location: self.location(definition.name.span()),
         };
         let value = Value::Callable(Arc::new(callable));
@@ -2169,6 +2205,7 @@ impl<'source> Evaluator<'source> {
             parameters,
             body: CallableBody::Expression(closure.body.clone()),
             captured: scope.captured_snapshot(),
+            source: Arc::clone(&self.source),
             location: self.location(closure.span),
         };
         Ok(Value::Callable(Arc::new(callable)))
@@ -2267,13 +2304,24 @@ impl<'source> Evaluator<'source> {
         // call frame naming this callee and its call site. Everything above
         // (cancellation, argument, arity, not-callable resolution) ran in the
         // caller's context and is deliberately left unframed.
-        let frame = CallFrame::new(function.name.as_deref(), span);
+        let frame = CallFrame::new(function.name.as_deref(), span, Arc::clone(&self.source));
         self.run_body(function, &mut call_scope)
             .map_err(|abort| abort.with_frame(frame))
     }
 
     /// Runs an already-prepared call body, reducing its control flow to a value.
     fn run_body(&mut self, function: &CallableValue, scope: &mut ScopeStack) -> Eval<Value> {
+        let caller_source = std::mem::replace(&mut self.source, Arc::clone(&function.source));
+        let result = self.run_body_in_defining_source(function, scope);
+        self.source = caller_source;
+        result
+    }
+
+    fn run_body_in_defining_source(
+        &mut self,
+        function: &CallableValue,
+        scope: &mut ScopeStack,
+    ) -> Eval<Value> {
         let outcome = match &function.body {
             CallableBody::Block(block) => {
                 scope.push();
@@ -2355,6 +2403,7 @@ struct CallableValue {
     parameters: Vec<Arc<str>>,
     body: CallableBody,
     captured: ScopeStack,
+    source: Arc<SourceFile>,
     location: String,
 }
 

@@ -40,7 +40,7 @@ use crate::closure::OwnedClosureContext;
 use crate::command::CommandRegistry;
 use crate::eval::{
     Clock, Completion, EvalLimits, ExpandedWord, RuntimeError, RuntimeErrorKind,
-    evaluate_in_environment, expand_word,
+    evaluate_in_environment_owned, expand_word,
 };
 use crate::execute::{execute_foreground_status, start_mixed_pipeline};
 use crate::internal::{
@@ -76,8 +76,16 @@ pub enum SubmitOutcome {
 /// A failure raised while submitting one edit buffer.
 #[derive(Debug)]
 pub enum SubmitError {
-    /// A recoverable parse or runtime failure; the session state is unchanged.
+    /// A recoverable source diagnostic; the session state is unchanged.
     Diagnostic(String),
+    /// A structured runtime failure plus its retained-source rendering. Module
+    /// execution may re-render it with its complete program registry.
+    Runtime {
+        /// The source-spanned runtime failure.
+        error: Box<RuntimeError>,
+        /// The complete rendering over every retained evaluation source.
+        rendered: String,
+    },
     /// A fatal failure to write built-in output to the caller's sink.
     Output(io::Error),
 }
@@ -89,6 +97,7 @@ impl SubmitError {
     pub fn render(&self) -> &str {
         match self {
             Self::Diagnostic(rendered) => rendered,
+            Self::Runtime { rendered, .. } => rendered,
             Self::Output(_) => "",
         }
     }
@@ -270,7 +279,7 @@ impl Session {
     /// Evaluate one submitted edit buffer against the retained session state.
     ///
     /// Statements run in source order; built-in textual output is written to
-    /// `output`. On a recoverable [`SubmitError::Diagnostic`] the accumulated
+    /// `output`. On a recoverable [`SubmitError`] the accumulated
     /// scope, environment, cwd, and status remain exactly as they were before
     /// the failing statement.
     #[allow(clippy::too_many_arguments)]
@@ -283,7 +292,7 @@ impl Session {
         clock: &dyn Clock,
         output: &mut dyn Write,
     ) -> Result<SubmitOutcome, SubmitError> {
-        let source = SourceFile::new(SourceId::new(self.next_source), name, text);
+        let source = Arc::new(SourceFile::new(SourceId::new(self.next_source), name, text));
         self.next_source = self.next_source.wrapping_add(1);
 
         let script = match parse(&source) {
@@ -300,26 +309,40 @@ impl Session {
             ParseOutcome::Invalid(diagnostics) => return Err(render(&source, &diagnostics)),
         };
 
-        self.submit_parsed(&source, &script, false, probe, platform, clock, output)
+        self.submit_parsed(source, &script, false, probe, platform, clock, output)
     }
 
-    /// Executes the root syntax of a fully analyzed module program.
-    pub(crate) fn submit_module_root(
+    /// Executes one source from a fully analyzed module program in an isolated
+    /// lexical root while retaining the session's shared execution state.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn submit_module_source(
         &mut self,
         source: &SourceFile,
         script: &Script,
+        mut scope: ScopeStack,
         probe: &dyn ExecutableProbe,
         platform: &dyn Platform,
         clock: &dyn Clock,
         output: &mut dyn Write,
-    ) -> Result<SubmitOutcome, SubmitError> {
-        self.submit_parsed(source, script, true, probe, platform, clock, output)
+    ) -> Result<(SubmitOutcome, ScopeStack), SubmitError> {
+        std::mem::swap(&mut self.scope, &mut scope);
+        let outcome = self.submit_parsed(
+            Arc::new(source.clone()),
+            script,
+            true,
+            probe,
+            platform,
+            clock,
+            output,
+        );
+        std::mem::swap(&mut self.scope, &mut scope);
+        outcome.map(|outcome| (outcome, scope))
     }
 
     #[allow(clippy::too_many_arguments)]
     fn submit_parsed(
         &mut self,
-        source: &SourceFile,
+        source: Arc<SourceFile>,
         script: &Script,
         imports_analyzed: bool,
         probe: &dyn ExecutableProbe,
@@ -327,6 +350,7 @@ impl Session {
         clock: &dyn Clock,
         output: &mut dyn Write,
     ) -> Result<SubmitOutcome, SubmitError> {
+        let source_file = source.as_ref();
         let Session {
             scope,
             state,
@@ -338,9 +362,7 @@ impl Session {
 
         for statement in script.statements() {
             match statement.kind() {
-                StatementKind::Import(import) if imports_analyzed && import.names.is_empty() => {
-                    continue;
-                }
+                StatementKind::Import(_) if imports_analyzed => continue,
                 StatementKind::ModuleExport(_) if imports_analyzed => continue,
                 StatementKind::Job(job) => {
                     if let Some(background_span) = job.background_span {
@@ -351,22 +373,22 @@ impl Session {
                                 },
                                 background_span,
                             );
-                            return Err(runtime(source, &error));
+                            return Err(runtime(source_file, &error));
                         };
                         if let Err(error) = validate_background_chain(
                             &job.chain,
-                            source,
+                            source_file,
                             scope,
                             state.environment(),
                         ) {
-                            return Err(runtime(source, &error));
+                            return Err(runtime(source_file, &error));
                         }
                         let mut child_scope = ScopeStack::from_environment(state.environment());
                         let direct_pipeline =
                             one_background_pipeline(&job.chain).filter(|pipeline| {
                                 pipeline_is_all_external(
                                     pipeline,
-                                    source,
+                                    source_file,
                                     &mut child_scope,
                                     registry,
                                 )
@@ -375,31 +397,31 @@ impl Session {
                             plan_pipeline_with_options(
                                 pipeline,
                                 state.cwd(),
-                                source,
+                                source_file,
                                 &mut child_scope,
                                 state.environment(),
                                 registry,
                                 probe,
                                 options,
                             )
-                            .map_err(|error| runtime(source, &error))?
+                            .map_err(|error| runtime(source_file, &error))?
                         } else {
                             background_shell_plan(
                                 &job.chain,
-                                source,
+                                source_file,
                                 state.cwd(),
                                 state.environment(),
                                 options,
                                 platform,
                             )
-                            .map_err(|error| runtime(source, &error))?
+                            .map_err(|error| runtime(source_file, &error))?
                         };
-                        let command = source
+                        let command = source_file
                             .slice(job.chain.span())
                             .map(escape_job_label)
                             .expect("a parsed chain span belongs to its source");
                         jobs.start(&plan, platform, command)
-                            .map_err(|error| runtime(source, &error))?;
+                            .map_err(|error| runtime(source_file, &error))?;
                         state.set_current_status(Some(
                             Status::exit(0, crate::Duration::ZERO)
                                 .expect("zero is a valid launch status"),
@@ -407,10 +429,19 @@ impl Session {
                         continue;
                     }
                     let step = run_chain(
-                        &job.chain, state, scope, options, registry, source, probe, platform,
-                        clock, jobs, output,
+                        &job.chain,
+                        state,
+                        scope,
+                        options,
+                        registry,
+                        source_file,
+                        probe,
+                        platform,
+                        clock,
+                        jobs,
+                        output,
                     )
-                    .map_err(|interrupt| interrupt.into_submit(source))?;
+                    .map_err(|interrupt| interrupt.into_submit(source_file))?;
                     match step {
                         ChainStep::Exit(code) => return Ok(SubmitOutcome::Exit(code)),
                         ChainStep::Status(status) => state.set_current_status(Some(status)),
@@ -424,14 +455,14 @@ impl Session {
                 }
                 _ => {
                     let one = Script::new(vec![statement.clone()], statement.span());
-                    match evaluate_in_environment(
+                    match evaluate_in_environment_owned(
                         &one,
-                        source,
+                        Arc::clone(&source),
                         scope,
                         state.environment_mut(),
                         &EvalLimits::default(),
                     )
-                    .map_err(|error| runtime(source, &error))?
+                    .map_err(|error| runtime(source_file, &error))?
                     {
                         Completion::Value(_) => {}
                         Completion::Cancelled(_) => {
@@ -1817,7 +1848,33 @@ fn render(source: &SourceFile, diagnostics: &[Diagnostic]) -> SubmitError {
 }
 
 fn runtime(source: &SourceFile, error: &RuntimeError) -> SubmitError {
-    let diagnostic = Diagnostic::new(Severity::Error, "RUN001", error.to_string())
+    let mut diagnostic = Diagnostic::new(Severity::Error, "RUN001", error.to_string())
         .with_primary(error.span(), "runtime failure");
-    render(source, &[diagnostic])
+    for frame in error.frames() {
+        diagnostic = diagnostic.with_secondary(frame.call_site(), "called from here");
+    }
+    let mut sources = Vec::new();
+    if let Some(primary) = error.source() {
+        sources.push(primary);
+    }
+    for frame in error.frames() {
+        if !sources
+            .iter()
+            .any(|candidate| candidate.id() == frame.source().id())
+        {
+            sources.push(frame.source());
+        }
+    }
+    if !sources
+        .iter()
+        .any(|candidate| candidate.id() == source.id())
+    {
+        sources.push(source);
+    }
+    let rendered = flash_syntax::render_diagnostic_sources(sources, &diagnostic)
+        .expect("runtime diagnostics retain every referenced evaluation source");
+    SubmitError::Runtime {
+        error: Box::new(error.clone()),
+        rendered,
+    }
 }

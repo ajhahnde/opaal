@@ -443,6 +443,14 @@ impl ModuleNameRegistry {
             .map_or(&[], |names| names.imports.as_slice())
     }
 
+    /// Explicit exports in deterministic name order for one canonical module.
+    pub fn exports<'a>(&'a self, module: &ModuleId) -> impl Iterator<Item = &'a ModuleExport> {
+        self.by_module
+            .get(module)
+            .into_iter()
+            .flat_map(|names| names.exports.values())
+    }
+
     fn analyze(
         graph: &ModuleGraph,
         sources: &ModuleSourceRegistry,

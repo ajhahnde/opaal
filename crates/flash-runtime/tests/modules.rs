@@ -5,13 +5,38 @@
 
 use std::cell::RefCell;
 use std::collections::BTreeMap;
+use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
+use flash_platform::{FakePlatform, RecordingPlatform};
+use flash_runtime::Environment;
+use flash_runtime::builtin::standard_registry;
+use flash_runtime::eval::FakeClock;
 use flash_runtime::module::{
     ModuleCanonicalizer, ModuleGraph, ModuleGraphError, ModulePathError, ModuleProgramLoader,
     ModuleResolver, ModuleSourceError, ModuleSourceLoader,
 };
+use flash_runtime::plan::SessionOptions;
+use flash_runtime::resolve::ExecutableProbe;
+use flash_runtime::script::execute_module_program;
 use flash_syntax::{LabelStyle, SourceFile, SourceId, Span};
+
+struct NoExecutables;
+
+impl ExecutableProbe for NoExecutables {
+    fn is_executable(&self, _path: &OsStr) -> bool {
+        false
+    }
+}
+
+struct MarkExecutable;
+
+impl ExecutableProbe for MarkExecutable {
+    fn is_executable(&self, path: &OsStr) -> bool {
+        path == OsStr::new("/bin/mark")
+    }
+}
 
 #[derive(Default)]
 struct FakeCanonicalizer {
@@ -168,6 +193,403 @@ fn named_imports_resolve_through_explicit_target_exports() {
     assert_eq!(export.name(), "answer");
     assert_eq!(export.declaration_span().source_id(), SourceId::new(1));
     assert_eq!(export.export_span().source_id(), SourceId::new(1));
+}
+
+#[test]
+fn named_import_initializes_a_scalar_export_while_load_only_imports_stay_dormant() {
+    let paths = FakeCanonicalizer::default()
+        .resolves("/project/main.fsh", "/project/main.fsh")
+        .resolves("/project/lib.fsh", "/project/lib.fsh")
+        .resolves("/project/dormant.fsh", "/project/dormant.fsh");
+    let sources = FakeSourceLoader::default()
+        .contains(
+            "/project/main.fsh",
+            concat!(
+                "import { answer } from './lib.fsh'\n",
+                "import './dormant.fsh'\n",
+                "export RESULT = $answer\n",
+            ),
+        )
+        .contains("/project/lib.fsh", "let answer = 42\nexport { answer }\n")
+        .contains("/project/dormant.fsh", "export BROKEN = $missing\n");
+    let program = ModuleProgramLoader::new(&paths, &sources)
+        .load(Path::new("/project/main.fsh"))
+        .expect("the module program loads");
+    let mut environment = Environment::new();
+
+    execute_module_program(
+        &program,
+        Path::new("/project"),
+        &mut environment,
+        &standard_registry(),
+        &NoExecutables,
+        &SessionOptions::default(),
+        &FakePlatform::none(),
+        Arc::new(FakeClock::new()),
+    )
+    .expect("the named dependency initializes and the load-only sibling stays dormant");
+
+    assert_eq!(environment.get("RESULT"), Some(OsStr::new("42")));
+    assert!(!environment.contains("BROKEN"));
+}
+
+#[test]
+fn named_dependencies_initialize_once_in_source_edge_depth_first_postorder() {
+    let paths = FakeCanonicalizer::default()
+        .resolves("/project/main.fsh", "/project/main.fsh")
+        .resolves("/project/left.fsh", "/project/left.fsh")
+        .resolves("/project/right.fsh", "/project/right.fsh")
+        .resolves("/project/shared.fsh", "/project/shared.fsh");
+    let sources = FakeSourceLoader::default()
+        .contains(
+            "/project/main.fsh",
+            concat!(
+                "import { left } from './left.fsh'\n",
+                "import { right } from './right.fsh'\n",
+                "^/bin/mark root\n",
+                "export ROOT_RAN = true\n",
+            ),
+        )
+        .contains(
+            "/project/left.fsh",
+            concat!(
+                "import { shared } from './shared.fsh'\n",
+                "^/bin/mark left\n",
+                "let left = $shared\n",
+                "export { left }\n",
+                "export LEFT_RAN = true\n",
+            ),
+        )
+        .contains(
+            "/project/right.fsh",
+            concat!(
+                "import { shared } from './shared.fsh'\n",
+                "^/bin/mark right\n",
+                "let right = $shared\n",
+                "export { right }\n",
+                "export RIGHT_RAN = true\n",
+            ),
+        )
+        .contains(
+            "/project/shared.fsh",
+            concat!(
+                "^/bin/mark shared\n",
+                "let shared = 42\n",
+                "export { shared }\n",
+                "export SHARED_RAN = true\n",
+            ),
+        );
+    let program = ModuleProgramLoader::new(&paths, &sources)
+        .load(Path::new("/project/main.fsh"))
+        .expect("the diamond module program loads");
+    let mut environment = Environment::new();
+    let platform = RecordingPlatform::new(FakePlatform::full());
+
+    execute_module_program(
+        &program,
+        Path::new("/project"),
+        &mut environment,
+        &standard_registry(),
+        &MarkExecutable,
+        &SessionOptions::default(),
+        &platform,
+        Arc::new(FakeClock::new()),
+    )
+    .expect("the diamond initializes successfully");
+
+    let labels = platform
+        .spawn_log()
+        .records()
+        .into_iter()
+        .map(|record| record.argv()[1].clone())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        labels,
+        ["shared", "left", "right", "root"].map(OsString::from)
+    );
+    assert_eq!(environment.get("SHARED_RAN"), Some(OsStr::new("true")));
+    assert_eq!(environment.get("LEFT_RAN"), Some(OsStr::new("true")));
+    assert_eq!(environment.get("RIGHT_RAN"), Some(OsStr::new("true")));
+    assert_eq!(environment.get("ROOT_RAN"), Some(OsStr::new("true")));
+}
+
+#[test]
+fn imported_mut_values_materialize_after_initialization_as_immutable_snapshots() {
+    let paths = FakeCanonicalizer::default()
+        .resolves("/project/main.fsh", "/project/main.fsh")
+        .resolves("/project/lib.fsh", "/project/lib.fsh");
+    let sources = FakeSourceLoader::default()
+        .contains(
+            "/project/main.fsh",
+            "import { answer } from './lib.fsh'\nexport RESULT = $answer\n",
+        )
+        .contains(
+            "/project/lib.fsh",
+            "mut answer = 41\n$answer = 42\nexport { answer }\n",
+        );
+    let program = ModuleProgramLoader::new(&paths, &sources)
+        .load(Path::new("/project/main.fsh"))
+        .expect("the module program loads");
+    let mut environment = Environment::new();
+
+    execute_module_program(
+        &program,
+        Path::new("/project"),
+        &mut environment,
+        &standard_registry(),
+        &NoExecutables,
+        &SessionOptions::default(),
+        &FakePlatform::none(),
+        Arc::new(FakeClock::new()),
+    )
+    .expect("the completed mutable export is materialized");
+
+    assert_eq!(environment.get("RESULT"), Some(OsStr::new("42")));
+
+    let immutable_root = FakeSourceLoader::default()
+        .contains(
+            "/project/main.fsh",
+            "import { answer } from './lib.fsh'\n$answer = 7\n",
+        )
+        .contains("/project/lib.fsh", "mut answer = 42\nexport { answer }\n");
+    let immutable_program = ModuleProgramLoader::new(&paths, &immutable_root)
+        .load(Path::new("/project/main.fsh"))
+        .expect("the immutable-import program loads");
+    let error = execute_module_program(
+        &immutable_program,
+        Path::new("/project"),
+        &mut Environment::new(),
+        &standard_registry(),
+        &NoExecutables,
+        &SessionOptions::default(),
+        &FakePlatform::none(),
+        Arc::new(FakeClock::new()),
+    )
+    .expect_err("an importer cannot assign through the snapshot");
+
+    assert!(error.render().contains("binding \"answer\" is immutable"));
+}
+
+#[test]
+fn imported_callables_execute_against_their_defining_source() {
+    let paths = FakeCanonicalizer::default()
+        .resolves("/project/main.fsh", "/project/main.fsh")
+        .resolves("/project/lib.fsh", "/project/lib.fsh");
+    let sources = FakeSourceLoader::default()
+        .contains(
+            "/project/main.fsh",
+            "import { increment } from './lib.fsh'\nexport RESULT = increment(41)\n",
+        )
+        .contains(
+            "/project/lib.fsh",
+            "def increment(value) {\n    $value + 1\n}\nexport { increment }\n",
+        );
+    let program = ModuleProgramLoader::new(&paths, &sources)
+        .load(Path::new("/project/main.fsh"))
+        .expect("the callable module program loads");
+    let mut environment = Environment::new();
+
+    execute_module_program(
+        &program,
+        Path::new("/project"),
+        &mut environment,
+        &standard_registry(),
+        &NoExecutables,
+        &SessionOptions::default(),
+        &FakePlatform::none(),
+        Arc::new(FakeClock::new()),
+    )
+    .expect("the imported callable uses its defining source");
+
+    assert_eq!(environment.get("RESULT"), Some(OsStr::new("42")));
+}
+
+#[test]
+fn imported_callable_failures_render_the_body_and_importing_call_site() {
+    let paths = FakeCanonicalizer::default()
+        .resolves("/project/main.fsh", "/project/main.fsh")
+        .resolves("/project/lib.fsh", "/project/lib.fsh");
+    let sources = FakeSourceLoader::default()
+        .contains(
+            "/project/main.fsh",
+            "import { boom } from './lib.fsh'\nexport RESULT = boom()\n",
+        )
+        .contains(
+            "/project/lib.fsh",
+            "def boom() {\n    $missing\n}\nexport { boom }\n",
+        );
+    let program = ModuleProgramLoader::new(&paths, &sources)
+        .load(Path::new("/project/main.fsh"))
+        .expect("the callable module program loads");
+    let error = execute_module_program(
+        &program,
+        Path::new("/project"),
+        &mut Environment::new(),
+        &standard_registry(),
+        &NoExecutables,
+        &SessionOptions::default(),
+        &FakePlatform::none(),
+        Arc::new(FakeClock::new()),
+    )
+    .expect_err("the imported callable body fails");
+    let rendered = error.render();
+
+    assert!(rendered.contains(" --> /project/lib.fsh:2:5"), "{rendered}");
+    assert!(rendered.contains("$missing"), "{rendered}");
+    assert!(
+        rendered.contains(" ::: /project/main.fsh:2:17"),
+        "{rendered}"
+    );
+    assert!(rendered.contains("boom()"), "{rendered}");
+}
+
+#[test]
+fn initializer_failure_stops_later_modules_after_preserving_externalized_effects() {
+    let paths = FakeCanonicalizer::default()
+        .resolves("/project/main.fsh", "/project/main.fsh")
+        .resolves("/project/failing.fsh", "/project/failing.fsh")
+        .resolves("/project/later.fsh", "/project/later.fsh");
+    let sources = FakeSourceLoader::default()
+        .contains(
+            "/project/main.fsh",
+            concat!(
+                "import { failing } from './failing.fsh'\n",
+                "import { later } from './later.fsh'\n",
+                "^/bin/mark root\n",
+            ),
+        )
+        .contains(
+            "/project/failing.fsh",
+            concat!(
+                "let failing = 1\n",
+                "export { failing }\n",
+                "^/bin/mark failing\n",
+                "export BROKEN = $missing\n",
+            ),
+        )
+        .contains(
+            "/project/later.fsh",
+            "let later = 2\nexport { later }\n^/bin/mark later\n",
+        );
+    let program = ModuleProgramLoader::new(&paths, &sources)
+        .load(Path::new("/project/main.fsh"))
+        .expect("the module program loads");
+    let platform = RecordingPlatform::new(FakePlatform::full());
+    let error = execute_module_program(
+        &program,
+        Path::new("/project"),
+        &mut Environment::new(),
+        &standard_registry(),
+        &MarkExecutable,
+        &SessionOptions::default(),
+        &platform,
+        Arc::new(FakeClock::new()),
+    )
+    .expect_err("the first initializer fails");
+
+    let labels = platform
+        .spawn_log()
+        .records()
+        .into_iter()
+        .map(|record| record.argv()[1].clone())
+        .collect::<Vec<_>>();
+    assert_eq!(labels, [OsString::from("failing")]);
+    assert!(error.render().contains("/project/failing.fsh"));
+}
+
+#[test]
+fn initializer_exit_terminates_the_whole_program_before_the_root() {
+    let paths = FakeCanonicalizer::default()
+        .resolves("/project/main.fsh", "/project/main.fsh")
+        .resolves("/project/dependency.fsh", "/project/dependency.fsh");
+    let sources = FakeSourceLoader::default()
+        .contains(
+            "/project/main.fsh",
+            "import { value } from './dependency.fsh'\n^/bin/mark root\n",
+        )
+        .contains(
+            "/project/dependency.fsh",
+            concat!(
+                "let value = 1\n",
+                "export { value }\n",
+                "^/bin/mark dependency\n",
+                "exit 7\n",
+            ),
+        );
+    let program = ModuleProgramLoader::new(&paths, &sources)
+        .load(Path::new("/project/main.fsh"))
+        .expect("the module program loads");
+    let platform = RecordingPlatform::new(FakePlatform::full());
+    let completion = execute_module_program(
+        &program,
+        Path::new("/project"),
+        &mut Environment::new(),
+        &standard_registry(),
+        &MarkExecutable,
+        &SessionOptions::default(),
+        &platform,
+        Arc::new(FakeClock::new()),
+    )
+    .expect("the explicit exit is a normal program completion");
+
+    assert_eq!(
+        completion.status().and_then(|status| status.code()),
+        Some(7)
+    );
+    let labels = platform
+        .spawn_log()
+        .records()
+        .into_iter()
+        .map(|record| record.argv()[1].clone())
+        .collect::<Vec<_>>();
+    assert_eq!(labels, [OsString::from("dependency")]);
+}
+
+#[test]
+fn dependency_background_jobs_live_until_the_whole_program_join() {
+    let paths = FakeCanonicalizer::default()
+        .resolves("/project/main.fsh", "/project/main.fsh")
+        .resolves("/project/dependency.fsh", "/project/dependency.fsh");
+    let sources = FakeSourceLoader::default()
+        .contains(
+            "/project/main.fsh",
+            "import { value } from './dependency.fsh'\n^/bin/mark root\n",
+        )
+        .contains(
+            "/project/dependency.fsh",
+            concat!(
+                "let value = 1\n",
+                "export { value }\n",
+                "^/bin/mark background &\n",
+            ),
+        );
+    let program = ModuleProgramLoader::new(&paths, &sources)
+        .load(Path::new("/project/main.fsh"))
+        .expect("the module program loads");
+    let platform = RecordingPlatform::new(FakePlatform::full());
+
+    execute_module_program(
+        &program,
+        Path::new("/project"),
+        &mut Environment::new(),
+        &standard_registry(),
+        &MarkExecutable,
+        &SessionOptions::default(),
+        &platform,
+        Arc::new(FakeClock::new()),
+    )
+    .expect("the dependency job is joined at whole-program completion");
+
+    let labels = platform
+        .spawn_log()
+        .records()
+        .into_iter()
+        .map(|record| record.argv()[1].clone())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        labels,
+        [OsString::from("background"), OsString::from("root")]
+    );
 }
 
 #[test]

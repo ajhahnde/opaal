@@ -183,6 +183,90 @@ fn static_imports_are_loaded_from_the_filesystem_without_execution() {
 }
 
 #[test]
+fn named_imports_initialize_through_the_filesystem_while_load_only_siblings_stay_dormant() {
+    let temp = TempDir::new("named-import-runtime");
+    temp.script("dependency.fsh", "let answer = 0\nexport { answer }\n");
+    temp.script("dormant.fsh", "export BROKEN = $missing\n");
+    let script = temp.script(
+        "main.fsh",
+        &format!(
+            concat!(
+                "import {{ answer }} from './dependency.fsh'\n",
+                "import './dormant.fsh'\n",
+                "^{} exit $answer\n",
+            ),
+            status_fixture(),
+        ),
+    );
+
+    let output = run_script(&script, temp.path(), fixture_directory());
+
+    assert!(output.status.success(), "{output:?}");
+    assert!(output.stdout.is_empty());
+    assert!(output.stderr.is_empty());
+}
+
+#[test]
+fn named_initializers_share_environment_and_working_directory_with_the_root() {
+    let temp = TempDir::new("named-import-shared-state");
+    let nested = temp.path().join("nested");
+    fs::create_dir(&nested).expect("the dependency target directory should be created");
+    let report = temp.path().join("report.bin");
+    temp.script(
+        "dependency.fsh",
+        concat!(
+            "let ready = true\n",
+            "export { ready }\n",
+            "export FLASH_PROBE_VALUE = 'dependency'\n",
+            "cd './nested'\n",
+        ),
+    );
+    let script = temp.script(
+        "main.fsh",
+        concat!(
+            "import { ready } from './dependency.fsh'\n",
+            "flash-e2e-process-observer-fixture\n",
+        ),
+    );
+
+    let output = Command::new(env!("CARGO_BIN_EXE_fsh"))
+        .arg(&script)
+        .current_dir(temp.path())
+        .env("PATH", fixture_directory())
+        .env("FLASH_PROBE_REPORT", &report)
+        .output()
+        .expect("fsh should start");
+
+    assert!(output.status.success(), "{output:?}");
+    assert!(output.stderr.is_empty());
+    let observed = ProcessReport::read(&report);
+    assert_eq!(observed.cwd, nested.as_os_str().as_bytes());
+    assert_eq!(observed.value, b"dependency");
+}
+
+#[test]
+fn the_root_inherits_the_last_initializer_status() {
+    let temp = TempDir::new("named-import-shared-status");
+    temp.script(
+        "dependency.fsh",
+        &format!(
+            "let ready = true\nexport {{ ready }}\n^{} exit 7\n",
+            status_fixture(),
+        ),
+    );
+    let script = temp.script(
+        "main.fsh",
+        "import { ready } from './dependency.fsh'\nexit\n",
+    );
+
+    let output = run_script(&script, temp.path(), fixture_directory());
+
+    assert_eq!(output.status.code(), Some(7), "{output:?}");
+    assert!(output.stdout.is_empty());
+    assert!(output.stderr.is_empty());
+}
+
+#[test]
 fn imported_syntax_diagnostics_name_the_imported_source() {
     let temp = TempDir::new("import-syntax");
     let marker = temp.path().join("root-ran.txt");
@@ -520,6 +604,7 @@ fn a_successful_background_job_is_silent_in_a_script() {
 #[derive(Debug)]
 struct ProcessReport {
     cwd: Vec<u8>,
+    value: Vec<u8>,
     argv: Vec<Vec<u8>>,
 }
 
@@ -528,13 +613,13 @@ impl ProcessReport {
         let bytes = fs::read(path).expect("process report should exist");
         let mut reader = ReportReader::new(&bytes);
         let cwd = reader.field();
-        let _value = reader.field();
+        let value = reader.field();
         let _path = reader.field();
         reader.byte();
         let count = reader.u32() as usize;
         let argv = (0..count).map(|_| reader.field()).collect();
         assert!(reader.remaining().is_empty());
-        Self { cwd, argv }
+        Self { cwd, value, argv }
     }
 }
 

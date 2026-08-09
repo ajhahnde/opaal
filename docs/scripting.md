@@ -50,8 +50,11 @@ Flash reports command-line invocation errors before opening a script. Before
 execution, it canonicalizes the root and every static `import '<path>'`, reads
 and parses each canonical source once, and rejects load, UTF-8, syntax, or
 cycle failures. Diagnostics use the applicable source file and group excerpts
-when an import cycle spans multiple files. Only the root source executes;
-load-only imported modules do not run initialization or bind names.
+when a failure spans multiple files. Dependencies reached through named imports
+initialize once in deterministic dependency-first order before the root. Their
+explicit exports become immutable snapshot bindings in the importer. A source
+reached only through a load-only import does not run initialization or bind
+names.
 
 ### Source files
 

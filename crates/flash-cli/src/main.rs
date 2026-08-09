@@ -399,6 +399,7 @@ impl InteractiveEvaluator for SessionEvaluator {
                 Ok(EvaluationControl::Exit(code))
             }
             Err(SubmitError::Diagnostic(rendered)) => Err(InteractiveDiagnostic::new(rendered)),
+            Err(SubmitError::Runtime { rendered, .. }) => Err(InteractiveDiagnostic::new(rendered)),
             Err(SubmitError::Output(error)) => Err(InteractiveDiagnostic::new(format!(
                 "fsh: cannot write command output: {error}\n"
             ))),

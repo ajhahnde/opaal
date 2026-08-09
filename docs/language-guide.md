@@ -818,9 +818,19 @@ Module export lists are distinct from `export NAME = value`, which continues to
 write the child-process environment. Internal bindings remain private unless a
 module export list names them.
 
-The current module-name boundary is analysis-only. It builds deterministic
-tables and diagnostics without evaluating dependencies; imported runtime values
-and module initialization are not yet available during script execution.
+Module-name analysis builds deterministic tables and diagnostics without
+evaluating dependencies. Script execution then activates only named-import
+edges. Named dependencies initialize once per canonical module in deterministic
+source-edge depth-first postorder, before the importing module; a source reached
+only through a load-only import remains dormant.
+
+Each initialized module owns an isolated lexical root. After a dependency
+completes, its exported values are copied into the importer as immutable
+snapshots, so an importer cannot assign through an imported binding or observe a
+live mutable cell. Working directory, child-process environment, status, output,
+processes, and background jobs remain shared across the program in the defined
+initialization order. Imported functions and closures retain their defining
+source for body evaluation and diagnostics.
 
 ### Static module analysis
 

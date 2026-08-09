@@ -1,22 +1,23 @@
 //! Non-interactive script execution through the persistent session driver.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::io;
 use std::path::Path;
 use std::sync::Arc;
 
 use flash_platform::Platform;
-use flash_syntax::SourceFile;
+use flash_syntax::{Diagnostic, Severity, render_diagnostic_sources};
 
 use crate::command::CommandRegistry;
 use crate::eval::Clock;
-use crate::module::ModuleProgram;
+use crate::module::{ModuleId, ModuleProgram, ModuleSourceRegistry};
 use crate::plan::SessionOptions;
 use crate::resolve::ExecutableProbe;
 use crate::session::{
     BackgroundFailure, BackgroundFailureReason, Session, SubmitError, SubmitOutcome,
 };
-use crate::{Environment, ScopeStack, Status};
+use crate::{BindingMutability, Environment, ScopeStack, Status, Value};
 
 /// The normally completed result of one non-interactive source file.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -42,8 +43,24 @@ impl ScriptError {
     fn submit(error: SubmitError) -> Self {
         let rendered = match error {
             SubmitError::Diagnostic(rendered) => rendered,
+            SubmitError::Runtime { rendered, .. } => rendered,
             SubmitError::Output(error) => format!("fsh: output write failed: {error}\n"),
         };
+        Self { rendered }
+    }
+
+    fn module_submit(error: SubmitError, sources: &ModuleSourceRegistry) -> Self {
+        let SubmitError::Runtime { error, .. } = error else {
+            return Self::submit(error);
+        };
+        let mut diagnostic = Diagnostic::new(Severity::Error, "RUN001", error.to_string())
+            .with_primary(error.span(), "runtime failure");
+        for frame in error.frames() {
+            diagnostic = diagnostic.with_secondary(frame.call_site(), "called from here");
+        }
+        let rendered =
+            render_diagnostic_sources(sources.entries().map(|entry| entry.source()), &diagnostic)
+                .expect("module runtime diagnostics reference retained program sources");
         Self { rendered }
     }
 
@@ -91,14 +108,14 @@ pub fn execute_script(
         platform,
         clock,
         true,
-        None,
     )
 }
 
-/// Executes only the root source of a fully loaded module program.
+/// Executes a fully loaded module program in named-dependency-first order.
 ///
-/// Static imports have already been analyzed by [`ModuleProgram`], so they are
-/// load-only declarations here. Imported source initialization is not executed.
+/// Named dependencies initialize once per canonical module. Each module owns
+/// an isolated lexical root seeded with immutable snapshots of its imports;
+/// load-only dependencies remain dormant.
 #[allow(clippy::too_many_arguments)]
 pub fn execute_module_program(
     program: &ModuleProgram,
@@ -110,29 +127,103 @@ pub fn execute_module_program(
     platform: &dyn Platform,
     clock: Arc<dyn Clock>,
 ) -> Result<ScriptCompletion, ScriptError> {
-    let root = program.graph().root();
-    let source = program
-        .sources()
-        .source(root)
-        .expect("a loaded module program registers its root source");
-    let script = program
-        .sources()
-        .script(root)
-        .expect("a loaded module program registers its root syntax");
-    execute_source(
-        source.name(),
-        source.text(),
-        cwd,
-        environment,
+    let mut session = Session::with_scope_and_registry(
         ScopeStack::new(),
-        registry,
-        probe,
-        options,
-        platform,
-        clock,
-        true,
-        Some((source, script)),
-    )
+        cwd,
+        environment.clone(),
+        *options,
+        registry.clone(),
+    );
+    session.enable_script_job_control(Arc::clone(&clock));
+    let mut output = io::stdout().lock();
+    let mut instances: BTreeMap<ModuleId, BTreeMap<String, Value>> = BTreeMap::new();
+    let mut outcome: Result<SubmitOutcome, ScriptError> = Ok(SubmitOutcome::Continued);
+
+    for module in module_initialization_order(program) {
+        let mut scope = ScopeStack::new();
+        for import in program.names().imports(&module) {
+            let value = instances
+                .get(import.target())
+                .and_then(|exports| exports.get(import.name()))
+                .expect("named dependencies initialize before their importers")
+                .clone();
+            scope
+                .declare(import.name(), BindingMutability::Immutable, value)
+                .expect("module name analysis rejects import binding collisions");
+        }
+
+        let source = program
+            .sources()
+            .source(&module)
+            .expect("a loaded module program registers every source");
+        let script = program
+            .sources()
+            .script(&module)
+            .expect("a loaded module program registers every syntax tree");
+        match session.submit_module_source(
+            source,
+            script,
+            scope,
+            probe,
+            platform,
+            clock.as_ref(),
+            &mut output,
+        ) {
+            Ok((SubmitOutcome::Continued, completed_scope)) => {
+                let exports = program
+                    .names()
+                    .exports(&module)
+                    .map(|export| {
+                        let value = completed_scope
+                            .get(export.name())
+                            .expect("an analyzed export names a completed root binding")
+                            .clone();
+                        (export.name().to_owned(), value)
+                    })
+                    .collect();
+                instances.insert(module, exports);
+            }
+            Ok((exit @ SubmitOutcome::Exit(_), _)) => {
+                outcome = Ok(exit);
+                break;
+            }
+            Err(error) => {
+                outcome = Err(ScriptError::module_submit(error, program.sources()));
+                break;
+            }
+        }
+    }
+
+    finish_script_session(&mut session, environment, platform, outcome)
+}
+
+fn module_initialization_order(program: &ModuleProgram) -> Vec<ModuleId> {
+    fn visit(
+        program: &ModuleProgram,
+        module: &ModuleId,
+        initialized: &mut BTreeSet<ModuleId>,
+        order: &mut Vec<ModuleId>,
+    ) {
+        if initialized.contains(module) {
+            return;
+        }
+        for import in program.names().imports(module) {
+            visit(program, import.target(), initialized, order);
+        }
+        if initialized.insert(module.clone()) {
+            order.push(module.clone());
+        }
+    }
+
+    let mut initialized = BTreeSet::new();
+    let mut order = Vec::new();
+    visit(
+        program,
+        program.graph().root(),
+        &mut initialized,
+        &mut order,
+    );
+    order
 }
 
 /// Execute one isolated conditional chain without creating a background-job
@@ -166,7 +257,6 @@ pub fn execute_chain_subshell(
         platform,
         clock,
         false,
-        None,
     )
 }
 
@@ -183,7 +273,6 @@ fn execute_source(
     platform: &dyn Platform,
     clock: Arc<dyn Clock>,
     enable_background_jobs: bool,
-    analyzed_root: Option<(&SourceFile, &flash_syntax::Script)>,
 ) -> Result<ScriptCompletion, ScriptError> {
     let mut session = Session::with_scope_and_registry(
         scope,
@@ -196,12 +285,19 @@ fn execute_source(
         session.enable_script_job_control(Arc::clone(&clock));
     }
     let mut output = io::stdout().lock();
-    let outcome = if let Some((source, script)) = analyzed_root {
-        session.submit_module_root(source, script, probe, platform, clock.as_ref(), &mut output)
-    } else {
-        session.submit(name, text, probe, platform, clock.as_ref(), &mut output)
-    };
+    let outcome = session
+        .submit(name, text, probe, platform, clock.as_ref(), &mut output)
+        .map_err(ScriptError::submit);
 
+    finish_script_session(&mut session, environment, platform, outcome)
+}
+
+fn finish_script_session(
+    session: &mut Session,
+    environment: &mut Environment,
+    platform: &dyn Platform,
+    outcome: Result<SubmitOutcome, ScriptError>,
+) -> Result<ScriptCompletion, ScriptError> {
     // The join runs on every exit route, including a failing one: a script must
     // not orphan a child because one of its later statements failed.
     let failures = session.join_background_jobs(platform);
@@ -209,7 +305,7 @@ fn execute_source(
         eprintln!("fsh: {}", failure.render());
     }
 
-    let outcome = outcome.map_err(ScriptError::submit)?;
+    let outcome = outcome?;
     let foreground = match outcome {
         SubmitOutcome::Continued => session.current_status().cloned(),
         SubmitOutcome::Exit(code) => Some(
