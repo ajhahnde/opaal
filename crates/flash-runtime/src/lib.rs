@@ -15,6 +15,7 @@ pub mod file;
 pub mod format;
 pub mod internal;
 pub mod job;
+pub mod module;
 pub mod operation;
 pub mod plan;
 pub mod presentation;
