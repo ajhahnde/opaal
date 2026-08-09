@@ -16,10 +16,11 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 
 use flash_syntax::{
-    Block, Closure, CommandItemKind, ConditionalChain, ControlTransfer, Diagnostic, ElseBranch,
-    Expression, ExpressionKind, LiteralKind, MatchArm, ParseOutcome, Pattern, Pipeline, RecordKey,
-    RedirectionKind, Script, Severity, SourceFile, SourceId, Span, StageKind, Statement,
-    StatementKind, TypeReference, Word, WordPart, WordPartKind, parse, render_diagnostic_sources,
+    BinaryOperator, Block, Closure, CommandItemKind, ConditionalChain, ControlTransfer, Diagnostic,
+    ElseBranch, Expression, ExpressionKind, LiteralKind, MatchArm, ParseOutcome, Pattern, Pipeline,
+    RecordKey, RedirectionKind, Script, Severity, SourceFile, SourceId, Span, StageKind, Statement,
+    StatementKind, TypeReference, UnaryOperator, Word, WordPart, WordPartKind, parse,
+    render_diagnostic_sources,
 };
 
 use crate::Value;
@@ -855,6 +856,13 @@ impl FunctionSignature {
 struct ModuleTypes {
     annotations: Vec<ResolvedTypeAnnotation>,
     functions: Vec<FunctionSignature>,
+    bindings: Vec<ResolvedBindingType>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ResolvedBindingType {
+    declaration_span: Span,
+    value_type: ValueType,
 }
 
 /// Resolved annotations and named-function signatures by canonical module.
@@ -904,6 +912,18 @@ impl ModuleTypeRegistry {
             .find(|signature| signature.declaration_span() == declaration_span)
     }
 
+    fn binding_type(&self, module: &ModuleId, declaration_span: Span) -> Option<&ValueType> {
+        self.by_module
+            .get(module)
+            .and_then(|types| {
+                types
+                    .bindings
+                    .iter()
+                    .find(|binding| binding.declaration_span == declaration_span)
+            })
+            .map(|binding| &binding.value_type)
+    }
+
     fn analyze(
         sources: &ModuleSourceRegistry,
         names: &ModuleNameRegistry,
@@ -950,7 +970,11 @@ impl<'a> TypeCollector<'a> {
             StatementKind::Import(_) | StatementKind::ModuleExport(_) => Ok(()),
             StatementKind::Declaration(declaration) => {
                 if let Some(annotation) = &declaration.type_annotation {
-                    self.resolve_type(annotation)?;
+                    let value_type = self.resolve_type(annotation)?;
+                    self.types.bindings.push(ResolvedBindingType {
+                        declaration_span: declaration.name.span(),
+                        value_type,
+                    });
                 }
                 self.expression(&declaration.value)
             }
@@ -963,7 +987,14 @@ impl<'a> TypeCollector<'a> {
                 let mut parameters = Vec::with_capacity(function.parameters.len());
                 for parameter in &function.parameters {
                     let value_type = match &parameter.type_annotation {
-                        Some(annotation) => self.resolve_type(annotation)?,
+                        Some(annotation) => {
+                            let value_type = self.resolve_type(annotation)?;
+                            self.types.bindings.push(ResolvedBindingType {
+                                declaration_span: parameter.name.span(),
+                                value_type: value_type.clone(),
+                            });
+                            value_type
+                        }
                         None => ValueType::Any,
                     };
                     parameters.push(FunctionParameterSignature {
@@ -1107,7 +1138,11 @@ impl<'a> TypeCollector<'a> {
     fn closure(&mut self, closure: &Closure) -> Result<(), Box<ModuleTypeError>> {
         for parameter in &closure.parameters {
             if let Some(annotation) = &parameter.type_annotation {
-                self.resolve_type(annotation)?;
+                let value_type = self.resolve_type(annotation)?;
+                self.types.bindings.push(ResolvedBindingType {
+                    declaration_span: parameter.name.span(),
+                    value_type,
+                });
             }
         }
         self.chain(&closure.body)
@@ -1253,6 +1288,129 @@ impl<'a> SignatureValidator<'a> {
         Ok(())
     }
 
+    fn function(
+        &self,
+        function: &flash_syntax::FunctionDefinition,
+    ) -> Result<(), Box<ModuleTypeError>> {
+        let signature = self
+            .types
+            .function(self.entry.module(), function.name.span())
+            .expect("every collected named function has one resolved signature");
+        self.function_statements(&function.body.statements, signature)?;
+
+        let Some(StatementKind::Job(job)) = function.body.statements.last().map(Statement::kind)
+        else {
+            return Ok(());
+        };
+        let Some((span, actual)) = self.chain_value(&job.chain)? else {
+            return Ok(());
+        };
+        self.check_result(signature, span, Some(actual))
+    }
+
+    fn function_statements(
+        &self,
+        statements: &[Statement],
+        signature: &FunctionSignature,
+    ) -> Result<(), Box<ModuleTypeError>> {
+        for statement in statements {
+            self.function_statement(statement, signature)?;
+        }
+        Ok(())
+    }
+
+    fn function_statement(
+        &self,
+        statement: &Statement,
+        signature: &FunctionSignature,
+    ) -> Result<(), Box<ModuleTypeError>> {
+        match statement.kind() {
+            StatementKind::Function(function) => self.function(function),
+            StatementKind::Control(ControlTransfer::Return(value)) => {
+                let (span, actual) = match value {
+                    Some(expression) => (expression.span(), self.expression(expression)?),
+                    None => (statement.span(), Some(ValueType::Null)),
+                };
+                self.check_result(signature, span, actual)
+            }
+            StatementKind::If(statement) => {
+                self.chain(&statement.condition)?;
+                self.function_statements(&statement.then_block.statements, signature)?;
+                match &statement.else_branch {
+                    Some(ElseBranch::Block(block)) => {
+                        self.function_statements(&block.statements, signature)
+                    }
+                    Some(ElseBranch::If(nested)) => {
+                        self.function_if_statement(nested.kind(), signature)
+                    }
+                    None => Ok(()),
+                }
+            }
+            StatementKind::While(statement) => {
+                self.chain(&statement.condition)?;
+                self.function_statements(&statement.body.statements, signature)
+            }
+            StatementKind::For(statement) => {
+                self.expression(&statement.iterable)?;
+                self.function_statements(&statement.body.statements, signature)
+            }
+            StatementKind::Match(statement) => {
+                self.expression(&statement.value)?;
+                for arm in &statement.arms {
+                    if let Pattern::Literal(literal) = &arm.pattern {
+                        self.literal(literal)?;
+                    }
+                    if let Some(guard) = &arm.guard {
+                        self.expression(guard)?;
+                    }
+                    self.function_statements(&arm.body.statements, signature)?;
+                }
+                Ok(())
+            }
+            _ => self.statement(statement),
+        }
+    }
+
+    fn function_if_statement(
+        &self,
+        statement: &flash_syntax::IfStatement,
+        signature: &FunctionSignature,
+    ) -> Result<(), Box<ModuleTypeError>> {
+        self.chain(&statement.condition)?;
+        self.function_statements(&statement.then_block.statements, signature)?;
+        match &statement.else_branch {
+            Some(ElseBranch::Block(block)) => {
+                self.function_statements(&block.statements, signature)
+            }
+            Some(ElseBranch::If(nested)) => self.function_if_statement(nested.kind(), signature),
+            None => Ok(()),
+        }
+    }
+
+    fn check_result(
+        &self,
+        signature: &FunctionSignature,
+        result_span: Span,
+        actual: Option<ValueType>,
+    ) -> Result<(), Box<ModuleTypeError>> {
+        let Some(actual) = actual else {
+            return Ok(());
+        };
+        if actual == ValueType::Any || signature.result().accepts_type(&actual) {
+            return Ok(());
+        }
+        Err(Box::new(ModuleTypeError::ResultMismatch {
+            module: self.entry.module().clone(),
+            name: signature.name().to_owned(),
+            result_span,
+            expected: signature.result().clone(),
+            actual,
+            annotation_span: signature
+                .result_annotation_span()
+                .unwrap_or_else(|| signature.declaration_span()),
+        }))
+    }
+
     fn statement(&self, statement: &Statement) -> Result<(), Box<ModuleTypeError>> {
         match statement.kind() {
             StatementKind::Import(_) | StatementKind::ModuleExport(_) => Ok(()),
@@ -1266,7 +1424,7 @@ impl<'a> SignatureValidator<'a> {
                 }
                 flash_syntax::EnvironmentStatement::Unset { .. } => Ok(()),
             },
-            StatementKind::Function(function) => self.statements(&function.body.statements),
+            StatementKind::Function(function) => self.function(function),
             StatementKind::If(statement) => {
                 self.chain(&statement.condition)?;
                 self.statements(&statement.then_block.statements)?;
@@ -1350,6 +1508,25 @@ impl<'a> SignatureValidator<'a> {
         Ok(())
     }
 
+    fn chain_value(
+        &self,
+        chain: &ConditionalChain,
+    ) -> Result<Option<(Span, ValueType)>, Box<ModuleTypeError>> {
+        if chain.or_terms().len() != 1 || chain.or_terms()[0].and_terms().len() != 1 {
+            return Ok(None);
+        }
+        let pipeline = &chain.or_terms()[0].and_terms()[0];
+        if pipeline.stages().len() != 1 {
+            return Ok(None);
+        }
+        let StageKind::Expression(expression) = pipeline.stages()[0].kind() else {
+            return Ok(None);
+        };
+        Ok(self
+            .expression(expression)?
+            .map(|value_type| (expression.span(), value_type)))
+    }
+
     fn expression(
         &self,
         expression: &Expression,
@@ -1359,13 +1536,7 @@ impl<'a> SignatureValidator<'a> {
             ExpressionKind::Variable(_) => Ok(self
                 .names
                 .reference(self.entry.module(), expression.span())
-                .and_then(|reference| match reference.target() {
-                    ModuleReferenceTarget::ScriptArguments => {
-                        Some(ValueType::List(Box::new(ValueType::String)))
-                    }
-                    ModuleReferenceTarget::Local { .. }
-                    | ModuleReferenceTarget::Imported { .. } => None,
-                })),
+                .and_then(|reference| self.reference_type(reference.target()))),
             ExpressionKind::Symbol(_) => Ok(None),
             ExpressionKind::List(elements) => {
                 let mut element_type = None;
@@ -1402,23 +1573,124 @@ impl<'a> SignatureValidator<'a> {
             }
             ExpressionKind::Call(call) => self.call(expression.span(), call),
             ExpressionKind::Index(index) => {
-                self.expression(&index.target)?;
-                self.expression(&index.index)?;
-                Ok(None)
+                let target = self.expression(&index.target)?;
+                let index_type = self.expression(&index.index)?;
+                Ok(match (target, index_type) {
+                    (Some(ValueType::List(element)), Some(ValueType::Int)) => Some(*element),
+                    (Some(ValueType::String), Some(ValueType::Int)) => Some(ValueType::String),
+                    _ => None,
+                })
             }
             ExpressionKind::Member(member) => {
                 self.expression(&member.target)?;
                 Ok(None)
             }
             ExpressionKind::Unary(unary) => {
-                self.expression(&unary.operand)?;
-                Ok(None)
+                let operand = self.expression(&unary.operand)?;
+                Ok(match (unary.operator.kind(), operand) {
+                    (UnaryOperator::Not, Some(ValueType::Bool)) => Some(ValueType::Bool),
+                    (
+                        UnaryOperator::Positive | UnaryOperator::Negative,
+                        Some(value_type @ (ValueType::Int | ValueType::Float)),
+                    ) => Some(value_type),
+                    _ => None,
+                })
             }
             ExpressionKind::Binary(binary) => {
-                self.expression(&binary.left)?;
-                self.expression(&binary.right)?;
-                Ok(None)
+                let left = self.expression(&binary.left)?;
+                let right = self.expression(&binary.right)?;
+                Ok(self.binary_type(*binary.operator.kind(), left, right))
             }
+        }
+    }
+
+    fn reference_type(&self, target: &ModuleReferenceTarget) -> Option<ValueType> {
+        match target {
+            ModuleReferenceTarget::ScriptArguments => {
+                Some(ValueType::List(Box::new(ValueType::String)))
+            }
+            ModuleReferenceTarget::Local {
+                module,
+                declaration_span,
+            } => self.declaration_type(module, *declaration_span),
+            ModuleReferenceTarget::Imported {
+                target_module,
+                declaration_span,
+                ..
+            } => self.declaration_type(target_module, *declaration_span),
+        }
+    }
+
+    fn declaration_type(&self, module: &ModuleId, declaration_span: Span) -> Option<ValueType> {
+        if self.types.function(module, declaration_span).is_some() {
+            return Some(ValueType::Function);
+        }
+        self.types.binding_type(module, declaration_span).cloned()
+    }
+
+    fn binary_type(
+        &self,
+        operator: BinaryOperator,
+        left: Option<ValueType>,
+        right: Option<ValueType>,
+    ) -> Option<ValueType> {
+        match operator {
+            BinaryOperator::Equal | BinaryOperator::NotEqual => Some(ValueType::Bool),
+            BinaryOperator::Less
+            | BinaryOperator::LessEqual
+            | BinaryOperator::Greater
+            | BinaryOperator::GreaterEqual => {
+                Self::ordered_pair(left.as_ref(), right.as_ref()).then_some(ValueType::Bool)
+            }
+            BinaryOperator::In => {
+                Self::membership_pair(left.as_ref(), right.as_ref()).then_some(ValueType::Bool)
+            }
+            BinaryOperator::Range | BinaryOperator::RangeInclusive => {
+                matches!((left, right), (Some(ValueType::Int), Some(ValueType::Int)))
+                    .then_some(ValueType::Range)
+            }
+            BinaryOperator::Add
+            | BinaryOperator::Subtract
+            | BinaryOperator::Multiply
+            | BinaryOperator::Divide
+            | BinaryOperator::Remainder => Self::numeric_pair(left.as_ref(), right.as_ref()),
+        }
+    }
+
+    fn numeric_pair(left: Option<&ValueType>, right: Option<&ValueType>) -> Option<ValueType> {
+        match (left, right) {
+            (Some(ValueType::Int), Some(ValueType::Int)) => Some(ValueType::Int),
+            (Some(ValueType::Int | ValueType::Float), Some(ValueType::Int | ValueType::Float)) => {
+                Some(ValueType::Float)
+            }
+            _ => None,
+        }
+    }
+
+    fn ordered_pair(left: Option<&ValueType>, right: Option<&ValueType>) -> bool {
+        match (left, right) {
+            (Some(ValueType::Int | ValueType::Float), Some(ValueType::Int | ValueType::Float)) => {
+                true
+            }
+            (Some(left), Some(right)) if left == right => match left {
+                ValueType::String
+                | ValueType::Bytes
+                | ValueType::Path
+                | ValueType::Duration
+                | ValueType::ByteSize => true,
+                ValueType::List(element) => Self::ordered_pair(Some(element), Some(element)),
+                _ => false,
+            },
+            _ => false,
+        }
+    }
+
+    fn membership_pair(element: Option<&ValueType>, container: Option<&ValueType>) -> bool {
+        match (element, container) {
+            (Some(ValueType::Int), Some(ValueType::Range))
+            | (Some(ValueType::String), Some(ValueType::String | ValueType::Record)) => true,
+            (Some(element), Some(ValueType::List(item))) => item.accepts_type(element),
+            _ => false,
         }
     }
 
@@ -2439,6 +2711,14 @@ pub enum ModuleTypeError {
         actual: ValueType,
         parameter_span: Span,
     },
+    ResultMismatch {
+        module: ModuleId,
+        name: String,
+        result_span: Span,
+        expected: ValueType,
+        actual: ValueType,
+        annotation_span: Span,
+    },
 }
 
 impl ModuleTypeError {
@@ -2448,7 +2728,8 @@ impl ModuleTypeError {
             Self::UnknownType { module, .. }
             | Self::InvalidTypeArity { module, .. }
             | Self::CallArity { module, .. }
-            | Self::ArgumentMismatch { module, .. } => module,
+            | Self::ArgumentMismatch { module, .. }
+            | Self::ResultMismatch { module, .. } => module,
         }
     }
 
@@ -2492,6 +2773,18 @@ impl ModuleTypeError {
                     format!("this argument is `{actual}`, expected `{expected}`"),
                 )
                 .with_secondary(*parameter_span, "parameter type declared here"),
+            Self::ResultMismatch {
+                result_span,
+                annotation_span,
+                expected,
+                actual,
+                ..
+            } => Diagnostic::new(Severity::Error, "SIG005", self.to_string())
+                .with_primary(
+                    *result_span,
+                    format!("this result is `{actual}`, expected `{expected}`"),
+                )
+                .with_secondary(*annotation_span, "function result type declared here"),
         }
     }
 }
@@ -2536,6 +2829,17 @@ impl fmt::Display for ModuleTypeError {
             } => write!(
                 formatter,
                 "module `{}` passes `{actual}` to `{name}` parameter `{parameter}`; expected `{expected}`",
+                module.path().display()
+            ),
+            Self::ResultMismatch {
+                module,
+                name,
+                expected,
+                actual,
+                ..
+            } => write!(
+                formatter,
+                "module `{}` returns `{actual}` from `{name}`; expected `{expected}`",
                 module.path().display()
             ),
         }

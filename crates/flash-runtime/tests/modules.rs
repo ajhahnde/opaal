@@ -230,6 +230,121 @@ fn typed_function_signatures_are_resolved_before_known_calls_are_validated() {
 }
 
 #[test]
+fn conservative_call_validation_uses_annotations_functions_results_and_operators() {
+    let paths = FakeCanonicalizer::default()
+        .resolves("/project/main.fsh", "/project/main.fsh")
+        .resolves("/project/lib.fsh", "/project/lib.fsh");
+    let local_cases = [
+        concat!(
+            "def needs_text(value: String) -> String { $value }\n",
+            "let count: Int = 1\n",
+            "needs_text($count)\n",
+        ),
+        concat!(
+            "def needs_closure(value: Closure) -> Null { null }\n",
+            "def candidate() -> Int { 1 }\n",
+            "needs_closure($candidate)\n",
+        ),
+        concat!(
+            "def needs_text(value: String) -> String { $value }\n",
+            "needs_text(1 < 2)\n",
+        ),
+        concat!(
+            "def number() -> Int { 1 }\n",
+            "def needs_text(value: String) -> String { $value }\n",
+            "needs_text(number())\n",
+        ),
+    ];
+
+    for text in local_cases {
+        let sources = FakeSourceLoader::default().contains("/project/main.fsh", text);
+        let error = ModuleProgramLoader::new(&paths, &sources)
+            .load(Path::new("/project/main.fsh"))
+            .expect_err("a conservatively known incompatible argument fails");
+        assert_eq!(error.diagnostics()[0].code(), "SIG004", "{text}");
+    }
+
+    let imported = FakeSourceLoader::default()
+        .contains(
+            "/project/main.fsh",
+            concat!(
+                "import { count } from './lib.fsh'\n",
+                "def needs_text(value: String) -> String { $value }\n",
+                "needs_text($count)\n",
+            ),
+        )
+        .contains("/project/lib.fsh", "let count: Int = 1\nexport { count }\n");
+    let error = ModuleProgramLoader::new(&paths, &imported)
+        .load(Path::new("/project/main.fsh"))
+        .expect_err("an imported annotated binding retains its known type");
+    assert_eq!(error.diagnostics()[0].code(), "SIG004");
+
+    let imported_function = FakeSourceLoader::default()
+        .contains(
+            "/project/main.fsh",
+            "import { needs_text } from './lib.fsh'\nneeds_text(42)\n",
+        )
+        .contains(
+            "/project/lib.fsh",
+            concat!(
+                "def needs_text(value: String) -> String { $value }\n",
+                "export { needs_text }\n",
+            ),
+        );
+    let error = ModuleProgramLoader::new(&paths, &imported_function)
+        .load(Path::new("/project/main.fsh"))
+        .expect_err("an imported known function validates its argument types");
+    let diagnostic = &error.diagnostics()[0];
+    assert_eq!(diagnostic.code(), "SIG004");
+    assert_eq!(diagnostic.labels()[0].span().source_id(), SourceId::new(0));
+    assert_eq!(diagnostic.labels()[1].span().source_id(), SourceId::new(1));
+
+    let unknown = FakeSourceLoader::default().contains(
+        "/project/main.fsh",
+        "def dynamic(value) -> String { $value }\n",
+    );
+    ModuleProgramLoader::new(&paths, &unknown)
+        .load(Path::new("/project/main.fsh"))
+        .expect("an unannotated data-dependent result remains unknown");
+}
+
+#[test]
+fn conservatively_known_function_result_mismatches_fail_without_execution() {
+    let paths = FakeCanonicalizer::default()
+        .resolves("/project/main.fsh", "/project/main.fsh")
+        .resolves("/project/lib.fsh", "/project/lib.fsh");
+    for text in [
+        "def explicit() -> String { return 1 }\n",
+        "def empty_return() -> String { return }\n",
+        "def nested() -> String { if true { return 1 }\n'ok' }\n",
+        "def implicit() -> String { 1 }\n",
+    ] {
+        let sources = FakeSourceLoader::default().contains("/project/main.fsh", text);
+        let error = ModuleProgramLoader::new(&paths, &sources)
+            .load(Path::new("/project/main.fsh"))
+            .expect_err("a known function result mismatch fails");
+        let diagnostic = &error.diagnostics()[0];
+        assert_eq!(diagnostic.code(), "SIG005", "{text}");
+        assert_eq!(diagnostic.labels().len(), 2, "{text}");
+    }
+
+    let imported = FakeSourceLoader::default()
+        .contains("/project/main.fsh", "import { broken } from './lib.fsh'\n")
+        .contains(
+            "/project/lib.fsh",
+            "def broken() -> String { return 1 }\nexport { broken }\n",
+        );
+    let error = ModuleProgramLoader::new(&paths, &imported)
+        .load(Path::new("/project/main.fsh"))
+        .expect_err("a dependency function result is validated without activation");
+    assert_eq!(error.diagnostics()[0].code(), "SIG005");
+    assert_eq!(
+        error.diagnostics()[0].labels()[0].span().source_id(),
+        SourceId::new(1)
+    );
+}
+
+#[test]
 fn value_types_match_exact_runtime_families_and_recursive_lists() {
     let cases = vec![
         (ValueType::Null, Value::Null),
