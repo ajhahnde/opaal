@@ -16,6 +16,7 @@ use std::path::{Path, PathBuf};
 
 use flash_syntax::{
     Diagnostic, ParseOutcome, Script, Severity, SourceFile, SourceId, Span, StatementKind, parse,
+    render_diagnostic_sources,
 };
 
 /// The sole host capability needed to turn a candidate source path into its
@@ -421,6 +422,66 @@ pub struct ModuleProgram {
     sources: ModuleSourceRegistry,
 }
 
+/// A module-program construction failure rendered while its analyzed sources
+/// are still available.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ModuleProgramLoadError {
+    error: Box<ModuleProgramError>,
+    rendered: String,
+}
+
+impl ModuleProgramLoadError {
+    fn new(error: ModuleProgramError, sources: &ModuleSourceRegistry) -> Self {
+        let diagnostics = error.diagnostics();
+        let mut available = sources
+            .entries()
+            .map(RegisteredModuleSource::source)
+            .collect::<Vec<_>>();
+        if let ModuleProgramError::Syntax { source, .. } = &error {
+            available.push(source.as_ref());
+        }
+        let rendered = if diagnostics.is_empty() {
+            format!("{error}\n")
+        } else {
+            diagnostics
+                .iter()
+                .map(|diagnostic| {
+                    render_diagnostic_sources(available.iter().copied(), diagnostic)
+                        .expect("module diagnostics reference retained analyzed sources")
+                })
+                .collect()
+        };
+        Self {
+            error: Box::new(error),
+            rendered,
+        }
+    }
+
+    /// The structured construction failure.
+    #[must_use]
+    pub fn error(&self) -> &ModuleProgramError {
+        self.error.as_ref()
+    }
+
+    /// The complete registry-backed user-facing diagnostic.
+    #[must_use]
+    pub fn render(&self) -> &str {
+        &self.rendered
+    }
+}
+
+impl fmt::Display for ModuleProgramLoadError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.error.fmt(formatter)
+    }
+}
+
+impl std::error::Error for ModuleProgramLoadError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(self.error.as_ref())
+    }
+}
+
 impl ModuleProgram {
     /// The canonical acyclic dependency graph.
     #[must_use]
@@ -457,13 +518,42 @@ impl<'a> ModuleProgramLoader<'a> {
     /// Loads one root and every reachable static import without executing any
     /// source statement.
     pub fn load(&self, requested: &Path) -> Result<ModuleProgram, ModuleProgramError> {
-        let root = self
-            .resolver
-            .resolve_root(requested)
-            .map_err(ModuleProgramError::Resolution)?;
+        self.load_retaining_sources(requested).map_err(|failure| {
+            let (error, _) = *failure;
+            error
+        })
+    }
+
+    /// Loads one module program and retains enough source context to render a
+    /// frontend diagnostic if construction fails.
+    pub fn load_for_frontend(
+        &self,
+        requested: &Path,
+    ) -> Result<ModuleProgram, ModuleProgramLoadError> {
+        self.load_retaining_sources(requested).map_err(|failure| {
+            let (error, sources) = *failure;
+            ModuleProgramLoadError::new(error, &sources)
+        })
+    }
+
+    fn load_retaining_sources(
+        &self,
+        requested: &Path,
+    ) -> Result<ModuleProgram, Box<(ModuleProgramError, ModuleSourceRegistry)>> {
+        let root = match self.resolver.resolve_root(requested) {
+            Ok(root) => root,
+            Err(error) => {
+                return Err(Box::new((
+                    ModuleProgramError::Resolution(error),
+                    ModuleSourceRegistry::default(),
+                )));
+            }
+        };
         let mut graph = ModuleGraph::new(root.clone());
         let mut sources = ModuleSourceRegistry::default();
-        self.load_module(root, None, &mut graph, &mut sources)?;
+        if let Err(error) = self.load_module(root, None, &mut graph, &mut sources) {
+            return Err(Box::new((error, sources)));
+        }
         Ok(ModuleProgram { graph, sources })
     }
 
@@ -509,12 +599,14 @@ impl<'a> ModuleProgramLoader<'a> {
                 );
                 return Err(ModuleProgramError::Syntax {
                     module,
+                    source: Box::new(source),
                     diagnostics: vec![diagnostic],
                 });
             }
             ParseOutcome::Invalid(diagnostics) => {
                 return Err(ModuleProgramError::Syntax {
                     module,
+                    source: Box::new(source),
                     diagnostics,
                 });
             }
@@ -570,6 +662,7 @@ pub enum ModuleProgramError {
     /// A loaded module was incomplete or invalid Flash syntax.
     Syntax {
         module: ModuleId,
+        source: Box<SourceFile>,
         diagnostics: Vec<Diagnostic>,
     },
     /// An import violated the canonical graph contract.

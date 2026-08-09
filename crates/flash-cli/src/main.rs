@@ -5,7 +5,7 @@ use std::ffi::OsStr;
 use std::fs;
 use std::io::{self, Write};
 use std::os::unix::fs::PermissionsExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
 
@@ -33,9 +33,13 @@ use flash_cli::interactive::{
 use flash_platform::{Platform, PlatformError};
 use flash_platform_posix::PosixPlatform;
 use flash_runtime::eval::{Clock, SystemClock};
+use flash_runtime::module::{
+    ModuleCanonicalizer, ModulePathError, ModuleProgramLoader, ModuleSourceError,
+    ModuleSourceLoader,
+};
 use flash_runtime::plan::SessionOptions;
 use flash_runtime::resolve::ExecutableProbe;
-use flash_runtime::script::{execute_chain_subshell, execute_script};
+use flash_runtime::script::{execute_chain_subshell, execute_module_program};
 use flash_runtime::session::{BackgroundFailure, JobNoticeId, Session, SubmitError, SubmitOutcome};
 use flash_runtime::{Environment, ScopeStack, Status};
 
@@ -403,21 +407,15 @@ impl InteractiveEvaluator for SessionEvaluator {
 }
 
 fn run_script(path: &Path) -> ExitCode {
-    let bytes = match fs::read(path) {
-        Ok(bytes) => bytes,
+    let filesystem = HostModuleFilesystem;
+    let program = match ModuleProgramLoader::new(&filesystem, &filesystem).load_for_frontend(path) {
+        Ok(program) => program,
         Err(error) => {
-            eprintln!("fsh: {}: {error}", path.display());
-            return ExitCode::FAILURE;
-        }
-    };
-    let text = match String::from_utf8(bytes) {
-        Ok(text) => text,
-        Err(error) => {
-            eprintln!(
-                "fsh: {}: source is not UTF-8 at byte {}",
-                path.display(),
-                error.utf8_error().valid_up_to()
-            );
+            if error.error().diagnostics().is_empty() {
+                eprintln!("fsh: {error}");
+            } else {
+                eprint!("{}", error.render());
+            }
             return ExitCode::FAILURE;
         }
     };
@@ -430,9 +428,8 @@ fn run_script(path: &Path) -> ExitCode {
     };
     let mut environment = process_environment();
     let registry = flash_runtime::builtin::standard_registry();
-    let result = execute_script(
-        path.to_string_lossy(),
-        text,
+    let result = execute_module_program(
+        &program,
         &cwd,
         &mut environment,
         &registry,
@@ -448,6 +445,20 @@ fn run_script(path: &Path) -> ExitCode {
             eprint!("{}", error.render());
             ExitCode::FAILURE
         }
+    }
+}
+
+struct HostModuleFilesystem;
+
+impl ModuleCanonicalizer for HostModuleFilesystem {
+    fn canonicalize(&self, candidate: &Path) -> Result<PathBuf, ModulePathError> {
+        fs::canonicalize(candidate).map_err(|error| ModulePathError::new(error.to_string()))
+    }
+}
+
+impl ModuleSourceLoader for HostModuleFilesystem {
+    fn load(&self, module: &flash_runtime::module::ModuleId) -> Result<Vec<u8>, ModuleSourceError> {
+        fs::read(module.path()).map_err(|error| ModuleSourceError::new(error.to_string()))
     }
 }
 

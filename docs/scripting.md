@@ -46,7 +46,12 @@ fsh --help
 fsh --version
 ```
 
-Flash reports command-line invocation errors before opening a script. File read failures, invalid UTF-8, parse failures, and runtime failures are reported separately.
+Flash reports command-line invocation errors before opening a script. Before
+execution, it canonicalizes the root and every static `import '<path>'`, reads
+and parses each canonical source once, and rejects load, UTF-8, syntax, or
+cycle failures. Diagnostics use the applicable source file and group excerpts
+when an import cycle spans multiple files. Only the root source executes;
+load-only imported modules do not run initialization or bind names.
 
 ### Source files
 

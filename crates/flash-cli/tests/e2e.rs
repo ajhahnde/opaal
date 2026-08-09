@@ -159,6 +159,93 @@ fn a_script_runs_and_joins_a_background_conditional_chain() {
 }
 
 #[test]
+fn static_imports_are_loaded_from_the_filesystem_without_execution() {
+    let temp = TempDir::new("static-import");
+    let marker = temp.path().join("import-ran.txt");
+    temp.script(
+        "dependency.fsh",
+        &format!("^{} late 0 {} 0\n", status_fixture(), marker.display()),
+    );
+    let script = temp.script(
+        "main.fsh",
+        &format!("import './dependency.fsh'\n^{} exit 0\n", status_fixture()),
+    );
+
+    let output = run_script(&script, temp.path(), fixture_directory());
+
+    assert!(output.status.success(), "{output:?}");
+    assert!(output.stdout.is_empty());
+    assert!(output.stderr.is_empty());
+    assert!(
+        !marker.exists(),
+        "a load-only imported module must not execute initialization"
+    );
+}
+
+#[test]
+fn imported_syntax_diagnostics_name_the_imported_source() {
+    let temp = TempDir::new("import-syntax");
+    let marker = temp.path().join("root-ran.txt");
+    let dependency = temp.script("broken.fsh", "let broken = ;\n");
+    let script = temp.script(
+        "main.fsh",
+        &format!(
+            "^{} late 0 {} 0\nimport './broken.fsh'\n",
+            status_fixture(),
+            marker.display()
+        ),
+    );
+
+    let output = run_script(&script, temp.path(), fixture_directory());
+
+    assert!(!output.status.success(), "{output:?}");
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8(output.stderr).expect("diagnostics should be UTF-8");
+    assert!(
+        stderr.contains("error[FS1000]: expected an expression"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains(&format!(" --> {}:", dependency.display())),
+        "{stderr}"
+    );
+    assert!(
+        !marker.exists(),
+        "module analysis must finish before the first root statement executes"
+    );
+}
+
+#[test]
+fn import_cycles_render_each_source_group() {
+    let temp = TempDir::new("import-cycle");
+    let root = temp.script("a.fsh", "import './b.fsh'\n");
+    let middle = temp.script("b.fsh", "import './c.fsh'\n");
+    let closing = temp.script("c.fsh", "import './a.fsh'\n");
+
+    let output = run_script(&root, temp.path(), fixture_directory());
+
+    assert!(!output.status.success(), "{output:?}");
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8(output.stderr).expect("diagnostics should be UTF-8");
+    assert!(
+        stderr.contains("error[MOD002]: module import cycle"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains(&format!(" --> {}:", closing.display())),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains(&format!(" ::: {}:", root.display())),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains(&format!(" ::: {}:", middle.display())),
+        "{stderr}"
+    );
+}
+
+#[test]
 fn script_preserves_empty_space_and_unicode_arguments() {
     let temp = TempDir::new("argv");
     let report = temp.path().join("report.bin");

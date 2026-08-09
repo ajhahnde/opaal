@@ -6,9 +6,11 @@ use std::path::Path;
 use std::sync::Arc;
 
 use flash_platform::Platform;
+use flash_syntax::SourceFile;
 
 use crate::command::CommandRegistry;
 use crate::eval::Clock;
+use crate::module::ModuleProgram;
 use crate::plan::SessionOptions;
 use crate::resolve::ExecutableProbe;
 use crate::session::{
@@ -89,6 +91,47 @@ pub fn execute_script(
         platform,
         clock,
         true,
+        None,
+    )
+}
+
+/// Executes only the root source of a fully loaded module program.
+///
+/// Static imports have already been analyzed by [`ModuleProgram`], so they are
+/// load-only declarations here. Imported source initialization is not executed.
+#[allow(clippy::too_many_arguments)]
+pub fn execute_module_program(
+    program: &ModuleProgram,
+    cwd: &Path,
+    environment: &mut Environment,
+    registry: &CommandRegistry,
+    probe: &dyn ExecutableProbe,
+    options: &SessionOptions,
+    platform: &dyn Platform,
+    clock: Arc<dyn Clock>,
+) -> Result<ScriptCompletion, ScriptError> {
+    let root = program.graph().root();
+    let source = program
+        .sources()
+        .source(root)
+        .expect("a loaded module program registers its root source");
+    let script = program
+        .sources()
+        .script(root)
+        .expect("a loaded module program registers its root syntax");
+    execute_source(
+        source.name(),
+        source.text(),
+        cwd,
+        environment,
+        ScopeStack::new(),
+        registry,
+        probe,
+        options,
+        platform,
+        clock,
+        true,
+        Some((source, script)),
     )
 }
 
@@ -123,6 +166,7 @@ pub fn execute_chain_subshell(
         platform,
         clock,
         false,
+        None,
     )
 }
 
@@ -139,6 +183,7 @@ fn execute_source(
     platform: &dyn Platform,
     clock: Arc<dyn Clock>,
     enable_background_jobs: bool,
+    analyzed_root: Option<(&SourceFile, &flash_syntax::Script)>,
 ) -> Result<ScriptCompletion, ScriptError> {
     let mut session = Session::with_scope_and_registry(
         scope,
@@ -151,7 +196,11 @@ fn execute_source(
         session.enable_script_job_control(Arc::clone(&clock));
     }
     let mut output = io::stdout().lock();
-    let outcome = session.submit(name, text, probe, platform, clock.as_ref(), &mut output);
+    let outcome = if let Some((source, script)) = analyzed_root {
+        session.submit_module_root(source, script, probe, platform, clock.as_ref(), &mut output)
+    } else {
+        session.submit(name, text, probe, platform, clock.as_ref(), &mut output)
+    };
 
     // The join runs on every exit route, including a failing one: a script must
     // not orphan a child because one of its later statements failed.

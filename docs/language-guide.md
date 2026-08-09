@@ -786,6 +786,12 @@ The path is one nonempty single-quoted literal. It is resolved relative to the i
 
 This load-only form adds the source to the analyzed module graph but binds no name and runs no module initialization. Explicit imported-name and exported-name syntax is a separate part of the module contract; the load-only declaration never creates wildcard ambient access.
 
+When `fsh` runs a script file, it canonicalizes and loads the complete static
+dependency graph before executing the root source. A load, UTF-8, syntax, or
+cycle failure ends the script before any root statement runs, and diagnostics
+identify the registered source files involved. Imported sources remain
+analysis-only in this form; their statements are not executed.
+
 An export makes a declared public name available to importers. Internal bindings remain private to the module unless the language contract marks them for export.
 
 ### Static module analysis

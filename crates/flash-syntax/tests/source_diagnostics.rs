@@ -2,6 +2,7 @@
 
 use flash_syntax::{
     Diagnostic, LabelStyle, Severity, SourceFile, SourceId, SpanError, render_diagnostic,
+    render_diagnostic_sources,
 };
 
 #[test]
@@ -102,4 +103,31 @@ fn diagnostic_rendering_rejects_a_label_from_another_source() {
         .with_primary(other.span(0..3).unwrap(), "from two");
 
     assert!(render_diagnostic(&source, &diagnostic).is_err());
+}
+
+#[test]
+fn diagnostics_group_labels_from_multiple_sources() {
+    let root = SourceFile::new(SourceId::new(1), "root.fsh", "import './lib.fsh'\n");
+    let library = SourceFile::new(SourceId::new(2), "lib.fsh", "import './root.fsh'\n");
+    let diagnostic = Diagnostic::new(Severity::Error, "MOD002", "module import cycle")
+        .with_primary(library.span(7..19).unwrap(), "this import closes the cycle")
+        .with_secondary(
+            root.span(7..18).unwrap(),
+            "cycle continues through this import",
+        );
+
+    assert_eq!(
+        render_diagnostic_sources([&root, &library], &diagnostic).unwrap(),
+        concat!(
+            "error[MOD002]: module import cycle\n",
+            " --> lib.fsh:1:8\n",
+            "  |\n",
+            "1 | import './root.fsh'\n",
+            "  |        ^^^^^^^^^^^^ this import closes the cycle\n",
+            " ::: root.fsh:1:8\n",
+            "  |\n",
+            "1 | import './lib.fsh'\n",
+            "  |        ----------- cycle continues through this import\n",
+        )
+    );
 }

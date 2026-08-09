@@ -1,6 +1,6 @@
 use std::fmt::{self, Write};
 
-use crate::{SourceFile, Span, SpanError};
+use crate::{SourceFile, SourceId, Span, SpanError};
 
 /// User-facing diagnostic severity.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -129,6 +129,7 @@ impl Diagnostic {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RenderError {
     MissingPrimaryLabel,
+    MissingSource(SourceId),
     InvalidSpan(SpanError),
 }
 
@@ -136,6 +137,13 @@ impl fmt::Display for RenderError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::MissingPrimaryLabel => formatter.write_str("diagnostic has no primary label"),
+            Self::MissingSource(source) => {
+                write!(
+                    formatter,
+                    "diagnostic source {} is not available",
+                    source.get()
+                )
+            }
             Self::InvalidSpan(error) => write!(formatter, "invalid diagnostic label: {error}"),
         }
     }
@@ -154,27 +162,27 @@ pub fn render_diagnostic(
     source: &SourceFile,
     diagnostic: &Diagnostic,
 ) -> Result<String, RenderError> {
+    render_diagnostic_sources(std::iter::once(source), diagnostic)
+}
+
+/// Renders a diagnostic whose ordered labels may belong to multiple sources.
+///
+/// Labels are grouped by source in first-appearance order. Each source receives
+/// its own location header and excerpt block while the diagnostic's primary
+/// label still determines the leading location.
+pub fn render_diagnostic_sources<'a>(
+    sources: impl IntoIterator<Item = &'a SourceFile>,
+    diagnostic: &Diagnostic,
+) -> Result<String, RenderError> {
+    let sources = sources.into_iter().collect::<Vec<_>>();
     let primary = diagnostic
         .labels
         .iter()
         .find(|label| label.style == LabelStyle::Primary)
         .ok_or(RenderError::MissingPrimaryLabel)?;
-    source.validate_span(primary.span)?;
-    let primary_location = source.location(primary.span.start())?;
-
-    for label in &diagnostic.labels {
-        source.validate_span(label.span)?;
-    }
-
-    let gutter_width = diagnostic
-        .labels
-        .iter()
-        .map(|label| source.location(label.span.start()))
-        .collect::<Result<Vec<_>, _>>()?
-        .into_iter()
-        .map(|location| decimal_width(location.line()))
-        .max()
-        .unwrap_or(1);
+    let primary_source = source_for_span(&sources, primary.span)?;
+    primary_source.validate_span(primary.span)?;
+    let primary_location = primary_source.location(primary.span.start())?;
 
     let mut output = String::new();
     writeln!(
@@ -186,21 +194,79 @@ pub fn render_diagnostic(
     writeln!(
         output,
         " --> {}:{}:{}",
-        source.name(),
+        primary_source.name(),
         primary_location.line(),
         primary_location.column()
     )
     .expect("writing to a String cannot fail");
     writeln!(output, "  |").expect("writing to a String cannot fail");
 
+    let mut source_order = vec![primary.span.source_id()];
     for label in &diagnostic.labels {
-        render_label(&mut output, source, label, gutter_width)?;
+        if !source_order.contains(&label.span.source_id()) {
+            source_order.push(label.span.source_id());
+        }
+    }
+
+    for (source_index, source_id) in source_order.into_iter().enumerate() {
+        let source = sources
+            .iter()
+            .copied()
+            .find(|source| source.id() == source_id)
+            .ok_or(RenderError::MissingSource(source_id))?;
+        let source_labels = diagnostic
+            .labels
+            .iter()
+            .filter(|candidate| candidate.span.source_id() == source_id)
+            .collect::<Vec<_>>();
+        for source_label in &source_labels {
+            source.validate_span(source_label.span)?;
+        }
+        let gutter_width = source_labels
+            .iter()
+            .map(|source_label| source.location(source_label.span.start()))
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .map(|location| decimal_width(location.line()))
+            .max()
+            .unwrap_or(1);
+
+        if source_index != 0 {
+            let first_span = source_labels
+                .first()
+                .expect("a diagnostic source group contains at least one label")
+                .span;
+            let location = source.location(first_span.start())?;
+            writeln!(
+                output,
+                " ::: {}:{}:{}",
+                source.name(),
+                location.line(),
+                location.column()
+            )
+            .expect("writing to a String cannot fail");
+            writeln!(output, "  |").expect("writing to a String cannot fail");
+        }
+        for source_label in source_labels {
+            render_label(&mut output, source, source_label, gutter_width)?;
+        }
     }
     for note in &diagnostic.notes {
         writeln!(output, "  = note: {note}").expect("writing to a String cannot fail");
     }
 
     Ok(output)
+}
+
+fn source_for_span<'a>(
+    sources: &[&'a SourceFile],
+    span: Span,
+) -> Result<&'a SourceFile, RenderError> {
+    sources
+        .iter()
+        .copied()
+        .find(|source| source.id() == span.source_id())
+        .ok_or(RenderError::MissingSource(span.source_id()))
 }
 
 fn render_label(

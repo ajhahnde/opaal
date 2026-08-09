@@ -300,6 +300,33 @@ impl Session {
             ParseOutcome::Invalid(diagnostics) => return Err(render(&source, &diagnostics)),
         };
 
+        self.submit_parsed(&source, &script, false, probe, platform, clock, output)
+    }
+
+    /// Executes the root syntax of a fully analyzed module program.
+    pub(crate) fn submit_module_root(
+        &mut self,
+        source: &SourceFile,
+        script: &Script,
+        probe: &dyn ExecutableProbe,
+        platform: &dyn Platform,
+        clock: &dyn Clock,
+        output: &mut dyn Write,
+    ) -> Result<SubmitOutcome, SubmitError> {
+        self.submit_parsed(source, script, true, probe, platform, clock, output)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn submit_parsed(
+        &mut self,
+        source: &SourceFile,
+        script: &Script,
+        imports_analyzed: bool,
+        probe: &dyn ExecutableProbe,
+        platform: &dyn Platform,
+        clock: &dyn Clock,
+        output: &mut dyn Write,
+    ) -> Result<SubmitOutcome, SubmitError> {
         let Session {
             scope,
             state,
@@ -311,6 +338,7 @@ impl Session {
 
         for statement in script.statements() {
             match statement.kind() {
+                StatementKind::Import(_) if imports_analyzed => continue,
                 StatementKind::Job(job) => {
                     if let Some(background_span) = job.background_span {
                         let Some(jobs) = jobs.as_mut() else {
@@ -320,22 +348,22 @@ impl Session {
                                 },
                                 background_span,
                             );
-                            return Err(runtime(&source, &error));
+                            return Err(runtime(source, &error));
                         };
                         if let Err(error) = validate_background_chain(
                             &job.chain,
-                            &source,
+                            source,
                             scope,
                             state.environment(),
                         ) {
-                            return Err(runtime(&source, &error));
+                            return Err(runtime(source, &error));
                         }
                         let mut child_scope = ScopeStack::from_environment(state.environment());
                         let direct_pipeline =
                             one_background_pipeline(&job.chain).filter(|pipeline| {
                                 pipeline_is_all_external(
                                     pipeline,
-                                    &source,
+                                    source,
                                     &mut child_scope,
                                     registry,
                                 )
@@ -344,31 +372,31 @@ impl Session {
                             plan_pipeline_with_options(
                                 pipeline,
                                 state.cwd(),
-                                &source,
+                                source,
                                 &mut child_scope,
                                 state.environment(),
                                 registry,
                                 probe,
                                 options,
                             )
-                            .map_err(|error| runtime(&source, &error))?
+                            .map_err(|error| runtime(source, &error))?
                         } else {
                             background_shell_plan(
                                 &job.chain,
-                                &source,
+                                source,
                                 state.cwd(),
                                 state.environment(),
                                 options,
                                 platform,
                             )
-                            .map_err(|error| runtime(&source, &error))?
+                            .map_err(|error| runtime(source, &error))?
                         };
                         let command = source
                             .slice(job.chain.span())
                             .map(escape_job_label)
                             .expect("a parsed chain span belongs to its source");
                         jobs.start(&plan, platform, command)
-                            .map_err(|error| runtime(&source, &error))?;
+                            .map_err(|error| runtime(source, &error))?;
                         state.set_current_status(Some(
                             Status::exit(0, crate::Duration::ZERO)
                                 .expect("zero is a valid launch status"),
@@ -376,10 +404,10 @@ impl Session {
                         continue;
                     }
                     let step = run_chain(
-                        &job.chain, state, scope, options, registry, &source, probe, platform,
+                        &job.chain, state, scope, options, registry, source, probe, platform,
                         clock, jobs, output,
                     )
-                    .map_err(|interrupt| interrupt.into_submit(&source))?;
+                    .map_err(|interrupt| interrupt.into_submit(source))?;
                     match step {
                         ChainStep::Exit(code) => return Ok(SubmitOutcome::Exit(code)),
                         ChainStep::Status(status) => state.set_current_status(Some(status)),
@@ -395,12 +423,12 @@ impl Session {
                     let one = Script::new(vec![statement.clone()], statement.span());
                     match evaluate_in_environment(
                         &one,
-                        &source,
+                        source,
                         scope,
                         state.environment_mut(),
                         &EvalLimits::default(),
                     )
-                    .map_err(|error| runtime(&source, &error))?
+                    .map_err(|error| runtime(source, &error))?
                     {
                         Completion::Value(_) => {}
                         Completion::Cancelled(_) => {

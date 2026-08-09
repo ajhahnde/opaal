@@ -167,7 +167,7 @@ The shared syntax tree represents a static dependency as a top-level `import '<p
 
 Canonicalization and source-byte loading are separate injected capabilities. The recursive program loader assigns stable source identities in first-visit depth-first order, decodes and parses each canonical module once, retains alias imports as distinct graph edges, and registers both canonical module and source identities for later diagnostics. It registers a module before traversing its imports, allowing the graph to reject a back edge without unbounded recursion. Program construction returns no partial graph or registry after a resolution, read, UTF-8, syntax, or cycle failure.
 
-Loading is analysis, not execution. The module program contains the canonical graph, source files, and parsed syntax; it does not run initialization or make imported names visible. Frontend wiring, exported-name analysis, and initialization policy are later layers over this boundary.
+Loading is analysis, not execution. The module program contains the canonical graph, source files, and parsed syntax; it does not run initialization or make imported names visible. Non-interactive `fsh <script>` execution injects the host filesystem adapter at this boundary, reports grouped excerpts for diagnostics that span multiple registered sources, and executes only the analyzed root syntax. Its load-only import declarations are skipped during that root execution, and imported module initialization remains unexecuted. Other frontends, exported-name analysis, and initialization policy are later layers over this boundary.
 
 The analysis layer is responsible for:
 

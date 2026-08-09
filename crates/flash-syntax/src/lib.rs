@@ -14,7 +14,10 @@ pub use ast::*;
 pub use classification::{
     IncompleteInput, IncompleteReason, SyntaxClassification, classify_tokens,
 };
-pub use diagnostic::{Diagnostic, Label, LabelStyle, RenderError, Severity, render_diagnostic};
+pub use diagnostic::{
+    Diagnostic, Label, LabelStyle, RenderError, Severity, render_diagnostic,
+    render_diagnostic_sources,
+};
 pub use formatter::{FormatOutcome, format_source};
 pub use lexer::{
     Delimiter, InvalidTokenKind, Keyword, NumberKind, Operator, Token, TokenKind, lex,
