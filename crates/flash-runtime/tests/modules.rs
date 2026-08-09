@@ -1097,6 +1097,83 @@ fn annotated_declarations_and_assignments_reject_dynamic_runtime_mismatches() {
 }
 
 #[test]
+fn ordinary_calls_reject_dynamic_parameter_mismatches_before_body_entry() {
+    let paths = FakeCanonicalizer::default().resolves("/project/main.fsh", "/project/main.fsh");
+
+    let call_sources = FakeSourceLoader::default().contains(
+        "/project/main.fsh",
+        concat!(
+            "let dynamic = $args[0]\n",
+            "def accept(value: Int) {\n",
+            "    export ENTERED = true\n",
+            "}\n",
+            "let result = accept($dynamic)\n",
+        ),
+    );
+    let call_program = ModuleProgramLoader::new(&paths, &call_sources)
+        .load(Path::new("/project/main.fsh"))
+        .expect("the unannotated argument remains unknown during analysis");
+    let mut call_environment = Environment::new();
+    let call_error = execute_module_program(
+        &call_program,
+        &["not-an-int".to_owned()],
+        Path::new("/project"),
+        &mut call_environment,
+        &standard_registry(),
+        &NoExecutables,
+        &SessionOptions::default(),
+        &FakePlatform::none(),
+        Arc::new(FakeClock::new()),
+    )
+    .expect_err("an ordinary call must enforce its resolved parameter type");
+    let call_rendered = call_error.render();
+    assert!(
+        call_rendered.contains("parameter \"value\" expects Int, found string"),
+        "{call_rendered}"
+    );
+    assert!(
+        call_rendered.contains(" --> /project/main.fsh:5:21"),
+        "{call_rendered}"
+    );
+    assert!(!call_environment.contains("ENTERED"));
+}
+
+#[test]
+fn apply_callable_rejects_dynamic_parameter_mismatches_before_body_entry() {
+    let paths = FakeCanonicalizer::default().resolves("/project/main.fsh", "/project/main.fsh");
+
+    let applied_sources = FakeSourceLoader::default().contains(
+        "/project/main.fsh",
+        "which pwd | each {|row: String| 1 / 0} | first 1 | to json\n",
+    );
+    let applied_program = ModuleProgramLoader::new(&paths, &applied_sources)
+        .load(Path::new("/project/main.fsh"))
+        .expect("internal-command closure parameters are resolved without execution");
+    let mut applied_environment = Environment::new();
+    let applied_error = execute_module_program(
+        &applied_program,
+        &[],
+        Path::new("/project"),
+        &mut applied_environment,
+        &standard_registry(),
+        &NoExecutables,
+        &SessionOptions::default(),
+        &FakePlatform::none(),
+        Arc::new(FakeClock::new()),
+    )
+    .expect_err("apply_callable must enforce the same resolved parameter type");
+    let applied_rendered = applied_error.render();
+    assert!(
+        applied_rendered.contains("parameter \"row\" expects String, found record"),
+        "{applied_rendered}"
+    );
+    assert!(
+        applied_rendered.contains(" --> /project/main.fsh:1:13"),
+        "{applied_rendered}"
+    );
+}
+
+#[test]
 fn annotated_binding_failures_inside_imported_callables_use_the_defining_source() {
     let paths = FakeCanonicalizer::default()
         .resolves("/project/main.fsh", "/project/main.fsh")

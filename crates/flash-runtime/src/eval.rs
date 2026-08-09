@@ -234,6 +234,12 @@ pub enum RuntimeErrorKind {
         expected: ValueType,
         actual: &'static str,
     },
+    /// A call argument whose value does not match its resolved parameter type.
+    ParameterTypeMismatch {
+        parameter: String,
+        expected: ValueType,
+        actual: &'static str,
+    },
     /// A function or closure declaring the same parameter name twice.
     DuplicateParameter { name: String },
     /// A construct requiring the execution engine that does not exist yet.
@@ -475,6 +481,14 @@ impl fmt::Display for RuntimeErrorKind {
             Self::BindingTypeMismatch { expected, actual } => {
                 write!(formatter, "binding expects {expected}, found {actual}")
             }
+            Self::ParameterTypeMismatch {
+                parameter,
+                expected,
+                actual,
+            } => write!(
+                formatter,
+                "parameter {parameter:?} expects {expected}, found {actual}"
+            ),
             Self::DuplicateParameter { name } => {
                 write!(formatter, "duplicate parameter {name:?}")
             }
@@ -1186,11 +1200,25 @@ pub fn evaluate_closure_argument(
     source: &SourceFile,
     scope: &ScopeStack,
 ) -> Result<Value, RuntimeError> {
+    evaluate_closure_argument_with_binding_types(
+        closure,
+        source,
+        scope,
+        Arc::new(RuntimeBindingTypes::default()),
+    )
+}
+
+pub(crate) fn evaluate_closure_argument_with_binding_types(
+    closure: &Closure,
+    source: &SourceFile,
+    scope: &ScopeStack,
+    binding_types: Arc<RuntimeBindingTypes>,
+) -> Result<Value, RuntimeError> {
     let limits = EvalLimits::default();
     let mut env = Environment::new();
     let evaluator = Evaluator {
         source: Arc::new(source.clone()),
-        binding_types: Arc::new(RuntimeBindingTypes::default()),
+        binding_types,
         cancel: limits.cancel,
         budget: limits.budget,
         policy: limits.policy,
@@ -1265,6 +1293,10 @@ pub fn apply_callable(
             Abort::Error(error) => Err(error),
         };
     }
+    let arguments = arguments
+        .into_iter()
+        .map(|value| RuntimeArgument { value, span })
+        .collect();
     match evaluator.run_call(callable, function, arguments, span) {
         Ok(value) => Ok(Completion::Value(value)),
         Err(Abort::Cancelled(cancellation)) => Ok(Completion::Cancelled(cancellation)),
@@ -2250,6 +2282,12 @@ impl Evaluator<'_> {
             captured: scope.captured_snapshot(),
             source: Arc::clone(&self.source),
             binding_types: Arc::clone(&self.binding_types),
+            _result_type: Some(
+                self.binding_types
+                    .function_result_type(self.source.id(), definition.name.span())
+                    .cloned()
+                    .unwrap_or(ValueType::Any),
+            ),
             location: self.location(definition.name.span()),
         };
         let value = Value::Callable(Arc::new(callable));
@@ -2267,17 +2305,21 @@ impl Evaluator<'_> {
             captured: scope.captured_snapshot(),
             source: Arc::clone(&self.source),
             binding_types: Arc::clone(&self.binding_types),
+            _result_type: None,
             location: self.location(closure.span),
         };
         Ok(Value::Callable(Arc::new(callable)))
     }
 
     /// Collects parameter names, rejecting a repeated name at creation time.
-    fn parameters(&self, parameters: &[Parameter]) -> Eval<Vec<Arc<str>>> {
-        let mut names: Vec<Arc<str>> = Vec::with_capacity(parameters.len());
+    fn parameters(&self, parameters: &[Parameter]) -> Eval<Vec<CallableParameter>> {
+        let mut resolved = Vec::with_capacity(parameters.len());
         for parameter in parameters {
             let name = self.text(parameter.name.span());
-            if names.iter().any(|existing| existing.as_ref() == name) {
+            if resolved
+                .iter()
+                .any(|existing: &CallableParameter| existing.name.as_ref() == name)
+            {
                 return Err(self.error(
                     RuntimeErrorKind::DuplicateParameter {
                         name: name.to_owned(),
@@ -2285,9 +2327,17 @@ impl Evaluator<'_> {
                     parameter.span,
                 ));
             }
-            names.push(Arc::from(name));
+            let value_type = self
+                .binding_types
+                .binding_type(self.source.id(), parameter.name.span())
+                .cloned()
+                .unwrap_or(ValueType::Any);
+            resolved.push(CallableParameter {
+                name: Arc::from(name),
+                value_type,
+            });
         }
-        Ok(names)
+        Ok(resolved)
     }
 
     fn call(&mut self, call: &CallExpression, scope: &mut ScopeStack, span: Span) -> Eval<Value> {
@@ -2320,7 +2370,10 @@ impl Evaluator<'_> {
 
         let mut arguments = Vec::with_capacity(call.arguments.len());
         for argument in &call.arguments {
-            arguments.push(self.expression(argument, scope)?);
+            arguments.push(RuntimeArgument {
+                value: self.expression(argument, scope)?,
+                span: argument.span(),
+            });
         }
 
         self.run_call(&callable, function, arguments, span)
@@ -2337,9 +2390,22 @@ impl Evaluator<'_> {
         &mut self,
         callable: &Arc<dyn Callable>,
         function: &CallableValue,
-        arguments: Vec<Value>,
+        arguments: Vec<RuntimeArgument>,
         span: Span,
     ) -> Eval<Value> {
+        for (parameter, argument) in function.parameters.iter().zip(&arguments) {
+            if !parameter.value_type.accepts(&argument.value) {
+                return Err(self.error(
+                    RuntimeErrorKind::ParameterTypeMismatch {
+                        parameter: parameter.name.to_string(),
+                        expected: parameter.value_type.clone(),
+                        actual: argument.value.family_name(),
+                    },
+                    argument.span,
+                ));
+            }
+        }
+
         // The captured snapshot underlies a fresh self frame (recursion) and a
         // fresh parameter frame, so parameters shadow captured names by ordinary
         // nearest-lexical lookup.
@@ -2355,9 +2421,14 @@ impl Evaluator<'_> {
                 .expect("a fresh frame cannot already hold the function name");
         }
         call_scope.push();
-        for (name, value) in function.parameters.iter().zip(arguments) {
+        for (parameter, argument) in function.parameters.iter().zip(arguments) {
             call_scope
-                .declare(name.as_ref(), BindingMutability::Mutable, value)
+                .declare_typed(
+                    parameter.name.as_ref(),
+                    BindingMutability::Mutable,
+                    argument.value,
+                    Some(parameter.value_type.clone()),
+                )
                 .expect("parameter names are unique by construction");
         }
 
@@ -2464,12 +2535,25 @@ impl Evaluator<'_> {
 struct CallableValue {
     /// `Some` for a `def` function, `None` for a closure.
     name: Option<Arc<str>>,
-    parameters: Vec<Arc<str>>,
+    parameters: Vec<CallableParameter>,
     body: CallableBody,
     captured: ScopeStack,
     source: Arc<SourceFile>,
     binding_types: Arc<RuntimeBindingTypes>,
+    /// `Some`, including `Any`, for a named function; `None` for a closure.
+    _result_type: Option<ValueType>,
     location: String,
+}
+
+#[derive(Clone)]
+struct CallableParameter {
+    name: Arc<str>,
+    value_type: ValueType,
+}
+
+struct RuntimeArgument {
+    value: Value,
+    span: Span,
 }
 
 #[derive(Clone)]

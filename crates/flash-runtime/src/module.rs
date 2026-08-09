@@ -868,6 +868,7 @@ struct ResolvedBindingType {
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct RuntimeBindingTypes {
     by_source: BTreeMap<SourceId, Vec<ResolvedBindingType>>,
+    functions_by_source: BTreeMap<SourceId, Vec<FunctionSignature>>,
 }
 
 impl RuntimeBindingTypes {
@@ -884,6 +885,21 @@ impl RuntimeBindingTypes {
                     .find(|binding| binding.declaration_span == declaration_span)
             })
             .map(|binding| &binding.value_type)
+    }
+
+    pub(crate) fn function_result_type(
+        &self,
+        source: SourceId,
+        declaration_span: Span,
+    ) -> Option<&ValueType> {
+        self.functions_by_source
+            .get(&source)
+            .and_then(|functions| {
+                functions
+                    .iter()
+                    .find(|function| function.declaration_span() == declaration_span)
+            })
+            .map(FunctionSignature::result)
     }
 }
 
@@ -2382,19 +2398,23 @@ impl ModuleProgram {
     }
 
     pub(crate) fn runtime_binding_types(&self) -> RuntimeBindingTypes {
-        let by_source = self
-            .sources
-            .entries()
-            .map(|entry| {
-                let bindings = self
-                    .types
-                    .by_module
-                    .get(entry.module())
-                    .map_or_else(Vec::new, |types| types.bindings.clone());
-                (entry.source().id(), bindings)
-            })
-            .collect();
-        RuntimeBindingTypes { by_source }
+        let mut by_source = BTreeMap::new();
+        let mut functions_by_source = BTreeMap::new();
+        for entry in self.sources.entries() {
+            let types = self.types.by_module.get(entry.module());
+            by_source.insert(
+                entry.source().id(),
+                types.map_or_else(Vec::new, |types| types.bindings.clone()),
+            );
+            functions_by_source.insert(
+                entry.source().id(),
+                types.map_or_else(Vec::new, |types| types.functions.clone()),
+            );
+        }
+        RuntimeBindingTypes {
+            by_source,
+            functions_by_source,
+        }
     }
 }
 

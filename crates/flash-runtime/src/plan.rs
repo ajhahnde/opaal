@@ -17,6 +17,7 @@ use std::collections::BTreeSet;
 use std::ffi::OsStr;
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use flash_syntax::{
     CommandItemKind, CommandStage, FileRedirection, IoNumber, OutputMode, PipeOperator, Pipeline,
@@ -26,8 +27,9 @@ use flash_syntax::{
 use crate::command::{Carrier, CommandOutput, CommandRegistry};
 use crate::eval::{
     CarrierBridge, CarrierMismatch, ExpandedWord, RuntimeError, RuntimeErrorKind,
-    evaluate_closure_argument, expand_spread, expand_word,
+    evaluate_closure_argument_with_binding_types, expand_spread, expand_word,
 };
+use crate::module::RuntimeBindingTypes;
 use crate::resolve::{ExecutableProbe, Resolution, ResolutionError, resolve_command};
 use crate::{Environment, ScopeStack, Value};
 
@@ -563,6 +565,31 @@ pub fn plan_pipeline_with_options(
     probe: &dyn ExecutableProbe,
     options: &SessionOptions,
 ) -> Result<ExecutionPlan, RuntimeError> {
+    plan_pipeline_with_options_and_binding_types(
+        pipeline,
+        cwd,
+        source,
+        scope,
+        environment,
+        registry,
+        probe,
+        options,
+        Arc::new(RuntimeBindingTypes::default()),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn plan_pipeline_with_options_and_binding_types(
+    pipeline: &Pipeline,
+    cwd: impl Into<PathBuf>,
+    source: &SourceFile,
+    scope: &mut ScopeStack,
+    environment: &Environment,
+    registry: &CommandRegistry,
+    probe: &dyn ExecutableProbe,
+    options: &SessionOptions,
+    binding_types: Arc<RuntimeBindingTypes>,
+) -> Result<ExecutionPlan, RuntimeError> {
     let mut stages = Vec::with_capacity(pipeline.stages().len());
     for stage in pipeline.stages() {
         let has_upstream = !stages.is_empty();
@@ -585,6 +612,7 @@ pub fn plan_pipeline_with_options(
             probe,
             input_carrier,
             has_upstream,
+            binding_types: Arc::clone(&binding_types),
         };
         stages.push(plan_stage(command, span, scope, &context)?);
     }
@@ -617,6 +645,7 @@ struct StagePlanningContext<'a> {
     probe: &'a dyn ExecutableProbe,
     input_carrier: Carrier,
     has_upstream: bool,
+    binding_types: Arc<RuntimeBindingTypes>,
 }
 
 fn plan_stage(
@@ -657,7 +686,12 @@ fn plan_stage(
                     ));
                 }
                 arguments.push(PlannedArgument::Value {
-                    value: evaluate_closure_argument(closure, context.source, scope)?,
+                    value: evaluate_closure_argument_with_binding_types(
+                        closure,
+                        context.source,
+                        scope,
+                        Arc::clone(&context.binding_types),
+                    )?,
                     span: item.span(),
                 });
             }

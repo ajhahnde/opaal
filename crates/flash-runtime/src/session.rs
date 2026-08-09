@@ -40,7 +40,7 @@ use crate::closure::OwnedClosureContext;
 use crate::command::CommandRegistry;
 use crate::eval::{
     Clock, Completion, EvalLimits, ExpandedWord, RuntimeError, RuntimeErrorKind,
-    evaluate_in_environment_owned, evaluate_in_environment_owned_with_binding_types, expand_word,
+    evaluate_in_environment_owned_with_binding_types, expand_word,
 };
 use crate::execute::{execute_foreground_status, start_mixed_pipeline};
 use crate::internal::{
@@ -51,7 +51,7 @@ use crate::job::JobPlacement;
 use crate::module::RuntimeBindingTypes;
 use crate::plan::{
     ExecutionPlan, PlannedResolution, PlannedStage, RedirectionAction, SessionOptions,
-    plan_pipeline_with_options, preflight,
+    plan_pipeline_with_options_and_binding_types, preflight,
 };
 use crate::presentation::{
     OutputDestination, TerminalPresentation, render_table, select_terminal_presentation,
@@ -355,6 +355,8 @@ impl Session {
         output: &mut dyn Write,
     ) -> Result<SubmitOutcome, SubmitError> {
         let source_file = source.as_ref();
+        let binding_types =
+            binding_types.unwrap_or_else(|| Arc::new(RuntimeBindingTypes::default()));
         let Session {
             scope,
             state,
@@ -398,7 +400,7 @@ impl Session {
                                 )
                             });
                         let plan = if let Some(pipeline) = direct_pipeline {
-                            plan_pipeline_with_options(
+                            plan_pipeline_with_options_and_binding_types(
                                 pipeline,
                                 state.cwd(),
                                 source_file,
@@ -407,6 +409,7 @@ impl Session {
                                 registry,
                                 probe,
                                 options,
+                                Arc::clone(&binding_types),
                             )
                             .map_err(|error| runtime(source_file, &error))?
                         } else {
@@ -439,6 +442,7 @@ impl Session {
                         options,
                         registry,
                         source_file,
+                        &binding_types,
                         probe,
                         platform,
                         clock,
@@ -459,23 +463,14 @@ impl Session {
                 }
                 _ => {
                     let one = Script::new(vec![statement.clone()], statement.span());
-                    let evaluated = match binding_types.as_ref() {
-                        Some(binding_types) => evaluate_in_environment_owned_with_binding_types(
-                            &one,
-                            Arc::clone(&source),
-                            scope,
-                            state.environment_mut(),
-                            &EvalLimits::default(),
-                            Arc::clone(binding_types),
-                        ),
-                        None => evaluate_in_environment_owned(
-                            &one,
-                            Arc::clone(&source),
-                            scope,
-                            state.environment_mut(),
-                            &EvalLimits::default(),
-                        ),
-                    };
+                    let evaluated = evaluate_in_environment_owned_with_binding_types(
+                        &one,
+                        Arc::clone(&source),
+                        scope,
+                        state.environment_mut(),
+                        &EvalLimits::default(),
+                        Arc::clone(&binding_types),
+                    );
                     match evaluated.map_err(|error| runtime(source_file, &error))? {
                         Completion::Value(_) => {}
                         Completion::Cancelled(_) => {
@@ -841,6 +836,7 @@ fn run_chain(
     options: &SessionOptions,
     registry: &CommandRegistry,
     source: &SourceFile,
+    binding_types: &Arc<RuntimeBindingTypes>,
     probe: &dyn ExecutableProbe,
     platform: &dyn Platform,
     clock: &dyn Clock,
@@ -851,7 +847,18 @@ fn run_chain(
         && let [pipeline] = and_chain.and_terms()
     {
         return run_pipeline(
-            pipeline, state, scope, options, registry, source, probe, platform, clock, jobs, true,
+            pipeline,
+            state,
+            scope,
+            options,
+            registry,
+            source,
+            binding_types,
+            probe,
+            platform,
+            clock,
+            jobs,
+            true,
             output,
         );
     }
@@ -861,7 +868,18 @@ fn run_chain(
         .next()
         .expect("a parsed conditional chain contains an operand");
     let mut step = run_and_chain(
-        first, state, scope, options, registry, source, probe, platform, clock, jobs, output,
+        first,
+        state,
+        scope,
+        options,
+        registry,
+        source,
+        binding_types,
+        probe,
+        platform,
+        clock,
+        jobs,
+        output,
     )?;
     for and_chain in or_terms {
         match &step {
@@ -872,7 +890,17 @@ fn run_chain(
             ChainStep::Status(_) => {}
         }
         step = run_and_chain(
-            and_chain, state, scope, options, registry, source, probe, platform, clock, jobs,
+            and_chain,
+            state,
+            scope,
+            options,
+            registry,
+            source,
+            binding_types,
+            probe,
+            platform,
+            clock,
+            jobs,
             output,
         )?;
     }
@@ -887,6 +915,7 @@ fn run_and_chain(
     options: &SessionOptions,
     registry: &CommandRegistry,
     source: &SourceFile,
+    binding_types: &Arc<RuntimeBindingTypes>,
     probe: &dyn ExecutableProbe,
     platform: &dyn Platform,
     clock: &dyn Clock,
@@ -898,7 +927,19 @@ fn run_and_chain(
         .next()
         .expect("a parsed and-chain contains an operand");
     let mut step = run_pipeline(
-        first, state, scope, options, registry, source, probe, platform, clock, jobs, false, output,
+        first,
+        state,
+        scope,
+        options,
+        registry,
+        source,
+        binding_types,
+        probe,
+        platform,
+        clock,
+        jobs,
+        false,
+        output,
     )?;
     for pipeline in pipelines {
         match &step {
@@ -909,7 +950,18 @@ fn run_and_chain(
             ChainStep::Status(_) => {}
         }
         step = run_pipeline(
-            pipeline, state, scope, options, registry, source, probe, platform, clock, jobs, false,
+            pipeline,
+            state,
+            scope,
+            options,
+            registry,
+            source,
+            binding_types,
+            probe,
+            platform,
+            clock,
+            jobs,
+            false,
             output,
         )?;
     }
@@ -924,6 +976,7 @@ fn run_pipeline(
     options: &SessionOptions,
     registry: &CommandRegistry,
     source: &SourceFile,
+    binding_types: &Arc<RuntimeBindingTypes>,
     probe: &dyn ExecutableProbe,
     platform: &dyn Platform,
     clock: &dyn Clock,
@@ -931,7 +984,7 @@ fn run_pipeline(
     manage_foreground: bool,
     output: &mut dyn Write,
 ) -> Result<ChainStep, Interrupt> {
-    let plan = plan_pipeline_with_options(
+    let plan = plan_pipeline_with_options_and_binding_types(
         pipeline,
         state.cwd(),
         source,
@@ -940,6 +993,7 @@ fn run_pipeline(
         registry,
         probe,
         options,
+        Arc::clone(binding_types),
     )?;
     validate_job_builtin_arguments(&plan)?;
 
