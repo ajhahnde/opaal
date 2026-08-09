@@ -393,6 +393,8 @@ pub struct ModuleNameImport {
 /// The lexical binding selected by one statically resolved name read.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ModuleReferenceTarget {
+    /// The synthetic immutable `args: List[String]` root-program input.
+    ScriptArguments,
     /// A declaration in the same canonical source module.
     Local {
         /// The module that owns the declaration.
@@ -660,7 +662,9 @@ impl ModuleNameRegistry {
         }
 
         for entry in sources.entries() {
-            let references = ReferenceResolver::new(entry, &registry).resolve()?;
+            let references =
+                ReferenceResolver::new(entry, &registry, entry.module() == graph.root())
+                    .resolve()?;
             registry
                 .by_module
                 .get_mut(entry.module())
@@ -1320,7 +1324,17 @@ impl<'a> SignatureValidator<'a> {
     ) -> Result<Option<ValueType>, Box<ModuleTypeError>> {
         match expression.kind() {
             ExpressionKind::Literal(literal) => self.literal(literal),
-            ExpressionKind::Variable(_) | ExpressionKind::Symbol(_) => Ok(None),
+            ExpressionKind::Variable(_) => Ok(self
+                .names
+                .reference(self.entry.module(), expression.span())
+                .and_then(|reference| match reference.target() {
+                    ModuleReferenceTarget::ScriptArguments => {
+                        Some(ValueType::List(Box::new(ValueType::String)))
+                    }
+                    ModuleReferenceTarget::Local { .. }
+                    | ModuleReferenceTarget::Imported { .. } => None,
+                })),
+            ExpressionKind::Symbol(_) => Ok(None),
             ExpressionKind::List(elements) => {
                 let mut element_type = None;
                 for element in elements {
@@ -1396,6 +1410,7 @@ impl<'a> SignatureValidator<'a> {
             return Ok(None);
         };
         let (target_module, declaration_span) = match reference.target() {
+            ModuleReferenceTarget::ScriptArguments => return Ok(None),
             ModuleReferenceTarget::Local {
                 module,
                 declaration_span,
@@ -1504,7 +1519,11 @@ struct ReferenceResolver<'a> {
 }
 
 impl<'a> ReferenceResolver<'a> {
-    fn new(entry: &'a RegisteredModuleSource, registry: &ModuleNameRegistry) -> Self {
+    fn new(
+        entry: &'a RegisteredModuleSource,
+        registry: &ModuleNameRegistry,
+        is_root: bool,
+    ) -> Self {
         let mut root = BTreeMap::new();
         for import in registry.imports(entry.module()) {
             let export = registry
@@ -1520,9 +1539,17 @@ impl<'a> ReferenceResolver<'a> {
                 },
             );
         }
+        let mut scopes = Vec::with_capacity(usize::from(is_root) + 1);
+        if is_root {
+            scopes.push(BTreeMap::from([(
+                "args".to_owned(),
+                ModuleReferenceTarget::ScriptArguments,
+            )]));
+        }
+        scopes.push(root);
         Self {
             entry,
-            scopes: vec![root],
+            scopes,
             references: Vec::new(),
         }
     }
@@ -1859,6 +1886,9 @@ impl<'a> ReferenceResolver<'a> {
 
 fn binding_span(target: &ModuleReferenceTarget) -> Span {
     match target {
+        ModuleReferenceTarget::ScriptArguments => {
+            unreachable!("the synthetic parent input cannot collide in a module scope")
+        }
         ModuleReferenceTarget::Local {
             declaration_span, ..
         } => *declaration_span,

@@ -85,7 +85,7 @@ fn help_describes_the_script_cli() {
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.starts_with("Flash command shell\n"));
-    assert!(stdout.contains("Usage: fsh [OPTIONS] [SCRIPT]\n"));
+    assert!(stdout.contains("Usage: fsh [OPTIONS] SCRIPT [ARGUMENT]...\n"));
     assert!(stdout.contains("--version"));
     assert!(output.stderr.is_empty());
 }
@@ -358,6 +358,67 @@ fn script_preserves_empty_space_and_unicode_arguments() {
             b"two words".as_slice(),
             "Grüße 🌍".as_bytes(),
         ]
+    );
+}
+
+#[test]
+fn script_arguments_are_passed_without_reparsing_or_splitting() {
+    let temp = TempDir::new("script-arguments");
+    let report = temp.path().join("report.bin");
+    let script = temp.script(
+        "arguments.fsh",
+        "^flash-e2e-process-observer-fixture ...$args\n",
+    );
+    let output = Command::new(env!("CARGO_BIN_EXE_fsh"))
+        .arg(&script)
+        .args(["", "two words", "Grüße 🌍", "--flag"])
+        .current_dir(temp.path())
+        .env("PATH", fixture_directory())
+        .env("FLASH_PROBE_REPORT", &report)
+        .output()
+        .expect("fsh should start");
+
+    assert!(output.status.success(), "{output:?}");
+    assert!(output.stdout.is_empty());
+    assert!(output.stderr.is_empty());
+    let observed = ProcessReport::read(&report);
+    assert_eq!(
+        observed.argv,
+        [
+            b"flash-e2e-process-observer-fixture".as_slice(),
+            b"".as_slice(),
+            b"two words".as_slice(),
+            "Grüße 🌍".as_bytes(),
+            b"--flag".as_slice(),
+        ]
+    );
+}
+
+#[test]
+fn a_non_utf8_script_argument_is_rejected_before_source_loading() {
+    let temp = TempDir::new("non-utf8-script-argument");
+    let marker = temp.path().join("source-ran.txt");
+    let script = temp.script(
+        "invalid-argument.fsh",
+        &format!("^{} late 0 {} 0\n", status_fixture(), marker.display()),
+    );
+    let output = Command::new(env!("CARGO_BIN_EXE_fsh"))
+        .arg(&script)
+        .arg(OsString::from_vec(vec![0xff]))
+        .current_dir(temp.path())
+        .env("PATH", fixture_directory())
+        .output()
+        .expect("fsh should start");
+
+    assert_eq!(output.status.code(), Some(2), "{output:?}");
+    assert!(output.stdout.is_empty());
+    assert_eq!(
+        String::from_utf8(output.stderr).expect("CLI diagnostics are UTF-8"),
+        "fsh: script arguments must be valid UTF-8\n"
+    );
+    assert!(
+        !marker.exists(),
+        "argument decoding must precede source loading"
     );
 }
 

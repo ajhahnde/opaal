@@ -208,6 +208,30 @@ fn typed_function_signatures_are_resolved_before_known_calls_are_validated() {
 }
 
 #[test]
+fn root_script_arguments_have_a_distinct_typed_analysis_target() {
+    let paths = FakeCanonicalizer::default().resolves("/project/main.fsh", "/project/main.fsh");
+    let text = "let captured = $args\n";
+    let sources = FakeSourceLoader::default().contains("/project/main.fsh", text);
+    let program = ModuleProgramLoader::new(&paths, &sources)
+        .load(Path::new("/project/main.fsh"))
+        .expect("the root script-argument input resolves");
+    let root = program.graph().root();
+    let reference = &program.names().references(root)[0];
+
+    assert_eq!(reference.name(), "args");
+    assert_eq!(reference.target(), &ModuleReferenceTarget::ScriptArguments);
+
+    let incompatible = FakeSourceLoader::default().contains(
+        "/project/main.fsh",
+        "def accepts(value: Int) -> Int { $value }\naccepts($args)\n",
+    );
+    let error = ModuleProgramLoader::new(&paths, &incompatible)
+        .load(Path::new("/project/main.fsh"))
+        .expect_err("script arguments have the known List[String] analysis type");
+    assert_eq!(error.diagnostics()[0].code(), "SIG004");
+}
+
+#[test]
 fn named_imports_resolve_through_explicit_target_exports() {
     let paths = FakeCanonicalizer::default()
         .resolves("/project/main.fsh", "/project/main.fsh")
@@ -339,6 +363,7 @@ fn local_references_follow_source_order_shadowing_and_callable_capture() {
     let declaration_starts = references
         .iter()
         .map(|reference| match reference.target() {
+            ModuleReferenceTarget::ScriptArguments => panic!("all bindings are source locals"),
             ModuleReferenceTarget::Local {
                 declaration_span, ..
             } => declaration_span.start(),
@@ -551,6 +576,7 @@ fn named_import_initializes_a_scalar_export_while_load_only_imports_stay_dormant
 
     execute_module_program(
         &program,
+        &[],
         Path::new("/project"),
         &mut environment,
         &standard_registry(),
@@ -563,6 +589,90 @@ fn named_import_initializes_a_scalar_export_while_load_only_imports_stay_dormant
 
     assert_eq!(environment.get("RESULT"), Some(OsStr::new("42")));
     assert!(!environment.contains("BROKEN"));
+}
+
+#[test]
+fn script_arguments_are_exact_root_only_immutable_data_with_ordinary_shadowing() {
+    let paths = FakeCanonicalizer::default().resolves("/project/main.fsh", "/project/main.fsh");
+    let sources = FakeSourceLoader::default().contains(
+        "/project/main.fsh",
+        concat!(
+            "export EMPTY = $args[0]\n",
+            "export UNICODE = $args[1]\n",
+            "export OPTION = $args[2]\n",
+            "let args = ['shadowed']\n",
+            "export SHADOWED = $args[0]\n",
+        ),
+    );
+    let program = ModuleProgramLoader::new(&paths, &sources)
+        .load(Path::new("/project/main.fsh"))
+        .expect("the root input and its ordinary shadow resolve");
+    let root = program.graph().root();
+    assert!(matches!(
+        program.names().references(root)[0].target(),
+        ModuleReferenceTarget::ScriptArguments
+    ));
+    assert!(matches!(
+        program.names().references(root)[3].target(),
+        ModuleReferenceTarget::Local { .. }
+    ));
+    let mut environment = Environment::new();
+
+    execute_module_program(
+        &program,
+        &[String::new(), "Grüße 🌍".to_owned(), "--flag".to_owned()],
+        Path::new("/project"),
+        &mut environment,
+        &standard_registry(),
+        &NoExecutables,
+        &SessionOptions::default(),
+        &FakePlatform::none(),
+        Arc::new(FakeClock::new()),
+    )
+    .expect("the root script arguments execute as exact strings");
+
+    assert_eq!(environment.get("EMPTY"), Some(OsStr::new("")));
+    assert_eq!(environment.get("UNICODE"), Some(OsStr::new("Grüße 🌍")));
+    assert_eq!(environment.get("OPTION"), Some(OsStr::new("--flag")));
+    assert_eq!(environment.get("SHADOWED"), Some(OsStr::new("shadowed")));
+
+    let immutable_sources =
+        FakeSourceLoader::default().contains("/project/main.fsh", "$args = []\n");
+    let immutable_program = ModuleProgramLoader::new(&paths, &immutable_sources)
+        .load(Path::new("/project/main.fsh"))
+        .expect("assignment target resolution succeeds before runtime mutability checking");
+    let error = execute_module_program(
+        &immutable_program,
+        &[],
+        Path::new("/project"),
+        &mut Environment::new(),
+        &standard_registry(),
+        &NoExecutables,
+        &SessionOptions::default(),
+        &FakePlatform::none(),
+        Arc::new(FakeClock::new()),
+    )
+    .expect_err("the script-argument input cannot be assigned");
+    assert!(error.render().contains("binding \"args\" is immutable"));
+}
+
+#[test]
+fn dependency_modules_cannot_resolve_the_root_script_arguments() {
+    let paths = FakeCanonicalizer::default()
+        .resolves("/project/main.fsh", "/project/main.fsh")
+        .resolves("/project/lib.fsh", "/project/lib.fsh");
+    let sources = FakeSourceLoader::default()
+        .contains("/project/main.fsh", "import { value } from './lib.fsh'\n")
+        .contains("/project/lib.fsh", "let value = $args\nexport { value }\n");
+    let error = ModuleProgramLoader::new(&paths, &sources)
+        .load(Path::new("/project/main.fsh"))
+        .expect_err("a dependency does not inherit the root program input");
+
+    assert_eq!(error.diagnostics()[0].code(), "MOD009");
+    assert_eq!(
+        error.module().expect("failing module").path(),
+        Path::new("/project/lib.fsh")
+    );
 }
 
 #[test]
@@ -619,6 +729,7 @@ fn named_dependencies_initialize_once_in_source_edge_depth_first_postorder() {
 
     execute_module_program(
         &program,
+        &[],
         Path::new("/project"),
         &mut environment,
         &standard_registry(),
@@ -666,6 +777,7 @@ fn imported_mut_values_materialize_after_initialization_as_immutable_snapshots()
 
     execute_module_program(
         &program,
+        &[],
         Path::new("/project"),
         &mut environment,
         &standard_registry(),
@@ -689,6 +801,7 @@ fn imported_mut_values_materialize_after_initialization_as_immutable_snapshots()
         .expect("the immutable-import program loads");
     let error = execute_module_program(
         &immutable_program,
+        &[],
         Path::new("/project"),
         &mut Environment::new(),
         &standard_registry(),
@@ -723,6 +836,7 @@ fn imported_callables_execute_against_their_defining_source() {
 
     execute_module_program(
         &program,
+        &[],
         Path::new("/project"),
         &mut environment,
         &standard_registry(),
@@ -755,6 +869,7 @@ fn imported_callable_failures_render_the_body_and_importing_call_site() {
         .expect("the callable module program loads");
     let error = execute_module_program(
         &program,
+        &[],
         Path::new("/project"),
         &mut Environment::new(),
         &standard_registry(),
@@ -809,6 +924,7 @@ fn initializer_failure_stops_later_modules_after_preserving_externalized_effects
     let platform = RecordingPlatform::new(FakePlatform::full());
     let error = execute_module_program(
         &program,
+        &[],
         Path::new("/project"),
         &mut Environment::new(),
         &standard_registry(),
@@ -854,6 +970,7 @@ fn initializer_exit_terminates_the_whole_program_before_the_root() {
     let platform = RecordingPlatform::new(FakePlatform::full());
     let completion = execute_module_program(
         &program,
+        &[],
         Path::new("/project"),
         &mut Environment::new(),
         &standard_registry(),
@@ -902,6 +1019,7 @@ fn dependency_background_jobs_live_until_the_whole_program_join() {
 
     execute_module_program(
         &program,
+        &[],
         Path::new("/project"),
         &mut Environment::new(),
         &standard_registry(),

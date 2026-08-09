@@ -45,7 +45,7 @@ use flash_runtime::{Environment, ScopeStack, Status};
 
 const HELP: &str = "Flash command shell
 
-Usage: fsh [OPTIONS] [SCRIPT]
+Usage: fsh [OPTIONS] SCRIPT [ARGUMENT]...
 
 Options:
       --no-config    Skip loading the startup configuration
@@ -72,7 +72,7 @@ fn main() -> ExitCode {
             println!("fsh {}", flash_runtime::version());
             ExitCode::SUCCESS
         }
-        Mode::Script { path, arguments: _ } => run_script(&path),
+        Mode::Script { path, arguments } => run_script(&path, &arguments),
         Mode::AsyncChain {
             text,
             pipefail,
@@ -407,7 +407,7 @@ impl InteractiveEvaluator for SessionEvaluator {
     }
 }
 
-fn run_script(path: &Path) -> ExitCode {
+fn run_script(path: &Path, arguments: &[String]) -> ExitCode {
     let filesystem = HostModuleFilesystem;
     let program = match ModuleProgramLoader::new(&filesystem, &filesystem).load_for_frontend(path) {
         Ok(program) => program,
@@ -431,6 +431,7 @@ fn run_script(path: &Path) -> ExitCode {
     let registry = flash_runtime::builtin::standard_registry();
     let result = execute_module_program(
         &program,
+        arguments,
         &cwd,
         &mut environment,
         &registry,

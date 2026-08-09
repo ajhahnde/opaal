@@ -115,10 +115,12 @@ pub fn execute_script(
 ///
 /// Named dependencies initialize once per canonical module. Each module owns
 /// an isolated lexical root seeded with immutable snapshots of its imports;
-/// load-only dependencies remain dormant.
+/// load-only dependencies remain dormant. The root module additionally sees
+/// the explicitly supplied immutable `args` list in a synthetic parent frame.
 #[allow(clippy::too_many_arguments)]
 pub fn execute_module_program(
     program: &ModuleProgram,
+    script_arguments: &[String],
     cwd: &Path,
     environment: &mut Environment,
     registry: &CommandRegistry,
@@ -141,6 +143,22 @@ pub fn execute_module_program(
 
     for module in module_initialization_order(program) {
         let mut scope = ScopeStack::new();
+        if &module == program.graph().root() {
+            scope
+                .declare(
+                    "args",
+                    BindingMutability::Immutable,
+                    Value::list(
+                        script_arguments
+                            .iter()
+                            .cloned()
+                            .map(Value::string)
+                            .collect(),
+                    ),
+                )
+                .expect("a fresh root input frame has no binding collisions");
+            scope.push();
+        }
         for import in program.names().imports(&module) {
             let value = instances
                 .get(import.target())
