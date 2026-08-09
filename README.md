@@ -121,4 +121,4 @@ Other FlashOS components and incorporated third-party materials may be subject t
 
 ---
 
-[← Previous: Upstream References](../../docs/upstream/README.md) · [FlashOS README](../../README.md) · [Source of Truth](../../docs/source_of_truth.md) · [Next: Flash Documentation →](docs/README.md)
+[← Previous: Upstream References](../../docs/upstream/README.md) · [FlashOS README](../../README.md) · [Next: Flash Documentation →](docs/README.md)
