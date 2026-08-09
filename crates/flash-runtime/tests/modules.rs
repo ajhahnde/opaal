@@ -411,6 +411,263 @@ fn conservative_call_validation_uses_annotations_functions_results_and_operators
 }
 
 #[test]
+fn known_local_and_imported_calls_validate_arity_with_multi_source_diagnostics() {
+    let paths = FakeCanonicalizer::default()
+        .resolves("/project/main.fsh", "/project/main.fsh")
+        .resolves("/project/lib.fsh", "/project/lib.fsh");
+    let local = FakeSourceLoader::default().contains(
+        "/project/main.fsh",
+        "def echo(value: String) -> String { $value }\necho()\n",
+    );
+    let local_error = ModuleProgramLoader::new(&paths, &local)
+        .load(Path::new("/project/main.fsh"))
+        .expect_err("a known local call always validates arity");
+    let local_diagnostic = &local_error.diagnostics()[0];
+
+    assert_eq!(local_diagnostic.code(), "SIG003");
+    assert_eq!(local_diagnostic.labels().len(), 2);
+    assert!(
+        local_diagnostic
+            .labels()
+            .iter()
+            .all(|label| label.span().source_id() == SourceId::new(0))
+    );
+
+    let imported = FakeSourceLoader::default()
+        .contains(
+            "/project/main.fsh",
+            "import { echo } from './lib.fsh'\necho('first', 'second')\n",
+        )
+        .contains(
+            "/project/lib.fsh",
+            "def echo(value: String) -> String { $value }\nexport { echo }\n",
+        );
+    let imported_error = ModuleProgramLoader::new(&paths, &imported)
+        .load_for_frontend(Path::new("/project/main.fsh"))
+        .expect_err("a known imported call always validates arity");
+    let imported_diagnostics = imported_error.error().diagnostics();
+    let imported_diagnostic = &imported_diagnostics[0];
+    let rendered = imported_error.render();
+
+    assert_eq!(imported_diagnostic.code(), "SIG003");
+    assert_eq!(
+        imported_diagnostic.labels()[0].span().source_id(),
+        SourceId::new(0)
+    );
+    assert_eq!(
+        imported_diagnostic.labels()[1].span().source_id(),
+        SourceId::new(1)
+    );
+    assert!(rendered.contains("/project/main.fsh"), "{rendered}");
+    assert!(rendered.contains("/project/lib.fsh"), "{rendered}");
+    assert!(
+        rendered.contains("expected 1 arguments, found 2"),
+        "{rendered}"
+    );
+    assert!(rendered.contains("function declared here"), "{rendered}");
+}
+
+#[test]
+fn dynamic_function_and_closure_callees_enforce_runtime_contracts() {
+    let paths = FakeCanonicalizer::default().resolves("/project/main.fsh", "/project/main.fsh");
+    let cases = [
+        (
+            "function arity",
+            concat!(
+                "def accept(value: Int) { 1 / 0 }\n",
+                "let callable = $accept\n",
+                "let result = $callable()\n",
+            ),
+            "expected 1 argument(s), found 0",
+        ),
+        (
+            "function parameter",
+            concat!(
+                "let dynamic = $args[0]\n",
+                "def accept(value: Int) { 1 / 0 }\n",
+                "let callable = $accept\n",
+                "let result = $callable($dynamic)\n",
+            ),
+            "parameter \"value\" expects Int, found string",
+        ),
+        (
+            "closure parameter",
+            concat!(
+                "let dynamic = $args[0]\n",
+                "let callable = {|value: Int| 1 / 0}\n",
+                "let result = $callable($dynamic)\n",
+            ),
+            "parameter \"value\" expects Int, found string",
+        ),
+    ];
+
+    for (case, text, expected) in cases {
+        let sources = FakeSourceLoader::default().contains("/project/main.fsh", text);
+        let program = ModuleProgramLoader::new(&paths, &sources)
+            .load(Path::new("/project/main.fsh"))
+            .unwrap_or_else(|error| panic!("{case} remains dynamic during analysis: {error}"));
+        let error = execute_module_program(
+            &program,
+            &["not-an-int".to_owned()],
+            Path::new("/project"),
+            &mut Environment::new(),
+            &standard_registry(),
+            &NoExecutables,
+            &SessionOptions::default(),
+            &FakePlatform::none(),
+            Arc::new(FakeClock::new()),
+        )
+        .err()
+        .unwrap_or_else(|| panic!("{case} must fail before entering the callable body"));
+        let rendered = error.render();
+
+        assert!(rendered.contains(expected), "{case}: {rendered}");
+        assert!(!rendered.contains("division by zero"), "{case}: {rendered}");
+    }
+}
+
+#[test]
+fn annotations_and_closure_types_are_registered_in_dormant_modules() {
+    let paths = FakeCanonicalizer::default()
+        .resolves("/project/main.fsh", "/project/main.fsh")
+        .resolves("/project/dormant.fsh", "/project/dormant.fsh");
+    let root_text = "import './dormant.fsh'\nlet ready: Bool = true\nexport ROOT = $ready\n";
+    let dormant_text = concat!(
+        "let count: Int = 1\n",
+        "def format(values: List[String]) -> String {\n",
+        "    let mapper = {|value: String| $value}\n",
+        "    'ready'\n",
+        "}\n",
+        "export DORMANT = true\n",
+    );
+    let sources = FakeSourceLoader::default()
+        .contains("/project/main.fsh", root_text)
+        .contains("/project/dormant.fsh", dormant_text);
+    let program = ModuleProgramLoader::new(&paths, &sources)
+        .load(Path::new("/project/main.fsh"))
+        .expect("every dormant annotation is resolved without activation");
+    let dormant = program.graph().imports()[0].target();
+    let dormant_source = program
+        .sources()
+        .source(dormant)
+        .expect("the dormant source is registered");
+    let annotations = program.types().annotations(dormant);
+    let spellings = annotations
+        .iter()
+        .map(|annotation| {
+            dormant_source
+                .slice(annotation.span())
+                .expect("the annotation span belongs to the dormant source")
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(spellings, ["Int", "List[String]", "String", "String"]);
+    assert_eq!(
+        annotations
+            .iter()
+            .map(|annotation| annotation.value_type().clone())
+            .collect::<Vec<_>>(),
+        [
+            ValueType::Int,
+            ValueType::List(Box::new(ValueType::String)),
+            ValueType::String,
+            ValueType::String,
+        ]
+    );
+    for annotation in annotations {
+        assert_eq!(
+            program.types().annotation(dormant, annotation.span()),
+            Some(annotation)
+        );
+    }
+
+    let mut environment = Environment::new();
+    execute_module_program(
+        &program,
+        &[],
+        Path::new("/project"),
+        &mut environment,
+        &standard_registry(),
+        &NoExecutables,
+        &SessionOptions::default(),
+        &FakePlatform::none(),
+        Arc::new(FakeClock::new()),
+    )
+    .expect("resolved dormant metadata does not activate the module");
+    assert_eq!(environment.get("ROOT"), Some(OsStr::new("true")));
+    assert!(!environment.contains("DORMANT"));
+
+    let invalid = FakeSourceLoader::default()
+        .contains("/project/main.fsh", "import './dormant.fsh'\n")
+        .contains("/project/dormant.fsh", "let value: Missing = null\n");
+    let error = ModuleProgramLoader::new(&paths, &invalid)
+        .load(Path::new("/project/main.fsh"))
+        .expect_err("invalid annotations fail even in a load-only module");
+
+    assert_eq!(error.diagnostics()[0].code(), "SIG001");
+    assert_eq!(
+        error.module().expect("the failing module").path(),
+        Path::new("/project/dormant.fsh")
+    );
+}
+
+#[test]
+fn a_child_closure_can_shadow_an_imported_typed_function() {
+    let paths = FakeCanonicalizer::default()
+        .resolves("/project/main.fsh", "/project/main.fsh")
+        .resolves("/project/lib.fsh", "/project/lib.fsh");
+    let sources = FakeSourceLoader::default()
+        .contains(
+            "/project/main.fsh",
+            concat!(
+                "import { transform } from './lib.fsh'\n",
+                "if true {\n",
+                "    let transform = {|value: String| $value}\n",
+                "    export RESULT = transform('shadowed')\n",
+                "}\n",
+            ),
+        )
+        .contains(
+            "/project/lib.fsh",
+            concat!(
+                "def transform(value: Int) -> Int { $value }\n",
+                "export { transform }\n",
+            ),
+        );
+    let program = ModuleProgramLoader::new(&paths, &sources)
+        .load(Path::new("/project/main.fsh"))
+        .expect("the child closure, not the imported signature, owns the call");
+    let root = program.graph().root();
+    let call_reference = program
+        .names()
+        .references(root)
+        .iter()
+        .find(|reference| reference.name() == "transform")
+        .expect("the shadowed call has a lexical reference");
+
+    assert!(matches!(
+        call_reference.target(),
+        ModuleReferenceTarget::Local { .. }
+    ));
+
+    let mut environment = Environment::new();
+    execute_module_program(
+        &program,
+        &[],
+        Path::new("/project"),
+        &mut environment,
+        &standard_registry(),
+        &NoExecutables,
+        &SessionOptions::default(),
+        &FakePlatform::none(),
+        Arc::new(FakeClock::new()),
+    )
+    .expect("the shadowing closure accepts its own declared String parameter");
+
+    assert_eq!(environment.get("RESULT"), Some(OsStr::new("shadowed")));
+}
+
+#[test]
 fn conservatively_known_function_result_mismatches_fail_without_execution() {
     let paths = FakeCanonicalizer::default()
         .resolves("/project/main.fsh", "/project/main.fsh")
