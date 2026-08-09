@@ -15,7 +15,7 @@ use flash_runtime::builtin::standard_registry;
 use flash_runtime::eval::FakeClock;
 use flash_runtime::module::{
     ModuleCanonicalizer, ModuleGraph, ModuleGraphError, ModulePathError, ModuleProgramLoader,
-    ModuleResolver, ModuleSourceError, ModuleSourceLoader,
+    ModuleReferenceTarget, ModuleResolver, ModuleSourceError, ModuleSourceLoader,
 };
 use flash_runtime::plan::SessionOptions;
 use flash_runtime::resolve::ExecutableProbe;
@@ -196,6 +196,299 @@ fn named_imports_resolve_through_explicit_target_exports() {
 }
 
 #[test]
+fn named_import_references_retain_local_and_cross_file_provenance() {
+    let paths = FakeCanonicalizer::default()
+        .resolves("/project/main.fsh", "/project/main.fsh")
+        .resolves("/project/lib.fsh", "/project/lib.fsh");
+    let sources = FakeSourceLoader::default()
+        .contains(
+            "/project/main.fsh",
+            "import { answer } from './lib.fsh'\nexport RESULT = $answer\n",
+        )
+        .contains("/project/lib.fsh", "let answer = 42\nexport { answer }\n");
+
+    let program = ModuleProgramLoader::new(&paths, &sources)
+        .load(Path::new("/project/main.fsh"))
+        .expect("the named import reference resolves");
+    let root = program.graph().root();
+    let references = program.names().references(root);
+
+    assert_eq!(references.len(), 1);
+    let reference = &references[0];
+    assert_eq!(reference.name(), "answer");
+    assert_eq!(
+        program
+            .sources()
+            .source(root)
+            .expect("the root source is registered")
+            .slice(reference.reference_span())
+            .expect("the reference span belongs to the root source"),
+        "$answer"
+    );
+    assert_eq!(
+        program.names().reference(root, reference.reference_span()),
+        Some(reference)
+    );
+
+    let ModuleReferenceTarget::Imported {
+        import_span,
+        target_module,
+        declaration_span,
+        export_span,
+    } = reference.target()
+    else {
+        panic!("the reference should resolve through an imported binding");
+    };
+    assert_eq!(*import_span, program.names().imports(root)[0].name_span());
+    assert_eq!(target_module.path(), Path::new("/project/lib.fsh"));
+    let target_source = program
+        .sources()
+        .source(target_module)
+        .expect("the target source is registered");
+    assert_eq!(
+        target_source
+            .slice(*declaration_span)
+            .expect("the declaration span belongs to the target source"),
+        "answer"
+    );
+    assert_eq!(
+        target_source
+            .slice(*export_span)
+            .expect("the export span belongs to the target source"),
+        "answer"
+    );
+}
+
+#[test]
+fn local_references_follow_source_order_shadowing_and_callable_capture() {
+    let paths = FakeCanonicalizer::default().resolves("/project/main.fsh", "/project/main.fsh");
+    let text = concat!(
+        "let outer = 1\n",
+        "if true {\n",
+        "    let outer = 2\n",
+        "    let inner = $outer\n",
+        "}\n",
+        "let after = $outer\n",
+        "def recurse(value) {\n",
+        "    if $value > 0 {\n",
+        "        recurse($value - 1)\n",
+        "    }\n",
+        "    $outer\n",
+        "}\n",
+        "let closure = {|outer| $outer}\n",
+        "recurse(1)\n",
+    );
+    let sources = FakeSourceLoader::default().contains("/project/main.fsh", text);
+
+    let program = ModuleProgramLoader::new(&paths, &sources)
+        .load(Path::new("/project/main.fsh"))
+        .expect("source-ordered scopes resolve");
+    let root = program.graph().root();
+    let source = program.sources().source(root).expect("root source");
+    let references = program.names().references(root);
+    let spellings = references
+        .iter()
+        .map(|reference| source.slice(reference.reference_span()).expect("root span"))
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        spellings,
+        [
+            "$outer", "$outer", "$value", "recurse", "$value", "$outer", "$outer", "recurse"
+        ]
+    );
+    let declaration_starts = references
+        .iter()
+        .map(|reference| match reference.target() {
+            ModuleReferenceTarget::Local {
+                declaration_span, ..
+            } => declaration_span.start(),
+            ModuleReferenceTarget::Imported { .. } => panic!("all bindings are local"),
+        })
+        .collect::<Vec<_>>();
+    assert_ne!(declaration_starts[0], declaration_starts[1]);
+    assert_eq!(declaration_starts[1], declaration_starts[5]);
+    assert_ne!(declaration_starts[5], declaration_starts[6]);
+    assert_eq!(declaration_starts[3], declaration_starts[7]);
+
+    let forward = FakeSourceLoader::default()
+        .contains("/project/main.fsh", "let early = $later\nlet later = 1\n");
+    let error = ModuleProgramLoader::new(&paths, &forward)
+        .load(Path::new("/project/main.fsh"))
+        .expect_err("a forward lexical read is unresolved");
+    assert_eq!(error.diagnostics()[0].code(), "MOD009");
+}
+
+#[test]
+fn loop_and_match_bindings_share_their_evaluator_frames() {
+    let paths = FakeCanonicalizer::default().resolves("/project/main.fsh", "/project/main.fsh");
+    let text = concat!(
+        "let items = [1]\n",
+        "for item in $items {\n",
+        "    let copy = $item\n",
+        "}\n",
+        "match 1 {\n",
+        "    arm if $arm > 0 => { let copy = $arm }\n",
+        "}\n",
+    );
+    let sources = FakeSourceLoader::default().contains("/project/main.fsh", text);
+    let program = ModuleProgramLoader::new(&paths, &sources)
+        .load(Path::new("/project/main.fsh"))
+        .expect("loop and arm bindings resolve");
+    let root = program.graph().root();
+
+    assert_eq!(
+        program
+            .names()
+            .references(root)
+            .iter()
+            .map(|reference| reference.name())
+            .collect::<Vec<_>>(),
+        ["items", "item", "arm", "arm"]
+    );
+}
+
+#[test]
+fn expression_word_spread_call_substitution_and_redirection_reads_are_resolved() {
+    let paths = FakeCanonicalizer::default().resolves("/project/main.fsh", "/project/main.fsh");
+    let text = concat!(
+        "let value = 1\n",
+        "mut assigned = 0\n",
+        "let items = [$value]\n",
+        "let callable = {|| $value}\n",
+        "$assigned = $value\n",
+        "callable($value)\n",
+        "echo \"$value\" ...$items $(echo $value) >\"$value\"\n",
+        "let indexed = $items[0].size\n",
+    );
+    let sources = FakeSourceLoader::default().contains("/project/main.fsh", text);
+    let program = ModuleProgramLoader::new(&paths, &sources)
+        .load(Path::new("/project/main.fsh"))
+        .expect("all lexical read forms resolve");
+    let root = program.graph().root();
+    let source = program.sources().source(root).expect("root source");
+
+    assert_eq!(
+        program
+            .names()
+            .references(root)
+            .iter()
+            .map(|reference| source.slice(reference.reference_span()).expect("root span"))
+            .collect::<Vec<_>>(),
+        [
+            "$value",
+            "$value",
+            "$assigned",
+            "$value",
+            "callable",
+            "$value",
+            "$value",
+            "...$items",
+            "$value",
+            "$value",
+            "$items",
+        ]
+    );
+}
+
+#[test]
+fn distinct_identifier_namespaces_are_not_lexical_references() {
+    let paths = FakeCanonicalizer::default().resolves("/project/main.fsh", "/project/main.fsh");
+    let text = concat!(
+        "let record = {key: 1}\n",
+        "let member = $record.key\n",
+        "let symbol = free_symbol\n",
+        "let typed: MissingType = 1\n",
+        "def typed_function(argument: MissingArgument) -> MissingReturn { $argument }\n",
+        "export ENV_NAME = 1\n",
+        "unset ENV_NAME\n",
+        "literal-command literal-argument\n",
+    );
+    let sources = FakeSourceLoader::default().contains("/project/main.fsh", text);
+    let program = ModuleProgramLoader::new(&paths, &sources)
+        .load(Path::new("/project/main.fsh"))
+        .expect("non-lexical identifier positions remain excluded");
+    let root = program.graph().root();
+
+    assert_eq!(
+        program
+            .names()
+            .references(root)
+            .iter()
+            .map(|reference| reference.name())
+            .collect::<Vec<_>>(),
+        ["record", "argument"]
+    );
+}
+
+#[test]
+fn unknown_references_fail_in_root_named_and_load_only_modules() {
+    let paths = FakeCanonicalizer::default()
+        .resolves("/project/main.fsh", "/project/main.fsh")
+        .resolves("/project/named.fsh", "/project/named.fsh")
+        .resolves("/project/dormant.fsh", "/project/dormant.fsh");
+    let cases = [
+        FakeSourceLoader::default()
+            .contains("/project/main.fsh", "if false { let value = $missing }\n"),
+        FakeSourceLoader::default()
+            .contains("/project/main.fsh", "import { value } from './named.fsh'\n")
+            .contains(
+                "/project/named.fsh",
+                "let value = $missing\nexport { value }\n",
+            ),
+        FakeSourceLoader::default()
+            .contains("/project/main.fsh", "import './dormant.fsh'\n")
+            .contains("/project/dormant.fsh", "let value = $missing\n"),
+    ];
+
+    for sources in cases {
+        let error = ModuleProgramLoader::new(&paths, &sources)
+            .load(Path::new("/project/main.fsh"))
+            .expect_err("every loaded module is statically resolved");
+        assert_eq!(error.diagnostics()[0].code(), "MOD009");
+        assert_eq!(
+            error.diagnostics()[0].labels()[0].span().source_id(),
+            error
+                .module()
+                .and_then(|module| match module.path().to_str() {
+                    Some("/project/main.fsh") => Some(SourceId::new(0)),
+                    Some(_) => Some(SourceId::new(1)),
+                    None => None,
+                })
+                .expect("the name failure identifies its module")
+        );
+    }
+}
+
+#[test]
+fn same_scope_duplicate_bindings_fail_while_child_shadowing_remains_valid() {
+    let paths = FakeCanonicalizer::default().resolves("/project/main.fsh", "/project/main.fsh");
+    for text in [
+        "let value = 1\nlet value = 2\n",
+        "if true {\n    let value = 1\n    let value = 2\n}\n",
+        "def duplicate(value, value) { $value }\n",
+        "let duplicate = {|value, value| $value}\n",
+        "for value in [1] { let value = 2 }\n",
+    ] {
+        let sources = FakeSourceLoader::default().contains("/project/main.fsh", text);
+        let error = ModuleProgramLoader::new(&paths, &sources)
+            .load(Path::new("/project/main.fsh"))
+            .expect_err("a repeated binding in one scope fails");
+        let diagnostic = &error.diagnostics()[0];
+        assert_eq!(diagnostic.code(), "MOD010", "{text}");
+        assert_eq!(diagnostic.labels().len(), 2, "{text}");
+    }
+
+    let shadowing = FakeSourceLoader::default().contains(
+        "/project/main.fsh",
+        "let value = 1\nif true { let value = 2\nlet copy = $value }\n",
+    );
+    ModuleProgramLoader::new(&paths, &shadowing)
+        .load(Path::new("/project/main.fsh"))
+        .expect("a child scope may shadow an outer binding");
+}
+
+#[test]
 fn named_import_initializes_a_scalar_export_while_load_only_imports_stay_dormant() {
     let paths = FakeCanonicalizer::default()
         .resolves("/project/main.fsh", "/project/main.fsh")
@@ -211,7 +504,7 @@ fn named_import_initializes_a_scalar_export_while_load_only_imports_stay_dormant
             ),
         )
         .contains("/project/lib.fsh", "let answer = 42\nexport { answer }\n")
-        .contains("/project/dormant.fsh", "export BROKEN = $missing\n");
+        .contains("/project/dormant.fsh", "export BROKEN = 1\n");
     let program = ModuleProgramLoader::new(&paths, &sources)
         .load(Path::new("/project/main.fsh"))
         .expect("the module program loads");
@@ -416,7 +709,7 @@ fn imported_callable_failures_render_the_body_and_importing_call_site() {
         )
         .contains(
             "/project/lib.fsh",
-            "def boom() {\n    $missing\n}\nexport { boom }\n",
+            "def boom() {\n    1 + true\n}\nexport { boom }\n",
         );
     let program = ModuleProgramLoader::new(&paths, &sources)
         .load(Path::new("/project/main.fsh"))
@@ -435,7 +728,7 @@ fn imported_callable_failures_render_the_body_and_importing_call_site() {
     let rendered = error.render();
 
     assert!(rendered.contains(" --> /project/lib.fsh:2:5"), "{rendered}");
-    assert!(rendered.contains("$missing"), "{rendered}");
+    assert!(rendered.contains("1 + true"), "{rendered}");
     assert!(
         rendered.contains(" ::: /project/main.fsh:2:17"),
         "{rendered}"
@@ -464,7 +757,7 @@ fn initializer_failure_stops_later_modules_after_preserving_externalized_effects
                 "let failing = 1\n",
                 "export { failing }\n",
                 "^/bin/mark failing\n",
-                "export BROKEN = $missing\n",
+                "export BROKEN = 1 + true\n",
             ),
         )
         .contains(

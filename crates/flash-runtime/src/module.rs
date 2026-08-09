@@ -7,7 +7,8 @@
 //! exposes structured diagnostics for checker, editor, and protocol clients.
 //!
 //! Static import syntax and injected recursive source loading build on this
-//! graph. Exported-name analysis, frontend wiring, and execution remain
+//! graph. Program construction also resolves explicit exports/imports and every
+//! lexical read without execution. Frontend wiring and execution remain
 //! separate layers.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -15,8 +16,10 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 
 use flash_syntax::{
-    Diagnostic, ParseOutcome, Script, Severity, SourceFile, SourceId, Span, StatementKind, parse,
-    render_diagnostic_sources,
+    Block, Closure, CommandItemKind, ConditionalChain, ControlTransfer, Diagnostic, ElseBranch,
+    Expression, ExpressionKind, LiteralKind, MatchArm, ParseOutcome, Pattern, Pipeline, RecordKey,
+    RedirectionKind, Script, Severity, SourceFile, SourceId, Span, StageKind, Statement,
+    StatementKind, Word, WordPart, WordPartKind, parse, render_diagnostic_sources,
 };
 
 /// The sole host capability needed to turn a candidate source path into its
@@ -387,6 +390,58 @@ pub struct ModuleNameImport {
     name_span: Span,
 }
 
+/// The lexical binding selected by one statically resolved name read.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ModuleReferenceTarget {
+    /// A declaration in the same canonical source module.
+    Local {
+        /// The module that owns the declaration.
+        module: ModuleId,
+        /// The identifier that introduced the binding.
+        declaration_span: Span,
+    },
+    /// An explicit import whose definition and visibility live in another
+    /// canonical source module.
+    Imported {
+        /// The identifier that introduced the binding in the importing module.
+        import_span: Span,
+        /// The canonical module that owns the exported declaration.
+        target_module: ModuleId,
+        /// The target module's declaration identifier.
+        declaration_span: Span,
+        /// The target module's explicit export-list identifier.
+        export_span: Span,
+    },
+}
+
+/// One source-spanned lexical read and its statically selected binding.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ModuleNameReference {
+    name: String,
+    reference_span: Span,
+    target: ModuleReferenceTarget,
+}
+
+impl ModuleNameReference {
+    /// The exact identifier spelling used by this read.
+    #[must_use]
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// The complete syntactic read, such as `$name` or `...$name`.
+    #[must_use]
+    pub const fn reference_span(&self) -> Span {
+        self.reference_span
+    }
+
+    /// The local or imported binding selected for this read.
+    #[must_use]
+    pub const fn target(&self) -> &ModuleReferenceTarget {
+        &self.target
+    }
+}
+
 impl ModuleNameImport {
     /// The imported and local identifier spelling.
     #[must_use]
@@ -418,9 +473,10 @@ struct ModuleNames {
     locals: BTreeMap<String, Span>,
     exports: BTreeMap<String, ModuleExport>,
     imports: Vec<ModuleNameImport>,
+    references: Vec<ModuleNameReference>,
 }
 
-/// Deterministic local, exported, and explicitly imported names by module.
+/// Deterministic local, exported, imported, and referenced names by module.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct ModuleNameRegistry {
     by_module: BTreeMap<ModuleId, ModuleNames>,
@@ -441,6 +497,26 @@ impl ModuleNameRegistry {
         self.by_module
             .get(module)
             .map_or(&[], |names| names.imports.as_slice())
+    }
+
+    /// Lexical reads in deterministic source-traversal order for one module.
+    #[must_use]
+    pub fn references(&self, module: &ModuleId) -> &[ModuleNameReference] {
+        self.by_module
+            .get(module)
+            .map_or(&[], |names| names.references.as_slice())
+    }
+
+    /// Looks up the lexical read occupying one exact complete source span.
+    #[must_use]
+    pub fn reference(
+        &self,
+        module: &ModuleId,
+        reference_span: Span,
+    ) -> Option<&ModuleNameReference> {
+        self.references(module)
+            .iter()
+            .find(|reference| reference.reference_span() == reference_span)
     }
 
     /// Explicit exports in deterministic name order for one canonical module.
@@ -583,7 +659,385 @@ impl ModuleNameRegistry {
             }
         }
 
+        for entry in sources.entries() {
+            let references = ReferenceResolver::new(entry, &registry).resolve()?;
+            registry
+                .by_module
+                .get_mut(entry.module())
+                .expect("every registered source has a name table")
+                .references = references;
+        }
+
         Ok(registry)
+    }
+}
+
+struct ReferenceResolver<'a> {
+    entry: &'a RegisteredModuleSource,
+    scopes: Vec<BTreeMap<String, ModuleReferenceTarget>>,
+    references: Vec<ModuleNameReference>,
+}
+
+impl<'a> ReferenceResolver<'a> {
+    fn new(entry: &'a RegisteredModuleSource, registry: &ModuleNameRegistry) -> Self {
+        let mut root = BTreeMap::new();
+        for import in registry.imports(entry.module()) {
+            let export = registry
+                .export(import.target(), import.name())
+                .expect("validated imports always retain their target export");
+            root.insert(
+                import.name().to_owned(),
+                ModuleReferenceTarget::Imported {
+                    import_span: import.name_span(),
+                    target_module: import.target().clone(),
+                    declaration_span: export.declaration_span(),
+                    export_span: export.export_span(),
+                },
+            );
+        }
+        Self {
+            entry,
+            scopes: vec![root],
+            references: Vec::new(),
+        }
+    }
+
+    fn resolve(mut self) -> Result<Vec<ModuleNameReference>, Box<ModuleNameError>> {
+        self.statements(self.entry.script().statements())?;
+        Ok(self.references)
+    }
+
+    fn statements(&mut self, statements: &[Statement]) -> Result<(), Box<ModuleNameError>> {
+        for statement in statements {
+            self.statement(statement)?;
+        }
+        Ok(())
+    }
+
+    fn statement(&mut self, statement: &Statement) -> Result<(), Box<ModuleNameError>> {
+        match statement.kind() {
+            StatementKind::Import(_) | StatementKind::ModuleExport(_) => Ok(()),
+            StatementKind::Declaration(declaration) => {
+                self.expression(&declaration.value)?;
+                self.declare(declaration.name.span())
+            }
+            StatementKind::Assignment(assignment) => {
+                self.variable(assignment.target.name.span(), assignment.target.span)?;
+                self.expression(&assignment.value)
+            }
+            StatementKind::Environment(environment) => match environment {
+                flash_syntax::EnvironmentStatement::Export { value, .. } => self.expression(value),
+                flash_syntax::EnvironmentStatement::Unset { .. } => Ok(()),
+            },
+            StatementKind::Function(function) => {
+                self.ensure_available(function.name.span())?;
+                self.push_scope();
+                self.insert_local(function.name.span());
+                self.push_scope();
+                let result = (|| {
+                    for parameter in &function.parameters {
+                        self.declare(parameter.name.span())?;
+                    }
+                    self.block(&function.body)
+                })();
+                self.pop_scope();
+                self.pop_scope();
+                result?;
+                self.insert_local(function.name.span());
+                Ok(())
+            }
+            StatementKind::If(statement) => self.if_statement(statement),
+            StatementKind::While(statement) => {
+                self.chain(&statement.condition)?;
+                self.block(&statement.body)
+            }
+            StatementKind::For(statement) => {
+                self.expression(&statement.iterable)?;
+                self.push_scope();
+                let result = (|| {
+                    self.declare(statement.binding.span())?;
+                    self.statements(&statement.body.statements)
+                })();
+                self.pop_scope();
+                result
+            }
+            StatementKind::Match(statement) => {
+                self.expression(&statement.value)?;
+                for arm in &statement.arms {
+                    self.match_arm(arm)?;
+                }
+                Ok(())
+            }
+            StatementKind::Control(control) => match control {
+                ControlTransfer::Return(Some(expression)) => self.expression(expression),
+                ControlTransfer::Break
+                | ControlTransfer::Continue
+                | ControlTransfer::Return(None) => Ok(()),
+            },
+            StatementKind::Job(job) => self.chain(&job.chain),
+        }
+    }
+
+    fn if_statement(
+        &mut self,
+        statement: &flash_syntax::IfStatement,
+    ) -> Result<(), Box<ModuleNameError>> {
+        self.chain(&statement.condition)?;
+        self.block(&statement.then_block)?;
+        match &statement.else_branch {
+            Some(ElseBranch::Block(block)) => self.block(block),
+            Some(ElseBranch::If(nested)) => self.if_statement(nested.kind()),
+            None => Ok(()),
+        }
+    }
+
+    fn match_arm(&mut self, arm: &MatchArm) -> Result<(), Box<ModuleNameError>> {
+        self.push_scope();
+        let result = (|| {
+            match &arm.pattern {
+                Pattern::Binding(identifier) => self.declare(identifier.span())?,
+                Pattern::Literal(literal) => self.literal(literal)?,
+                Pattern::Wildcard(_) => {}
+            }
+            if let Some(guard) = &arm.guard {
+                self.expression(guard)?;
+            }
+            self.statements(&arm.body.statements)
+        })();
+        self.pop_scope();
+        result
+    }
+
+    fn block(&mut self, block: &Block) -> Result<(), Box<ModuleNameError>> {
+        self.push_scope();
+        let result = self.statements(&block.statements);
+        self.pop_scope();
+        result
+    }
+
+    fn chain(&mut self, chain: &ConditionalChain) -> Result<(), Box<ModuleNameError>> {
+        for and_chain in chain.or_terms() {
+            for pipeline in and_chain.and_terms() {
+                self.pipeline(pipeline)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn pipeline(&mut self, pipeline: &Pipeline) -> Result<(), Box<ModuleNameError>> {
+        for stage in pipeline.stages() {
+            match stage.kind() {
+                StageKind::Command(command) => {
+                    self.word(command.head.word())?;
+                    for item in &command.items {
+                        match item.kind() {
+                            CommandItemKind::Word(word) => self.word(word)?,
+                            CommandItemKind::Spread(variable) => {
+                                self.variable(variable.name.span(), item.span())?;
+                            }
+                            CommandItemKind::Closure(closure) => self.closure(closure)?,
+                            CommandItemKind::Redirection(redirection) => {
+                                self.redirection(redirection.kind())?;
+                            }
+                        }
+                    }
+                }
+                StageKind::Expression(expression) => self.expression(expression)?,
+            }
+        }
+        Ok(())
+    }
+
+    fn expression(&mut self, expression: &Expression) -> Result<(), Box<ModuleNameError>> {
+        match expression.kind() {
+            ExpressionKind::Literal(literal) => self.literal(literal),
+            ExpressionKind::Variable(variable) => {
+                self.variable(variable.name.span(), variable.span)
+            }
+            ExpressionKind::Symbol(_) => Ok(()),
+            ExpressionKind::List(elements) => {
+                for element in elements {
+                    self.expression(element)?;
+                }
+                Ok(())
+            }
+            ExpressionKind::Record(entries) => {
+                for entry in entries {
+                    if let RecordKey::DoubleQuoted(part) = &entry.key {
+                        self.word_part(part)?;
+                    }
+                    self.expression(&entry.value)?;
+                }
+                Ok(())
+            }
+            ExpressionKind::Closure(closure) => self.closure(closure),
+            ExpressionKind::CommandSubstitution(chain) | ExpressionKind::GroupedJob(chain) => {
+                self.chain(chain)
+            }
+            ExpressionKind::Call(call) => {
+                if let ExpressionKind::Symbol(identifier) = call.callee.kind() {
+                    self.variable(identifier.span(), call.callee.span())?;
+                } else {
+                    self.expression(&call.callee)?;
+                }
+                for argument in &call.arguments {
+                    self.expression(argument)?;
+                }
+                Ok(())
+            }
+            ExpressionKind::Index(index) => {
+                self.expression(&index.target)?;
+                self.expression(&index.index)
+            }
+            ExpressionKind::Member(member) => self.expression(&member.target),
+            ExpressionKind::Unary(unary) => self.expression(&unary.operand),
+            ExpressionKind::Binary(binary) => {
+                self.expression(&binary.left)?;
+                self.expression(&binary.right)
+            }
+        }
+    }
+
+    fn closure(&mut self, closure: &Closure) -> Result<(), Box<ModuleNameError>> {
+        self.push_scope();
+        let result = (|| {
+            for parameter in &closure.parameters {
+                self.declare(parameter.name.span())?;
+            }
+            self.chain(&closure.body)
+        })();
+        self.pop_scope();
+        result
+    }
+
+    fn literal(&mut self, literal: &flash_syntax::Literal) -> Result<(), Box<ModuleNameError>> {
+        if let LiteralKind::DoubleQuoted(parts) = literal.kind() {
+            self.word_parts(parts)?;
+        }
+        Ok(())
+    }
+
+    fn word(&mut self, word: &Word) -> Result<(), Box<ModuleNameError>> {
+        self.word_parts(word.parts())
+    }
+
+    fn word_parts(&mut self, parts: &[WordPart]) -> Result<(), Box<ModuleNameError>> {
+        for part in parts {
+            self.word_part(part)?;
+        }
+        Ok(())
+    }
+
+    fn word_part(&mut self, part: &WordPart) -> Result<(), Box<ModuleNameError>> {
+        match part.kind() {
+            WordPartKind::Variable(identifier) => self.variable(identifier.span(), part.span()),
+            WordPartKind::DoubleQuoted(parts) => self.word_parts(parts),
+            WordPartKind::BracedInterpolation(expression) => self.expression(expression),
+            WordPartKind::CommandSubstitution(chain) => self.chain(chain),
+            WordPartKind::Bare
+            | WordPartKind::BareEscape
+            | WordPartKind::SingleQuoted
+            | WordPartKind::DoubleText
+            | WordPartKind::DoubleEscape => Ok(()),
+        }
+    }
+
+    fn redirection(&mut self, redirection: &RedirectionKind) -> Result<(), Box<ModuleNameError>> {
+        match redirection {
+            RedirectionKind::Input { target, .. } => self.word(target),
+            RedirectionKind::File(file) => self.word(&file.target),
+            RedirectionKind::Duplicate { .. } | RedirectionKind::Close { .. } => Ok(()),
+        }
+    }
+
+    fn variable(
+        &mut self,
+        name_span: Span,
+        reference_span: Span,
+    ) -> Result<(), Box<ModuleNameError>> {
+        let name = self.text(name_span).to_owned();
+        let Some(target) = self
+            .scopes
+            .iter()
+            .rev()
+            .find_map(|scope| scope.get(&name))
+            .cloned()
+        else {
+            return Err(Box::new(ModuleNameError::UnknownReference {
+                module: self.entry.module().clone(),
+                name,
+                reference_span,
+            }));
+        };
+        self.references.push(ModuleNameReference {
+            name,
+            reference_span,
+            target,
+        });
+        Ok(())
+    }
+
+    fn ensure_available(&self, declaration_span: Span) -> Result<(), Box<ModuleNameError>> {
+        let name = self.text(declaration_span);
+        let scope = self
+            .scopes
+            .last()
+            .expect("reference resolution always retains a root scope");
+        if let Some(first) = scope.get(name) {
+            return Err(Box::new(ModuleNameError::DuplicateBinding {
+                module: self.entry.module().clone(),
+                name: name.to_owned(),
+                first_span: binding_span(first),
+                duplicate_span: declaration_span,
+            }));
+        }
+        Ok(())
+    }
+
+    fn declare(&mut self, declaration_span: Span) -> Result<(), Box<ModuleNameError>> {
+        self.ensure_available(declaration_span)?;
+        self.insert_local(declaration_span);
+        Ok(())
+    }
+
+    fn insert_local(&mut self, declaration_span: Span) {
+        let name = self.text(declaration_span).to_owned();
+        self.scopes
+            .last_mut()
+            .expect("reference resolution always retains a root scope")
+            .insert(
+                name,
+                ModuleReferenceTarget::Local {
+                    module: self.entry.module().clone(),
+                    declaration_span,
+                },
+            );
+    }
+
+    fn push_scope(&mut self) {
+        self.scopes.push(BTreeMap::new());
+    }
+
+    fn pop_scope(&mut self) {
+        self.scopes
+            .pop()
+            .expect("each reference-analysis scope is popped exactly once");
+    }
+
+    fn text(&self, span: Span) -> &str {
+        self.entry
+            .source()
+            .slice(span)
+            .expect("parsed syntax spans belong to their module source")
+    }
+}
+
+fn binding_span(target: &ModuleReferenceTarget) -> Span {
+    match target {
+        ModuleReferenceTarget::Local {
+            declaration_span, ..
+        } => *declaration_span,
+        ModuleReferenceTarget::Imported { import_span, .. } => *import_span,
     }
 }
 
@@ -733,7 +1187,7 @@ impl ModuleProgram {
         &self.sources
     }
 
-    /// Static local, export, and explicit-import tables.
+    /// Static local, export, explicit-import, and lexical-reference tables.
     #[must_use]
     pub const fn names(&self) -> &ModuleNameRegistry {
         &self.names
@@ -925,6 +1379,19 @@ pub enum ModuleNameError {
         first_span: Span,
         duplicate_span: Span,
     },
+    /// A lexical read has no binding visible at its source position.
+    UnknownReference {
+        module: ModuleId,
+        name: String,
+        reference_span: Span,
+    },
+    /// One static lexical scope declares the same binding more than once.
+    DuplicateBinding {
+        module: ModuleId,
+        name: String,
+        first_span: Span,
+        duplicate_span: Span,
+    },
 }
 
 impl ModuleNameError {
@@ -934,7 +1401,9 @@ impl ModuleNameError {
         match self {
             Self::UnknownExport { module, .. }
             | Self::DuplicateExport { module, .. }
-            | Self::ImportConflict { module, .. } => module,
+            | Self::ImportConflict { module, .. }
+            | Self::UnknownReference { module, .. }
+            | Self::DuplicateBinding { module, .. } => module,
             Self::UnavailableImport { importer, .. } => importer,
         }
     }
@@ -979,6 +1448,21 @@ impl ModuleNameError {
             } => Diagnostic::new(Severity::Error, "MOD008", self.to_string())
                 .with_primary(*duplicate_span, "this imported binding conflicts")
                 .with_secondary(*first_span, "the name is already bound here"),
+            Self::UnknownReference {
+                name,
+                reference_span,
+                ..
+            } => Diagnostic::new(Severity::Error, "MOD009", self.to_string()).with_primary(
+                *reference_span,
+                format!("no lexical binding named `{name}` is visible here"),
+            ),
+            Self::DuplicateBinding {
+                first_span,
+                duplicate_span,
+                ..
+            } => Diagnostic::new(Severity::Error, "MOD010", self.to_string())
+                .with_primary(*duplicate_span, "this binding is declared again")
+                .with_secondary(*first_span, "the binding was first declared here"),
         }
     }
 }
@@ -1004,6 +1488,16 @@ impl fmt::Display for ModuleNameError {
             Self::ImportConflict { module, name, .. } => write!(
                 formatter,
                 "module `{}` imports conflicting name `{name}`",
+                module.path().display()
+            ),
+            Self::UnknownReference { module, name, .. } => write!(
+                formatter,
+                "module `{}` references unknown binding `{name}`",
+                module.path().display()
+            ),
+            Self::DuplicateBinding { module, name, .. } => write!(
+                formatter,
+                "module `{}` declares binding `{name}` more than once in one scope",
                 module.path().display()
             ),
         }

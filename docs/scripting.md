@@ -48,13 +48,15 @@ fsh --version
 
 Flash reports command-line invocation errors before opening a script. Before
 execution, it canonicalizes the root and every static `import '<path>'`, reads
-and parses each canonical source once, and rejects load, UTF-8, syntax, or
-cycle failures. Diagnostics use the applicable source file and group excerpts
-when a failure spans multiple files. Dependencies reached through named imports
-initialize once in deterministic dependency-first order before the root. Their
-explicit exports become immutable snapshot bindings in the importer. A source
-reached only through a load-only import does not run initialization or bind
-names.
+and parses each canonical source once, and rejects load, UTF-8, syntax, cycle,
+module-name, or lexical-reference failures. Lexical resolution covers every
+loaded source without executing it, so an invalid dormant load-only dependency
+also stops program construction. Diagnostics use the applicable source file and
+group excerpts when a failure spans multiple files. Dependencies reached
+through named imports initialize once in deterministic dependency-first order
+before the root. Their explicit exports become immutable snapshot bindings in
+the importer. A valid source reached only through a load-only import does not
+run initialization or bind names.
 
 ### Source files
 

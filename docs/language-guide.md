@@ -834,7 +834,11 @@ source for body evaluation and diagnostics.
 
 ### Static module analysis
 
-The module graph, exported names, imported names, function metadata, and cross-file references are available to non-executing analysis. This allows `fsh check`, help tooling, and the language server to use one consistent view of the program.
+Canonical program construction resolves lexical reads in every loaded module without executing source, including a module reached only through a load-only import. Resolution follows source-order declaration visibility and the evaluator's block, loop, match-arm, function, parameter, closure-capture, recursion, and shadowing scopes. Unknown reads and duplicate bindings in one scope stop construction with source-anchored diagnostics; a child scope may shadow an outer binding.
+
+The program-owned reference table retains each complete read span and its local declaration. A reference to an imported binding also retains the local import identifier and the target module's declaration and explicit export spans. Record and member keys, process-environment names, literal command text, and type references remain distinct namespaces rather than lexical reads. Type/signature analysis and assignment-mutability validation remain separate work.
+
+The module graph, exported names, imported names, and cross-file lexical references are therefore available to non-executing shared analysis. Checker, help, editor, and language-server frontends can consume that information without maintaining a competing resolver.
 
 Name resolution must be deterministic and source-anchored. Missing names, duplicate declarations, inaccessible private names, incompatible signatures, and import cycles must produce diagnostics without relying on side effects from program execution.
 

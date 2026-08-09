@@ -186,7 +186,7 @@ fn static_imports_are_loaded_from_the_filesystem_without_execution() {
 fn named_imports_initialize_through_the_filesystem_while_load_only_siblings_stay_dormant() {
     let temp = TempDir::new("named-import-runtime");
     temp.script("dependency.fsh", "let answer = 0\nexport { answer }\n");
-    temp.script("dormant.fsh", "export BROKEN = $missing\n");
+    temp.script("dormant.fsh", "export BROKEN = 1\n");
     let script = temp.script(
         "main.fsh",
         &format!(
