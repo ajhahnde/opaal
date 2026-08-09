@@ -865,6 +865,28 @@ struct ResolvedBindingType {
     value_type: ValueType,
 }
 
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct RuntimeBindingTypes {
+    by_source: BTreeMap<SourceId, Vec<ResolvedBindingType>>,
+}
+
+impl RuntimeBindingTypes {
+    pub(crate) fn binding_type(
+        &self,
+        source: SourceId,
+        declaration_span: Span,
+    ) -> Option<&ValueType> {
+        self.by_source
+            .get(&source)
+            .and_then(|bindings| {
+                bindings
+                    .iter()
+                    .find(|binding| binding.declaration_span == declaration_span)
+            })
+            .map(|binding| &binding.value_type)
+    }
+}
+
 /// Resolved annotations and named-function signatures by canonical module.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct ModuleTypeRegistry {
@@ -2357,6 +2379,22 @@ impl ModuleProgram {
     #[must_use]
     pub const fn types(&self) -> &ModuleTypeRegistry {
         &self.types
+    }
+
+    pub(crate) fn runtime_binding_types(&self) -> RuntimeBindingTypes {
+        let by_source = self
+            .sources
+            .entries()
+            .map(|entry| {
+                let bindings = self
+                    .types
+                    .by_module
+                    .get(entry.module())
+                    .map_or_else(Vec::new, |types| types.bindings.clone());
+                (entry.source().id(), bindings)
+            })
+            .collect();
+        RuntimeBindingTypes { by_source }
     }
 }
 

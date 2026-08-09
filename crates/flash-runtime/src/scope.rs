@@ -3,6 +3,7 @@ use std::error::Error;
 use std::fmt;
 use std::sync::Arc;
 
+use crate::module::ValueType;
 use crate::{Environment, NativePath, Value};
 
 /// Whether a lexical binding cell may be reassigned.
@@ -15,6 +16,7 @@ pub enum BindingMutability {
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct Binding {
     mutability: BindingMutability,
+    value_type: Option<ValueType>,
     value: Value,
 }
 
@@ -73,6 +75,7 @@ impl ScopeStack {
                             Arc::clone(name),
                             Binding {
                                 mutability: BindingMutability::Immutable,
+                                value_type: binding.value_type.clone(),
                                 value: binding.value.clone(),
                             },
                         )
@@ -101,6 +104,16 @@ impl ScopeStack {
         mutability: BindingMutability,
         value: Value,
     ) -> Result<(), ScopeError> {
+        self.declare_typed(name, mutability, value, None)
+    }
+
+    pub(crate) fn declare_typed(
+        &mut self,
+        name: impl Into<String>,
+        mutability: BindingMutability,
+        value: Value,
+        value_type: Option<ValueType>,
+    ) -> Result<(), ScopeError> {
         let name = name.into();
         let current = self
             .frames
@@ -113,9 +126,22 @@ impl ScopeStack {
         {
             return Err(ScopeError::DuplicateBinding(name));
         }
-        current
-            .bindings
-            .push((Arc::from(name), Binding { mutability, value }));
+        if let Some(expected) = value_type.as_ref()
+            && !expected.accepts(&value)
+        {
+            return Err(ScopeError::TypeMismatch {
+                expected: expected.clone(),
+                actual: value.family_name(),
+            });
+        }
+        current.bindings.push((
+            Arc::from(name),
+            Binding {
+                mutability,
+                value_type,
+                value,
+            },
+        ));
         Ok(())
     }
 
@@ -140,6 +166,14 @@ impl ScopeStack {
             };
             if binding.mutability == BindingMutability::Immutable {
                 return Err(ScopeError::ImmutableBinding(name.to_owned()));
+            }
+            if let Some(expected) = binding.value_type.as_ref()
+                && !expected.accepts(&value)
+            {
+                return Err(ScopeError::TypeMismatch {
+                    expected: expected.clone(),
+                    actual: value.family_name(),
+                });
             }
             binding.value = value;
             return Ok(());
@@ -182,6 +216,10 @@ pub enum ScopeError {
     DuplicateBinding(String),
     UnknownBinding(String),
     ImmutableBinding(String),
+    TypeMismatch {
+        expected: ValueType,
+        actual: &'static str,
+    },
     CannotPopRoot,
 }
 
@@ -194,6 +232,9 @@ impl fmt::Display for ScopeError {
             Self::UnknownBinding(name) => write!(formatter, "unknown binding {name:?}"),
             Self::ImmutableBinding(name) => {
                 write!(formatter, "binding {name:?} is immutable")
+            }
+            Self::TypeMismatch { expected, actual } => {
+                write!(formatter, "binding expects {expected}, found {actual}")
             }
             Self::CannotPopRoot => formatter.write_str("cannot leave the root scope"),
         }

@@ -25,6 +25,7 @@ use flash_syntax::{
     UnaryOperator, VariableReference, WhileStatement, Word, WordPart, WordPartKind,
 };
 
+use crate::module::{RuntimeBindingTypes, ValueType};
 use crate::operation::{self, OperationError};
 use crate::{BindingMutability, Callable, Environment, Record, ScopeError, ScopeStack, Value};
 
@@ -228,6 +229,11 @@ pub enum RuntimeErrorKind {
     NotCallable { actual: &'static str },
     /// A call whose argument count does not match the parameter count.
     ArityMismatch { expected: usize, actual: usize },
+    /// A declaration or assignment whose value does not match its binding type.
+    BindingTypeMismatch {
+        expected: ValueType,
+        actual: &'static str,
+    },
     /// A function or closure declaring the same parameter name twice.
     DuplicateParameter { name: String },
     /// A construct requiring the execution engine that does not exist yet.
@@ -465,6 +471,9 @@ impl fmt::Display for RuntimeErrorKind {
             }
             Self::ArityMismatch { expected, actual } => {
                 write!(formatter, "expected {expected} argument(s), found {actual}")
+            }
+            Self::BindingTypeMismatch { expected, actual } => {
+                write!(formatter, "binding expects {expected}, found {actual}")
             }
             Self::DuplicateParameter { name } => {
                 write!(formatter, "duplicate parameter {name:?}")
@@ -1103,8 +1112,27 @@ pub(crate) fn evaluate_in_environment_owned(
     env: &mut Environment,
     limits: &EvalLimits,
 ) -> Result<Completion, RuntimeError> {
+    evaluate_in_environment_owned_with_binding_types(
+        script,
+        source,
+        scope,
+        env,
+        limits,
+        Arc::new(RuntimeBindingTypes::default()),
+    )
+}
+
+pub(crate) fn evaluate_in_environment_owned_with_binding_types(
+    script: &flash_syntax::Script,
+    source: Arc<SourceFile>,
+    scope: &mut ScopeStack,
+    env: &mut Environment,
+    limits: &EvalLimits,
+    binding_types: Arc<RuntimeBindingTypes>,
+) -> Result<Completion, RuntimeError> {
     let mut evaluator = Evaluator {
         source,
+        binding_types,
         cancel: limits.cancel.clone(),
         budget: limits.budget,
         policy: limits.policy,
@@ -1162,6 +1190,7 @@ pub fn evaluate_closure_argument(
     let mut env = Environment::new();
     let evaluator = Evaluator {
         source: Arc::new(source.clone()),
+        binding_types: Arc::new(RuntimeBindingTypes::default()),
         cancel: limits.cancel,
         budget: limits.budget,
         policy: limits.policy,
@@ -1223,6 +1252,7 @@ pub fn apply_callable(
 
     let mut evaluator = Evaluator {
         source: Arc::new(source.clone()),
+        binding_types: Arc::clone(&function.binding_types),
         cancel: limits.cancel.clone(),
         budget: limits.budget,
         policy: limits.policy,
@@ -1304,6 +1334,7 @@ pub fn expand_word(
     let mut env = Environment::new();
     let mut evaluator = Evaluator {
         source: Arc::new(source.clone()),
+        binding_types: Arc::new(RuntimeBindingTypes::default()),
         cancel: limits.cancel.clone(),
         budget: limits.budget,
         policy: limits.policy,
@@ -1338,6 +1369,7 @@ pub fn expand_spread(
     let mut env = Environment::new();
     let mut evaluator = Evaluator {
         source: Arc::new(source.clone()),
+        binding_types: Arc::new(RuntimeBindingTypes::default()),
         cancel: limits.cancel.clone(),
         budget: limits.budget,
         policy: limits.policy,
@@ -1382,6 +1414,7 @@ enum Flow {
 
 struct Evaluator<'environment> {
     source: Arc<SourceFile>,
+    binding_types: Arc<RuntimeBindingTypes>,
     cancel: CancellationToken,
     budget: ResourceBudget,
     policy: EvaluationPolicy,
@@ -1464,17 +1497,33 @@ impl Evaluator<'_> {
         } else {
             BindingMutability::Immutable
         };
+        let value_type = self
+            .binding_types
+            .binding_type(self.source.id(), declaration.name.span())
+            .cloned();
         scope
-            .declare(name, mutability, value)
-            .map_err(|error| self.error(RuntimeErrorKind::Scope(error), declaration.name.span()))
+            .declare_typed(name, mutability, value, value_type)
+            .map_err(|error| {
+                let span = if matches!(error, ScopeError::TypeMismatch { .. }) {
+                    declaration.value.span()
+                } else {
+                    declaration.name.span()
+                };
+                self.binding_error(error, span)
+            })
     }
 
     fn assignment(&mut self, assignment: &Assignment, scope: &mut ScopeStack) -> Eval<()> {
         let value = self.expression(&assignment.value, scope)?;
         let name = self.text(assignment.target.name.span());
-        scope
-            .assign(name, value)
-            .map_err(|error| self.error(RuntimeErrorKind::Scope(error), assignment.target.span))
+        scope.assign(name, value).map_err(|error| {
+            let span = if matches!(error, ScopeError::TypeMismatch { .. }) {
+                assignment.value.span()
+            } else {
+                assignment.target.span
+            };
+            self.binding_error(error, span)
+        })
     }
 
     /// Applies an `export` or `unset` to the environment. `export` encodes its
@@ -2169,6 +2218,16 @@ impl Evaluator<'_> {
         Abort::Error(RuntimeError::new(kind, span).with_source(Arc::clone(&self.source)))
     }
 
+    fn binding_error(&self, error: ScopeError, span: Span) -> Abort {
+        let kind = match error {
+            ScopeError::TypeMismatch { expected, actual } => {
+                RuntimeErrorKind::BindingTypeMismatch { expected, actual }
+            }
+            error => RuntimeErrorKind::Scope(error),
+        };
+        self.error(kind, span)
+    }
+
     fn unsupported(&self, feature: &'static str, span: Span) -> Abort {
         self.error(RuntimeErrorKind::Unsupported { feature }, span)
     }
@@ -2190,6 +2249,7 @@ impl Evaluator<'_> {
             body: CallableBody::Block(definition.body.clone()),
             captured: scope.captured_snapshot(),
             source: Arc::clone(&self.source),
+            binding_types: Arc::clone(&self.binding_types),
             location: self.location(definition.name.span()),
         };
         let value = Value::Callable(Arc::new(callable));
@@ -2206,6 +2266,7 @@ impl Evaluator<'_> {
             body: CallableBody::Expression(closure.body.clone()),
             captured: scope.captured_snapshot(),
             source: Arc::clone(&self.source),
+            binding_types: Arc::clone(&self.binding_types),
             location: self.location(closure.span),
         };
         Ok(Value::Callable(Arc::new(callable)))
@@ -2312,8 +2373,11 @@ impl Evaluator<'_> {
     /// Runs an already-prepared call body, reducing its control flow to a value.
     fn run_body(&mut self, function: &CallableValue, scope: &mut ScopeStack) -> Eval<Value> {
         let caller_source = std::mem::replace(&mut self.source, Arc::clone(&function.source));
+        let caller_binding_types =
+            std::mem::replace(&mut self.binding_types, Arc::clone(&function.binding_types));
         let result = self.run_body_in_defining_source(function, scope);
         self.source = caller_source;
+        self.binding_types = caller_binding_types;
         result
     }
 
@@ -2404,6 +2468,7 @@ struct CallableValue {
     body: CallableBody,
     captured: ScopeStack,
     source: Arc<SourceFile>,
+    binding_types: Arc<RuntimeBindingTypes>,
     location: String,
 }
 

@@ -138,6 +138,7 @@ pub fn execute_module_program(
     );
     session.enable_script_job_control(Arc::clone(&clock));
     let mut output = io::stdout().lock();
+    let binding_types = Arc::new(program.runtime_binding_types());
     let mut instances: BTreeMap<ModuleId, BTreeMap<String, Value>> = BTreeMap::new();
     let mut outcome: Result<SubmitOutcome, ScriptError> = Ok(SubmitOutcome::Continued);
 
@@ -182,6 +183,7 @@ pub fn execute_module_program(
             source,
             script,
             scope,
+            Arc::clone(&binding_types),
             probe,
             platform,
             clock.as_ref(),

@@ -40,7 +40,7 @@ use crate::closure::OwnedClosureContext;
 use crate::command::CommandRegistry;
 use crate::eval::{
     Clock, Completion, EvalLimits, ExpandedWord, RuntimeError, RuntimeErrorKind,
-    evaluate_in_environment_owned, expand_word,
+    evaluate_in_environment_owned, evaluate_in_environment_owned_with_binding_types, expand_word,
 };
 use crate::execute::{execute_foreground_status, start_mixed_pipeline};
 use crate::internal::{
@@ -48,6 +48,7 @@ use crate::internal::{
     execute_internal_pipeline, execute_internal_suffix, execute_stage,
 };
 use crate::job::JobPlacement;
+use crate::module::RuntimeBindingTypes;
 use crate::plan::{
     ExecutionPlan, PlannedResolution, PlannedStage, RedirectionAction, SessionOptions,
     plan_pipeline_with_options, preflight,
@@ -309,7 +310,7 @@ impl Session {
             ParseOutcome::Invalid(diagnostics) => return Err(render(&source, &diagnostics)),
         };
 
-        self.submit_parsed(source, &script, false, probe, platform, clock, output)
+        self.submit_parsed(source, &script, false, None, probe, platform, clock, output)
     }
 
     /// Executes one source from a fully analyzed module program in an isolated
@@ -320,6 +321,7 @@ impl Session {
         source: &SourceFile,
         script: &Script,
         mut scope: ScopeStack,
+        binding_types: Arc<RuntimeBindingTypes>,
         probe: &dyn ExecutableProbe,
         platform: &dyn Platform,
         clock: &dyn Clock,
@@ -330,6 +332,7 @@ impl Session {
             Arc::new(source.clone()),
             script,
             true,
+            Some(binding_types),
             probe,
             platform,
             clock,
@@ -345,6 +348,7 @@ impl Session {
         source: Arc<SourceFile>,
         script: &Script,
         imports_analyzed: bool,
+        binding_types: Option<Arc<RuntimeBindingTypes>>,
         probe: &dyn ExecutableProbe,
         platform: &dyn Platform,
         clock: &dyn Clock,
@@ -455,15 +459,24 @@ impl Session {
                 }
                 _ => {
                     let one = Script::new(vec![statement.clone()], statement.span());
-                    match evaluate_in_environment_owned(
-                        &one,
-                        Arc::clone(&source),
-                        scope,
-                        state.environment_mut(),
-                        &EvalLimits::default(),
-                    )
-                    .map_err(|error| runtime(source_file, &error))?
-                    {
+                    let evaluated = match binding_types.as_ref() {
+                        Some(binding_types) => evaluate_in_environment_owned_with_binding_types(
+                            &one,
+                            Arc::clone(&source),
+                            scope,
+                            state.environment_mut(),
+                            &EvalLimits::default(),
+                            Arc::clone(binding_types),
+                        ),
+                        None => evaluate_in_environment_owned(
+                            &one,
+                            Arc::clone(&source),
+                            scope,
+                            state.environment_mut(),
+                            &EvalLimits::default(),
+                        ),
+                    };
+                    match evaluated.map_err(|error| runtime(source_file, &error))? {
                         Completion::Value(_) => {}
                         Completion::Cancelled(_) => {
                             unreachable!("default evaluation limits never cancel")

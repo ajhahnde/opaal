@@ -1030,6 +1030,118 @@ fn imported_mut_values_materialize_after_initialization_as_immutable_snapshots()
 }
 
 #[test]
+fn annotated_declarations_and_assignments_reject_dynamic_runtime_mismatches() {
+    let paths = FakeCanonicalizer::default().resolves("/project/main.fsh", "/project/main.fsh");
+
+    let initializer_sources = FakeSourceLoader::default().contains(
+        "/project/main.fsh",
+        "let count: Int = $args[0]\nexport AFTER = true\n",
+    );
+    let initializer_program = ModuleProgramLoader::new(&paths, &initializer_sources)
+        .load(Path::new("/project/main.fsh"))
+        .expect("the dynamic initializer cannot be rejected before execution");
+    let mut initializer_environment = Environment::new();
+    let initializer_error = execute_module_program(
+        &initializer_program,
+        &["not-an-int".to_owned()],
+        Path::new("/project"),
+        &mut initializer_environment,
+        &standard_registry(),
+        &NoExecutables,
+        &SessionOptions::default(),
+        &FakePlatform::none(),
+        Arc::new(FakeClock::new()),
+    )
+    .expect_err("an annotated initializer must match before binding insertion");
+    let initializer_rendered = initializer_error.render();
+    assert!(
+        initializer_rendered.contains("binding expects Int, found string"),
+        "{initializer_rendered}"
+    );
+    assert!(
+        initializer_rendered.contains(" --> /project/main.fsh:1:18"),
+        "{initializer_rendered}"
+    );
+    assert!(!initializer_environment.contains("AFTER"));
+
+    let assignment_sources = FakeSourceLoader::default().contains(
+        "/project/main.fsh",
+        "mut count: Int = 1\n$count = $args[0]\nexport AFTER = $count\n",
+    );
+    let assignment_program = ModuleProgramLoader::new(&paths, &assignment_sources)
+        .load(Path::new("/project/main.fsh"))
+        .expect("the dynamic assignment cannot be rejected before execution");
+    let mut assignment_environment = Environment::new();
+    let assignment_error = execute_module_program(
+        &assignment_program,
+        &["still-not-an-int".to_owned()],
+        Path::new("/project"),
+        &mut assignment_environment,
+        &standard_registry(),
+        &NoExecutables,
+        &SessionOptions::default(),
+        &FakePlatform::none(),
+        Arc::new(FakeClock::new()),
+    )
+    .expect_err("a later assignment must preserve the binding's declared type");
+    let assignment_rendered = assignment_error.render();
+    assert!(
+        assignment_rendered.contains("binding expects Int, found string"),
+        "{assignment_rendered}"
+    );
+    assert!(
+        assignment_rendered.contains(" --> /project/main.fsh:2:10"),
+        "{assignment_rendered}"
+    );
+    assert!(!assignment_environment.contains("AFTER"));
+}
+
+#[test]
+fn annotated_binding_failures_inside_imported_callables_use_the_defining_source() {
+    let paths = FakeCanonicalizer::default()
+        .resolves("/project/main.fsh", "/project/main.fsh")
+        .resolves("/project/lib.fsh", "/project/lib.fsh");
+    let sources = FakeSourceLoader::default()
+        .contains(
+            "/project/main.fsh",
+            "import { store } from './lib.fsh'\nlet result = store($args[0])\n",
+        )
+        .contains(
+            "/project/lib.fsh",
+            "def store(value) {\n    let count: Int = $value\n}\nexport { store }\n",
+        );
+    let program = ModuleProgramLoader::new(&paths, &sources)
+        .load(Path::new("/project/main.fsh"))
+        .expect("the dynamic imported call cannot be rejected before execution");
+    let error = execute_module_program(
+        &program,
+        &["not-an-int".to_owned()],
+        Path::new("/project"),
+        &mut Environment::new(),
+        &standard_registry(),
+        &NoExecutables,
+        &SessionOptions::default(),
+        &FakePlatform::none(),
+        Arc::new(FakeClock::new()),
+    )
+    .expect_err("the defining module's annotated local must be enforced");
+    let rendered = error.render();
+
+    assert!(
+        rendered.contains("binding expects Int, found string"),
+        "{rendered}"
+    );
+    assert!(
+        rendered.contains(" --> /project/lib.fsh:2:22"),
+        "{rendered}"
+    );
+    assert!(
+        rendered.contains(" ::: /project/main.fsh:2:14"),
+        "{rendered}"
+    );
+}
+
+#[test]
 fn imported_callables_execute_against_their_defining_source() {
     let paths = FakeCanonicalizer::default()
         .resolves("/project/main.fsh", "/project/main.fsh")
