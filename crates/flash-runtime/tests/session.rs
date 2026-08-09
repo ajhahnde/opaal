@@ -1952,6 +1952,244 @@ fn rendered(
     String::from_utf8(sink).expect("rendered structured output is UTF-8")
 }
 
+#[test]
+fn planned_help_inspects_a_function_without_executing_or_mutating_runtime_paths() {
+    struct PanicProbe;
+
+    impl ExecutableProbe for PanicProbe {
+        fn is_executable(&self, _path: &OsStr) -> bool {
+            panic!("help inspection must not probe executables")
+        }
+    }
+
+    let mut session = session();
+    let platform = RecordingPlatform::new(terminal_platform());
+    let clock = FakeClock::new();
+    let definition = concat!(
+        "## Inspects without running.\n",
+        "## The function body must remain dormant.\n",
+        "def dangerous() {\n",
+        "    cd /mutated\n",
+        "    ^must-not-run\n",
+        "}\n",
+    );
+    let mut definition_output = Vec::new();
+    session
+        .submit(
+            "dangerous.fsh",
+            definition,
+            &Probe::default(),
+            &platform,
+            &clock,
+            &mut definition_output,
+        )
+        .expect("the documented function binds without running");
+    assert!(definition_output.is_empty());
+    let before_cwd = session.cwd().to_owned();
+    let before_status = session.current_status().cloned();
+
+    let mut help_output = Vec::new();
+    session
+        .submit(
+            "help.fsh",
+            "help dangerous",
+            &PanicProbe,
+            &platform,
+            &clock,
+            &mut help_output,
+        )
+        .expect("help is planned and rendered from an immutable metadata snapshot");
+
+    assert_eq!(
+        String::from_utf8(help_output).unwrap(),
+        concat!(
+            "function dangerous\n",
+            "  signature: def dangerous() -> Any\n",
+            "  defined at: dangerous.fsh:3:5\n",
+            "  summary: Inspects without running.\n",
+            "  details:\n",
+            "    Inspects without running.\n",
+            "    The function body must remain dormant.\n",
+        )
+    );
+    assert_eq!(session.cwd(), before_cwd);
+    assert_eq!(session.current_status(), before_status.as_ref());
+    assert!(platform.spawn_log().records().is_empty());
+    assert!(platform.signal_log().records().is_empty());
+}
+
+#[test]
+fn help_keeps_builtin_and_function_namespaces_and_orders_list_output() {
+    let mut session = session();
+    let platform = terminal_platform();
+    let clock = FakeClock::new();
+    let probe = Probe::default();
+
+    assert_eq!(
+        rendered(
+            &mut session,
+            concat!(
+                "## User-defined help function.\n",
+                "def help(value: String) -> String { $value }\n",
+                "## Last function.\n",
+                "def zzz() { null }\n",
+            ),
+            &probe,
+            &platform,
+            &clock,
+        ),
+        ""
+    );
+
+    let detail = rendered(&mut session, "help help", &probe, &platform, &clock);
+    assert_eq!(
+        detail,
+        concat!(
+            "builtin help\n",
+            "  invocation: help [NAME]\n",
+            "  input: Empty\n",
+            "  output: ByteStream\n",
+            "  summary: Inspect built-in and visible function metadata without execution.\n",
+            "  details:\n",
+            "    Inspect built-in and visible function metadata without execution.\n",
+            "\n",
+            "function help\n",
+            "  signature: def help(value: String) -> String\n",
+            "  defined at: <interactive>:2:5\n",
+            "  summary: User-defined help function.\n",
+            "  details:\n",
+            "    User-defined help function.\n",
+        )
+    );
+    assert_eq!(
+        rendered(&mut session, "help 'zzz'", &probe, &platform, &clock),
+        concat!(
+            "function zzz\n",
+            "  signature: def zzz() -> Any\n",
+            "  defined at: <interactive>:4:5\n",
+            "  summary: Last function.\n",
+            "  details:\n",
+            "    Last function.\n",
+        )
+    );
+
+    let list = rendered(&mut session, "help", &probe, &platform, &clock);
+    assert!(list.ends_with('\n'));
+    assert!(!list.ends_with("\n\n"));
+    let keys = list
+        .lines()
+        .map(|line| {
+            let mut fields = line.split('\t');
+            (
+                fields.next().expect("name").to_owned(),
+                fields.next().expect("kind").to_owned(),
+            )
+        })
+        .collect::<Vec<_>>();
+    let mut sorted = keys.clone();
+    sorted.sort();
+    assert_eq!(keys, sorted);
+    assert!(keys.contains(&("help".to_owned(), "builtin".to_owned())));
+    assert!(keys.contains(&("help".to_owned(), "function".to_owned())));
+    assert!(keys.contains(&("zzz".to_owned(), "function".to_owned())));
+}
+
+#[test]
+fn help_rejects_dynamic_queries_and_unknown_names_at_the_query_span() {
+    for text in [
+        "help $name",
+        "help ${$name}",
+        "help $(^must-not-run)",
+        "help ...$names",
+        "help { |value| $value }",
+        "help one two",
+    ] {
+        let mut session = session();
+        let mut output = Vec::new();
+        let error = session
+            .submit(
+                "help.fsh",
+                text,
+                &Probe::default(),
+                &terminal_platform(),
+                &FakeClock::new(),
+                &mut output,
+            )
+            .expect_err("dynamic or over-arity help queries are rejected");
+        assert!(output.is_empty());
+        assert!(
+            error.render().contains("help"),
+            "the diagnostic names help for {text:?}: {}",
+            error.render()
+        );
+    }
+
+    let mut unknown_session = session();
+    let mut output = Vec::new();
+    let error = unknown_session
+        .submit(
+            "help.fsh",
+            "help missing",
+            &Probe::default(),
+            &terminal_platform(),
+            &FakeClock::new(),
+            &mut output,
+        )
+        .expect_err("an unknown exact name is rejected");
+    assert!(output.is_empty());
+    assert!(error.render().contains("unknown help name `missing`"));
+    assert!(error.render().contains("help.fsh:1:6"));
+
+    let mut dynamic_session = session();
+    submit(
+        &mut dynamic_session,
+        "let command_suffix = 'elp'",
+        &Probe::default(),
+    );
+    let mut output = Vec::new();
+    let error = dynamic_session
+        .submit(
+            "dynamic-head.fsh",
+            "h${$command_suffix} missing",
+            &Probe::default(),
+            &terminal_platform(),
+            &FakeClock::new(),
+            &mut output,
+        )
+        .expect_err("a dynamically resolved help head is rejected");
+    assert!(output.is_empty());
+    assert!(
+        error
+            .render()
+            .contains("help command head must be the static"),
+        "{}",
+        error.render()
+    );
+    assert!(error.render().contains("dynamic-head.fsh:1:1"));
+}
+
+#[test]
+fn help_uses_the_ordinary_redirection_byte_path() {
+    let temp = TempDir::new("help-redirection");
+    let mut redirected_session =
+        Session::new(temp.path(), environment(), SessionOptions::default());
+    let mut sink = Vec::new();
+    redirected_session
+        .submit(
+            "redirect.fsh",
+            "help pwd > help.txt",
+            &Probe::default(),
+            &PosixPlatform,
+            &FakeClock::new(),
+            &mut sink,
+        )
+        .expect("help bytes use ordinary file redirection");
+    assert!(sink.is_empty());
+    let redirected = fs::read_to_string(temp.path().join("help.txt")).unwrap();
+    assert!(redirected.starts_with("builtin pwd\n  invocation: pwd\n"));
+    assert!(redirected.ends_with('\n'));
+}
+
 /// Complete every scripted child so no observer outlives the test blocked on a
 /// transition the test would otherwise never release.
 fn release(controls: &[BackgroundChildControl]) {

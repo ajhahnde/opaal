@@ -167,7 +167,7 @@ The shared syntax tree represents a static dependency as a top-level `import '<p
 
 Canonicalization and source-byte loading are separate injected capabilities. The recursive program loader assigns stable source identities in first-visit depth-first order, decodes and parses each canonical module once, retains alias imports as distinct graph edges, and registers both canonical module and source identities for later diagnostics. It registers a module before traversing its imports, allowing the graph to reject a back edge without unbounded recursion. Program construction returns no partial graph or registry after a resolution, read, UTF-8, syntax, or cycle failure.
 
-Loading is analysis, not execution. The module program contains the canonical graph, source files, parsed syntax, deterministic local/export/import/reference tables, and a resolved type registry. Explicit `export { name }` lists can expose top-level lexical declarations and functions; `import { name } from '<path>'` resolves only names explicitly exported by the canonical target. Every loaded source is then resolved in evaluator-matched source order, including sources reached only through load-only imports. Each reference retains its complete source span and local declaration target; an imported reference also retains the import identifier and the target declaration/export provenance. The type registry retains source-spanned annotations and named-function signatures for exact-span lookup. Unknown, private, duplicate, colliding, or invalid type names fail analysis with source-anchored diagnostics, and there is no wildcard import path.
+Loading is analysis, not execution. The module program contains the canonical graph, source files, parsed syntax, deterministic local/export/import/reference tables, and a resolved type registry. Explicit `export { name }` lists can expose top-level lexical declarations and functions; `import { name } from '<path>'` resolves only names explicitly exported by the canonical target. Every loaded source is then resolved in evaluator-matched source order, including sources reached only through load-only imports. Each reference retains its complete source span and local declaration target; an imported reference also retains the import identifier and the target declaration/export provenance. The type registry retains source-spanned annotations and named-function signatures, including normalized attached documentation, for exact-span lookup. Unknown, private, duplicate, colliding, or invalid type names fail analysis with source-anchored diagnostics, and there is no wildcard import path.
 
 The root module begins above an implicit immutable `args: List[String]` input
 containing the ordered UTF-8 operands supplied after the script path. This
@@ -176,7 +176,7 @@ inventing a declaration span. Dependency modules do not receive the input.
 
 Non-interactive `fsh <script>` execution injects the host filesystem adapter at this boundary and reports grouped excerpts for diagnostics that span multiple registered sources. The runtime derives deterministic source-edge depth-first postorder from the analyzed named-import tables, initializes each canonical dependency once, and executes the root last. A source reached only through load-only imports remains dormant.
 
-Each activated module executes through the existing session driver with an isolated lexical root. Completed exports are cloned into importer roots as immutable snapshots; private bindings never become ambient names. Working directory, child-process environment, status, output, process activity, and background jobs remain shared across the whole program. Runtime binding cells and callables receive the resolved annotations owned by the program. Initializers, assignments, callable arguments, and named-function results use exact value-family checks; imported callables retain their defining source so body diagnostics and cross-file call frames use the correct registered sources. Checker, formatter, help, editor, and language-server exposure remain later frontends over the shared program; assignment-mutability analysis also remains separate.
+Each activated module executes through the existing session driver with an isolated lexical root. Completed exports are cloned into importer roots as immutable snapshots; private bindings never become ambient names. Working directory, child-process environment, status, output, process activity, and background jobs remain shared across the whole program. Runtime binding cells and callables receive the resolved annotations owned by the program. Named callables also retain their signature-derived inspection metadata and defining source; imported callables therefore keep both correct help ownership and correct cross-file body diagnostics. Initializers, assignments, callable arguments, and named-function results use exact value-family checks. Checker and language-server protocol exposure remain later frontends over the shared program; assignment-mutability analysis also remains separate.
 
 The analysis layer is responsible for:
 
@@ -287,7 +287,8 @@ A signature declares:
 
 - which carriers the command accepts;
 - which carrier it returns, or whether it passes the input carrier through;
-- command flags exposed to editor services.
+- command flags exposed to editor services;
+- a stable invocation spelling and normalized user-facing documentation.
 
 Duplicate command registration is rejected when the registry is constructed. Runtime command execution does not use registration order as an override mechanism.
 
@@ -313,6 +314,7 @@ An [`ExecutionPlan`](../crates/flash-runtime/src/plan.rs) records:
 - pipeline operators and their source spans;
 - source-ordered redirections;
 - snapshotted execution options;
+- an optional immutable help selection for an inspection stage;
 - process-group policy;
 - the complete pipeline span.
 

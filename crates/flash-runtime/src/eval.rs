@@ -2300,6 +2300,11 @@ impl Evaluator<'_> {
     ) -> Eval<()> {
         let name: Arc<str> = Arc::from(self.text(definition.name.span()));
         let parameters = self.parameters(&definition.parameters)?;
+        let inspection = self
+            .binding_types
+            .function_signature(self.source.id(), definition.name.span())
+            .cloned()
+            .map(|signature| crate::help::FunctionInspection::new(signature, &self.source));
         let callable = CallableValue {
             name: Some(Arc::clone(&name)),
             parameters,
@@ -2314,6 +2319,7 @@ impl Evaluator<'_> {
                     .unwrap_or(ValueType::Any),
             ),
             location: self.location(definition.name.span()),
+            inspection,
         };
         let value = Value::Callable(Arc::new(callable));
         scope
@@ -2332,6 +2338,7 @@ impl Evaluator<'_> {
             binding_types: Arc::clone(&self.binding_types),
             result_type: None,
             location: self.location(closure.span),
+            inspection: None,
         };
         Ok(Value::Callable(Arc::new(callable)))
     }
@@ -2588,6 +2595,7 @@ struct CallableValue {
     /// `Some`, including `Any`, for a named function; `None` for a closure.
     result_type: Option<ValueType>,
     location: String,
+    inspection: Option<crate::help::FunctionInspection>,
 }
 
 #[derive(Clone)]
@@ -2635,6 +2643,10 @@ impl Callable for CallableValue {
 
     fn display(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.write_form(formatter)
+    }
+
+    fn inspection(&self) -> Option<&crate::help::FunctionInspection> {
+        self.inspection.as_ref()
     }
 
     fn as_any(&self) -> &dyn Any {

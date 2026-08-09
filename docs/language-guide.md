@@ -107,6 +107,26 @@ let retries = 3 # An end-of-line comment
 
 A `#` embedded in an existing word is part of that word rather than the start of a comment.
 
+A complete line whose first non-horizontal-whitespace characters are `##` is
+a documentation comment. Consecutive documentation lines attach only to the
+named function on the immediately following physical line:
+
+```text
+## Return a greeting.
+##
+## The name is preserved as Unicode text.
+def greet(name: String) -> String {
+    "Hello, $name"
+}
+```
+
+The `##` marker and at most one following ASCII space are removed from the
+stored prose. An empty documentation line creates a paragraph break. A blank
+line, ordinary `#` comment, or another statement breaks attachment. Inline,
+detached, and orphaned `##` text remains an inert ordinary comment for
+compatibility. Documentation attaches to named functions at any lexical depth,
+not to closures, bindings, modules, imports, exports, or commands.
+
 ### Quoting
 
 Flash provides bare, single-quoted, and double-quoted words.
@@ -800,9 +820,40 @@ the current grammar.
 
 ### Documentation comments and help
 
-Built-ins and user-defined functions can provide documentation metadata for discoverability. The same metadata supplies human-readable help, signature presentation, static analysis, and language-server features rather than being maintained as separate descriptions with different behavior.
+Attached `##` blocks are normalized into the canonical signature metadata for
+their named function. The first nonempty normalized line is its summary; the
+complete text is its detail body. Unicode and interior blank lines are
+preserved, and no markup language is interpreted.
 
-Help must remain inspection-only. Requesting help must not execute a function body, start an external command, or mutate session state.
+Use the language command `help` to list standard built-ins and currently
+visible named functions, or `help NAME` for every exact, case-sensitive match:
+
+```text
+help
+help greet
+```
+
+The list includes each entry's kind, canonical signature or invocation, and
+summary. Detailed built-in output also shows its pipeline carrier contract and
+flags; detailed function output shows its resolved parameter/result types and
+defining location. An undocumented named function is still inspectable and is
+identified as `undocumented`. Built-ins and functions occupy distinct
+namespaces, so both entries are shown when they share a name.
+
+Runtime lookup follows ordinary lexical visibility and shadowing. A visible
+non-callable hides an outer function of the same name, imported functions keep
+their defining metadata, and anonymous closures are omitted. Results are
+ordered by name and then kind.
+
+`help` accepts only an empty pipeline input and returns a UTF-8 `ByteStream`
+ending in one newline, so it can be captured, piped, or redirected through the
+ordinary byte path. Its optional query must be one static source word; variable
+interpolation, command substitution, spreads, closures, and additional
+arguments are rejected.
+
+Help is inspection-only. Planning snapshots immutable entries from the command
+registry and current scope; rendering does not execute a function body, probe
+an executable, access a platform capability, or mutate session state.
 
 ## Modules and name resolution
 

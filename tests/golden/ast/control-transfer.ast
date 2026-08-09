@@ -3,6 +3,7 @@ Script {
         AstNode {
             kind: Function(
                 FunctionDefinition {
+                    documentation: None,
                     name: Identifier {
                         span: Span(4..15),
                     },

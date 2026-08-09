@@ -674,6 +674,10 @@ pub trait Callable: fmt::Debug + Send + Sync {
     fn family(&self) -> &'static str;
     /// Writes the deterministic human display form.
     fn display(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result;
+    /// Returns immutable metadata for an inspectable named function.
+    fn inspection(&self) -> Option<&crate::help::FunctionInspection> {
+        None
+    }
     /// Returns this callable as `&dyn Any` for evaluator-internal downcasting.
     fn as_any(&self) -> &dyn Any;
 }

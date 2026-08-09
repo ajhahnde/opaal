@@ -24,14 +24,14 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use flash_platform::{
-    DescriptorEndpoint, DescriptorReadError, DescriptorWriteError, JobSignal, Platform,
-    ProcessGroupId,
+    DescriptorEndpoint, DescriptorReadError, DescriptorWriteError, FileOpenMode, FileOpenRequest,
+    JobSignal, Platform, ProcessGroupId,
 };
 use flash_syntax::{
     Closure, CommandHeadKind, CommandItemKind, ConditionalChain, Diagnostic, Expression,
-    ExpressionKind, LiteralKind, ParseOutcome, RecordKey, RedirectionKind, Script, Severity,
-    SourceFile, SourceId, Span, StageKind, StatementKind, Word, WordPart, WordPartKind, parse,
-    render_diagnostic,
+    ExpressionKind, LiteralKind, OutputMode, ParseOutcome, RecordKey, RedirectionKind, Script,
+    Severity, SourceFile, SourceId, Span, StageKind, StatementKind, Word, WordPart, WordPartKind,
+    parse, render_diagnostic,
 };
 
 use crate::background::{BackgroundJobs, ForegroundJobOutcome, QuarantinePolicy, escape_job_label};
@@ -310,7 +310,19 @@ impl Session {
             ParseOutcome::Invalid(diagnostics) => return Err(render(&source, &diagnostics)),
         };
 
-        self.submit_parsed(source, &script, false, None, probe, platform, clock, output)
+        let binding_types = RuntimeBindingTypes::analyze_source(&source, &script)
+            .map_err(|error| render(&source, &[error.diagnostic()]))?;
+
+        self.submit_parsed(
+            source,
+            &script,
+            false,
+            Some(Arc::new(binding_types)),
+            probe,
+            platform,
+            clock,
+            output,
+        )
     }
 
     /// Executes one source from a fully analyzed module program in an isolated
@@ -435,6 +447,7 @@ impl Session {
                         ));
                         continue;
                     }
+                    let inspection_only = chain_is_standalone_help(&job.chain, source_file);
                     let step = run_chain(
                         &job.chain,
                         state,
@@ -452,7 +465,10 @@ impl Session {
                     .map_err(|interrupt| interrupt.into_submit(source_file))?;
                     match step {
                         ChainStep::Exit(code) => return Ok(SubmitOutcome::Exit(code)),
-                        ChainStep::Status(status) => state.set_current_status(Some(status)),
+                        ChainStep::Status(status) if !inspection_only => {
+                            state.set_current_status(Some(status));
+                        }
+                        ChainStep::Status(_) => {}
                         ChainStep::Stopped(job) => {
                             debug_assert!(
                                 jobs.as_ref().and_then(|jobs| jobs.job(job)).is_some(),
@@ -483,6 +499,23 @@ impl Session {
 
         Ok(SubmitOutcome::Continued)
     }
+}
+
+fn chain_is_standalone_help(chain: &ConditionalChain, source: &SourceFile) -> bool {
+    let [and_chain] = chain.or_terms() else {
+        return false;
+    };
+    let [pipeline] = and_chain.and_terms() else {
+        return false;
+    };
+    let [stage] = pipeline.stages() else {
+        return false;
+    };
+    let StageKind::Command(command) = stage.kind() else {
+        return false;
+    };
+    command.head.kind() == CommandHeadKind::Bare
+        && source.slice(command.head.word().span()).ok() == Some("help")
 }
 
 /// One pipeline's control result inside a conditional chain.
@@ -1043,7 +1076,14 @@ fn run_pipeline(
                 status,
                 closure_context,
             } => {
-                render_payload(payload, presentation.as_ref(), final_stage.span(), output)?;
+                render_payload_with_redirection(
+                    payload,
+                    presentation.as_ref(),
+                    final_stage,
+                    plan.cwd(),
+                    platform,
+                    output,
+                )?;
                 *pending_state.environment_mut() = closure_context.environment_snapshot();
                 *state = pending_state;
                 Ok(ChainStep::Status(status))
@@ -1872,6 +1912,81 @@ fn render_payload(
                 }
             }
         },
+    }
+}
+
+fn render_payload_with_redirection(
+    payload: InternalPayload,
+    presentation: Option<&TerminalPresentation>,
+    stage: &PlannedStage,
+    cwd: &Path,
+    platform: &dyn Platform,
+    sink: &mut dyn Write,
+) -> Result<(), Interrupt> {
+    enum StdoutRoute<'stage> {
+        Sink,
+        File {
+            target: &'stage ExpandedWord,
+            mode: FileOpenMode,
+        },
+        Unsupported,
+    }
+
+    let mut route = StdoutRoute::Sink;
+    for redirection in stage.redirections() {
+        match redirection.action() {
+            RedirectionAction::Output {
+                descriptor,
+                mode,
+                target,
+                ..
+            } if *descriptor == 1 => {
+                route = StdoutRoute::File {
+                    target,
+                    mode: match mode {
+                        OutputMode::Truncate => FileOpenMode::WriteTruncate,
+                        OutputMode::Append => FileOpenMode::WriteAppend,
+                    },
+                };
+            }
+            RedirectionAction::Input { descriptor, .. }
+            | RedirectionAction::Duplicate { descriptor, .. }
+            | RedirectionAction::Close { descriptor, .. }
+                if *descriptor == 1 =>
+            {
+                route = StdoutRoute::Unsupported;
+            }
+            _ => {}
+        }
+    }
+
+    match route {
+        StdoutRoute::Sink => render_payload(payload, presentation, stage.span(), sink),
+        StdoutRoute::File { target, mode } => {
+            let endpoint = platform
+                .open_file(FileOpenRequest::new(Path::new(target.value()), cwd, mode))
+                .map_err(|error| {
+                    Interrupt::Runtime(RuntimeError::new(
+                        RuntimeErrorKind::RedirectionSetup(error),
+                        target.span(),
+                    ))
+                })?;
+            match payload {
+                InternalPayload::Empty => Ok(()),
+                bytes @ InternalPayload::ByteStream(_) => {
+                    drain_payload_to_pipe(bytes, endpoint, stage.span())
+                }
+                InternalPayload::Value(_) | InternalPayload::ValueStream(_) => {
+                    unreachable!("structured output redirection is rejected before execution")
+                }
+            }
+        }
+        StdoutRoute::Unsupported => Err(Interrupt::Runtime(RuntimeError::new(
+            RuntimeErrorKind::Unsupported {
+                feature: "this stdout redirection on an internal byte stream",
+            },
+            stage.span(),
+        ))),
     }
 }
 

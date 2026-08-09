@@ -388,7 +388,23 @@ Checker tests must prove that analysis does not start external processes, apply 
 
 Built-in and user-function help must use the same names, signatures, and documentation metadata consumed by static analysis and editor tooling. Tests should prevent help text, checker signatures, and language-server information from drifting into separate incompatible definitions.
 
-Help lookup is inspection-only and must not execute the documented callable.
+The lossless lexer distinguishes complete-line `##` tokens, while the parser
+retains only exact attached spans on named functions. Normalization belongs to
+shared runtime analysis, not the formatter or a frontend. `FunctionSignature`
+owns resolved callable metadata; `CommandSignature` owns carriers, flags,
+invocation, and prose. The host-free help catalog derives entries from those
+owners and `ScopeStack::visible_bindings`.
+
+The planner recognizes only static `help [NAME]`, snapshots its selected
+entries, and stores them on the planned stage. The internal executor renders
+that snapshot as bytes without receiving the live scope or callable body. Help
+tests must cover attachment and normalization, registry documentation
+completeness, exact ordering, lexical shadowing, imported defining ownership,
+same-name built-in/function entries, unknown and dynamic queries, byte routing,
+and panic-on-use process/platform adapters.
+
+Help lookup is inspection-only and must not execute the documented callable,
+probe an executable, or mutate the session merely to discover metadata.
 
 ### Language-server contract
 

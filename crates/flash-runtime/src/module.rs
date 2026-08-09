@@ -24,6 +24,7 @@ use flash_syntax::{
 };
 
 use crate::Value;
+use crate::documentation::Documentation;
 
 /// The sole host capability needed to turn a candidate source path into its
 /// unique module path.
@@ -823,6 +824,7 @@ pub struct FunctionSignature {
     parameters: Vec<FunctionParameterSignature>,
     result: ValueType,
     result_annotation_span: Option<Span>,
+    documentation: Option<Documentation>,
 }
 
 impl FunctionSignature {
@@ -849,6 +851,12 @@ impl FunctionSignature {
     #[must_use]
     pub const fn result_annotation_span(&self) -> Option<Span> {
         self.result_annotation_span
+    }
+
+    /// Normalized documentation attached to this named definition.
+    #[must_use]
+    pub const fn documentation(&self) -> Option<&Documentation> {
+        self.documentation.as_ref()
     }
 }
 
@@ -900,6 +908,34 @@ impl RuntimeBindingTypes {
                     .find(|function| function.declaration_span() == declaration_span)
             })
             .map(FunctionSignature::result)
+    }
+
+    pub(crate) fn function_signature(
+        &self,
+        source: SourceId,
+        declaration_span: Span,
+    ) -> Option<&FunctionSignature> {
+        self.functions_by_source.get(&source).and_then(|functions| {
+            functions
+                .iter()
+                .find(|function| function.declaration_span() == declaration_span)
+        })
+    }
+
+    pub(crate) fn analyze_source(
+        source: &SourceFile,
+        script: &Script,
+    ) -> Result<Self, Box<ModuleTypeError>> {
+        let entry = RegisteredModuleSource {
+            module: ModuleId(PathBuf::from(source.name())),
+            source: source.clone(),
+            script: script.clone(),
+        };
+        let types = TypeCollector::new(&entry).collect()?;
+        Ok(Self {
+            by_source: BTreeMap::from([(source.id(), types.bindings)]),
+            functions_by_source: BTreeMap::from([(source.id(), types.functions)]),
+        })
     }
 }
 
@@ -1058,6 +1094,10 @@ impl<'a> TypeCollector<'a> {
                         .return_type
                         .as_ref()
                         .map(|annotation| annotation.span),
+                    documentation: function
+                        .documentation
+                        .as_ref()
+                        .map(|block| Documentation::from_block(self.entry.source(), block)),
                 });
                 self.statements(&function.body.statements)
             }

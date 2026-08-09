@@ -127,10 +127,16 @@ pub enum EnvironmentStatement {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FunctionDefinition {
+    pub documentation: Option<DocumentationBlock>,
     pub name: Identifier,
     pub parameters: Vec<Parameter>,
     pub return_type: Option<TypeReference>,
     pub body: Block,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DocumentationBlock {
+    pub lines: Vec<Span>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

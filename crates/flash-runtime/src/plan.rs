@@ -21,7 +21,7 @@ use std::sync::Arc;
 
 use flash_syntax::{
     CommandItemKind, CommandStage, FileRedirection, IoNumber, OutputMode, PipeOperator, Pipeline,
-    RedirectionKind, SourceFile, Span, StageKind,
+    RedirectionKind, SourceFile, Span, StageKind, Word, WordPartKind,
 };
 
 use crate::command::{Carrier, CommandOutput, CommandRegistry};
@@ -29,6 +29,7 @@ use crate::eval::{
     CarrierBridge, CarrierMismatch, ExpandedWord, RuntimeError, RuntimeErrorKind,
     evaluate_closure_argument_with_binding_types, expand_spread, expand_word,
 };
+use crate::help::{HelpCatalog, HelpSnapshot};
 use crate::module::RuntimeBindingTypes;
 use crate::resolve::{ExecutableProbe, Resolution, ResolutionError, resolve_command};
 use crate::{Environment, ScopeStack, Value};
@@ -74,6 +75,7 @@ impl ExecutionPlan {
                 argv,
                 arguments: Vec::new(),
                 redirections: Vec::new(),
+                help: None,
                 span,
             }],
             edges: Vec::new(),
@@ -316,6 +318,7 @@ pub struct PlannedStage {
     argv: Vec<ExpandedWord>,
     arguments: Vec<PlannedArgument>,
     redirections: Vec<PlannedRedirection>,
+    help: Option<HelpSnapshot>,
     span: Span,
 }
 
@@ -365,6 +368,12 @@ impl PlannedStage {
     #[must_use]
     pub fn redirections(&self) -> &[PlannedRedirection] {
         &self.redirections
+    }
+
+    /// Immutable metadata selected while planning an inspection-only `help` stage.
+    #[must_use]
+    pub const fn help_snapshot(&self) -> Option<&HelpSnapshot> {
+        self.help.as_ref()
     }
 
     /// The stage's source span.
@@ -654,12 +663,27 @@ fn plan_stage(
     scope: &mut ScopeStack,
     context: &StagePlanningContext<'_>,
 ) -> Result<PlannedStage, RuntimeError> {
+    if command.head.kind() == flash_syntax::CommandHeadKind::Bare
+        && context.source.slice(command.head.word().span()).ok() == Some("help")
+    {
+        return plan_help_stage(command, span, scope, context);
+    }
+
     // argv[0] is the expanded command word; the head marker only steers
     // resolution and is never part of the name.
     let head = expand_word(command.head.word(), context.source, scope)?;
     let force_external = command.head.kind() == flash_syntax::CommandHeadKind::ForcedExternal;
     let (resolution, input_carriers, output_carrier) =
         resolve(head.value(), force_external, command.head.span(), context)?;
+    if matches!(&resolution, PlannedResolution::Internal { name } if name == "help") {
+        return Err(RuntimeError::new(
+            RuntimeErrorKind::BuiltinArgument {
+                command: "help",
+                message: "the help command head must be the static source word `help`".to_owned(),
+            },
+            command.head.span(),
+        ));
+    }
 
     let mut argv = vec![head];
     let mut arguments = Vec::new();
@@ -712,7 +736,137 @@ fn plan_stage(
         argv,
         arguments,
         redirections,
+        help: None,
         span,
+    })
+}
+
+fn plan_help_stage(
+    command: &CommandStage,
+    span: Span,
+    scope: &ScopeStack,
+    context: &StagePlanningContext<'_>,
+) -> Result<PlannedStage, RuntimeError> {
+    let signature = context
+        .registry
+        .lookup("help")
+        .expect("the standard help command is registered");
+    let mut head_scope = scope.clone();
+    let head = expand_word(command.head.word(), context.source, &mut head_scope)?;
+    let mut argv = vec![head];
+    let mut arguments = Vec::new();
+    let mut redirections = Vec::new();
+    let mut query = None;
+    let mut query_span = command.head.span();
+    let argument_items = command
+        .items
+        .iter()
+        .filter(|item| !matches!(item.kind(), CommandItemKind::Redirection(_)))
+        .collect::<Vec<_>>();
+    if argument_items.len() > 1 {
+        return Err(RuntimeError::new(
+            RuntimeErrorKind::BuiltinArity {
+                command: "help",
+                minimum: 0,
+                maximum: Some(1),
+                actual: argument_items.len(),
+            },
+            argument_items[1].span(),
+        ));
+    }
+
+    for item in &command.items {
+        match item.kind() {
+            CommandItemKind::Word(word) => {
+                if !is_static_word(word) {
+                    return Err(RuntimeError::new(
+                        RuntimeErrorKind::BuiltinArgument {
+                            command: "help",
+                            message: "the optional name must be one static source word".to_owned(),
+                        },
+                        item.span(),
+                    ));
+                }
+                query_span = item.span();
+                let mut query_scope = scope.clone();
+                let expanded = expand_word(word, context.source, &mut query_scope)?;
+                let name = expanded.value().to_str().ok_or_else(|| {
+                    RuntimeError::new(
+                        RuntimeErrorKind::BuiltinArgument {
+                            command: "help",
+                            message: "the optional name must be UTF-8 source text".to_owned(),
+                        },
+                        item.span(),
+                    )
+                })?;
+                query = Some(name.to_owned());
+                argv.push(expanded.clone());
+                arguments.push(PlannedArgument::Word(expanded));
+            }
+            CommandItemKind::Spread(_) | CommandItemKind::Closure(_) => {
+                return Err(RuntimeError::new(
+                    RuntimeErrorKind::BuiltinArgument {
+                        command: "help",
+                        message: "the optional name must be one static source word".to_owned(),
+                    },
+                    item.span(),
+                ));
+            }
+            CommandItemKind::Redirection(redirection) => {
+                let mut redirection_scope = scope.clone();
+                let action =
+                    plan_redirection(redirection.kind(), context.source, &mut redirection_scope)?;
+                redirections.push(PlannedRedirection {
+                    action,
+                    span: redirection.span(),
+                });
+            }
+        }
+    }
+
+    let catalog = HelpCatalog::snapshot(context.registry, scope);
+    let entries = catalog.query(query.as_deref());
+    if query.is_some() && entries.is_empty() {
+        return Err(RuntimeError::new(
+            RuntimeErrorKind::StructuredCommand {
+                command: "help",
+                message: format!(
+                    "unknown help name `{}`",
+                    query.as_deref().unwrap_or_default()
+                ),
+            },
+            query_span,
+        ));
+    }
+
+    Ok(PlannedStage {
+        resolution: PlannedResolution::Internal {
+            name: signature.name().to_owned(),
+        },
+        input_carriers: signature.inputs().collect(),
+        output_carrier: signature.output().resolve(context.input_carrier),
+        argv,
+        arguments,
+        redirections,
+        help: Some(HelpSnapshot::new(entries, query.is_some())),
+        span,
+    })
+}
+
+fn is_static_word(word: &Word) -> bool {
+    word.parts().iter().all(|part| match part.kind() {
+        WordPartKind::Bare | WordPartKind::BareEscape | WordPartKind::SingleQuoted => true,
+        WordPartKind::DoubleQuoted(parts) => parts.iter().all(|part| {
+            matches!(
+                part.kind(),
+                WordPartKind::DoubleText | WordPartKind::DoubleEscape
+            )
+        }),
+        WordPartKind::DoubleText
+        | WordPartKind::DoubleEscape
+        | WordPartKind::Variable(_)
+        | WordPartKind::BracedInterpolation(_)
+        | WordPartKind::CommandSubstitution(_) => false,
     })
 }
 

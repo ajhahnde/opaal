@@ -6,11 +6,12 @@ use flash_syntax::{ParseOutcome, SourceFile, SourceId, parse};
 
 #[test]
 fn complete_source_uses_stable_semantic_categories_without_changing_text() {
-    let source = "let cafe = 42\n^echo \"hello 💡 $name\" | check # note";
+    let source = "## documented\nlet cafe = 42\n^echo \"hello 💡 $name\" | check # note";
     let segments = SyntaxHighlighter::new().highlight(source);
 
     assert_lossless(source, &segments);
     assert_segment(&segments, "let", HighlightKind::Keyword);
+    assert_segment(&segments, "## documented", HighlightKind::Comment);
     assert_segment(&segments, "42", HighlightKind::Literal);
     assert_segment(&segments, "^", HighlightKind::Operator);
     assert_segment(&segments, "\"", HighlightKind::String);

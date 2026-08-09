@@ -95,6 +95,7 @@ pub enum TokenKind {
     Newline,
     LineContinuation,
     Comment,
+    DocumentationComment,
     Identifier,
     Keyword(Keyword),
     Number(NumberKind),
@@ -314,8 +315,25 @@ impl<'source> Lexer<'source> {
         {
             self.advance_scalar();
         }
-        self.push(TokenKind::Comment, start);
+        let kind = if self.starts_documentation_comment(start) {
+            TokenKind::DocumentationComment
+        } else {
+            TokenKind::Comment
+        };
+        self.push(kind, start);
         true
+    }
+
+    fn starts_documentation_comment(&self, start: usize) -> bool {
+        if !self.source.text()[start..].starts_with("##") {
+            return false;
+        }
+        let line_start = self.source.text()[..start]
+            .rfind('\n')
+            .map_or(0, |newline| newline + 1);
+        self.source.text()[line_start..start]
+            .bytes()
+            .all(|byte| matches!(byte, b' ' | b'\t'))
     }
 
     fn lex_single_quoted(&mut self) -> bool {

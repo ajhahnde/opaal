@@ -306,6 +306,11 @@ impl<'source> SpanChecker<'source> {
                 EnvironmentStatement::Unset { name } => self.identifier(*name),
             },
             StatementKind::Function(function) => {
+                if let Some(documentation) = &function.documentation {
+                    for line in &documentation.lines {
+                        self.span(*line);
+                    }
+                }
                 self.identifier(function.name);
                 for parameter in &function.parameters {
                     self.parameter(parameter);

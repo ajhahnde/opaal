@@ -83,8 +83,8 @@ fn standard_registry_has_exact_carrier_contracts() {
         registry.names().collect::<Vec<_>>(),
         [
             "bg", "cd", "check", "collect", "command", "decode", "each", "encode", "exit", "fg",
-            "first", "from", "get", "jobs", "kill", "last", "length", "lines", "ls", "open", "pwd",
-            "save", "select", "sort", "to", "update", "wait", "where", "which"
+            "first", "from", "get", "help", "jobs", "kill", "last", "length", "lines", "ls",
+            "open", "pwd", "save", "select", "sort", "to", "update", "wait", "where", "which"
         ]
     );
 
@@ -95,6 +95,8 @@ fn standard_registry_has_exact_carrier_contracts() {
     assert_eq!(fixed("command"), CommandOutput::Fixed(Carrier::ByteStream));
     assert_eq!(fixed("exit"), CommandOutput::Fixed(Carrier::Empty));
     assert_eq!(fixed("check"), CommandOutput::SameAsInput);
+    assert_eq!(fixed("help"), CommandOutput::Fixed(Carrier::ByteStream));
+    assert!(registry.lookup("help").unwrap().accepts(Carrier::Empty));
     assert_eq!(fixed("jobs"), CommandOutput::Fixed(Carrier::ValueStream));
     for name in ["fg", "bg", "wait", "kill"] {
         assert_eq!(fixed(name), CommandOutput::Fixed(Carrier::Empty));
@@ -131,6 +133,23 @@ fn standard_registry_has_exact_carrier_contracts() {
         Carrier::ValueStream,
     ] {
         assert!(registry.lookup("check").unwrap().accepts(carrier));
+    }
+
+    for signature in registry.signatures() {
+        assert!(
+            !signature.documentation().invocation().is_empty(),
+            "{} must have an invocation",
+            signature.name()
+        );
+        assert!(
+            !signature
+                .documentation()
+                .documentation()
+                .summary()
+                .is_empty(),
+            "{} must have a summary",
+            signature.name()
+        );
     }
 
     // The explicit byte/structured boundary commands. `decode`/`from` parse a

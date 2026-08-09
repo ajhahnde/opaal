@@ -46,6 +46,10 @@ fsh --help
 fsh --version
 ```
 
+`fsh --help` describes the launcher and script invocation. Inside Flash, the
+separate language command `help [NAME]` inspects standard built-ins and visible
+named functions. It is not a top-level `fsh help` mode.
+
 Flash reports command-line invocation errors before opening a script. Before
 execution, it canonicalizes the root and every static `import '<path>'`, reads
 and parses each canonical source once, and rejects load, UTF-8, syntax, cycle,
@@ -131,6 +135,19 @@ starts an interactive session without loading its startup configuration. The `--
 ## Checking and formatting without execution
 
 Flash v1 provides inspection modes for validating and normalizing source without running the program.
+
+The currently available runtime inspection surface is:
+
+```text
+help
+help NAME
+```
+
+It accepts zero or one static name, produces UTF-8 bytes, and uses ordinary
+capture, pipeline, and redirection behavior. Lookup is resolved from immutable
+metadata during planning; it never calls the documented function or queries an
+external executable. Dynamic query forms such as `help $name`, substitutions,
+spreads, and closures are rejected rather than evaluated as discovery logic.
 
 ### Static checking
 

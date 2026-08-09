@@ -280,7 +280,10 @@ fn can_end_callee(kind: TokenKind) -> bool {
 fn is_significant(kind: TokenKind) -> bool {
     !matches!(
         kind,
-        TokenKind::Whitespace | TokenKind::Newline | TokenKind::Comment
+        TokenKind::Whitespace
+            | TokenKind::Newline
+            | TokenKind::Comment
+            | TokenKind::DocumentationComment
     )
 }
 

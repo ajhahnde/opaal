@@ -28,6 +28,7 @@ use crate::format::{
     FromJsonStep, FromTextStep, JsonMode, ToJsonStep, ToTextStep, from_json, from_text, to_json,
     to_text,
 };
+use crate::help::render_help;
 use crate::plan::{ExecutionPlan, PlannedArgument, PlannedResolution, PlannedStage, preflight};
 use crate::resolve::ExecutableProbe;
 use crate::stream::{BytePull, ByteStream, StreamPull, ValueStream};
@@ -170,7 +171,14 @@ pub fn execute_internal_suffix(
     }
 
     let status = aggregate_status(statuses, plan.pipefail());
-    state.set_current_status(Some(status.clone()));
+    let inspection_only = plan.stages().len() == 1
+        && matches!(
+            plan.stages()[0].resolution(),
+            PlannedResolution::Internal { name } if name == "help"
+        );
+    if !inspection_only {
+        state.set_current_status(Some(status.clone()));
+    }
     Ok(InternalPipelineOutcome::Completed {
         payload,
         status,
@@ -221,6 +229,7 @@ pub(crate) fn execute_stage(
         "to" => execute_to(stage, input),
         "open" => execute_open(stage, input, platform, cwd),
         "save" => execute_save(stage, input, platform, cwd),
+        "help" => execute_help(stage, input),
         _ => Err(RuntimeError::new(
             RuntimeErrorKind::Unsupported {
                 feature: "this internal command in the live structured executor",
@@ -228,6 +237,25 @@ pub(crate) fn execute_stage(
             stage.span(),
         )),
     }
+}
+
+fn execute_help(
+    stage: &PlannedStage,
+    input: InternalPayload,
+) -> Result<StageOutcome, RuntimeError> {
+    expect_empty(stage, input)?;
+    let snapshot = stage.help_snapshot().ok_or_else(|| {
+        RuntimeError::new(
+            RuntimeErrorKind::StructuredCommand {
+                command: "help",
+                message: "planned help metadata is missing".to_owned(),
+            },
+            stage.span(),
+        )
+    })?;
+    completed(InternalPayload::ByteStream(ByteStream::from_chunks(vec![
+        render_help(snapshot),
+    ])))
 }
 
 fn execute_each(

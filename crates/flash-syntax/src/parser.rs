@@ -2,12 +2,12 @@ use crate::{
     AndChain, AndOperator, Assignment, AstNode, BinaryExpression, BinaryOperator, Block,
     CallExpression, Closure, CommandHead, CommandHeadKind, CommandItem, CommandItemKind,
     CommandStage, ConditionalChain, ConditionalOperator, ControlTransfer, Declaration, Delimiter,
-    Diagnostic, ElseBranch, EnvironmentStatement, Expression, ExpressionKind, FileRedirection,
-    ForStatement, FunctionDefinition, Identifier, IfStatement, ImportStatement, IncompleteInput,
-    IncompleteReason, IndexExpression, IoNumber, JobStatement, Keyword, Literal, LiteralKind,
-    MatchArm, MatchStatement, MemberExpression, ModuleExportStatement, NumberKind, Operator,
-    OutputMode, Parameter, Pattern, PipeOperator, Pipeline, RecordEntry, RecordKey, Redirection,
-    RedirectionKind, Script, Severity, SourceFile, Span, Stage, StageKind, Statement,
+    Diagnostic, DocumentationBlock, ElseBranch, EnvironmentStatement, Expression, ExpressionKind,
+    FileRedirection, ForStatement, FunctionDefinition, Identifier, IfStatement, ImportStatement,
+    IncompleteInput, IncompleteReason, IndexExpression, IoNumber, JobStatement, Keyword, Literal,
+    LiteralKind, MatchArm, MatchStatement, MemberExpression, ModuleExportStatement, NumberKind,
+    Operator, OutputMode, Parameter, Pattern, PipeOperator, Pipeline, RecordEntry, RecordKey,
+    Redirection, RedirectionKind, Script, Severity, SourceFile, Span, Stage, StageKind, Statement,
     StatementKind, SyntaxClassification, Token, TokenKind, TypeReference, UnaryExpression,
     UnaryOperator, VariableReference, WhileStatement, Word, WordPart, WordPartKind,
     classify_tokens, lex,
@@ -96,14 +96,14 @@ impl<'source> Parser<'source> {
 
     fn parse_statement_list(&mut self, closing: Option<Delimiter>) -> ParseResult<Vec<Statement>> {
         let mut statements = Vec::new();
-        self.skip_separators();
+        let mut documentation = self.skip_separators_with_documentation();
         while !self.is_end() && !self.at_delimiter(closing) {
-            let statement = match self.parse_statement(closing.is_none()) {
+            let statement = match self.parse_statement(closing.is_none(), documentation.take()) {
                 Ok(statement) => statement,
                 Err(ParseError::Invalid(diagnostic)) => {
                     self.diagnostics.push(diagnostic);
                     self.synchronize(closing);
-                    self.skip_separators();
+                    documentation = self.skip_separators_with_documentation();
                     continue;
                 }
                 Err(error) => return Err(error),
@@ -119,7 +119,7 @@ impl<'source> Parser<'source> {
             self.skip_inline();
 
             if backgrounded {
-                self.skip_separators();
+                documentation = self.skip_separators_with_documentation();
                 continue;
             }
             if self.at_delimiter(closing) || self.is_end() {
@@ -133,7 +133,7 @@ impl<'source> Parser<'source> {
                 };
                 self.diagnostics.push(diagnostic);
                 self.synchronize(closing);
-                self.skip_separators();
+                documentation = self.skip_separators_with_documentation();
                 continue;
             }
             if !self.at_statement_separator() {
@@ -144,15 +144,19 @@ impl<'source> Parser<'source> {
                 };
                 self.diagnostics.push(diagnostic);
                 self.synchronize(closing);
-                self.skip_separators();
+                documentation = self.skip_separators_with_documentation();
                 continue;
             }
-            self.skip_separators();
+            documentation = self.skip_separators_with_documentation();
         }
         Ok(statements)
     }
 
-    fn parse_statement(&mut self, top_level: bool) -> ParseResult<Statement> {
+    fn parse_statement(
+        &mut self,
+        top_level: bool,
+        documentation: Option<DocumentationBlock>,
+    ) -> ParseResult<Statement> {
         self.skip_inline();
         match self.current_kind() {
             Some(TokenKind::Keyword(Keyword::Import)) if top_level => self.parse_import(),
@@ -163,7 +167,7 @@ impl<'source> Parser<'source> {
             Some(TokenKind::Keyword(Keyword::Mut)) => self.parse_declaration(true),
             Some(TokenKind::Keyword(Keyword::Export)) => self.parse_export(top_level),
             Some(TokenKind::Keyword(Keyword::Unset)) => self.parse_unset(),
-            Some(TokenKind::Keyword(Keyword::Def)) => self.parse_function(),
+            Some(TokenKind::Keyword(Keyword::Def)) => self.parse_function(documentation),
             Some(TokenKind::Keyword(Keyword::If)) => {
                 let node = self.parse_if_node()?;
                 let span = node.span();
@@ -324,7 +328,10 @@ impl<'source> Parser<'source> {
         ))
     }
 
-    fn parse_function(&mut self) -> ParseResult<Statement> {
+    fn parse_function(
+        &mut self,
+        documentation: Option<DocumentationBlock>,
+    ) -> ParseResult<Statement> {
         let start = self.take().expect("def keyword is current").span();
         self.skip_inline();
         let name = self.parse_identifier()?;
@@ -347,6 +354,7 @@ impl<'source> Parser<'source> {
         let span = self.span(start.start(), body.span.end());
         Ok(Statement::new(
             StatementKind::Function(FunctionDefinition {
+                documentation,
                 name,
                 parameters,
                 return_type,
@@ -1642,7 +1650,12 @@ impl<'source> Parser<'source> {
     fn skip_inline(&mut self) {
         while matches!(
             self.current_kind(),
-            Some(TokenKind::Whitespace | TokenKind::Comment | TokenKind::LineContinuation)
+            Some(
+                TokenKind::Whitespace
+                    | TokenKind::Comment
+                    | TokenKind::DocumentationComment
+                    | TokenKind::LineContinuation
+            )
         ) || (self.continuation_depth > 0 && self.current_kind() == Some(TokenKind::Newline))
         {
             self.position += 1;
@@ -1655,6 +1668,7 @@ impl<'source> Parser<'source> {
             Some(
                 TokenKind::Whitespace
                     | TokenKind::Comment
+                    | TokenKind::DocumentationComment
                     | TokenKind::LineContinuation
                     | TokenKind::Newline
             )
@@ -1669,6 +1683,7 @@ impl<'source> Parser<'source> {
             Some(
                 TokenKind::Whitespace
                     | TokenKind::Comment
+                    | TokenKind::DocumentationComment
                     | TokenKind::LineContinuation
                     | TokenKind::Newline
                     | TokenKind::Operator(Operator::Semicolon)
@@ -1676,6 +1691,46 @@ impl<'source> Parser<'source> {
         ) {
             self.position += 1;
         }
+    }
+
+    fn skip_separators_with_documentation(&mut self) -> Option<DocumentationBlock> {
+        let mut lines = Vec::new();
+        let mut newlines_after_documentation = 0usize;
+
+        while let Some(token) = self.current().copied() {
+            match token.kind() {
+                TokenKind::DocumentationComment => {
+                    if !lines.is_empty() && newlines_after_documentation != 1 {
+                        lines.clear();
+                    }
+                    lines.push(token.span());
+                    newlines_after_documentation = 0;
+                    self.position += 1;
+                }
+                TokenKind::Newline => {
+                    if !lines.is_empty() {
+                        newlines_after_documentation += 1;
+                        if newlines_after_documentation > 1 {
+                            lines.clear();
+                            newlines_after_documentation = 0;
+                        }
+                    }
+                    self.position += 1;
+                }
+                TokenKind::Whitespace => self.position += 1,
+                TokenKind::Comment
+                | TokenKind::LineContinuation
+                | TokenKind::Operator(Operator::Semicolon) => {
+                    lines.clear();
+                    newlines_after_documentation = 0;
+                    self.position += 1;
+                }
+                _ => break,
+            }
+        }
+
+        (!lines.is_empty() && newlines_after_documentation == 1)
+            .then_some(DocumentationBlock { lines })
     }
 
     fn synchronize(&mut self, closing: Option<Delimiter>) {
@@ -1798,7 +1853,10 @@ impl<'source> Parser<'source> {
         while let Some(token) = self.tokens.get(position) {
             if !matches!(
                 token.kind(),
-                TokenKind::Whitespace | TokenKind::Comment | TokenKind::LineContinuation
+                TokenKind::Whitespace
+                    | TokenKind::Comment
+                    | TokenKind::DocumentationComment
+                    | TokenKind::LineContinuation
             ) {
                 return Some(token);
             }

@@ -349,7 +349,10 @@ fn significant_before(tokens: &[Token], offset: usize) -> Vec<&Token> {
             token.span().end() <= offset
                 && !matches!(
                     token.kind(),
-                    TokenKind::Whitespace | TokenKind::Comment | TokenKind::LineContinuation
+                    TokenKind::Whitespace
+                        | TokenKind::Comment
+                        | TokenKind::DocumentationComment
+                        | TokenKind::LineContinuation
                 )
         })
         .collect()

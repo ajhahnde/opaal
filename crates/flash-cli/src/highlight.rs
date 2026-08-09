@@ -121,7 +121,7 @@ fn token_highlight_kind(kind: TokenKind) -> HighlightKind {
         TokenKind::LineContinuation | TokenKind::BareEscape | TokenKind::DoubleEscape => {
             HighlightKind::Escape
         }
-        TokenKind::Comment => HighlightKind::Comment,
+        TokenKind::Comment | TokenKind::DocumentationComment => HighlightKind::Comment,
         TokenKind::Keyword(Keyword::True | Keyword::False | Keyword::Null)
         | TokenKind::Number(_) => HighlightKind::Literal,
         TokenKind::Keyword(_) => HighlightKind::Keyword,

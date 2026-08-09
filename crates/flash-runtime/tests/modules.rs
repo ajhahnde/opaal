@@ -230,6 +230,53 @@ fn typed_function_signatures_are_resolved_before_known_calls_are_validated() {
 }
 
 #[test]
+fn function_documentation_is_normalized_beside_resolved_module_signatures_without_activation() {
+    let paths = FakeCanonicalizer::default()
+        .resolves("/project/main.fsh", "/project/main.fsh")
+        .resolves("/project/library.fsh", "/project/library.fsh");
+    let root_text = concat!(
+        "import { imported } from './library.fsh'\n",
+        "## Local summary π\n",
+        "##\n",
+        "## Local detail 🚀\n",
+        "def local(value: String) -> String { $value }\n",
+    );
+    let imported_text = concat!(
+        "export { imported }\n",
+        "## Imported summary\n",
+        "def imported(value: Int) -> Int {\n",
+        "    ^must-not-run\n",
+        "    $value\n",
+        "}\n",
+    );
+    let sources = FakeSourceLoader::default()
+        .contains("/project/main.fsh", root_text)
+        .contains("/project/library.fsh", imported_text);
+    let program = ModuleProgramLoader::new(&paths, &sources)
+        .load(Path::new("/project/main.fsh"))
+        .expect("documentation is analyzed without activating the imported source");
+
+    let root = program.graph().root();
+    let imported = program.graph().imports()[0].target();
+    let local = &program.types().functions(root)[0];
+    let imported = &program.types().functions(imported)[0];
+
+    assert_eq!(local.name(), "local");
+    assert_eq!(local.parameters()[0].value_type(), &ValueType::String);
+    assert_eq!(local.result(), &ValueType::String);
+    assert_eq!(local.documentation().unwrap().summary(), "Local summary π");
+    assert_eq!(
+        local.documentation().unwrap().text(),
+        "Local summary π\n\nLocal detail 🚀"
+    );
+
+    assert_eq!(imported.name(), "imported");
+    assert_eq!(imported.parameters()[0].value_type(), &ValueType::Int);
+    assert_eq!(imported.result(), &ValueType::Int);
+    assert_eq!(imported.documentation().unwrap().text(), "Imported summary");
+}
+
+#[test]
 fn every_builtin_type_spelling_resolves_in_source_annotations() {
     let paths = FakeCanonicalizer::default().resolves("/project/main.fsh", "/project/main.fsh");
     let text = concat!(

@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use flash_platform::{Platform, WorkingDirectoryRequest};
 
 use crate::command::{Carrier, CommandRegistry, CommandSignature};
+use crate::documentation::{CommandDocumentation, Documentation};
 use crate::eval::{RuntimeError, RuntimeErrorKind};
 use crate::plan::{PlannedArgument, PlannedResolution, PlannedStage};
 use crate::resolve::{
@@ -146,23 +147,47 @@ pub enum BuiltinOutcome {
 pub fn standard_registry() -> CommandRegistry {
     let mut registry = CommandRegistry::new();
     for signature in [
-        CommandSignature::new("cd", [Carrier::Empty], Carrier::Empty),
-        CommandSignature::new("pwd", [Carrier::Empty], Carrier::Value),
-        CommandSignature::new("which", [Carrier::Empty], Carrier::ValueStream),
-        CommandSignature::new(
-            "command",
-            [Carrier::Empty, Carrier::ByteStream],
-            Carrier::ByteStream,
+        documented(
+            CommandSignature::new("cd", [Carrier::Empty], Carrier::Empty),
+            "cd [PATH]",
+            "Change the logical working directory.",
         ),
-        CommandSignature::new("exit", [Carrier::Empty], Carrier::Empty),
-        CommandSignature::passthrough(
-            "check",
-            [
-                Carrier::Empty,
+        documented(
+            CommandSignature::new("pwd", [Carrier::Empty], Carrier::Value),
+            "pwd",
+            "Return the logical working directory.",
+        ),
+        documented(
+            CommandSignature::new("which", [Carrier::Empty], Carrier::ValueStream),
+            "which NAME...",
+            "Resolve command names without executing them.",
+        ),
+        documented(
+            CommandSignature::new(
+                "command",
+                [Carrier::Empty, Carrier::ByteStream],
                 Carrier::ByteStream,
-                Carrier::Value,
-                Carrier::ValueStream,
-            ],
+            ),
+            "command NAME [ARG...]",
+            "Run a command through explicit external resolution.",
+        ),
+        documented(
+            CommandSignature::new("exit", [Carrier::Empty], Carrier::Empty),
+            "exit [CODE]",
+            "End the current session.",
+        ),
+        documented(
+            CommandSignature::passthrough(
+                "check",
+                [
+                    Carrier::Empty,
+                    Carrier::ByteStream,
+                    Carrier::Value,
+                    Carrier::ValueStream,
+                ],
+            ),
+            "check",
+            "Require the upstream stage to have succeeded.",
         ),
         // The explicit byte/structured boundaries (see the value-model spec).
         // `decode`/`from` parse a byte stream into structured values; `encode`/`to`
@@ -170,65 +195,162 @@ pub fn standard_registry() -> CommandRegistry {
         // carrier contracts makes the pipeline-validation bridge hints name real
         // commands. `decode`/`encode` implement the codec crossing in `convert`;
         // `from`/`to` use the format conversions in `format`.
-        CommandSignature::new("decode", [Carrier::ByteStream], Carrier::ValueStream),
-        CommandSignature::new("from", [Carrier::ByteStream], Carrier::ValueStream),
-        CommandSignature::new(
-            "encode",
-            [Carrier::Value, Carrier::ValueStream],
-            Carrier::ByteStream,
+        documented(
+            CommandSignature::new("decode", [Carrier::ByteStream], Carrier::ValueStream),
+            "decode CODEC",
+            "Decode bytes into structured values.",
         ),
-        CommandSignature::new(
-            "to",
-            [Carrier::Value, Carrier::ValueStream],
-            Carrier::ByteStream,
+        documented(
+            CommandSignature::new("from", [Carrier::ByteStream], Carrier::ValueStream),
+            "from FORMAT",
+            "Parse formatted bytes into structured values.",
+        ),
+        documented(
+            CommandSignature::new(
+                "encode",
+                [Carrier::Value, Carrier::ValueStream],
+                Carrier::ByteStream,
+            ),
+            "encode CODEC",
+            "Encode structured values as bytes.",
+        ),
+        documented(
+            CommandSignature::new(
+                "to",
+                [Carrier::Value, Carrier::ValueStream],
+                Carrier::ByteStream,
+            ),
+            "to FORMAT",
+            "Serialize structured values in a named format.",
         ),
         // The closure-free structured commands (see `structured`). Each consumes a
         // value stream: `first`/`last` reshape it to a bounded value stream,
         // `collect` materializes one `List` value, `length` counts, and `lines`
         // splits the text carried by its values into one value per line.
-        CommandSignature::new("first", [Carrier::ValueStream], Carrier::ValueStream),
-        CommandSignature::new("last", [Carrier::ValueStream], Carrier::ValueStream),
-        CommandSignature::new("collect", [Carrier::ValueStream], Carrier::Value),
-        CommandSignature::new("length", [Carrier::ValueStream], Carrier::Value),
-        CommandSignature::new("lines", [Carrier::ValueStream], Carrier::ValueStream),
+        documented(
+            CommandSignature::new("first", [Carrier::ValueStream], Carrier::ValueStream),
+            "first [COUNT]",
+            "Keep the first values from a stream.",
+        ),
+        documented(
+            CommandSignature::new("last", [Carrier::ValueStream], Carrier::ValueStream),
+            "last [COUNT]",
+            "Keep the last values from a stream.",
+        ),
+        documented(
+            CommandSignature::new("collect", [Carrier::ValueStream], Carrier::Value),
+            "collect",
+            "Collect a value stream into one list.",
+        ),
+        documented(
+            CommandSignature::new("length", [Carrier::ValueStream], Carrier::Value),
+            "length",
+            "Count values in a stream.",
+        ),
+        documented(
+            CommandSignature::new("lines", [Carrier::ValueStream], Carrier::ValueStream),
+            "lines",
+            "Split textual values into lines.",
+        ),
         // The closure-driven structured commands (see `closure`). `each` maps and
         // `where` filters the value stream by applying a closure per item.
-        CommandSignature::new("each", [Carrier::ValueStream], Carrier::ValueStream),
-        CommandSignature::new("where", [Carrier::ValueStream], Carrier::ValueStream),
+        documented(
+            CommandSignature::new("each", [Carrier::ValueStream], Carrier::ValueStream),
+            "each { |VALUE| EXPRESSION }",
+            "Transform each value with a closure.",
+        ),
+        documented(
+            CommandSignature::new("where", [Carrier::ValueStream], Carrier::ValueStream),
+            "where { |VALUE| PREDICATE }",
+            "Keep values accepted by a predicate closure.",
+        ),
         // The read-only record projections (see `structured`). `select` narrows
         // each record to named columns; `get` extracts one field per record.
-        CommandSignature::new("select", [Carrier::ValueStream], Carrier::ValueStream),
-        CommandSignature::new("get", [Carrier::ValueStream], Carrier::ValueStream),
+        documented(
+            CommandSignature::new("select", [Carrier::ValueStream], Carrier::ValueStream),
+            "select FIELD...",
+            "Project named fields from records.",
+        ),
+        documented(
+            CommandSignature::new("get", [Carrier::ValueStream], Carrier::ValueStream),
+            "get FIELD",
+            "Extract one named field from each record.",
+        ),
         // `update` replaces one field per record, applying a closure replacement
         // to the current value (see `closure`).
-        CommandSignature::new("update", [Carrier::ValueStream], Carrier::ValueStream),
+        documented(
+            CommandSignature::new("update", [Carrier::ValueStream], Carrier::ValueStream),
+            "update FIELD VALUE",
+            "Replace a field in each record.",
+        ),
         // `sort` materializes the stream and orders it, or records by a key (see
         // `structured`).
-        CommandSignature::new("sort", [Carrier::ValueStream], Carrier::ValueStream),
+        documented(
+            CommandSignature::new("sort", [Carrier::ValueStream], Carrier::ValueStream),
+            "sort [FIELD]",
+            "Sort values or records by a field.",
+        ),
         // `ls` is a structured producer: it takes no pipeline input and yields
         // one record per directory entry (see `directory`).
-        CommandSignature::new("ls", [Carrier::Empty], Carrier::ValueStream),
+        documented(
+            CommandSignature::new("ls", [Carrier::Empty], Carrier::ValueStream),
+            "ls [PATH]",
+            "List directory entries as records.",
+        ),
         // File bytes remain bytes. `open` produces them lazily and `save`
         // consumes them; parsing and serialization stay explicit `from`/`to`
         // stages (see `file`).
-        CommandSignature::new("open", [Carrier::Empty], Carrier::ByteStream),
-        CommandSignature::new("save", [Carrier::ByteStream], Carrier::Empty),
+        documented(
+            CommandSignature::new("open", [Carrier::Empty], Carrier::ByteStream),
+            "open PATH",
+            "Read a file as bytes.",
+        ),
+        documented(
+            CommandSignature::new("save", [Carrier::ByteStream], Carrier::Empty),
+            "save PATH",
+            "Write pipeline bytes to a file.",
+        ),
         // Job-control commands need the session-owned coordinator rather than
         // the clonable `SessionState` used by ordinary built-ins. Their
         // signatures still belong in the standard registry so planning,
         // preflight, and editor completion see the real carrier contract.
-        CommandSignature::new("jobs", [Carrier::Empty], Carrier::ValueStream),
-        CommandSignature::new("fg", [Carrier::Empty], Carrier::Empty),
-        CommandSignature::new("bg", [Carrier::Empty], Carrier::Empty),
-        CommandSignature::new("wait", [Carrier::Empty], Carrier::Empty),
-        CommandSignature::new("kill", [Carrier::Empty], Carrier::Empty).with_flags([
-            "--hangup",
-            "--interrupt",
-            "--terminate",
-            "--kill",
-            "--stop",
-            "--continue",
-        ]),
+        documented(
+            CommandSignature::new("jobs", [Carrier::Empty], Carrier::ValueStream),
+            "jobs",
+            "List addressable background jobs.",
+        ),
+        documented(
+            CommandSignature::new("fg", [Carrier::Empty], Carrier::Empty),
+            "fg %JOB",
+            "Resume a job in the foreground.",
+        ),
+        documented(
+            CommandSignature::new("bg", [Carrier::Empty], Carrier::Empty),
+            "bg %JOB",
+            "Resume a stopped job in the background.",
+        ),
+        documented(
+            CommandSignature::new("wait", [Carrier::Empty], Carrier::Empty),
+            "wait [%JOB]",
+            "Wait for one job or all jobs.",
+        ),
+        documented(
+            CommandSignature::new("kill", [Carrier::Empty], Carrier::Empty).with_flags([
+                "--hangup",
+                "--interrupt",
+                "--terminate",
+                "--kill",
+                "--stop",
+                "--continue",
+            ]),
+            "kill [SIGNAL] %JOB",
+            "Send a signal to an addressable job.",
+        ),
+        documented(
+            CommandSignature::new("help", [Carrier::Empty], Carrier::ByteStream),
+            "help [NAME]",
+            "Inspect built-in and visible function metadata without execution.",
+        ),
     ] {
         assert!(
             registry.register(signature),
@@ -236,6 +358,17 @@ pub fn standard_registry() -> CommandRegistry {
         );
     }
     registry
+}
+
+fn documented(
+    signature: CommandSignature,
+    invocation: &'static str,
+    summary: &'static str,
+) -> CommandSignature {
+    signature.with_documentation(CommandDocumentation::new(
+        invocation,
+        Documentation::new(summary),
+    ))
 }
 
 /// Execute one planned standard internal command without spawning a process.

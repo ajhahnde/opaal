@@ -1,14 +1,17 @@
 //! The command registry and command signatures.
 //!
-//! A [`CommandSignature`] is, for v0.1, exactly the pipeline-carrier contract an
-//! internal command declares: the input carriers it accepts, the carrier it
-//! produces, and the flags it advertises to editor services. Typed parameters
-//! and option value schemas remain later additive extensions. A [`CommandRegistry`] maps a name to a signature;
+//! A [`CommandSignature`] owns the pipeline-carrier contract and stable
+//! documentation an internal command declares: accepted input carriers, its
+//! output carrier, advertised flags, invocation spelling, and prose. Typed
+//! parameters and option value schemas remain later additive extensions. A
+//! [`CommandRegistry`] maps a name to a signature;
 //! it is empty by default, and each built-in's signature is registered with the
 //! built-in. Registering a name twice is rejected, since a duplicate built-in name
 //! is a definition-time bug rather than a runtime override.
 
 use std::collections::{BTreeMap, BTreeSet};
+
+use crate::documentation::CommandDocumentation;
 
 /// One pipeline-edge carrier.
 ///
@@ -46,13 +49,14 @@ impl CommandOutput {
     }
 }
 
-/// An internal command's signature: its name, pipeline contract, and flags.
+/// An internal command's signature: its name, pipeline contract, flags, and prose.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CommandSignature {
     name: String,
     inputs: BTreeSet<Carrier>,
     output: CommandOutput,
     flags: BTreeSet<String>,
+    documentation: CommandDocumentation,
 }
 
 impl CommandSignature {
@@ -68,6 +72,7 @@ impl CommandSignature {
             inputs: inputs.into_iter().collect(),
             output: CommandOutput::Fixed(output),
             flags: BTreeSet::new(),
+            documentation: CommandDocumentation::default(),
         }
     }
 
@@ -78,6 +83,7 @@ impl CommandSignature {
             inputs: inputs.into_iter().collect(),
             output: CommandOutput::SameAsInput,
             flags: BTreeSet::new(),
+            documentation: CommandDocumentation::default(),
         }
     }
 
@@ -85,6 +91,13 @@ impl CommandSignature {
     #[must_use]
     pub fn with_flags(mut self, flags: impl IntoIterator<Item = impl Into<String>>) -> Self {
         self.flags.extend(flags.into_iter().map(Into::into));
+        self
+    }
+
+    /// Attaches the command's stable invocation spelling and prose.
+    #[must_use]
+    pub fn with_documentation(mut self, documentation: CommandDocumentation) -> Self {
+        self.documentation = documentation;
         self
     }
 
@@ -114,6 +127,12 @@ impl CommandSignature {
     /// The advertised flags, in sorted order.
     pub fn flags(&self) -> impl Iterator<Item = &str> {
         self.flags.iter().map(String::as_str)
+    }
+
+    /// Required user-facing invocation and prose metadata.
+    #[must_use]
+    pub const fn documentation(&self) -> &CommandDocumentation {
+        &self.documentation
     }
 }
 
@@ -168,5 +187,10 @@ impl CommandRegistry {
     /// The registered command names, in sorted order.
     pub fn names(&self) -> impl Iterator<Item = &str> {
         self.commands.keys().map(String::as_str)
+    }
+
+    /// Registered signatures in name order.
+    pub fn signatures(&self) -> impl Iterator<Item = &CommandSignature> {
+        self.commands.values()
     }
 }
