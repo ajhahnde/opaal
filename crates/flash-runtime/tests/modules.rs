@@ -230,6 +230,108 @@ fn typed_function_signatures_are_resolved_before_known_calls_are_validated() {
 }
 
 #[test]
+fn every_builtin_type_spelling_resolves_in_source_annotations() {
+    let paths = FakeCanonicalizer::default().resolves("/project/main.fsh", "/project/main.fsh");
+    let text = concat!(
+        "def all_types(any_value: Any, null_value: Null, bool_value: Bool, int_value: Int, ",
+        "float_value: Float, string_value: String, bytes_value: Bytes, path_value: Path, ",
+        "duration_value: Duration, size_value: ByteSize, strings: List[String], ",
+        "nested: List[List[Int]], record_value: Record, table_value: Table, range_value: Range, ",
+        "status_value: Status, function_value: Function, closure_value: Closure) -> Any { null }\n",
+    );
+    let sources = FakeSourceLoader::default().contains("/project/main.fsh", text);
+    let program = ModuleProgramLoader::new(&paths, &sources)
+        .load(Path::new("/project/main.fsh"))
+        .expect("every built-in type spelling resolves");
+    let root = program.graph().root();
+    let source = program
+        .sources()
+        .source(root)
+        .expect("the root source is registered");
+    let name_start = text.find("all_types").expect("function name is present");
+    let signature = program
+        .types()
+        .function(
+            root,
+            span(source, name_start..name_start + "all_types".len()),
+        )
+        .expect("the resolved signature is inspectable");
+
+    let expected = vec![
+        ValueType::Any,
+        ValueType::Null,
+        ValueType::Bool,
+        ValueType::Int,
+        ValueType::Float,
+        ValueType::String,
+        ValueType::Bytes,
+        ValueType::Path,
+        ValueType::Duration,
+        ValueType::ByteSize,
+        ValueType::List(Box::new(ValueType::String)),
+        ValueType::List(Box::new(ValueType::List(Box::new(ValueType::Int)))),
+        ValueType::Record,
+        ValueType::Table,
+        ValueType::Range,
+        ValueType::Status,
+        ValueType::Function,
+        ValueType::Closure,
+    ];
+    assert_eq!(
+        signature
+            .parameters()
+            .iter()
+            .map(|parameter| parameter.value_type().clone())
+            .collect::<Vec<_>>(),
+        expected
+    );
+    assert_eq!(signature.result(), &ValueType::Any);
+}
+
+#[test]
+fn unknown_type_names_and_invalid_type_arity_report_stable_diagnostics() {
+    let paths = FakeCanonicalizer::default().resolves("/project/main.fsh", "/project/main.fsh");
+    let cases = [
+        (
+            "let value: Mystery = null\n",
+            "SIG001",
+            "unknown value type `Mystery`",
+        ),
+        (
+            "let value: string = 'text'\n",
+            "SIG001",
+            "unknown value type `string`",
+        ),
+        (
+            "let value: List = []\n",
+            "SIG002",
+            "expected 1 type arguments, found 0",
+        ),
+        (
+            "let value: List[String, Int] = []\n",
+            "SIG002",
+            "expected 1 type arguments, found 2",
+        ),
+        (
+            "let value: String[Int] = 'text'\n",
+            "SIG002",
+            "expected 0 type arguments, found 1",
+        ),
+    ];
+
+    for (text, code, label) in cases {
+        let sources = FakeSourceLoader::default().contains("/project/main.fsh", text);
+        let error = ModuleProgramLoader::new(&paths, &sources)
+            .load(Path::new("/project/main.fsh"))
+            .expect_err("an invalid type reference fails during analysis");
+        let diagnostic = &error.diagnostics()[0];
+
+        assert_eq!(diagnostic.code(), code, "{text}");
+        assert_eq!(diagnostic.labels()[0].message(), label, "{text}");
+    }
+}
+
+#[test]
 fn conservative_call_validation_uses_annotations_functions_results_and_operators() {
     let paths = FakeCanonicalizer::default()
         .resolves("/project/main.fsh", "/project/main.fsh")
@@ -419,6 +521,67 @@ fn value_types_match_exact_runtime_families_and_recursive_lists() {
     );
     let wrong_nested_value = Value::list(vec![Value::list(vec![Value::Bool(true)])]);
     assert!(!nested_strings.accepts(&wrong_nested_value));
+}
+
+#[test]
+fn dynamic_lists_enforce_any_and_recursive_element_types_at_runtime() {
+    let paths = FakeCanonicalizer::default().resolves("/project/main.fsh", "/project/main.fsh");
+    let valid_sources = FakeSourceLoader::default().contains(
+        "/project/main.fsh",
+        concat!(
+            "let nested = [['nested']]\n",
+            "let mixed = [1, 'two', true]\n",
+            "def accept_nested(values: List[List[String]]) -> Null { null }\n",
+            "def accept_any(values: List[Any]) -> Null { null }\n",
+            "let nested_result = accept_nested($nested)\n",
+            "let any_result = accept_any($mixed)\n",
+        ),
+    );
+    let valid_program = ModuleProgramLoader::new(&paths, &valid_sources)
+        .load(Path::new("/project/main.fsh"))
+        .expect("untyped list bindings remain conservative during analysis");
+    execute_module_program(
+        &valid_program,
+        &[],
+        Path::new("/project"),
+        &mut Environment::new(),
+        &standard_registry(),
+        &NoExecutables,
+        &SessionOptions::default(),
+        &FakePlatform::none(),
+        Arc::new(FakeClock::new()),
+    )
+    .expect("Any and recursively matching list elements are accepted");
+
+    let invalid_sources = FakeSourceLoader::default().contains(
+        "/project/main.fsh",
+        concat!(
+            "let nested = [[true]]\n",
+            "def accept(values: List[List[String]]) -> Null { null }\n",
+            "let result = accept($nested)\n",
+        ),
+    );
+    let invalid_program = ModuleProgramLoader::new(&paths, &invalid_sources)
+        .load(Path::new("/project/main.fsh"))
+        .expect("an untyped list binding remains unknown during analysis");
+    let error = execute_module_program(
+        &invalid_program,
+        &[],
+        Path::new("/project"),
+        &mut Environment::new(),
+        &standard_registry(),
+        &NoExecutables,
+        &SessionOptions::default(),
+        &FakePlatform::none(),
+        Arc::new(FakeClock::new()),
+    )
+    .expect_err("a nested runtime element mismatch is rejected");
+    let rendered = error.render();
+
+    assert!(
+        rendered.contains("parameter \"values\" expects List[List[String]], found list"),
+        "{rendered}"
+    );
 }
 
 #[test]
