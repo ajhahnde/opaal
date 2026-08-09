@@ -1174,6 +1174,135 @@ fn apply_callable_rejects_dynamic_parameter_mismatches_before_body_entry() {
 }
 
 #[test]
+fn dynamic_function_results_enforce_explicit_implicit_and_null_fallthrough_values() {
+    let paths = FakeCanonicalizer::default().resolves("/project/main.fsh", "/project/main.fsh");
+    let cases = [
+        (
+            "explicit",
+            concat!(
+                "let dynamic = $args[0]\n",
+                "def produce() -> Int {\n",
+                "    return $dynamic\n",
+                "}\n",
+                "let callable = $produce\n",
+                "let result = $callable()\n",
+            ),
+            "string",
+            " --> /project/main.fsh:3:12",
+            "6 | let result = $callable()",
+        ),
+        (
+            "implicit final",
+            concat!(
+                "let dynamic = $args[0]\n",
+                "def produce() -> Int {\n",
+                "    $dynamic\n",
+                "}\n",
+                "let result = produce()\n",
+            ),
+            "string",
+            " --> /project/main.fsh:3:5",
+            "5 | let result = produce()",
+        ),
+        (
+            "null fallthrough",
+            concat!(
+                "def produce() -> Int {\n",
+                "    let touched = true\n",
+                "}\n",
+                "let result = produce()\n",
+            ),
+            "null",
+            " --> /project/main.fsh:1:22",
+            "4 | let result = produce()",
+        ),
+    ];
+
+    let outcomes = cases
+        .iter()
+        .map(|(_, text, _, _, _)| {
+            let sources = FakeSourceLoader::default().contains("/project/main.fsh", text);
+            let program = ModuleProgramLoader::new(&paths, &sources)
+                .load(Path::new("/project/main.fsh"))
+                .expect("the dynamic result cannot be rejected before execution");
+            execute_module_program(
+                &program,
+                &["not-an-int".to_owned()],
+                Path::new("/project"),
+                &mut Environment::new(),
+                &standard_registry(),
+                &NoExecutables,
+                &SessionOptions::default(),
+                &FakePlatform::none(),
+                Arc::new(FakeClock::new()),
+            )
+            .err()
+            .map(|error| error.render().to_owned())
+        })
+        .collect::<Vec<_>>();
+
+    for ((case, _, actual, primary, frame), rendered) in cases.iter().zip(outcomes) {
+        let rendered = rendered.unwrap_or_else(|| panic!("{case} result was not enforced"));
+        assert!(
+            rendered.contains(&format!("function result expects Int, found {actual}")),
+            "{case}: {rendered}"
+        );
+        assert!(rendered.contains(primary), "{case}: {rendered}");
+        assert!(rendered.contains(frame), "{case}: {rendered}");
+        assert!(rendered.contains("called from here"), "{case}: {rendered}");
+    }
+}
+
+#[test]
+fn imported_function_result_failures_keep_defining_source_and_call_frame() {
+    let paths = FakeCanonicalizer::default()
+        .resolves("/project/main.fsh", "/project/main.fsh")
+        .resolves("/project/lib.fsh", "/project/lib.fsh");
+    let sources = FakeSourceLoader::default()
+        .contains(
+            "/project/main.fsh",
+            concat!(
+                "import { produce } from './lib.fsh'\n",
+                "let dynamic = $args[0]\n",
+                "let result = produce($dynamic)\n",
+            ),
+        )
+        .contains(
+            "/project/lib.fsh",
+            "def produce(value) -> Int { return $value }\nexport { produce }\n",
+        );
+    let program = ModuleProgramLoader::new(&paths, &sources)
+        .load(Path::new("/project/main.fsh"))
+        .expect("the imported dynamic result cannot be rejected before execution");
+    let error = execute_module_program(
+        &program,
+        &["not-an-int".to_owned()],
+        Path::new("/project"),
+        &mut Environment::new(),
+        &standard_registry(),
+        &NoExecutables,
+        &SessionOptions::default(),
+        &FakePlatform::none(),
+        Arc::new(FakeClock::new()),
+    )
+    .expect_err("the imported function's result type must be enforced");
+    let rendered = error.render();
+
+    assert!(
+        rendered.contains("function result expects Int, found string"),
+        "{rendered}"
+    );
+    assert!(
+        rendered.contains(" --> /project/lib.fsh:1:36"),
+        "{rendered}"
+    );
+    assert!(
+        rendered.contains(" ::: /project/main.fsh:3:14"),
+        "{rendered}"
+    );
+}
+
+#[test]
 fn annotated_binding_failures_inside_imported_callables_use_the_defining_source() {
     let paths = FakeCanonicalizer::default()
         .resolves("/project/main.fsh", "/project/main.fsh")

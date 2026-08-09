@@ -240,6 +240,11 @@ pub enum RuntimeErrorKind {
         expected: ValueType,
         actual: &'static str,
     },
+    /// A named function whose returned value does not match its resolved result type.
+    FunctionResultTypeMismatch {
+        expected: ValueType,
+        actual: &'static str,
+    },
     /// A function or closure declaring the same parameter name twice.
     DuplicateParameter { name: String },
     /// A construct requiring the execution engine that does not exist yet.
@@ -489,6 +494,12 @@ impl fmt::Display for RuntimeErrorKind {
                 formatter,
                 "parameter {parameter:?} expects {expected}, found {actual}"
             ),
+            Self::FunctionResultTypeMismatch { expected, actual } => {
+                write!(
+                    formatter,
+                    "function result expects {expected}, found {actual}"
+                )
+            }
             Self::DuplicateParameter { name } => {
                 write!(formatter, "duplicate parameter {name:?}")
             }
@@ -1160,7 +1171,7 @@ pub(crate) fn evaluate_in_environment_owned_with_binding_types(
             Err(Abort::Error(error)) => return Err(error),
         };
         match flow {
-            Flow::Fallthrough(Some(value)) => last = value,
+            Flow::Fallthrough(Some(result)) => last = result.value,
             Flow::Fallthrough(None) => {}
             Flow::Break(span) => {
                 return Err(RuntimeError::new(
@@ -1435,13 +1446,18 @@ fn word_encoding(value: &Value) -> Option<OsString> {
 /// The control-flow result of evaluating a statement or statement sequence.
 enum Flow {
     /// Continue with the current frame; the value is present for expressions.
-    Fallthrough(Option<Value>),
+    Fallthrough(Option<FlowValue>),
     /// A `break` originating at the given span is propagating outward.
     Break(Span),
     /// A `continue` originating at the given span is propagating outward.
     Continue(Span),
     /// A `return` carrying its value is propagating outward to the function.
-    Return(Value, Span),
+    Return(FlowValue, Span),
+}
+
+struct FlowValue {
+    value: Value,
+    span: Span,
 }
 
 struct Evaluator<'environment> {
@@ -1516,7 +1532,10 @@ impl Evaluator<'_> {
                     return Err(self.error(RuntimeErrorKind::ExecutionUnsupported, span));
                 }
                 let value = self.eval_chain(&job.chain, scope)?;
-                Ok(Flow::Fallthrough(Some(value)))
+                Ok(Flow::Fallthrough(Some(FlowValue {
+                    value,
+                    span: job.chain.span(),
+                })))
             }
         }
     }
@@ -1778,11 +1797,17 @@ impl Evaluator<'_> {
             ControlTransfer::Break => Ok(Flow::Break(span)),
             ControlTransfer::Continue => Ok(Flow::Continue(span)),
             ControlTransfer::Return(expression) => {
-                let value = match expression {
-                    Some(expression) => self.expression(expression, scope)?,
-                    None => Value::Null,
+                let result = match expression {
+                    Some(expression) => FlowValue {
+                        value: self.expression(expression, scope)?,
+                        span: expression.span(),
+                    },
+                    None => FlowValue {
+                        value: Value::Null,
+                        span,
+                    },
                 };
-                Ok(Flow::Return(value, span))
+                Ok(Flow::Return(result, span))
             }
         }
     }
@@ -2282,7 +2307,7 @@ impl Evaluator<'_> {
             captured: scope.captured_snapshot(),
             source: Arc::clone(&self.source),
             binding_types: Arc::clone(&self.binding_types),
-            _result_type: Some(
+            result_type: Some(
                 self.binding_types
                     .function_result_type(self.source.id(), definition.name.span())
                     .cloned()
@@ -2305,7 +2330,7 @@ impl Evaluator<'_> {
             captured: scope.captured_snapshot(),
             source: Arc::clone(&self.source),
             binding_types: Arc::clone(&self.binding_types),
-            _result_type: None,
+            result_type: None,
             location: self.location(closure.span),
         };
         Ok(Value::Callable(Arc::new(callable)))
@@ -2464,27 +2489,47 @@ impl Evaluator<'_> {
                 scope.pop().expect("the body pushes exactly one frame");
                 flow?
             }
-            CallableBody::Expression(chain) => {
-                Flow::Fallthrough(Some(self.eval_chain(chain, scope)?))
-            }
+            CallableBody::Expression(chain) => Flow::Fallthrough(Some(FlowValue {
+                value: self.eval_chain(chain, scope)?,
+                span: chain.span(),
+            })),
         };
 
-        match outcome {
-            Flow::Return(value, _) | Flow::Fallthrough(Some(value)) => Ok(value),
-            Flow::Fallthrough(None) => Ok(Value::Null),
+        let result = match outcome {
+            Flow::Return(result, _) | Flow::Fallthrough(Some(result)) => result,
+            Flow::Fallthrough(None) => FlowValue {
+                value: Value::Null,
+                span: match &function.body {
+                    CallableBody::Block(block) => block.span,
+                    CallableBody::Expression(chain) => chain.span(),
+                },
+            },
             Flow::Break(span) => Err(self.error(
                 RuntimeErrorKind::ControlOutsideLoop {
                     control: ControlKind::Break,
                 },
                 span,
-            )),
+            ))?,
             Flow::Continue(span) => Err(self.error(
                 RuntimeErrorKind::ControlOutsideLoop {
                     control: ControlKind::Continue,
                 },
                 span,
-            )),
+            ))?,
+        };
+
+        if let Some(expected) = &function.result_type
+            && !expected.accepts(&result.value)
+        {
+            return Err(self.error(
+                RuntimeErrorKind::FunctionResultTypeMismatch {
+                    expected: expected.clone(),
+                    actual: result.value.family_name(),
+                },
+                result.span,
+            ));
         }
+        Ok(result.value)
     }
 
     /// Resolves a callee. A bare name resolves in scope; any other form is an
@@ -2507,7 +2552,7 @@ impl Evaluator<'_> {
         let mut last = None;
         for statement in statements {
             match self.statement(statement, scope)? {
-                Flow::Fallthrough(Some(value)) => last = Some(value),
+                Flow::Fallthrough(Some(result)) => last = Some(result),
                 Flow::Fallthrough(None) => {}
                 transfer => return Ok(transfer),
             }
@@ -2541,7 +2586,7 @@ struct CallableValue {
     source: Arc<SourceFile>,
     binding_types: Arc<RuntimeBindingTypes>,
     /// `Some`, including `Any`, for a named function; `None` for a closure.
-    _result_type: Option<ValueType>,
+    result_type: Option<ValueType>,
     location: String,
 }
 
