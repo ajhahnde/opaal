@@ -3,14 +3,15 @@
 //! Module analysis is host-free: these tests inject a fixed canonicalizer, so
 //! aliases and failures are deterministic and no real filesystem is touched.
 
+use std::any::Any;
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::ffi::{OsStr, OsString};
+use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use flash_platform::{FakePlatform, RecordingPlatform};
-use flash_runtime::Environment;
 use flash_runtime::builtin::standard_registry;
 use flash_runtime::eval::FakeClock;
 use flash_runtime::module::{
@@ -20,6 +21,10 @@ use flash_runtime::module::{
 use flash_runtime::plan::SessionOptions;
 use flash_runtime::resolve::ExecutableProbe;
 use flash_runtime::script::execute_module_program;
+use flash_runtime::{
+    ByteSize, Callable, Duration, Environment, FiniteFloat, NativePath, Range, Record, Status,
+    Table, Value,
+};
 use flash_syntax::{LabelStyle, SourceFile, SourceId, Span};
 
 struct NoExecutables;
@@ -35,6 +40,23 @@ struct MarkExecutable;
 impl ExecutableProbe for MarkExecutable {
     fn is_executable(&self, path: &OsStr) -> bool {
         path == OsStr::new("/bin/mark")
+    }
+}
+
+#[derive(Debug)]
+struct FamilyCallable(&'static str);
+
+impl Callable for FamilyCallable {
+    fn family(&self) -> &'static str {
+        self.0
+    }
+
+    fn display(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.0)
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
     }
 }
 
@@ -205,6 +227,83 @@ fn typed_function_signatures_are_resolved_before_known_calls_are_validated() {
         .expect_err("a known incompatible literal call fails before execution");
 
     assert_eq!(error.diagnostics()[0].code(), "SIG004");
+}
+
+#[test]
+fn value_types_match_exact_runtime_families_and_recursive_lists() {
+    let cases = vec![
+        (ValueType::Null, Value::Null),
+        (ValueType::Bool, Value::Bool(true)),
+        (ValueType::Int, Value::Int(1)),
+        (
+            ValueType::Float,
+            Value::from(FiniteFloat::new(1.0).expect("finite test value")),
+        ),
+        (ValueType::String, Value::string("one")),
+        (ValueType::Bytes, Value::bytes(vec![1])),
+        (ValueType::Path, Value::from(NativePath::new("one"))),
+        (ValueType::Duration, Value::from(Duration::ZERO)),
+        (ValueType::ByteSize, Value::from(ByteSize::new(1))),
+        (
+            ValueType::List(Box::new(ValueType::String)),
+            Value::list(vec![Value::string("one")]),
+        ),
+        (
+            ValueType::Record,
+            Value::from(Record::new(Vec::new()).expect("empty record")),
+        ),
+        (
+            ValueType::Table,
+            Value::from(Table::new(Vec::new(), Vec::new()).expect("empty table")),
+        ),
+        (ValueType::Range, Value::from(Range::new(0, 1, false))),
+        (
+            ValueType::Status,
+            Value::from(Status::exit(0, Duration::ZERO).expect("valid status")),
+        ),
+        (
+            ValueType::Function,
+            Value::Callable(Arc::new(FamilyCallable("function"))),
+        ),
+        (
+            ValueType::Closure,
+            Value::Callable(Arc::new(FamilyCallable("closure"))),
+        ),
+    ];
+
+    for (expected_index, (expected_type, expected_value)) in cases.iter().enumerate() {
+        assert!(
+            expected_type.accepts(expected_value),
+            "{expected_type} should accept its runtime family"
+        );
+        assert!(ValueType::Any.accepts(expected_value));
+        for (actual_index, (_, actual_value)) in cases.iter().enumerate() {
+            if expected_index != actual_index {
+                assert!(
+                    !expected_type.accepts(actual_value),
+                    "{expected_type} must not accept {}",
+                    actual_value.family_name()
+                );
+            }
+        }
+    }
+
+    let strings = ValueType::List(Box::new(ValueType::String));
+    assert!(strings.accepts(&Value::list(Vec::new())));
+    assert!(strings.accepts(&Value::list(vec![
+        Value::string("first"),
+        Value::string("second"),
+    ])));
+    assert!(!strings.accepts(&Value::list(vec![Value::string("first"), Value::Int(2),])));
+
+    let nested_strings = ValueType::List(Box::new(strings));
+    assert!(
+        nested_strings.accepts(&Value::list(vec![Value::list(vec![Value::string(
+            "nested",
+        )])]))
+    );
+    let wrong_nested_value = Value::list(vec![Value::list(vec![Value::Bool(true)])]);
+    assert!(!nested_strings.accepts(&wrong_nested_value));
 }
 
 #[test]

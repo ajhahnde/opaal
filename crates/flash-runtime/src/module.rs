@@ -22,6 +22,8 @@ use flash_syntax::{
     StatementKind, TypeReference, Word, WordPart, WordPartKind, parse, render_diagnostic_sources,
 };
 
+use crate::Value;
+
 /// The sole host capability needed to turn a candidate source path into its
 /// unique module path.
 ///
@@ -699,6 +701,36 @@ pub enum ValueType {
 }
 
 impl ValueType {
+    /// Whether one runtime value belongs to this exact resolved value family.
+    ///
+    /// `Any` accepts every value and `List[T]` recursively checks every element.
+    /// No numeric, text, path, or callable-family conversion is attempted.
+    #[must_use]
+    pub fn accepts(&self, value: &Value) -> bool {
+        match (self, value) {
+            (Self::Any, _) => true,
+            (Self::Null, Value::Null) => true,
+            (Self::Bool, Value::Bool(_)) => true,
+            (Self::Int, Value::Int(_)) => true,
+            (Self::Float, Value::Float(_)) => true,
+            (Self::String, Value::String(_)) => true,
+            (Self::Bytes, Value::Bytes(_)) => true,
+            (Self::Path, Value::Path(_)) => true,
+            (Self::Duration, Value::Duration(_)) => true,
+            (Self::ByteSize, Value::ByteSize(_)) => true,
+            (Self::List(element_type), Value::List(values)) => {
+                values.iter().all(|value| element_type.accepts(value))
+            }
+            (Self::Record, Value::Record(_)) => true,
+            (Self::Table, Value::Table(_)) => true,
+            (Self::Range, Value::Range(_)) => true,
+            (Self::Status, Value::Status(_)) => true,
+            (Self::Function, Value::Callable(callable)) => callable.family() == "function",
+            (Self::Closure, Value::Callable(callable)) => callable.family() == "closure",
+            _ => false,
+        }
+    }
+
     fn accepts_type(&self, actual: &Self) -> bool {
         match (self, actual) {
             (Self::Any, _) => true,
