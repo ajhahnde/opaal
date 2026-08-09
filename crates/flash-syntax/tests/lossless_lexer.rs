@@ -119,6 +119,7 @@ fn expansions_operators_numbers_keywords_and_delimiters_have_stable_kinds() {
 
     let reserved = lex_fixture("complete/reserved-words.fsh");
     assert_token(&reserved, "let", TokenKind::Keyword(Keyword::Let));
+    assert_token(&reserved, "import", TokenKind::Keyword(Keyword::Import));
     assert_token(&reserved, "null", TokenKind::Keyword(Keyword::Null));
 
     let grammar = fixture_source("grammar/complete/literals-and-collections.fsh");

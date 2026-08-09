@@ -13,5 +13,6 @@ complete/background.fsh	background.ast
 complete/redirections.fsh	redirections.ast
 complete/closures.fsh	closures.ast
 complete/literals-and-collections.fsh	literals-and-collections.ast
+complete/modules.fsh	modules.ast
 complete/operators.fsh	operators.ast
 complete/substitution.fsh	substitution.ast

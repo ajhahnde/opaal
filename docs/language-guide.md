@@ -84,6 +84,7 @@ export
 false
 for
 if
+import
 in
 let
 match
@@ -774,6 +775,16 @@ Resolution errors must identify both the importing source and the requested modu
 ### Explicit imports and exports
 
 Names cross module boundaries only through explicit imports and exports. A module does not mutate unrelated caller scopes, and importing a module does not create ambient wildcard access to all of its internal bindings.
+
+A static source dependency uses a top-level import declaration:
+
+```text
+import './lib/math.fsh'
+```
+
+The path is one nonempty single-quoted literal. It is resolved relative to the importing module unless it is absolute. Import paths are exact and static: they do not interpolate values, expand environment entries, apply globbing, add an implicit extension, or execute source to discover another module. An import is a module-level declaration and is invalid inside a function or control-flow block.
+
+This load-only form adds the source to the analyzed module graph but binds no name and runs no module initialization. Explicit imported-name and exported-name syntax is a separate part of the module contract; the load-only declaration never creates wildcard ambient access.
 
 An export makes a declared public name available to importers. Internal bindings remain private to the module unless the language contract marks them for export.
 

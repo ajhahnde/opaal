@@ -76,6 +76,7 @@ pub type Statement = AstNode<StatementKind>;
 /// The statement forms ratified for the initial grammar.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum StatementKind {
+    Import(ImportStatement),
     Declaration(Declaration),
     Assignment(Assignment),
     Environment(EnvironmentStatement),
@@ -86,6 +87,13 @@ pub enum StatementKind {
     Match(MatchStatement),
     Control(ControlTransfer),
     Job(JobStatement),
+}
+
+/// One static top-level source dependency.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ImportStatement {
+    /// The complete nonempty single-quoted path literal.
+    pub path: Span,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

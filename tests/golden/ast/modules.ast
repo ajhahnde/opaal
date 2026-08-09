@@ -1,0 +1,13 @@
+Script {
+    statements: [
+        AstNode {
+            kind: Import(
+                ImportStatement {
+                    path: Span(7..23),
+                },
+            ),
+            span: Span(0..23),
+        },
+    ],
+    span: Span(0..24),
+}

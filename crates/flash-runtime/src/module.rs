@@ -6,14 +6,17 @@
 //! graph uses only canonical identities, rejects cycles before mutation, and
 //! exposes structured diagnostics for checker, editor, and protocol clients.
 //!
-//! Source loading, import syntax, exported-name analysis, and execution are
-//! separate layers built on this boundary.
+//! Static import syntax and injected recursive source loading build on this
+//! graph. Exported-name analysis, frontend wiring, and execution remain
+//! separate layers.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::path::{Path, PathBuf};
 
-use flash_syntax::{Diagnostic, Severity, Span};
+use flash_syntax::{
+    Diagnostic, ParseOutcome, Script, Severity, SourceFile, SourceId, Span, StatementKind, parse,
+};
 
 /// The sole host capability needed to turn a candidate source path into its
 /// unique module path.
@@ -54,6 +57,45 @@ impl fmt::Display for ModulePathError {
 }
 
 impl std::error::Error for ModulePathError {}
+
+/// The injected capability for reading one already canonical source module.
+///
+/// Implementations may use a host filesystem or another target-appropriate
+/// source store. The runtime receives owned bytes and performs UTF-8 decoding
+/// and parsing itself.
+pub trait ModuleSourceLoader {
+    /// Reads all source bytes for `module`.
+    fn load(&self, module: &ModuleId) -> Result<Vec<u8>, ModuleSourceError>;
+}
+
+/// A host-independent source read failure.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ModuleSourceError {
+    message: String,
+}
+
+impl ModuleSourceError {
+    /// Creates a source read failure with a human-readable cause.
+    pub fn new(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+        }
+    }
+
+    /// The source loader's explanation.
+    #[must_use]
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+}
+
+impl fmt::Display for ModuleSourceError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for ModuleSourceError {}
 
 /// The canonical native path that uniquely identifies one source module.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -268,6 +310,356 @@ impl fmt::Display for ModuleResolutionError {
 impl std::error::Error for ModuleResolutionError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         Some(&self.cause)
+    }
+}
+
+/// One canonical module's source and parsed syntax.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RegisteredModuleSource {
+    module: ModuleId,
+    source: SourceFile,
+    script: Script,
+}
+
+impl RegisteredModuleSource {
+    /// The canonical module identity.
+    #[must_use]
+    pub const fn module(&self) -> &ModuleId {
+        &self.module
+    }
+
+    /// The stable source file assigned during traversal.
+    #[must_use]
+    pub const fn source(&self) -> &SourceFile {
+        &self.source
+    }
+
+    /// The complete parsed module syntax.
+    #[must_use]
+    pub const fn script(&self) -> &Script {
+        &self.script
+    }
+}
+
+/// A bidirectional registry of canonical modules and stable source identities.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ModuleSourceRegistry {
+    by_module: BTreeMap<ModuleId, usize>,
+    by_source: BTreeMap<SourceId, usize>,
+    entries: Vec<RegisteredModuleSource>,
+}
+
+impl ModuleSourceRegistry {
+    /// The number of unique canonical source modules.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// Whether no source module has been registered.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    /// The registered source for a canonical module.
+    #[must_use]
+    pub fn source(&self, module: &ModuleId) -> Option<&SourceFile> {
+        self.entry(module).map(RegisteredModuleSource::source)
+    }
+
+    /// The parsed syntax for a canonical module.
+    #[must_use]
+    pub fn script(&self, module: &ModuleId) -> Option<&Script> {
+        self.entry(module).map(RegisteredModuleSource::script)
+    }
+
+    /// The canonical module assigned to a stable source identity.
+    #[must_use]
+    pub fn module(&self, source: SourceId) -> Option<&ModuleId> {
+        self.by_source
+            .get(&source)
+            .and_then(|index| self.entries.get(*index))
+            .map(RegisteredModuleSource::module)
+    }
+
+    /// Entries in deterministic first-visit depth-first order.
+    pub fn entries(&self) -> impl ExactSizeIterator<Item = &RegisteredModuleSource> {
+        self.entries.iter()
+    }
+
+    fn entry(&self, module: &ModuleId) -> Option<&RegisteredModuleSource> {
+        self.by_module
+            .get(module)
+            .and_then(|index| self.entries.get(*index))
+    }
+
+    fn next_source_id(&self) -> Result<SourceId, ModuleProgramError> {
+        u32::try_from(self.entries.len())
+            .map(SourceId::new)
+            .map_err(|_| ModuleProgramError::SourceIdentityExhausted)
+    }
+
+    fn register(&mut self, module: ModuleId, source: SourceFile, script: Script) {
+        debug_assert!(!self.by_module.contains_key(&module));
+        debug_assert!(!self.by_source.contains_key(&source.id()));
+        let index = self.entries.len();
+        self.by_module.insert(module.clone(), index);
+        self.by_source.insert(source.id(), index);
+        self.entries.push(RegisteredModuleSource {
+            module,
+            source,
+            script,
+        });
+    }
+}
+
+/// A completely loaded, parsed, and canonically graphed Flash source program.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ModuleProgram {
+    graph: ModuleGraph,
+    sources: ModuleSourceRegistry,
+}
+
+impl ModuleProgram {
+    /// The canonical acyclic dependency graph.
+    #[must_use]
+    pub const fn graph(&self) -> &ModuleGraph {
+        &self.graph
+    }
+
+    /// Every canonical module's source and parsed syntax.
+    #[must_use]
+    pub const fn sources(&self) -> &ModuleSourceRegistry {
+        &self.sources
+    }
+}
+
+/// Recursively resolves, reads, decodes, parses, and graphs Flash modules.
+pub struct ModuleProgramLoader<'a> {
+    resolver: ModuleResolver<'a>,
+    source_loader: &'a dyn ModuleSourceLoader,
+}
+
+impl<'a> ModuleProgramLoader<'a> {
+    /// Creates a program loader over injected path and source capabilities.
+    #[must_use]
+    pub const fn new(
+        canonicalizer: &'a dyn ModuleCanonicalizer,
+        source_loader: &'a dyn ModuleSourceLoader,
+    ) -> Self {
+        Self {
+            resolver: ModuleResolver::new(canonicalizer),
+            source_loader,
+        }
+    }
+
+    /// Loads one root and every reachable static import without executing any
+    /// source statement.
+    pub fn load(&self, requested: &Path) -> Result<ModuleProgram, ModuleProgramError> {
+        let root = self
+            .resolver
+            .resolve_root(requested)
+            .map_err(ModuleProgramError::Resolution)?;
+        let mut graph = ModuleGraph::new(root.clone());
+        let mut sources = ModuleSourceRegistry::default();
+        self.load_module(root, None, &mut graph, &mut sources)?;
+        Ok(ModuleProgram { graph, sources })
+    }
+
+    fn load_module(
+        &self,
+        module: ModuleId,
+        imported_by: Option<ModuleImport>,
+        graph: &mut ModuleGraph,
+        sources: &mut ModuleSourceRegistry,
+    ) -> Result<(), ModuleProgramError> {
+        if sources.source(&module).is_some() {
+            return Ok(());
+        }
+
+        let bytes =
+            self.source_loader
+                .load(&module)
+                .map_err(|cause| ModuleProgramError::SourceRead {
+                    module: module.clone(),
+                    imported_by: imported_by.clone().map(Box::new),
+                    cause,
+                })?;
+        let source_id = sources.next_source_id()?;
+        let source_name = module.path().to_string_lossy().into_owned();
+        let source = SourceFile::from_bytes(source_id, source_name, bytes).map_err(|error| {
+            ModuleProgramError::InvalidUtf8 {
+                module: module.clone(),
+                imported_by: imported_by.clone().map(Box::new),
+                valid_up_to: error.utf8_error().valid_up_to(),
+            }
+        })?;
+        let script = match parse(&source) {
+            ParseOutcome::Complete(script) => script,
+            ParseOutcome::Incomplete(incomplete) => {
+                let diagnostic = Diagnostic::new(
+                    Severity::Error,
+                    "SYN002",
+                    format!("incomplete input: {}", incomplete.reason()),
+                )
+                .with_primary(
+                    incomplete.span(),
+                    "input ends before this construct is complete",
+                );
+                return Err(ModuleProgramError::Syntax {
+                    module,
+                    diagnostics: vec![diagnostic],
+                });
+            }
+            ParseOutcome::Invalid(diagnostics) => {
+                return Err(ModuleProgramError::Syntax {
+                    module,
+                    diagnostics,
+                });
+            }
+        };
+
+        let imports = script
+            .statements()
+            .iter()
+            .filter_map(|statement| match statement.kind() {
+                StatementKind::Import(import) => Some(import.path),
+                _ => None,
+            })
+            .map(|span| {
+                let quoted = source
+                    .slice(span)
+                    .expect("parsed import spans belong to their source");
+                (PathBuf::from(&quoted[1..quoted.len() - 1]), span)
+            })
+            .collect::<Vec<_>>();
+        sources.register(module.clone(), source, script);
+
+        for (requested, span) in imports {
+            let import = self
+                .resolver
+                .resolve_import(&module, &requested, span)
+                .map_err(ModuleProgramError::Resolution)?;
+            graph
+                .add_import(import.clone())
+                .map_err(ModuleProgramError::Graph)?;
+            self.load_module(import.target().clone(), Some(import), graph, sources)?;
+        }
+        Ok(())
+    }
+}
+
+/// A failure while constructing a recursively parsed module program.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ModuleProgramError {
+    /// A root or import request could not be canonicalized.
+    Resolution(ModuleResolutionError),
+    /// Canonical source bytes could not be read.
+    SourceRead {
+        module: ModuleId,
+        imported_by: Option<Box<ModuleImport>>,
+        cause: ModuleSourceError,
+    },
+    /// A source module was not valid UTF-8.
+    InvalidUtf8 {
+        module: ModuleId,
+        imported_by: Option<Box<ModuleImport>>,
+        valid_up_to: usize,
+    },
+    /// A loaded module was incomplete or invalid Flash syntax.
+    Syntax {
+        module: ModuleId,
+        diagnostics: Vec<Diagnostic>,
+    },
+    /// An import violated the canonical graph contract.
+    Graph(ModuleGraphError),
+    /// More source identities were required than `SourceId` can represent.
+    SourceIdentityExhausted,
+}
+
+impl ModuleProgramError {
+    /// The source diagnostics represented by this failure.
+    #[must_use]
+    pub fn diagnostics(&self) -> Vec<Diagnostic> {
+        match self {
+            Self::Resolution(error) => error.diagnostic().into_iter().collect(),
+            Self::SourceRead { imported_by, .. } => imported_by
+                .as_ref()
+                .map(|import| {
+                    Diagnostic::new(Severity::Error, "MOD003", self.to_string())
+                        .with_primary(import.span(), "this module source could not be read")
+                })
+                .into_iter()
+                .collect(),
+            Self::InvalidUtf8 { imported_by, .. } => imported_by
+                .as_ref()
+                .map(|import| {
+                    Diagnostic::new(Severity::Error, "MOD004", self.to_string())
+                        .with_primary(import.span(), "this module source is not valid UTF-8")
+                })
+                .into_iter()
+                .collect(),
+            Self::Syntax { diagnostics, .. } => diagnostics.clone(),
+            Self::Graph(ModuleGraphError::Cycle(cycle)) => vec![cycle.diagnostic()],
+            Self::Graph(ModuleGraphError::UnknownImporter(_)) | Self::SourceIdentityExhausted => {
+                Vec::new()
+            }
+        }
+    }
+
+    /// The canonical module directly associated with the failure, when one is
+    /// available.
+    #[must_use]
+    pub const fn module(&self) -> Option<&ModuleId> {
+        match self {
+            Self::SourceRead { module, .. }
+            | Self::InvalidUtf8 { module, .. }
+            | Self::Syntax { module, .. } => Some(module),
+            Self::Resolution(_) | Self::Graph(_) | Self::SourceIdentityExhausted => None,
+        }
+    }
+}
+
+impl fmt::Display for ModuleProgramError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Resolution(error) => error.fmt(formatter),
+            Self::SourceRead { module, cause, .. } => write!(
+                formatter,
+                "cannot read module `{}`: {cause}",
+                module.path().display()
+            ),
+            Self::InvalidUtf8 {
+                module,
+                valid_up_to,
+                ..
+            } => write!(
+                formatter,
+                "module `{}` is not UTF-8 at byte {valid_up_to}",
+                module.path().display()
+            ),
+            Self::Syntax { module, .. } => write!(
+                formatter,
+                "module `{}` contains invalid Flash syntax",
+                module.path().display()
+            ),
+            Self::Graph(error) => error.fmt(formatter),
+            Self::SourceIdentityExhausted => {
+                formatter.write_str("module program exhausted stable source identities")
+            }
+        }
+    }
+}
+
+impl std::error::Error for ModuleProgramError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Resolution(error) => Some(error),
+            Self::SourceRead { cause, .. } => Some(cause),
+            Self::Graph(error) => Some(error),
+            Self::InvalidUtf8 { .. } | Self::Syntax { .. } | Self::SourceIdentityExhausted => None,
+        }
     }
 }
 

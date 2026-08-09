@@ -1379,6 +1379,9 @@ impl<'source> Evaluator<'source> {
         let span = statement.span();
         self.charge(span)?;
         match statement.kind() {
+            StatementKind::Import(_) => {
+                Err(self.error(RuntimeErrorKind::ExecutionUnsupported, span))
+            }
             StatementKind::Declaration(declaration) => {
                 self.declaration(declaration, scope)?;
                 Ok(Flow::Fallthrough(None))

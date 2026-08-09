@@ -48,6 +48,38 @@ fn grammar_manifest_boundaries_are_parsed_directly() {
 }
 
 #[test]
+fn a_static_import_retains_its_exact_path_span() {
+    let text = "import './lib/math.fsh'\n";
+    let script = complete(text);
+    let StatementKind::Import(import) = script.statements()[0].kind() else {
+        panic!("expected import declaration");
+    };
+
+    assert_eq!(source_text(text, import.path), "'./lib/math.fsh'");
+}
+
+#[test]
+fn imports_reject_empty_dynamic_and_nested_paths() {
+    for (text, message) in [
+        ("import ''\n", "import path cannot be empty"),
+        (
+            "import \"./dynamic.fsh\"\n",
+            "import requires a single-quoted path",
+        ),
+        (
+            "if true {\n    import './nested.fsh'\n}\n",
+            "imports are allowed only at module top level",
+        ),
+    ] {
+        let source = SourceFile::new(SourceId::new(899), "invalid-import.fsh", text);
+        let ParseOutcome::Invalid(diagnostics) = parse(&source) else {
+            panic!("expected invalid import for {text:?}");
+        };
+        assert_eq!(diagnostics[0].message(), message);
+    }
+}
+
+#[test]
 fn command_control_precedence_has_distinct_ast_layers() {
     let script = complete("^a | ^b && ^c || ^d\n");
     let StatementKind::Job(job) = script.statements()[0].kind() else {

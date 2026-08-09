@@ -78,6 +78,17 @@ fn horizontal_trivia_and_block_indentation_are_canonical() {
 }
 
 #[test]
+fn static_import_spacing_is_canonical() {
+    let source = SourceFile::new(
+        SourceId::new(3_003),
+        "imports.fsh",
+        "import   './lib/math.fsh'\n",
+    );
+
+    assert_eq!(complete_format(&source), "import './lib/math.fsh'\n");
+}
+
+#[test]
 fn incomplete_and_invalid_inputs_keep_their_parse_outcomes() {
     let incomplete = SourceFile::new(SourceId::new(3_001), "incomplete.fsh", "echo \"");
     let FormatOutcome::Incomplete(reason) = format_source(&incomplete) else {

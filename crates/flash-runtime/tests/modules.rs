@@ -3,11 +3,13 @@
 //! Module analysis is host-free: these tests inject a fixed canonicalizer, so
 //! aliases and failures are deterministic and no real filesystem is touched.
 
+use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use flash_runtime::module::{
-    ModuleCanonicalizer, ModuleGraph, ModuleGraphError, ModulePathError, ModuleResolver,
+    ModuleCanonicalizer, ModuleGraph, ModuleGraphError, ModulePathError, ModuleProgramLoader,
+    ModuleResolver, ModuleSourceError, ModuleSourceLoader,
 };
 use flash_syntax::{LabelStyle, SourceFile, SourceId, Span};
 
@@ -39,12 +41,222 @@ impl ModuleCanonicalizer for FakeCanonicalizer {
     }
 }
 
+#[derive(Default)]
+struct FakeSourceLoader {
+    sources: BTreeMap<PathBuf, Result<Vec<u8>, ModuleSourceError>>,
+    loads: RefCell<BTreeMap<PathBuf, usize>>,
+}
+
+impl FakeSourceLoader {
+    fn contains(mut self, path: &str, text: &str) -> Self {
+        self.sources
+            .insert(PathBuf::from(path), Ok(text.as_bytes().to_vec()));
+        self
+    }
+
+    fn contains_bytes(mut self, path: &str, bytes: Vec<u8>) -> Self {
+        self.sources.insert(PathBuf::from(path), Ok(bytes));
+        self
+    }
+
+    fn rejects(mut self, path: &str, message: &str) -> Self {
+        self.sources
+            .insert(PathBuf::from(path), Err(ModuleSourceError::new(message)));
+        self
+    }
+
+    fn load_count(&self, path: &str) -> usize {
+        self.loads
+            .borrow()
+            .get(Path::new(path))
+            .copied()
+            .unwrap_or(0)
+    }
+}
+
+impl ModuleSourceLoader for FakeSourceLoader {
+    fn load(&self, module: &flash_runtime::module::ModuleId) -> Result<Vec<u8>, ModuleSourceError> {
+        *self
+            .loads
+            .borrow_mut()
+            .entry(module.path().to_path_buf())
+            .or_default() += 1;
+        self.sources
+            .get(module.path())
+            .cloned()
+            .unwrap_or_else(|| Err(ModuleSourceError::new("source was not mapped by the test")))
+    }
+}
+
 fn source(id: u32, name: &str, text: &str) -> SourceFile {
     SourceFile::new(SourceId::new(id), name, text)
 }
 
 fn span(source: &SourceFile, range: std::ops::Range<usize>) -> Span {
     source.span(range).expect("valid test span")
+}
+
+#[test]
+fn static_imports_recursively_load_a_registered_module_program() {
+    let paths = FakeCanonicalizer::default()
+        .resolves("/project/main.fsh", "/project/main.fsh")
+        .resolves("/project/lib/math.fsh", "/project/lib/math.fsh");
+    let sources = FakeSourceLoader::default()
+        .contains("/project/main.fsh", "import './lib/math.fsh'\n")
+        .contains("/project/lib/math.fsh", "let answer = 42\n");
+
+    let program = ModuleProgramLoader::new(&paths, &sources)
+        .load(Path::new("/project/main.fsh"))
+        .expect("the module program loads");
+
+    assert_eq!(program.graph().modules().count(), 2);
+    assert_eq!(program.graph().imports().len(), 1);
+    assert_eq!(program.sources().len(), 2);
+    assert_eq!(
+        program.sources().module(SourceId::new(0)),
+        Some(program.graph().root())
+    );
+    assert_eq!(
+        program
+            .sources()
+            .source(program.graph().root())
+            .expect("root source is registered")
+            .id(),
+        SourceId::new(0)
+    );
+    assert_eq!(
+        program
+            .sources()
+            .source(program.graph().imports()[0].target())
+            .expect("imported source is registered")
+            .id(),
+        SourceId::new(1)
+    );
+    assert_eq!(
+        program
+            .sources()
+            .script(program.graph().imports()[0].target())
+            .expect("imported syntax is registered")
+            .statements()
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn canonical_aliases_share_one_loaded_and_parsed_source() {
+    let paths = FakeCanonicalizer::default()
+        .resolves("/project/main.fsh", "/project/main.fsh")
+        .resolves("/project/lib/math.fsh", "/project/lib/math.fsh")
+        .resolves("/project/math-alias.fsh", "/project/lib/math.fsh");
+    let sources = FakeSourceLoader::default()
+        .contains(
+            "/project/main.fsh",
+            "import './lib/math.fsh'\nimport './math-alias.fsh'\n",
+        )
+        .contains("/project/lib/math.fsh", "let answer = 42\n");
+
+    let program = ModuleProgramLoader::new(&paths, &sources)
+        .load(Path::new("/project/main.fsh"))
+        .expect("both aliases load");
+
+    assert_eq!(program.sources().len(), 2);
+    assert_eq!(program.graph().modules().count(), 2);
+    assert_eq!(program.graph().imports().len(), 2);
+    assert_eq!(sources.load_count("/project/lib/math.fsh"), 1);
+}
+
+#[test]
+fn an_imported_read_failure_is_anchored_to_the_static_path() {
+    let paths = FakeCanonicalizer::default()
+        .resolves("/project/main.fsh", "/project/main.fsh")
+        .resolves("/project/missing.fsh", "/project/missing.fsh");
+    let sources = FakeSourceLoader::default()
+        .contains("/project/main.fsh", "import './missing.fsh'\n")
+        .rejects("/project/missing.fsh", "source does not exist");
+
+    let error = ModuleProgramLoader::new(&paths, &sources)
+        .load(Path::new("/project/main.fsh"))
+        .expect_err("the imported read fails");
+    let diagnostics = error.diagnostics();
+
+    assert_eq!(
+        error.module().expect("failed target is retained").path(),
+        Path::new("/project/missing.fsh")
+    );
+    assert_eq!(diagnostics.len(), 1);
+    assert_eq!(diagnostics[0].code(), "MOD003");
+    assert_eq!(diagnostics[0].labels()[0].style(), LabelStyle::Primary);
+    assert_eq!(
+        diagnostics[0].labels()[0].span().source_id(),
+        SourceId::new(0)
+    );
+    assert_eq!(diagnostics[0].labels()[0].span().start(), 7);
+}
+
+#[test]
+fn invalid_utf8_and_parse_failures_identify_the_imported_source() {
+    let paths = FakeCanonicalizer::default()
+        .resolves("/project/main.fsh", "/project/main.fsh")
+        .resolves("/project/bytes.fsh", "/project/bytes.fsh")
+        .resolves("/project/syntax.fsh", "/project/syntax.fsh");
+    let invalid_bytes = FakeSourceLoader::default()
+        .contains("/project/main.fsh", "import './bytes.fsh'\n")
+        .contains_bytes("/project/bytes.fsh", vec![b'l', b'e', b't', b' ', 0xff]);
+    let utf8_error = ModuleProgramLoader::new(&paths, &invalid_bytes)
+        .load(Path::new("/project/main.fsh"))
+        .expect_err("invalid UTF-8 fails");
+
+    assert_eq!(utf8_error.diagnostics()[0].code(), "MOD004");
+    assert_eq!(
+        utf8_error.diagnostics()[0].labels()[0].span().source_id(),
+        SourceId::new(0)
+    );
+
+    let invalid_syntax = FakeSourceLoader::default()
+        .contains("/project/main.fsh", "import './syntax.fsh'\n")
+        .contains("/project/syntax.fsh", "let broken = ;\n");
+    let syntax_error = ModuleProgramLoader::new(&paths, &invalid_syntax)
+        .load(Path::new("/project/main.fsh"))
+        .expect_err("invalid imported syntax fails");
+
+    assert_eq!(syntax_error.diagnostics()[0].code(), "FS1000");
+    assert_eq!(
+        syntax_error.diagnostics()[0].message(),
+        "expected an expression"
+    );
+    assert_eq!(
+        syntax_error.diagnostics()[0].labels()[0].span().source_id(),
+        SourceId::new(1)
+    );
+}
+
+#[test]
+fn parsed_imports_reuse_multi_source_cycle_diagnostics() {
+    let paths = FakeCanonicalizer::default()
+        .resolves("/project/a.fsh", "/project/a.fsh")
+        .resolves("/project/b.fsh", "/project/b.fsh")
+        .resolves("/project/c.fsh", "/project/c.fsh");
+    let sources = FakeSourceLoader::default()
+        .contains("/project/a.fsh", "import './b.fsh'\n")
+        .contains("/project/b.fsh", "import './c.fsh'\n")
+        .contains("/project/c.fsh", "import './a.fsh'\n");
+
+    let error = ModuleProgramLoader::new(&paths, &sources)
+        .load(Path::new("/project/a.fsh"))
+        .expect_err("the parsed imports close a cycle");
+    let diagnostics = error.diagnostics();
+
+    assert_eq!(diagnostics.len(), 1);
+    assert_eq!(diagnostics[0].code(), "MOD002");
+    assert_eq!(
+        diagnostics[0]
+            .labels()
+            .iter()
+            .map(|label| label.span().source_id())
+            .collect::<Vec<_>>(),
+        [SourceId::new(2), SourceId::new(0), SourceId::new(1)]
+    );
 }
 
 #[test]

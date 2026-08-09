@@ -163,6 +163,12 @@ These services may present different user interfaces on different targets, but t
 
 Multi-file programs are represented as a graph of canonically identified source modules. Module resolution records the importing source, the requested path, the canonical module identity, and the source spans required for diagnostics.
 
+The shared syntax tree represents a static dependency as a top-level `import '<path>'` declaration. The path is a nonempty exact literal rather than an expression, so module discovery never depends on evaluation, interpolation, environment state, or globbing.
+
+Canonicalization and source-byte loading are separate injected capabilities. The recursive program loader assigns stable source identities in first-visit depth-first order, decodes and parses each canonical module once, retains alias imports as distinct graph edges, and registers both canonical module and source identities for later diagnostics. It registers a module before traversing its imports, allowing the graph to reject a back edge without unbounded recursion. Program construction returns no partial graph or registry after a resolution, read, UTF-8, syntax, or cycle failure.
+
+Loading is analysis, not execution. The module program contains the canonical graph, source files, and parsed syntax; it does not run initialization or make imported names visible. Frontend wiring, exported-name analysis, and initialization policy are later layers over this boundary.
+
 The analysis layer is responsible for:
 
 - resolving explicit imports and exports;

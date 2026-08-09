@@ -3,13 +3,13 @@ use crate::{
     CallExpression, Closure, CommandHead, CommandHeadKind, CommandItem, CommandItemKind,
     CommandStage, ConditionalChain, ConditionalOperator, ControlTransfer, Declaration, Delimiter,
     Diagnostic, ElseBranch, EnvironmentStatement, Expression, ExpressionKind, FileRedirection,
-    ForStatement, FunctionDefinition, Identifier, IfStatement, IncompleteInput, IncompleteReason,
-    IndexExpression, IoNumber, JobStatement, Keyword, Literal, LiteralKind, MatchArm,
-    MatchStatement, MemberExpression, NumberKind, Operator, OutputMode, Parameter, Pattern,
-    PipeOperator, Pipeline, RecordEntry, RecordKey, Redirection, RedirectionKind, Script, Severity,
-    SourceFile, Span, Stage, StageKind, Statement, StatementKind, SyntaxClassification, Token,
-    TokenKind, TypeReference, UnaryExpression, UnaryOperator, VariableReference, WhileStatement,
-    Word, WordPart, WordPartKind, classify_tokens, lex,
+    ForStatement, FunctionDefinition, Identifier, IfStatement, ImportStatement, IncompleteInput,
+    IncompleteReason, IndexExpression, IoNumber, JobStatement, Keyword, Literal, LiteralKind,
+    MatchArm, MatchStatement, MemberExpression, NumberKind, Operator, OutputMode, Parameter,
+    Pattern, PipeOperator, Pipeline, RecordEntry, RecordKey, Redirection, RedirectionKind, Script,
+    Severity, SourceFile, Span, Stage, StageKind, Statement, StatementKind, SyntaxClassification,
+    Token, TokenKind, TypeReference, UnaryExpression, UnaryOperator, VariableReference,
+    WhileStatement, Word, WordPart, WordPartKind, classify_tokens, lex,
 };
 
 /// The result of parsing one source file.
@@ -97,7 +97,7 @@ impl<'source> Parser<'source> {
         let mut statements = Vec::new();
         self.skip_separators();
         while !self.is_end() && !self.at_delimiter(closing) {
-            let statement = match self.parse_statement() {
+            let statement = match self.parse_statement(closing.is_none()) {
                 Ok(statement) => statement,
                 Err(ParseError::Invalid(diagnostic)) => {
                     self.diagnostics.push(diagnostic);
@@ -151,9 +151,13 @@ impl<'source> Parser<'source> {
         Ok(statements)
     }
 
-    fn parse_statement(&mut self) -> ParseResult<Statement> {
+    fn parse_statement(&mut self, top_level: bool) -> ParseResult<Statement> {
         self.skip_inline();
         match self.current_kind() {
+            Some(TokenKind::Keyword(Keyword::Import)) if top_level => self.parse_import(),
+            Some(TokenKind::Keyword(Keyword::Import)) => {
+                Err(self.invalid_here("imports are allowed only at module top level"))
+            }
             Some(TokenKind::Keyword(Keyword::Let)) => self.parse_declaration(false),
             Some(TokenKind::Keyword(Keyword::Mut)) => self.parse_declaration(true),
             Some(TokenKind::Keyword(Keyword::Export)) => self.parse_export(),
@@ -179,6 +183,28 @@ impl<'source> Parser<'source> {
             Some(_) => self.parse_job_statement(),
             None => Err(self.incomplete_here(IncompleteReason::Expression)),
         }
+    }
+
+    fn parse_import(&mut self) -> ParseResult<Statement> {
+        let start = self.take().expect("import keyword is current").span();
+        self.skip_inline();
+        let path = match self.current_kind() {
+            Some(TokenKind::SingleQuoted) => self.take().expect("import path is current").span(),
+            _ => {
+                return Err(self.expected(
+                    "import requires a single-quoted path",
+                    IncompleteReason::Expression,
+                ));
+            }
+        };
+        if path.len() == 2 {
+            return Err(self.invalid_at(path, "import path cannot be empty"));
+        }
+        let span = self.span(start.start(), path.end());
+        Ok(Statement::new(
+            StatementKind::Import(ImportStatement { path }),
+            span,
+        ))
     }
 
     fn parse_declaration(&mut self, mutable: bool) -> ParseResult<Statement> {

@@ -13,6 +13,7 @@ complete	background	complete/background.fsh	statement-only background boundaries
 complete	redirections	complete/redirections.fsh	stage-local source-order redirections and descriptor duplication
 complete	closures	complete/closures.fsh	typed nonempty and empty expression-bodied closures
 complete	literals-and-collections	complete/literals-and-collections.fsh	scalar list and ordered-record expression literals
+complete	modules	complete/modules.fsh	static top-level source imports
 complete	operators	complete/operators.fsh	postfix unary arithmetic range comparison and equality precedence
 complete	substitution	complete/substitution.fsh	foreground conditional chains inside command substitution
 incomplete	pipelines	incomplete/pipeline-stage.fsh	pipeline operator requires another stage
