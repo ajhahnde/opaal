@@ -71,11 +71,38 @@ A `.fsh` file is not a Bash or `sh` program. Do not use POSIX-specific syntax un
 
 ## Script arguments
 
-Flash v1 exposes arguments supplied to a `.fsh` program through its script-argument interface. The interface preserves argument order and cardinality so that an empty argument remains one argument and multiple arguments do not collapse into one string.
+Invoke a script with zero or more arguments after its path:
+
+```bash
+fsh program.fsh first "" --mode
+```
+
+The first non-option operand is the script path. Every following operand belongs
+to the script, including `--` and option-like values such as `--mode`. A leading
+`--` ends `fsh` option parsing and makes the next operand the script path:
+
+```bash
+fsh -- --maintenance.fsh first
+```
+
+The root module receives the arguments as an immutable `args: List[String]`
+binding:
+
+```text
+let first = $args[0]
+let second = $args[1]
+```
+
+The script path and process argument zero are not included. Order and
+cardinality are exact: the empty operand above remains one empty `String`.
+Arguments must be valid UTF-8; an invalid operand is rejected before source
+loading without lossy replacement.
+
+`args` is available only to the root module through an implicit parent scope.
+Imported and load-only modules do not receive it. A root declaration or named
+import may shadow `args` through ordinary source-order scope rules.
 
 Script arguments are data. They are not reparsed as Flash source, do not undergo implicit whitespace splitting, and do not trigger implicit wildcard expansion. A script must request any later parsing, conversion, or explicit collection expansion itself.
-
-The `fsh` command-line parser distinguishes shell options, the script path, and the arguments belonging to that script. An option terminator may be used where an operand could otherwise be interpreted as an `fsh` option. Concrete argument-access syntax follows the language grammar and must not be inferred from POSIX-shell conventions.
 
 ## Script and interactive execution
 
@@ -794,6 +821,11 @@ A target may support ordinary foreground execution while lacking a more advanced
 ### Native paths and arguments
 
 Flash source is UTF-8, but operating-system paths, environment values, and external argument units are preserved through the native platform representation where supported.
+
+The script-argument interface is deliberately narrower: every operand after the
+script path must decode as UTF-8 before the program is loaded. Arbitrary native
+path and external-process argument values do not silently become script
+`String` values.
 
 A value containing a null byte cannot cross an external process, environment, or filesystem boundary that rejects it. Such conversion failures are runtime errors rather than string truncation.
 

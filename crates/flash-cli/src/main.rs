@@ -45,13 +45,22 @@ use flash_runtime::{Environment, ScopeStack, Status};
 
 const HELP: &str = "Flash command shell
 
-Usage: fsh [OPTIONS] SCRIPT [ARGUMENT]...
+Usage:
+  fsh [OPTIONS]
+  fsh [OPTIONS] SCRIPT [ARGUMENT]...
+
+Arguments:
+  SCRIPT        Flash source file to execute
+  [ARGUMENT]... Ordered UTF-8 strings exposed to the root module as $args
 
 Options:
+      --             Stop parsing options; the next operand is SCRIPT
       --no-config    Skip loading the startup configuration
       --no-history   Disable interactive history for this session
   -h, --help         Print help
   -V, --version      Print version
+
+Every operand after SCRIPT belongs to the script, including option-like values.
 ";
 
 fn main() -> ExitCode {

@@ -750,11 +750,53 @@ ls | where {|entry| $entry.type == "file"}
 
 ### Typed function metadata
 
-Flash v1 associates functions with parameter and result information that can be inspected without executing the function. The metadata supports name and signature validation, help output, editor tooling, and pipeline analysis.
+Bindings, named-function parameters and results, and closure parameters may use
+type annotations:
 
-A signature describes the callable contract exposed to analysis tools. It does not turn every runtime value into a fully statically proven value or provide stronger static type guarantees than those defined by the language specification.
+```text
+let retries: Int = 3
+mut labels: List[String] = ["stable"]
 
-Call sites are checked against the available function metadata before execution where the required information is known. Diagnostics should identify the callable, the incompatible argument or result expectation, and the relevant source span.
+def greet(name: String) -> String {
+    "Hello, $name"
+}
+
+let normalize = {|value: String| $value}
+```
+
+Type names are case-sensitive. The closed built-in namespace is:
+
+```text
+Any Null Bool Int Float String Bytes Path Duration ByteSize
+List[T] Record Table Range Status Function Closure
+```
+
+`List` requires exactly one type argument; the other built-in types accept no
+type arguments. `Any` accepts every runtime value. An omitted binding,
+parameter, or named-function result annotation has the same unrestricted
+runtime contract as `Any`. There are no user-defined types, unions, implicit
+coercions, or callable generics in this boundary. `Function` and `Closure` are
+distinct value families.
+
+Canonical program construction resolves every annotation in every loaded
+module, including dormant load-only modules. It exposes source-spanned
+annotation records and named-function signatures without executing source.
+Unknown names and invalid type-argument counts are analysis errors.
+
+For a statically resolved local or imported named function, analysis always
+checks call arity. It checks argument and result compatibility when their types
+are conservatively known from literals, annotations, script input, closures,
+known signatures, or supported operators. Untyped or data-dependent
+information remains unknown rather than being guessed, so dynamic cases are
+deferred to runtime.
+
+Runtime enforcement is exact and performs no conversion. Annotated declaration
+initializers and later assignments must match their binding type. Function and
+closure arguments are checked before body entry. A named function's explicit
+result, implicit final value, or `null` fallthrough must match its result type.
+`List[T]` checks every element recursively; an empty list satisfies every
+`List[T]` contract. Closures have typed parameters but no result annotation in
+the current grammar.
 
 ### Documentation comments and help
 
@@ -836,7 +878,7 @@ source for body evaluation and diagnostics.
 
 Canonical program construction resolves lexical reads in every loaded module without executing source, including a module reached only through a load-only import. Resolution follows source-order declaration visibility and the evaluator's block, loop, match-arm, function, parameter, closure-capture, recursion, and shadowing scopes. Unknown reads and duplicate bindings in one scope stop construction with source-anchored diagnostics; a child scope may shadow an outer binding.
 
-The program-owned reference table retains each complete read span and its local declaration. A reference to an imported binding also retains the local import identifier and the target module's declaration and explicit export spans. Record and member keys, process-environment names, literal command text, and type references remain distinct namespaces rather than lexical reads. Type/signature analysis and assignment-mutability validation remain separate work.
+The program-owned reference table retains each complete read span and its local declaration. A reference to an imported binding also retains the local import identifier and the target module's declaration and explicit export spans. Record and member keys, process-environment names, literal command text, and type references remain distinct namespaces rather than lexical reads. Resolved type annotations and named-function signatures occupy a separate program-owned registry; assignment-mutability analysis remains separate work.
 
 The module graph, exported names, imported names, and cross-file lexical references are therefore available to non-executing shared analysis. Checker, help, editor, and language-server frontends can consume that information without maintaining a competing resolver.
 

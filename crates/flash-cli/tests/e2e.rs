@@ -85,7 +85,9 @@ fn help_describes_the_script_cli() {
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.starts_with("Flash command shell\n"));
-    assert!(stdout.contains("Usage: fsh [OPTIONS] SCRIPT [ARGUMENT]...\n"));
+    assert!(stdout.contains("  fsh [OPTIONS] SCRIPT [ARGUMENT]...\n"));
+    assert!(stdout.contains("Ordered UTF-8 strings exposed to the root module as $args"));
+    assert!(stdout.contains("Every operand after SCRIPT belongs to the script"));
     assert!(stdout.contains("--version"));
     assert!(output.stderr.is_empty());
 }
