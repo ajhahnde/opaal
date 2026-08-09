@@ -5,11 +5,12 @@ use crate::{
     Diagnostic, ElseBranch, EnvironmentStatement, Expression, ExpressionKind, FileRedirection,
     ForStatement, FunctionDefinition, Identifier, IfStatement, ImportStatement, IncompleteInput,
     IncompleteReason, IndexExpression, IoNumber, JobStatement, Keyword, Literal, LiteralKind,
-    MatchArm, MatchStatement, MemberExpression, NumberKind, Operator, OutputMode, Parameter,
-    Pattern, PipeOperator, Pipeline, RecordEntry, RecordKey, Redirection, RedirectionKind, Script,
-    Severity, SourceFile, Span, Stage, StageKind, Statement, StatementKind, SyntaxClassification,
-    Token, TokenKind, TypeReference, UnaryExpression, UnaryOperator, VariableReference,
-    WhileStatement, Word, WordPart, WordPartKind, classify_tokens, lex,
+    MatchArm, MatchStatement, MemberExpression, ModuleExportStatement, NumberKind, Operator,
+    OutputMode, Parameter, Pattern, PipeOperator, Pipeline, RecordEntry, RecordKey, Redirection,
+    RedirectionKind, Script, Severity, SourceFile, Span, Stage, StageKind, Statement,
+    StatementKind, SyntaxClassification, Token, TokenKind, TypeReference, UnaryExpression,
+    UnaryOperator, VariableReference, WhileStatement, Word, WordPart, WordPartKind,
+    classify_tokens, lex,
 };
 
 /// The result of parsing one source file.
@@ -160,7 +161,7 @@ impl<'source> Parser<'source> {
             }
             Some(TokenKind::Keyword(Keyword::Let)) => self.parse_declaration(false),
             Some(TokenKind::Keyword(Keyword::Mut)) => self.parse_declaration(true),
-            Some(TokenKind::Keyword(Keyword::Export)) => self.parse_export(),
+            Some(TokenKind::Keyword(Keyword::Export)) => self.parse_export(top_level),
             Some(TokenKind::Keyword(Keyword::Unset)) => self.parse_unset(),
             Some(TokenKind::Keyword(Keyword::Def)) => self.parse_function(),
             Some(TokenKind::Keyword(Keyword::If)) => {
@@ -188,6 +189,15 @@ impl<'source> Parser<'source> {
     fn parse_import(&mut self) -> ParseResult<Statement> {
         let start = self.take().expect("import keyword is current").span();
         self.skip_inline();
+        let names = if self.at_delimiter(Some(Delimiter::LeftBrace)) {
+            let (names, _) = self.parse_module_name_list("import name list cannot be empty")?;
+            self.skip_inline();
+            self.expect_contextual_identifier("from", "named import requires `from`")?;
+            self.skip_inline();
+            names
+        } else {
+            Vec::new()
+        };
         let path = match self.current_kind() {
             Some(TokenKind::SingleQuoted) => self.take().expect("import path is current").span(),
             _ => {
@@ -202,7 +212,7 @@ impl<'source> Parser<'source> {
         }
         let span = self.span(start.start(), path.end());
         Ok(Statement::new(
-            StatementKind::Import(ImportStatement { path }),
+            StatementKind::Import(ImportStatement { names, path }),
             span,
         ))
     }
@@ -248,9 +258,23 @@ impl<'source> Parser<'source> {
         ))
     }
 
-    fn parse_export(&mut self) -> ParseResult<Statement> {
+    fn parse_export(&mut self, top_level: bool) -> ParseResult<Statement> {
         let start = self.take().expect("export keyword is current").span();
         self.skip_inline();
+        if self.at_delimiter(Some(Delimiter::LeftBrace)) {
+            if !top_level {
+                return Err(
+                    self.invalid_here("module exports are allowed only at module top level")
+                );
+            }
+            let (names, close) =
+                self.parse_module_name_list("module export list cannot be empty")?;
+            let span = self.span(start.start(), close.span().end());
+            return Ok(Statement::new(
+                StatementKind::ModuleExport(ModuleExportStatement { names }),
+                span,
+            ));
+        }
         let name = self.parse_identifier()?;
         self.skip_inline();
         self.expect_operator(Operator::Assign, "export requires `=`")?;
@@ -261,6 +285,32 @@ impl<'source> Parser<'source> {
             StatementKind::Environment(EnvironmentStatement::Export { name, value }),
             span,
         ))
+    }
+
+    fn parse_module_name_list(
+        &mut self,
+        empty_message: &str,
+    ) -> ParseResult<(Vec<Identifier>, Token)> {
+        self.expect_delimiter(Delimiter::LeftBrace, "module name list requires `{`")?;
+        self.skip_layout();
+        if self.at_delimiter(Some(Delimiter::RightBrace)) {
+            return Err(self.invalid_here(empty_message));
+        }
+        let mut names = Vec::new();
+        loop {
+            names.push(self.parse_identifier()?);
+            self.skip_layout();
+            if self.take_operator(Operator::Comma).is_none() {
+                break;
+            }
+            self.skip_layout();
+            if self.at_delimiter(Some(Delimiter::RightBrace)) {
+                break;
+            }
+        }
+        let close =
+            self.expect_delimiter(Delimiter::RightBrace, "module name list is not closed")?;
+        Ok((names, close))
     }
 
     fn parse_unset(&mut self) -> ParseResult<Statement> {
@@ -1690,6 +1740,24 @@ impl<'source> Parser<'source> {
     fn expect_keyword(&mut self, keyword: Keyword, message: &str) -> ParseResult<Token> {
         self.take_keyword(keyword)
             .ok_or_else(|| self.expected(message, IncompleteReason::Expression))
+    }
+
+    fn expect_contextual_identifier(
+        &mut self,
+        spelling: &str,
+        message: &str,
+    ) -> ParseResult<Token> {
+        let matches = self.current().is_some_and(|token| {
+            token.kind() == TokenKind::Identifier
+                && self.source.slice(token.span()).ok() == Some(spelling)
+        });
+        if matches {
+            Ok(self
+                .take()
+                .expect("matching contextual identifier is current"))
+        } else {
+            Err(self.expected(message, IncompleteReason::Expression))
+        }
     }
 
     fn take_operator(&mut self, operator: Operator) -> Option<Token> {

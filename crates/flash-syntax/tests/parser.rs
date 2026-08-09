@@ -55,7 +55,47 @@ fn a_static_import_retains_its_exact_path_span() {
         panic!("expected import declaration");
     };
 
+    assert!(import.names.is_empty());
     assert_eq!(source_text(text, import.path), "'./lib/math.fsh'");
+}
+
+#[test]
+fn explicit_module_exports_and_imports_retain_name_spans() {
+    let text = concat!(
+        "let answer = 42\n",
+        "export { answer, add }\n",
+        "import { answer, add, } from './lib/math.fsh'\n",
+        "export EDITOR = 'fsh'\n",
+    );
+    let script = complete(text);
+    let StatementKind::ModuleExport(export) = script.statements()[1].kind() else {
+        panic!("expected module export");
+    };
+    let StatementKind::Import(import) = script.statements()[2].kind() else {
+        panic!("expected named import");
+    };
+
+    assert_eq!(
+        export
+            .names
+            .iter()
+            .map(|name| source_text(text, name.span()))
+            .collect::<Vec<_>>(),
+        ["answer", "add"]
+    );
+    assert_eq!(
+        import
+            .names
+            .iter()
+            .map(|name| source_text(text, name.span()))
+            .collect::<Vec<_>>(),
+        ["answer", "add"]
+    );
+    assert_eq!(source_text(text, import.path), "'./lib/math.fsh'");
+    assert!(matches!(
+        script.statements()[3].kind(),
+        StatementKind::Environment(_)
+    ));
 }
 
 #[test]
@@ -76,6 +116,32 @@ fn imports_reject_empty_dynamic_and_nested_paths() {
             panic!("expected invalid import for {text:?}");
         };
         assert_eq!(diagnostics[0].message(), message);
+    }
+}
+
+#[test]
+fn module_name_lists_reject_empty_wildcard_dynamic_and_nested_forms() {
+    for (text, message) in [
+        ("export {}\n", "module export list cannot be empty"),
+        (
+            "import {} from './lib.fsh'\n",
+            "import name list cannot be empty",
+        ),
+        ("import { * } from './lib.fsh'\n", "expected an identifier"),
+        (
+            "import { answer } from \"./dynamic.fsh\"\n",
+            "import requires a single-quoted path",
+        ),
+        (
+            "if true {\n    export { answer }\n}\n",
+            "module exports are allowed only at module top level",
+        ),
+    ] {
+        let source = SourceFile::new(SourceId::new(899), "invalid-module-name.fsh", text);
+        let ParseOutcome::Invalid(diagnostics) = parse(&source) else {
+            panic!("expected invalid module name form for {text:?}");
+        };
+        assert_eq!(diagnostics[0].message(), message, "{text:?}");
     }
 }
 

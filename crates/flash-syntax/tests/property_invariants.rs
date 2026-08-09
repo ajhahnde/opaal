@@ -276,7 +276,17 @@ impl<'source> SpanChecker<'source> {
     fn statement(&self, statement: &Statement) {
         self.span(statement.span());
         match statement.kind() {
-            StatementKind::Import(import) => self.span(import.path),
+            StatementKind::Import(import) => {
+                for name in &import.names {
+                    self.identifier(*name);
+                }
+                self.span(import.path);
+            }
+            StatementKind::ModuleExport(export) => {
+                for name in &export.names {
+                    self.identifier(*name);
+                }
+            }
             StatementKind::Declaration(declaration) => {
                 self.identifier(declaration.name);
                 if let Some(annotation) = &declaration.type_annotation {

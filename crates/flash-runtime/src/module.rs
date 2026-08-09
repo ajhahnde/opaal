@@ -350,6 +350,235 @@ pub struct ModuleSourceRegistry {
     entries: Vec<RegisteredModuleSource>,
 }
 
+/// One top-level name made visible by a module export list.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ModuleExport {
+    name: String,
+    declaration_span: Span,
+    export_span: Span,
+}
+
+impl ModuleExport {
+    /// The exact exported identifier spelling.
+    #[must_use]
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// The local declaration that owns the exported name.
+    #[must_use]
+    pub const fn declaration_span(&self) -> Span {
+        self.declaration_span
+    }
+
+    /// The identifier in the explicit export list.
+    #[must_use]
+    pub const fn export_span(&self) -> Span {
+        self.export_span
+    }
+}
+
+/// One explicit imported name after its target export has been validated.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ModuleNameImport {
+    name: String,
+    importer: ModuleId,
+    target: ModuleId,
+    name_span: Span,
+}
+
+impl ModuleNameImport {
+    /// The imported and local identifier spelling.
+    #[must_use]
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// The canonical module containing the named import.
+    #[must_use]
+    pub const fn importer(&self) -> &ModuleId {
+        &self.importer
+    }
+
+    /// The canonical module exporting the name.
+    #[must_use]
+    pub const fn target(&self) -> &ModuleId {
+        &self.target
+    }
+
+    /// The identifier in the explicit import list.
+    #[must_use]
+    pub const fn name_span(&self) -> Span {
+        self.name_span
+    }
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+struct ModuleNames {
+    locals: BTreeMap<String, Span>,
+    exports: BTreeMap<String, ModuleExport>,
+    imports: Vec<ModuleNameImport>,
+}
+
+/// Deterministic local, exported, and explicitly imported names by module.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ModuleNameRegistry {
+    by_module: BTreeMap<ModuleId, ModuleNames>,
+}
+
+impl ModuleNameRegistry {
+    /// Looks up one exported name from a canonical module.
+    #[must_use]
+    pub fn export(&self, module: &ModuleId, name: &str) -> Option<&ModuleExport> {
+        self.by_module
+            .get(module)
+            .and_then(|names| names.exports.get(name))
+    }
+
+    /// Explicit imports in source order for one canonical module.
+    #[must_use]
+    pub fn imports(&self, module: &ModuleId) -> &[ModuleNameImport] {
+        self.by_module
+            .get(module)
+            .map_or(&[], |names| names.imports.as_slice())
+    }
+
+    fn analyze(
+        graph: &ModuleGraph,
+        sources: &ModuleSourceRegistry,
+    ) -> Result<Self, Box<ModuleNameError>> {
+        let mut registry = Self::default();
+
+        for entry in sources.entries() {
+            let mut names = ModuleNames::default();
+            for statement in entry.script().statements() {
+                let identifier = match statement.kind() {
+                    StatementKind::Declaration(declaration) => Some(declaration.name),
+                    StatementKind::Function(function) => Some(function.name),
+                    _ => None,
+                };
+                let Some(identifier) = identifier else {
+                    continue;
+                };
+                let name = entry
+                    .source()
+                    .slice(identifier.span())
+                    .expect("parsed identifiers belong to their module source")
+                    .to_owned();
+                names.locals.entry(name).or_insert(identifier.span());
+            }
+            registry.by_module.insert(entry.module().clone(), names);
+        }
+
+        for entry in sources.entries() {
+            for statement in entry.script().statements() {
+                let StatementKind::ModuleExport(export) = statement.kind() else {
+                    continue;
+                };
+                for identifier in &export.names {
+                    let name = entry
+                        .source()
+                        .slice(identifier.span())
+                        .expect("parsed identifiers belong to their module source")
+                        .to_owned();
+                    let names = registry
+                        .by_module
+                        .get_mut(entry.module())
+                        .expect("every registered source has a name table");
+                    let Some(declaration_span) = names.locals.get(&name).copied() else {
+                        return Err(Box::new(ModuleNameError::UnknownExport {
+                            module: entry.module().clone(),
+                            name,
+                            export_span: identifier.span(),
+                        }));
+                    };
+                    if let Some(first) = names.exports.get(&name) {
+                        return Err(Box::new(ModuleNameError::DuplicateExport {
+                            module: entry.module().clone(),
+                            name,
+                            first_span: first.export_span(),
+                            duplicate_span: identifier.span(),
+                        }));
+                    }
+                    names.exports.insert(
+                        name.clone(),
+                        ModuleExport {
+                            name,
+                            declaration_span,
+                            export_span: identifier.span(),
+                        },
+                    );
+                }
+            }
+        }
+
+        for entry in sources.entries() {
+            for statement in entry.script().statements() {
+                let StatementKind::Import(import) = statement.kind() else {
+                    continue;
+                };
+                if import.names.is_empty() {
+                    continue;
+                }
+                let edge = graph
+                    .imports()
+                    .iter()
+                    .find(|edge| edge.importer() == entry.module() && edge.span() == import.path)
+                    .expect("every parsed import has one resolved graph edge");
+                for identifier in &import.names {
+                    let name = entry
+                        .source()
+                        .slice(identifier.span())
+                        .expect("parsed identifiers belong to their module source")
+                        .to_owned();
+                    let target_names = registry
+                        .by_module
+                        .get(edge.target())
+                        .expect("every graph target has a name table");
+                    if !target_names.exports.contains_key(&name) {
+                        let private_span = target_names.locals.get(&name).copied();
+                        return Err(Box::new(ModuleNameError::UnavailableImport {
+                            importer: entry.module().clone(),
+                            target: edge.target().clone(),
+                            name,
+                            import_span: identifier.span(),
+                            private_span,
+                        }));
+                    }
+
+                    let importer_names = registry
+                        .by_module
+                        .get_mut(entry.module())
+                        .expect("every registered source has a name table");
+                    let conflict = importer_names.locals.get(&name).copied().or_else(|| {
+                        importer_names
+                            .imports
+                            .iter()
+                            .find(|imported| imported.name() == name)
+                            .map(ModuleNameImport::name_span)
+                    });
+                    if let Some(first_span) = conflict {
+                        return Err(Box::new(ModuleNameError::ImportConflict {
+                            module: entry.module().clone(),
+                            name,
+                            first_span,
+                            duplicate_span: identifier.span(),
+                        }));
+                    }
+                    importer_names.imports.push(ModuleNameImport {
+                        name,
+                        importer: entry.module().clone(),
+                        target: edge.target().clone(),
+                        name_span: identifier.span(),
+                    });
+                }
+            }
+        }
+
+        Ok(registry)
+    }
+}
+
 impl ModuleSourceRegistry {
     /// The number of unique canonical source modules.
     #[must_use]
@@ -420,6 +649,7 @@ impl ModuleSourceRegistry {
 pub struct ModuleProgram {
     graph: ModuleGraph,
     sources: ModuleSourceRegistry,
+    names: ModuleNameRegistry,
 }
 
 /// A module-program construction failure rendered while its analyzed sources
@@ -494,6 +724,12 @@ impl ModuleProgram {
     pub const fn sources(&self) -> &ModuleSourceRegistry {
         &self.sources
     }
+
+    /// Static local, export, and explicit-import tables.
+    #[must_use]
+    pub const fn names(&self) -> &ModuleNameRegistry {
+        &self.names
+    }
 }
 
 /// Recursively resolves, reads, decodes, parses, and graphs Flash modules.
@@ -554,7 +790,15 @@ impl<'a> ModuleProgramLoader<'a> {
         if let Err(error) = self.load_module(root, None, &mut graph, &mut sources) {
             return Err(Box::new((error, sources)));
         }
-        Ok(ModuleProgram { graph, sources })
+        let names = match ModuleNameRegistry::analyze(&graph, &sources) {
+            Ok(names) => names,
+            Err(error) => return Err(Box::new((ModuleProgramError::Names(error), sources))),
+        };
+        Ok(ModuleProgram {
+            graph,
+            sources,
+            names,
+        })
     }
 
     fn load_module(
@@ -642,6 +886,124 @@ impl<'a> ModuleProgramLoader<'a> {
     }
 }
 
+/// A failure while building explicit module export/import-name tables.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ModuleNameError {
+    /// An export list names no top-level lexical declaration or function.
+    UnknownExport {
+        module: ModuleId,
+        name: String,
+        export_span: Span,
+    },
+    /// One module exports the same name more than once.
+    DuplicateExport {
+        module: ModuleId,
+        name: String,
+        first_span: Span,
+        duplicate_span: Span,
+    },
+    /// A target module does not explicitly export the requested name.
+    UnavailableImport {
+        importer: ModuleId,
+        target: ModuleId,
+        name: String,
+        import_span: Span,
+        private_span: Option<Span>,
+    },
+    /// An imported binding conflicts with a local or earlier imported name.
+    ImportConflict {
+        module: ModuleId,
+        name: String,
+        first_span: Span,
+        duplicate_span: Span,
+    },
+}
+
+impl ModuleNameError {
+    /// The module whose declaration directly failed.
+    #[must_use]
+    pub const fn module(&self) -> &ModuleId {
+        match self {
+            Self::UnknownExport { module, .. }
+            | Self::DuplicateExport { module, .. }
+            | Self::ImportConflict { module, .. } => module,
+            Self::UnavailableImport { importer, .. } => importer,
+        }
+    }
+
+    /// The structured source diagnostic for this name failure.
+    #[must_use]
+    pub fn diagnostic(&self) -> Diagnostic {
+        match self {
+            Self::UnknownExport {
+                export_span, name, ..
+            } => Diagnostic::new(Severity::Error, "MOD005", self.to_string()).with_primary(
+                *export_span,
+                format!("no top-level declaration or function named `{name}`"),
+            ),
+            Self::DuplicateExport {
+                first_span,
+                duplicate_span,
+                ..
+            } => Diagnostic::new(Severity::Error, "MOD006", self.to_string())
+                .with_primary(*duplicate_span, "this name is exported again")
+                .with_secondary(*first_span, "first exported here"),
+            Self::UnavailableImport {
+                import_span,
+                private_span,
+                ..
+            } => {
+                let diagnostic = Diagnostic::new(Severity::Error, "MOD007", self.to_string())
+                    .with_primary(
+                        *import_span,
+                        "this name is not exported by the target module",
+                    );
+                if let Some(span) = private_span {
+                    diagnostic.with_secondary(*span, "a private declaration exists here")
+                } else {
+                    diagnostic
+                }
+            }
+            Self::ImportConflict {
+                first_span,
+                duplicate_span,
+                ..
+            } => Diagnostic::new(Severity::Error, "MOD008", self.to_string())
+                .with_primary(*duplicate_span, "this imported binding conflicts")
+                .with_secondary(*first_span, "the name is already bound here"),
+        }
+    }
+}
+
+impl fmt::Display for ModuleNameError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnknownExport { module, name, .. } => write!(
+                formatter,
+                "module `{}` cannot export unknown name `{name}`",
+                module.path().display()
+            ),
+            Self::DuplicateExport { module, name, .. } => write!(
+                formatter,
+                "module `{}` exports `{name}` more than once",
+                module.path().display()
+            ),
+            Self::UnavailableImport { target, name, .. } => write!(
+                formatter,
+                "module `{}` does not export `{name}`",
+                target.path().display()
+            ),
+            Self::ImportConflict { module, name, .. } => write!(
+                formatter,
+                "module `{}` imports conflicting name `{name}`",
+                module.path().display()
+            ),
+        }
+    }
+}
+
+impl std::error::Error for ModuleNameError {}
+
 /// A failure while constructing a recursively parsed module program.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ModuleProgramError {
@@ -667,6 +1029,8 @@ pub enum ModuleProgramError {
     },
     /// An import violated the canonical graph contract.
     Graph(ModuleGraphError),
+    /// Static module export/import-name analysis failed.
+    Names(Box<ModuleNameError>),
     /// More source identities were required than `SourceId` can represent.
     SourceIdentityExhausted,
 }
@@ -695,6 +1059,7 @@ impl ModuleProgramError {
                 .collect(),
             Self::Syntax { diagnostics, .. } => diagnostics.clone(),
             Self::Graph(ModuleGraphError::Cycle(cycle)) => vec![cycle.diagnostic()],
+            Self::Names(error) => vec![error.diagnostic()],
             Self::Graph(ModuleGraphError::UnknownImporter(_)) | Self::SourceIdentityExhausted => {
                 Vec::new()
             }
@@ -709,6 +1074,7 @@ impl ModuleProgramError {
             Self::SourceRead { module, .. }
             | Self::InvalidUtf8 { module, .. }
             | Self::Syntax { module, .. } => Some(module),
+            Self::Names(error) => Some(error.module()),
             Self::Resolution(_) | Self::Graph(_) | Self::SourceIdentityExhausted => None,
         }
     }
@@ -738,6 +1104,7 @@ impl fmt::Display for ModuleProgramError {
                 module.path().display()
             ),
             Self::Graph(error) => error.fmt(formatter),
+            Self::Names(error) => error.fmt(formatter),
             Self::SourceIdentityExhausted => {
                 formatter.write_str("module program exhausted stable source identities")
             }
@@ -751,6 +1118,7 @@ impl std::error::Error for ModuleProgramError {
             Self::Resolution(error) => Some(error),
             Self::SourceRead { cause, .. } => Some(cause),
             Self::Graph(error) => Some(error),
+            Self::Names(error) => Some(error),
             Self::InvalidUtf8 { .. } | Self::Syntax { .. } | Self::SourceIdentityExhausted => None,
         }
     }

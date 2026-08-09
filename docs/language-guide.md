@@ -792,7 +792,35 @@ cycle failure ends the script before any root statement runs, and diagnostics
 identify the registered source files involved. Imported sources remain
 analysis-only in this form; their statements are not executed.
 
-An export makes a declared public name available to importers. Internal bindings remain private to the module unless the language contract marks them for export.
+Expose top-level lexical declarations and functions with an explicit export
+list:
+
+```text
+let answer = 42
+def add(left, right) { return $left + $right }
+export { answer, add }
+```
+
+Import only the names a source needs:
+
+```text
+import { answer, add } from './lib/math.fsh'
+```
+
+Both lists are nonempty identifier lists and may include a trailing comma.
+Exports and named imports are allowed only at module top level. An exported name
+must refer to a top-level `let`, `mut`, or `def` in the same source. A named
+import must identify an explicit target export and cannot replace a local or
+earlier imported binding. Aliases, re-exports, wildcard names, expressions in
+name lists, and dynamic paths are not part of this boundary.
+
+Module export lists are distinct from `export NAME = value`, which continues to
+write the child-process environment. Internal bindings remain private unless a
+module export list names them.
+
+The current module-name boundary is analysis-only. It builds deterministic
+tables and diagnostics without evaluating dependencies; imported runtime values
+and module initialization are not yet available during script execution.
 
 ### Static module analysis
 

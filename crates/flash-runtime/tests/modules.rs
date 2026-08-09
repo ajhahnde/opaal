@@ -144,6 +144,122 @@ fn static_imports_recursively_load_a_registered_module_program() {
 }
 
 #[test]
+fn named_imports_resolve_through_explicit_target_exports() {
+    let paths = FakeCanonicalizer::default()
+        .resolves("/project/main.fsh", "/project/main.fsh")
+        .resolves("/project/lib.fsh", "/project/lib.fsh");
+    let sources = FakeSourceLoader::default()
+        .contains("/project/main.fsh", "import { answer } from './lib.fsh'\n")
+        .contains("/project/lib.fsh", "let answer = 42\nexport { answer }\n");
+
+    let program = ModuleProgramLoader::new(&paths, &sources)
+        .load(Path::new("/project/main.fsh"))
+        .expect("the named import resolves");
+    let root = program.graph().root();
+    let import = &program.names().imports(root)[0];
+    let target = import.target();
+    let export = program
+        .names()
+        .export(target, "answer")
+        .expect("the target exports answer");
+
+    assert_eq!(import.name(), "answer");
+    assert_eq!(import.name_span().source_id(), SourceId::new(0));
+    assert_eq!(export.name(), "answer");
+    assert_eq!(export.declaration_span().source_id(), SourceId::new(1));
+    assert_eq!(export.export_span().source_id(), SourceId::new(1));
+}
+
+#[test]
+fn module_exports_must_name_locals_once() {
+    let paths = FakeCanonicalizer::default().resolves("/project/main.fsh", "/project/main.fsh");
+    let unknown = FakeSourceLoader::default().contains("/project/main.fsh", "export { missing }\n");
+    let unknown_error = ModuleProgramLoader::new(&paths, &unknown)
+        .load(Path::new("/project/main.fsh"))
+        .expect_err("an unknown export fails");
+
+    assert_eq!(unknown_error.diagnostics()[0].code(), "MOD005");
+    assert_eq!(
+        unknown_error.diagnostics()[0].labels()[0]
+            .span()
+            .source_id(),
+        SourceId::new(0)
+    );
+
+    let duplicate = FakeSourceLoader::default().contains(
+        "/project/main.fsh",
+        "let answer = 42\nexport { answer, answer }\n",
+    );
+    let duplicate_error = ModuleProgramLoader::new(&paths, &duplicate)
+        .load(Path::new("/project/main.fsh"))
+        .expect_err("a duplicate export fails");
+    let diagnostic = &duplicate_error.diagnostics()[0];
+
+    assert_eq!(diagnostic.code(), "MOD006");
+    assert_eq!(diagnostic.labels().len(), 2);
+    assert_eq!(diagnostic.labels()[0].style(), LabelStyle::Primary);
+    assert_eq!(diagnostic.labels()[1].style(), LabelStyle::Secondary);
+}
+
+#[test]
+fn private_target_names_cannot_be_imported() {
+    let paths = FakeCanonicalizer::default()
+        .resolves("/project/main.fsh", "/project/main.fsh")
+        .resolves("/project/lib.fsh", "/project/lib.fsh");
+    let sources = FakeSourceLoader::default()
+        .contains("/project/main.fsh", "import { answer } from './lib.fsh'\n")
+        .contains("/project/lib.fsh", "let answer = 42\n");
+
+    let error = ModuleProgramLoader::new(&paths, &sources)
+        .load(Path::new("/project/main.fsh"))
+        .expect_err("a private target name is unavailable");
+    let diagnostic = &error.diagnostics()[0];
+
+    assert_eq!(diagnostic.code(), "MOD007");
+    assert_eq!(
+        diagnostic
+            .labels()
+            .iter()
+            .map(|label| label.span().source_id())
+            .collect::<Vec<_>>(),
+        [SourceId::new(0), SourceId::new(1)]
+    );
+}
+
+#[test]
+fn imported_names_cannot_collide_with_local_or_imported_bindings() {
+    let paths = FakeCanonicalizer::default()
+        .resolves("/project/main.fsh", "/project/main.fsh")
+        .resolves("/project/lib.fsh", "/project/lib.fsh");
+    let local_collision = FakeSourceLoader::default()
+        .contains(
+            "/project/main.fsh",
+            "let answer = 0\nimport { answer } from './lib.fsh'\n",
+        )
+        .contains("/project/lib.fsh", "let answer = 42\nexport { answer }\n");
+    let local_error = ModuleProgramLoader::new(&paths, &local_collision)
+        .load(Path::new("/project/main.fsh"))
+        .expect_err("an imported name cannot replace a local");
+
+    assert_eq!(local_error.diagnostics()[0].code(), "MOD008");
+
+    let import_collision = FakeSourceLoader::default()
+        .contains(
+            "/project/main.fsh",
+            concat!(
+                "import { answer } from './lib.fsh'\n",
+                "import { answer } from './lib.fsh'\n",
+            ),
+        )
+        .contains("/project/lib.fsh", "let answer = 42\nexport { answer }\n");
+    let import_error = ModuleProgramLoader::new(&paths, &import_collision)
+        .load(Path::new("/project/main.fsh"))
+        .expect_err("an imported name cannot be bound twice");
+
+    assert_eq!(import_error.diagnostics()[0].code(), "MOD008");
+}
+
+#[test]
 fn canonical_aliases_share_one_loaded_and_parsed_source() {
     let paths = FakeCanonicalizer::default()
         .resolves("/project/main.fsh", "/project/main.fsh")

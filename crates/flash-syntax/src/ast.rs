@@ -77,6 +77,7 @@ pub type Statement = AstNode<StatementKind>;
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum StatementKind {
     Import(ImportStatement),
+    ModuleExport(ModuleExportStatement),
     Declaration(Declaration),
     Assignment(Assignment),
     Environment(EnvironmentStatement),
@@ -92,8 +93,16 @@ pub enum StatementKind {
 /// One static top-level source dependency.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ImportStatement {
+    /// Explicit imported names. Empty only for a load-only import.
+    pub names: Vec<Identifier>,
     /// The complete nonempty single-quoted path literal.
     pub path: Span,
+}
+
+/// One explicit module export list.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ModuleExportStatement {
+    pub names: Vec<Identifier>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

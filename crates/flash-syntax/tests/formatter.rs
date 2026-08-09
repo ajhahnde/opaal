@@ -89,6 +89,26 @@ fn static_import_spacing_is_canonical() {
 }
 
 #[test]
+fn explicit_module_name_spacing_is_canonical() {
+    let source = SourceFile::new(
+        SourceId::new(3_004),
+        "module-names.fsh",
+        concat!(
+            "export   {   answer,   add   }\n",
+            "import   {   answer,   add   }   from   './lib/math.fsh'\n",
+        ),
+    );
+
+    assert_eq!(
+        complete_format(&source),
+        concat!(
+            "export { answer, add }\n",
+            "import { answer, add } from './lib/math.fsh'\n",
+        )
+    );
+}
+
+#[test]
 fn incomplete_and_invalid_inputs_keep_their_parse_outcomes() {
     let incomplete = SourceFile::new(SourceId::new(3_001), "incomplete.fsh", "echo \"");
     let FormatOutcome::Incomplete(reason) = format_source(&incomplete) else {

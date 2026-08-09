@@ -1379,7 +1379,7 @@ impl<'source> Evaluator<'source> {
         let span = statement.span();
         self.charge(span)?;
         match statement.kind() {
-            StatementKind::Import(_) => {
+            StatementKind::Import(_) | StatementKind::ModuleExport(_) => {
                 Err(self.error(RuntimeErrorKind::ExecutionUnsupported, span))
             }
             StatementKind::Declaration(declaration) => {

@@ -338,7 +338,10 @@ impl Session {
 
         for statement in script.statements() {
             match statement.kind() {
-                StatementKind::Import(_) if imports_analyzed => continue,
+                StatementKind::Import(import) if imports_analyzed && import.names.is_empty() => {
+                    continue;
+                }
+                StatementKind::ModuleExport(_) if imports_analyzed => continue,
                 StatementKind::Job(job) => {
                     if let Some(background_span) = job.background_span {
                         let Some(jobs) = jobs.as_mut() else {

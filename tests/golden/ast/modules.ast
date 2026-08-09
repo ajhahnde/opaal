@@ -3,11 +3,138 @@ Script {
         AstNode {
             kind: Import(
                 ImportStatement {
+                    names: [],
                     path: Span(7..23),
                 },
             ),
             span: Span(0..23),
         },
+        AstNode {
+            kind: Declaration(
+                Declaration {
+                    mutable: false,
+                    name: Identifier {
+                        span: Span(28..34),
+                    },
+                    type_annotation: None,
+                    value: AstNode {
+                        kind: Literal(
+                            Literal {
+                                kind: Integer,
+                                span: Span(37..39),
+                            },
+                        ),
+                        span: Span(37..39),
+                    },
+                },
+            ),
+            span: Span(24..39),
+        },
+        AstNode {
+            kind: Function(
+                FunctionDefinition {
+                    name: Identifier {
+                        span: Span(44..47),
+                    },
+                    parameters: [
+                        Parameter {
+                            name: Identifier {
+                                span: Span(48..52),
+                            },
+                            type_annotation: None,
+                            span: Span(48..52),
+                        },
+                        Parameter {
+                            name: Identifier {
+                                span: Span(54..59),
+                            },
+                            type_annotation: None,
+                            span: Span(54..59),
+                        },
+                    ],
+                    return_type: None,
+                    body: Block {
+                        statements: [
+                            AstNode {
+                                kind: Control(
+                                    Return(
+                                        Some(
+                                            AstNode {
+                                                kind: Binary(
+                                                    BinaryExpression {
+                                                        left: AstNode {
+                                                            kind: Variable(
+                                                                VariableReference {
+                                                                    name: Identifier {
+                                                                        span: Span(71..75),
+                                                                    },
+                                                                    span: Span(70..75),
+                                                                },
+                                                            ),
+                                                            span: Span(70..75),
+                                                        },
+                                                        operator: AstNode {
+                                                            kind: Add,
+                                                            span: Span(76..77),
+                                                        },
+                                                        right: AstNode {
+                                                            kind: Variable(
+                                                                VariableReference {
+                                                                    name: Identifier {
+                                                                        span: Span(79..84),
+                                                                    },
+                                                                    span: Span(78..84),
+                                                                },
+                                                            ),
+                                                            span: Span(78..84),
+                                                        },
+                                                    },
+                                                ),
+                                                span: Span(70..84),
+                                            },
+                                        ),
+                                    ),
+                                ),
+                                span: Span(63..84),
+                            },
+                        ],
+                        span: Span(61..86),
+                    },
+                },
+            ),
+            span: Span(40..86),
+        },
+        AstNode {
+            kind: ModuleExport(
+                ModuleExportStatement {
+                    names: [
+                        Identifier {
+                            span: Span(96..102),
+                        },
+                        Identifier {
+                            span: Span(104..107),
+                        },
+                    ],
+                },
+            ),
+            span: Span(87..109),
+        },
+        AstNode {
+            kind: Import(
+                ImportStatement {
+                    names: [
+                        Identifier {
+                            span: Span(119..125),
+                        },
+                        Identifier {
+                            span: Span(127..130),
+                        },
+                    ],
+                    path: Span(138..154),
+                },
+            ),
+            span: Span(110..154),
+        },
     ],
-    span: Span(0..24),
+    span: Span(0..155),
 }
