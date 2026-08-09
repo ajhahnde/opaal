@@ -962,6 +962,8 @@ Flash distinguishes four pipeline carrier forms:
 
 External processes consume and produce byte streams. Internal commands declare the carrier forms they accept and return.
 
+A pipeline may alternate between external byte-stream stages and internal typed stages any number of times. Each edge is checked independently; there is no language-level limit of one internal stage island. Every transition must still use carriers accepted by both adjacent stages.
+
 Flash does not automatically:
 
 - decode bytes as text;

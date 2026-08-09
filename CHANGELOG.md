@@ -55,9 +55,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   while byte streams retain producer failures and cancellation without implicit
   decoding, rendering, or serialization.
 - Stream explicit byte boundaries across external and internal stages without
-  capture, in scripts and interactive sessions. Mixed pipelines preserve
-  source-ordered stage statuses and `pipefail`, and stop pulling an internal
-  producer when an external consumer closes early.
+  capture, in scripts and interactive sessions. The current mixed executor
+  supports one contiguous internal island; within that implemented boundary it
+  preserves source-ordered stage statuses and `pipefail`, and stops pulling an
+  internal producer when an external consumer closes early. Arbitrarily
+  alternating internal and external segments remain required for Flash v1.
 - Add the checked lifecycle foundation for process-backed jobs: stable shell
   job identities, an all-members startup barrier, foreground/background and
   stopped states, per-process completion observations, prompt-safe notice

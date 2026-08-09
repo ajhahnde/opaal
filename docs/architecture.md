@@ -369,7 +369,7 @@ Command substitution and other capture paths drain output concurrently with chil
 
 ### Mixed pipelines
 
-A mixed pipeline contains one contiguous island of internal stages surrounded by external stages:
+The current mixed executor supports one contiguous island of internal stages surrounded by external stages:
 
 ```text
 external prefix
@@ -382,6 +382,8 @@ external suffix
 External-to-external edges remain ordinary operating-system pipes. The two edges adjacent to the internal island retain a parent-owned endpoint so the runtime can pull bytes from the prefix or push bytes into the suffix without materializing the entire stream.
 
 A structured carrier cannot cross an external boundary directly. The internal island must produce or consume a byte carrier through an explicit codec or format command.
+
+The one-island shape is an implementation constraint of the current session-thread bridge, not a language-semantic restriction. The Flash v1 contract permits any number of alternating internal and external segments when every adjacent carrier is compatible. Before the v1 runtime contract is frozen, the executor must generalize this bridge while preserving bounded streaming, backpressure, cancellation, cleanup, transactional session state, and source-ordered aggregate status.
 
 This architecture preserves:
 

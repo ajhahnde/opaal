@@ -427,6 +427,20 @@ Common conversion families are:
 
 Flash rejects incompatible pipeline edges rather than guessing a conversion.
 
+Explicit byte boundaries may occur more than once in one pipeline. Flash v1 permits carrier-compatible shapes such as:
+
+```text
+^producer
+    | decode utf8
+    | where {|text| true}
+    | encode utf8
+    | ^transform
+    | decode utf8
+    | where {|text| true}
+```
+
+The external stages remain byte-oriented, while each internal island keeps its structured values inside the runtime.
+
 Interactive rendering of a record, list, or table is for human inspection. It is not a stable serialization format. Use an explicit encoder or formatter when a file or external process requires bytes.
 
 ### Pipeline completion
