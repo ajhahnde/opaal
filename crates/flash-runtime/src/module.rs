@@ -19,7 +19,7 @@ use flash_syntax::{
     Block, Closure, CommandItemKind, ConditionalChain, ControlTransfer, Diagnostic, ElseBranch,
     Expression, ExpressionKind, LiteralKind, MatchArm, ParseOutcome, Pattern, Pipeline, RecordKey,
     RedirectionKind, Script, Severity, SourceFile, SourceId, Span, StageKind, Statement,
-    StatementKind, Word, WordPart, WordPartKind, parse, render_diagnostic_sources,
+    StatementKind, TypeReference, Word, WordPart, WordPartKind, parse, render_diagnostic_sources,
 };
 
 /// The sole host capability needed to turn a candidate source path into its
@@ -672,6 +672,831 @@ impl ModuleNameRegistry {
     }
 }
 
+/// A resolved value type from Flash's closed built-in annotation namespace.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ValueType {
+    Any,
+    Null,
+    Bool,
+    Int,
+    Float,
+    String,
+    Bytes,
+    Path,
+    Duration,
+    ByteSize,
+    List(Box<Self>),
+    Record,
+    Table,
+    Range,
+    Status,
+    Function,
+    Closure,
+}
+
+impl ValueType {
+    fn accepts_type(&self, actual: &Self) -> bool {
+        match (self, actual) {
+            (Self::Any, _) => true,
+            (Self::List(expected), Self::List(actual)) => expected.accepts_type(actual),
+            _ => self == actual,
+        }
+    }
+}
+
+impl fmt::Display for ValueType {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Any => formatter.write_str("Any"),
+            Self::Null => formatter.write_str("Null"),
+            Self::Bool => formatter.write_str("Bool"),
+            Self::Int => formatter.write_str("Int"),
+            Self::Float => formatter.write_str("Float"),
+            Self::String => formatter.write_str("String"),
+            Self::Bytes => formatter.write_str("Bytes"),
+            Self::Path => formatter.write_str("Path"),
+            Self::Duration => formatter.write_str("Duration"),
+            Self::ByteSize => formatter.write_str("ByteSize"),
+            Self::List(element) => write!(formatter, "List[{element}]"),
+            Self::Record => formatter.write_str("Record"),
+            Self::Table => formatter.write_str("Table"),
+            Self::Range => formatter.write_str("Range"),
+            Self::Status => formatter.write_str("Status"),
+            Self::Function => formatter.write_str("Function"),
+            Self::Closure => formatter.write_str("Closure"),
+        }
+    }
+}
+
+/// One source annotation resolved to a built-in value type.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResolvedTypeAnnotation {
+    span: Span,
+    value_type: ValueType,
+}
+
+impl ResolvedTypeAnnotation {
+    #[must_use]
+    pub const fn span(&self) -> Span {
+        self.span
+    }
+
+    #[must_use]
+    pub const fn value_type(&self) -> &ValueType {
+        &self.value_type
+    }
+}
+
+/// One resolved named-function parameter.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FunctionParameterSignature {
+    name: String,
+    declaration_span: Span,
+    value_type: ValueType,
+    annotation_span: Option<Span>,
+}
+
+impl FunctionParameterSignature {
+    #[must_use]
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    #[must_use]
+    pub const fn declaration_span(&self) -> Span {
+        self.declaration_span
+    }
+
+    #[must_use]
+    pub const fn value_type(&self) -> &ValueType {
+        &self.value_type
+    }
+
+    #[must_use]
+    pub const fn annotation_span(&self) -> Option<Span> {
+        self.annotation_span
+    }
+}
+
+/// A named function's resolved non-executing signature.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FunctionSignature {
+    name: String,
+    declaration_span: Span,
+    parameters: Vec<FunctionParameterSignature>,
+    result: ValueType,
+    result_annotation_span: Option<Span>,
+}
+
+impl FunctionSignature {
+    #[must_use]
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    #[must_use]
+    pub const fn declaration_span(&self) -> Span {
+        self.declaration_span
+    }
+
+    #[must_use]
+    pub fn parameters(&self) -> &[FunctionParameterSignature] {
+        &self.parameters
+    }
+
+    #[must_use]
+    pub const fn result(&self) -> &ValueType {
+        &self.result
+    }
+
+    #[must_use]
+    pub const fn result_annotation_span(&self) -> Option<Span> {
+        self.result_annotation_span
+    }
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+struct ModuleTypes {
+    annotations: Vec<ResolvedTypeAnnotation>,
+    functions: Vec<FunctionSignature>,
+}
+
+/// Resolved annotations and named-function signatures by canonical module.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ModuleTypeRegistry {
+    by_module: BTreeMap<ModuleId, ModuleTypes>,
+}
+
+impl ModuleTypeRegistry {
+    /// Resolved annotations in deterministic source traversal order.
+    #[must_use]
+    pub fn annotations(&self, module: &ModuleId) -> &[ResolvedTypeAnnotation] {
+        self.by_module
+            .get(module)
+            .map_or(&[], |types| types.annotations.as_slice())
+    }
+
+    /// Looks up the annotation occupying one exact complete source span.
+    #[must_use]
+    pub fn annotation(
+        &self,
+        module: &ModuleId,
+        annotation_span: Span,
+    ) -> Option<&ResolvedTypeAnnotation> {
+        self.annotations(module)
+            .iter()
+            .find(|annotation| annotation.span() == annotation_span)
+    }
+
+    /// Named-function signatures in deterministic source traversal order.
+    #[must_use]
+    pub fn functions(&self, module: &ModuleId) -> &[FunctionSignature] {
+        self.by_module
+            .get(module)
+            .map_or(&[], |types| types.functions.as_slice())
+    }
+
+    /// Looks up a named signature by its function-name declaration span.
+    #[must_use]
+    pub fn function(
+        &self,
+        module: &ModuleId,
+        declaration_span: Span,
+    ) -> Option<&FunctionSignature> {
+        self.functions(module)
+            .iter()
+            .find(|signature| signature.declaration_span() == declaration_span)
+    }
+
+    fn analyze(
+        sources: &ModuleSourceRegistry,
+        names: &ModuleNameRegistry,
+    ) -> Result<Self, Box<ModuleTypeError>> {
+        let mut registry = Self::default();
+        for entry in sources.entries() {
+            let types = TypeCollector::new(entry).collect()?;
+            registry.by_module.insert(entry.module().clone(), types);
+        }
+        for entry in sources.entries() {
+            SignatureValidator::new(entry, names, &registry).validate()?;
+        }
+        Ok(registry)
+    }
+}
+
+struct TypeCollector<'a> {
+    entry: &'a RegisteredModuleSource,
+    types: ModuleTypes,
+}
+
+impl<'a> TypeCollector<'a> {
+    fn new(entry: &'a RegisteredModuleSource) -> Self {
+        Self {
+            entry,
+            types: ModuleTypes::default(),
+        }
+    }
+
+    fn collect(mut self) -> Result<ModuleTypes, Box<ModuleTypeError>> {
+        self.statements(self.entry.script().statements())?;
+        Ok(self.types)
+    }
+
+    fn statements(&mut self, statements: &[Statement]) -> Result<(), Box<ModuleTypeError>> {
+        for statement in statements {
+            self.statement(statement)?;
+        }
+        Ok(())
+    }
+
+    fn statement(&mut self, statement: &Statement) -> Result<(), Box<ModuleTypeError>> {
+        match statement.kind() {
+            StatementKind::Import(_) | StatementKind::ModuleExport(_) => Ok(()),
+            StatementKind::Declaration(declaration) => {
+                if let Some(annotation) = &declaration.type_annotation {
+                    self.resolve_type(annotation)?;
+                }
+                self.expression(&declaration.value)
+            }
+            StatementKind::Assignment(assignment) => self.expression(&assignment.value),
+            StatementKind::Environment(environment) => match environment {
+                flash_syntax::EnvironmentStatement::Export { value, .. } => self.expression(value),
+                flash_syntax::EnvironmentStatement::Unset { .. } => Ok(()),
+            },
+            StatementKind::Function(function) => {
+                let mut parameters = Vec::with_capacity(function.parameters.len());
+                for parameter in &function.parameters {
+                    let value_type = match &parameter.type_annotation {
+                        Some(annotation) => self.resolve_type(annotation)?,
+                        None => ValueType::Any,
+                    };
+                    parameters.push(FunctionParameterSignature {
+                        name: self.text(parameter.name.span()).to_owned(),
+                        declaration_span: parameter.name.span(),
+                        value_type,
+                        annotation_span: parameter
+                            .type_annotation
+                            .as_ref()
+                            .map(|annotation| annotation.span),
+                    });
+                }
+                let result = match &function.return_type {
+                    Some(annotation) => self.resolve_type(annotation)?,
+                    None => ValueType::Any,
+                };
+                self.types.functions.push(FunctionSignature {
+                    name: self.text(function.name.span()).to_owned(),
+                    declaration_span: function.name.span(),
+                    parameters,
+                    result,
+                    result_annotation_span: function
+                        .return_type
+                        .as_ref()
+                        .map(|annotation| annotation.span),
+                });
+                self.statements(&function.body.statements)
+            }
+            StatementKind::If(statement) => {
+                self.chain(&statement.condition)?;
+                self.statements(&statement.then_block.statements)?;
+                match &statement.else_branch {
+                    Some(ElseBranch::Block(block)) => self.statements(&block.statements),
+                    Some(ElseBranch::If(nested)) => self.statement(&Statement::new(
+                        StatementKind::If(nested.kind().clone()),
+                        nested.span(),
+                    )),
+                    None => Ok(()),
+                }
+            }
+            StatementKind::While(statement) => {
+                self.chain(&statement.condition)?;
+                self.statements(&statement.body.statements)
+            }
+            StatementKind::For(statement) => {
+                self.expression(&statement.iterable)?;
+                self.statements(&statement.body.statements)
+            }
+            StatementKind::Match(statement) => {
+                self.expression(&statement.value)?;
+                for arm in &statement.arms {
+                    if let Pattern::Literal(literal) = &arm.pattern {
+                        self.literal(literal)?;
+                    }
+                    if let Some(guard) = &arm.guard {
+                        self.expression(guard)?;
+                    }
+                    self.statements(&arm.body.statements)?;
+                }
+                Ok(())
+            }
+            StatementKind::Control(ControlTransfer::Return(Some(expression))) => {
+                self.expression(expression)
+            }
+            StatementKind::Control(
+                ControlTransfer::Break | ControlTransfer::Continue | ControlTransfer::Return(None),
+            ) => Ok(()),
+            StatementKind::Job(job) => self.chain(&job.chain),
+        }
+    }
+
+    fn chain(&mut self, chain: &ConditionalChain) -> Result<(), Box<ModuleTypeError>> {
+        for and_chain in chain.or_terms() {
+            for pipeline in and_chain.and_terms() {
+                for stage in pipeline.stages() {
+                    match stage.kind() {
+                        StageKind::Expression(expression) => self.expression(expression)?,
+                        StageKind::Command(command) => {
+                            self.word(command.head.word())?;
+                            for item in &command.items {
+                                match item.kind() {
+                                    CommandItemKind::Word(word) => self.word(word)?,
+                                    CommandItemKind::Closure(closure) => self.closure(closure)?,
+                                    CommandItemKind::Redirection(redirection) => {
+                                        self.redirection(redirection.kind())?;
+                                    }
+                                    CommandItemKind::Spread(_) => {}
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn expression(&mut self, expression: &Expression) -> Result<(), Box<ModuleTypeError>> {
+        match expression.kind() {
+            ExpressionKind::Literal(literal) => self.literal(literal),
+            ExpressionKind::Variable(_) | ExpressionKind::Symbol(_) => Ok(()),
+            ExpressionKind::List(elements) => {
+                for element in elements {
+                    self.expression(element)?;
+                }
+                Ok(())
+            }
+            ExpressionKind::Record(entries) => {
+                for entry in entries {
+                    if let RecordKey::DoubleQuoted(part) = &entry.key {
+                        self.word_part(part)?;
+                    }
+                    self.expression(&entry.value)?;
+                }
+                Ok(())
+            }
+            ExpressionKind::Closure(closure) => self.closure(closure),
+            ExpressionKind::CommandSubstitution(chain) | ExpressionKind::GroupedJob(chain) => {
+                self.chain(chain)
+            }
+            ExpressionKind::Call(call) => {
+                self.expression(&call.callee)?;
+                for argument in &call.arguments {
+                    self.expression(argument)?;
+                }
+                Ok(())
+            }
+            ExpressionKind::Index(index) => {
+                self.expression(&index.target)?;
+                self.expression(&index.index)
+            }
+            ExpressionKind::Member(member) => self.expression(&member.target),
+            ExpressionKind::Unary(unary) => self.expression(&unary.operand),
+            ExpressionKind::Binary(binary) => {
+                self.expression(&binary.left)?;
+                self.expression(&binary.right)
+            }
+        }
+    }
+
+    fn closure(&mut self, closure: &Closure) -> Result<(), Box<ModuleTypeError>> {
+        for parameter in &closure.parameters {
+            if let Some(annotation) = &parameter.type_annotation {
+                self.resolve_type(annotation)?;
+            }
+        }
+        self.chain(&closure.body)
+    }
+
+    fn literal(&mut self, literal: &flash_syntax::Literal) -> Result<(), Box<ModuleTypeError>> {
+        if let LiteralKind::DoubleQuoted(parts) = literal.kind() {
+            self.word_parts(parts)?;
+        }
+        Ok(())
+    }
+
+    fn word(&mut self, word: &Word) -> Result<(), Box<ModuleTypeError>> {
+        self.word_parts(word.parts())
+    }
+
+    fn word_parts(&mut self, parts: &[WordPart]) -> Result<(), Box<ModuleTypeError>> {
+        for part in parts {
+            self.word_part(part)?;
+        }
+        Ok(())
+    }
+
+    fn word_part(&mut self, part: &WordPart) -> Result<(), Box<ModuleTypeError>> {
+        match part.kind() {
+            WordPartKind::DoubleQuoted(parts) => self.word_parts(parts),
+            WordPartKind::BracedInterpolation(expression) => self.expression(expression),
+            WordPartKind::CommandSubstitution(chain) => self.chain(chain),
+            _ => Ok(()),
+        }
+    }
+
+    fn redirection(&mut self, redirection: &RedirectionKind) -> Result<(), Box<ModuleTypeError>> {
+        match redirection {
+            RedirectionKind::Input { target, .. } => self.word(target),
+            RedirectionKind::File(file) => self.word(&file.target),
+            RedirectionKind::Duplicate { .. } | RedirectionKind::Close { .. } => Ok(()),
+        }
+    }
+
+    fn resolve_type(
+        &mut self,
+        reference: &TypeReference,
+    ) -> Result<ValueType, Box<ModuleTypeError>> {
+        let value_type = self.resolve_type_value(reference)?;
+        self.types.annotations.push(ResolvedTypeAnnotation {
+            span: reference.span,
+            value_type: value_type.clone(),
+        });
+        Ok(value_type)
+    }
+
+    fn resolve_type_value(
+        &mut self,
+        reference: &TypeReference,
+    ) -> Result<ValueType, Box<ModuleTypeError>> {
+        let name = self.text(reference.name.span());
+        let value_type = if name == "List" {
+            if reference.arguments.len() != 1 {
+                return Err(Box::new(ModuleTypeError::InvalidTypeArity {
+                    module: self.entry.module().clone(),
+                    name: name.to_owned(),
+                    expected: 1,
+                    actual: reference.arguments.len(),
+                    span: reference.span,
+                }));
+            }
+            ValueType::List(Box::new(self.resolve_type_value(&reference.arguments[0])?))
+        } else {
+            if !reference.arguments.is_empty() {
+                return Err(Box::new(ModuleTypeError::InvalidTypeArity {
+                    module: self.entry.module().clone(),
+                    name: name.to_owned(),
+                    expected: 0,
+                    actual: reference.arguments.len(),
+                    span: reference.span,
+                }));
+            }
+            match name {
+                "Any" => ValueType::Any,
+                "Null" => ValueType::Null,
+                "Bool" => ValueType::Bool,
+                "Int" => ValueType::Int,
+                "Float" => ValueType::Float,
+                "String" => ValueType::String,
+                "Bytes" => ValueType::Bytes,
+                "Path" => ValueType::Path,
+                "Duration" => ValueType::Duration,
+                "ByteSize" => ValueType::ByteSize,
+                "Record" => ValueType::Record,
+                "Table" => ValueType::Table,
+                "Range" => ValueType::Range,
+                "Status" => ValueType::Status,
+                "Function" => ValueType::Function,
+                "Closure" => ValueType::Closure,
+                _ => {
+                    return Err(Box::new(ModuleTypeError::UnknownType {
+                        module: self.entry.module().clone(),
+                        name: name.to_owned(),
+                        span: reference.span,
+                    }));
+                }
+            }
+        };
+        Ok(value_type)
+    }
+
+    fn text(&self, span: Span) -> &str {
+        self.entry
+            .source()
+            .slice(span)
+            .expect("parsed syntax spans belong to their module source")
+    }
+}
+
+struct SignatureValidator<'a> {
+    entry: &'a RegisteredModuleSource,
+    names: &'a ModuleNameRegistry,
+    types: &'a ModuleTypeRegistry,
+}
+
+impl<'a> SignatureValidator<'a> {
+    fn new(
+        entry: &'a RegisteredModuleSource,
+        names: &'a ModuleNameRegistry,
+        types: &'a ModuleTypeRegistry,
+    ) -> Self {
+        Self {
+            entry,
+            names,
+            types,
+        }
+    }
+
+    fn validate(&self) -> Result<(), Box<ModuleTypeError>> {
+        self.statements(self.entry.script().statements())
+    }
+
+    fn statements(&self, statements: &[Statement]) -> Result<(), Box<ModuleTypeError>> {
+        for statement in statements {
+            self.statement(statement)?;
+        }
+        Ok(())
+    }
+
+    fn statement(&self, statement: &Statement) -> Result<(), Box<ModuleTypeError>> {
+        match statement.kind() {
+            StatementKind::Import(_) | StatementKind::ModuleExport(_) => Ok(()),
+            StatementKind::Declaration(declaration) => {
+                self.expression(&declaration.value).map(|_| ())
+            }
+            StatementKind::Assignment(assignment) => self.expression(&assignment.value).map(|_| ()),
+            StatementKind::Environment(environment) => match environment {
+                flash_syntax::EnvironmentStatement::Export { value, .. } => {
+                    self.expression(value).map(|_| ())
+                }
+                flash_syntax::EnvironmentStatement::Unset { .. } => Ok(()),
+            },
+            StatementKind::Function(function) => self.statements(&function.body.statements),
+            StatementKind::If(statement) => {
+                self.chain(&statement.condition)?;
+                self.statements(&statement.then_block.statements)?;
+                match &statement.else_branch {
+                    Some(ElseBranch::Block(block)) => self.statements(&block.statements),
+                    Some(ElseBranch::If(nested)) => self.if_statement(nested.kind()),
+                    None => Ok(()),
+                }
+            }
+            StatementKind::While(statement) => {
+                self.chain(&statement.condition)?;
+                self.statements(&statement.body.statements)
+            }
+            StatementKind::For(statement) => {
+                self.expression(&statement.iterable)?;
+                self.statements(&statement.body.statements)
+            }
+            StatementKind::Match(statement) => {
+                self.expression(&statement.value)?;
+                for arm in &statement.arms {
+                    if let Pattern::Literal(literal) = &arm.pattern {
+                        self.literal(literal)?;
+                    }
+                    if let Some(guard) = &arm.guard {
+                        self.expression(guard)?;
+                    }
+                    self.statements(&arm.body.statements)?;
+                }
+                Ok(())
+            }
+            StatementKind::Control(ControlTransfer::Return(Some(expression))) => {
+                self.expression(expression).map(|_| ())
+            }
+            StatementKind::Control(
+                ControlTransfer::Break | ControlTransfer::Continue | ControlTransfer::Return(None),
+            ) => Ok(()),
+            StatementKind::Job(job) => self.chain(&job.chain),
+        }
+    }
+
+    fn if_statement(
+        &self,
+        statement: &flash_syntax::IfStatement,
+    ) -> Result<(), Box<ModuleTypeError>> {
+        self.chain(&statement.condition)?;
+        self.statements(&statement.then_block.statements)?;
+        match &statement.else_branch {
+            Some(ElseBranch::Block(block)) => self.statements(&block.statements),
+            Some(ElseBranch::If(nested)) => self.if_statement(nested.kind()),
+            None => Ok(()),
+        }
+    }
+
+    fn chain(&self, chain: &ConditionalChain) -> Result<(), Box<ModuleTypeError>> {
+        for and_chain in chain.or_terms() {
+            for pipeline in and_chain.and_terms() {
+                for stage in pipeline.stages() {
+                    match stage.kind() {
+                        StageKind::Expression(expression) => {
+                            self.expression(expression)?;
+                        }
+                        StageKind::Command(command) => {
+                            self.word(command.head.word())?;
+                            for item in &command.items {
+                                match item.kind() {
+                                    CommandItemKind::Word(word) => self.word(word)?,
+                                    CommandItemKind::Closure(closure) => {
+                                        self.chain(&closure.body)?;
+                                    }
+                                    CommandItemKind::Redirection(redirection) => {
+                                        self.redirection(redirection.kind())?;
+                                    }
+                                    CommandItemKind::Spread(_) => {}
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn expression(
+        &self,
+        expression: &Expression,
+    ) -> Result<Option<ValueType>, Box<ModuleTypeError>> {
+        match expression.kind() {
+            ExpressionKind::Literal(literal) => self.literal(literal),
+            ExpressionKind::Variable(_) | ExpressionKind::Symbol(_) => Ok(None),
+            ExpressionKind::List(elements) => {
+                let mut element_type = None;
+                for element in elements {
+                    let Some(current) = self.expression(element)? else {
+                        return Ok(None);
+                    };
+                    if let Some(previous) = &element_type {
+                        if previous != &current {
+                            return Ok(None);
+                        }
+                    } else {
+                        element_type = Some(current);
+                    }
+                }
+                Ok(element_type.map(|element| ValueType::List(Box::new(element))))
+            }
+            ExpressionKind::Record(entries) => {
+                for entry in entries {
+                    if let RecordKey::DoubleQuoted(part) = &entry.key {
+                        self.word_part(part)?;
+                    }
+                    self.expression(&entry.value)?;
+                }
+                Ok(Some(ValueType::Record))
+            }
+            ExpressionKind::Closure(closure) => {
+                self.chain(&closure.body)?;
+                Ok(Some(ValueType::Closure))
+            }
+            ExpressionKind::CommandSubstitution(chain) | ExpressionKind::GroupedJob(chain) => {
+                self.chain(chain)?;
+                Ok(None)
+            }
+            ExpressionKind::Call(call) => self.call(expression.span(), call),
+            ExpressionKind::Index(index) => {
+                self.expression(&index.target)?;
+                self.expression(&index.index)?;
+                Ok(None)
+            }
+            ExpressionKind::Member(member) => {
+                self.expression(&member.target)?;
+                Ok(None)
+            }
+            ExpressionKind::Unary(unary) => {
+                self.expression(&unary.operand)?;
+                Ok(None)
+            }
+            ExpressionKind::Binary(binary) => {
+                self.expression(&binary.left)?;
+                self.expression(&binary.right)?;
+                Ok(None)
+            }
+        }
+    }
+
+    fn call(
+        &self,
+        call_span: Span,
+        call: &flash_syntax::CallExpression,
+    ) -> Result<Option<ValueType>, Box<ModuleTypeError>> {
+        if !matches!(call.callee.kind(), ExpressionKind::Symbol(_)) {
+            self.expression(&call.callee)?;
+        }
+        let mut argument_types = Vec::with_capacity(call.arguments.len());
+        for argument in &call.arguments {
+            argument_types.push(self.expression(argument)?);
+        }
+
+        let Some(reference) = self
+            .names
+            .reference(self.entry.module(), call.callee.span())
+        else {
+            return Ok(None);
+        };
+        let (target_module, declaration_span) = match reference.target() {
+            ModuleReferenceTarget::Local {
+                module,
+                declaration_span,
+            } => (module, *declaration_span),
+            ModuleReferenceTarget::Imported {
+                target_module,
+                declaration_span,
+                ..
+            } => (target_module, *declaration_span),
+        };
+        let Some(signature) = self.types.function(target_module, declaration_span) else {
+            return Ok(None);
+        };
+        if call.arguments.len() != signature.parameters().len() {
+            return Err(Box::new(ModuleTypeError::CallArity {
+                module: self.entry.module().clone(),
+                name: signature.name().to_owned(),
+                call_span,
+                expected: signature.parameters().len(),
+                actual: call.arguments.len(),
+                declaration_span: signature.declaration_span(),
+            }));
+        }
+        for ((argument, actual), parameter) in call
+            .arguments
+            .iter()
+            .zip(argument_types)
+            .zip(signature.parameters())
+        {
+            let Some(actual) = actual else {
+                continue;
+            };
+            if actual == ValueType::Any {
+                continue;
+            }
+            if !parameter.value_type().accepts_type(&actual) {
+                return Err(Box::new(ModuleTypeError::ArgumentMismatch {
+                    module: self.entry.module().clone(),
+                    name: signature.name().to_owned(),
+                    parameter: parameter.name().to_owned(),
+                    argument_span: argument.span(),
+                    expected: parameter.value_type().clone(),
+                    actual,
+                    parameter_span: parameter
+                        .annotation_span()
+                        .unwrap_or_else(|| parameter.declaration_span()),
+                }));
+            }
+        }
+        Ok(Some(signature.result().clone()))
+    }
+
+    fn literal(
+        &self,
+        literal: &flash_syntax::Literal,
+    ) -> Result<Option<ValueType>, Box<ModuleTypeError>> {
+        let value_type = match literal.kind() {
+            LiteralKind::Null => ValueType::Null,
+            LiteralKind::Boolean(_) => ValueType::Bool,
+            LiteralKind::Integer => ValueType::Int,
+            LiteralKind::Float => ValueType::Float,
+            LiteralKind::SingleQuoted => ValueType::String,
+            LiteralKind::DoubleQuoted(parts) => {
+                self.word_parts(parts)?;
+                ValueType::String
+            }
+        };
+        Ok(Some(value_type))
+    }
+
+    fn word(&self, word: &Word) -> Result<(), Box<ModuleTypeError>> {
+        self.word_parts(word.parts())
+    }
+
+    fn word_parts(&self, parts: &[WordPart]) -> Result<(), Box<ModuleTypeError>> {
+        for part in parts {
+            self.word_part(part)?;
+        }
+        Ok(())
+    }
+
+    fn word_part(&self, part: &WordPart) -> Result<(), Box<ModuleTypeError>> {
+        match part.kind() {
+            WordPartKind::DoubleQuoted(parts) => self.word_parts(parts),
+            WordPartKind::BracedInterpolation(expression) => {
+                self.expression(expression).map(|_| ())
+            }
+            WordPartKind::CommandSubstitution(chain) => self.chain(chain),
+            _ => Ok(()),
+        }
+    }
+
+    fn redirection(&self, redirection: &RedirectionKind) -> Result<(), Box<ModuleTypeError>> {
+        match redirection {
+            RedirectionKind::Input { target, .. } => self.word(target),
+            RedirectionKind::File(file) => self.word(&file.target),
+            RedirectionKind::Duplicate { .. } | RedirectionKind::Close { .. } => Ok(()),
+        }
+    }
+}
+
 struct ReferenceResolver<'a> {
     entry: &'a RegisteredModuleSource,
     scopes: Vec<BTreeMap<String, ModuleReferenceTarget>>,
@@ -1112,6 +1937,7 @@ pub struct ModuleProgram {
     graph: ModuleGraph,
     sources: ModuleSourceRegistry,
     names: ModuleNameRegistry,
+    types: ModuleTypeRegistry,
 }
 
 /// A module-program construction failure rendered while its analyzed sources
@@ -1192,6 +2018,12 @@ impl ModuleProgram {
     pub const fn names(&self) -> &ModuleNameRegistry {
         &self.names
     }
+
+    /// Resolved annotations and named-function signatures.
+    #[must_use]
+    pub const fn types(&self) -> &ModuleTypeRegistry {
+        &self.types
+    }
 }
 
 /// Recursively resolves, reads, decodes, parses, and graphs Flash modules.
@@ -1256,10 +2088,17 @@ impl<'a> ModuleProgramLoader<'a> {
             Ok(names) => names,
             Err(error) => return Err(Box::new((ModuleProgramError::Names(error), sources))),
         };
+        let types = match ModuleTypeRegistry::analyze(&sources, &names) {
+            Ok(types) => types,
+            Err(error) => {
+                return Err(Box::new((ModuleProgramError::Signatures(error), sources)));
+            }
+        };
         Ok(ModuleProgram {
             graph,
             sources,
             names,
+            types,
         })
     }
 
@@ -1506,6 +2345,143 @@ impl fmt::Display for ModuleNameError {
 
 impl std::error::Error for ModuleNameError {}
 
+/// A failure while resolving annotations or validating a known function call.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ModuleTypeError {
+    UnknownType {
+        module: ModuleId,
+        name: String,
+        span: Span,
+    },
+    InvalidTypeArity {
+        module: ModuleId,
+        name: String,
+        expected: usize,
+        actual: usize,
+        span: Span,
+    },
+    CallArity {
+        module: ModuleId,
+        name: String,
+        call_span: Span,
+        expected: usize,
+        actual: usize,
+        declaration_span: Span,
+    },
+    ArgumentMismatch {
+        module: ModuleId,
+        name: String,
+        parameter: String,
+        argument_span: Span,
+        expected: ValueType,
+        actual: ValueType,
+        parameter_span: Span,
+    },
+}
+
+impl ModuleTypeError {
+    #[must_use]
+    pub const fn module(&self) -> &ModuleId {
+        match self {
+            Self::UnknownType { module, .. }
+            | Self::InvalidTypeArity { module, .. }
+            | Self::CallArity { module, .. }
+            | Self::ArgumentMismatch { module, .. } => module,
+        }
+    }
+
+    #[must_use]
+    pub fn diagnostic(&self) -> Diagnostic {
+        match self {
+            Self::UnknownType { span, name, .. } => {
+                Diagnostic::new(Severity::Error, "SIG001", self.to_string())
+                    .with_primary(*span, format!("unknown value type `{name}`"))
+            }
+            Self::InvalidTypeArity {
+                span,
+                expected,
+                actual,
+                ..
+            } => Diagnostic::new(Severity::Error, "SIG002", self.to_string()).with_primary(
+                *span,
+                format!("expected {expected} type arguments, found {actual}"),
+            ),
+            Self::CallArity {
+                call_span,
+                declaration_span,
+                expected,
+                actual,
+                ..
+            } => Diagnostic::new(Severity::Error, "SIG003", self.to_string())
+                .with_primary(
+                    *call_span,
+                    format!("expected {expected} arguments, found {actual}"),
+                )
+                .with_secondary(*declaration_span, "function declared here"),
+            Self::ArgumentMismatch {
+                argument_span,
+                parameter_span,
+                expected,
+                actual,
+                ..
+            } => Diagnostic::new(Severity::Error, "SIG004", self.to_string())
+                .with_primary(
+                    *argument_span,
+                    format!("this argument is `{actual}`, expected `{expected}`"),
+                )
+                .with_secondary(*parameter_span, "parameter type declared here"),
+        }
+    }
+}
+
+impl fmt::Display for ModuleTypeError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnknownType { module, name, .. } => write!(
+                formatter,
+                "module `{}` uses unknown value type `{name}`",
+                module.path().display()
+            ),
+            Self::InvalidTypeArity {
+                module,
+                name,
+                expected,
+                actual,
+                ..
+            } => write!(
+                formatter,
+                "module `{}` gives type `{name}` {actual} arguments; expected {expected}",
+                module.path().display()
+            ),
+            Self::CallArity {
+                module,
+                name,
+                expected,
+                actual,
+                ..
+            } => write!(
+                formatter,
+                "module `{}` calls `{name}` with {actual} arguments; expected {expected}",
+                module.path().display()
+            ),
+            Self::ArgumentMismatch {
+                module,
+                name,
+                parameter,
+                expected,
+                actual,
+                ..
+            } => write!(
+                formatter,
+                "module `{}` passes `{actual}` to `{name}` parameter `{parameter}`; expected `{expected}`",
+                module.path().display()
+            ),
+        }
+    }
+}
+
+impl std::error::Error for ModuleTypeError {}
+
 /// A failure while constructing a recursively parsed module program.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ModuleProgramError {
@@ -1533,6 +2509,8 @@ pub enum ModuleProgramError {
     Graph(ModuleGraphError),
     /// Static module export/import-name analysis failed.
     Names(Box<ModuleNameError>),
+    /// Static type resolution or known-call validation failed.
+    Signatures(Box<ModuleTypeError>),
     /// More source identities were required than `SourceId` can represent.
     SourceIdentityExhausted,
 }
@@ -1562,6 +2540,7 @@ impl ModuleProgramError {
             Self::Syntax { diagnostics, .. } => diagnostics.clone(),
             Self::Graph(ModuleGraphError::Cycle(cycle)) => vec![cycle.diagnostic()],
             Self::Names(error) => vec![error.diagnostic()],
+            Self::Signatures(error) => vec![error.diagnostic()],
             Self::Graph(ModuleGraphError::UnknownImporter(_)) | Self::SourceIdentityExhausted => {
                 Vec::new()
             }
@@ -1577,6 +2556,7 @@ impl ModuleProgramError {
             | Self::InvalidUtf8 { module, .. }
             | Self::Syntax { module, .. } => Some(module),
             Self::Names(error) => Some(error.module()),
+            Self::Signatures(error) => Some(error.module()),
             Self::Resolution(_) | Self::Graph(_) | Self::SourceIdentityExhausted => None,
         }
     }
@@ -1607,6 +2587,7 @@ impl fmt::Display for ModuleProgramError {
             ),
             Self::Graph(error) => error.fmt(formatter),
             Self::Names(error) => error.fmt(formatter),
+            Self::Signatures(error) => error.fmt(formatter),
             Self::SourceIdentityExhausted => {
                 formatter.write_str("module program exhausted stable source identities")
             }
@@ -1621,6 +2602,7 @@ impl std::error::Error for ModuleProgramError {
             Self::SourceRead { cause, .. } => Some(cause),
             Self::Graph(error) => Some(error),
             Self::Names(error) => Some(error),
+            Self::Signatures(error) => Some(error),
             Self::InvalidUtf8 { .. } | Self::Syntax { .. } | Self::SourceIdentityExhausted => None,
         }
     }

@@ -1,7 +1,8 @@
 //! Command-line invocation parsing and classification.
 //!
 //! Parsing is separated from process startup so the invocation matrix — help,
-//! version, a single script path, or an interactive session, each combined with
+//! version, a script path with ordered arguments, or an interactive session,
+//! each combined with
 //! the `--no-config` and `--no-history` policies — is decided by one pure,
 //! testable function before any environment, filesystem, or editor access.
 
@@ -16,7 +17,10 @@ pub enum Mode {
     /// Print the version and exit.
     Version,
     /// Run one script file non-interactively.
-    Script { path: PathBuf },
+    Script {
+        path: PathBuf,
+        arguments: Vec<String>,
+    },
     /// Run one isolated chain supplied by the parent shell.
     AsyncChain {
         text: String,
@@ -42,6 +46,8 @@ pub enum CliError {
     UnknownOption(String),
     /// More than one positional argument.
     UnexpectedArgument(String),
+    /// A script argument could not be represented without loss.
+    InvalidScriptArgument,
     /// An option that requires a following value had none.
     MissingOptionValue(&'static str),
     /// An option's value could not be decoded or parsed.
@@ -59,6 +65,7 @@ impl CliError {
         match self {
             Self::UnknownOption(option) => format!("unknown option '{option}'"),
             Self::UnexpectedArgument(_) => "expected one script path".to_owned(),
+            Self::InvalidScriptArgument => "script arguments must be valid UTF-8".to_owned(),
             Self::MissingOptionValue(option) => format!("option '{option}' requires a value"),
             Self::InvalidOptionValue { option, value } => {
                 format!("invalid value '{value}' for option '{option}'")
@@ -75,8 +82,9 @@ impl CliError {
 ///
 /// Leading options are order-independent; the first non-option token is the
 /// script path and terminates option parsing. `--help`/`-h` and
-/// `--version`/`-V` win over a script path. Any token after the script path,
-/// and any unrecognized leading option, is rejected.
+/// `--version`/`-V` win over a script path. Every token after the script path is
+/// retained as an ordered UTF-8 script argument. An unrecognized leading option
+/// is rejected.
 pub fn parse_args<I>(arguments: I) -> Result<Invocation, CliError>
 where
     I: IntoIterator<Item = OsString>,
@@ -86,6 +94,7 @@ where
     let mut no_config = false;
     let mut no_history = false;
     let mut script: Option<PathBuf> = None;
+    let mut script_arguments = Vec::new();
     let mut async_chain: Option<String> = None;
     let mut async_pipefail = false;
     let mut async_capture_limit: Option<usize> = None;
@@ -94,9 +103,12 @@ where
 
     while let Some(argument) = arguments.next() {
         if script.is_some() {
-            return Err(CliError::UnexpectedArgument(
-                argument.to_string_lossy().into_owned(),
-            ));
+            script_arguments.push(
+                argument
+                    .into_string()
+                    .map_err(|_| CliError::InvalidScriptArgument)?,
+            );
+            continue;
         }
 
         if options_ended {
@@ -177,7 +189,10 @@ where
     } else if async_pipefail || async_capture_limit.is_some() {
         return Err(CliError::MissingRequiredOption("--async-chain"));
     } else if let Some(path) = script {
-        Mode::Script { path }
+        Mode::Script {
+            path,
+            arguments: script_arguments,
+        }
     } else {
         Mode::Interactive
     };
@@ -220,7 +235,20 @@ mod tests {
         assert_eq!(
             invocation.mode,
             Mode::Script {
-                path: PathBuf::from("run.fsh")
+                path: PathBuf::from("run.fsh"),
+                arguments: Vec::new(),
+            }
+        );
+    }
+
+    #[test]
+    fn operands_after_the_script_path_are_ordered_script_arguments() {
+        let invocation = parse(&["run.fsh", "", "--flag"]).expect("valid script invocation");
+        assert_eq!(
+            invocation.mode,
+            Mode::Script {
+                path: PathBuf::from("run.fsh"),
+                arguments: vec![String::new(), "--flag".to_owned()],
             }
         );
     }
@@ -242,7 +270,8 @@ mod tests {
         assert_eq!(
             invocation.mode,
             Mode::Script {
-                path: PathBuf::from("--no-config")
+                path: PathBuf::from("--no-config"),
+                arguments: Vec::new(),
             }
         );
         assert!(
@@ -260,18 +289,26 @@ mod tests {
     }
 
     #[test]
-    fn a_second_positional_is_rejected() {
+    fn a_second_positional_is_a_script_argument() {
+        let invocation = parse(&["one.fsh", "two.fsh"]).expect("valid script invocation");
         assert_eq!(
-            parse(&["one.fsh", "two.fsh"]),
-            Err(CliError::UnexpectedArgument("two.fsh".to_owned()))
+            invocation.mode,
+            Mode::Script {
+                path: PathBuf::from("one.fsh"),
+                arguments: vec!["two.fsh".to_owned()],
+            }
         );
     }
 
     #[test]
-    fn an_option_after_the_script_path_is_rejected() {
+    fn an_option_after_the_script_path_is_a_script_argument() {
+        let invocation = parse(&["run.fsh", "--no-config"]).expect("valid script invocation");
         assert_eq!(
-            parse(&["run.fsh", "--no-config"]),
-            Err(CliError::UnexpectedArgument("--no-config".to_owned()))
+            invocation.mode,
+            Mode::Script {
+                path: PathBuf::from("run.fsh"),
+                arguments: vec!["--no-config".to_owned()],
+            }
         );
     }
 

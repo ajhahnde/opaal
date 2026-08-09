@@ -15,7 +15,7 @@ use flash_runtime::builtin::standard_registry;
 use flash_runtime::eval::FakeClock;
 use flash_runtime::module::{
     ModuleCanonicalizer, ModuleGraph, ModuleGraphError, ModulePathError, ModuleProgramLoader,
-    ModuleReferenceTarget, ModuleResolver, ModuleSourceError, ModuleSourceLoader,
+    ModuleReferenceTarget, ModuleResolver, ModuleSourceError, ModuleSourceLoader, ValueType,
 };
 use flash_runtime::plan::SessionOptions;
 use flash_runtime::resolve::ExecutableProbe;
@@ -166,6 +166,45 @@ fn static_imports_recursively_load_a_registered_module_program() {
             .len(),
         1
     );
+}
+
+#[test]
+fn typed_function_signatures_are_resolved_before_known_calls_are_validated() {
+    let paths = FakeCanonicalizer::default().resolves("/project/main.fsh", "/project/main.fsh");
+    let valid_text = "def echo(value: String) -> String { $value }\n";
+    let valid_sources = FakeSourceLoader::default().contains("/project/main.fsh", valid_text);
+    let program = ModuleProgramLoader::new(&paths, &valid_sources)
+        .load(Path::new("/project/main.fsh"))
+        .expect("the typed function is valid");
+    let root = program.graph().root();
+    let source = program
+        .sources()
+        .source(root)
+        .expect("the root source is registered");
+    let name_start = valid_text.find("echo").expect("function name is present");
+    let signature = program
+        .types()
+        .function(root, span(source, name_start..name_start + "echo".len()))
+        .expect("the resolved signature is inspectable by declaration span");
+
+    assert_eq!(signature.name(), "echo");
+    assert_eq!(signature.parameters().len(), 1);
+    assert_eq!(signature.parameters()[0].name(), "value");
+    assert_eq!(signature.parameters()[0].value_type(), &ValueType::String);
+    assert_eq!(signature.result(), &ValueType::String);
+
+    let invalid_sources = FakeSourceLoader::default().contains(
+        "/project/main.fsh",
+        concat!(
+            "def echo(value: String) -> String { $value }\n",
+            "echo(42)\n",
+        ),
+    );
+    let error = ModuleProgramLoader::new(&paths, &invalid_sources)
+        .load(Path::new("/project/main.fsh"))
+        .expect_err("a known incompatible literal call fails before execution");
+
+    assert_eq!(error.diagnostics()[0].code(), "SIG004");
 }
 
 #[test]
@@ -398,8 +437,8 @@ fn distinct_identifier_namespaces_are_not_lexical_references() {
         "let record = {key: 1}\n",
         "let member = $record.key\n",
         "let symbol = free_symbol\n",
-        "let typed: MissingType = 1\n",
-        "def typed_function(argument: MissingArgument) -> MissingReturn { $argument }\n",
+        "let typed: Int = 1\n",
+        "def typed_function(argument: String) -> String { $argument }\n",
         "export ENV_NAME = 1\n",
         "unset ENV_NAME\n",
         "literal-command literal-argument\n",

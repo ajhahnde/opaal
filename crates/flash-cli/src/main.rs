@@ -72,7 +72,7 @@ fn main() -> ExitCode {
             println!("fsh {}", flash_runtime::version());
             ExitCode::SUCCESS
         }
-        Mode::Script { path } => run_script(&path),
+        Mode::Script { path, arguments: _ } => run_script(&path),
         Mode::AsyncChain {
             text,
             pipefail,
