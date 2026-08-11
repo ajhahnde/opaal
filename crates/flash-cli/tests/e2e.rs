@@ -55,6 +55,18 @@ fn run_script(path: &Path, cwd: &Path, fixture_path: &Path) -> Output {
         .expect("fsh should start")
 }
 
+fn run_async_chain(source: &str, pipefail: bool) -> Output {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_fsh"));
+    command.args(["--async-chain", source, "--async-capture-limit", "4096"]);
+    if pipefail {
+        command.arg("--async-pipefail");
+    }
+    command
+        .env("PATH", fixture_directory())
+        .output()
+        .expect("fsh should start")
+}
+
 fn fixture_directory() -> &'static Path {
     Path::new(env!("CARGO_BIN_EXE_flash-e2e-status-fixture"))
         .parent()
@@ -132,6 +144,136 @@ fn the_reserved_chain_mode_uses_the_environment_and_short_circuits() {
         !marker.exists(),
         "the successful left side must skip the right"
     );
+}
+
+#[test]
+fn an_empty_script_is_silent_success() {
+    let temp = TempDir::new("empty-script");
+    let script = temp.script("empty.fsh", "");
+
+    let output = run_script(&script, temp.path(), fixture_directory());
+
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert!(output.stdout.is_empty());
+    assert!(output.stderr.is_empty());
+}
+
+#[test]
+fn completed_program_codes_propagate_exactly_without_diagnostics() {
+    let temp = TempDir::new("completed-codes");
+    let script = temp.path().join("status.fsh");
+
+    for code in [0_u8, 1, 2, 125, 126, 127, 128, 255] {
+        fs::write(&script, format!("^{} exit {code}\n", status_fixture()))
+            .expect("status script should be written");
+        let output = run_script(&script, temp.path(), fixture_directory());
+
+        assert_eq!(output.status.code(), Some(i32::from(code)), "{output:?}");
+        assert!(output.stdout.is_empty(), "code {code}: {output:?}");
+        assert!(output.stderr.is_empty(), "code {code}: {output:?}");
+    }
+}
+
+#[test]
+fn completed_signal_maps_to_128_plus_its_number_without_a_shell_report() {
+    let temp = TempDir::new("completed-signal");
+    let script = temp.script("signal.fsh", &format!("^{} signal\n", status_fixture()));
+
+    let output = run_script(&script, temp.path(), fixture_directory());
+
+    assert_eq!(output.status.code(), Some(134), "{output:?}");
+    assert!(output.stdout.is_empty());
+    assert!(output.stderr.is_empty());
+}
+
+#[test]
+fn explicit_exit_codes_are_exact_and_silent() {
+    let temp = TempDir::new("explicit-exit-codes");
+    let script = temp.path().join("exit.fsh");
+
+    for code in [0_u8, 1, 2, 255] {
+        fs::write(&script, format!("exit {code}\n")).expect("exit script should be written");
+        let output = run_script(&script, temp.path(), fixture_directory());
+
+        assert_eq!(output.status.code(), Some(i32::from(code)), "{output:?}");
+        assert!(output.stdout.is_empty(), "code {code}: {output:?}");
+        assert!(output.stderr.is_empty(), "code {code}: {output:?}");
+    }
+}
+
+#[test]
+fn default_and_pipefail_pipeline_selection_reach_the_host_boundary_exactly() {
+    let source = format!("^{0} exit 7 | ^{0} exit 0", status_fixture(),);
+
+    let default = run_async_chain(&source, false);
+    assert_eq!(default.status.code(), Some(0), "{default:?}");
+    assert!(default.stdout.is_empty());
+    assert!(default.stderr.is_empty());
+
+    let pipefail = run_async_chain(&source, true);
+    assert_eq!(pipefail.status.code(), Some(7), "{pipefail:?}");
+    assert!(pipefail.stdout.is_empty());
+    assert!(pipefail.stderr.is_empty());
+}
+
+#[test]
+fn program_bytes_use_stdout_without_shell_text() {
+    let temp = TempDir::new("program-output");
+    let script = temp.script("output.fsh", "which pwd | get kind | encode utf8\n");
+
+    let output = run_script(&script, temp.path(), fixture_directory());
+
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert_eq!(output.stdout, b"internal");
+    assert!(output.stderr.is_empty());
+}
+
+#[test]
+fn parse_import_and_runtime_failures_are_status_one_on_stderr() {
+    let temp = TempDir::new("shell-owned-failures");
+    let cases = [
+        ("parse.fsh", "let broken = ;\n", "error[FS1000]"),
+        ("import.fsh", "import './missing.fsh'\n", "error[MOD001]"),
+        ("runtime.fsh", "let broken = 1 + true\n", "error[RUN001]"),
+    ];
+
+    for (name, source, heading) in cases {
+        let script = temp.script(name, source);
+        let output = run_script(&script, temp.path(), fixture_directory());
+
+        assert_eq!(output.status.code(), Some(1), "{name}: {output:?}");
+        assert!(output.stdout.is_empty(), "{name}: {output:?}");
+        let stderr = String::from_utf8(output.stderr).expect("diagnostics should be UTF-8");
+        assert!(stderr.starts_with(heading), "{name}: {stderr}");
+        assert!(stderr.ends_with('\n'), "{name}: {stderr}");
+    }
+}
+
+#[test]
+fn background_failures_report_in_job_order_and_the_first_owns_status() {
+    let temp = TempDir::new("ordered-background-failures");
+    let script = temp.script(
+        "failures.fsh",
+        &format!(
+            "^{0} exit 7 &\n^{0} exit 9 &\n^{0} exit 0\n",
+            status_fixture(),
+        ),
+    );
+
+    let output = run_script(&script, temp.path(), fixture_directory());
+
+    assert_eq!(output.status.code(), Some(7), "{output:?}");
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8(output.stderr).expect("reports should be UTF-8");
+    let first = stderr
+        .find("exited with status 7")
+        .expect("the first failure should be reported");
+    let second = stderr
+        .find("exited with status 9")
+        .expect("the second failure should be reported");
+    assert!(first < second, "{stderr}");
+    assert_eq!(stderr.matches("fsh: [").count(), 2, "{stderr}");
+    assert!(stderr.ends_with('\n'), "{stderr}");
 }
 
 #[test]
