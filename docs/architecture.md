@@ -202,7 +202,7 @@ suppress dependent cascades. A complete `ModuleProgram` is produced only when
 every error-classified phase succeeds, so execution receives no partial graph
 or registry.
 
-Loading is analysis, not execution. The module program contains the canonical graph, source files, parsed syntax, deterministic local/export/import/reference tables, and a resolved type registry. Explicit `export { name }` lists can expose top-level lexical declarations and functions; `import { name } from '<path>'` resolves only names explicitly exported by the canonical target. Every loaded source is then resolved in evaluator-matched source order, including sources reached only through load-only imports. Each reference retains its complete source span and local declaration target; an imported reference also retains the import identifier and the target declaration/export provenance. The type registry retains source-spanned annotations and named-function signatures, including normalized attached documentation, for exact-span lookup. Unknown, private, duplicate, colliding, or invalid type names fail analysis with source-anchored diagnostics, and there is no wildcard import path.
+Loading is analysis, not execution. The module program contains the canonical graph, source files, parsed syntax, deterministic local/export/import/reference tables, a resolved type registry, and direct/transitive initializer-effect summaries. Explicit `export { name }` lists can expose top-level lexical declarations and functions; `import { name } from '<path>'` resolves only names explicitly exported by the canonical target. Every loaded source is then resolved in evaluator-matched source order, including sources reached only through load-only imports. Each reference retains its complete source span and local declaration target; an imported reference also retains the import identifier and the target declaration/export provenance. The type registry retains source-spanned annotations and named-function signatures, including normalized attached documentation, for exact-span lookup. Unknown, private, duplicate, colliding, or invalid type names fail analysis with source-anchored diagnostics, and there is no wildcard import path.
 
 The root module begins above an implicit immutable `args: List[String]` input
 containing the ordered UTF-8 operands supplied after the script path. This
@@ -221,6 +221,24 @@ successful program representation.
 
 Each activated module executes through the existing session driver with an isolated lexical root. Completed exports are cloned into importer roots as immutable snapshots; private bindings never become ambient names. Working directory, child-process environment, status, output, process activity, and background jobs remain shared across the whole program. Runtime binding cells and callables receive the resolved annotations owned by the program. Named callables also retain their signature-derived inspection metadata and defining source; imported callables therefore keep both correct help ownership and correct cross-file body diagnostics. Initializers, assignments, callable arguments, and named-function results use exact value-family checks. Assignment-mutability analysis remains separate.
 
+The session driver commits successful statement-local cwd, environment, and
+status changes before the next statement. Normal completion and explicit
+whole-program `exit` copy the final child environment to the caller; runtime or
+required-output failure does not. Output, filesystem operations, and process
+activity cross their boundaries immediately and are never rolled back. One
+program-owned job coordinator joins background work on normal completion,
+explicit exit, runtime failure, and output failure, retaining ordered
+background evidence and its existing completion precedence.
+
+Host-free effect analysis walks the same syntax and command manifest without
+expansion, executable probing, or platform access. It records source-spanned
+working-directory, child-environment, status, output, filesystem-read,
+filesystem-write, process, job, program-exit, and opaque-external occurrences.
+Known callable bodies fold into the caller summary; indirect calls and external
+execution remain conservative. A transitive summary visits named dependencies
+once in runtime initialization order and excludes load-only edges. The model is
+descriptive and does not add a checker warning or a second execution policy.
+
 The analysis layer is responsible for:
 
 - resolving explicit imports and exports;
@@ -230,6 +248,7 @@ The analysis layer is responsible for:
 - resolving source annotations and named-function signatures;
 - checking known local and imported call arity and conservatively known types;
 - retaining runtime contracts for dynamic binding and callable checks;
+- classifying direct and named-dependency-folded initializer effects;
 - collecting command metadata;
 - validating typed pipeline connections;
 - exposing the same results to the checker, help system, and language server.
@@ -238,7 +257,7 @@ Analysis must not depend on executing user code to discover names or signatures.
 
 ## Shared tooling services
 
-The formatter, `fsh check`, help output, interactive editor features, and language server use the same source model, parser, syntax tree, module graph, name resolution, function metadata, and diagnostic types.
+The formatter, `fsh check`, help output, interactive editor features, and language server use the same source model, parser, syntax tree, module graph, name resolution, function metadata, initializer-effect summaries, and diagnostic types.
 
 No tooling frontend may maintain a second Flash grammar or a competing name resolver. A language change is implemented in the shared language services first and then exposed through the relevant CLI, editor, and protocol adapters.
 

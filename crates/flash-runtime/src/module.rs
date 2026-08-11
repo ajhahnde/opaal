@@ -25,6 +25,7 @@ use flash_syntax::{
 };
 
 use crate::Value;
+use crate::builtin::standard_registry;
 use crate::carrier::{
     CarrierBridge, PipelineCarrierFault, StageCarrierContract, analyze_pipeline_carriers,
 };
@@ -2435,6 +2436,535 @@ impl ModuleSourceRegistry {
     }
 }
 
+/// One potential module-initializer effect found without execution or probing.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum ModuleEffect {
+    /// A change to the session-owned logical working directory.
+    WorkingDirectory,
+    /// A change to the child environment shared by the program session.
+    ChildEnvironment,
+    /// A change to or dependency on the shared command status.
+    Status,
+    /// Bytes or structured payloads routed to program output.
+    Output,
+    /// A filesystem read requested by syntax with known semantics.
+    FilesystemRead,
+    /// A filesystem write requested by syntax with known semantics.
+    FilesystemWrite,
+    /// Foreground or background process activity.
+    Process,
+    /// Observation or mutation of program-owned job state.
+    Job,
+    /// Whole-program termination requested by `exit`.
+    ProgramExit,
+    /// Behavior whose external effects cannot be proven more precisely.
+    OpaqueExternal,
+}
+
+/// One source-anchored potential initializer effect.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct ModuleEffectOccurrence {
+    effect: ModuleEffect,
+    span: Span,
+}
+
+impl ModuleEffectOccurrence {
+    /// The statically classified effect.
+    #[must_use]
+    pub const fn effect(self) -> ModuleEffect {
+        self.effect
+    }
+
+    /// The syntax that introduces this potential effect.
+    #[must_use]
+    pub const fn span(self) -> Span {
+        self.span
+    }
+}
+
+/// Deterministically ordered potential effects for one initializer boundary.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ModuleEffectSummary {
+    occurrences: Vec<ModuleEffectOccurrence>,
+}
+
+impl ModuleEffectSummary {
+    /// Source-ordered effect sites, with identical effect/span pairs retained once.
+    #[must_use]
+    pub fn occurrences(&self) -> &[ModuleEffectOccurrence] {
+        &self.occurrences
+    }
+
+    fn push(&mut self, effect: ModuleEffect, span: Span) {
+        let occurrence = ModuleEffectOccurrence { effect, span };
+        if !self.occurrences.contains(&occurrence) {
+            self.occurrences.push(occurrence);
+        }
+    }
+
+    fn extend(&mut self, other: &Self) {
+        for occurrence in &other.occurrences {
+            self.push(occurrence.effect, occurrence.span);
+        }
+    }
+}
+
+/// Direct and named-dependency-folded effect summaries by canonical module.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ModuleEffectRegistry {
+    direct: BTreeMap<ModuleId, ModuleEffectSummary>,
+    transitive: BTreeMap<ModuleId, ModuleEffectSummary>,
+}
+
+impl ModuleEffectRegistry {
+    /// Effects introduced by this module's initializer itself.
+    #[must_use]
+    pub fn direct(&self, module: &ModuleId) -> &ModuleEffectSummary {
+        static EMPTY: ModuleEffectSummary = ModuleEffectSummary {
+            occurrences: Vec::new(),
+        };
+        self.direct.get(module).unwrap_or(&EMPTY)
+    }
+
+    /// Effects in once-only named-dependency initialization order, then direct effects.
+    #[must_use]
+    pub fn transitive(&self, module: &ModuleId) -> &ModuleEffectSummary {
+        static EMPTY: ModuleEffectSummary = ModuleEffectSummary {
+            occurrences: Vec::new(),
+        };
+        self.transitive.get(module).unwrap_or(&EMPTY)
+    }
+
+    fn analyze(
+        graph: &ModuleGraph,
+        sources: &ModuleSourceRegistry,
+        names: &ModuleNameRegistry,
+        commands: &CommandRegistry,
+    ) -> Self {
+        let mut direct = BTreeMap::new();
+        for entry in sources.entries() {
+            direct.insert(
+                entry.module().clone(),
+                StaticEffectAnalyzer::analyze(
+                    entry.module(),
+                    entry.source(),
+                    entry.script(),
+                    sources,
+                    names,
+                    commands,
+                ),
+            );
+        }
+
+        fn visit(
+            module: &ModuleId,
+            names: &ModuleNameRegistry,
+            direct: &BTreeMap<ModuleId, ModuleEffectSummary>,
+            initialized: &mut BTreeSet<ModuleId>,
+            summary: &mut ModuleEffectSummary,
+        ) {
+            if initialized.contains(module) {
+                return;
+            }
+            for import in names.imports(module) {
+                visit(import.target(), names, direct, initialized, summary);
+            }
+            if initialized.insert(module.clone())
+                && let Some(module_summary) = direct.get(module)
+            {
+                summary.extend(module_summary);
+            }
+        }
+
+        let mut transitive = BTreeMap::new();
+        for entry in sources.entries() {
+            let mut summary = ModuleEffectSummary::default();
+            visit(
+                entry.module(),
+                names,
+                &direct,
+                &mut BTreeSet::new(),
+                &mut summary,
+            );
+            transitive.insert(entry.module().clone(), summary);
+        }
+        debug_assert!(transitive.contains_key(graph.root()));
+        Self { direct, transitive }
+    }
+}
+
+struct StaticEffectAnalyzer<'a> {
+    module: ModuleId,
+    source: SourceFile,
+    sources: &'a ModuleSourceRegistry,
+    names: &'a ModuleNameRegistry,
+    commands: &'a CommandRegistry,
+    summary: ModuleEffectSummary,
+    active_functions: BTreeSet<(ModuleId, usize)>,
+}
+
+impl<'a> StaticEffectAnalyzer<'a> {
+    fn analyze(
+        module: &'a ModuleId,
+        source: &'a SourceFile,
+        script: &'a Script,
+        sources: &'a ModuleSourceRegistry,
+        names: &'a ModuleNameRegistry,
+        commands: &'a CommandRegistry,
+    ) -> ModuleEffectSummary {
+        let mut analyzer = Self {
+            module: module.clone(),
+            source: source.clone(),
+            sources,
+            names,
+            commands,
+            summary: ModuleEffectSummary::default(),
+            active_functions: BTreeSet::new(),
+        };
+        analyzer.statements(script.statements());
+        analyzer.summary
+    }
+
+    fn statements(&mut self, statements: &[Statement]) {
+        for statement in statements {
+            self.statement(statement);
+        }
+    }
+
+    fn statement(&mut self, statement: &Statement) {
+        match statement.kind() {
+            StatementKind::Import(_)
+            | StatementKind::ModuleExport(_)
+            | StatementKind::Function(_) => {}
+            StatementKind::Declaration(declaration) => self.expression(&declaration.value),
+            StatementKind::Assignment(assignment) => self.expression(&assignment.value),
+            StatementKind::Environment(environment) => {
+                self.summary
+                    .push(ModuleEffect::ChildEnvironment, statement.span());
+                if let flash_syntax::EnvironmentStatement::Export { value, .. } = environment {
+                    self.expression(value);
+                }
+            }
+            StatementKind::If(statement) => {
+                self.if_statement(statement);
+            }
+            StatementKind::While(statement) => {
+                self.chain(&statement.condition);
+                self.statements(&statement.body.statements);
+            }
+            StatementKind::For(statement) => {
+                self.expression(&statement.iterable);
+                self.statements(&statement.body.statements);
+            }
+            StatementKind::Match(statement) => {
+                self.expression(&statement.value);
+                for arm in &statement.arms {
+                    if let Pattern::Literal(literal) = &arm.pattern {
+                        self.literal(literal);
+                    }
+                    if let Some(guard) = &arm.guard {
+                        self.expression(guard);
+                    }
+                    self.statements(&arm.body.statements);
+                }
+            }
+            StatementKind::Control(ControlTransfer::Return(Some(expression))) => {
+                self.expression(expression);
+            }
+            StatementKind::Control(
+                ControlTransfer::Break | ControlTransfer::Continue | ControlTransfer::Return(None),
+            ) => {}
+            StatementKind::Job(job) => {
+                if let Some(span) = job.background_span {
+                    self.summary.push(ModuleEffect::Job, span);
+                    self.summary.push(ModuleEffect::Process, span);
+                    self.summary.push(ModuleEffect::Status, span);
+                    self.summary.push(ModuleEffect::OpaqueExternal, span);
+                }
+                self.chain(&job.chain);
+            }
+        }
+    }
+
+    fn if_statement(&mut self, statement: &flash_syntax::IfStatement) {
+        self.chain(&statement.condition);
+        self.statements(&statement.then_block.statements);
+        match &statement.else_branch {
+            Some(ElseBranch::Block(block)) => self.statements(&block.statements),
+            Some(ElseBranch::If(nested)) => self.if_statement(nested.kind()),
+            None => {}
+        }
+    }
+
+    fn chain(&mut self, chain: &ConditionalChain) {
+        for and_chain in chain.or_terms() {
+            for pipeline in and_chain.and_terms() {
+                self.pipeline(pipeline);
+            }
+        }
+    }
+
+    fn pipeline(&mut self, pipeline: &Pipeline) {
+        if !self.pipeline_is_standalone_help(pipeline) {
+            self.summary.push(ModuleEffect::Status, pipeline.span());
+        }
+        let last = pipeline.stages().len().saturating_sub(1);
+        for (index, stage) in pipeline.stages().iter().enumerate() {
+            match stage.kind() {
+                StageKind::Expression(expression) => {
+                    self.expression(expression);
+                    if index == last {
+                        self.summary.push(ModuleEffect::Output, stage.span());
+                    }
+                }
+                StageKind::Command(command) => self.command(command, index == last),
+            }
+        }
+    }
+
+    fn pipeline_is_standalone_help(&self, pipeline: &Pipeline) -> bool {
+        let [stage] = pipeline.stages() else {
+            return false;
+        };
+        let StageKind::Command(command) = stage.kind() else {
+            return false;
+        };
+        command.head.kind() == CommandHeadKind::Bare
+            && static_word_text(command.head.word(), &self.source).is_some_and(|name| {
+                match self.commands.classify(&name) {
+                    CommandClassification::Core { signature, .. }
+                    | CommandClassification::Alias { signature, .. } => signature.name() == "help",
+                    CommandClassification::Unknown | CommandClassification::Reserved { .. } => {
+                        false
+                    }
+                }
+            })
+    }
+
+    fn command(&mut self, command: &flash_syntax::CommandStage, is_last: bool) {
+        self.word(command.head.word());
+        let mut redirects_output = false;
+        for item in &command.items {
+            match item.kind() {
+                CommandItemKind::Word(word) => self.word(word),
+                CommandItemKind::Spread(_) => {}
+                CommandItemKind::Closure(closure) => self.chain(&closure.body),
+                CommandItemKind::Redirection(redirection) => {
+                    redirects_output |= self.redirection(redirection.kind(), redirection.span());
+                }
+            }
+        }
+
+        let span = command.head.span();
+        if command.head.kind() == CommandHeadKind::ForcedExternal {
+            self.external(span, is_last && !redirects_output);
+            return;
+        }
+        let Some(name) = static_word_text(command.head.word(), &self.source) else {
+            self.external(span, is_last && !redirects_output);
+            return;
+        };
+        let (canonical, output) = match self.commands.classify(&name) {
+            CommandClassification::Core { signature, .. } => {
+                (signature.name(), Some(signature.output()))
+            }
+            CommandClassification::Alias {
+                canonical_name,
+                signature,
+                ..
+            } => (canonical_name, Some(signature.output())),
+            CommandClassification::Unknown => {
+                self.external(span, is_last && !redirects_output);
+                return;
+            }
+            CommandClassification::Reserved { .. } => {
+                self.summary.push(ModuleEffect::OpaqueExternal, span);
+                return;
+            }
+        };
+
+        match canonical {
+            "cd" => {
+                self.summary.push(ModuleEffect::WorkingDirectory, span);
+                self.summary.push(ModuleEffect::ChildEnvironment, span);
+            }
+            "ls" | "open" => self.summary.push(ModuleEffect::FilesystemRead, span),
+            "save" => self.summary.push(ModuleEffect::FilesystemWrite, span),
+            "fg" | "bg" | "wait" | "kill" => {
+                self.summary.push(ModuleEffect::Job, span);
+                self.summary.push(ModuleEffect::Process, span);
+            }
+            "jobs" => self.summary.push(ModuleEffect::Job, span),
+            "exit" => self.summary.push(ModuleEffect::ProgramExit, span),
+            "command" => {
+                self.external(span, is_last && !redirects_output);
+                return;
+            }
+            _ => {}
+        }
+        if is_last
+            && !redirects_output
+            && output.is_some_and(|output| match output {
+                CommandOutput::Fixed(carrier) => carrier != Carrier::Empty,
+                CommandOutput::SameAsInput => true,
+            })
+        {
+            self.summary.push(ModuleEffect::Output, span);
+        }
+    }
+
+    fn external(&mut self, span: Span, output: bool) {
+        self.summary.push(ModuleEffect::Process, span);
+        self.summary.push(ModuleEffect::OpaqueExternal, span);
+        if output {
+            self.summary.push(ModuleEffect::Output, span);
+        }
+    }
+
+    fn redirection(&mut self, redirection: &RedirectionKind, span: Span) -> bool {
+        match redirection {
+            RedirectionKind::Input { target, .. } => {
+                self.summary.push(ModuleEffect::FilesystemRead, span);
+                self.word(target);
+                false
+            }
+            RedirectionKind::File(file) => {
+                self.summary.push(ModuleEffect::FilesystemWrite, span);
+                self.word(&file.target);
+                file.descriptor.is_none_or(|descriptor| {
+                    self.source
+                        .slice(descriptor.span())
+                        .is_ok_and(|text| text == "1")
+                })
+            }
+            RedirectionKind::Duplicate { .. } | RedirectionKind::Close { .. } => false,
+        }
+    }
+
+    fn expression(&mut self, expression: &Expression) {
+        match expression.kind() {
+            ExpressionKind::Literal(literal) => self.literal(literal),
+            ExpressionKind::Variable(_) | ExpressionKind::Symbol(_) => {}
+            ExpressionKind::List(items) => {
+                for item in items {
+                    self.expression(item);
+                }
+            }
+            ExpressionKind::Record(entries) => {
+                for entry in entries {
+                    if let RecordKey::DoubleQuoted(part) = &entry.key {
+                        self.word_part(part);
+                    }
+                    self.expression(&entry.value);
+                }
+            }
+            ExpressionKind::Closure(_) => {}
+            ExpressionKind::CommandSubstitution(chain) | ExpressionKind::GroupedJob(chain) => {
+                self.chain(chain);
+            }
+            ExpressionKind::Call(call) => {
+                for argument in &call.arguments {
+                    self.expression(argument);
+                }
+                self.call(expression.span(), &call.callee);
+            }
+            ExpressionKind::Index(index) => {
+                self.expression(&index.target);
+                self.expression(&index.index);
+            }
+            ExpressionKind::Member(member) => self.expression(&member.target),
+            ExpressionKind::Unary(unary) => self.expression(&unary.operand),
+            ExpressionKind::Binary(binary) => {
+                self.expression(&binary.left);
+                self.expression(&binary.right);
+            }
+        }
+    }
+
+    fn call(&mut self, call_span: Span, callee: &Expression) {
+        let Some(reference) = self.names.reference(&self.module, callee.span()) else {
+            self.expression(callee);
+            self.summary.push(ModuleEffect::OpaqueExternal, call_span);
+            return;
+        };
+        let (module, declaration_span) = match reference.target() {
+            ModuleReferenceTarget::Local {
+                module,
+                declaration_span,
+            } => (module.clone(), *declaration_span),
+            ModuleReferenceTarget::Imported {
+                target_module,
+                declaration_span,
+                ..
+            } => (target_module.clone(), *declaration_span),
+            ModuleReferenceTarget::ScriptArguments => {
+                self.summary.push(ModuleEffect::OpaqueExternal, call_span);
+                return;
+            }
+        };
+        let key = (module.clone(), declaration_span.start());
+        if !self.active_functions.insert(key.clone()) {
+            return;
+        }
+        let body = self.sources.script(&module).and_then(|script| {
+            script.statements().iter().find_map(|statement| {
+                let StatementKind::Function(function) = statement.kind() else {
+                    return None;
+                };
+                (function.name.span() == declaration_span)
+                    .then_some(function.body.statements.clone())
+            })
+        });
+        if let Some(body) = body {
+            let defining_source = self
+                .sources
+                .source(&module)
+                .expect("a known callable belongs to a registered source")
+                .clone();
+            let previous_module = std::mem::replace(&mut self.module, module);
+            let previous_source = std::mem::replace(&mut self.source, defining_source);
+            self.statements(&body);
+            self.module = previous_module;
+            self.source = previous_source;
+        } else {
+            self.summary.push(ModuleEffect::OpaqueExternal, call_span);
+        }
+        self.active_functions.remove(&key);
+    }
+
+    fn literal(&mut self, literal: &flash_syntax::Literal) {
+        if let LiteralKind::DoubleQuoted(parts) = literal.kind() {
+            for part in parts {
+                self.word_part(part);
+            }
+        }
+    }
+
+    fn word(&mut self, word: &Word) {
+        for part in word.parts() {
+            self.word_part(part);
+        }
+    }
+
+    fn word_part(&mut self, part: &WordPart) {
+        match part.kind() {
+            WordPartKind::DoubleQuoted(parts) => {
+                for part in parts {
+                    self.word_part(part);
+                }
+            }
+            WordPartKind::BracedInterpolation(expression) => self.expression(expression),
+            WordPartKind::CommandSubstitution(chain) => self.chain(chain),
+            WordPartKind::Bare
+            | WordPartKind::BareEscape
+            | WordPartKind::SingleQuoted
+            | WordPartKind::DoubleText
+            | WordPartKind::DoubleEscape
+            | WordPartKind::Variable(_) => {}
+        }
+    }
+}
+
 /// A completely loaded, parsed, and canonically graphed Flash source program.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ModuleProgram {
@@ -2442,6 +2972,7 @@ pub struct ModuleProgram {
     sources: ModuleSourceRegistry,
     names: ModuleNameRegistry,
     types: ModuleTypeRegistry,
+    effects: ModuleEffectRegistry,
 }
 
 /// One static command diagnostic found without expansion or host probing.
@@ -3126,6 +3657,12 @@ impl ModuleProgram {
         &self.types
     }
 
+    /// Host-free direct and named-dependency-folded initializer effects.
+    #[must_use]
+    pub const fn effects(&self) -> &ModuleEffectRegistry {
+        &self.effects
+    }
+
     pub(crate) fn runtime_binding_types(&self) -> RuntimeBindingTypes {
         let mut by_source = BTreeMap::new();
         let mut functions_by_source = BTreeMap::new();
@@ -3333,6 +3870,8 @@ impl<'a> ModuleProgramLoader<'a> {
                 program: None,
             };
         }
+        let effect_commands = commands.cloned().unwrap_or_else(standard_registry);
+        let effects = ModuleEffectRegistry::analyze(&graph, &sources, &names, &effect_commands);
         ModuleAnalysisReport {
             sources: retained,
             issues: pipeline_issues,
@@ -3341,6 +3880,7 @@ impl<'a> ModuleProgramLoader<'a> {
                 sources,
                 names,
                 types,
+                effects,
             }),
         }
     }

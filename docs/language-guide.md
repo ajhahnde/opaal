@@ -964,13 +964,43 @@ processes, and background jobs remain shared across the program in the defined
 initialization order. Imported functions and closures retain their defining
 source for body evaluation and diagnostics.
 
+### Initializer effects
+
+Module initialization is ordinary Flash execution, not a sandbox. Every
+current effect is permitted, but lexical isolation does not imply operational
+isolation. The public effect contract is:
+
+| Class | During dependency-first initialization | Completion and failure boundary |
+| --- | --- | --- |
+| Working directory | A successful `cd` changes the shared logical cwd used by later initializers, the root, relative file operations, and planned children. It updates `PWD` and `OLDPWD` but never changes the host process cwd or the already-loaded module graph. | The logical cwd ends with the session. Its environment entries commit to the caller on normal completion or explicit `exit`; a failing `cd` does not commit. |
+| Child environment | Successful `export` and `unset` statements are visible to later initializers, the root, and subsequently spawned children. | The final environment commits to the caller on normal completion or explicit `exit`, but not on runtime or output failure. Already spawned children retain their spawn-time snapshot. |
+| Status | Normally completed foreground work and successful background launch update one shared current status. Later conditionals and bare `exit` observe it; standalone `help` preserves it. | The final foreground or explicit-exit status is returned unless the first failing background job in job order takes precedence. Runtime and output failures remain errors rather than fabricated statuses. |
+| Output | Initializers use the ordinary output and descriptor paths in execution order. | Written bytes are immediate and never rolled back. A required sink-write failure is fatal, stops later initialization and root execution, joins program jobs, and prevents caller-environment commit. |
+| Filesystem | Reads, `save`, redirections, and external filesystem activity use the shared logical cwd. | Creates, truncation, append, partial writes, and external changes are not transactional and persist after later failure or nonzero completion. |
+| Process and job | Foreground and background work is permitted. Initializer jobs use the program-wide coordinator and remain visible to later job commands. | Every exit route joins program-owned background jobs. Spawned work is not undone; executor cleanup and joining prevent orphans and retain ordered failure evidence. |
+| Program exit | `exit CODE` in an initializer stops that initializer immediately and skips export materialization, later modules, and the root. Bare `exit` derives its code from the shared current status. | This is normal whole-program completion: it commits the environment and joins jobs. A failing background job may replace the requested completion status. Invalid exit use is a runtime failure. |
+
+Successful statements and internal pipelines retain their existing pending-state
+transaction: in-memory cwd, environment, and status changes become shared only
+after that statement or pipeline succeeds. This transaction never includes
+already written output, filesystem changes, spawned processes, or effects from
+earlier successful statements. A runtime failure prevents the current module's
+export map and all later execution without rewinding effects that already
+crossed an external boundary.
+
 ### Static module analysis
 
 Canonical program construction resolves lexical reads in every loaded module without executing source, including a module reached only through a load-only import. Resolution follows source-order declaration visibility and the evaluator's block, loop, match-arm, function, parameter, closure-capture, recursion, and shadowing scopes. Unknown reads and duplicate bindings in one scope stop construction with source-anchored diagnostics; a child scope may shadow an outer binding.
 
 The program-owned reference table retains each complete read span and its local declaration. A reference to an imported binding also retains the local import identifier and the target module's declaration and explicit export spans. Record and member keys, process-environment names, literal command text, and type references remain distinct namespaces rather than lexical reads. Resolved type annotations and named-function signatures occupy a separate program-owned registry; assignment-mutability analysis remains separate work.
 
-The module graph, exported names, imported names, and cross-file lexical references are therefore available to non-executing shared analysis. Checker, help, editor, and language-server frontends can consume that information without maintaining a competing resolver.
+The module graph, exported names, imported names, and cross-file lexical references are therefore available to non-executing shared analysis. Canonical programs also expose source-spanned direct and named-dependency-folded initializer summaries using the shared vocabulary `WorkingDirectory`, `ChildEnvironment`, `Status`, `Output`, `FilesystemRead`, `FilesystemWrite`, `Process`, `Job`, `ProgramExit`, and `OpaqueExternal`. Transitive summaries follow once-only initialization order and exclude load-only dependencies; direct summaries remain available for every analyzed source. Known Flash callables fold their bodies, while indirect calls and external execution remain conservative without execution or host probing.
+
+These summaries are descriptive. All current initializer effects are permitted,
+so a valid effectful module does not add a checker diagnostic or change
+`fsh check` output or status. Checker, help, editor, and language-server
+frontends can consume the shared analysis without maintaining a competing
+resolver or effect classifier.
 
 Name resolution must be deterministic and source-anchored. Missing names, duplicate declarations, inaccessible private names, incompatible signatures, and import cycles must produce diagnostics without relying on side effects from program execution.
 

@@ -8,18 +8,28 @@ use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::ffi::{OsStr, OsString};
 use std::fmt;
+use std::fs;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 
-use flash_platform::{FakePlatform, Platform, RecordingPlatform};
+use flash_platform::{
+    Capabilities, ChildProcess, DescriptorEndpoint, FakePlatform, FileActionError, FileIoEndpoint,
+    FileOpenRequest, PipeEndpoints, PipeError, Platform, ProcessGroup, ProcessGroupId,
+    ProcessStatus, RecordingPlatform, SpawnError, SpawnRequest, TerminateError, WaitError,
+    WorkingDirectoryError, WorkingDirectoryRequest,
+};
+use flash_platform_posix::PosixPlatform;
 use flash_runtime::builtin::standard_registry;
 use flash_runtime::command::{
     Carrier, CommandLifecycle, CommandNamespaceEntry, CommandRegistry, CommandSignature,
 };
 use flash_runtime::eval::FakeClock;
 use flash_runtime::module::{
-    ModuleCanonicalizer, ModuleGraph, ModuleGraphError, ModulePathError, ModuleProgramLoader,
-    ModuleReferenceTarget, ModuleResolver, ModuleSourceError, ModuleSourceLoader, ValueType,
+    ModuleCanonicalizer, ModuleEffect, ModuleGraph, ModuleGraphError, ModulePathError,
+    ModuleProgramLoader, ModuleReferenceTarget, ModuleResolver, ModuleSourceError,
+    ModuleSourceLoader, ValueType,
 };
 use flash_runtime::plan::SessionOptions;
 use flash_runtime::resolve::ExecutableProbe;
@@ -43,6 +53,247 @@ struct MarkExecutable;
 impl ExecutableProbe for MarkExecutable {
     fn is_executable(&self, path: &OsStr) -> bool {
         path == OsStr::new("/bin/mark")
+    }
+}
+
+struct OneExecutable(PathBuf);
+
+impl ExecutableProbe for OneExecutable {
+    fn is_executable(&self, path: &OsStr) -> bool {
+        self.0.as_os_str() == path
+    }
+}
+
+struct TestDirectory(PathBuf);
+
+impl TestDirectory {
+    fn new(label: &str) -> Self {
+        static NEXT: AtomicU64 = AtomicU64::new(1);
+        let path = std::env::temp_dir().join(format!(
+            "flash-modules-{label}-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::create_dir(&path).expect("the unique test directory is created");
+        Self(path)
+    }
+
+    fn path(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl Drop for TestDirectory {
+    fn drop(&mut self) {
+        fs::remove_dir_all(&self.0).expect("the test directory is removed");
+    }
+}
+
+struct CountingPosix {
+    spawns: AtomicUsize,
+}
+
+impl CountingPosix {
+    fn new() -> Self {
+        Self {
+            spawns: AtomicUsize::new(0),
+        }
+    }
+
+    fn spawns(&self) -> usize {
+        self.spawns.load(Ordering::Relaxed)
+    }
+}
+
+impl Platform for CountingPosix {
+    fn capabilities(&self) -> Capabilities {
+        PosixPlatform.capabilities()
+    }
+
+    fn resolve_working_directory(
+        &self,
+        request: WorkingDirectoryRequest<'_>,
+    ) -> Result<PathBuf, WorkingDirectoryError> {
+        PosixPlatform.resolve_working_directory(request)
+    }
+
+    fn pipe(&self) -> Result<PipeEndpoints, PipeError> {
+        PosixPlatform.pipe()
+    }
+
+    fn open_file(
+        &self,
+        request: FileOpenRequest<'_>,
+    ) -> Result<Box<dyn DescriptorEndpoint>, FileActionError> {
+        PosixPlatform.open_file(request)
+    }
+
+    fn open_file_io(
+        &self,
+        request: FileOpenRequest<'_>,
+    ) -> Result<Box<dyn FileIoEndpoint>, FileActionError> {
+        PosixPlatform.open_file_io(request)
+    }
+
+    fn inherit_descriptor(
+        &self,
+        descriptor: u32,
+    ) -> Result<Box<dyn DescriptorEndpoint>, FileActionError> {
+        PosixPlatform.inherit_descriptor(descriptor)
+    }
+
+    fn spawn(&self, request: &SpawnRequest<'_>) -> Result<Box<dyn ChildProcess>, SpawnError> {
+        self.spawns.fetch_add(1, Ordering::Relaxed);
+        PosixPlatform.spawn(request)
+    }
+}
+
+#[derive(Default)]
+struct PrefixThenFailWriter {
+    bytes: Vec<u8>,
+    remaining: usize,
+}
+
+impl PrefixThenFailWriter {
+    fn new(remaining: usize) -> Self {
+        Self {
+            bytes: Vec::new(),
+            remaining,
+        }
+    }
+}
+
+impl Write for PrefixThenFailWriter {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        if self.remaining == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "scripted sink failure",
+            ));
+        }
+        let written = self.remaining.min(bytes.len());
+        self.bytes.extend_from_slice(&bytes[..written]);
+        self.remaining -= written;
+        Ok(written)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+struct StatusChild {
+    id: u64,
+    group: Option<ProcessGroupId>,
+    code: i32,
+    waits: Arc<AtomicUsize>,
+}
+
+impl ChildProcess for StatusChild {
+    fn id(&self) -> u64 {
+        self.id
+    }
+
+    fn process_group(&self) -> Option<ProcessGroupId> {
+        self.group
+    }
+
+    fn wait(&mut self) -> Result<ProcessStatus, WaitError> {
+        self.waits.fetch_add(1, Ordering::Relaxed);
+        Ok(ProcessStatus::Exited(self.code))
+    }
+
+    fn terminate(&mut self) -> Result<(), TerminateError> {
+        Ok(())
+    }
+}
+
+struct StatusPlatform {
+    inner: FakePlatform,
+    code: i32,
+    waits: Arc<AtomicUsize>,
+    spawns: Mutex<Vec<StatusSpawn>>,
+}
+
+#[derive(Clone)]
+struct StatusSpawn {
+    argv: Vec<OsString>,
+    cwd: PathBuf,
+    environment: Vec<(OsString, OsString)>,
+}
+
+impl StatusPlatform {
+    fn new(code: i32) -> Self {
+        Self {
+            inner: FakePlatform::full(),
+            code,
+            waits: Arc::new(AtomicUsize::new(0)),
+            spawns: Mutex::new(Vec::new()),
+        }
+    }
+
+    fn waits(&self) -> usize {
+        self.waits.load(Ordering::Relaxed)
+    }
+
+    fn spawns(&self) -> Vec<StatusSpawn> {
+        self.spawns.lock().expect("spawn log lock").clone()
+    }
+}
+
+impl Platform for StatusPlatform {
+    fn capabilities(&self) -> Capabilities {
+        self.inner.capabilities()
+    }
+
+    fn pipe(&self) -> Result<PipeEndpoints, PipeError> {
+        self.inner.pipe()
+    }
+
+    fn resolve_working_directory(
+        &self,
+        request: WorkingDirectoryRequest<'_>,
+    ) -> Result<PathBuf, WorkingDirectoryError> {
+        self.inner.resolve_working_directory(request)
+    }
+
+    fn open_file(
+        &self,
+        request: FileOpenRequest<'_>,
+    ) -> Result<Box<dyn DescriptorEndpoint>, FileActionError> {
+        self.inner.open_file(request)
+    }
+
+    fn inherit_descriptor(
+        &self,
+        descriptor: u32,
+    ) -> Result<Box<dyn DescriptorEndpoint>, FileActionError> {
+        self.inner.inherit_descriptor(descriptor)
+    }
+
+    fn spawn(&self, request: &SpawnRequest<'_>) -> Result<Box<dyn ChildProcess>, SpawnError> {
+        static NEXT_ID: AtomicU64 = AtomicU64::new(10_000);
+        let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+        let group = match request.process_group() {
+            ProcessGroup::Inherit => None,
+            ProcessGroup::New => ProcessGroupId::new(id),
+            ProcessGroup::Join(group) => Some(group),
+        };
+        self.spawns
+            .lock()
+            .expect("spawn log lock")
+            .push(StatusSpawn {
+                argv: request.argv().to_vec(),
+                cwd: request.cwd().to_path_buf(),
+                environment: request.environment().to_vec(),
+            });
+        Ok(Box::new(StatusChild {
+            id,
+            group,
+            code: self.code,
+            waits: Arc::clone(&self.waits),
+        }))
     }
 }
 
@@ -1975,6 +2226,90 @@ fn initializer_failure_stops_later_modules_after_preserving_externalized_effects
 }
 
 #[test]
+fn initializer_failure_keeps_crossed_file_and_process_effects_without_environment_commit() {
+    let directory = TestDirectory::new("failure-effects");
+    let root_path = directory.path().join("main.fsh");
+    let failing_path = directory.path().join("failing.fsh");
+    let later_path = directory.path().join("later.fsh");
+    let root_name = root_path.to_string_lossy();
+    let failing_name = failing_path.to_string_lossy();
+    let later_name = later_path.to_string_lossy();
+    let fixture = PathBuf::from(env!("CARGO_BIN_EXE_flash-status-fixture"));
+    let fixture_name = fixture.to_string_lossy();
+    let paths = FakeCanonicalizer::default()
+        .resolves(&root_name, &root_name)
+        .resolves(&failing_name, &failing_name)
+        .resolves(&later_name, &later_name);
+    let sources = FakeSourceLoader::default()
+        .contains(
+            &root_name,
+            concat!(
+                "import { failing } from './failing.fsh'\n",
+                "import { later } from './later.fsh'\n",
+                "which pwd | get kind | encode utf8 | save root-ran.txt\n",
+            ),
+        )
+        .contains(
+            &failing_name,
+            &format!(
+                concat!(
+                    "let failing = 1\n",
+                    "export {{ failing }}\n",
+                    "which pwd | get kind | encode utf8 | save crossed.txt\n",
+                    "^{} exit 0\n",
+                    "^{} exit 0 &\n",
+                    "export SESSION_ONLY = 'changed'\n",
+                    "export BROKEN = 1 + true\n",
+                ),
+                fixture_name, fixture_name
+            ),
+        )
+        .contains(
+            &later_name,
+            concat!(
+                "let later = 1\n",
+                "export { later }\n",
+                "which pwd | get kind | encode utf8 | save later-ran.txt\n",
+            ),
+        );
+    let program = ModuleProgramLoader::new(&paths, &sources)
+        .load(&root_path)
+        .expect("the failure-effects module program loads");
+    let platform = CountingPosix::new();
+    let mut environment = Environment::from_snapshot([("SESSION_ONLY", "caller")]);
+
+    let error = execute_module_program(
+        &program,
+        &[],
+        directory.path(),
+        &mut environment,
+        &standard_registry(),
+        &OneExecutable(fixture),
+        &SessionOptions::default(),
+        &platform,
+        Arc::new(FakeClock::new()),
+    )
+    .expect_err("the initializer fails after crossing file and process boundaries");
+
+    assert!(
+        error
+            .render()
+            .contains("operator `+` is not defined for int, bool"),
+        "{}",
+        error.render()
+    );
+    assert_eq!(
+        fs::read(directory.path().join("crossed.txt")).unwrap(),
+        b"internal"
+    );
+    assert!(!directory.path().join("later-ran.txt").exists());
+    assert!(!directory.path().join("root-ran.txt").exists());
+    assert_eq!(platform.spawns(), 2);
+    assert_eq!(environment.get("SESSION_ONLY"), Some(OsStr::new("caller")));
+    assert!(!environment.contains("BROKEN"));
+}
+
+#[test]
 fn initializer_exit_terminates_the_whole_program_before_the_root() {
     let paths = FakeCanonicalizer::default()
         .resolves("/project/main.fsh", "/project/main.fsh")
@@ -2072,6 +2407,192 @@ fn dependency_background_jobs_live_until_the_whole_program_join() {
 }
 
 #[test]
+fn dependency_order_shares_cwd_environment_status_and_output_until_root_exit() {
+    let paths = FakeCanonicalizer::default()
+        .resolves("/project/main.fsh", "/project/main.fsh")
+        .resolves("/project/state.fsh", "/project/state.fsh")
+        .resolves("/project/observer.fsh", "/project/observer.fsh");
+    let sources = FakeSourceLoader::default()
+        .contains(
+            "/project/main.fsh",
+            concat!(
+                "import { observed } from './observer.fsh'\n",
+                "help cd\n",
+                "^/bin/mark root\n",
+                "exit\n",
+            ),
+        )
+        .contains(
+            "/project/observer.fsh",
+            concat!(
+                "import { ready } from './state.fsh'\n",
+                "help pwd\n",
+                "^/bin/mark observer\n",
+                "let observed = $ready\n",
+                "export { observed }\n",
+            ),
+        )
+        .contains(
+            "/project/state.fsh",
+            concat!(
+                "cd './nested'\n",
+                "export TOKEN = 'dependency'\n",
+                "which exit | get kind | encode utf8\n",
+                "^/bin/mark status\n",
+                "let ready = true\n",
+                "export { ready }\n",
+            ),
+        );
+    let program = ModuleProgramLoader::new(&paths, &sources)
+        .load(Path::new("/project/main.fsh"))
+        .expect("the shared-state module program loads");
+    let platform = StatusPlatform::new(7);
+    let mut environment = Environment::from_snapshot([("PWD", "/project")]);
+    let mut output = Vec::new();
+
+    let completion = execute_module_program_with_output(
+        &program,
+        &[],
+        Path::new("/project"),
+        &mut environment,
+        &standard_registry(),
+        &MarkExecutable,
+        &SessionOptions::default(),
+        &platform,
+        Arc::new(FakeClock::new()),
+        &mut output,
+    )
+    .expect("the root bare exit observes the dependency status");
+
+    assert_eq!(completion.status().and_then(Status::code), Some(7));
+    assert_eq!(environment.get("TOKEN"), Some(OsStr::new("dependency")));
+    assert_eq!(environment.get("PWD"), Some(OsStr::new("/project/nested")));
+    let spawns = platform.spawns();
+    assert_eq!(
+        spawns
+            .iter()
+            .map(|spawn| spawn.argv[1].clone())
+            .collect::<Vec<_>>(),
+        ["status", "observer", "root"].map(OsString::from)
+    );
+    assert!(
+        spawns
+            .iter()
+            .all(|spawn| spawn.cwd == Path::new("/project/nested"))
+    );
+    assert!(spawns.iter().all(|spawn| {
+        spawn
+            .environment
+            .iter()
+            .any(|(name, value)| name == "TOKEN" && value == "dependency")
+    }));
+    let rendered = String::from_utf8(output).expect("built-in output is UTF-8");
+    let cwd = rendered.find("internal").expect("state output");
+    let observer = rendered.find("pwd").expect("observer help output");
+    let root = rendered.rfind("cd").expect("root help output");
+    assert!(cwd < observer && observer < root, "{rendered}");
+}
+
+#[test]
+fn initializer_exit_commits_environment_joins_jobs_and_keeps_failure_precedence() {
+    let paths = FakeCanonicalizer::default()
+        .resolves("/project/main.fsh", "/project/main.fsh")
+        .resolves("/project/dependency.fsh", "/project/dependency.fsh");
+    let sources = FakeSourceLoader::default()
+        .contains(
+            "/project/main.fsh",
+            "import { value } from './dependency.fsh'\nexport ROOT_RAN = true\n",
+        )
+        .contains(
+            "/project/dependency.fsh",
+            concat!(
+                "let value = 1\n",
+                "export { value }\n",
+                "export COMMITTED = 'yes'\n",
+                "^/bin/mark background &\n",
+                "exit 7\n",
+                "export AFTER_EXIT = 'no'\n",
+            ),
+        );
+    let program = ModuleProgramLoader::new(&paths, &sources)
+        .load(Path::new("/project/main.fsh"))
+        .expect("the explicit-exit module program loads");
+    let platform = StatusPlatform::new(9);
+    let mut environment = Environment::new();
+
+    let completion = execute_module_program(
+        &program,
+        &[],
+        Path::new("/project"),
+        &mut environment,
+        &standard_registry(),
+        &MarkExecutable,
+        &SessionOptions::default(),
+        &platform,
+        Arc::new(FakeClock::new()),
+    )
+    .expect("explicit exit is normal completion even when a joined job fails");
+
+    assert_eq!(completion.status().and_then(Status::code), Some(9));
+    assert_eq!(completion.background_failures().len(), 1);
+    assert_eq!(platform.waits(), 1);
+    assert_eq!(environment.get("COMMITTED"), Some(OsStr::new("yes")));
+    assert!(!environment.contains("AFTER_EXIT"));
+    assert!(!environment.contains("ROOT_RAN"));
+}
+
+#[test]
+fn initializer_output_failure_keeps_prefix_joins_jobs_and_discards_environment() {
+    let paths = FakeCanonicalizer::default()
+        .resolves("/project/main.fsh", "/project/main.fsh")
+        .resolves("/project/dependency.fsh", "/project/dependency.fsh");
+    let sources = FakeSourceLoader::default()
+        .contains(
+            "/project/main.fsh",
+            "import { value } from './dependency.fsh'\nexport ROOT_RAN = true\n",
+        )
+        .contains(
+            "/project/dependency.fsh",
+            concat!(
+                "let value = 1\n",
+                "export { value }\n",
+                "export CHANGED = 'session-only'\n",
+                "^/bin/mark background &\n",
+                "which pwd | get kind | encode utf8\n",
+                "export AFTER_OUTPUT = 'no'\n",
+            ),
+        );
+    let program = ModuleProgramLoader::new(&paths, &sources)
+        .load(Path::new("/project/main.fsh"))
+        .expect("the output-failure module program loads");
+    let platform = StatusPlatform::new(9);
+    let mut environment = Environment::from_snapshot([("CHANGED", "caller")]);
+    let mut output = PrefixThenFailWriter::new(3);
+
+    let error = execute_module_program_with_output(
+        &program,
+        &[],
+        Path::new("/project"),
+        &mut environment,
+        &standard_registry(),
+        &MarkExecutable,
+        &SessionOptions::default(),
+        &platform,
+        Arc::new(FakeClock::new()),
+        &mut output,
+    )
+    .expect_err("the injected sink failure is fatal");
+
+    assert_eq!(output.bytes, b"int", "{}", error.render());
+    assert!(error.render().contains("output write failed"));
+    assert_eq!(error.background_failures().len(), 1);
+    assert_eq!(platform.waits(), 1);
+    assert_eq!(environment.get("CHANGED"), Some(OsStr::new("caller")));
+    assert!(!environment.contains("AFTER_OUTPUT"));
+    assert!(!environment.contains("ROOT_RAN"));
+}
+
+#[test]
 fn module_program_output_uses_only_the_injected_sink() {
     let paths = FakeCanonicalizer::default().resolves("/project/main.fsh", "/project/main.fsh");
     let sources = FakeSourceLoader::default()
@@ -2096,6 +2617,155 @@ fn module_program_output_uses_only_the_injected_sink() {
     .expect("module output should use the supplied sink");
 
     assert_eq!(output, b"internal");
+}
+
+#[test]
+fn module_effect_summaries_fold_named_dependencies_and_exclude_load_only_modules() {
+    let paths = FakeCanonicalizer::default()
+        .resolves("/project/main.fsh", "/project/main.fsh")
+        .resolves("/project/dependency.fsh", "/project/dependency.fsh")
+        .resolves("/project/dormant.fsh", "/project/dormant.fsh");
+    let sources = FakeSourceLoader::default()
+        .contains(
+            "/project/main.fsh",
+            concat!(
+                "import { reveal } from './dependency.fsh'\n",
+                "import './dormant.fsh'\n",
+                "let observed = reveal()\n",
+                "let action = $reveal\n",
+                "let dynamic = action()\n",
+                "export ROOT = 'ready'\n",
+                "open input.txt | save output.txt\n",
+                "exit 0\n",
+            ),
+        )
+        .contains(
+            "/project/dependency.fsh",
+            concat!(
+                "def reveal() {\n",
+                "    pwd | encode utf8\n",
+                "}\n",
+                "export { reveal }\n",
+                "cd '/work'\n",
+                "export TOKEN = 'set'\n",
+                "^tool &\n",
+            ),
+        )
+        .contains(
+            "/project/dormant.fsh",
+            "pwd | encode utf8 | save dormant.txt\n",
+        );
+    let program = ModuleProgramLoader::new(&paths, &sources)
+        .load(Path::new("/project/main.fsh"))
+        .expect("the effectful module program loads without execution");
+    let root = program.graph().root();
+    let dependency = program
+        .graph()
+        .imports()
+        .iter()
+        .find(|import| import.target().path() == Path::new("/project/dependency.fsh"))
+        .expect("the named dependency is graphed")
+        .target();
+    let dormant = program
+        .graph()
+        .imports()
+        .iter()
+        .find(|import| import.target().path() == Path::new("/project/dormant.fsh"))
+        .expect("the load-only dependency is graphed")
+        .target();
+
+    let dependency_kinds = program
+        .effects()
+        .direct(dependency)
+        .occurrences()
+        .iter()
+        .map(|occurrence| occurrence.effect())
+        .collect::<std::collections::BTreeSet<_>>();
+    assert!(dependency_kinds.contains(&ModuleEffect::WorkingDirectory));
+    assert!(dependency_kinds.contains(&ModuleEffect::ChildEnvironment));
+    assert!(dependency_kinds.contains(&ModuleEffect::Status));
+    assert!(dependency_kinds.contains(&ModuleEffect::Process));
+    assert!(dependency_kinds.contains(&ModuleEffect::Job));
+    assert!(dependency_kinds.contains(&ModuleEffect::OpaqueExternal));
+    let dependency_source = program
+        .sources()
+        .source(dependency)
+        .expect("dependency source");
+    assert!(
+        !program
+            .effects()
+            .direct(dependency)
+            .occurrences()
+            .iter()
+            .any(|occurrence| occurrence.effect() == ModuleEffect::Output
+                && dependency_source.slice(occurrence.span()) == Ok("encode")),
+        "a dormant function body is not a direct initializer effect"
+    );
+
+    let dormant_kinds = program
+        .effects()
+        .direct(dormant)
+        .occurrences()
+        .iter()
+        .map(|occurrence| occurrence.effect())
+        .collect::<std::collections::BTreeSet<_>>();
+    assert!(dormant_kinds.contains(&ModuleEffect::FilesystemWrite));
+
+    let root_direct = program.effects().direct(root);
+    assert!(
+        root_direct
+            .occurrences()
+            .iter()
+            .any(|occurrence| occurrence.effect() == ModuleEffect::Output
+                && occurrence.span().source_id()
+                    == program
+                        .sources()
+                        .source(dependency)
+                        .expect("dependency source")
+                        .id()),
+        "the statically known imported callable folds its defining body"
+    );
+    let root_kinds = root_direct
+        .occurrences()
+        .iter()
+        .map(|occurrence| occurrence.effect())
+        .collect::<std::collections::BTreeSet<_>>();
+    assert!(root_kinds.contains(&ModuleEffect::FilesystemRead));
+    assert!(root_kinds.contains(&ModuleEffect::FilesystemWrite));
+    assert!(root_kinds.contains(&ModuleEffect::ProgramExit));
+    assert!(
+        root_kinds.contains(&ModuleEffect::OpaqueExternal),
+        "an indirectly held callable remains conservative"
+    );
+
+    let root_transitive = program.effects().transitive(root);
+    let transitive_sources = root_transitive
+        .occurrences()
+        .iter()
+        .map(|occurrence| occurrence.span().source_id())
+        .collect::<std::collections::BTreeSet<_>>();
+    assert!(
+        transitive_sources.contains(
+            &program
+                .sources()
+                .source(dependency)
+                .expect("dependency source")
+                .id()
+        )
+    );
+    assert!(
+        transitive_sources.contains(&program.sources().source(root).expect("root source").id())
+    );
+    assert!(
+        !transitive_sources.contains(
+            &program
+                .sources()
+                .source(dormant)
+                .expect("dormant source")
+                .id()
+        ),
+        "load-only modules are analyzed directly but remain dormant transitively"
+    );
 }
 
 #[test]

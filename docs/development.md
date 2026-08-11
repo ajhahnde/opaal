@@ -420,6 +420,16 @@ registry, forced and assumed externals use byte-stream contracts, and dynamic
 heads remain unknown. It must not probe `PATH` or invent generic command
 argument and option schemas that `CommandSignature` does not own.
 
+Successful module analysis also owns source-spanned direct and transitive
+initializer-effect summaries. The shared vocabulary distinguishes working
+directory, child environment, status, output, filesystem read/write, process,
+job, program exit, and opaque external behavior. Named dependencies fold once
+in runtime initialization order; load-only edges remain absent from transitive
+runtime summaries; known callable bodies fold into their call sites; and
+indirect or external behavior stays conservative. This model is descriptive:
+valid effectful modules remain silent checker successes, and no frontend may
+add an effect warning or probe the host to make a summary more precise.
+
 The `flash-cli` checker frontend receives only injected canonicalization and
 finite source-loading capabilities. Its host adapter resolves canonical aliases
 and reads regular files without constructing a runtime session, environment,
@@ -432,6 +442,7 @@ Checker development must cover:
 - local, imported, exported, private, and missing names;
 - function and command signatures;
 - pipeline carrier compatibility;
+- direct and named-dependency-folded initializer effects;
 - stable source spans and deterministic diagnostic ordering;
 - success and failure behavior suitable for CI.
 
@@ -544,7 +555,8 @@ Runtime changes belong in `flash-runtime` when they affect:
 - pipeline carrier compatibility;
 - structured streams;
 - statuses and errors;
-- sessions or background jobs.
+- sessions or background jobs;
+- module initialization or effect analysis.
 
 The runtime tests are organized by behavior rather than by one monolithic integration target. Use the test file nearest to the changed contract, then run the full runtime package.
 
@@ -587,6 +599,9 @@ For execution changes, cover more than the successful result. Relevant cases may
 - cancellation;
 - output or collection limit;
 - cleanup after a primary failure;
+- caller-environment commit versus external no-rollback boundaries;
+- whole-program initializer exit and background-job precedence;
+- fatal output failure after a written prefix;
 - stopped and continued process observations;
 - status aggregation with and without `pipefail`.
 

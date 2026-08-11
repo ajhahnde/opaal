@@ -1056,6 +1056,7 @@ fn run_pipeline(
         // state before presentation would leave a successful status behind a
         // failed pipeline.
         let mut pending_state = state.clone();
+        let closure_environment = pending_state.environment().clone();
         let outcome = if is_job_table_head(&plan) {
             execute_job_table_pipeline(
                 &plan,
@@ -1087,7 +1088,10 @@ fn run_pipeline(
                     platform,
                     output,
                 )?;
-                *pending_state.environment_mut() = closure_context.environment_snapshot();
+                pending_state.environment_mut().apply_delta(
+                    &closure_environment,
+                    &closure_context.environment_snapshot(),
+                );
                 *state = pending_state;
                 Ok(ChainStep::Status(status))
             }
@@ -1612,9 +1616,10 @@ fn run_mixed_pipeline(
     };
 
     let mut pending_state = state.clone();
+    let closure_environment = pending_state.environment().clone();
     let closure_context = OwnedClosureContext::new(
         source.clone(),
-        pending_state.environment().clone(),
+        closure_environment.clone(),
         EvalLimits::default(),
     );
     let mut mixed = start_mixed_pipeline(plan, platform, clock, internal.clone())?;
@@ -1687,7 +1692,10 @@ fn run_mixed_pipeline(
     };
     if let Some(exit) = requested_exit {
         mixed.terminate();
-        *pending_state.environment_mut() = closure_context.environment_snapshot();
+        pending_state.environment_mut().apply_delta(
+            &closure_environment,
+            &closure_context.environment_snapshot(),
+        );
         *state = pending_state;
         return Ok(exit);
     }
@@ -1710,7 +1718,10 @@ fn run_mixed_pipeline(
     let status = Status::aggregate(statuses, selected, pipeline_duration)
         .expect("a mixed pipeline has source-ordered leaf statuses");
     pending_state.set_current_status(Some(status.clone()));
-    *pending_state.environment_mut() = closure_context.environment_snapshot();
+    pending_state.environment_mut().apply_delta(
+        &closure_environment,
+        &closure_context.environment_snapshot(),
+    );
     *state = pending_state;
     Ok(ChainStep::Status(status))
 }

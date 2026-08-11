@@ -86,4 +86,27 @@ impl Environment {
             .iter()
             .map(|(name, value)| (name.as_str(), value.as_os_str()))
     }
+
+    /// Apply only entries changed between `base` and `updated` to this mapping.
+    ///
+    /// Lazy closure stages evaluate against their own transaction snapshot.
+    /// Committing that snapshot wholesale would overwrite state changed by a
+    /// built-in in the same pending pipeline, such as `cd` updating `PWD` and
+    /// `OLDPWD`. A delta preserves both boundaries while still committing
+    /// closure-side `export` and `unset` changes after successful rendering.
+    pub(crate) fn apply_delta(&mut self, base: &Self, updated: &Self) {
+        for name in base.entries.keys().chain(updated.entries.keys()) {
+            if base.entries.get(name) == updated.entries.get(name) {
+                continue;
+            }
+            match updated.entries.get(name) {
+                Some(value) => {
+                    self.entries.insert(name.clone(), value.clone());
+                }
+                None => {
+                    self.entries.remove(name);
+                }
+            }
+        }
+    }
 }

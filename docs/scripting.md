@@ -62,6 +62,23 @@ before the root. Their explicit exports become immutable snapshot bindings in
 the importer. A valid source reached only through a load-only import does not
 run initialization or bind names.
 
+Named initializers otherwise run as ordinary Flash code. They share the
+program's logical cwd, child environment, current status, output routing, and
+background-job coordinator in dependency-first order. Successful `cd`,
+`export`, and `unset` effects are visible to later initializers and the root;
+normal completion and initializer `exit` commit the final child environment to
+the caller. Runtime or required-output failure does not commit that environment.
+
+Output, filesystem writes, and process activity are immediate external effects,
+not a whole-program transaction. A later failure cannot retract bytes, restore
+a truncated file, or unspawn work. The runtime stops later initializers and the
+root, joins every program-owned background job, and retains ordered background
+failure evidence. `exit` inside an initializer is whole-program control: it
+skips that module's export materialization and all later execution, joins jobs,
+and follows normal completion rules, including background-failure precedence.
+See [Initializer effects](language-guide.md#initializer-effects) for the
+complete per-class contract.
+
 ### Source files
 
 Flash scripts conventionally use the `.fsh` extension. Source files:
