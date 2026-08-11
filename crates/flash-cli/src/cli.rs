@@ -1,13 +1,21 @@
 //! Command-line invocation parsing and classification.
 //!
 //! Parsing is separated from process startup so the invocation matrix — help,
-//! version, a script path with ordered arguments, or an interactive session,
-//! each combined with
-//! the `--no-config` and `--no-history` policies — is decided by one pure,
-//! testable function before any environment, filesystem, or editor access.
+//! version, formatter frontend, a script path with ordered arguments, or an
+//! interactive session — is decided by one pure, testable function before any
+//! environment, filesystem, runtime, or editor access.
 
 use std::ffi::OsString;
 use std::path::PathBuf;
+
+/// The explicit formatter action selected by the launcher.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FormatOperation {
+    /// Report sources whose canonical form differs without writing them.
+    Check,
+    /// Atomically replace sources whose canonical form differs.
+    Write,
+}
 
 /// The selected top-level program mode.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -16,6 +24,13 @@ pub enum Mode {
     Help,
     /// Print the version and exit.
     Version,
+    /// Print formatter subcommand help and exit.
+    FormatHelp,
+    /// Format explicit source paths without executing them.
+    Format {
+        operation: FormatOperation,
+        paths: Vec<PathBuf>,
+    },
     /// Run one script file non-interactively.
     Script {
         path: PathBuf,
@@ -56,6 +71,14 @@ pub enum CliError {
     MissingRequiredOption(&'static str),
     /// A singleton option appeared more than once.
     DuplicateOption(&'static str),
+    /// The formatter did not select a check or write operation.
+    MissingFormatOperation,
+    /// The formatter selected both check and write operations.
+    ConflictingFormatOperations,
+    /// The formatter did not receive a source path.
+    MissingFormatPath,
+    /// The formatter received the unsupported stdin sentinel.
+    StdinFormatPath,
 }
 
 impl CliError {
@@ -74,6 +97,16 @@ impl CliError {
                 format!("reserved invocation requires option '{option}'")
             }
             Self::DuplicateOption(option) => format!("option '{option}' may appear only once"),
+            Self::MissingFormatOperation => {
+                "format requires exactly one of '--check' or '--write'".to_owned()
+            }
+            Self::ConflictingFormatOperations => {
+                "format options '--check' and '--write' cannot be combined".to_owned()
+            }
+            Self::MissingFormatPath => "format requires at least one path".to_owned(),
+            Self::StdinFormatPath => {
+                "'-' is not supported as a formatter path; name a file".to_owned()
+            }
         }
     }
 }
@@ -163,6 +196,32 @@ where
                 }
             }
             Some("--") => options_ended = true,
+            Some("format") => {
+                if help {
+                    return Ok(Invocation {
+                        mode: Mode::Help,
+                        no_config,
+                        no_history,
+                    });
+                }
+                if version {
+                    return Ok(Invocation {
+                        mode: Mode::Version,
+                        no_config,
+                        no_history,
+                    });
+                }
+                if no_config {
+                    return Err(CliError::UnknownOption("--no-config".to_owned()));
+                }
+                if no_history {
+                    return Err(CliError::UnknownOption("--no-history".to_owned()));
+                }
+                if async_chain.is_some() || async_pipefail || async_capture_limit.is_some() {
+                    return Err(CliError::UnexpectedArgument("format".to_owned()));
+                }
+                return parse_format_args(arguments);
+            }
             Some(text) if text.starts_with('-') && text != "-" => {
                 return Err(CliError::UnknownOption(text.to_owned()));
             }
@@ -202,6 +261,79 @@ where
         no_config,
         no_history,
     })
+}
+
+fn parse_format_args<I>(arguments: I) -> Result<Invocation, CliError>
+where
+    I: IntoIterator<Item = OsString>,
+{
+    let mut operation = None;
+    let mut help = false;
+    let mut paths = Vec::new();
+    let mut options_ended = false;
+
+    for argument in arguments {
+        if options_ended {
+            if argument == "-" {
+                return Err(CliError::StdinFormatPath);
+            }
+            paths.push(PathBuf::from(argument));
+            continue;
+        }
+
+        match argument.to_str() {
+            Some("--check") => select_format_operation(&mut operation, FormatOperation::Check)?,
+            Some("--write") => select_format_operation(&mut operation, FormatOperation::Write)?,
+            Some("--help") => {
+                if help {
+                    return Err(CliError::DuplicateOption("--help"));
+                }
+                help = true;
+            }
+            Some("--") => options_ended = true,
+            Some("-") => return Err(CliError::StdinFormatPath),
+            Some(text) if text.starts_with('-') => {
+                return Err(CliError::UnknownOption(text.to_owned()));
+            }
+            _ => paths.push(PathBuf::from(argument)),
+        }
+    }
+
+    if help {
+        return Ok(Invocation {
+            mode: Mode::FormatHelp,
+            no_config: false,
+            no_history: false,
+        });
+    }
+    let operation = operation.ok_or(CliError::MissingFormatOperation)?;
+    if paths.is_empty() {
+        return Err(CliError::MissingFormatPath);
+    }
+
+    Ok(Invocation {
+        mode: Mode::Format { operation, paths },
+        no_config: false,
+        no_history: false,
+    })
+}
+
+fn select_format_operation(
+    selected: &mut Option<FormatOperation>,
+    candidate: FormatOperation,
+) -> Result<(), CliError> {
+    match *selected {
+        None => *selected = Some(candidate),
+        Some(existing) if existing == candidate => {
+            let option = match candidate {
+                FormatOperation::Check => "--check",
+                FormatOperation::Write => "--write",
+            };
+            return Err(CliError::DuplicateOption(option));
+        }
+        Some(_) => return Err(CliError::ConflictingFormatOperations),
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -296,6 +428,197 @@ mod tests {
             Mode::Script {
                 path: PathBuf::from("one.fsh"),
                 arguments: vec!["two.fsh".to_owned()],
+            }
+        );
+    }
+
+    #[test]
+    fn formatter_check_and_write_preserve_ordered_paths() {
+        let check = parse(&["format", "--check", "one.fsh", "two.fsh"])
+            .expect("formatter check invocation is valid");
+        assert_eq!(
+            check.mode,
+            Mode::Format {
+                operation: FormatOperation::Check,
+                paths: vec![PathBuf::from("one.fsh"), PathBuf::from("two.fsh")],
+            }
+        );
+
+        let write =
+            parse(&["format", "--write", "one.fsh"]).expect("formatter write invocation is valid");
+        assert_eq!(
+            write.mode,
+            Mode::Format {
+                operation: FormatOperation::Write,
+                paths: vec![PathBuf::from("one.fsh")],
+            }
+        );
+    }
+
+    #[test]
+    fn formatter_options_may_be_interspersed_before_double_dash() {
+        let invocation = parse(&["format", "one.fsh", "--check", "two.fsh"])
+            .expect("interspersed formatter operation is valid");
+        assert_eq!(
+            invocation.mode,
+            Mode::Format {
+                operation: FormatOperation::Check,
+                paths: vec![PathBuf::from("one.fsh"), PathBuf::from("two.fsh")],
+            }
+        );
+    }
+
+    #[test]
+    fn formatter_double_dash_makes_every_remaining_operand_a_path() {
+        let invocation = parse(&["format", "--write", "--", "--check", "--odd.fsh"])
+            .expect("dash-leading formatter paths are valid after --");
+        assert_eq!(
+            invocation.mode,
+            Mode::Format {
+                operation: FormatOperation::Write,
+                paths: vec![PathBuf::from("--check"), PathBuf::from("--odd.fsh")],
+            }
+        );
+    }
+
+    #[test]
+    fn formatter_help_is_a_distinct_launcher_mode() {
+        assert_eq!(parse(&["format", "--help"]).unwrap().mode, Mode::FormatHelp);
+        assert_eq!(
+            parse(&["format", "--help", "--check", "ignored.fsh"])
+                .unwrap()
+                .mode,
+            Mode::FormatHelp,
+            "subcommand help wins over formatter modes and paths"
+        );
+        assert_eq!(
+            parse(&["--help", "format", "--check", "one.fsh"])
+                .unwrap()
+                .mode,
+            Mode::Help,
+            "top-level help keeps precedence before the formatter operand"
+        );
+        assert_eq!(
+            parse(&["--version", "format", "--check", "one.fsh"])
+                .unwrap()
+                .mode,
+            Mode::Version,
+            "top-level version keeps precedence before the formatter operand"
+        );
+    }
+
+    #[test]
+    fn formatter_rejects_missing_conflicting_and_duplicate_modes() {
+        for arguments in [
+            &["format", "one.fsh"][..],
+            &["format", "--check", "--write", "one.fsh"],
+            &["format", "--write", "--check", "one.fsh"],
+            &["format", "--check", "--check", "one.fsh"],
+            &["format", "--write", "--write", "one.fsh"],
+            &["format", "--help", "--help"],
+        ] {
+            assert!(
+                parse(arguments).is_err(),
+                "formatter mode misuse must fail: {arguments:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn formatter_rejects_missing_or_unsupported_paths() {
+        for arguments in [
+            &["format", "--check"][..],
+            &["format", "--write"],
+            &["format", "--check", "-"],
+            &["format", "--write", "--", "-"],
+        ] {
+            assert!(
+                parse(arguments).is_err(),
+                "unsupported formatter path must fail: {arguments:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn formatter_rejects_unknown_and_session_options() {
+        for arguments in [
+            &["format", "--check", "--unknown", "one.fsh"][..],
+            &["format", "--check", "--version", "one.fsh"],
+            &["format", "--check", "--no-config", "one.fsh"],
+            &["format", "--check", "--no-history", "one.fsh"],
+            &["--no-config", "format", "--check", "one.fsh"],
+            &["--no-history", "format", "--check", "one.fsh"],
+        ] {
+            assert!(
+                parse(arguments).is_err(),
+                "inapplicable formatter option must fail: {arguments:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn formatter_cannot_combine_with_the_reserved_chain_mode() {
+        assert!(
+            parse(&[
+                "--async-chain",
+                "^tool",
+                "--async-capture-limit",
+                "4096",
+                "format",
+                "--check",
+                "one.fsh",
+            ])
+            .is_err()
+        );
+        assert!(
+            parse(&[
+                "format",
+                "--check",
+                "one.fsh",
+                "--async-chain",
+                "^tool",
+                "--async-capture-limit",
+                "4096",
+            ])
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn formatter_spelling_remains_reachable_as_a_script_path() {
+        assert_eq!(
+            parse(&["./format", "--check"]).unwrap().mode,
+            Mode::Script {
+                path: PathBuf::from("./format"),
+                arguments: vec!["--check".to_owned()],
+            }
+        );
+        assert_eq!(
+            parse(&["--", "format", "--check"]).unwrap().mode,
+            Mode::Script {
+                path: PathBuf::from("format"),
+                arguments: vec!["--check".to_owned()],
+            }
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn formatter_paths_preserve_native_non_utf8_spelling() {
+        use std::os::unix::ffi::OsStringExt;
+
+        let path = OsString::from_vec(b"source-\xff.fsh".to_vec());
+        let invocation = parse_args([
+            OsString::from("format"),
+            OsString::from("--check"),
+            path.clone(),
+        ])
+        .expect("native formatter path is valid");
+        assert_eq!(
+            invocation.mode,
+            Mode::Format {
+                operation: FormatOperation::Check,
+                paths: vec![PathBuf::from(path)],
             }
         );
     }

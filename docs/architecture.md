@@ -12,6 +12,7 @@ This document describes the internal architecture of Flash: crate boundaries, so
 - [Design principles](#design-principles)
 - [Workspace and dependency direction](#workspace-and-dependency-direction)
 - [Source and syntax front end](#source-and-syntax-front-end)
+- [Formatter launcher frontend](#formatter-launcher-frontend)
 - [Modules and static analysis](#modules-and-static-analysis)
 - [Shared tooling services](#shared-tooling-services)
 - [Runtime and session state](#runtime-and-session-state)
@@ -152,6 +153,29 @@ Invalid
 A complete result contains a syntax tree. An incomplete result identifies source that may become valid with more input, allowing an interactive editor to request continuation without inventing its own delimiter logic. An invalid result contains diagnostics for source that should be reported immediately.
 
 This distinction is reused by interactive validation rather than approximated with terminal-editor heuristics.
+
+## Formatter launcher frontend
+
+`fsh format --check` and `fsh format --write` are non-executing launcher modes
+owned by `flash-cli`. Their pure argument classifier retains ordered native
+paths, and their formatter orchestration receives only an injected filesystem
+capability. It does not construct a module program, runtime session, platform
+adapter, executable probe, terminal, configuration loader, or history store.
+
+The orchestration assigns stable source identities in operand order, decodes
+each explicit file as UTF-8, and delegates canonical text exclusively to
+`flash_syntax::format_source`. Check mode turns the first scalar divergence into
+an anchored `FMT001`; incomplete and invalid input retain shared syntax
+diagnostics. Imports are ordinary retained syntax and are never traversed by
+the formatter frontend.
+
+Both operations inspect and prepare the complete ordered batch. Write mode
+performs no replacement after any preflight failure. Its host adapter rejects
+final symlinks and nonregular or canonically duplicate targets, rechecks source
+bytes and permission bits, and replaces each changed file through a unique
+same-directory temporary file using complete write, file synchronization, and
+atomic rename. The adapter preserves permission bits only and deliberately
+does not present ordered per-file replacement as a multi-file transaction.
 
 ### Shared editor services
 

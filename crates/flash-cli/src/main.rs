@@ -23,6 +23,7 @@ use flash_cli::config::{
 };
 #[cfg(target_os = "redox")]
 use flash_cli::editor::EditorPrompt;
+use flash_cli::format::{FormatRequest, HostFormatFilesystem, format_files};
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 use flash_cli::history::{HistoryPlatform, ProcessHistoryEnvironment, select_history};
 use flash_cli::interactive::{
@@ -48,6 +49,9 @@ const HELP: &str = "Flash command shell
 Usage:
   fsh [OPTIONS]
   fsh [OPTIONS] SCRIPT [ARGUMENT]...
+  fsh format --check [--] PATH...
+  fsh format --write [--] PATH...
+  fsh format --help
 
 Arguments:
   SCRIPT        Flash source file to execute
@@ -61,6 +65,25 @@ Options:
   -V, --version      Print version
 
 Every operand after SCRIPT belongs to the script, including option-like values.
+";
+
+const FORMAT_HELP: &str = "Check or rewrite Flash source formatting
+
+Usage:
+  fsh format --check [--] PATH...
+  fsh format --write [--] PATH...
+  fsh format --help
+
+Options:
+      --check    Report every source that is not canonically formatted
+      --write    Atomically rewrite every changed source after batch preflight
+      --         Stop parsing formatter options; remaining operands are paths
+      --help     Print formatter help
+
+PATH operands must name existing regular files. Directories, final symlinks,
+stdin, globs, recursion, and import traversal are not supported. Successful
+check and write operations are silent. Changed files preserve permission bits;
+other metadata and multi-file transactionality are not promised.
 ";
 
 fn main() -> ExitCode {
@@ -81,6 +104,11 @@ fn main() -> ExitCode {
             println!("fsh {}", flash_runtime::version());
             ExitCode::SUCCESS
         }
+        Mode::FormatHelp => {
+            print!("{FORMAT_HELP}");
+            ExitCode::SUCCESS
+        }
+        Mode::Format { operation, paths } => run_formatter(operation, paths),
         Mode::Script { path, arguments } => run_script(&path, &arguments),
         Mode::AsyncChain {
             text,
@@ -88,6 +116,20 @@ fn main() -> ExitCode {
             capture_limit,
         } => run_async_chain(text, pipefail, capture_limit),
         Mode::Interactive => run_interactive(invocation.no_config, invocation.no_history),
+    }
+}
+
+fn run_formatter(operation: flash_cli::cli::FormatOperation, paths: Vec<PathBuf>) -> ExitCode {
+    let request = FormatRequest::new(operation, paths);
+    let mut filesystem = HostFormatFilesystem;
+    let run = format_files(&request, &mut filesystem);
+    for failure in run.failures() {
+        eprint!("{}", failure.rendered());
+    }
+    if run.is_success() {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
     }
 }
 

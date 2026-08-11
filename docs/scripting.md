@@ -159,11 +159,50 @@ Checker diagnostics and process status are intended for local development, edito
 
 ### Canonical formatting
 
-The Flash formatter provides a check mode and a write mode. Check mode reports source that differs from canonical formatting without rewriting it. Write mode rewrites source to the canonical representation.
+Use the launcher formatter modes on one or more explicit files:
 
-Formatting must be idempotent: formatting already formatted source must not produce another change. The formatted result must preserve the parsed program structure and must remain valid Flash source.
+```bash
+fsh format --check source.fsh library.fsh
+fsh format --write source.fsh library.fsh
+fsh format --help
+```
 
-The exact command-line spelling of formatter options belongs to the `fsh` CLI contract and must match the executable's help and tests; it must not be inferred from another formatter.
+`--check` visits every operand in command-line order without writing. Canonical
+files are silent; each complete source that differs receives an anchored
+`FMT001` diagnostic. `--write` parses and formats the complete batch before its
+first mutation. A read, UTF-8, incomplete, or invalid-source failure therefore
+leaves every operand untouched.
+
+Operands must name existing regular files. Use the formatter `--` delimiter
+before a dash-leading path. The formatter does not read stdin, expand globs,
+walk directories, follow a final symlink, or discover imported sources. Each
+named file is independent, and two operands that resolve to the same canonical
+target are rejected.
+
+After a successful write preflight, each changed file is replaced in operand
+order through a synchronized sibling temporary file and same-directory atomic
+rename. Unchanged files are not opened for write. Changed files preserve their
+permission bits, but replacement creates a new file identity and does not
+promise hard-link identity, ownership, group, timestamps, ACLs, or extended
+attributes. A source or permission change detected after preflight is refused.
+An individual replacement is atomic, but a multi-file write is not a
+transaction: the first replacement failure stops the batch after any earlier
+successful replacements.
+
+Successful check and write operations emit nothing and exit with status 0.
+Noncanonical check results and source or filesystem failures use stderr and
+status 1. Invocation misuse uses one `fsh:` message on stderr and status 2.
+Formatter output never uses stdout except for `format --help`.
+
+Formatting is idempotent: formatting already formatted source does not produce
+another change. The canonical result preserves parsed program structure,
+significant token spelling, comments, and documentation-comment attachment.
+Incomplete input retains `SYN002`, while invalid input retains the parser's
+structured diagnostics.
+
+`fsh format` is a non-executing launcher frontend. It does not load startup
+configuration or history, traverse imports, initialize a runtime session,
+resolve commands, probe executables, or execute source.
 
 ## Session state
 

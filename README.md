@@ -73,6 +73,10 @@ fsh
 # Run a Flash script.
 fsh program.fsh
 
+# Check or atomically rewrite canonical source formatting.
+fsh format --check program.fsh
+fsh format --write program.fsh
+
 # Show the supported command-line options.
 fsh --help
 ```

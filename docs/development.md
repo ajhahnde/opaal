@@ -357,6 +357,14 @@ The v1 formatter, static checker, help system, and language server are different
 
 ### Formatter contract
 
+The shipped launcher surface is:
+
+```text
+fsh format --check [--] PATH...
+fsh format --write [--] PATH...
+fsh format --help
+```
+
 Formatter changes must preserve all of the following:
 
 - parsing succeeds before formatting;
@@ -365,9 +373,27 @@ Formatter changes must preserve all of the following:
 - check mode detects noncanonical source without rewriting it;
 - write mode produces canonical source;
 - comments and documentation metadata remain attached to the intended constructs;
+- every write batch completes source and filesystem preflight before mutation;
+- changed files use permission-preserving same-directory atomic replacement;
+- final symlinks, nonregular files, stale sources, and duplicate canonical targets are refused;
+- the launcher frontend does not initialize or execute a Flash runtime session;
 - golden fixtures cover representative valid, incomplete, and invalid boundaries where formatting interacts with parsing.
 
 Formatter commands and options must remain synchronized with the implemented CLI contract and its tests.
+
+The focused frontend and real-filesystem suites are:
+
+```bash
+cargo test -p flash-cli cli::tests --lib
+cargo test -p flash-cli --test format_frontend
+cargo test -p flash-cli --test formatter_e2e
+```
+
+The injected `FormatFilesystem` suite owns deterministic orchestration, while
+the host suite owns native-path inspection, permission preservation, stale
+source detection, temporary cleanup, and atomic rename behavior. Neither
+replaces the existing `flash-syntax` formatter grammar, idempotence, structural,
+significant-token, or documentation-comment tests.
 
 ### Static checker contract
 
