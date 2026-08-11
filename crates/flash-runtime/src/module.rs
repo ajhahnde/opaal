@@ -11,19 +11,24 @@
 //! lexical read without execution. Frontend wiring and execution remain
 //! separate layers.
 
+use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::path::{Path, PathBuf};
 
 use flash_syntax::{
-    BinaryOperator, Block, Closure, CommandItemKind, ConditionalChain, ControlTransfer, Diagnostic,
-    ElseBranch, Expression, ExpressionKind, LiteralKind, MatchArm, ParseOutcome, Pattern, Pipeline,
-    RecordKey, RedirectionKind, Script, Severity, SourceFile, SourceId, Span, StageKind, Statement,
-    StatementKind, TypeReference, UnaryOperator, Word, WordPart, WordPartKind, parse,
-    render_diagnostic_sources,
+    BinaryOperator, Block, Closure, CommandHeadKind, CommandItemKind, ConditionalChain,
+    ControlTransfer, Diagnostic, ElseBranch, Expression, ExpressionKind, LiteralKind, MatchArm,
+    ParseOutcome, Pattern, Pipeline, RecordKey, RedirectionKind, Script, Severity, SourceFile,
+    SourceId, Span, StageKind, Statement, StatementKind, TypeReference, UnaryOperator, Word,
+    WordPart, WordPartKind, parse, render_diagnostic_sources,
 };
 
 use crate::Value;
+use crate::carrier::{
+    CarrierBridge, PipelineCarrierFault, StageCarrierContract, analyze_pipeline_carriers,
+};
+use crate::command::{Carrier, CommandOutput, CommandRegistry};
 use crate::documentation::Documentation;
 
 /// The sole host capability needed to turn a candidate source path into its
@@ -536,8 +541,11 @@ impl ModuleNameRegistry {
     fn analyze(
         graph: &ModuleGraph,
         sources: &ModuleSourceRegistry,
-    ) -> Result<Self, Box<ModuleNameError>> {
+    ) -> Result<Self, Vec<ModuleNameError>> {
         let mut registry = Self::default();
+        let mut errors = Vec::new();
+        let mut poisoned_exports = BTreeMap::<ModuleId, BTreeSet<String>>::new();
+        let mut poisoned_imports = BTreeMap::<ModuleId, BTreeSet<String>>::new();
 
         for entry in sources.entries() {
             let mut names = ModuleNames::default();
@@ -576,19 +584,25 @@ impl ModuleNameRegistry {
                         .get_mut(entry.module())
                         .expect("every registered source has a name table");
                     let Some(declaration_span) = names.locals.get(&name).copied() else {
-                        return Err(Box::new(ModuleNameError::UnknownExport {
+                        poisoned_exports
+                            .entry(entry.module().clone())
+                            .or_default()
+                            .insert(name.clone());
+                        errors.push(ModuleNameError::UnknownExport {
                             module: entry.module().clone(),
                             name,
                             export_span: identifier.span(),
-                        }));
+                        });
+                        continue;
                     };
                     if let Some(first) = names.exports.get(&name) {
-                        return Err(Box::new(ModuleNameError::DuplicateExport {
+                        errors.push(ModuleNameError::DuplicateExport {
                             module: entry.module().clone(),
                             name,
                             first_span: first.export_span(),
                             duplicate_span: identifier.span(),
-                        }));
+                        });
+                        continue;
                     }
                     names.exports.insert(
                         name.clone(),
@@ -626,14 +640,24 @@ impl ModuleNameRegistry {
                         .get(edge.target())
                         .expect("every graph target has a name table");
                     if !target_names.exports.contains_key(&name) {
-                        let private_span = target_names.locals.get(&name).copied();
-                        return Err(Box::new(ModuleNameError::UnavailableImport {
-                            importer: entry.module().clone(),
-                            target: edge.target().clone(),
-                            name,
-                            import_span: identifier.span(),
-                            private_span,
-                        }));
+                        let target_is_poisoned = poisoned_exports
+                            .get(edge.target())
+                            .is_some_and(|names| names.contains(&name));
+                        if !target_is_poisoned {
+                            let private_span = target_names.locals.get(&name).copied();
+                            errors.push(ModuleNameError::UnavailableImport {
+                                importer: entry.module().clone(),
+                                target: edge.target().clone(),
+                                name: name.clone(),
+                                import_span: identifier.span(),
+                                private_span,
+                            });
+                        }
+                        poisoned_imports
+                            .entry(entry.module().clone())
+                            .or_default()
+                            .insert(name);
+                        continue;
                     }
 
                     let importer_names = registry
@@ -648,12 +672,13 @@ impl ModuleNameRegistry {
                             .map(ModuleNameImport::name_span)
                     });
                     if let Some(first_span) = conflict {
-                        return Err(Box::new(ModuleNameError::ImportConflict {
+                        errors.push(ModuleNameError::ImportConflict {
                             module: entry.module().clone(),
                             name,
                             first_span,
                             duplicate_span: identifier.span(),
-                        }));
+                        });
+                        continue;
                     }
                     importer_names.imports.push(ModuleNameImport {
                         name,
@@ -666,9 +691,14 @@ impl ModuleNameRegistry {
         }
 
         for entry in sources.entries() {
-            let references =
-                ReferenceResolver::new(entry, &registry, entry.module() == graph.root())
-                    .resolve()?;
+            let (references, mut reference_errors) = ReferenceResolver::new(
+                entry,
+                &registry,
+                poisoned_imports.get(entry.module()),
+                entry.module() == graph.root(),
+            )
+            .resolve();
+            errors.append(&mut reference_errors);
             registry
                 .by_module
                 .get_mut(entry.module())
@@ -676,7 +706,11 @@ impl ModuleNameRegistry {
                 .references = references;
         }
 
-        Ok(registry)
+        if errors.is_empty() {
+            Ok(registry)
+        } else {
+            Err(errors)
+        }
     }
 }
 
@@ -931,7 +965,10 @@ impl RuntimeBindingTypes {
             source: source.clone(),
             script: script.clone(),
         };
-        let types = TypeCollector::new(&entry).collect()?;
+        let (types, errors) = TypeCollector::new(&entry).collect();
+        if let Some(error) = errors.into_iter().next() {
+            return Err(Box::new(error));
+        }
         Ok(Self {
             by_source: BTreeMap::from([(source.id(), types.bindings)]),
             functions_by_source: BTreeMap::from([(source.id(), types.functions)]),
@@ -1001,22 +1038,36 @@ impl ModuleTypeRegistry {
     fn analyze(
         sources: &ModuleSourceRegistry,
         names: &ModuleNameRegistry,
-    ) -> Result<Self, Box<ModuleTypeError>> {
+    ) -> Result<Self, Vec<ModuleTypeError>> {
         let mut registry = Self::default();
+        let mut errors = Vec::new();
         for entry in sources.entries() {
-            let types = TypeCollector::new(entry).collect()?;
+            let (types, mut source_errors) = TypeCollector::new(entry).collect();
+            errors.append(&mut source_errors);
             registry.by_module.insert(entry.module().clone(), types);
         }
         for entry in sources.entries() {
-            SignatureValidator::new(entry, names, &registry).validate()?;
+            errors.extend(SignatureValidator::new(entry, names, &registry).validate());
         }
-        Ok(registry)
+        let source_order = sources
+            .entries()
+            .enumerate()
+            .map(|(index, entry)| (entry.module().clone(), index))
+            .collect::<BTreeMap<_, _>>();
+        errors.sort_by_key(|error| (source_order[error.module()], error.primary_span().start()));
+        errors.dedup();
+        if errors.is_empty() {
+            Ok(registry)
+        } else {
+            Err(errors)
+        }
     }
 }
 
 struct TypeCollector<'a> {
     entry: &'a RegisteredModuleSource,
     types: ModuleTypes,
+    errors: Vec<ModuleTypeError>,
 }
 
 impl<'a> TypeCollector<'a> {
@@ -1024,12 +1075,14 @@ impl<'a> TypeCollector<'a> {
         Self {
             entry,
             types: ModuleTypes::default(),
+            errors: Vec::new(),
         }
     }
 
-    fn collect(mut self) -> Result<ModuleTypes, Box<ModuleTypeError>> {
-        self.statements(self.entry.script().statements())?;
-        Ok(self.types)
+    fn collect(mut self) -> (ModuleTypes, Vec<ModuleTypeError>) {
+        self.statements(self.entry.script().statements())
+            .expect("accumulating type collection does not fail fast");
+        (self.types, self.errors)
     }
 
     fn statements(&mut self, statements: &[Statement]) -> Result<(), Box<ModuleTypeError>> {
@@ -1044,7 +1097,7 @@ impl<'a> TypeCollector<'a> {
             StatementKind::Import(_) | StatementKind::ModuleExport(_) => Ok(()),
             StatementKind::Declaration(declaration) => {
                 if let Some(annotation) = &declaration.type_annotation {
-                    let value_type = self.resolve_type(annotation)?;
+                    let value_type = self.resolve_type(annotation);
                     self.types.bindings.push(ResolvedBindingType {
                         declaration_span: declaration.name.span(),
                         value_type,
@@ -1062,7 +1115,7 @@ impl<'a> TypeCollector<'a> {
                 for parameter in &function.parameters {
                     let value_type = match &parameter.type_annotation {
                         Some(annotation) => {
-                            let value_type = self.resolve_type(annotation)?;
+                            let value_type = self.resolve_type(annotation);
                             self.types.bindings.push(ResolvedBindingType {
                                 declaration_span: parameter.name.span(),
                                 value_type: value_type.clone(),
@@ -1082,7 +1135,7 @@ impl<'a> TypeCollector<'a> {
                     });
                 }
                 let result = match &function.return_type {
-                    Some(annotation) => self.resolve_type(annotation)?,
+                    Some(annotation) => self.resolve_type(annotation),
                     None => ValueType::Any,
                 };
                 self.types.functions.push(FunctionSignature {
@@ -1216,7 +1269,7 @@ impl<'a> TypeCollector<'a> {
     fn closure(&mut self, closure: &Closure) -> Result<(), Box<ModuleTypeError>> {
         for parameter in &closure.parameters {
             if let Some(annotation) = &parameter.type_annotation {
-                let value_type = self.resolve_type(annotation)?;
+                let value_type = self.resolve_type(annotation);
                 self.types.bindings.push(ResolvedBindingType {
                     declaration_span: parameter.name.span(),
                     value_type,
@@ -1261,16 +1314,19 @@ impl<'a> TypeCollector<'a> {
         }
     }
 
-    fn resolve_type(
-        &mut self,
-        reference: &TypeReference,
-    ) -> Result<ValueType, Box<ModuleTypeError>> {
-        let value_type = self.resolve_type_value(reference)?;
+    fn resolve_type(&mut self, reference: &TypeReference) -> ValueType {
+        let value_type = match self.resolve_type_value(reference) {
+            Ok(value_type) => value_type,
+            Err(error) => {
+                self.errors.push(*error);
+                ValueType::Any
+            }
+        };
         self.types.annotations.push(ResolvedTypeAnnotation {
             span: reference.span,
             value_type: value_type.clone(),
         });
-        Ok(value_type)
+        value_type
     }
 
     fn resolve_type_value(
@@ -1340,6 +1396,7 @@ struct SignatureValidator<'a> {
     entry: &'a RegisteredModuleSource,
     names: &'a ModuleNameRegistry,
     types: &'a ModuleTypeRegistry,
+    errors: RefCell<Vec<ModuleTypeError>>,
 }
 
 impl<'a> SignatureValidator<'a> {
@@ -1352,11 +1409,14 @@ impl<'a> SignatureValidator<'a> {
             entry,
             names,
             types,
+            errors: RefCell::new(Vec::new()),
         }
     }
 
-    fn validate(&self) -> Result<(), Box<ModuleTypeError>> {
+    fn validate(self) -> Vec<ModuleTypeError> {
         self.statements(self.entry.script().statements())
+            .expect("accumulating signature validation does not fail fast");
+        self.errors.into_inner()
     }
 
     fn statements(&self, statements: &[Statement]) -> Result<(), Box<ModuleTypeError>> {
@@ -1477,16 +1537,19 @@ impl<'a> SignatureValidator<'a> {
         if actual == ValueType::Any || signature.result().accepts_type(&actual) {
             return Ok(());
         }
-        Err(Box::new(ModuleTypeError::ResultMismatch {
-            module: self.entry.module().clone(),
-            name: signature.name().to_owned(),
-            result_span,
-            expected: signature.result().clone(),
-            actual,
-            annotation_span: signature
-                .result_annotation_span()
-                .unwrap_or_else(|| signature.declaration_span()),
-        }))
+        self.errors
+            .borrow_mut()
+            .push(ModuleTypeError::ResultMismatch {
+                module: self.entry.module().clone(),
+                name: signature.name().to_owned(),
+                result_span,
+                expected: signature.result().clone(),
+                actual,
+                annotation_span: signature
+                    .result_annotation_span()
+                    .unwrap_or_else(|| signature.declaration_span()),
+            });
+        Ok(())
     }
 
     fn statement(&self, statement: &Statement) -> Result<(), Box<ModuleTypeError>> {
@@ -1807,15 +1870,17 @@ impl<'a> SignatureValidator<'a> {
             return Ok(None);
         };
         if call.arguments.len() != signature.parameters().len() {
-            return Err(Box::new(ModuleTypeError::CallArity {
+            self.errors.borrow_mut().push(ModuleTypeError::CallArity {
                 module: self.entry.module().clone(),
                 name: signature.name().to_owned(),
                 call_span,
                 expected: signature.parameters().len(),
                 actual: call.arguments.len(),
                 declaration_span: signature.declaration_span(),
-            }));
+            });
+            return Ok(Some(ValueType::Any));
         }
+        let mut invalid = false;
         for ((argument, actual), parameter) in call
             .arguments
             .iter()
@@ -1829,20 +1894,27 @@ impl<'a> SignatureValidator<'a> {
                 continue;
             }
             if !parameter.value_type().accepts_type(&actual) {
-                return Err(Box::new(ModuleTypeError::ArgumentMismatch {
-                    module: self.entry.module().clone(),
-                    name: signature.name().to_owned(),
-                    parameter: parameter.name().to_owned(),
-                    argument_span: argument.span(),
-                    expected: parameter.value_type().clone(),
-                    actual,
-                    parameter_span: parameter
-                        .annotation_span()
-                        .unwrap_or_else(|| parameter.declaration_span()),
-                }));
+                self.errors
+                    .borrow_mut()
+                    .push(ModuleTypeError::ArgumentMismatch {
+                        module: self.entry.module().clone(),
+                        name: signature.name().to_owned(),
+                        parameter: parameter.name().to_owned(),
+                        argument_span: argument.span(),
+                        expected: parameter.value_type().clone(),
+                        actual,
+                        parameter_span: parameter
+                            .annotation_span()
+                            .unwrap_or_else(|| parameter.declaration_span()),
+                    });
+                invalid = true;
             }
         }
-        Ok(Some(signature.result().clone()))
+        Ok(Some(if invalid {
+            ValueType::Any
+        } else {
+            signature.result().clone()
+        }))
     }
 
     fn literal(
@@ -1896,14 +1968,16 @@ impl<'a> SignatureValidator<'a> {
 
 struct ReferenceResolver<'a> {
     entry: &'a RegisteredModuleSource,
-    scopes: Vec<BTreeMap<String, ModuleReferenceTarget>>,
+    scopes: Vec<BTreeMap<String, Option<ModuleReferenceTarget>>>,
     references: Vec<ModuleNameReference>,
+    errors: Vec<ModuleNameError>,
 }
 
 impl<'a> ReferenceResolver<'a> {
     fn new(
         entry: &'a RegisteredModuleSource,
         registry: &ModuleNameRegistry,
+        poisoned_imports: Option<&BTreeSet<String>>,
         is_root: bool,
     ) -> Self {
         let mut root = BTreeMap::new();
@@ -1913,19 +1987,31 @@ impl<'a> ReferenceResolver<'a> {
                 .expect("validated imports always retain their target export");
             root.insert(
                 import.name().to_owned(),
-                ModuleReferenceTarget::Imported {
+                Some(ModuleReferenceTarget::Imported {
                     import_span: import.name_span(),
                     target_module: import.target().clone(),
                     declaration_span: export.declaration_span(),
                     export_span: export.export_span(),
-                },
+                }),
             );
+        }
+        if let Some(poisoned_imports) = poisoned_imports {
+            let locals = &registry
+                .by_module
+                .get(entry.module())
+                .expect("every registered source has a name table")
+                .locals;
+            for name in poisoned_imports {
+                if !locals.contains_key(name) {
+                    root.entry(name.clone()).or_insert(None);
+                }
+            }
         }
         let mut scopes = Vec::with_capacity(usize::from(is_root) + 1);
         if is_root {
             scopes.push(BTreeMap::from([(
                 "args".to_owned(),
-                ModuleReferenceTarget::ScriptArguments,
+                Some(ModuleReferenceTarget::ScriptArguments),
             )]));
         }
         scopes.push(root);
@@ -1933,12 +2019,14 @@ impl<'a> ReferenceResolver<'a> {
             entry,
             scopes,
             references: Vec::new(),
+            errors: Vec::new(),
         }
     }
 
-    fn resolve(mut self) -> Result<Vec<ModuleNameReference>, Box<ModuleNameError>> {
-        self.statements(self.entry.script().statements())?;
-        Ok(self.references)
+    fn resolve(mut self) -> (Vec<ModuleNameReference>, Vec<ModuleNameError>) {
+        self.statements(self.entry.script().statements())
+            .expect("accumulating name traversal does not fail fast");
+        (self.references, self.errors)
     }
 
     fn statements(&mut self, statements: &[Statement]) -> Result<(), Box<ModuleNameError>> {
@@ -1964,7 +2052,7 @@ impl<'a> ReferenceResolver<'a> {
                 flash_syntax::EnvironmentStatement::Unset { .. } => Ok(()),
             },
             StatementKind::Function(function) => {
-                self.ensure_available(function.name.span())?;
+                let available = self.ensure_available(function.name.span());
                 self.push_scope();
                 self.insert_local(function.name.span());
                 self.push_scope();
@@ -1977,7 +2065,9 @@ impl<'a> ReferenceResolver<'a> {
                 self.pop_scope();
                 self.pop_scope();
                 result?;
-                self.insert_local(function.name.span());
+                if available {
+                    self.insert_local(function.name.span());
+                }
                 Ok(())
             }
             StatementKind::If(statement) => self.if_statement(statement),
@@ -2197,11 +2287,15 @@ impl<'a> ReferenceResolver<'a> {
             .find_map(|scope| scope.get(&name))
             .cloned()
         else {
-            return Err(Box::new(ModuleNameError::UnknownReference {
+            self.errors.push(ModuleNameError::UnknownReference {
                 module: self.entry.module().clone(),
                 name,
                 reference_span,
-            }));
+            });
+            return Ok(());
+        };
+        let Some(target) = target else {
+            return Ok(());
         };
         self.references.push(ModuleNameReference {
             name,
@@ -2211,26 +2305,28 @@ impl<'a> ReferenceResolver<'a> {
         Ok(())
     }
 
-    fn ensure_available(&self, declaration_span: Span) -> Result<(), Box<ModuleNameError>> {
-        let name = self.text(declaration_span);
+    fn ensure_available(&mut self, declaration_span: Span) -> bool {
+        let name = self.text(declaration_span).to_owned();
         let scope = self
             .scopes
             .last()
             .expect("reference resolution always retains a root scope");
-        if let Some(first) = scope.get(name) {
-            return Err(Box::new(ModuleNameError::DuplicateBinding {
+        if let Some(Some(first)) = scope.get(&name) {
+            self.errors.push(ModuleNameError::DuplicateBinding {
                 module: self.entry.module().clone(),
-                name: name.to_owned(),
+                name,
                 first_span: binding_span(first),
                 duplicate_span: declaration_span,
-            }));
+            });
+            return false;
         }
-        Ok(())
+        true
     }
 
     fn declare(&mut self, declaration_span: Span) -> Result<(), Box<ModuleNameError>> {
-        self.ensure_available(declaration_span)?;
-        self.insert_local(declaration_span);
+        if self.ensure_available(declaration_span) {
+            self.insert_local(declaration_span);
+        }
         Ok(())
     }
 
@@ -2241,10 +2337,10 @@ impl<'a> ReferenceResolver<'a> {
             .expect("reference resolution always retains a root scope")
             .insert(
                 name,
-                ModuleReferenceTarget::Local {
+                Some(ModuleReferenceTarget::Local {
                     module: self.entry.module().clone(),
                     declaration_span,
-                },
+                }),
             );
     }
 
@@ -2323,12 +2419,6 @@ impl ModuleSourceRegistry {
             .and_then(|index| self.entries.get(*index))
     }
 
-    fn next_source_id(&self) -> Result<SourceId, ModuleProgramError> {
-        u32::try_from(self.entries.len())
-            .map(SourceId::new)
-            .map_err(|_| ModuleProgramError::SourceIdentityExhausted)
-    }
-
     fn register(&mut self, module: ModuleId, source: SourceFile, script: Script) {
         debug_assert!(!self.by_module.contains_key(&module));
         debug_assert!(!self.by_source.contains_key(&source.id()));
@@ -2352,6 +2442,526 @@ pub struct ModuleProgram {
     types: ModuleTypeRegistry,
 }
 
+/// One carrier diagnostic found without expanding or resolving a command head.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ModulePipelineError {
+    module: ModuleId,
+    diagnostic: Diagnostic,
+}
+
+impl ModulePipelineError {
+    /// The canonical source module containing the faulty pipeline.
+    #[must_use]
+    pub const fn module(&self) -> &ModuleId {
+        &self.module
+    }
+
+    /// The structured `PIP001`-`PIP004` diagnostic.
+    #[must_use]
+    pub const fn diagnostic(&self) -> &Diagnostic {
+        &self.diagnostic
+    }
+
+    fn primary_span(&self) -> Span {
+        self.diagnostic
+            .labels()
+            .iter()
+            .find(|label| label.style() == flash_syntax::LabelStyle::Primary)
+            .expect("a pipeline diagnostic has a primary label")
+            .span()
+    }
+}
+
+impl fmt::Display for ModulePipelineError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.diagnostic.message())
+    }
+}
+
+impl std::error::Error for ModulePipelineError {}
+
+struct StaticPipelineAnalyzer<'a> {
+    module: &'a ModuleId,
+    source: &'a SourceFile,
+    commands: &'a CommandRegistry,
+    errors: Vec<ModulePipelineError>,
+}
+
+impl<'a> StaticPipelineAnalyzer<'a> {
+    fn analyze(
+        module: &'a ModuleId,
+        source: &'a SourceFile,
+        script: &'a Script,
+        commands: &'a CommandRegistry,
+    ) -> Vec<ModulePipelineError> {
+        let mut analyzer = Self {
+            module,
+            source,
+            commands,
+            errors: Vec::new(),
+        };
+        analyzer.statements(script.statements());
+        analyzer
+            .errors
+            .sort_by_key(|error| error.primary_span().start());
+        analyzer.errors
+    }
+
+    fn statements(&mut self, statements: &[Statement]) {
+        for statement in statements {
+            self.statement(statement);
+        }
+    }
+
+    fn statement(&mut self, statement: &Statement) {
+        match statement.kind() {
+            StatementKind::Import(_) | StatementKind::ModuleExport(_) => {}
+            StatementKind::Declaration(declaration) => self.expression(&declaration.value),
+            StatementKind::Assignment(assignment) => self.expression(&assignment.value),
+            StatementKind::Environment(environment) => {
+                if let flash_syntax::EnvironmentStatement::Export { value, .. } = environment {
+                    self.expression(value);
+                }
+            }
+            StatementKind::Function(function) => self.statements(&function.body.statements),
+            StatementKind::If(statement) => self.if_statement(statement),
+            StatementKind::While(statement) => {
+                self.chain(&statement.condition);
+                self.statements(&statement.body.statements);
+            }
+            StatementKind::For(statement) => {
+                self.expression(&statement.iterable);
+                self.statements(&statement.body.statements);
+            }
+            StatementKind::Match(statement) => {
+                self.expression(&statement.value);
+                for arm in &statement.arms {
+                    if let Pattern::Literal(literal) = &arm.pattern {
+                        self.literal(literal);
+                    }
+                    if let Some(guard) = &arm.guard {
+                        self.expression(guard);
+                    }
+                    self.statements(&arm.body.statements);
+                }
+            }
+            StatementKind::Control(ControlTransfer::Return(Some(expression))) => {
+                self.expression(expression);
+            }
+            StatementKind::Control(
+                ControlTransfer::Break | ControlTransfer::Continue | ControlTransfer::Return(None),
+            ) => {}
+            StatementKind::Job(job) => self.chain(&job.chain),
+        }
+    }
+
+    fn if_statement(&mut self, statement: &flash_syntax::IfStatement) {
+        self.chain(&statement.condition);
+        self.statements(&statement.then_block.statements);
+        match &statement.else_branch {
+            Some(ElseBranch::Block(block)) => self.statements(&block.statements),
+            Some(ElseBranch::If(nested)) => self.if_statement(nested.kind()),
+            None => {}
+        }
+    }
+
+    fn chain(&mut self, chain: &ConditionalChain) {
+        for and_chain in chain.or_terms() {
+            for pipeline in and_chain.and_terms() {
+                self.pipeline(pipeline);
+            }
+        }
+    }
+
+    fn pipeline(&mut self, pipeline: &Pipeline) {
+        let contracts = pipeline
+            .stages()
+            .iter()
+            .map(|stage| match stage.kind() {
+                StageKind::Command(command) => self.command_contract(command),
+                StageKind::Expression(_) => StageCarrierContract::unknown(),
+            })
+            .collect::<Vec<_>>();
+        let operators = pipeline
+            .operators()
+            .iter()
+            .map(|operator| *operator.kind())
+            .collect::<Vec<_>>();
+        for fault in analyze_pipeline_carriers(&contracts, &operators) {
+            self.errors.push(self.carrier_diagnostic(pipeline, fault));
+        }
+        if pipeline.stages().len() > 1 {
+            for stage in pipeline.stages() {
+                if matches!(stage.kind(), StageKind::Expression(_)) {
+                    self.errors.push(ModulePipelineError {
+                        module: self.module.clone(),
+                        diagnostic: Diagnostic::new(
+                            Severity::Error,
+                            "PIP004",
+                            "an expression cannot be a stage in a multi-stage command pipeline",
+                        )
+                        .with_primary(stage.span(), "this is an expression stage"),
+                    });
+                }
+            }
+        }
+
+        for stage in pipeline.stages() {
+            match stage.kind() {
+                StageKind::Expression(expression) => self.expression(expression),
+                StageKind::Command(command) => {
+                    self.word(command.head.word());
+                    for item in &command.items {
+                        match item.kind() {
+                            CommandItemKind::Word(word) => self.word(word),
+                            CommandItemKind::Closure(closure) => self.closure(closure),
+                            CommandItemKind::Redirection(redirection) => {
+                                self.redirection(redirection.kind());
+                            }
+                            CommandItemKind::Spread(_) => {}
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn command_contract(&self, command: &flash_syntax::CommandStage) -> StageCarrierContract {
+        if command.head.kind() == CommandHeadKind::ForcedExternal {
+            return StageCarrierContract::known(
+                self.source
+                    .slice(command.head.word().span())
+                    .expect("a parsed command head belongs to its source"),
+                [Carrier::ByteStream],
+                CommandOutput::Fixed(Carrier::ByteStream),
+            );
+        }
+        let Some(name) = static_word_text(command.head.word(), self.source) else {
+            return StageCarrierContract::unknown();
+        };
+        match self.commands.lookup(&name) {
+            Some(signature) => {
+                StageCarrierContract::known(name, signature.inputs(), signature.output())
+            }
+            None => StageCarrierContract::known(
+                name,
+                [Carrier::ByteStream],
+                CommandOutput::Fixed(Carrier::ByteStream),
+            ),
+        }
+    }
+
+    fn carrier_diagnostic(
+        &self,
+        pipeline: &Pipeline,
+        fault: PipelineCarrierFault,
+    ) -> ModulePipelineError {
+        let diagnostic = match fault {
+            PipelineCarrierFault::HeadInput {
+                stage,
+                command,
+                accepted,
+            } => Diagnostic::new(
+                Severity::Error,
+                "PIP001",
+                format!("`{command}` needs an upstream structured pipeline value"),
+            )
+            .with_primary(
+                pipeline.stages()[stage].span(),
+                format!(
+                    "accepts {}, not an empty or byte input",
+                    carrier_set(&accepted)
+                ),
+            ),
+            PipelineCarrierFault::MergedEdgeNotByteStream {
+                edge,
+                producer_command,
+                produced,
+            } => Diagnostic::new(
+                Severity::Error,
+                "PIP002",
+                format!("`|&` requires bytes, but `{producer_command}` produces {produced:?}"),
+            )
+            .with_primary(
+                pipeline.operators()[edge].span(),
+                "stderr can merge only with a byte stream",
+            ),
+            PipelineCarrierFault::CarrierMismatch { edge, mismatch } => {
+                let mut diagnostic = Diagnostic::new(
+                    Severity::Error,
+                    "PIP003",
+                    format!(
+                        "`{}` produces {:?}, but `{}` accepts {}",
+                        mismatch.producer_command,
+                        mismatch.produced,
+                        mismatch.consumer_command,
+                        carrier_set(&mismatch.accepted),
+                    ),
+                )
+                .with_primary(
+                    pipeline.operators()[edge].span(),
+                    "these adjacent carrier contracts are incompatible",
+                );
+                diagnostic = match mismatch.bridge {
+                    Some(CarrierBridge::StructuredToByte) => diagnostic.with_note(
+                        "add an explicit `encode`/`to` boundary to serialize structured values",
+                    ),
+                    Some(CarrierBridge::ByteToStructured) => diagnostic.with_note(
+                        "add an explicit `decode`/`from` boundary to parse bytes into values",
+                    ),
+                    None => diagnostic,
+                };
+                diagnostic
+            }
+        };
+        ModulePipelineError {
+            module: self.module.clone(),
+            diagnostic,
+        }
+    }
+
+    fn expression(&mut self, expression: &Expression) {
+        match expression.kind() {
+            ExpressionKind::Literal(literal) => self.literal(literal),
+            ExpressionKind::Variable(_) | ExpressionKind::Symbol(_) => {}
+            ExpressionKind::List(elements) => {
+                for element in elements {
+                    self.expression(element);
+                }
+            }
+            ExpressionKind::Record(entries) => {
+                for entry in entries {
+                    if let RecordKey::DoubleQuoted(part) = &entry.key {
+                        self.word_part(part);
+                    }
+                    self.expression(&entry.value);
+                }
+            }
+            ExpressionKind::Closure(closure) => self.closure(closure),
+            ExpressionKind::CommandSubstitution(chain) | ExpressionKind::GroupedJob(chain) => {
+                self.chain(chain);
+            }
+            ExpressionKind::Call(call) => {
+                self.expression(&call.callee);
+                for argument in &call.arguments {
+                    self.expression(argument);
+                }
+            }
+            ExpressionKind::Index(index) => {
+                self.expression(&index.target);
+                self.expression(&index.index);
+            }
+            ExpressionKind::Member(member) => self.expression(&member.target),
+            ExpressionKind::Unary(unary) => self.expression(&unary.operand),
+            ExpressionKind::Binary(binary) => {
+                self.expression(&binary.left);
+                self.expression(&binary.right);
+            }
+        }
+    }
+
+    fn closure(&mut self, closure: &Closure) {
+        self.chain(&closure.body);
+    }
+
+    fn literal(&mut self, literal: &flash_syntax::Literal) {
+        if let LiteralKind::DoubleQuoted(parts) = literal.kind() {
+            self.word_parts(parts);
+        }
+    }
+
+    fn word(&mut self, word: &Word) {
+        self.word_parts(word.parts());
+    }
+
+    fn word_parts(&mut self, parts: &[WordPart]) {
+        for part in parts {
+            self.word_part(part);
+        }
+    }
+
+    fn word_part(&mut self, part: &WordPart) {
+        match part.kind() {
+            WordPartKind::DoubleQuoted(parts) => self.word_parts(parts),
+            WordPartKind::BracedInterpolation(expression) => self.expression(expression),
+            WordPartKind::CommandSubstitution(chain) => self.chain(chain),
+            WordPartKind::Bare
+            | WordPartKind::BareEscape
+            | WordPartKind::SingleQuoted
+            | WordPartKind::DoubleText
+            | WordPartKind::DoubleEscape
+            | WordPartKind::Variable(_) => {}
+        }
+    }
+
+    fn redirection(&mut self, redirection: &RedirectionKind) {
+        match redirection {
+            RedirectionKind::Input { target, .. } => self.word(target),
+            RedirectionKind::File(file) => self.word(&file.target),
+            RedirectionKind::Duplicate { .. } | RedirectionKind::Close { .. } => {}
+        }
+    }
+}
+
+fn carrier_set(carriers: &[Carrier]) -> String {
+    carriers
+        .iter()
+        .map(|carrier| format!("{carrier:?}"))
+        .collect::<Vec<_>>()
+        .join(" or ")
+}
+
+fn static_word_text(word: &Word, source: &SourceFile) -> Option<String> {
+    let mut text = String::new();
+    append_static_parts(word.parts(), source, &mut text).then_some(text)
+}
+
+fn append_static_parts(parts: &[WordPart], source: &SourceFile, text: &mut String) -> bool {
+    for part in parts {
+        let raw = source
+            .slice(part.span())
+            .expect("a parsed word part belongs to its source");
+        match part.kind() {
+            WordPartKind::Bare | WordPartKind::DoubleText => text.push_str(raw),
+            WordPartKind::SingleQuoted => text.push_str(&raw[1..raw.len() - 1]),
+            WordPartKind::BareEscape => text.push_str(&raw[1..]),
+            WordPartKind::DoubleEscape => text.push_str(&decode_static_double_escape(raw)),
+            WordPartKind::DoubleQuoted(inner) => {
+                if !append_static_parts(inner, source, text) {
+                    return false;
+                }
+            }
+            WordPartKind::Variable(_)
+            | WordPartKind::BracedInterpolation(_)
+            | WordPartKind::CommandSubstitution(_) => return false,
+        }
+    }
+    true
+}
+
+fn decode_static_double_escape(raw: &str) -> String {
+    if matches!(raw, "\\\n" | "\\\r\n") {
+        return String::new();
+    }
+    let body = &raw[1..];
+    match body.chars().next().expect("a validated escape has a body") {
+        '\\' => "\\".to_owned(),
+        '"' => "\"".to_owned(),
+        '$' => "$".to_owned(),
+        'n' => "\n".to_owned(),
+        'r' => "\r".to_owned(),
+        't' => "\t".to_owned(),
+        '0' => "\0".to_owned(),
+        'u' => {
+            let hex = body
+                .trim_start_matches('u')
+                .trim_start_matches('{')
+                .trim_end_matches('}');
+            u32::from_str_radix(hex, 16)
+                .ok()
+                .and_then(char::from_u32)
+                .map_or_else(|| body.to_owned(), |scalar| scalar.to_string())
+        }
+        _ => body.to_owned(),
+    }
+}
+
+/// One decoded source retained by a module-analysis report.
+///
+/// Invalid syntax leaves `script` absent while preserving the source identity
+/// and text needed to render its diagnostics. Read and UTF-8 failures cannot
+/// produce a retained [`SourceFile`].
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ModuleAnalysisSource {
+    module: ModuleId,
+    source: SourceFile,
+    script: Option<Script>,
+}
+
+impl ModuleAnalysisSource {
+    /// The canonical identity assigned to this source.
+    #[must_use]
+    pub const fn module(&self) -> &ModuleId {
+        &self.module
+    }
+
+    /// The decoded source with its stable discovery identity.
+    #[must_use]
+    pub const fn source(&self) -> &SourceFile {
+        &self.source
+    }
+
+    /// Parsed syntax, absent only when parsing this retained source failed.
+    #[must_use]
+    pub const fn script(&self) -> Option<&Script> {
+        self.script.as_ref()
+    }
+}
+
+/// One structured error retained in deterministic module-analysis order.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ModuleAnalysisIssue {
+    error: ModuleProgramError,
+}
+
+impl ModuleAnalysisIssue {
+    fn new(error: ModuleProgramError) -> Self {
+        Self { error }
+    }
+
+    /// The structured module-program error represented by this issue.
+    #[must_use]
+    pub const fn error(&self) -> &ModuleProgramError {
+        &self.error
+    }
+
+    /// The issue severity. Module discovery and semantic construction failures
+    /// are errors; later analysis phases may add warning or note issue kinds.
+    #[must_use]
+    pub const fn severity(&self) -> Severity {
+        Severity::Error
+    }
+}
+
+/// Host-free analysis of one canonical root and its static import closure.
+///
+/// Retained sources and ordered issues remain available after a failed run. A
+/// complete executable program is exposed only when no error was found.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ModuleAnalysisReport {
+    sources: Vec<ModuleAnalysisSource>,
+    issues: Vec<ModuleAnalysisIssue>,
+    program: Option<ModuleProgram>,
+}
+
+impl ModuleAnalysisReport {
+    /// Decoded sources in deterministic first-visit depth-first order.
+    #[must_use]
+    pub fn sources(&self) -> &[ModuleAnalysisSource] {
+        &self.sources
+    }
+
+    /// Structured issues in analysis-owned order.
+    #[must_use]
+    pub fn issues(&self) -> &[ModuleAnalysisIssue] {
+        &self.issues
+    }
+
+    /// The complete program, present exactly when analysis has no errors.
+    #[must_use]
+    pub const fn program(&self) -> Option<&ModuleProgram> {
+        self.program.as_ref()
+    }
+
+    /// Whether at least one error-classified issue prevents a complete program.
+    #[must_use]
+    pub fn has_errors(&self) -> bool {
+        self.issues
+            .iter()
+            .any(|issue| issue.severity() == Severity::Error)
+    }
+}
+
 /// A module-program construction failure rendered while its analyzed sources
 /// are still available.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -2361,15 +2971,12 @@ pub struct ModuleProgramLoadError {
 }
 
 impl ModuleProgramLoadError {
-    fn new(error: ModuleProgramError, sources: &ModuleSourceRegistry) -> Self {
+    fn new(error: ModuleProgramError, sources: &[ModuleAnalysisSource]) -> Self {
         let diagnostics = error.diagnostics();
-        let mut available = sources
-            .entries()
-            .map(RegisteredModuleSource::source)
+        let available = sources
+            .iter()
+            .map(ModuleAnalysisSource::source)
             .collect::<Vec<_>>();
-        if let ModuleProgramError::Syntax { source, .. } = &error {
-            available.push(source.as_ref());
-        }
         let rendered = if diagnostics.is_empty() {
             format!("{error}\n")
         } else {
@@ -2480,10 +3087,16 @@ impl<'a> ModuleProgramLoader<'a> {
     /// Loads one root and every reachable static import without executing any
     /// source statement.
     pub fn load(&self, requested: &Path) -> Result<ModuleProgram, ModuleProgramError> {
-        self.load_retaining_sources(requested).map_err(|failure| {
-            let (error, _) = *failure;
-            error
-        })
+        let report = self.analyze(requested);
+        match report.program {
+            Some(program) => Ok(program),
+            None => Err(report
+                .issues
+                .into_iter()
+                .next()
+                .expect("an incomplete module analysis has an issue")
+                .error),
+        }
     }
 
     /// Loads one module program and retains enough source context to render a
@@ -2492,76 +3105,208 @@ impl<'a> ModuleProgramLoader<'a> {
         &self,
         requested: &Path,
     ) -> Result<ModuleProgram, ModuleProgramLoadError> {
-        self.load_retaining_sources(requested).map_err(|failure| {
-            let (error, sources) = *failure;
-            ModuleProgramLoadError::new(error, &sources)
-        })
+        let report = self.analyze(requested);
+        match report.program {
+            Some(program) => Ok(program),
+            None => {
+                let error = report
+                    .issues
+                    .into_iter()
+                    .next()
+                    .expect("an incomplete module analysis has an issue")
+                    .error;
+                Err(ModuleProgramLoadError::new(error, &report.sources))
+            }
+        }
     }
 
-    fn load_retaining_sources(
+    /// Analyzes one root and every reachable static import without executing
+    /// source. Discovery accumulates independent branch failures while
+    /// retaining every decoded source available for later diagnostics. On a
+    /// complete graph, name analysis accumulates independent export, import,
+    /// binding, and reference failures. On clean names, signature analysis
+    /// accumulates independent annotation, known-call, and result failures.
+    #[must_use]
+    pub fn analyze(&self, requested: &Path) -> ModuleAnalysisReport {
+        self.analyze_internal(requested, None)
+    }
+
+    /// Performs full non-executing analysis, including static pipeline carrier
+    /// checking against the injected command registry.
+    ///
+    /// Pipeline checking walks every retained parsed source even when an earlier
+    /// graph, name, or signature phase failed. It never expands a word or probes
+    /// an executable. The legacy execution loaders continue to use [`Self::analyze`]
+    /// so runtime preflight retains its established error surface.
+    #[must_use]
+    pub fn analyze_with_commands(
         &self,
         requested: &Path,
-    ) -> Result<ModuleProgram, Box<(ModuleProgramError, ModuleSourceRegistry)>> {
+        commands: &CommandRegistry,
+    ) -> ModuleAnalysisReport {
+        self.analyze_internal(requested, Some(commands))
+    }
+
+    fn analyze_internal(
+        &self,
+        requested: &Path,
+        commands: Option<&CommandRegistry>,
+    ) -> ModuleAnalysisReport {
         let root = match self.resolver.resolve_root(requested) {
             Ok(root) => root,
             Err(error) => {
-                return Err(Box::new((
-                    ModuleProgramError::Resolution(error),
-                    ModuleSourceRegistry::default(),
-                )));
+                return ModuleAnalysisReport {
+                    sources: Vec::new(),
+                    issues: vec![ModuleAnalysisIssue::new(ModuleProgramError::Resolution(
+                        error,
+                    ))],
+                    program: None,
+                };
             }
         };
         let mut graph = ModuleGraph::new(root.clone());
         let mut sources = ModuleSourceRegistry::default();
-        if let Err(error) = self.load_module(root, None, &mut graph, &mut sources) {
-            return Err(Box::new((error, sources)));
+        let mut retained = Vec::new();
+        let mut attempted = BTreeSet::new();
+        let mut issues = Vec::new();
+        self.discover_module(
+            root,
+            None,
+            &mut graph,
+            &mut sources,
+            &mut retained,
+            &mut attempted,
+            &mut issues,
+        );
+        let pipeline_issues = commands.map_or_else(Vec::new, |commands| {
+            retained
+                .iter()
+                .filter_map(|entry| {
+                    entry.script().map(|script| {
+                        StaticPipelineAnalyzer::analyze(
+                            entry.module(),
+                            entry.source(),
+                            script,
+                            commands,
+                        )
+                    })
+                })
+                .flatten()
+                .map(|error| {
+                    ModuleAnalysisIssue::new(ModuleProgramError::Pipelines(Box::new(error)))
+                })
+                .collect::<Vec<_>>()
+        });
+
+        if !issues.is_empty() {
+            issues.extend(pipeline_issues);
+            return ModuleAnalysisReport {
+                sources: retained,
+                issues,
+                program: None,
+            };
         }
+
         let names = match ModuleNameRegistry::analyze(&graph, &sources) {
             Ok(names) => names,
-            Err(error) => return Err(Box::new((ModuleProgramError::Names(error), sources))),
+            Err(errors) => {
+                let mut issues = errors
+                    .into_iter()
+                    .map(|error| {
+                        ModuleAnalysisIssue::new(ModuleProgramError::Names(Box::new(error)))
+                    })
+                    .collect::<Vec<_>>();
+                issues.extend(pipeline_issues);
+                return ModuleAnalysisReport {
+                    sources: retained,
+                    issues,
+                    program: None,
+                };
+            }
         };
         let types = match ModuleTypeRegistry::analyze(&sources, &names) {
             Ok(types) => types,
-            Err(error) => {
-                return Err(Box::new((ModuleProgramError::Signatures(error), sources)));
+            Err(errors) => {
+                let mut issues = errors
+                    .into_iter()
+                    .map(|error| {
+                        ModuleAnalysisIssue::new(ModuleProgramError::Signatures(Box::new(error)))
+                    })
+                    .collect::<Vec<_>>();
+                issues.extend(pipeline_issues);
+                return ModuleAnalysisReport {
+                    sources: retained,
+                    issues,
+                    program: None,
+                };
             }
         };
-        Ok(ModuleProgram {
-            graph,
-            sources,
-            names,
-            types,
-        })
+        if !pipeline_issues.is_empty() {
+            return ModuleAnalysisReport {
+                sources: retained,
+                issues: pipeline_issues,
+                program: None,
+            };
+        }
+        ModuleAnalysisReport {
+            sources: retained,
+            issues: Vec::new(),
+            program: Some(ModuleProgram {
+                graph,
+                sources,
+                names,
+                types,
+            }),
+        }
     }
 
-    fn load_module(
+    #[allow(clippy::too_many_arguments)]
+    fn discover_module(
         &self,
         module: ModuleId,
         imported_by: Option<ModuleImport>,
         graph: &mut ModuleGraph,
         sources: &mut ModuleSourceRegistry,
-    ) -> Result<(), ModuleProgramError> {
-        if sources.source(&module).is_some() {
-            return Ok(());
+        retained: &mut Vec<ModuleAnalysisSource>,
+        attempted: &mut BTreeSet<ModuleId>,
+        issues: &mut Vec<ModuleAnalysisIssue>,
+    ) {
+        if !attempted.insert(module.clone()) {
+            return;
         }
 
-        let bytes =
-            self.source_loader
-                .load(&module)
-                .map_err(|cause| ModuleProgramError::SourceRead {
+        let bytes = match self.source_loader.load(&module) {
+            Ok(bytes) => bytes,
+            Err(cause) => {
+                issues.push(ModuleAnalysisIssue::new(ModuleProgramError::SourceRead {
                     module: module.clone(),
-                    imported_by: imported_by.clone().map(Box::new),
+                    imported_by: imported_by.map(Box::new),
                     cause,
-                })?;
-        let source_id = sources.next_source_id()?;
-        let source_name = module.path().to_string_lossy().into_owned();
-        let source = SourceFile::from_bytes(source_id, source_name, bytes).map_err(|error| {
-            ModuleProgramError::InvalidUtf8 {
-                module: module.clone(),
-                imported_by: imported_by.clone().map(Box::new),
-                valid_up_to: error.utf8_error().valid_up_to(),
+                }));
+                return;
             }
-        })?;
+        };
+        let source_id = match u32::try_from(retained.len()) {
+            Ok(id) => SourceId::new(id),
+            Err(_) => {
+                issues.push(ModuleAnalysisIssue::new(
+                    ModuleProgramError::SourceIdentityExhausted,
+                ));
+                return;
+            }
+        };
+        let source_name = module.path().to_string_lossy().into_owned();
+        let source = match SourceFile::from_bytes(source_id, source_name, bytes) {
+            Ok(source) => source,
+            Err(error) => {
+                issues.push(ModuleAnalysisIssue::new(ModuleProgramError::InvalidUtf8 {
+                    module,
+                    imported_by: imported_by.map(Box::new),
+                    valid_up_to: error.utf8_error().valid_up_to(),
+                }));
+                return;
+            }
+        };
         let script = match parse(&source) {
             ParseOutcome::Complete(script) => script,
             ParseOutcome::Incomplete(incomplete) => {
@@ -2574,18 +3319,30 @@ impl<'a> ModuleProgramLoader<'a> {
                     incomplete.span(),
                     "input ends before this construct is complete",
                 );
-                return Err(ModuleProgramError::Syntax {
+                retained.push(ModuleAnalysisSource {
+                    module: module.clone(),
+                    source: source.clone(),
+                    script: None,
+                });
+                issues.push(ModuleAnalysisIssue::new(ModuleProgramError::Syntax {
                     module,
                     source: Box::new(source),
                     diagnostics: vec![diagnostic],
-                });
+                }));
+                return;
             }
             ParseOutcome::Invalid(diagnostics) => {
-                return Err(ModuleProgramError::Syntax {
+                retained.push(ModuleAnalysisSource {
+                    module: module.clone(),
+                    source: source.clone(),
+                    script: None,
+                });
+                issues.push(ModuleAnalysisIssue::new(ModuleProgramError::Syntax {
                     module,
                     source: Box::new(source),
                     diagnostics,
-                });
+                }));
+                return;
             }
         };
 
@@ -2603,19 +3360,37 @@ impl<'a> ModuleProgramLoader<'a> {
                 (PathBuf::from(&quoted[1..quoted.len() - 1]), span)
             })
             .collect::<Vec<_>>();
-        sources.register(module.clone(), source, script);
+        sources.register(module.clone(), source.clone(), script.clone());
+        retained.push(ModuleAnalysisSource {
+            module: module.clone(),
+            source,
+            script: Some(script),
+        });
 
         for (requested, span) in imports {
-            let import = self
-                .resolver
-                .resolve_import(&module, &requested, span)
-                .map_err(ModuleProgramError::Resolution)?;
-            graph
-                .add_import(import.clone())
-                .map_err(ModuleProgramError::Graph)?;
-            self.load_module(import.target().clone(), Some(import), graph, sources)?;
+            let import = match self.resolver.resolve_import(&module, &requested, span) {
+                Ok(import) => import,
+                Err(error) => {
+                    issues.push(ModuleAnalysisIssue::new(ModuleProgramError::Resolution(
+                        error,
+                    )));
+                    continue;
+                }
+            };
+            if let Err(error) = graph.add_import(import.clone()) {
+                issues.push(ModuleAnalysisIssue::new(ModuleProgramError::Graph(error)));
+                continue;
+            }
+            self.discover_module(
+                import.target().clone(),
+                Some(import),
+                graph,
+                sources,
+                retained,
+                attempted,
+                issues,
+            );
         }
-        Ok(())
     }
 }
 
@@ -2831,6 +3606,15 @@ impl ModuleTypeError {
         }
     }
 
+    const fn primary_span(&self) -> Span {
+        match self {
+            Self::UnknownType { span, .. } | Self::InvalidTypeArity { span, .. } => *span,
+            Self::CallArity { call_span, .. } => *call_span,
+            Self::ArgumentMismatch { argument_span, .. } => *argument_span,
+            Self::ResultMismatch { result_span, .. } => *result_span,
+        }
+    }
+
     #[must_use]
     pub fn diagnostic(&self) -> Diagnostic {
         match self {
@@ -2975,6 +3759,8 @@ pub enum ModuleProgramError {
     Names(Box<ModuleNameError>),
     /// Static type resolution or known-call validation failed.
     Signatures(Box<ModuleTypeError>),
+    /// Static command-pipeline carrier analysis failed.
+    Pipelines(Box<ModulePipelineError>),
     /// More source identities were required than `SourceId` can represent.
     SourceIdentityExhausted,
 }
@@ -3005,6 +3791,7 @@ impl ModuleProgramError {
             Self::Graph(ModuleGraphError::Cycle(cycle)) => vec![cycle.diagnostic()],
             Self::Names(error) => vec![error.diagnostic()],
             Self::Signatures(error) => vec![error.diagnostic()],
+            Self::Pipelines(error) => vec![error.diagnostic().clone()],
             Self::Graph(ModuleGraphError::UnknownImporter(_)) | Self::SourceIdentityExhausted => {
                 Vec::new()
             }
@@ -3021,6 +3808,7 @@ impl ModuleProgramError {
             | Self::Syntax { module, .. } => Some(module),
             Self::Names(error) => Some(error.module()),
             Self::Signatures(error) => Some(error.module()),
+            Self::Pipelines(error) => Some(error.module()),
             Self::Resolution(_) | Self::Graph(_) | Self::SourceIdentityExhausted => None,
         }
     }
@@ -3052,6 +3840,7 @@ impl fmt::Display for ModuleProgramError {
             Self::Graph(error) => error.fmt(formatter),
             Self::Names(error) => error.fmt(formatter),
             Self::Signatures(error) => error.fmt(formatter),
+            Self::Pipelines(error) => error.fmt(formatter),
             Self::SourceIdentityExhausted => {
                 formatter.write_str("module program exhausted stable source identities")
             }
@@ -3067,6 +3856,7 @@ impl std::error::Error for ModuleProgramError {
             Self::Graph(error) => Some(error),
             Self::Names(error) => Some(error),
             Self::Signatures(error) => Some(error),
+            Self::Pipelines(error) => Some(error),
             Self::InvalidUtf8 { .. } | Self::Syntax { .. } | Self::SourceIdentityExhausted => None,
         }
     }

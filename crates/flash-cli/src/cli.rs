@@ -1,9 +1,9 @@
 //! Command-line invocation parsing and classification.
 //!
 //! Parsing is separated from process startup so the invocation matrix — help,
-//! version, formatter frontend, a script path with ordered arguments, or an
-//! interactive session — is decided by one pure, testable function before any
-//! environment, filesystem, runtime, or editor access.
+//! version, checker/formatter frontend, a script path with ordered arguments,
+//! or an interactive session — is decided by one pure, testable function
+//! before any environment, filesystem, runtime, or editor access.
 
 use std::ffi::OsString;
 use std::path::PathBuf;
@@ -24,6 +24,11 @@ pub enum Mode {
     Help,
     /// Print the version and exit.
     Version,
+    /// Print static-checker subcommand help and exit.
+    CheckHelp,
+    /// Analyze one root source and its canonical import closure without
+    /// executing it.
+    Check { source: PathBuf },
     /// Print formatter subcommand help and exit.
     FormatHelp,
     /// Format explicit source paths without executing them.
@@ -79,6 +84,12 @@ pub enum CliError {
     MissingFormatPath,
     /// The formatter received the unsupported stdin sentinel.
     StdinFormatPath,
+    /// The checker did not receive its one required root source.
+    MissingCheckSource,
+    /// The checker received more than one root source.
+    UnexpectedCheckSource(String),
+    /// The checker received the unsupported stdin sentinel.
+    StdinCheckSource,
 }
 
 impl CliError {
@@ -106,6 +117,11 @@ impl CliError {
             Self::MissingFormatPath => "format requires at least one path".to_owned(),
             Self::StdinFormatPath => {
                 "'-' is not supported as a formatter path; name a file".to_owned()
+            }
+            Self::MissingCheckSource => "check requires exactly one source path".to_owned(),
+            Self::UnexpectedCheckSource(_) => "check accepts exactly one source path".to_owned(),
+            Self::StdinCheckSource => {
+                "'-' is not supported as a checker source; name a file".to_owned()
             }
         }
     }
@@ -222,6 +238,32 @@ where
                 }
                 return parse_format_args(arguments);
             }
+            Some("check") => {
+                if help {
+                    return Ok(Invocation {
+                        mode: Mode::Help,
+                        no_config,
+                        no_history,
+                    });
+                }
+                if version {
+                    return Ok(Invocation {
+                        mode: Mode::Version,
+                        no_config,
+                        no_history,
+                    });
+                }
+                if no_config {
+                    return Err(CliError::UnknownOption("--no-config".to_owned()));
+                }
+                if no_history {
+                    return Err(CliError::UnknownOption("--no-history".to_owned()));
+                }
+                if async_chain.is_some() || async_pipefail || async_capture_limit.is_some() {
+                    return Err(CliError::UnexpectedArgument("check".to_owned()));
+                }
+                return parse_check_args(arguments);
+            }
             Some(text) if text.starts_with('-') && text != "-" => {
                 return Err(CliError::UnknownOption(text.to_owned()));
             }
@@ -260,6 +302,71 @@ where
         mode,
         no_config,
         no_history,
+    })
+}
+
+fn parse_check_args<I>(arguments: I) -> Result<Invocation, CliError>
+where
+    I: IntoIterator<Item = OsString>,
+{
+    let mut help = false;
+    let mut source = None;
+    let mut options_ended = false;
+
+    for argument in arguments {
+        if options_ended {
+            if argument == "-" {
+                return Err(CliError::StdinCheckSource);
+            }
+            if source.replace(PathBuf::from(&argument)).is_some() {
+                return Err(CliError::UnexpectedCheckSource(
+                    argument.to_string_lossy().into_owned(),
+                ));
+            }
+            continue;
+        }
+
+        match argument.to_str() {
+            Some("--help") => {
+                if help {
+                    return Err(CliError::DuplicateOption("--help"));
+                }
+                help = true;
+            }
+            Some("--") => options_ended = true,
+            Some("-") => return Err(CliError::StdinCheckSource),
+            Some(text) if text.starts_with('-') => {
+                return Err(CliError::UnknownOption(text.to_owned()));
+            }
+            _ => {
+                if source.replace(PathBuf::from(&argument)).is_some() {
+                    return Err(CliError::UnexpectedCheckSource(
+                        argument.to_string_lossy().into_owned(),
+                    ));
+                }
+            }
+        }
+    }
+
+    if help {
+        if let Some(source) = source {
+            return Err(CliError::UnexpectedCheckSource(
+                source.to_string_lossy().into_owned(),
+            ));
+        }
+        return Ok(Invocation {
+            mode: Mode::CheckHelp,
+            no_config: false,
+            no_history: false,
+        });
+    }
+
+    Ok(Invocation {
+        mode: Mode::Check {
+            source: source.ok_or(CliError::MissingCheckSource)?,
+        },
+        no_config: false,
+        no_history: false,
     })
 }
 
@@ -619,6 +726,132 @@ mod tests {
             Mode::Format {
                 operation: FormatOperation::Check,
                 paths: vec![PathBuf::from(path)],
+            }
+        );
+    }
+
+    #[test]
+    fn checker_accepts_exactly_one_root_with_an_optional_separator() {
+        assert_eq!(
+            parse(&["check", "main.fsh"]).unwrap().mode,
+            Mode::Check {
+                source: PathBuf::from("main.fsh"),
+            }
+        );
+        assert_eq!(
+            parse(&["check", "--", "--source.fsh"]).unwrap().mode,
+            Mode::Check {
+                source: PathBuf::from("--source.fsh"),
+            }
+        );
+    }
+
+    #[test]
+    fn checker_help_is_a_distinct_launcher_mode() {
+        assert_eq!(parse(&["check", "--help"]).unwrap().mode, Mode::CheckHelp);
+        assert_eq!(
+            parse(&["--help", "check", "main.fsh"]).unwrap().mode,
+            Mode::Help,
+            "top-level help keeps precedence before the checker operand"
+        );
+        assert_eq!(
+            parse(&["--version", "check", "main.fsh"]).unwrap().mode,
+            Mode::Version,
+            "top-level version keeps precedence before the checker operand"
+        );
+    }
+
+    #[test]
+    fn checker_rejects_missing_extra_and_stdin_roots() {
+        for arguments in [
+            &["check"][..],
+            &["check", "one.fsh", "two.fsh"],
+            &["check", "-"],
+            &["check", "--", "-"],
+        ] {
+            assert!(
+                parse(arguments).is_err(),
+                "checker root misuse must fail: {arguments:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn checker_rejects_unknown_formatter_session_and_help_combinations() {
+        for arguments in [
+            &["check", "--unknown", "one.fsh"][..],
+            &["check", "--check", "one.fsh"],
+            &["check", "--write", "one.fsh"],
+            &["check", "--no-config", "one.fsh"],
+            &["check", "--no-history", "one.fsh"],
+            &["--no-config", "check", "one.fsh"],
+            &["--no-history", "check", "one.fsh"],
+            &["check", "--help", "one.fsh"],
+            &["check", "--help", "--help"],
+        ] {
+            assert!(
+                parse(arguments).is_err(),
+                "inapplicable checker option must fail: {arguments:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn checker_cannot_combine_with_the_reserved_chain_mode() {
+        assert!(
+            parse(&[
+                "--async-chain",
+                "^tool",
+                "--async-capture-limit",
+                "4096",
+                "check",
+                "one.fsh",
+            ])
+            .is_err()
+        );
+        assert!(
+            parse(&[
+                "check",
+                "one.fsh",
+                "--async-chain",
+                "^tool",
+                "--async-capture-limit",
+                "4096",
+            ])
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn checker_spelling_remains_reachable_as_a_script_path() {
+        assert_eq!(
+            parse(&["./check", "argument"]).unwrap().mode,
+            Mode::Script {
+                path: PathBuf::from("./check"),
+                arguments: vec!["argument".to_owned()],
+            }
+        );
+        assert_eq!(
+            parse(&["--", "check", "argument"]).unwrap().mode,
+            Mode::Script {
+                path: PathBuf::from("check"),
+                arguments: vec!["argument".to_owned()],
+            }
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn checker_root_preserves_native_non_utf8_spelling() {
+        use std::os::unix::ffi::OsStringExt;
+
+        let path = OsString::from_vec(b"source-\xff.fsh".to_vec());
+        let invocation = parse_args([OsString::from("check"), path.clone()])
+            .expect("native checker root is valid");
+        assert_eq!(
+            invocation.mode,
+            Mode::Check {
+                source: PathBuf::from(path),
             }
         );
     }

@@ -2154,6 +2154,538 @@ fn canonical_aliases_share_one_loaded_and_parsed_source() {
 }
 
 #[test]
+fn analysis_report_collapses_canonical_aliases_and_exposes_a_complete_program() {
+    let paths = FakeCanonicalizer::default()
+        .resolves("/project/main.fsh", "/project/main.fsh")
+        .resolves("/project/lib/math.fsh", "/project/lib/math.fsh")
+        .resolves("/project/math-alias.fsh", "/project/lib/math.fsh");
+    let sources = FakeSourceLoader::default()
+        .contains(
+            "/project/main.fsh",
+            "import './lib/math.fsh'\nimport './math-alias.fsh'\n",
+        )
+        .contains("/project/lib/math.fsh", "let answer = 42\n");
+
+    let report = ModuleProgramLoader::new(&paths, &sources).analyze(Path::new("/project/main.fsh"));
+
+    assert!(report.issues().is_empty());
+    assert!(report.program().is_some());
+    assert_eq!(report.sources().len(), 2);
+    assert_eq!(sources.load_count("/project/lib/math.fsh"), 1);
+    assert_eq!(
+        report
+            .sources()
+            .iter()
+            .map(|entry| (entry.module().path(), entry.source().id()))
+            .collect::<Vec<_>>(),
+        [
+            (Path::new("/project/main.fsh"), SourceId::new(0)),
+            (Path::new("/project/lib/math.fsh"), SourceId::new(1)),
+        ]
+    );
+}
+
+#[test]
+fn analysis_report_accumulates_discovery_failures_in_depth_first_source_order() {
+    let paths = FakeCanonicalizer::default()
+        .resolves("/project/main.fsh", "/project/main.fsh")
+        .rejects("/project/unresolved.fsh", "missing mapping")
+        .resolves("/project/unreadable.fsh", "/project/unreadable.fsh")
+        .resolves("/project/bytes.fsh", "/project/bytes.fsh")
+        .resolves("/project/syntax.fsh", "/project/syntax.fsh")
+        .resolves("/project/a.fsh", "/project/a.fsh")
+        .resolves("/project/b.fsh", "/project/b.fsh")
+        .resolves("/project/valid.fsh", "/project/valid.fsh");
+    let sources = FakeSourceLoader::default()
+        .contains(
+            "/project/main.fsh",
+            concat!(
+                "import './unresolved.fsh'\n",
+                "import './unreadable.fsh'\n",
+                "import './bytes.fsh'\n",
+                "import './syntax.fsh'\n",
+                "import './a.fsh'\n",
+                "import './valid.fsh'\n",
+            ),
+        )
+        .rejects("/project/unreadable.fsh", "read refused")
+        .contains_bytes("/project/bytes.fsh", vec![b'l', b'e', b't', b' ', 0xff])
+        .contains(
+            "/project/syntax.fsh",
+            "let broken = ;\nimport './not-scanned.fsh'\n",
+        )
+        .contains("/project/a.fsh", "import './b.fsh'\n")
+        .contains("/project/b.fsh", "import './a.fsh'\n")
+        .contains("/project/valid.fsh", "let value = 1\n");
+
+    let report = ModuleProgramLoader::new(&paths, &sources).analyze(Path::new("/project/main.fsh"));
+
+    assert!(
+        report.program().is_none(),
+        "a partial program must not escape"
+    );
+    assert_eq!(
+        report
+            .issues()
+            .iter()
+            .map(|issue| {
+                issue.error().diagnostics().first().map_or_else(
+                    || "unspanned".to_owned(),
+                    |diagnostic| diagnostic.code().to_owned(),
+                )
+            })
+            .collect::<Vec<_>>(),
+        ["MOD001", "MOD003", "MOD004", "FS1000", "MOD002"]
+    );
+    assert_eq!(
+        report
+            .sources()
+            .iter()
+            .map(|entry| (
+                entry.module().path(),
+                entry.source().id(),
+                entry.script().is_some()
+            ))
+            .collect::<Vec<_>>(),
+        [
+            (Path::new("/project/main.fsh"), SourceId::new(0), true),
+            (Path::new("/project/syntax.fsh"), SourceId::new(1), false),
+            (Path::new("/project/a.fsh"), SourceId::new(2), true),
+            (Path::new("/project/b.fsh"), SourceId::new(3), true),
+            (Path::new("/project/valid.fsh"), SourceId::new(4), true),
+        ]
+    );
+    assert_eq!(sources.load_count("/project/valid.fsh"), 1);
+    assert_eq!(sources.load_count("/project/not-scanned.fsh"), 0);
+}
+
+#[test]
+fn analysis_report_accumulates_name_failures_in_phase_and_source_order() {
+    let paths = FakeCanonicalizer::default()
+        .resolves("/project/main.fsh", "/project/main.fsh")
+        .resolves("/project/alpha.fsh", "/project/alpha.fsh")
+        .resolves("/project/beta.fsh", "/project/beta.fsh");
+    let sources = FakeSourceLoader::default()
+        .contains(
+            "/project/main.fsh",
+            concat!(
+                "import { private } from './alpha.fsh'\n",
+                "import { collision } from './beta.fsh'\n",
+                "let duplicate_export = 1\n",
+                "let collision = 1\n",
+                "let repeated = 1\n",
+                "let repeated = 2\n",
+                "let repeated = 3\n",
+                "export { missing, duplicate_export, duplicate_export }\n",
+                "let root_read = $unknown_root\n",
+            ),
+        )
+        .contains(
+            "/project/alpha.fsh",
+            concat!(
+                "let private = 1\n",
+                "export { ghost }\n",
+                "let alpha_read = $unknown_alpha\n",
+            ),
+        )
+        .contains(
+            "/project/beta.fsh",
+            "let collision = 2\nexport { collision }\n",
+        );
+
+    let report = ModuleProgramLoader::new(&paths, &sources).analyze(Path::new("/project/main.fsh"));
+
+    assert!(report.program().is_none());
+    let diagnostics = report
+        .issues()
+        .iter()
+        .map(|issue| issue.error().diagnostics().remove(0))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.code())
+            .collect::<Vec<_>>(),
+        [
+            "MOD005", "MOD006", "MOD005", "MOD007", "MOD008", "MOD010", "MOD010", "MOD009",
+            "MOD009",
+        ]
+    );
+    assert_eq!(
+        diagnostics
+            .iter()
+            .map(diagnostics_source_ids)
+            .collect::<Vec<_>>(),
+        [
+            vec![SourceId::new(0)],
+            vec![SourceId::new(0), SourceId::new(0)],
+            vec![SourceId::new(1)],
+            vec![SourceId::new(0), SourceId::new(1)],
+            vec![SourceId::new(0), SourceId::new(0)],
+            vec![SourceId::new(0), SourceId::new(0)],
+            vec![SourceId::new(0), SourceId::new(0)],
+            vec![SourceId::new(0)],
+            vec![SourceId::new(1)],
+        ]
+    );
+}
+
+#[test]
+fn poisoned_name_owners_suppress_only_their_dependent_cascades() {
+    let paths = FakeCanonicalizer::default()
+        .resolves("/project/main.fsh", "/project/main.fsh")
+        .resolves("/project/lib.fsh", "/project/lib.fsh");
+    let invalid_export = FakeSourceLoader::default()
+        .contains(
+            "/project/main.fsh",
+            concat!(
+                "import { missing } from './lib.fsh'\n",
+                "let dependent = $missing\n",
+                "let independent = $unknown\n",
+            ),
+        )
+        .contains("/project/lib.fsh", "export { missing }\n");
+
+    let report =
+        ModuleProgramLoader::new(&paths, &invalid_export).analyze(Path::new("/project/main.fsh"));
+    assert_eq!(analysis_codes(&report), ["MOD005", "MOD009"]);
+
+    let unavailable_import = FakeSourceLoader::default()
+        .contains(
+            "/project/main.fsh",
+            concat!(
+                "import { private } from './lib.fsh'\n",
+                "let dependent = $private\n",
+                "let independent = $unknown\n",
+            ),
+        )
+        .contains("/project/lib.fsh", "let private = 1\n");
+    let report = ModuleProgramLoader::new(&paths, &unavailable_import)
+        .analyze(Path::new("/project/main.fsh"));
+
+    assert_eq!(analysis_codes(&report), ["MOD007", "MOD009"]);
+}
+
+#[test]
+fn graph_issues_suppress_the_name_phase() {
+    let paths = FakeCanonicalizer::default()
+        .resolves("/project/main.fsh", "/project/main.fsh")
+        .rejects("/project/missing.fsh", "missing mapping");
+    let sources = FakeSourceLoader::default().contains(
+        "/project/main.fsh",
+        concat!(
+            "import './missing.fsh'\n",
+            "export { missing }\n",
+            "let value = $unknown\n",
+        ),
+    );
+
+    let report = ModuleProgramLoader::new(&paths, &sources).analyze(Path::new("/project/main.fsh"));
+
+    assert_eq!(analysis_codes(&report), ["MOD001"]);
+}
+
+#[test]
+fn name_issues_suppress_the_signature_phase() {
+    let paths = FakeCanonicalizer::default().resolves("/project/main.fsh", "/project/main.fsh");
+    let sources = FakeSourceLoader::default().contains(
+        "/project/main.fsh",
+        "export { missing }\nlet value: Mystery = null\n",
+    );
+
+    let report = ModuleProgramLoader::new(&paths, &sources).analyze(Path::new("/project/main.fsh"));
+
+    assert_eq!(analysis_codes(&report), ["MOD005"]);
+}
+
+#[test]
+fn analysis_report_accumulates_signature_failures_in_source_and_construct_order() {
+    let paths = FakeCanonicalizer::default()
+        .resolves("/project/main.fsh", "/project/main.fsh")
+        .resolves("/project/lib.fsh", "/project/lib.fsh");
+    let sources = FakeSourceLoader::default()
+        .contains(
+            "/project/main.fsh",
+            concat!(
+                "import { imported } from './lib.fsh'\n",
+                "let unknown: Mystery = null\n",
+                "let invalid_arity: List = []\n",
+                "def arity(value: Int) -> Int { $value }\n",
+                "arity()\n",
+                "def needs_text(value: String) -> String { $value }\n",
+                "needs_text(42)\n",
+                "def wrong_result() -> String { 42 }\n",
+                "imported(42)\n",
+            ),
+        )
+        .contains(
+            "/project/lib.fsh",
+            concat!(
+                "def imported(value: String) -> String { $value }\n",
+                "export { imported }\n",
+                "let library_unknown: Missing = null\n",
+            ),
+        );
+
+    let report = ModuleProgramLoader::new(&paths, &sources).analyze(Path::new("/project/main.fsh"));
+
+    assert!(report.program().is_none());
+    let diagnostics = analysis_diagnostics(&report);
+    assert_eq!(
+        diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.code())
+            .collect::<Vec<_>>(),
+        [
+            "SIG001", "SIG002", "SIG003", "SIG004", "SIG005", "SIG004", "SIG001",
+        ]
+    );
+    assert_eq!(
+        diagnostics
+            .iter()
+            .map(diagnostics_source_ids)
+            .collect::<Vec<_>>(),
+        [
+            vec![SourceId::new(0)],
+            vec![SourceId::new(0)],
+            vec![SourceId::new(0), SourceId::new(0)],
+            vec![SourceId::new(0), SourceId::new(0)],
+            vec![SourceId::new(0), SourceId::new(0)],
+            vec![SourceId::new(0), SourceId::new(1)],
+            vec![SourceId::new(1)],
+        ]
+    );
+}
+
+#[test]
+fn poisoned_signature_owners_suppress_only_dependent_mismatches() {
+    let paths = FakeCanonicalizer::default().resolves("/project/main.fsh", "/project/main.fsh");
+    let sources = FakeSourceLoader::default().contains(
+        "/project/main.fsh",
+        concat!(
+            "def invalid(value: Mystery) -> String { $value }\n",
+            "invalid(42)\n",
+            "let poisoned: Missing = 42\n",
+            "def needs_text(value: String) -> String { $value }\n",
+            "needs_text($poisoned)\n",
+            "needs_text(42)\n",
+            "def number(value: Int) -> Int { $value }\n",
+            "needs_text(number())\n",
+        ),
+    );
+
+    let report = ModuleProgramLoader::new(&paths, &sources).analyze(Path::new("/project/main.fsh"));
+
+    assert_eq!(
+        analysis_codes(&report),
+        ["SIG001", "SIG001", "SIG004", "SIG003"]
+    );
+}
+
+#[test]
+fn legacy_loaders_select_and_render_the_first_accumulated_signature_issue() {
+    let paths = FakeCanonicalizer::default().resolves("/project/main.fsh", "/project/main.fsh");
+    let sources = FakeSourceLoader::default().contains(
+        "/project/main.fsh",
+        "let first: Mystery = null\nlet second: List = []\n",
+    );
+    let loader = ModuleProgramLoader::new(&paths, &sources);
+
+    let report = loader.analyze(Path::new("/project/main.fsh"));
+    assert_eq!(analysis_codes(&report), ["SIG001", "SIG002"]);
+
+    let error = loader
+        .load(Path::new("/project/main.fsh"))
+        .expect_err("legacy execution loading selects the first signature issue");
+    assert!(error.to_string().contains("`Mystery`"));
+
+    let error = loader
+        .load_for_frontend(Path::new("/project/main.fsh"))
+        .expect_err("legacy frontend loading renders only the first signature issue");
+    assert!(error.render().contains("`Mystery`"));
+    assert!(!error.render().contains("type `List`"));
+}
+
+#[test]
+fn legacy_loaders_select_and_render_the_first_accumulated_name_issue() {
+    let paths = FakeCanonicalizer::default().resolves("/project/main.fsh", "/project/main.fsh");
+    let sources =
+        FakeSourceLoader::default().contains("/project/main.fsh", "export { first, second }\n");
+    let loader = ModuleProgramLoader::new(&paths, &sources);
+
+    let report = loader.analyze(Path::new("/project/main.fsh"));
+    assert_eq!(analysis_codes(&report), ["MOD005", "MOD005"]);
+
+    let error = loader
+        .load(Path::new("/project/main.fsh"))
+        .expect_err("legacy execution loading selects the first issue");
+    assert!(error.to_string().contains("`first`"));
+
+    let error = loader
+        .load_for_frontend(Path::new("/project/main.fsh"))
+        .expect_err("legacy frontend loading renders only the first issue");
+    assert!(error.render().contains("`first`"));
+    assert!(!error.render().contains("`second`"));
+}
+
+#[test]
+fn static_pipeline_analysis_reports_all_four_fault_families_in_source_order() {
+    let paths = FakeCanonicalizer::default().resolves("/project/main.fsh", "/project/main.fsh");
+    let sources = FakeSourceLoader::default().contains(
+        "/project/main.fsh",
+        concat!("each\n", "ls |& each\n", "ls | ^cat\n", "^cat | (1 + 2)\n",),
+    );
+
+    let report = ModuleProgramLoader::new(&paths, &sources)
+        .analyze_with_commands(Path::new("/project/main.fsh"), &standard_registry());
+
+    assert_eq!(
+        analysis_codes(&report),
+        ["PIP001", "PIP002", "PIP003", "PIP004"]
+    );
+    assert!(report.program().is_none());
+    let diagnostics = analysis_diagnostics(&report);
+    assert_eq!(diagnostics[0].labels()[0].span().start(), 0);
+    assert_eq!(diagnostics[1].labels()[0].span().start(), 8);
+    assert_eq!(diagnostics[2].labels()[0].span().start(), 19);
+    assert_eq!(diagnostics[3].labels()[0].span().start(), 33);
+    assert!(
+        diagnostics[2]
+            .notes()
+            .iter()
+            .any(|note| note.contains("encode") && note.contains("to")),
+        "structured-to-byte faults retain explicit repair guidance"
+    );
+}
+
+#[test]
+fn forced_assumed_and_dynamic_heads_need_no_probe_or_expansion() {
+    let paths = FakeCanonicalizer::default().resolves("/project/main.fsh", "/project/main.fsh");
+    let sources = FakeSourceLoader::default().contains(
+        "/project/main.fsh",
+        concat!(
+            "^each\n",
+            "not_installed\n",
+            "let selected = 'each'\n",
+            "cmd-${selected}\n",
+            "ls | ^cat\n",
+            "^cat | each\n",
+            "ls | not_installed\n",
+            "ls | cmd-${selected}\n",
+        ),
+    );
+
+    let report = ModuleProgramLoader::new(&paths, &sources)
+        .analyze_with_commands(Path::new("/project/main.fsh"), &standard_registry());
+
+    assert_eq!(analysis_codes(&report), ["PIP003", "PIP003", "PIP003"]);
+    let diagnostics = analysis_diagnostics(&report);
+    assert!(diagnostics[0].notes()[0].contains("encode"));
+    assert!(diagnostics[1].notes()[0].contains("decode"));
+    assert!(diagnostics[2].notes()[0].contains("encode"));
+}
+
+#[test]
+fn pipeline_walk_visits_functions_closures_and_command_substitutions() {
+    let paths = FakeCanonicalizer::default().resolves("/project/main.fsh", "/project/main.fsh");
+    let sources = FakeSourceLoader::default().contains(
+        "/project/main.fsh",
+        concat!(
+            "def nested() { each }\n",
+            "let transform = {|| ls | ^cat}\n",
+            "echo \"$(ls |& each)\"\n",
+        ),
+    );
+
+    let report = ModuleProgramLoader::new(&paths, &sources)
+        .analyze_with_commands(Path::new("/project/main.fsh"), &standard_registry());
+
+    assert_eq!(analysis_codes(&report), ["PIP001", "PIP003", "PIP002"]);
+}
+
+#[test]
+fn an_unknown_dynamic_head_suppresses_only_its_dependent_edges() {
+    let paths = FakeCanonicalizer::default().resolves("/project/main.fsh", "/project/main.fsh");
+    let sources = FakeSourceLoader::default().contains(
+        "/project/main.fsh",
+        concat!(
+            "let selected = 'ls'\n",
+            "cmd-${selected} | each\n",
+            "ls | ^cat\n",
+        ),
+    );
+
+    let report = ModuleProgramLoader::new(&paths, &sources)
+        .analyze_with_commands(Path::new("/project/main.fsh"), &standard_registry());
+
+    assert_eq!(analysis_codes(&report), ["PIP003"]);
+}
+
+#[test]
+fn pipeline_issues_remain_available_beside_an_earlier_graph_phase() {
+    let paths = FakeCanonicalizer::default()
+        .resolves("/project/main.fsh", "/project/main.fsh")
+        .rejects("/project/missing.fsh", "missing mapping");
+    let sources =
+        FakeSourceLoader::default().contains("/project/main.fsh", "import './missing.fsh'\neach\n");
+
+    let report = ModuleProgramLoader::new(&paths, &sources)
+        .analyze_with_commands(Path::new("/project/main.fsh"), &standard_registry());
+
+    assert_eq!(analysis_codes(&report), ["MOD001", "PIP001"]);
+    assert!(report.program().is_none());
+}
+
+#[test]
+fn pipeline_issues_follow_first_visit_source_order_across_imports() {
+    let paths = FakeCanonicalizer::default()
+        .resolves("/project/main.fsh", "/project/main.fsh")
+        .resolves("/project/lib.fsh", "/project/lib.fsh");
+    let sources = FakeSourceLoader::default()
+        .contains("/project/main.fsh", "import './lib.fsh'\neach\n")
+        .contains("/project/lib.fsh", "ls | ^cat\n");
+
+    let report = ModuleProgramLoader::new(&paths, &sources)
+        .analyze_with_commands(Path::new("/project/main.fsh"), &standard_registry());
+    let diagnostics = analysis_diagnostics(&report);
+
+    assert_eq!(analysis_codes(&report), ["PIP001", "PIP003"]);
+    assert_eq!(
+        diagnostics
+            .iter()
+            .map(diagnostics_source_ids)
+            .collect::<Vec<_>>(),
+        [vec![SourceId::new(0)], vec![SourceId::new(1)]]
+    );
+}
+
+fn analysis_codes(report: &flash_runtime::module::ModuleAnalysisReport) -> Vec<String> {
+    report
+        .issues()
+        .iter()
+        .map(|issue| issue.error().diagnostics()[0].code().to_owned())
+        .collect()
+}
+
+fn analysis_diagnostics(
+    report: &flash_runtime::module::ModuleAnalysisReport,
+) -> Vec<flash_syntax::Diagnostic> {
+    report
+        .issues()
+        .iter()
+        .map(|issue| issue.error().diagnostics().remove(0))
+        .collect()
+}
+
+fn diagnostics_source_ids(diagnostic: &flash_syntax::Diagnostic) -> Vec<SourceId> {
+    diagnostic
+        .labels()
+        .iter()
+        .map(|label| label.span().source_id())
+        .collect()
+}
+
+#[test]
 fn an_imported_read_failure_is_anchored_to_the_static_path() {
     let paths = FakeCanonicalizer::default()
         .resolves("/project/main.fsh", "/project/main.fsh")

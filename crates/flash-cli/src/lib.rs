@@ -2,6 +2,7 @@
 
 //! Interactive client boundaries for Flash.
 
+pub mod check;
 pub mod cli;
 pub mod completion;
 #[cfg(any(target_os = "macos", target_os = "linux"))]

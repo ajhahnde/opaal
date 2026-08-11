@@ -151,11 +151,59 @@ spreads, and closures are rejected rather than evaluated as discovery logic.
 
 ### Static checking
 
-The `fsh check` mode parses supplied source and performs the available module, name, signature, and pipeline-compatibility analysis without executing script statements. It must not start external processes, apply redirections, change the working directory, mutate the caller's environment, or run imported module initialization as a substitute for analysis.
+Check one root program with:
 
-A successful check means that the supported non-executing analyses completed without diagnostics classified as errors. It does not prove that external programs exist, that a target platform provides every requested capability, or that runtime data will satisfy conditions that cannot be established statically.
+```bash
+fsh check program.fsh
+fsh check -- --maintenance.fsh
+fsh check --help
+```
 
-Checker diagnostics and process status are intended for local development, editor integration, and CI use.
+The checker accepts exactly one native source path and no script arguments.
+Exact first-operand `check` selects this launcher mode; `fsh ./check` and
+`fsh -- check` still treat `check` as a script path. Stdin, multiple explicit
+roots, globs, directory walks, implicit extensions, configuration, and ambient
+module search are not supported.
+
+The root and every recursively reachable static import are canonicalized,
+loaded, and parsed. Canonical aliases share one source identity, so a symlink to
+a regular source is accepted and read once. Roots and imports must resolve to
+finite regular files containing UTF-8 source; directories and special files
+are rejected.
+
+Checking reports syntax and module-graph failures, name and export/import
+failures, named-function annotation and known-call signature failures, and
+statically knowable pipeline-carrier failures. Diagnostics use retained source
+spans and deterministic phase order: discovery and graph issues, then name
+issues, then signature issues, then `PIP001`-`PIP004` carrier issues. Within a
+phase, sources follow canonical first-visit depth-first order and constructs
+follow source order. A broken discovery graph suppresses name and signature
+analysis; name failures suppress signature analysis. Pipeline analysis still
+visits every successfully parsed source because it does not depend on those
+phases.
+
+Bare command names absent from the built-in registry and explicitly forced
+external commands are classified as byte-stream stages without checking
+`PATH`. An exact built-in uses its shared runtime carrier contract. A dynamic
+command head remains unknown, so the checker suppresses only carrier answers
+that depend on guessing its runtime command. Pipeline diagnostics therefore
+describe language-level carrier incompatibility, not executable availability.
+
+A successful check is silent and exits with status 0. Any analysis or source
+error is written only to stderr and exits with status 1. Invocation misuse
+writes one `fsh:` message to stderr and exits with status 2; checker help writes
+to stdout and exits with status 0.
+
+`fsh check` does not load startup configuration or history, initialize any
+module, evaluate declarations or substitutions, expand words, probe an
+executable, apply redirections, change the working directory, mutate the
+environment, access a terminal, or start a process. It does not format source,
+predict runtime output or status, validate external-command availability,
+perform general option or built-in arity checking, infer all value types, check
+assignment mutability, discover a multi-root project, or start a language
+server. Success means only that the supported non-executing analyses completed
+without error diagnostics; target capabilities and runtime-only data remain
+separate concerns.
 
 ### Canonical formatting
 

@@ -397,7 +397,34 @@ significant-token, or documentation-comment tests.
 
 ### Static checker contract
 
-`fsh check` performs non-executing analysis. Checker development must cover:
+The shipped launcher surface is:
+
+```text
+fsh check [--] SOURCE
+fsh check --help
+```
+
+`flash-runtime` owns a report-oriented analysis path over the canonical root
+and recursively reachable imports. Discovery retains every successfully decoded
+source and accumulates independent branch failures in first-visit depth-first
+order. A complete graph enables accumulating name analysis; clean names enable
+accumulating signature analysis. Poisoned invalid owners suppress dependent
+cascades, and no partial `ModuleProgram` escapes after any error. Static
+pipeline analysis walks every retained parsed source even when an earlier phase
+fails.
+
+Runtime preflight and static analysis share source-independent carrier
+contracts and fault classification. The checker maps those faults to
+`PIP001`-`PIP004` without word expansion: exact built-ins use the standard
+registry, forced and assumed externals use byte-stream contracts, and dynamic
+heads remain unknown. It must not probe `PATH` or invent generic command
+argument and option schemas that `CommandSignature` does not own.
+
+The `flash-cli` checker frontend receives only injected canonicalization and
+finite source-loading capabilities. Its host adapter resolves canonical aliases
+and reads regular files without constructing a runtime session, environment,
+executable probe, platform, terminal, configuration loader, or history store.
+Checker development must cover:
 
 - parsing and incomplete-input handling;
 - canonical module resolution;
@@ -408,7 +435,19 @@ significant-token, or documentation-comment tests.
 - stable source spans and deterministic diagnostic ordering;
 - success and failure behavior suitable for CI.
 
-Checker tests must prove that analysis does not start external processes, apply redirections, mutate the caller's environment, change the working directory, or require interactive terminal state.
+The focused frontend and executable suites are:
+
+```bash
+cargo test -p flash-cli cli::tests --lib
+cargo test -p flash-cli --test check_frontend
+cargo test -p flash-cli --test checker_e2e
+```
+
+Checker tests must prove silent status-0 success, stderr-only status-1 analysis
+failure, status-2 invocation misuse, deterministic multi-source rendering, and
+that analysis does not initialize modules, start external processes, apply
+redirections, mutate the caller's environment, change the working directory,
+or require interactive terminal state.
 
 ### Help and documentation metadata
 

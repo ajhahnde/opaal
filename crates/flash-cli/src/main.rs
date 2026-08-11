@@ -15,6 +15,7 @@ use flash_cli::RawLineEditor;
 use flash_cli::ReedlineEditor;
 #[cfg(target_os = "redox")]
 use flash_cli::TerminalEditor;
+use flash_cli::check::{CheckRequest, HostCheckFilesystem, check_source};
 use flash_cli::cli::{Mode, parse_args};
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 use flash_cli::config::{
@@ -49,6 +50,8 @@ const HELP: &str = "Flash command shell
 Usage:
   fsh [OPTIONS]
   fsh [OPTIONS] SCRIPT [ARGUMENT]...
+  fsh check [--] SOURCE
+  fsh check --help
   fsh format --check [--] PATH...
   fsh format --write [--] PATH...
   fsh format --help
@@ -56,6 +59,7 @@ Usage:
 Arguments:
   SCRIPT        Flash source file to execute
   [ARGUMENT]... Ordered UTF-8 strings exposed to the root module as $args
+  SOURCE        Flash source root to analyze without execution
 
 Options:
       --             Stop parsing options; the next operand is SCRIPT
@@ -65,6 +69,26 @@ Options:
   -V, --version      Print version
 
 Every operand after SCRIPT belongs to the script, including option-like values.
+";
+
+const CHECK_HELP: &str = "Analyze Flash source without executing it
+
+Usage:
+  fsh check [--] SOURCE
+  fsh check --help
+
+Arguments:
+  SOURCE     Root source whose canonical import closure is analyzed
+
+Options:
+      --         Stop parsing checker options; the next operand is SOURCE
+      --help     Print checker help
+
+SOURCE and its static imports must resolve to regular files. Canonical symlink
+aliases are accepted. Checking performs syntax, module, name, signature, and
+pipeline-carrier analysis without configuration, history, expansion, executable
+probing, initialization, redirection, or execution. Successful checking is silent;
+diagnostics are written to stderr.
 ";
 
 const FORMAT_HELP: &str = "Check or rewrite Flash source formatting
@@ -104,6 +128,11 @@ fn main() -> ExitCode {
             println!("fsh {}", flash_runtime::version());
             ExitCode::SUCCESS
         }
+        Mode::CheckHelp => {
+            print!("{CHECK_HELP}");
+            ExitCode::SUCCESS
+        }
+        Mode::Check { source } => run_checker(source),
         Mode::FormatHelp => {
             print!("{FORMAT_HELP}");
             ExitCode::SUCCESS
@@ -116,6 +145,19 @@ fn main() -> ExitCode {
             capture_limit,
         } => run_async_chain(text, pipefail, capture_limit),
         Mode::Interactive => run_interactive(invocation.no_config, invocation.no_history),
+    }
+}
+
+fn run_checker(source: PathBuf) -> ExitCode {
+    let request = CheckRequest::new(source);
+    let run = check_source(&request, &HostCheckFilesystem);
+    for issue in run.rendered_issues() {
+        eprint!("{issue}");
+    }
+    if run.is_success() {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
     }
 }
 

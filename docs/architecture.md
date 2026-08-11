@@ -189,7 +189,18 @@ Multi-file programs are represented as a graph of canonically identified source 
 
 The shared syntax tree represents a static dependency as a top-level `import '<path>'` declaration. The path is a nonempty exact literal rather than an expression, so module discovery never depends on evaluation, interpolation, environment state, or globbing.
 
-Canonicalization and source-byte loading are separate injected capabilities. The recursive program loader assigns stable source identities in first-visit depth-first order, decodes and parses each canonical module once, retains alias imports as distinct graph edges, and registers both canonical module and source identities for later diagnostics. It registers a module before traversing its imports, allowing the graph to reject a back edge without unbounded recursion. Program construction returns no partial graph or registry after a resolution, read, UTF-8, syntax, or cycle failure.
+Canonicalization and source-byte loading are separate injected capabilities. The
+recursive program analyzer assigns stable source identities in first-visit
+depth-first order, decodes and parses each canonical module once, retains alias
+imports as distinct graph edges, and registers both canonical module and source
+identities for later diagnostics. It registers a module before traversing its
+imports, allowing the graph to reject a back edge without unbounded recursion.
+Report-oriented discovery retains decoded sources and continues through
+independent sibling failures. Name analysis begins only with a complete graph,
+and signature analysis begins only with clean names; poisoned invalid owners
+suppress dependent cascades. A complete `ModuleProgram` is produced only when
+every error-classified phase succeeds, so execution receives no partial graph
+or registry.
 
 Loading is analysis, not execution. The module program contains the canonical graph, source files, parsed syntax, deterministic local/export/import/reference tables, and a resolved type registry. Explicit `export { name }` lists can expose top-level lexical declarations and functions; `import { name } from '<path>'` resolves only names explicitly exported by the canonical target. Every loaded source is then resolved in evaluator-matched source order, including sources reached only through load-only imports. Each reference retains its complete source span and local declaration target; an imported reference also retains the import identifier and the target declaration/export provenance. The type registry retains source-spanned annotations and named-function signatures, including normalized attached documentation, for exact-span lookup. Unknown, private, duplicate, colliding, or invalid type names fail analysis with source-anchored diagnostics, and there is no wildcard import path.
 
@@ -198,9 +209,17 @@ containing the ordered UTF-8 operands supplied after the script path. This
 synthetic parent scope permits ordinary root source-order shadowing without
 inventing a declaration span. Dependency modules do not receive the input.
 
-Non-interactive `fsh <script>` execution injects the host filesystem adapter at this boundary and reports grouped excerpts for diagnostics that span multiple registered sources. The runtime derives deterministic source-edge depth-first postorder from the analyzed named-import tables, initializes each canonical dependency once, and executes the root last. A source reached only through load-only imports remains dormant.
+Non-interactive `fsh <script>` execution injects the host filesystem adapter at
+this boundary and reports grouped excerpts for diagnostics that span multiple
+registered sources. The runtime derives deterministic source-edge depth-first
+postorder from the analyzed named-import tables, initializes each canonical
+dependency once, and executes the root last. A source reached only through
+load-only imports remains dormant. The legacy execution loader selects the
+first deterministic analysis error, while the checker frontend retains all
+independent issues allowed by the phase barriers; both consume the same
+successful program representation.
 
-Each activated module executes through the existing session driver with an isolated lexical root. Completed exports are cloned into importer roots as immutable snapshots; private bindings never become ambient names. Working directory, child-process environment, status, output, process activity, and background jobs remain shared across the whole program. Runtime binding cells and callables receive the resolved annotations owned by the program. Named callables also retain their signature-derived inspection metadata and defining source; imported callables therefore keep both correct help ownership and correct cross-file body diagnostics. Initializers, assignments, callable arguments, and named-function results use exact value-family checks. Checker and language-server protocol exposure remain later frontends over the shared program; assignment-mutability analysis also remains separate.
+Each activated module executes through the existing session driver with an isolated lexical root. Completed exports are cloned into importer roots as immutable snapshots; private bindings never become ambient names. Working directory, child-process environment, status, output, process activity, and background jobs remain shared across the whole program. Runtime binding cells and callables receive the resolved annotations owned by the program. Named callables also retain their signature-derived inspection metadata and defining source; imported callables therefore keep both correct help ownership and correct cross-file body diagnostics. Initializers, assignments, callable arguments, and named-function results use exact value-family checks. Assignment-mutability analysis remains separate.
 
 The analysis layer is responsible for:
 
@@ -223,7 +242,19 @@ The formatter, `fsh check`, help output, interactive editor features, and langua
 
 No tooling frontend may maintain a second Flash grammar or a competing name resolver. A language change is implemented in the shared language services first and then exposed through the relevant CLI, editor, and protocol adapters.
 
-Execution remains a separate stage. Formatting, checking, help lookup, completion, navigation, and language-server requests must not start external commands or mutate the active shell session merely to obtain analysis results.
+Static pipeline checking also shares its source-independent carrier contracts and
+fault classification with runtime preflight. It walks retained syntax without
+expanding words: exact built-ins use the standard command registry, forced and
+assumed externals are byte-stream stages, and dynamic heads remain unknown.
+Executable availability and `PATH` contents are not analysis inputs.
+
+`flash-cli` exposes checking through a read-only adapter whose entire capability
+surface is canonicalization and finite regular-file source loading. It does not
+construct a runtime session, environment, executable probe, platform, terminal,
+configuration loader, or history store. Execution remains a separate stage.
+Formatting, checking, help lookup, completion, navigation, and language-server
+requests must not start external commands or mutate the active shell session
+merely to obtain analysis results.
 
 ## Runtime and session state
 

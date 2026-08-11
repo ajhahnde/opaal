@@ -169,39 +169,7 @@ impl fmt::Display for RuntimeError {
 
 impl Error for RuntimeError {}
 
-/// The explicit boundary that would repair a structured-to-byte or
-/// byte-to-structured pipeline edge.
-///
-/// A structured producer meeting a byte consumer needs serialization; a byte
-/// producer meeting a structured consumer needs parsing. The concrete boundary
-/// commands (`encode`/`to`, `decode`/`from`) arrive with the structured-command
-/// slice; this hint names the direction so a mismatch points at its own fix.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum CarrierBridge {
-    /// Serialize a structured stream into bytes before a byte consumer.
-    StructuredToByte,
-    /// Parse bytes into structured values before a structured consumer.
-    ByteToStructured,
-}
-
-/// The actionable detail of an incompatible pipeline edge.
-///
-/// Boxed into its [`RuntimeErrorKind::CarrierMismatch`] variant so a large,
-/// rarely constructed diagnostic does not widen every runtime `Result`.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct CarrierMismatch {
-    /// The producing stage's head word, as the reader typed it.
-    pub producer_command: String,
-    /// The carrier the producing stage emits.
-    pub produced: crate::command::Carrier,
-    /// The consuming stage's head word, as the reader typed it.
-    pub consumer_command: String,
-    /// The carrier set the consuming stage accepts, in a deterministic order.
-    pub accepted: Vec<crate::command::Carrier>,
-    /// The explicit boundary that would repair a structured-to-byte crossing,
-    /// when one applies.
-    pub bridge: Option<CarrierBridge>,
-}
+pub use crate::carrier::{CarrierBridge, CarrierMismatch};
 
 /// A source-independent runtime failure kind.
 #[derive(Clone, Debug, PartialEq)]

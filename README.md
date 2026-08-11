@@ -53,7 +53,7 @@ Flash is maintained as an independent Rust workspace inside the FlashOS reposito
 | Path                           | Responsibility                                                                          |
 | ------------------------------ | --------------------------------------------------------------------------------------- |
 | `crates/flash-syntax/`         | Source representation, lexical analysis, parsing, syntax trees, and diagnostics         |
-| `crates/flash-runtime/`        | Runtime values, evaluation, built-ins, execution planning, sessions, and jobs           |
+| `crates/flash-runtime/`        | Runtime values, shared analysis, built-ins, execution planning, sessions, and jobs      |
 | `crates/flash-platform/`       | Platform capability contracts used by the runtime                                       |
 | `crates/flash-platform-posix/` | Process, filesystem, descriptor, signal, and terminal integration for supported targets |
 | `crates/flash-cli/`            | The `fsh` executable and its interactive and script entry points                        |
@@ -72,6 +72,9 @@ fsh
 
 # Run a Flash script.
 fsh program.fsh
+
+# Check one root and its canonical import closure without execution.
+fsh check program.fsh
 
 # Check or atomically rewrite canonical source formatting.
 fsh format --check program.fsh

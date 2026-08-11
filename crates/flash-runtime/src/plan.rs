@@ -24,10 +24,11 @@ use flash_syntax::{
     RedirectionKind, SourceFile, Span, StageKind, Word, WordPartKind,
 };
 
+use crate::carrier::{PipelineCarrierFault, StageCarrierContract, analyze_pipeline_carriers};
 use crate::command::{Carrier, CommandOutput, CommandRegistry};
 use crate::eval::{
-    CarrierBridge, CarrierMismatch, ExpandedWord, RuntimeError, RuntimeErrorKind,
-    evaluate_closure_argument_with_binding_types, expand_spread, expand_word,
+    ExpandedWord, RuntimeError, RuntimeErrorKind, evaluate_closure_argument_with_binding_types,
+    expand_spread, expand_word,
 };
 use crate::help::{HelpCatalog, HelpSnapshot};
 use crate::module::RuntimeBindingTypes;
@@ -1010,8 +1011,7 @@ pub fn preflight(plan: &ExecutionPlan) -> Result<(), RuntimeError> {
         check_nul(stage)?;
         check_descriptor_ownership(stage)?;
     }
-    check_head_input(plan)?;
-    check_edges(plan)?;
+    check_carriers(plan)?;
     Ok(())
 }
 
@@ -1024,45 +1024,6 @@ fn head_word(stage: &PlannedStage) -> String {
         .first()
         .map(|word| word.value().to_string_lossy().into_owned())
         .unwrap_or_default()
-}
-
-/// The explicit boundary that would repair a structured-to-byte crossing, if the
-/// mismatch is exactly that crossing.
-///
-/// A structured producer that a byte consumer accepts is bridged by serializing;
-/// a byte producer that a structured consumer accepts is bridged by parsing. Any
-/// other mismatch (for example an empty carrier) has no single-boundary repair.
-fn bridge_for(produced: Carrier, accepted: &[Carrier]) -> Option<CarrierBridge> {
-    let is_structured = |carrier: Carrier| matches!(carrier, Carrier::Value | Carrier::ValueStream);
-    if is_structured(produced) && accepted.contains(&Carrier::ByteStream) {
-        Some(CarrierBridge::StructuredToByte)
-    } else if produced == Carrier::ByteStream && accepted.iter().copied().any(is_structured) {
-        Some(CarrierBridge::ByteToStructured)
-    } else {
-        None
-    }
-}
-
-/// Rejects a pipeline head whose command can only consume a structured input.
-///
-/// The head stage has no upstream: its input is the inherited terminal, a byte
-/// source (or nothing). A command that accepts `Empty` or `ByteStream` can
-/// therefore begin a pipeline, but one that consumes only a value or value
-/// stream has no structured source at the head and needs an upstream stage.
-fn check_head_input(plan: &ExecutionPlan) -> Result<(), RuntimeError> {
-    let Some(head) = plan.stages().first() else {
-        return Ok(());
-    };
-    if head.accepts_input(Carrier::Empty) || head.accepts_input(Carrier::ByteStream) {
-        return Ok(());
-    }
-    Err(RuntimeError::new(
-        RuntimeErrorKind::PipelineHeadInput {
-            command: head_word(head),
-            accepted: head.accepted_inputs(),
-        },
-        head.span(),
-    ))
 }
 
 /// Rejects a NUL byte in any argv argument or redirection target.
@@ -1097,43 +1058,55 @@ fn reject_nul(word: &ExpandedWord) -> Result<(), RuntimeError> {
     Ok(())
 }
 
-/// Rejects an incompatible carrier edge between two consecutive stages.
-///
-/// A merged stdout+stderr edge that does not carry bytes is the more specific
-/// fault and is reported first; otherwise a carrier the consumer does not accept
-/// is reported with an actionable diagnostic naming both stages, the accepted
-/// set, and a repair boundary when the crossing is structured-to-byte.
-fn check_edges(plan: &ExecutionPlan) -> Result<(), RuntimeError> {
-    for (index, edge) in plan.edges().iter().enumerate() {
-        let producer = &plan.stages()[index];
-        let consumer = &plan.stages()[index + 1];
-        let carried = producer.output_carrier();
-        // A merged stdout+stderr edge is only meaningful for a byte producer.
-        if edge.kind() == PipeOperator::StdoutAndStderr && carried != Carrier::ByteStream {
-            return Err(RuntimeError::new(
-                RuntimeErrorKind::MergedEdgeNotByteStream {
-                    producer_command: head_word(producer),
-                    produced: carried,
-                },
-                edge.operator_span(),
-            ));
-        }
-        if !consumer.accepts_input(carried) {
-            let accepted = consumer.accepted_inputs();
-            let bridge = bridge_for(carried, &accepted);
-            return Err(RuntimeError::new(
-                RuntimeErrorKind::CarrierMismatch(Box::new(CarrierMismatch {
-                    producer_command: head_word(producer),
-                    produced: carried,
-                    consumer_command: head_word(consumer),
-                    accepted,
-                    bridge,
-                })),
-                edge.operator_span(),
-            ));
-        }
+/// Maps the first shared carrier fault back to the established runtime surface.
+fn check_carriers(plan: &ExecutionPlan) -> Result<(), RuntimeError> {
+    let stages = plan
+        .stages()
+        .iter()
+        .map(|stage| {
+            StageCarrierContract::known(
+                head_word(stage),
+                stage.accepted_inputs(),
+                CommandOutput::Fixed(stage.output_carrier()),
+            )
+        })
+        .collect::<Vec<_>>();
+    let operators = plan
+        .edges()
+        .iter()
+        .map(PipelineEdge::kind)
+        .collect::<Vec<_>>();
+    let Some(fault) = analyze_pipeline_carriers(&stages, &operators)
+        .into_iter()
+        .next()
+    else {
+        return Ok(());
+    };
+    match fault {
+        PipelineCarrierFault::HeadInput {
+            stage,
+            command,
+            accepted,
+        } => Err(RuntimeError::new(
+            RuntimeErrorKind::PipelineHeadInput { command, accepted },
+            plan.stages()[stage].span(),
+        )),
+        PipelineCarrierFault::MergedEdgeNotByteStream {
+            edge,
+            producer_command,
+            produced,
+        } => Err(RuntimeError::new(
+            RuntimeErrorKind::MergedEdgeNotByteStream {
+                producer_command,
+                produced,
+            },
+            plan.edges()[edge].operator_span(),
+        )),
+        PipelineCarrierFault::CarrierMismatch { edge, mismatch } => Err(RuntimeError::new(
+            RuntimeErrorKind::CarrierMismatch(Box::new(mismatch)),
+            plan.edges()[edge].operator_span(),
+        )),
     }
-    Ok(())
 }
 
 /// Rejects duplication from a descriptor not open in the stage's descriptor map.
