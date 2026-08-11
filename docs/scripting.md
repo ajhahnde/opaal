@@ -647,6 +647,44 @@ Flash distinguishes normal unsuccessful completion from structural failure.
 | Cancellation | Evaluation was interrupted or cancelled | No |
 | Parse failure | Source could not be executed | Not evaluated |
 
+### Process exit and output contract
+
+The `fsh` process preserves normally completed command results and uses
+separate statuses for launcher misuse and shell-owned failure. CI callers can
+rely on the following matrix without parsing diagnostic prose:
+
+| Executable outcome | Process status | Output contract |
+|---|---:|---|
+| Help, version, successful check or format, or a script with no completed command | 0 | Requested help/version text uses stdout; the other cases are silent |
+| Launcher misuse | 2 | Exactly one newline-terminated `fsh:` message on stderr |
+| Completed command with code `0..=255` | Exact command code | No automatic status message |
+| Completed command with numeric signal `1..=127` | `128 + signal` | No automatic status message |
+| Completed status that cannot be represented by those rules | 1 | One shell-boundary report on stderr |
+| Parse, module, runtime, source-loading, platform, or output failure | 1 | A diagnostic or shell report on stderr |
+| Interactive end of input | 0 | No exit diagnostic |
+| Interactive `exit CODE` | Exact requested code | No exit diagnostic |
+| Fatal interactive editor, reporting, or platform failure | 1 | A fatal report when stderr remains usable |
+
+Codes 1 and 2 remain valid ordinary command results. A command that really
+exits with either code is silent unless the program itself wrote output; it is
+not reclassified as a shell failure or launcher misuse. Resolution and spawn
+failures did not complete as child processes, so Flash reports them as runtime
+errors instead of manufacturing command-not-found 127 or not-executable 126.
+
+Program bytes use stdout. Source diagnostics, shell-owned reports, loading
+errors, and failing background-job reports use stderr. Source diagnostics are
+deterministic, contain no color or terminal-control bytes, and end with a
+newline. Required writes and flushes are checked. A failed stdout write or
+flush becomes status 1 and is reported on stderr when possible; a failed stderr
+write or flush is never reported recursively through stderr.
+
+Pipeline aggregation and `pipefail` select the completed status before this
+process mapping occurs. Script background jobs are joined first: their failure
+reports use stderr in job-identity order, and the first failing job in that
+order retains the established final-status precedence. Interactive diagnostics
+remain recoverable, while a fatal interactive failure hangs up session-owned
+jobs before returning status 1.
+
 ### Conditional execution
 
 Use `&&` to continue after success:

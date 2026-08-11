@@ -34,6 +34,9 @@ The component follows several implementation boundaries:
 - Interactive input and script execution use the same syntax and runtime crates, but their front ends are not required to expose identical editing, history, or startup behavior on every target.
 - Structured values belong to the Flash runtime. At an external process boundary, commands still use argument vectors, environment variables, working directories, file descriptors, and byte-oriented standard streams.
 - External executables are launched directly through the platform interface rather than by translating Flash source into another shell language.
+- The `fsh` process preserves representable completed codes and signals while
+  keeping program output on stdout, shell diagnostics on stderr, launcher
+  misuse distinct from runtime failure, and required report writes checked.
 - Successful behavior on a macOS or Linux development host does not by itself establish equivalent behavior in a FlashOS image. Target compilation and image-level execution require separate verification.
 
 ## Flash v1 contract

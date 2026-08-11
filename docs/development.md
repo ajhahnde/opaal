@@ -232,8 +232,8 @@ The workspace combines unit tests, crate integration tests, declarative golden c
 | Runtime            | Values, scopes, functions, expansion, command resolution, planning, pipelines, structured commands, status propagation, cancellation, limits, and jobs |
 | Platform contracts | Capability reporting, fake and recording adapters, native values, resources, and cleanup                                                               |
 | Concrete adapter   | Process creation, descriptors, waits, signals, process groups, and terminal guards                                                                     |
-| CLI                | Argument handling, startup configuration, editor services, interactive recovery, history, completion, and highlighting                                 |
-| Black-box and PTY  | Executable behavior, prompts, control characters, terminal ownership, signals, and job control                                                         |
+| CLI                | Argument handling, host-status mapping, report streams, startup configuration, editor services, interactive recovery, history, completion, and highlighting |
+| Black-box and PTY  | Executable statuses and channels, prompts, control characters, terminal ownership, signals, recovery, and job control                                      |
 | Fuzzing            | Public lexer and parser entry points with arbitrary bytes                                                                                              |
 
 Run a named integration test with Cargo's `--test` selector:
@@ -651,6 +651,32 @@ cargo test -p flash-cli --test pty
 
 Some interactive and PTY tests are host-specific. Cargo's target configuration controls whether host-only dependencies and tests are compiled.
 
+### Test status and channel reporting
+
+Keep host process policy in `flash-cli`. Runtime tests should prove structured
+completion, failure, cleanup, and ordered background reports without observing
+process-global stdout, stderr, or exit codes. CLI report tests should inject
+writers and exercise exact status mapping, checked writes and flushes, output
+failure, diagnostic failure, and the rule that stderr is never reused
+recursively after it fails.
+
+Black-box script tests must assert all three observable fields together:
+
+- the exact process status;
+- exact stdout bytes; and
+- exact stderr bytes or a deliberately stable diagnostic prefix and newline.
+
+Cover ordinary completed codes separately from shell-owned failure and launcher
+misuse, including codes 1 and 2. Keep impossible or platform-unrepresentable
+status shapes at the pure mapper seam rather than trying to fabricate them with
+a real child process. Do not classify failures by matching rendered prose.
+
+Interactive driver tests use injected program and diagnostic writers to prove
+checked flushing, recoverable diagnostics, non-recursive diagnostic failure,
+and fatal cleanup before status 1. PTY tests remain responsible for edit Ctrl-C,
+foreground child signals, EOF, exact explicit exit, live-job refusal and
+hang-up, prompt-safe notices, and terminal restoration.
+
 ### Keep the editor behind its interface
 
 Interactive control flow should depend on the CLI's line-editor boundary rather than on details of one editing library.
@@ -994,6 +1020,17 @@ Also verify:
 - carrier compatibility;
 - status aggregation;
 - scripting or language documentation.
+
+### CLI status, reporting, or interactive-exit change
+
+Also verify:
+
+- pure status-mapping and injected-writer report tests;
+- complete executable status/stdout/stderr cases;
+- interactive driver recovery and fatal-cleanup cases;
+- the relevant PTY subset, followed by the complete PTY suite;
+- no process-stream or host-exit ownership has moved into `flash-runtime`;
+- Scripting and Architecture documentation.
 
 ### Platform, process, descriptor, signal, or terminal change
 

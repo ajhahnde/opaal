@@ -270,7 +270,35 @@ A long-lived [`Session`](../crates/flash-runtime/src/session.rs) retains:
 - the most recent normally completed status;
 - background-job state when job control is enabled.
 
-Interactive submissions and complete script files both use this session driver. Script execution creates a session, submits the source, joins the jobs started by that script, and converts the resulting Flash status into a process exit result.
+Interactive submissions and complete script files both use this session driver. Script execution creates a session, submits the source, joins the jobs started by that script, and returns its structured completion or failure to the CLI.
+
+### Runtime and CLI reporting boundary
+
+`flash-runtime` owns language execution, cleanup, and outcome precedence. Its
+script, module-program, isolated-chain, and interactive submission paths accept
+an injected program-output sink. Script completion returns the optional final
+`Status` plus ordered background-job reports; script failure returns the primary
+structured error plus those reports. The runtime does not select host process
+exit codes or write directly to process stdout or stderr.
+
+`flash-cli` owns the executable boundary. Its host-free report layer maps a
+classified completed `Status` to an exact eight-bit process code, writes program
+bytes to stdout, and writes diagnostics and shell reports to stderr. Required
+writes and flushes are checked. A failed program-output operation becomes
+failure 1 and is reported on stderr when possible; a failed diagnostic stream
+is not used recursively to report itself. Classification uses structured
+outcomes and never parses rendered diagnostic text.
+
+Normally completed codes `0..=255` remain exact. Numeric signals `1..=127` map
+to `128 + signal`; an unrepresentable status becomes diagnosed failure 1 rather
+than being wrapped or truncated. Launcher misuse remains status 2, and other
+shell-owned failures use status 1. Codes 1 and 2 therefore remain distinguishable
+ordinary program results when they arrive through a completed `Status`.
+
+One shared runtime diagnostic builder retains the primary source and ordered
+call frames for ordinary and multi-source module failures. The CLI renders that
+structured diagnostic once; it does not add a second summary or infer the
+failure kind from the stable `RUN001` heading.
 
 ### Lexical state and process state
 
@@ -543,6 +571,8 @@ Its top-level modes are:
 ```text
 help
 version
+static checking
+canonical formatting
 script execution
 interactive session
 reserved internal child-shell execution
@@ -560,7 +590,14 @@ An editor produces events such as:
 - cancellation of the current edit;
 - end of input.
 
-The interactive loop owns the sequencing of prompts, notices, diagnostics, evaluation, and exit decisions. The editor owns terminal writes that must appear safely before the next prompt.
+The interactive loop owns the sequencing of prompts, notices, diagnostics,
+evaluation, and exit decisions. Evaluation receives an injected program-output
+sink, while the driver owns checked output and diagnostic flushes plus the final
+host result. Recoverable diagnostics return to the same session. Fatal editor,
+output, diagnostic, or platform failure performs unconditional session cleanup
+before returning status 1; if the diagnostic stream itself failed, the driver
+does not attempt another write through it. The editor owns terminal writes that
+must appear safely before the next prompt.
 
 ### Host and target editors
 

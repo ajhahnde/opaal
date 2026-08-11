@@ -30,6 +30,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Add `fsh script.fsh` execution for foreground external commands, byte
   pipelines, conditional status chains, and source-ordered redirections, with
   source diagnostics and process-status exit mapping.
+- Add a deterministic CI-facing status and channel contract: exact completed
+  codes, bounded signal mapping, silent ordinary nonzero completion, distinct
+  status-1 shell failure and status-2 launcher misuse, stdout-only program
+  bytes, stderr-only diagnostics and background reports, checked writes and
+  flushes, and non-recursive diagnostic-stream failure. Interactive fatal exits
+  hang up owned jobs before returning status 1 while recoverable diagnostics
+  preserve the session.
 - Add shared shell-free Rust process fixtures and end-to-end coverage for native
   arguments and paths, large streams, broken pipes, resolution failures, and
   redirection setup failures.
