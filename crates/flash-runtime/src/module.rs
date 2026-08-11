@@ -28,7 +28,9 @@ use crate::Value;
 use crate::carrier::{
     CarrierBridge, PipelineCarrierFault, StageCarrierContract, analyze_pipeline_carriers,
 };
-use crate::command::{Carrier, CommandOutput, CommandRegistry};
+use crate::command::{
+    Carrier, CommandClassification, CommandLifecycle, CommandOutput, CommandRegistry,
+};
 use crate::documentation::Documentation;
 
 /// The sole host capability needed to turn a candidate source path into its
@@ -2442,7 +2444,7 @@ pub struct ModuleProgram {
     types: ModuleTypeRegistry,
 }
 
-/// One carrier diagnostic found without expanding or resolving a command head.
+/// One static command diagnostic found without expansion or host probing.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ModulePipelineError {
     module: ModuleId,
@@ -2456,7 +2458,7 @@ impl ModulePipelineError {
         &self.module
     }
 
-    /// The structured `PIP001`-`PIP004` diagnostic.
+    /// The structured `CMD001`-`CMD002` or `PIP001`-`PIP004` diagnostic.
     #[must_use]
     pub const fn diagnostic(&self) -> &Diagnostic {
         &self.diagnostic
@@ -2626,7 +2628,7 @@ impl<'a> StaticPipelineAnalyzer<'a> {
         }
     }
 
-    fn command_contract(&self, command: &flash_syntax::CommandStage) -> StageCarrierContract {
+    fn command_contract(&mut self, command: &flash_syntax::CommandStage) -> StageCarrierContract {
         if command.head.kind() == CommandHeadKind::ForcedExternal {
             return StageCarrierContract::known(
                 self.source
@@ -2639,15 +2641,92 @@ impl<'a> StaticPipelineAnalyzer<'a> {
         let Some(name) = static_word_text(command.head.word(), self.source) else {
             return StageCarrierContract::unknown();
         };
-        match self.commands.lookup(&name) {
-            Some(signature) => {
+        match self.commands.classify(&name) {
+            CommandClassification::Core {
+                signature,
+                lifecycle,
+            }
+            | CommandClassification::Alias {
+                signature,
+                lifecycle,
+                ..
+            } => {
+                if lifecycle.deprecated_since_release().is_some() {
+                    self.errors.push(self.deprecated_command_diagnostic(
+                        command.head.word().span(),
+                        &name,
+                        lifecycle,
+                    ));
+                }
                 StageCarrierContract::known(name, signature.inputs(), signature.output())
             }
-            None => StageCarrierContract::known(
+            CommandClassification::Reserved {
+                purpose,
+                replacement,
+                ..
+            } => {
+                self.errors.push(self.reserved_command_diagnostic(
+                    command.head.word().span(),
+                    &name,
+                    purpose,
+                    replacement,
+                ));
+                StageCarrierContract::unknown()
+            }
+            CommandClassification::Unknown => StageCarrierContract::known(
                 name,
                 [Carrier::ByteStream],
                 CommandOutput::Fixed(Carrier::ByteStream),
             ),
+        }
+    }
+
+    fn deprecated_command_diagnostic(
+        &self,
+        span: Span,
+        name: &str,
+        lifecycle: &CommandLifecycle,
+    ) -> ModulePipelineError {
+        let release = lifecycle
+            .deprecated_since_release()
+            .expect("the caller observed deprecation metadata");
+        let mut diagnostic = Diagnostic::new(
+            Severity::Warning,
+            "CMD001",
+            format!("`{name}` is deprecated since {release}"),
+        )
+        .with_primary(span, "this command spelling is deprecated");
+        if let Some(replacement) = lifecycle.replacement() {
+            diagnostic = diagnostic.with_note(format!("use `{replacement}` instead"));
+        }
+        ModulePipelineError {
+            module: self.module.clone(),
+            diagnostic,
+        }
+    }
+
+    fn reserved_command_diagnostic(
+        &self,
+        span: Span,
+        name: &str,
+        purpose: &str,
+        replacement: Option<&str>,
+    ) -> ModulePipelineError {
+        let mut diagnostic = Diagnostic::new(
+            Severity::Error,
+            "CMD002",
+            format!("`{name}` is reserved and cannot be invoked as a bare command"),
+        )
+        .with_primary(span, purpose);
+        if let Some(replacement) = replacement {
+            diagnostic = diagnostic.with_note(format!("use `{replacement}` instead"));
+        }
+        diagnostic = diagnostic.with_note(format!(
+            "use `^{name}` or `command {name}` for intentional external execution"
+        ));
+        ModulePipelineError {
+            module: self.module.clone(),
+            diagnostic,
         }
     }
 
@@ -2915,11 +2994,14 @@ impl ModuleAnalysisIssue {
         &self.error
     }
 
-    /// The issue severity. Module discovery and semantic construction failures
-    /// are errors; later analysis phases may add warning or note issue kinds.
+    /// The issue severity. Namespace deprecations are warnings; construction
+    /// failures and reserved-name diagnostics are errors.
     #[must_use]
-    pub const fn severity(&self) -> Severity {
-        Severity::Error
+    pub fn severity(&self) -> Severity {
+        match &self.error {
+            ModuleProgramError::Pipelines(error) => error.diagnostic().severity(),
+            _ => Severity::Error,
+        }
     }
 }
 
@@ -3241,7 +3323,10 @@ impl<'a> ModuleProgramLoader<'a> {
                 };
             }
         };
-        if !pipeline_issues.is_empty() {
+        if pipeline_issues
+            .iter()
+            .any(|issue| issue.severity() == Severity::Error)
+        {
             return ModuleAnalysisReport {
                 sources: retained,
                 issues: pipeline_issues,
@@ -3250,7 +3335,7 @@ impl<'a> ModuleProgramLoader<'a> {
         }
         ModuleAnalysisReport {
             sources: retained,
-            issues: Vec::new(),
+            issues: pipeline_issues,
             program: Some(ModuleProgram {
                 graph,
                 sources,

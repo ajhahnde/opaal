@@ -13,6 +13,9 @@ use std::sync::Arc;
 
 use flash_platform::{FakePlatform, Platform, RecordingPlatform};
 use flash_runtime::builtin::standard_registry;
+use flash_runtime::command::{
+    Carrier, CommandLifecycle, CommandNamespaceEntry, CommandRegistry, CommandSignature,
+};
 use flash_runtime::eval::FakeClock;
 use flash_runtime::module::{
     ModuleCanonicalizer, ModuleGraph, ModuleGraphError, ModulePathError, ModuleProgramLoader,
@@ -25,7 +28,7 @@ use flash_runtime::{
     ByteSize, Callable, Duration, Environment, FiniteFloat, NativePath, Range, Record, Status,
     Table, Value,
 };
-use flash_syntax::{LabelStyle, SourceFile, SourceId, Span};
+use flash_syntax::{LabelStyle, Severity, SourceFile, SourceId, Span};
 
 struct NoExecutables;
 
@@ -2637,6 +2640,155 @@ fn forced_assumed_and_dynamic_heads_need_no_probe_or_expansion() {
     assert!(diagnostics[0].notes()[0].contains("encode"));
     assert!(diagnostics[1].notes()[0].contains("decode"));
     assert!(diagnostics[2].notes()[0].contains("encode"));
+}
+
+fn namespace_checker_registry() -> CommandRegistry {
+    CommandRegistry::try_from_entries(
+        1,
+        [
+            CommandNamespaceEntry::core(
+                CommandSignature::new("pwd", [Carrier::Empty], Carrier::Value),
+                CommandLifecycle::introduced(1),
+            ),
+            CommandNamespaceEntry::core(
+                CommandSignature::new("oldpwd", [Carrier::Empty], Carrier::Value),
+                CommandLifecycle::introduced(1)
+                    .deprecated_since("0.9.0")
+                    .with_replacement("pwd"),
+            ),
+            CommandNamespaceEntry::alias(
+                "cwd",
+                "pwd",
+                CommandLifecycle::introduced(1)
+                    .deprecated_since("0.9.0")
+                    .with_replacement("pwd"),
+            ),
+            CommandNamespaceEntry::reserved(
+                "future",
+                1,
+                "reserved for a future structured command",
+                Some("pwd"),
+            ),
+            CommandNamespaceEntry::core(
+                CommandSignature::new("ls", [Carrier::Empty], Carrier::ValueStream),
+                CommandLifecycle::introduced(1),
+            ),
+            CommandNamespaceEntry::core(
+                CommandSignature::new("each", [Carrier::ValueStream], Carrier::ValueStream),
+                CommandLifecycle::introduced(1),
+            ),
+        ],
+    )
+    .expect("valid checker namespace")
+}
+
+#[test]
+fn deprecated_core_and_alias_are_ordered_warnings_with_replacement_guidance() {
+    let paths = FakeCanonicalizer::default().resolves("/project/main.fsh", "/project/main.fsh");
+    let sources = FakeSourceLoader::default().contains("/project/main.fsh", "oldpwd\ncwd\npwd\n");
+
+    let report = ModuleProgramLoader::new(&paths, &sources).analyze_with_commands(
+        Path::new("/project/main.fsh"),
+        &namespace_checker_registry(),
+    );
+
+    assert!(!report.has_errors());
+    assert!(report.program().is_some());
+    assert_eq!(analysis_codes(&report), ["CMD001", "CMD001"]);
+    assert!(
+        report
+            .issues()
+            .iter()
+            .all(|issue| issue.severity() == Severity::Warning)
+    );
+    let diagnostics = analysis_diagnostics(&report);
+    assert_eq!(diagnostics[0].severity(), Severity::Warning);
+    let first_span = diagnostics[0].labels()[0].span();
+    let second_span = diagnostics[1].labels()[0].span();
+    assert_eq!(
+        (first_span.source_id(), first_span.start(), first_span.end()),
+        (SourceId::new(0), 0, 6)
+    );
+    assert_eq!(
+        (
+            second_span.source_id(),
+            second_span.start(),
+            second_span.end()
+        ),
+        (SourceId::new(0), 7, 10)
+    );
+    assert!(diagnostics[0].message().contains("`oldpwd` is deprecated"));
+    assert!(diagnostics[1].message().contains("`cwd` is deprecated"));
+    for diagnostic in diagnostics {
+        assert!(diagnostic.message().contains("0.9.0"));
+        assert!(
+            diagnostic
+                .notes()
+                .iter()
+                .any(|note| note == "use `pwd` instead")
+        );
+    }
+}
+
+#[test]
+fn reserved_static_heads_error_in_order_while_forced_and_dynamic_heads_are_suppressed() {
+    let paths = FakeCanonicalizer::default().resolves("/project/main.fsh", "/project/main.fsh");
+    let sources = FakeSourceLoader::default().contains(
+        "/project/main.fsh",
+        concat!(
+            "oldpwd\n",
+            "future\n",
+            "^future\n",
+            "let selected = 'future'\n",
+            "cmd-${selected}\n",
+            "cwd\n",
+        ),
+    );
+
+    let report = ModuleProgramLoader::new(&paths, &sources).analyze_with_commands(
+        Path::new("/project/main.fsh"),
+        &namespace_checker_registry(),
+    );
+
+    assert!(report.has_errors());
+    assert!(report.program().is_none());
+    assert_eq!(analysis_codes(&report), ["CMD001", "CMD002", "CMD001"]);
+    let diagnostics = analysis_diagnostics(&report);
+    assert_eq!(diagnostics[0].severity(), Severity::Warning);
+    assert_eq!(diagnostics[2].severity(), Severity::Warning);
+    let diagnostic = &diagnostics[1];
+    assert_eq!(diagnostic.severity(), Severity::Error);
+    let span = diagnostic.labels()[0].span();
+    assert_eq!(
+        (span.source_id(), span.start(), span.end()),
+        (SourceId::new(0), 7, 13)
+    );
+    assert!(diagnostic.message().contains("`future` is reserved"));
+    assert!(
+        diagnostic
+            .notes()
+            .iter()
+            .any(|note| note == "use `pwd` instead")
+    );
+    assert!(
+        diagnostic
+            .notes()
+            .iter()
+            .any(|note| { note.contains("`^future`") && note.contains("`command future`") })
+    );
+}
+
+#[test]
+fn a_reserved_stage_has_unknown_carriers_and_suppresses_dependent_cascades() {
+    let paths = FakeCanonicalizer::default().resolves("/project/main.fsh", "/project/main.fsh");
+    let sources = FakeSourceLoader::default().contains("/project/main.fsh", "ls | future | each\n");
+
+    let report = ModuleProgramLoader::new(&paths, &sources).analyze_with_commands(
+        Path::new("/project/main.fsh"),
+        &namespace_checker_registry(),
+    );
+
+    assert_eq!(analysis_codes(&report), ["CMD002"]);
 }
 
 #[test]
