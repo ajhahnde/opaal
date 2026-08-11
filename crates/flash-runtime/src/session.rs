@@ -2030,33 +2030,49 @@ fn render(source: &SourceFile, diagnostics: &[Diagnostic]) -> SubmitError {
 }
 
 fn runtime(source: &SourceFile, error: &RuntimeError) -> SubmitError {
+    let rendered = render_runtime_diagnostic(source, error, std::iter::empty());
+    SubmitError::Runtime {
+        error: Box::new(error.clone()),
+        rendered,
+    }
+}
+
+pub(crate) fn render_runtime_diagnostic(
+    submitting_source: &SourceFile,
+    error: &RuntimeError,
+    additional_sources: impl IntoIterator<Item = SourceFile>,
+) -> String {
     let mut diagnostic = Diagnostic::new(Severity::Error, "RUN001", error.to_string())
         .with_primary(error.span(), "runtime failure");
     for frame in error.frames() {
         diagnostic = diagnostic.with_secondary(frame.call_site(), "called from here");
     }
-    let mut sources = Vec::new();
+    let mut sources = Vec::<SourceFile>::new();
     if let Some(primary) = error.source() {
-        sources.push(primary);
+        sources.push(primary.clone());
     }
     for frame in error.frames() {
         if !sources
             .iter()
             .any(|candidate| candidate.id() == frame.source().id())
         {
-            sources.push(frame.source());
+            sources.push(frame.source().clone());
         }
     }
     if !sources
         .iter()
-        .any(|candidate| candidate.id() == source.id())
+        .any(|candidate| candidate.id() == submitting_source.id())
     {
-        sources.push(source);
+        sources.push(submitting_source.clone());
     }
-    let rendered = flash_syntax::render_diagnostic_sources(sources, &diagnostic)
-        .expect("runtime diagnostics retain every referenced evaluation source");
-    SubmitError::Runtime {
-        error: Box::new(error.clone()),
-        rendered,
+    for additional in additional_sources {
+        if !sources
+            .iter()
+            .any(|candidate| candidate.id() == additional.id())
+        {
+            sources.push(additional);
+        }
     }
+    flash_syntax::render_diagnostic_sources(sources.iter(), &diagnostic)
+        .expect("runtime diagnostics retain every referenced evaluation source")
 }

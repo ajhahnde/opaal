@@ -40,6 +40,7 @@ pub enum HostReport<'a> {
     Completed {
         status: &'a Status,
         output: &'a [u8],
+        diagnostic: &'a [u8],
     },
     /// A pre-rendered shell-owned diagnostic.
     Failure { diagnostic: &'a [u8] },
@@ -57,7 +58,25 @@ impl<'a> HostReport<'a> {
     /// Build program output with its completed status.
     #[must_use]
     pub const fn completed(status: &'a Status, output: &'a [u8]) -> Self {
-        Self::Completed { status, output }
+        Self::Completed {
+            status,
+            output,
+            diagnostic: b"",
+        }
+    }
+
+    /// Build program output and ordered diagnostics with a completed status.
+    #[must_use]
+    pub const fn completed_with_diagnostic(
+        status: &'a Status,
+        output: &'a [u8],
+        diagnostic: &'a [u8],
+    ) -> Self {
+        Self::Completed {
+            status,
+            output,
+            diagnostic,
+        }
     }
 
     /// Build a shell-owned failure from one already-rendered diagnostic.
@@ -154,9 +173,13 @@ where
         HostReport::Completed {
             status,
             output: bytes,
+            diagnostic,
         } => {
             if let Err(error) = write_required(output, bytes) {
                 report_output_failure(diagnostics, &error);
+                return HostExit::Failure;
+            }
+            if write_required(diagnostics, diagnostic).is_err() {
                 return HostExit::Failure;
             }
             match map_status(status) {
@@ -284,6 +307,30 @@ mod tests {
         assert_eq!(stdout.flushes, 1);
         assert!(stderr.bytes.is_empty());
         assert_eq!(stderr.flushes, 0);
+    }
+
+    #[test]
+    fn completed_status_can_carry_ordered_shell_diagnostics() {
+        let mut stdout = RecordingWriter::default();
+        let mut stderr = RecordingWriter::default();
+
+        let exit = write_report(
+            HostReport::completed_with_diagnostic(
+                &exited(7),
+                b"",
+                b"fsh: first background failure\nfsh: second background failure\n",
+            ),
+            &mut stdout,
+            &mut stderr,
+        );
+
+        assert_eq!(exit, HostExit::Code(7));
+        assert!(stdout.bytes.is_empty());
+        assert_eq!(
+            stderr.bytes,
+            b"fsh: first background failure\nfsh: second background failure\n"
+        );
+        assert_eq!(stderr.flushes, 1);
     }
 
     #[test]

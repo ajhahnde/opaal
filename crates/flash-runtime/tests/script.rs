@@ -103,6 +103,7 @@ fn isolated_chain_external_processes_inherit_the_callers_group() {
     let mut environment = environment();
     let platform = RecordingPlatform::new(FakePlatform::new(Capabilities::full()));
     let clock: Arc<dyn Clock> = Arc::new(FakeClock::new());
+    let mut output = Vec::new();
 
     let completion = execute_chain_subshell(
         "<chain>",
@@ -114,6 +115,7 @@ fn isolated_chain_external_processes_inherit_the_callers_group() {
         &SessionOptions::default(),
         &platform,
         clock,
+        &mut output,
     )
     .expect("the isolated chain should complete");
 
@@ -138,6 +140,7 @@ fn isolated_chain_mixed_pipeline_processes_inherit_the_callers_group() {
     let platform = RecordingPosix::new();
     let clock: Arc<dyn Clock> = Arc::new(FakeClock::new());
     let cwd = std::env::current_dir().expect("the test current directory should be readable");
+    let mut output = Vec::new();
 
     execute_chain_subshell(
         "<chain>",
@@ -149,8 +152,31 @@ fn isolated_chain_mixed_pipeline_processes_inherit_the_callers_group() {
         &SessionOptions::default(),
         &platform,
         clock,
+        &mut output,
     )
     .expect("the isolated mixed pipeline should complete");
 
     assert_eq!(platform.requested(), [ProcessGroup::Inherit]);
+}
+
+#[test]
+fn isolated_chain_internal_output_uses_the_injected_sink() {
+    let mut environment = environment();
+    let mut output = Vec::new();
+
+    execute_chain_subshell(
+        "<chain>",
+        "which pwd | get kind | encode utf8",
+        std::path::Path::new("/work"),
+        &mut environment,
+        &standard_registry(),
+        &Probe::new(std::iter::empty::<PathBuf>()),
+        &SessionOptions::default(),
+        &FakePlatform::none(),
+        Arc::new(FakeClock::new()),
+        &mut output,
+    )
+    .expect("the isolated internal chain should complete");
+
+    assert_eq!(output, b"internal");
 }

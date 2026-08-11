@@ -11,7 +11,7 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use flash_platform::{FakePlatform, RecordingPlatform};
+use flash_platform::{FakePlatform, Platform, RecordingPlatform};
 use flash_runtime::builtin::standard_registry;
 use flash_runtime::eval::FakeClock;
 use flash_runtime::module::{
@@ -20,7 +20,7 @@ use flash_runtime::module::{
 };
 use flash_runtime::plan::SessionOptions;
 use flash_runtime::resolve::ExecutableProbe;
-use flash_runtime::script::execute_module_program;
+use flash_runtime::script::execute_module_program as execute_module_program_with_output;
 use flash_runtime::{
     ByteSize, Callable, Duration, Environment, FiniteFloat, NativePath, Range, Record, Status,
     Table, Value,
@@ -41,6 +41,33 @@ impl ExecutableProbe for MarkExecutable {
     fn is_executable(&self, path: &OsStr) -> bool {
         path == OsStr::new("/bin/mark")
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn execute_module_program(
+    program: &flash_runtime::module::ModuleProgram,
+    script_arguments: &[String],
+    cwd: &Path,
+    environment: &mut Environment,
+    registry: &flash_runtime::command::CommandRegistry,
+    probe: &dyn ExecutableProbe,
+    options: &SessionOptions,
+    platform: &dyn Platform,
+    clock: Arc<dyn flash_runtime::eval::Clock>,
+) -> Result<flash_runtime::script::ScriptCompletion, flash_runtime::script::ScriptError> {
+    let mut output = Vec::new();
+    execute_module_program_with_output(
+        program,
+        script_arguments,
+        cwd,
+        environment,
+        registry,
+        probe,
+        options,
+        platform,
+        clock,
+        &mut output,
+    )
 }
 
 #[derive(Debug)]
@@ -2039,6 +2066,33 @@ fn dependency_background_jobs_live_until_the_whole_program_join() {
         labels,
         [OsString::from("background"), OsString::from("root")]
     );
+}
+
+#[test]
+fn module_program_output_uses_only_the_injected_sink() {
+    let paths = FakeCanonicalizer::default().resolves("/project/main.fsh", "/project/main.fsh");
+    let sources = FakeSourceLoader::default()
+        .contains("/project/main.fsh", "which pwd | get kind | encode utf8\n");
+    let program = ModuleProgramLoader::new(&paths, &sources)
+        .load(Path::new("/project/main.fsh"))
+        .expect("the output program loads");
+    let mut output = Vec::new();
+
+    execute_module_program_with_output(
+        &program,
+        &[],
+        Path::new("/project"),
+        &mut Environment::new(),
+        &standard_registry(),
+        &NoExecutables,
+        &SessionOptions::default(),
+        &FakePlatform::none(),
+        Arc::new(FakeClock::new()),
+        &mut output,
+    )
+    .expect("module output should use the supplied sink");
+
+    assert_eq!(output, b"internal");
 }
 
 #[test]

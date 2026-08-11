@@ -42,7 +42,9 @@ use flash_runtime::module::{
 };
 use flash_runtime::plan::SessionOptions;
 use flash_runtime::resolve::ExecutableProbe;
-use flash_runtime::script::{execute_chain_subshell, execute_module_program};
+use flash_runtime::script::{
+    ScriptCompletion, ScriptError, execute_chain_subshell, execute_module_program,
+};
 use flash_runtime::session::{BackgroundFailure, JobNoticeId, Session, SubmitError, SubmitOutcome};
 use flash_runtime::{Environment, ScopeStack};
 
@@ -522,6 +524,8 @@ fn run_script(path: &Path, arguments: &[String]) -> ExitCode {
     };
     let mut environment = process_environment();
     let registry = flash_runtime::builtin::standard_registry();
+    let stdout = io::stdout();
+    let mut output = stdout.lock();
     let result = execute_module_program(
         &program,
         arguments,
@@ -532,18 +536,12 @@ fn run_script(path: &Path, arguments: &[String]) -> ExitCode {
         &SessionOptions::default(),
         &PosixPlatform,
         Arc::new(SystemClock::new()) as Arc<dyn Clock>,
+        &mut output,
     );
+    let flush = output.flush();
+    drop(output);
 
-    match result {
-        Ok(completion) => completion.status().map_or_else(
-            || emit_report(HostReport::success(b"")),
-            |status| emit_report(HostReport::completed(status, b"")),
-        ),
-        Err(error) => {
-            eprint!("{}", error.render());
-            ExitCode::FAILURE
-        }
-    }
+    finish_script_report(result, flush)
 }
 
 struct HostModuleFilesystem;
@@ -581,6 +579,8 @@ fn run_async_chain(text: String, pipefail: bool, capture_limit: usize) -> ExitCo
     let options = SessionOptions::default()
         .with_pipefail(pipefail)
         .with_capture_limit(capture_limit);
+    let stdout = io::stdout();
+    let mut output = stdout.lock();
     let result = execute_chain_subshell(
         "<background-chain>",
         text,
@@ -591,18 +591,62 @@ fn run_async_chain(text: String, pipefail: bool, capture_limit: usize) -> ExitCo
         &options,
         &PosixPlatform,
         Arc::new(SystemClock::new()) as Arc<dyn Clock>,
+        &mut output,
     );
+    let flush = output.flush();
+    drop(output);
+
+    finish_script_report(result, flush)
+}
+
+fn finish_script_report(
+    result: Result<ScriptCompletion, ScriptError>,
+    output_flush: io::Result<()>,
+) -> ExitCode {
+    if let Err(flush_error) = output_flush {
+        let mut diagnostics = match &result {
+            Ok(completion) => render_background_failures(completion.background_failures()),
+            Err(error) => {
+                let mut diagnostics = render_background_failures(error.background_failures());
+                diagnostics.push_str(error.render());
+                diagnostics
+            }
+        };
+        diagnostics.push_str(&format!(
+            "fsh: cannot flush command output: {flush_error}\n"
+        ));
+        return emit_report(HostReport::failure(diagnostics.as_bytes()));
+    }
 
     match result {
-        Ok(completion) => completion.status().map_or_else(
-            || emit_report(HostReport::success(b"")),
-            |status| emit_report(HostReport::completed(status, b"")),
-        ),
+        Ok(completion) => {
+            let diagnostics = render_background_failures(completion.background_failures());
+            match completion.status() {
+                Some(status) if diagnostics.is_empty() => {
+                    emit_report(HostReport::completed(status, b""))
+                }
+                Some(status) => emit_report(HostReport::completed_with_diagnostic(
+                    status,
+                    b"",
+                    diagnostics.as_bytes(),
+                )),
+                None if diagnostics.is_empty() => emit_report(HostReport::success(b"")),
+                None => emit_report(HostReport::failure(diagnostics.as_bytes())),
+            }
+        }
         Err(error) => {
-            eprint!("{}", error.render());
-            ExitCode::FAILURE
+            let mut diagnostics = render_background_failures(error.background_failures());
+            diagnostics.push_str(error.render());
+            emit_report(HostReport::failure(diagnostics.as_bytes()))
         }
     }
+}
+
+fn render_background_failures(failures: &[BackgroundFailure]) -> String {
+    failures
+        .iter()
+        .map(|failure| format!("fsh: {}\n", failure.render()))
+        .collect()
 }
 
 struct NativeExecutableProbe;

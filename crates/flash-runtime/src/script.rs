@@ -2,12 +2,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
-use std::io;
+use std::io::Write;
 use std::path::Path;
 use std::sync::Arc;
-
-use flash_platform::Platform;
-use flash_syntax::{Diagnostic, Severity, render_diagnostic_sources};
 
 use crate::command::CommandRegistry;
 use crate::eval::Clock;
@@ -18,11 +15,13 @@ use crate::session::{
     BackgroundFailure, BackgroundFailureReason, Session, SubmitError, SubmitOutcome,
 };
 use crate::{BindingMutability, Environment, ScopeStack, Status, Value};
+use flash_platform::Platform;
 
 /// The normally completed result of one non-interactive source file.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ScriptCompletion {
     status: Option<Status>,
+    background_failures: Vec<BackgroundFailure>,
 }
 
 impl ScriptCompletion {
@@ -31,12 +30,19 @@ impl ScriptCompletion {
     pub const fn status(&self) -> Option<&Status> {
         self.status.as_ref()
     }
+
+    /// Joined background failures in ascending job-identity order.
+    #[must_use]
+    pub fn background_failures(&self) -> &[BackgroundFailure] {
+        &self.background_failures
+    }
 }
 
 /// A source-anchored parse or runtime failure from script execution.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ScriptError {
     rendered: String,
+    background_failures: Vec<BackgroundFailure>,
 }
 
 impl ScriptError {
@@ -46,28 +52,46 @@ impl ScriptError {
             SubmitError::Runtime { rendered, .. } => rendered,
             SubmitError::Output(error) => format!("fsh: output write failed: {error}\n"),
         };
-        Self { rendered }
+        Self {
+            rendered,
+            background_failures: Vec::new(),
+        }
     }
 
-    fn module_submit(error: SubmitError, sources: &ModuleSourceRegistry) -> Self {
+    fn module_submit(
+        error: SubmitError,
+        source: &flash_syntax::SourceFile,
+        sources: &ModuleSourceRegistry,
+    ) -> Self {
         let SubmitError::Runtime { error, .. } = error else {
             return Self::submit(error);
         };
-        let mut diagnostic = Diagnostic::new(Severity::Error, "RUN001", error.to_string())
-            .with_primary(error.span(), "runtime failure");
-        for frame in error.frames() {
-            diagnostic = diagnostic.with_secondary(frame.call_site(), "called from here");
+        let rendered = crate::session::render_runtime_diagnostic(
+            source,
+            &error,
+            sources.entries().map(|entry| entry.source().clone()),
+        );
+        Self {
+            rendered,
+            background_failures: Vec::new(),
         }
-        let rendered =
-            render_diagnostic_sources(sources.entries().map(|entry| entry.source()), &diagnostic)
-                .expect("module runtime diagnostics reference retained program sources");
-        Self { rendered }
     }
 
     /// Render the complete user-facing diagnostic.
     #[must_use]
     pub fn render(&self) -> &str {
         &self.rendered
+    }
+
+    /// Joined background failures in ascending job-identity order.
+    #[must_use]
+    pub fn background_failures(&self) -> &[BackgroundFailure] {
+        &self.background_failures
+    }
+
+    fn with_background_failures(mut self, failures: Vec<BackgroundFailure>) -> Self {
+        self.background_failures = failures;
+        self
     }
 }
 
@@ -95,6 +119,7 @@ pub fn execute_script(
     options: &SessionOptions,
     platform: &dyn Platform,
     clock: Arc<dyn Clock>,
+    output: &mut dyn Write,
 ) -> Result<ScriptCompletion, ScriptError> {
     execute_source(
         name,
@@ -108,6 +133,7 @@ pub fn execute_script(
         platform,
         clock,
         true,
+        output,
     )
 }
 
@@ -128,6 +154,7 @@ pub fn execute_module_program(
     options: &SessionOptions,
     platform: &dyn Platform,
     clock: Arc<dyn Clock>,
+    output: &mut dyn Write,
 ) -> Result<ScriptCompletion, ScriptError> {
     let mut session = Session::with_scope_and_registry(
         ScopeStack::new(),
@@ -137,7 +164,6 @@ pub fn execute_module_program(
         registry.clone(),
     );
     session.enable_script_job_control(Arc::clone(&clock));
-    let mut output = io::stdout().lock();
     let binding_types = Arc::new(program.runtime_binding_types());
     let mut instances: BTreeMap<ModuleId, BTreeMap<String, Value>> = BTreeMap::new();
     let mut outcome: Result<SubmitOutcome, ScriptError> = Ok(SubmitOutcome::Continued);
@@ -187,7 +213,7 @@ pub fn execute_module_program(
             probe,
             platform,
             clock.as_ref(),
-            &mut output,
+            output,
         ) {
             Ok((SubmitOutcome::Continued, completed_scope)) => {
                 let exports = program
@@ -208,7 +234,7 @@ pub fn execute_module_program(
                 break;
             }
             Err(error) => {
-                outcome = Err(ScriptError::module_submit(error, program.sources()));
+                outcome = Err(ScriptError::module_submit(error, source, program.sources()));
                 break;
             }
         }
@@ -262,6 +288,7 @@ pub fn execute_chain_subshell(
     options: &SessionOptions,
     platform: &dyn Platform,
     clock: Arc<dyn Clock>,
+    output: &mut dyn Write,
 ) -> Result<ScriptCompletion, ScriptError> {
     let options = options.inherit_process_group();
     let scope = ScopeStack::from_environment(environment);
@@ -277,6 +304,7 @@ pub fn execute_chain_subshell(
         platform,
         clock,
         false,
+        output,
     )
 }
 
@@ -293,6 +321,7 @@ fn execute_source(
     platform: &dyn Platform,
     clock: Arc<dyn Clock>,
     enable_background_jobs: bool,
+    output: &mut dyn Write,
 ) -> Result<ScriptCompletion, ScriptError> {
     let mut session = Session::with_scope_and_registry(
         scope,
@@ -304,9 +333,8 @@ fn execute_source(
     if enable_background_jobs {
         session.enable_script_job_control(Arc::clone(&clock));
     }
-    let mut output = io::stdout().lock();
     let outcome = session
-        .submit(name, text, probe, platform, clock.as_ref(), &mut output)
+        .submit(name, text, probe, platform, clock.as_ref(), output)
         .map_err(ScriptError::submit);
 
     finish_script_session(&mut session, environment, platform, outcome)
@@ -321,11 +349,10 @@ fn finish_script_session(
     // The join runs on every exit route, including a failing one: a script must
     // not orphan a child because one of its later statements failed.
     let failures = session.join_background_jobs(platform);
-    for failure in &failures {
-        eprintln!("fsh: {}", failure.render());
-    }
-
-    let outcome = outcome?;
+    let outcome = match outcome {
+        Ok(outcome) => outcome,
+        Err(error) => return Err(error.with_background_failures(failures)),
+    };
     let foreground = match outcome {
         SubmitOutcome::Continued => session.current_status().cloned(),
         SubmitOutcome::Exit(code) => Some(
@@ -335,7 +362,10 @@ fn finish_script_session(
     };
     let status = background_exit_status(&failures).or(foreground);
     *environment = session.environment().clone();
-    Ok(ScriptCompletion { status })
+    Ok(ScriptCompletion {
+        status,
+        background_failures: failures,
+    })
 }
 
 /// The exit status a failing background job imposes on its script.

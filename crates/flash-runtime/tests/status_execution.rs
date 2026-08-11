@@ -12,14 +12,17 @@ use std::sync::{Arc, Mutex};
 
 use flash_platform::{
     Capabilities, Capability, ChildProcess, DescriptorEndpoint, FileActionError, FileOpenRequest,
-    PipeEndpoints, PipeError, Platform, PlatformError, ProcessStatus, SpawnError, SpawnRequest,
-    TerminateError, WaitError,
+    PipeEndpoints, PipeError, Platform, PlatformError, ProcessGroup, ProcessGroupId, ProcessStatus,
+    SpawnError, SpawnRequest, TerminateError, WaitError,
 };
+use flash_runtime::builtin::standard_registry;
 use flash_runtime::command::CommandRegistry;
 use flash_runtime::eval::{FakeClock, RuntimeErrorKind};
 use flash_runtime::execute::{execute_foreground_chain, execute_foreground_status};
 use flash_runtime::plan::{SessionOptions, plan_pipeline_with_options};
 use flash_runtime::resolve::ExecutableProbe;
+use flash_runtime::script::execute_script;
+use flash_runtime::session::BackgroundFailureReason;
 use flash_runtime::{Environment, ScopeStack};
 use flash_syntax::{
     ConditionalChain, ParseOutcome, Pipeline, SourceFile, SourceId, StatementKind, parse,
@@ -132,6 +135,14 @@ impl Platform for ScriptedPlatform {
             .expect("executable lock")
             .push(request.executable().to_owned());
         Ok(Box::new(ScriptedChild {
+            id: u64::try_from(index + 1).expect("test child identity fits u64"),
+            process_group: match request.process_group() {
+                ProcessGroup::Inherit => None,
+                ProcessGroup::New => ProcessGroupId::new(
+                    u64::try_from(index + 1).expect("test process-group identity fits u64"),
+                ),
+                ProcessGroup::Join(group) => Some(group),
+            },
             status: self.statuses[index],
             wait_advance: self.wait_advances[index],
             clock: self.clock.clone(),
@@ -141,6 +152,8 @@ impl Platform for ScriptedPlatform {
 
 #[derive(Debug)]
 struct ScriptedChild {
+    id: u64,
+    process_group: Option<ProcessGroupId>,
     status: ProcessStatus,
     wait_advance: u64,
     clock: FakeClock,
@@ -148,7 +161,11 @@ struct ScriptedChild {
 
 impl ChildProcess for ScriptedChild {
     fn id(&self) -> u64 {
-        1
+        self.id
+    }
+
+    fn process_group(&self) -> Option<ProcessGroupId> {
+        self.process_group
     }
 
     fn wait(&mut self) -> Result<ProcessStatus, WaitError> {
@@ -186,6 +203,109 @@ fn a_plan_snapshots_pipefail_from_session_options() {
 
     assert!(!default_plan.pipefail());
     assert!(pipefail_plan.pipefail());
+}
+
+#[test]
+fn script_program_output_uses_the_injected_sink() {
+    let clock = FakeClock::new();
+    let platform = ScriptedPlatform::new(Vec::new(), Vec::new(), clock.clone());
+    let mut environment = Environment::from_snapshot([("PATH", "/bin")]);
+    let mut output = Vec::new();
+
+    let completion = execute_script(
+        "output.fsh",
+        "which pwd | get kind | encode utf8\n",
+        Path::new("/work"),
+        &mut environment,
+        &standard_registry(),
+        &BinProbe,
+        &SessionOptions::default(),
+        &platform,
+        Arc::new(clock),
+        &mut output,
+    )
+    .expect("the internal command should write through the supplied sink");
+
+    assert!(completion.background_failures().is_empty());
+    assert_eq!(output, b"internal");
+}
+
+#[test]
+fn script_join_returns_background_failures_in_job_identity_order() {
+    let clock = FakeClock::new();
+    let platform = ScriptedPlatform::new(
+        vec![ProcessStatus::Exited(7), ProcessStatus::Exited(9)],
+        vec![1, 1],
+        clock.clone(),
+    );
+    let mut environment = Environment::from_snapshot([("PATH", "/bin")]);
+    let mut output = Vec::new();
+
+    let completion = execute_script(
+        "jobs.fsh",
+        "^tool &\n^other &\n",
+        Path::new("/work"),
+        &mut environment,
+        &standard_registry(),
+        &BinProbe,
+        &SessionOptions::default(),
+        &platform,
+        Arc::new(clock),
+        &mut output,
+    )
+    .expect("background failures are completed script outcomes");
+
+    assert_eq!(
+        completion.status().and_then(|status| status.code()),
+        Some(7),
+        "the first failing job still owns final-status precedence"
+    );
+    assert_eq!(
+        completion
+            .background_failures()
+            .iter()
+            .map(|failure| failure.job().get())
+            .collect::<Vec<_>>(),
+        [1, 2]
+    );
+    assert!(matches!(
+        completion.background_failures()[0].reason(),
+        BackgroundFailureReason::Exited(status) if status.code() == Some(7)
+    ));
+    assert!(matches!(
+        completion.background_failures()[1].reason(),
+        BackgroundFailureReason::Exited(status) if status.code() == Some(9)
+    ));
+    assert!(output.is_empty());
+}
+
+#[test]
+fn script_error_retains_joined_background_reports() {
+    let clock = FakeClock::new();
+    let platform = ScriptedPlatform::new(vec![ProcessStatus::Exited(7)], vec![1], clock.clone());
+    let mut environment = Environment::from_snapshot([("PATH", "/bin")]);
+    let mut output = Vec::new();
+
+    let error = execute_script(
+        "failure.fsh",
+        "^tool &\nlet broken = 1 + true\n",
+        Path::new("/work"),
+        &mut environment,
+        &standard_registry(),
+        &BinProbe,
+        &SessionOptions::default(),
+        &platform,
+        Arc::new(clock),
+        &mut output,
+    )
+    .expect_err("the foreground runtime failure should remain primary");
+
+    assert!(error.render().starts_with("error[RUN001]"));
+    assert_eq!(error.background_failures().len(), 1);
+    assert!(matches!(
+        error.background_failures()[0].reason(),
+        BackgroundFailureReason::Exited(status) if status.code() == Some(7)
+    ));
 }
 
 #[test]
