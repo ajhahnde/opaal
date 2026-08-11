@@ -3,7 +3,10 @@
 use flash_syntax::SourceFile;
 
 use crate::ScopeStack;
-use crate::command::{Carrier, CommandOutput, CommandRegistry, CommandSignature};
+use crate::command::{
+    Carrier, CommandClassification, CommandLifecycle, CommandOutput, CommandRegistry,
+    CommandSignature,
+};
 pub use crate::documentation::{CommandDocumentation, Documentation};
 use crate::module::FunctionSignature;
 
@@ -54,6 +57,8 @@ impl FunctionInspection {
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum HelpKind {
     Builtin,
+    Alias,
+    Reserved,
     Function,
 }
 
@@ -61,15 +66,37 @@ pub enum HelpKind {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum HelpSignature {
     Builtin(CommandSignature),
+    Reserved,
     Function(FunctionSignature),
 }
 
-/// One immutable built-in or visible named-function help result.
+/// Namespace metadata retained by one help result.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum HelpNamespace {
+    /// A canonical executable built-in.
+    Core { lifecycle: CommandLifecycle },
+    /// An executable migration spelling backed by a canonical built-in.
+    Alias {
+        canonical_name: String,
+        lifecycle: CommandLifecycle,
+    },
+    /// A spelling protected from implicit external fallback.
+    Reserved {
+        introduced_major: u16,
+        purpose: String,
+        replacement: Option<String>,
+    },
+    /// A visible lexical function, outside the command registry.
+    Function,
+}
+
+/// One immutable command-namespace or visible named-function help result.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct HelpEntry {
     kind: HelpKind,
     name: String,
     signature: HelpSignature,
+    namespace: HelpNamespace,
     documentation: Documentation,
     definition: Option<FunctionInspection>,
 }
@@ -91,6 +118,11 @@ impl HelpEntry {
     }
 
     #[must_use]
+    pub const fn namespace(&self) -> &HelpNamespace {
+        &self.namespace
+    }
+
+    #[must_use]
     pub const fn documentation(&self) -> &Documentation {
         &self.documentation
     }
@@ -108,17 +140,59 @@ pub struct HelpCatalog {
 }
 
 impl HelpCatalog {
-    /// Snapshots standard commands and currently visible named callables.
+    /// Snapshots command-namespace entries and currently visible named callables.
     #[must_use]
     pub fn snapshot(registry: &CommandRegistry, scope: &ScopeStack) -> Self {
         let mut entries = registry
-            .signatures()
-            .map(|signature| HelpEntry {
-                kind: HelpKind::Builtin,
-                name: signature.name().to_owned(),
-                signature: HelpSignature::Builtin(signature.clone()),
-                documentation: signature.documentation().documentation().clone(),
-                definition: None,
+            .namespace_entries()
+            .map(|entry| match registry.classify(entry.name()) {
+                CommandClassification::Core {
+                    signature,
+                    lifecycle,
+                } => HelpEntry {
+                    kind: HelpKind::Builtin,
+                    name: entry.name().to_owned(),
+                    signature: HelpSignature::Builtin(signature.clone()),
+                    namespace: HelpNamespace::Core {
+                        lifecycle: lifecycle.clone(),
+                    },
+                    documentation: signature.documentation().documentation().clone(),
+                    definition: None,
+                },
+                CommandClassification::Alias {
+                    canonical_name,
+                    signature,
+                    lifecycle,
+                } => HelpEntry {
+                    kind: HelpKind::Alias,
+                    name: entry.name().to_owned(),
+                    signature: HelpSignature::Builtin(signature.clone()),
+                    namespace: HelpNamespace::Alias {
+                        canonical_name: canonical_name.to_owned(),
+                        lifecycle: lifecycle.clone(),
+                    },
+                    documentation: signature.documentation().documentation().clone(),
+                    definition: None,
+                },
+                CommandClassification::Reserved {
+                    purpose,
+                    replacement,
+                    introduced_major,
+                } => HelpEntry {
+                    kind: HelpKind::Reserved,
+                    name: entry.name().to_owned(),
+                    signature: HelpSignature::Reserved,
+                    namespace: HelpNamespace::Reserved {
+                        introduced_major,
+                        purpose: purpose.to_owned(),
+                        replacement: replacement.map(str::to_owned),
+                    },
+                    documentation: Documentation::new(purpose),
+                    definition: None,
+                },
+                CommandClassification::Unknown => {
+                    unreachable!("namespace iteration yields classified entries")
+                }
             })
             .collect::<Vec<_>>();
         entries.extend(
@@ -136,6 +210,7 @@ impl HelpCatalog {
                         name: signature.name().to_owned(),
                         documentation: signature.documentation().cloned().unwrap_or_default(),
                         signature: HelpSignature::Function(signature),
+                        namespace: HelpNamespace::Function,
                         definition: Some(inspection),
                     })
                 }),
@@ -207,7 +282,7 @@ pub fn render_help(snapshot: &HelpSnapshot) -> Vec<u8> {
         for entry in &snapshot.entries {
             let kind = kind_name(entry.kind);
             let signature = signature_text(&entry.signature);
-            let summary = summary(entry);
+            let summary = list_summary(entry);
             output.push_str(&format!("{}\t{kind}\t{signature}\t{summary}\n", entry.name));
         }
     }
@@ -219,6 +294,23 @@ pub fn render_help(snapshot: &HelpSnapshot) -> Vec<u8> {
 
 fn render_detail(output: &mut String, entry: &HelpEntry) {
     output.push_str(&format!("{} {}\n", kind_name(entry.kind), entry.name));
+    match &entry.namespace {
+        HelpNamespace::Alias { canonical_name, .. } => {
+            output.push_str(&format!("  target: {canonical_name}\n"));
+        }
+        HelpNamespace::Reserved {
+            introduced_major,
+            purpose,
+            replacement,
+        } => {
+            output.push_str(&format!("  introduced major: {introduced_major}\n"));
+            output.push_str(&format!("  purpose: {purpose}\n"));
+            if let Some(replacement) = replacement {
+                output.push_str(&format!("  replacement: {replacement}\n"));
+            }
+        }
+        HelpNamespace::Core { .. } | HelpNamespace::Function => {}
+    }
     match &entry.signature {
         HelpSignature::Function(_) => {
             output.push_str(&format!(
@@ -257,6 +349,18 @@ fn render_detail(output: &mut String, entry: &HelpEntry) {
                 output.push_str(&format!("  flags: {}\n", flags.join(", ")));
             }
         }
+        HelpSignature::Reserved => {}
+    }
+    match &entry.namespace {
+        HelpNamespace::Core { lifecycle } | HelpNamespace::Alias { lifecycle, .. } => {
+            if let Some(release) = lifecycle.deprecated_since_release() {
+                output.push_str(&format!("  deprecated since: {release}\n"));
+                if let Some(replacement) = lifecycle.replacement() {
+                    output.push_str(&format!("  replacement: {replacement}\n"));
+                }
+            }
+        }
+        HelpNamespace::Reserved { .. } | HelpNamespace::Function => {}
     }
     output.push_str(&format!("  summary: {}\n", summary(entry)));
     if !entry.documentation.is_empty() {
@@ -272,6 +376,7 @@ fn render_detail(output: &mut String, entry: &HelpEntry) {
 fn signature_text(signature: &HelpSignature) -> String {
     match signature {
         HelpSignature::Builtin(signature) => signature.documentation().invocation().to_owned(),
+        HelpSignature::Reserved => "-".to_owned(),
         HelpSignature::Function(signature) => {
             let parameters = signature
                 .parameters()
@@ -288,6 +393,40 @@ fn signature_text(signature: &HelpSignature) -> String {
     }
 }
 
+fn list_summary(entry: &HelpEntry) -> String {
+    let mut rendered = summary(entry).to_owned();
+    match &entry.namespace {
+        HelpNamespace::Core { lifecycle } => append_lifecycle(&mut rendered, lifecycle),
+        HelpNamespace::Alias {
+            canonical_name,
+            lifecycle,
+        } => {
+            rendered.push_str(&format!(" (alias for {canonical_name})"));
+            append_lifecycle(&mut rendered, lifecycle);
+        }
+        HelpNamespace::Reserved {
+            replacement: Some(replacement),
+            ..
+        } => rendered.push_str(&format!(" (replacement: {replacement})")),
+        HelpNamespace::Reserved {
+            replacement: None, ..
+        }
+        | HelpNamespace::Function => {}
+    }
+    rendered
+}
+
+fn append_lifecycle(rendered: &mut String, lifecycle: &CommandLifecycle) {
+    let Some(release) = lifecycle.deprecated_since_release() else {
+        return;
+    };
+    rendered.push_str(&format!(" (deprecated since {release}"));
+    if let Some(replacement) = lifecycle.replacement() {
+        rendered.push_str(&format!("; use {replacement}"));
+    }
+    rendered.push(')');
+}
+
 fn summary(entry: &HelpEntry) -> &str {
     let summary = entry.documentation.summary();
     if summary.is_empty() {
@@ -300,6 +439,8 @@ fn summary(entry: &HelpEntry) -> &str {
 const fn kind_name(kind: HelpKind) -> &'static str {
     match kind {
         HelpKind::Builtin => "builtin",
+        HelpKind::Alias => "alias",
+        HelpKind::Reserved => "reserved",
         HelpKind::Function => "function",
     }
 }
@@ -322,6 +463,7 @@ mod tests {
     use flash_syntax::{ParseOutcome, SourceId, parse};
 
     use super::*;
+    use crate::command::{CommandLifecycle, CommandNamespaceEntry};
     use crate::module::RuntimeBindingTypes;
     use crate::{BindingMutability, Callable, Value};
 
@@ -450,5 +592,113 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["other"]
         );
+    }
+
+    #[test]
+    fn namespace_help_exposes_classes_lifecycle_targets_order_and_exact_queries() {
+        let signature = |name: &str, invocation: &str, summary: &str| {
+            CommandSignature::new(name, [Carrier::Empty], Carrier::Value)
+                .with_flags(["--all"])
+                .with_documentation(CommandDocumentation::new(
+                    invocation,
+                    Documentation::new(summary),
+                ))
+        };
+        let registry = CommandRegistry::try_from_entries(
+            1,
+            [
+                CommandNamespaceEntry::core(
+                    signature("inspect", "inspect [--all]", "Inspect values."),
+                    CommandLifecycle::introduced(1),
+                ),
+                CommandNamespaceEntry::core(
+                    signature("old", "old [--all]", "Legacy inspection."),
+                    CommandLifecycle::introduced(1)
+                        .deprecated_since("0.9.0")
+                        .with_replacement("inspect"),
+                ),
+                CommandNamespaceEntry::alias(
+                    "show",
+                    "inspect",
+                    CommandLifecycle::introduced(1)
+                        .deprecated_since("0.9.0")
+                        .with_replacement("inspect"),
+                ),
+                CommandNamespaceEntry::reserved(
+                    "future",
+                    1,
+                    "reserved for a future inspector",
+                    Some("inspect"),
+                ),
+            ],
+        )
+        .expect("valid help namespace");
+
+        let catalog = HelpCatalog::snapshot(&registry, &ScopeStack::new());
+        assert_eq!(
+            catalog
+                .entries()
+                .iter()
+                .map(|entry| (entry.name(), entry.kind()))
+                .collect::<Vec<_>>(),
+            [
+                ("future", HelpKind::Reserved),
+                ("inspect", HelpKind::Builtin),
+                ("old", HelpKind::Builtin),
+                ("show", HelpKind::Alias),
+            ]
+        );
+
+        let show = catalog.query(Some("show"));
+        assert_eq!(show.len(), 1);
+        assert!(matches!(
+            show[0].namespace(),
+            HelpNamespace::Alias {
+                canonical_name,
+                lifecycle,
+            } if canonical_name == "inspect"
+                && lifecycle.deprecated_since_release() == Some("0.9.0")
+                && lifecycle.replacement() == Some("inspect")
+        ));
+        let HelpSignature::Builtin(alias_signature) = show[0].signature() else {
+            panic!("an alias reuses its canonical built-in signature");
+        };
+        assert_eq!(alias_signature.name(), "inspect");
+        assert_eq!(alias_signature.flags().collect::<Vec<_>>(), ["--all"]);
+
+        let old = catalog.query(Some("old"));
+        assert!(matches!(
+            old[0].namespace(),
+            HelpNamespace::Core { lifecycle }
+                if lifecycle.deprecated_since_release() == Some("0.9.0")
+                    && lifecycle.replacement() == Some("inspect")
+        ));
+
+        let rendered = String::from_utf8(render_help(&HelpSnapshot::new(
+            catalog.entries().to_vec(),
+            false,
+        )))
+        .expect("help is UTF-8");
+        assert!(rendered.contains("future\treserved\t"));
+        assert!(rendered.contains("show\talias\t"));
+        assert!(rendered.contains("alias for inspect"));
+        assert!(rendered.contains("deprecated since 0.9.0; use inspect"));
+
+        let future = catalog.query(Some("future"));
+        assert_eq!(future.len(), 1);
+        assert!(matches!(future[0].signature(), HelpSignature::Reserved));
+        assert!(matches!(
+            future[0].namespace(),
+            HelpNamespace::Reserved {
+                introduced_major: 1,
+                purpose,
+                replacement: Some(replacement),
+            } if purpose == "reserved for a future inspector" && replacement == "inspect"
+        ));
+        let detail = String::from_utf8(render_help(&HelpSnapshot::new(future, true)))
+            .expect("help is UTF-8");
+        assert!(detail.contains("reserved future\n"));
+        assert!(detail.contains("purpose: reserved for a future inspector\n"));
+        assert!(detail.contains("replacement: inspect\n"));
     }
 }

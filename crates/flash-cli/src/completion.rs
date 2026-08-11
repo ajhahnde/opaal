@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::ops::Range;
 
 use flash_runtime::ScopeStack;
-use flash_runtime::command::CommandRegistry;
+use flash_runtime::command::{CommandClassification, CommandRegistry};
 use flash_syntax::{
     Delimiter, Operator, ParseOutcome, SourceFile, SourceId, Token, TokenKind, lex, parse,
 };
@@ -82,15 +82,17 @@ impl CompletionCatalog {
     #[must_use]
     pub fn from_runtime(registry: &CommandRegistry, scope: &ScopeStack) -> Self {
         let internal = registry
-            .names()
-            .map(|name| {
-                let flags = registry
-                    .lookup(name)
-                    .expect("registry names always have signatures")
-                    .flags()
-                    .map(str::to_owned)
-                    .collect();
-                (name.to_owned(), flags)
+            .namespace_entries()
+            .filter_map(|entry| {
+                let signature = match registry.classify(entry.name()) {
+                    CommandClassification::Core { signature, .. }
+                    | CommandClassification::Alias { signature, .. } => signature,
+                    CommandClassification::Reserved { .. } | CommandClassification::Unknown => {
+                        return None;
+                    }
+                };
+                let flags = signature.flags().map(str::to_owned).collect();
+                Some((entry.name().to_owned(), flags))
             })
             .collect();
         let mut functions = BTreeSet::new();

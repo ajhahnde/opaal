@@ -7,8 +7,8 @@ use std::path::{Path, PathBuf};
 use flash_platform::{Platform, WorkingDirectoryRequest};
 
 use crate::command::{
-    Carrier, CommandLifecycle, CommandNamespaceEntry, CommandRegistry, CommandSignature,
-    V1_LANGUAGE_MAJOR,
+    Carrier, CommandClassification, CommandLifecycle, CommandNamespaceEntry, CommandRegistry,
+    CommandSignature, V1_LANGUAGE_MAJOR,
 };
 use crate::documentation::{CommandDocumentation, Documentation};
 use crate::eval::{RuntimeError, RuntimeErrorKind};
@@ -487,20 +487,37 @@ fn execute_which(
     for argument in stage.arguments() {
         let argument = word_argument("which", argument)?;
         let name = argument.value();
-        let (kind, path) = match resolve_command(name, false, registry, &session.environment, probe)
-        {
-            Ok(Resolution::Internal { .. }) => ("internal", Value::Null),
-            Ok(Resolution::External(command)) => (
-                "external",
-                Value::Path(NativePath::new(command.path().as_os_str().to_os_string())),
-            ),
-            Err(ResolutionError::NotFound { .. }) => {
-                missing = true;
-                ("missing", Value::Null)
+        let classification = name.to_str().map(|name| registry.classify(name));
+        let (kind, target, path) = match classification {
+            Some(CommandClassification::Core { .. }) => ("internal", Value::Null, Value::Null),
+            Some(CommandClassification::Alias { canonical_name, .. }) => {
+                ("alias", Value::string(canonical_name), Value::Null)
             }
-            Err(ResolutionError::Reserved { .. }) => {
+            Some(CommandClassification::Reserved { replacement, .. }) => {
                 missing = true;
-                ("missing", Value::Null)
+                (
+                    "reserved",
+                    replacement.map_or(Value::Null, Value::string),
+                    Value::Null,
+                )
+            }
+            Some(CommandClassification::Unknown) | None => {
+                match resolve_command(name, false, registry, &session.environment, probe) {
+                    Ok(Resolution::External(command)) => (
+                        "external",
+                        Value::Null,
+                        Value::Path(NativePath::new(command.path().as_os_str().to_os_string())),
+                    ),
+                    Err(ResolutionError::NotFound { .. }) => {
+                        missing = true;
+                        ("missing", Value::Null, Value::Null)
+                    }
+                    Ok(Resolution::Internal { .. }) | Err(ResolutionError::Reserved { .. }) => {
+                        unreachable!(
+                            "unknown and native names cannot resolve through the namespace"
+                        )
+                    }
+                }
             }
         };
         output.push(Value::Record(
@@ -510,6 +527,7 @@ fn execute_which(
                     Value::Path(NativePath::new(name.to_os_string())),
                 ),
                 ("kind".to_owned(), Value::string(kind)),
+                ("target".to_owned(), target),
                 ("path".to_owned(), path),
             ])
             .expect("which record keys are unique"),

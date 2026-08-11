@@ -6,7 +6,9 @@ use std::fmt;
 use std::sync::Arc;
 
 use flash_cli::completion::{CompletionCatalog, CompletionEngine, CompletionKind};
-use flash_runtime::command::{Carrier, CommandRegistry, CommandSignature};
+use flash_runtime::command::{
+    Carrier, CommandLifecycle, CommandNamespaceEntry, CommandRegistry, CommandSignature,
+};
 use flash_runtime::{BindingMutability, Callable, ScopeStack, Value};
 
 #[derive(Debug)]
@@ -124,6 +126,44 @@ fn flags_come_only_from_the_matching_internal_signature() {
         ]
     );
     assert!(engine.complete("external --a", 12).is_empty());
+}
+
+#[test]
+fn aliases_reuse_canonical_flags_and_reserved_names_are_not_commands() {
+    let registry = CommandRegistry::try_from_entries(
+        1,
+        [
+            CommandNamespaceEntry::core(
+                CommandSignature::new("query", [Carrier::Empty], Carrier::Value)
+                    .with_flags(["--all", "--verbose"]),
+                CommandLifecycle::introduced(1),
+            ),
+            CommandNamespaceEntry::alias("ask", "query", CommandLifecycle::introduced(1)),
+            CommandNamespaceEntry::reserved("archive", 1, "future command", None),
+        ],
+    )
+    .expect("valid completion namespace");
+    let engine = CompletionEngine::new(CompletionCatalog::from_runtime(
+        &registry,
+        &ScopeStack::new(),
+    ));
+
+    assert_eq!(
+        engine
+            .complete("a", 1)
+            .iter()
+            .map(|completion| (completion.value(), completion.kind()))
+            .collect::<Vec<_>>(),
+        [("ask", CompletionKind::InternalCommand)]
+    );
+    assert_eq!(
+        engine
+            .complete("ask --", 6)
+            .iter()
+            .map(|completion| completion.value())
+            .collect::<Vec<_>>(),
+        ["--all", "--verbose"]
+    );
 }
 
 #[test]

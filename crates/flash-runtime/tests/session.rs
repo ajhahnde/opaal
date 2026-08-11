@@ -4383,7 +4383,7 @@ fn a_terminal_record_stream_renders_as_one_table() {
 
     assert_eq!(
         String::from_utf8(sink).unwrap(),
-        "name    | kind     | path\n--------+----------+-----\npwd     | internal | null\nmissing | missing  | null\n"
+        "name    | kind     | target | path\n--------+----------+--------+-----\npwd     | internal | null   | null\nmissing | missing  | null   | null\n"
     );
 }
 

@@ -441,6 +441,92 @@ fn which_reports_internal_external_and_missing_names_in_order() {
 }
 
 #[test]
+fn which_reports_all_namespace_kinds_targets_paths_order_and_status() {
+    let standard = standard_registry();
+    let registry = CommandRegistry::try_from_entries(
+        1,
+        [
+            CommandNamespaceEntry::core(
+                standard.lookup("which").expect("standard which").clone(),
+                CommandLifecycle::introduced(1),
+            ),
+            CommandNamespaceEntry::core(
+                standard.lookup("pwd").expect("standard pwd").clone(),
+                CommandLifecycle::introduced(1),
+            ),
+            CommandNamespaceEntry::alias("cwd", "pwd", CommandLifecycle::introduced(1)),
+            CommandNamespaceEntry::reserved("future", 1, "future command", Some("pwd")),
+        ],
+    )
+    .expect("valid which namespace");
+    let probe = Probe::new(["/bin/tool"]);
+    let mut session = state();
+    let plan = build_with_registry(
+        "which pwd cwd future tool absent",
+        session.environment(),
+        &registry,
+        &probe,
+    );
+    let outcome = execute_builtin(
+        &plan.stages()[0],
+        Carrier::Empty,
+        None,
+        &mut session,
+        &registry,
+        &probe,
+        &FakePlatform::none(),
+    )
+    .expect("which namespace misses are normal data");
+    let BuiltinOutcome::Completed(completion) = outcome else {
+        panic!("which should complete internally");
+    };
+    let BuiltinOutput::ValueStream(records) = completion.output() else {
+        panic!("which should produce a value stream");
+    };
+
+    let fields = records
+        .iter()
+        .map(|value| {
+            let Value::Record(record) = value else {
+                panic!("which item should be a record");
+            };
+            let string = |key| match record.get(key) {
+                Some(Value::String(value)) => Some(value.as_ref()),
+                Some(Value::Null) => None,
+                other => panic!("unexpected {key} field: {other:?}"),
+            };
+            let name = match record.get("name") {
+                Some(Value::Path(value)) => value.as_os_str(),
+                other => panic!("unexpected name field: {other:?}"),
+            };
+            let path = match record.get("path") {
+                Some(Value::Path(value)) => Some(value.as_os_str()),
+                Some(Value::Null) => None,
+                other => panic!("unexpected path field: {other:?}"),
+            };
+            (name, string("kind").expect("kind"), string("target"), path)
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        fields,
+        [
+            (OsStr::new("pwd"), "internal", None, None),
+            (OsStr::new("cwd"), "alias", Some("pwd"), None),
+            (OsStr::new("future"), "reserved", Some("pwd"), None),
+            (
+                OsStr::new("tool"),
+                "external",
+                None,
+                Some(OsStr::new("/bin/tool")),
+            ),
+            (OsStr::new("absent"), "missing", None, None),
+        ]
+    );
+    assert_eq!(completion.status().code(), Some(1));
+    assert_eq!(session.current_status().unwrap().code(), Some(1));
+}
+
+#[test]
 fn command_forces_external_resolution_and_preserves_native_argv() {
     let probe = Probe::new(["/bin/pwd"]);
     let mut session = state();
