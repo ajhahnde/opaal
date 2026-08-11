@@ -389,8 +389,105 @@ fn a_bare_name_resolves_to_the_internal_command_before_external() {
         .expect("resolves internal");
 
     match resolved {
-        Resolution::Internal(signature) => assert_eq!(signature.name(), "git"),
+        Resolution::Internal {
+            source_name,
+            canonical_name,
+            signature,
+        } => {
+            assert_eq!(source_name, "git");
+            assert_eq!(canonical_name, "git");
+            assert_eq!(signature.name(), "git");
+        }
         Resolution::External(other) => panic!("expected internal, found {other:?}"),
+    }
+}
+
+#[test]
+fn an_alias_resolves_with_source_and_canonical_executor_identity() {
+    let registry = CommandRegistry::try_from_entries(
+        1,
+        [
+            CommandNamespaceEntry::core(sig("pwd", [Carrier::Empty], Carrier::Value), lifecycle()),
+            CommandNamespaceEntry::alias("cwd", "pwd", lifecycle()),
+        ],
+    )
+    .expect("valid namespace");
+    let env = Environment::from_snapshot([("PATH", "/usr/bin")]);
+    let probe = FakeExecutables::new(["/usr/bin/cwd"]);
+
+    let resolved = resolve_command(OsStr::new("cwd"), false, &registry, &env, &probe)
+        .expect("alias resolves internally");
+
+    match resolved {
+        Resolution::Internal {
+            source_name,
+            canonical_name,
+            signature,
+        } => {
+            assert_eq!(source_name, "cwd");
+            assert_eq!(canonical_name, "pwd");
+            assert_eq!(signature.name(), "pwd");
+        }
+        Resolution::External(other) => panic!("expected internal alias, found {other:?}"),
+    }
+}
+
+#[test]
+fn a_reserved_bare_name_is_refused_before_path_lookup() {
+    let registry = CommandRegistry::try_from_entries(
+        1,
+        [
+            CommandNamespaceEntry::core(sig("pwd", [Carrier::Empty], Carrier::Value), lifecycle()),
+            CommandNamespaceEntry::reserved(
+                "future",
+                1,
+                "reserved for a future structured command",
+                Some("pwd"),
+            ),
+        ],
+    )
+    .expect("valid namespace");
+    let env = Environment::from_snapshot([("PATH", "/usr/bin")]);
+    let probe = FakeExecutables::new(["/usr/bin/future"]);
+
+    let error = resolve_command(OsStr::new("future"), false, &registry, &env, &probe)
+        .expect_err("reservation wins before PATH");
+
+    assert!(matches!(
+        error,
+        ResolutionError::Reserved {
+            name,
+            purpose,
+            replacement: Some(replacement),
+        } if name == "future"
+            && purpose == "reserved for a future structured command"
+            && replacement == "pwd"
+    ));
+}
+
+#[test]
+fn forced_external_resolution_bypasses_a_reservation() {
+    let registry = CommandRegistry::try_from_entries(
+        1,
+        [CommandNamespaceEntry::reserved(
+            "future",
+            1,
+            "future command",
+            None,
+        )],
+    )
+    .expect("valid namespace");
+    let env = Environment::from_snapshot([("PATH", "/usr/bin")]);
+    let probe = FakeExecutables::new(["/usr/bin/future"]);
+
+    let resolved = resolve_command(OsStr::new("future"), true, &registry, &env, &probe)
+        .expect("forced external bypasses reservation");
+
+    match resolved {
+        Resolution::External(command) => {
+            assert_eq!(command.path(), Path::new("/usr/bin/future"));
+        }
+        Resolution::Internal { .. } => panic!("forced external resolved internally"),
     }
 }
 
@@ -405,7 +502,7 @@ fn a_bare_name_missing_from_the_registry_falls_back_to_external() {
 
     match resolved {
         Resolution::External(command) => assert_eq!(command.path(), Path::new("/usr/bin/ls")),
-        Resolution::Internal(signature) => panic!("expected external, found {signature:?}"),
+        Resolution::Internal { .. } => panic!("expected external"),
     }
 }
 
@@ -434,7 +531,7 @@ fn an_external_marked_name_skips_the_registry() {
 
     match resolved {
         Resolution::External(command) => assert_eq!(command.path(), Path::new("/usr/bin/git")),
-        Resolution::Internal(signature) => panic!("expected external, found {signature:?}"),
+        Resolution::Internal { .. } => panic!("expected external"),
     }
 }
 
@@ -473,6 +570,6 @@ fn a_non_utf8_name_cannot_be_internal_and_resolves_externally() {
         Resolution::External(command) => {
             assert_eq!(command.path().as_os_str().as_bytes(), candidate.as_bytes());
         }
-        Resolution::Internal(signature) => panic!("expected external, found {signature:?}"),
+        Resolution::Internal { .. } => panic!("expected external"),
     }
 }

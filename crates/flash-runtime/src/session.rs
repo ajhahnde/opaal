@@ -799,7 +799,10 @@ fn pipeline_is_all_external(
         let Some(name) = head.value().to_str() else {
             return true;
         };
-        !registry.contains(name)
+        matches!(
+            registry.classify(name),
+            crate::command::CommandClassification::Unknown
+        )
     })
 }
 
@@ -1130,10 +1133,10 @@ fn validate_job_builtin_arguments(plan: &ExecutionPlan) -> Result<(), RuntimeErr
         .iter()
         .any(|stage| !matches!(stage.resolution(), PlannedResolution::Internal { .. }));
     for stage in plan.stages() {
-        let PlannedResolution::Internal { name } = stage.resolution() else {
+        let PlannedResolution::Internal { canonical_name, .. } = stage.resolution() else {
             continue;
         };
-        let Some(command) = job_command_name(name.as_str()) else {
+        let Some(command) = job_command_name(canonical_name.as_str()) else {
             continue;
         };
         // Job commands run against the session-owned coordinator, which the
@@ -1189,10 +1192,10 @@ fn sole_job_command(plan: &ExecutionPlan) -> Option<(&'static str, &PlannedStage
     let [stage] = plan.stages() else {
         return None;
     };
-    let PlannedResolution::Internal { name } = stage.resolution() else {
+    let PlannedResolution::Internal { canonical_name, .. } = stage.resolution() else {
         return None;
     };
-    match job_command_name(name.as_str()) {
+    match job_command_name(canonical_name.as_str()) {
         Some("jobs") | None => None,
         Some(command) => Some((command, stage)),
     }
@@ -1285,7 +1288,10 @@ fn execute_job_builtin(
 /// Whether this all-internal plan begins with the read-only job table.
 fn is_job_table_head(plan: &ExecutionPlan) -> bool {
     plan.stages().first().is_some_and(|stage| {
-        matches!(stage.resolution(), PlannedResolution::Internal { name } if name == "jobs")
+        matches!(
+            stage.resolution(),
+            PlannedResolution::Internal { canonical_name, .. } if canonical_name == "jobs"
+        )
     })
 }
 
@@ -1623,7 +1629,7 @@ fn run_mixed_pipeline(
     let internal_result = (|| {
         for index in internal {
             let stage = &plan.stages()[index];
-            let PlannedResolution::Internal { name } = stage.resolution() else {
+            let PlannedResolution::Internal { canonical_name, .. } = stage.resolution() else {
                 return Err(Interrupt::Runtime(RuntimeError::new(
                     RuntimeErrorKind::Unsupported {
                         feature: "a mixed pipeline with more than one internal stage island",
@@ -1633,7 +1639,7 @@ fn run_mixed_pipeline(
             };
             let upstream = indexed_statuses.last().map(|(_, status)| status);
             match execute_stage(
-                name,
+                canonical_name,
                 stage,
                 payload,
                 upstream,

@@ -244,6 +244,8 @@ pub enum RuntimeErrorKind {
     /// A command name that resolved to neither an internal command nor an
     /// executable on `PATH`. `name` is the searched native command name.
     CommandNotFound { name: OsString },
+    /// A bare command spelling is reserved against implicit external fallback.
+    ReservedCommand(Box<ReservedCommandDetails>),
     /// A redirection descriptor number whose decimal spelling does not fit in a
     /// `u32`.
     RedirectionDescriptorOverflow,
@@ -509,6 +511,21 @@ impl fmt::Display for RuntimeErrorKind {
             Self::CommandNotFound { name } => {
                 write!(formatter, "command not found: {}", name.to_string_lossy())
             }
+            Self::ReservedCommand(details) => {
+                write!(
+                    formatter,
+                    "command `{}` is reserved: {}",
+                    details.name, details.purpose
+                )?;
+                if let Some(replacement) = &details.replacement {
+                    write!(formatter, "; use `{replacement}` instead")?;
+                }
+                write!(
+                    formatter,
+                    "; use `^{0}` or `command {0}` for intentional external execution",
+                    details.name
+                )
+            }
             Self::RedirectionDescriptorOverflow => {
                 formatter.write_str("redirection descriptor number is out of range")
             }
@@ -694,6 +711,44 @@ impl fmt::Display for RuntimeErrorKind {
                 formatter.write_str("the stopped job has no process group to resume")
             }
         }
+    }
+}
+
+/// Structured runtime data for a reserved bare command spelling.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReservedCommandDetails {
+    name: String,
+    purpose: String,
+    replacement: Option<String>,
+}
+
+impl ReservedCommandDetails {
+    /// Build one reserved-command refusal from validated namespace metadata.
+    #[must_use]
+    pub const fn new(name: String, purpose: String, replacement: Option<String>) -> Self {
+        Self {
+            name,
+            purpose,
+            replacement,
+        }
+    }
+
+    /// The reserved source spelling.
+    #[must_use]
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Stable reason the spelling is unavailable.
+    #[must_use]
+    pub fn purpose(&self) -> &str {
+        &self.purpose
+    }
+
+    /// Optional canonical migration target.
+    #[must_use]
+    pub fn replacement(&self) -> Option<&str> {
+        self.replacement.as_deref()
     }
 }
 

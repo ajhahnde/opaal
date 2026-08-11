@@ -27,8 +27,8 @@ use flash_syntax::{
 use crate::carrier::{PipelineCarrierFault, StageCarrierContract, analyze_pipeline_carriers};
 use crate::command::{Carrier, CommandOutput, CommandRegistry};
 use crate::eval::{
-    ExpandedWord, RuntimeError, RuntimeErrorKind, evaluate_closure_argument_with_binding_types,
-    expand_spread, expand_word,
+    ExpandedWord, ReservedCommandDetails, RuntimeError, RuntimeErrorKind,
+    evaluate_closure_argument_with_binding_types, expand_spread, expand_word,
 };
 use crate::help::{HelpCatalog, HelpSnapshot};
 use crate::module::RuntimeBindingTypes;
@@ -274,10 +274,18 @@ impl Default for SessionOptions {
     }
 }
 
-/// Renders a stage's resolution as `internal NAME` or `external PATH`.
+/// Renders a stage's source and canonical internal identity or external path.
 fn render_resolution(resolution: &PlannedResolution) -> String {
     match resolution {
-        PlannedResolution::Internal { name } => format!("internal {name}"),
+        PlannedResolution::Internal {
+            source_name,
+            canonical_name,
+        } if source_name != canonical_name => {
+            format!("internal {source_name} (canonical {canonical_name})")
+        }
+        PlannedResolution::Internal { canonical_name, .. } => {
+            format!("internal {canonical_name}")
+        }
         PlannedResolution::External { path } => format!("external {}", path.display()),
     }
 }
@@ -427,13 +435,15 @@ impl PlannedArgument {
     }
 }
 
-/// A resolved command: an internal command or an external executable path.
+/// A resolved command with retained source/canonical identity or an external path.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum PlannedResolution {
     /// A bare name matched a registered internal command.
     Internal {
-        /// The registered command name.
-        name: String,
+        /// The expanded source spelling used by the caller.
+        source_name: String,
+        /// The canonical executor identity.
+        canonical_name: String,
     },
     /// A name resolved to an external executable path.
     External {
@@ -676,7 +686,10 @@ fn plan_stage(
     let force_external = command.head.kind() == flash_syntax::CommandHeadKind::ForcedExternal;
     let (resolution, input_carriers, output_carrier) =
         resolve(head.value(), force_external, command.head.span(), context)?;
-    if matches!(&resolution, PlannedResolution::Internal { name } if name == "help") {
+    if matches!(
+        &resolution,
+        PlannedResolution::Internal { canonical_name, .. } if canonical_name == "help"
+    ) {
         return Err(RuntimeError::new(
             RuntimeErrorKind::BuiltinArgument {
                 command: "help",
@@ -842,7 +855,8 @@ fn plan_help_stage(
 
     Ok(PlannedStage {
         resolution: PlannedResolution::Internal {
-            name: signature.name().to_owned(),
+            source_name: signature.name().to_owned(),
+            canonical_name: signature.name().to_owned(),
         },
         input_carriers: signature.inputs().collect(),
         output_carrier: signature.output().resolve(context.input_carrier),
@@ -888,7 +902,11 @@ fn resolve(
         context.environment,
         context.probe,
     ) {
-        Ok(Resolution::Internal(signature)) => {
+        Ok(Resolution::Internal {
+            source_name,
+            canonical_name,
+            signature,
+        }) => {
             if signature.name() == "check"
                 && signature.output() == CommandOutput::SameAsInput
                 && !context.has_upstream
@@ -900,7 +918,8 @@ fn resolve(
             }
             Ok((
                 PlannedResolution::Internal {
-                    name: signature.name().to_owned(),
+                    source_name,
+                    canonical_name: canonical_name.to_owned(),
                 },
                 signature.inputs().collect(),
                 signature.output().resolve(context.input_carrier),
@@ -915,6 +934,18 @@ fn resolve(
         )),
         Err(ResolutionError::NotFound { name }) => Err(RuntimeError::new(
             RuntimeErrorKind::CommandNotFound { name },
+            head_span,
+        )),
+        Err(ResolutionError::Reserved {
+            name,
+            purpose,
+            replacement,
+        }) => Err(RuntimeError::new(
+            RuntimeErrorKind::ReservedCommand(Box::new(ReservedCommandDetails::new(
+                name,
+                purpose,
+                replacement,
+            ))),
             head_span,
         )),
     }

@@ -28,6 +28,8 @@ use flash_platform::{
     WaitError,
 };
 use flash_platform_posix::PosixPlatform;
+use flash_runtime::builtin::standard_registry;
+use flash_runtime::command::{CommandLifecycle, CommandNamespaceEntry, CommandRegistry};
 use flash_runtime::eval::FakeClock;
 use flash_runtime::job::{JobMemberState, JobPlacement, JobState, ProcessId};
 use flash_runtime::plan::SessionOptions;
@@ -35,7 +37,7 @@ use flash_runtime::resolve::ExecutableProbe;
 use flash_runtime::session::{
     BackgroundFailureReason, JobNoticeKind, LiveJobState, Session, SubmitOutcome,
 };
-use flash_runtime::{Duration, Environment, Status};
+use flash_runtime::{Duration, Environment, ScopeStack, Status};
 
 #[derive(Default)]
 struct Probe {
@@ -752,6 +754,49 @@ fn external_commands_execute_and_record_their_status() {
 }
 
 #[test]
+fn an_alias_runs_through_the_canonical_session_executor() {
+    let standard = standard_registry();
+    let registry = CommandRegistry::try_from_entries(
+        1,
+        [
+            CommandNamespaceEntry::core(
+                standard.lookup("pwd").expect("standard pwd").clone(),
+                CommandLifecycle::introduced(1),
+            ),
+            CommandNamespaceEntry::alias("cwd", "pwd", CommandLifecycle::introduced(1)),
+        ],
+    )
+    .expect("valid namespace");
+    let mut session = Session::with_scope_and_registry(
+        ScopeStack::new(),
+        "/work",
+        environment(),
+        SessionOptions::default(),
+        registry,
+    );
+    let mut output = Vec::new();
+
+    assert_eq!(
+        session
+            .submit(
+                "<interactive>",
+                "cwd",
+                &Probe::default(),
+                &terminal_platform(),
+                &FakeClock::new(),
+                &mut output,
+            )
+            .expect("alias should execute through pwd"),
+        SubmitOutcome::Continued
+    );
+    assert!(
+        String::from_utf8(output)
+            .expect("UTF-8 output")
+            .contains("/work")
+    );
+}
+
+#[test]
 fn background_work_without_a_job_control_opt_in_is_rejected_at_the_marker() {
     let mut session = session();
     let probe = Probe::new(["/bin/tool"]);
@@ -823,6 +868,60 @@ fn a_background_conditional_chain_launches_exactly_one_shell_member() {
         ]
     );
     assert_eq!(records[0].requested(), ProcessGroup::New);
+}
+
+#[test]
+fn a_reserved_background_head_is_not_classified_as_an_external_pipeline() {
+    let registry = CommandRegistry::try_from_entries(
+        1,
+        [CommandNamespaceEntry::reserved(
+            "future",
+            1,
+            "future command",
+            None,
+        )],
+    )
+    .expect("valid namespace");
+    let clock = Arc::new(FakeClock::at(100));
+    let mut session = Session::with_scope_and_registry(
+        ScopeStack::new(),
+        "/work",
+        environment(),
+        SessionOptions::default(),
+        registry,
+    );
+    session.enable_interactive_job_control(clock.clone());
+    let probe = Probe::new(["/bin/future"]);
+    let platform = RecordingPlatform::new(terminal_platform());
+    let mut sink = Vec::new();
+
+    assert_eq!(
+        session
+            .submit(
+                "<interactive>",
+                "future &",
+                &probe,
+                &platform,
+                clock.as_ref(),
+                &mut sink,
+            )
+            .expect("reserved background work should use shell re-execution"),
+        SubmitOutcome::Continued
+    );
+
+    let records = platform.spawn_log().records();
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].executable(), Path::new("/fake/fsh"));
+    assert_eq!(
+        records[0].argv(),
+        [
+            OsString::from("/fake/fsh"),
+            OsString::from("--async-chain"),
+            OsString::from("future"),
+            OsString::from("--async-capture-limit"),
+            OsString::from(SessionOptions::DEFAULT_CAPTURE_LIMIT.to_string()),
+        ]
+    );
 }
 
 #[test]

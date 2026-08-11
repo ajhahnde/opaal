@@ -1,4 +1,4 @@
-//! External-command resolution and `PATH` lookup.
+//! Command-namespace resolution and external `PATH` lookup.
 //!
 //! [`resolve_external`] turns an already-expanded native command name into a
 //! concrete executable path using the environment's `PATH` and an injected
@@ -13,7 +13,7 @@ use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 
 use crate::Environment;
-use crate::command::{CommandRegistry, CommandSignature};
+use crate::command::{CommandClassification, CommandRegistry, CommandSignature};
 
 /// Answers whether a native path names an executable file.
 ///
@@ -24,7 +24,7 @@ pub trait ExecutableProbe {
     fn is_executable(&self, path: &OsStr) -> bool;
 }
 
-/// An `^external` name resolved to a concrete executable path.
+/// An external name resolved to a concrete executable path.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ResolvedCommand {
     path: PathBuf,
@@ -40,7 +40,7 @@ impl ResolvedCommand {
     }
 }
 
-/// A failure to resolve an `^external` name to an executable.
+/// A failure to resolve a command name.
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum ResolutionError {
@@ -50,13 +50,29 @@ pub enum ResolutionError {
         /// The command name that could not be resolved.
         name: std::ffi::OsString,
     },
+    /// A namespace reservation prevented implicit external fallback.
+    Reserved {
+        /// The reserved UTF-8 source spelling.
+        name: String,
+        /// Stable reason the spelling is unavailable.
+        purpose: String,
+        /// Optional canonical migration target.
+        replacement: Option<String>,
+    },
 }
 
-/// A resolved command: an internal command's signature or an external executable.
+/// A resolved command: an internal source/canonical identity or an external executable.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Resolution<'a> {
     /// A bare name matched a registered internal command.
-    Internal(&'a CommandSignature),
+    Internal {
+        /// The expanded source spelling used by the caller.
+        source_name: String,
+        /// The canonical executor identity.
+        canonical_name: &'a str,
+        /// The canonical command signature.
+        signature: &'a CommandSignature,
+    },
     /// A name resolved to an external executable.
     External(ResolvedCommand),
 }
@@ -64,10 +80,11 @@ pub enum Resolution<'a> {
 /// Resolves a command name against the registry and, on a miss, `PATH`.
 ///
 /// A bare name (`force_external` is `false`) is looked up in `registry` first;
-/// only a miss falls back to [`resolve_external`], giving internal commands
-/// precedence. An `^external` name (`force_external` is `true`) never consults the
-/// registry and resolves externally only. A name whose native bytes are not valid
-/// UTF-8 cannot equal an identifier and always resolves externally.
+/// only an unknown spelling falls back to [`resolve_external`], giving internal
+/// commands and reservations precedence. An `^external` name (`force_external`
+/// is `true`) never consults the registry and resolves externally only. A name
+/// whose native bytes are not valid UTF-8 cannot equal an identifier and always
+/// resolves externally.
 pub fn resolve_command<'a>(
     name: &OsStr,
     force_external: bool,
@@ -75,9 +92,39 @@ pub fn resolve_command<'a>(
     environment: &Environment,
     probe: &dyn ExecutableProbe,
 ) -> Result<Resolution<'a>, ResolutionError> {
-    if !force_external && let Some(signature) = name.to_str().and_then(|name| registry.lookup(name))
-    {
-        return Ok(Resolution::Internal(signature));
+    if !force_external && let Some(name) = name.to_str() {
+        match registry.classify(name) {
+            CommandClassification::Unknown => {}
+            CommandClassification::Core { signature, .. } => {
+                return Ok(Resolution::Internal {
+                    source_name: name.to_owned(),
+                    canonical_name: signature.name(),
+                    signature,
+                });
+            }
+            CommandClassification::Alias {
+                canonical_name,
+                signature,
+                ..
+            } => {
+                return Ok(Resolution::Internal {
+                    source_name: name.to_owned(),
+                    canonical_name,
+                    signature,
+                });
+            }
+            CommandClassification::Reserved {
+                purpose,
+                replacement,
+                ..
+            } => {
+                return Err(ResolutionError::Reserved {
+                    name: name.to_owned(),
+                    purpose: purpose.to_owned(),
+                    replacement: replacement.map(str::to_owned),
+                });
+            }
+        }
     }
     resolve_external(name, environment, probe).map(Resolution::External)
 }

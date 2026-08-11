@@ -8,7 +8,9 @@ use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 
 use flash_runtime::builtin::standard_registry;
-use flash_runtime::command::{Carrier, CommandRegistry, CommandSignature};
+use flash_runtime::command::{
+    Carrier, CommandLifecycle, CommandNamespaceEntry, CommandRegistry, CommandSignature,
+};
 use flash_runtime::eval::RuntimeErrorKind;
 use flash_runtime::plan::{
     ExecutionPlan, PlannedArgument, PlannedResolution, RedirectionAction, plan_pipeline,
@@ -138,7 +140,119 @@ fn bare_command_resolves_internal_before_external() {
     assert_eq!(
         plan.stages()[0].resolution(),
         &PlannedResolution::Internal {
-            name: "cd".to_owned(),
+            source_name: "cd".to_owned(),
+            canonical_name: "cd".to_owned(),
+        }
+    );
+}
+
+#[test]
+fn alias_planning_retains_source_spelling_and_canonical_executor() {
+    let registry = CommandRegistry::try_from_entries(
+        1,
+        [
+            CommandNamespaceEntry::core(
+                CommandSignature::new("pwd", [Carrier::Empty], Carrier::Value),
+                CommandLifecycle::introduced(1),
+            ),
+            CommandNamespaceEntry::alias("cwd", "pwd", CommandLifecycle::introduced(1)),
+        ],
+    )
+    .expect("valid namespace");
+    let probe = FakeProbe::with(&["/bin/cwd"]);
+    let mut scope = ScopeStack::new();
+    let environment = Environment::from_snapshot([("PATH", "/bin")]);
+
+    let plan =
+        plan_with("cwd", "/work", &mut scope, &environment, &registry, &probe).expect("plan");
+
+    assert_eq!(
+        plan.stages()[0].resolution(),
+        &PlannedResolution::Internal {
+            source_name: "cwd".to_owned(),
+            canonical_name: "pwd".to_owned(),
+        }
+    );
+    assert_eq!(plan.stages()[0].output_carrier(), Carrier::Value);
+}
+
+#[test]
+fn reserved_planning_fails_before_path_with_structured_guidance() {
+    let registry = CommandRegistry::try_from_entries(
+        1,
+        [
+            CommandNamespaceEntry::core(
+                CommandSignature::new("pwd", [Carrier::Empty], Carrier::Value),
+                CommandLifecycle::introduced(1),
+            ),
+            CommandNamespaceEntry::reserved(
+                "future",
+                1,
+                "reserved for a future command",
+                Some("pwd"),
+            ),
+        ],
+    )
+    .expect("valid namespace");
+    let probe = FakeProbe::with(&["/bin/future"]);
+    let mut scope = ScopeStack::new();
+    let environment = Environment::from_snapshot([("PATH", "/bin")]);
+
+    let error = plan_with(
+        "future",
+        "/work",
+        &mut scope,
+        &environment,
+        &registry,
+        &probe,
+    )
+    .expect_err("reserved bare name");
+
+    let rendered = error.to_string();
+    assert!(rendered.contains("command `future` is reserved"));
+    assert!(rendered.contains("use `pwd` instead"));
+    assert!(rendered.contains("`^future`"));
+    assert!(rendered.contains("`command future`"));
+
+    assert!(matches!(
+        error,
+        RuntimeErrorKind::ReservedCommand(details)
+            if details.name() == "future"
+                && details.purpose() == "reserved for a future command"
+                && details.replacement() == Some("pwd")
+    ));
+}
+
+#[test]
+fn forced_external_planning_bypasses_a_reservation() {
+    let registry = CommandRegistry::try_from_entries(
+        1,
+        [CommandNamespaceEntry::reserved(
+            "future",
+            1,
+            "future command",
+            None,
+        )],
+    )
+    .expect("valid namespace");
+    let probe = FakeProbe::with(&["/bin/future"]);
+    let mut scope = ScopeStack::new();
+    let environment = Environment::from_snapshot([("PATH", "/bin")]);
+
+    let plan = plan_with(
+        "^future",
+        "/work",
+        &mut scope,
+        &environment,
+        &registry,
+        &probe,
+    )
+    .expect("forced external plan");
+
+    assert_eq!(
+        plan.stages()[0].resolution(),
+        &PlannedResolution::External {
+            path: PathBuf::from("/bin/future"),
         }
     );
 }

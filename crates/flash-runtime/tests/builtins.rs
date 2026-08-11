@@ -9,7 +9,9 @@ use flash_platform::FakePlatform;
 use flash_runtime::builtin::{
     BuiltinOutcome, BuiltinOutput, SessionState, execute_builtin, standard_registry,
 };
-use flash_runtime::command::{Carrier, CommandOutput};
+use flash_runtime::command::{
+    Carrier, CommandLifecycle, CommandNamespaceEntry, CommandOutput, CommandRegistry,
+};
 use flash_runtime::eval::RuntimeErrorKind;
 use flash_runtime::plan::{ExecutionPlan, plan_pipeline};
 use flash_runtime::resolve::ExecutableProbe;
@@ -53,6 +55,15 @@ impl ExecutableProbe for Probe {
 }
 
 fn build(text: &str, environment: &Environment, probe: &dyn ExecutableProbe) -> ExecutionPlan {
+    build_with_registry(text, environment, &standard_registry(), probe)
+}
+
+fn build_with_registry(
+    text: &str,
+    environment: &Environment,
+    registry: &CommandRegistry,
+    probe: &dyn ExecutableProbe,
+) -> ExecutionPlan {
     let file = source(text);
     plan_pipeline(
         &pipeline(&file),
@@ -60,7 +71,7 @@ fn build(text: &str, environment: &Environment, probe: &dyn ExecutableProbe) -> 
         &file,
         &mut ScopeStack::new(),
         environment,
-        &standard_registry(),
+        registry,
         probe,
     )
     .expect("built-in plan should build")
@@ -354,6 +365,44 @@ fn pwd_returns_the_stored_path_without_platform_access() {
 }
 
 #[test]
+fn an_alias_dispatches_through_its_canonical_builtin_executor() {
+    let standard = standard_registry();
+    let registry = CommandRegistry::try_from_entries(
+        1,
+        [
+            CommandNamespaceEntry::core(
+                standard.lookup("pwd").expect("standard pwd").clone(),
+                CommandLifecycle::introduced(1),
+            ),
+            CommandNamespaceEntry::alias("cwd", "pwd", CommandLifecycle::introduced(1)),
+        ],
+    )
+    .expect("valid namespace");
+    let probe = Probe::new(["/bin/cwd"]);
+    let mut session = state();
+    let plan = build_with_registry("cwd", session.environment(), &registry, &probe);
+
+    let outcome = execute_builtin(
+        &plan.stages()[0],
+        Carrier::Empty,
+        None,
+        &mut session,
+        &registry,
+        &probe,
+        &FakePlatform::none(),
+    )
+    .expect("alias should use pwd executor");
+
+    let BuiltinOutcome::Completed(completion) = outcome else {
+        panic!("pwd alias should complete internally");
+    };
+    let BuiltinOutput::Value(Value::Path(path)) = completion.output() else {
+        panic!("pwd alias should produce one Path value");
+    };
+    assert_eq!(path.as_os_str(), OsStr::new("/work"));
+}
+
+#[test]
 fn which_reports_internal_external_and_missing_names_in_order() {
     let probe = Probe::new(["/bin/tool"]);
     let mut session = state();
@@ -418,6 +467,45 @@ fn command_forces_external_resolution_and_preserves_native_argv() {
             OsString::new()
         ]
     );
+}
+
+#[test]
+fn command_dynamically_bypasses_a_reserved_name() {
+    let standard = standard_registry();
+    let registry = CommandRegistry::try_from_entries(
+        1,
+        [
+            CommandNamespaceEntry::core(
+                standard
+                    .lookup("command")
+                    .expect("standard command")
+                    .clone(),
+                CommandLifecycle::introduced(1),
+            ),
+            CommandNamespaceEntry::reserved("future", 1, "future command", None),
+        ],
+    )
+    .expect("valid namespace");
+    let probe = Probe::new(["/bin/future"]);
+    let mut session = state();
+    let plan = build_with_registry("command future", session.environment(), &registry, &probe);
+
+    let outcome = execute_builtin(
+        &plan.stages()[0],
+        Carrier::Empty,
+        None,
+        &mut session,
+        &registry,
+        &probe,
+        &FakePlatform::none(),
+    )
+    .expect("command should bypass the reservation");
+
+    let BuiltinOutcome::External(invocation) = outcome else {
+        panic!("command should request external execution");
+    };
+    assert_eq!(invocation.executable(), Path::new("/bin/future"));
+    assert_eq!(invocation.argv(), [OsString::from("future")]);
 }
 
 #[test]

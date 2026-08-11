@@ -383,7 +383,7 @@ pub fn execute_builtin(
     probe: &dyn ExecutableProbe,
     platform: &dyn Platform,
 ) -> Result<BuiltinOutcome, RuntimeError> {
-    let PlannedResolution::Internal { name } = stage.resolution() else {
+    let PlannedResolution::Internal { canonical_name, .. } = stage.resolution() else {
         return Err(RuntimeError::new(
             RuntimeErrorKind::Unsupported {
                 feature: "executing an external stage as a built-in",
@@ -391,7 +391,7 @@ pub fn execute_builtin(
             stage.span(),
         ));
     };
-    let signature = registry.lookup(name).ok_or_else(|| {
+    let signature = registry.lookup(canonical_name).ok_or_else(|| {
         RuntimeError::new(
             RuntimeErrorKind::Unsupported {
                 feature: "an unregistered internal command",
@@ -399,7 +399,7 @@ pub fn execute_builtin(
             stage.span(),
         )
     })?;
-    let command = standard_name(name).ok_or_else(|| {
+    let command = standard_name(canonical_name).ok_or_else(|| {
         RuntimeError::new(
             RuntimeErrorKind::Unsupported {
                 feature: "a non-standard internal command",
@@ -489,12 +489,16 @@ fn execute_which(
         let name = argument.value();
         let (kind, path) = match resolve_command(name, false, registry, &session.environment, probe)
         {
-            Ok(Resolution::Internal(_)) => ("internal", Value::Null),
+            Ok(Resolution::Internal { .. }) => ("internal", Value::Null),
             Ok(Resolution::External(command)) => (
                 "external",
                 Value::Path(NativePath::new(command.path().as_os_str().to_os_string())),
             ),
             Err(ResolutionError::NotFound { .. }) => {
+                missing = true;
+                ("missing", Value::Null)
+            }
+            Err(ResolutionError::Reserved { .. }) => {
                 missing = true;
                 ("missing", Value::Null)
             }
@@ -531,14 +535,16 @@ fn execute_command(
             .first()
             .expect("arity guarantees one command name"),
     )?;
-    let resolved = resolve_external(name.value(), &session.environment, probe).map_err(
-        |ResolutionError::NotFound { name: missing }| {
+    let resolved =
+        resolve_external(name.value(), &session.environment, probe).map_err(|error| {
+            let ResolutionError::NotFound { name: missing } = error else {
+                unreachable!("direct external resolution cannot observe namespace reservations");
+            };
             RuntimeError::new(
                 RuntimeErrorKind::CommandNotFound { name: missing },
                 name.span(),
             )
-        },
-    )?;
+        })?;
     Ok(BuiltinOutcome::External(ExternalInvocation {
         executable: resolved.path().to_owned(),
         argv: stage

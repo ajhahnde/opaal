@@ -138,7 +138,7 @@ pub fn execute_internal_suffix(
     );
 
     for stage in plan.stages().iter().skip(start) {
-        let PlannedResolution::Internal { name } = stage.resolution() else {
+        let PlannedResolution::Internal { canonical_name, .. } = stage.resolution() else {
             return Err(RuntimeError::new(
                 RuntimeErrorKind::Unsupported {
                     feature: "an external stage in the internal pipeline executor",
@@ -148,7 +148,7 @@ pub fn execute_internal_suffix(
         };
         let upstream = statuses.last();
         match execute_stage(
-            name,
+            canonical_name,
             stage,
             payload,
             upstream,
@@ -174,7 +174,7 @@ pub fn execute_internal_suffix(
     let inspection_only = plan.stages().len() == 1
         && matches!(
             plan.stages()[0].resolution(),
-            PlannedResolution::Internal { name } if name == "help"
+            PlannedResolution::Internal { canonical_name, .. } if canonical_name == "help"
         );
     if !inspection_only {
         state.set_current_status(Some(status.clone()));
@@ -1231,7 +1231,7 @@ fn aggregate_status(statuses: Vec<Status>, pipefail: bool) -> Status {
 
 fn command_name(stage: &PlannedStage) -> &'static str {
     match stage.resolution() {
-        PlannedResolution::Internal { name } => match name.as_str() {
+        PlannedResolution::Internal { canonical_name, .. } => match canonical_name.as_str() {
             "first" => "first",
             "last" => "last",
             "collect" => "collect",
