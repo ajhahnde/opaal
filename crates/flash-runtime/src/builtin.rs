@@ -6,7 +6,10 @@ use std::path::{Path, PathBuf};
 
 use flash_platform::{Platform, WorkingDirectoryRequest};
 
-use crate::command::{Carrier, CommandRegistry, CommandSignature};
+use crate::command::{
+    Carrier, CommandLifecycle, CommandNamespaceEntry, CommandRegistry, CommandSignature,
+    V1_LANGUAGE_MAJOR,
+};
 use crate::documentation::{CommandDocumentation, Documentation};
 use crate::eval::{RuntimeError, RuntimeErrorKind};
 use crate::plan::{PlannedArgument, PlannedResolution, PlannedStage};
@@ -145,8 +148,7 @@ pub enum BuiltinOutcome {
 /// Construct the standard internal-command registry.
 #[must_use]
 pub fn standard_registry() -> CommandRegistry {
-    let mut registry = CommandRegistry::new();
-    for signature in [
+    let entries = [
         documented(
             CommandSignature::new("cd", [Carrier::Empty], Carrier::Empty),
             "cd [PATH]",
@@ -351,24 +353,23 @@ pub fn standard_registry() -> CommandRegistry {
             "help [NAME]",
             "Inspect built-in and visible function metadata without execution.",
         ),
-    ] {
-        assert!(
-            registry.register(signature),
-            "standard built-in names are unique"
-        );
-    }
-    registry
+    ];
+    CommandRegistry::try_from_entries(V1_LANGUAGE_MAJOR, entries)
+        .expect("the standard command namespace manifest must be valid")
 }
 
 fn documented(
     signature: CommandSignature,
     invocation: &'static str,
     summary: &'static str,
-) -> CommandSignature {
-    signature.with_documentation(CommandDocumentation::new(
-        invocation,
-        Documentation::new(summary),
-    ))
+) -> CommandNamespaceEntry {
+    CommandNamespaceEntry::core(
+        signature.with_documentation(CommandDocumentation::new(
+            invocation,
+            Documentation::new(summary),
+        )),
+        CommandLifecycle::introduced(V1_LANGUAGE_MAJOR),
+    )
 }
 
 /// Execute one planned standard internal command without spawning a process.

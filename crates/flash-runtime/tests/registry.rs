@@ -10,7 +10,11 @@ use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::Path;
 
 use flash_runtime::Environment;
-use flash_runtime::command::{Carrier, CommandOutput, CommandRegistry, CommandSignature};
+use flash_runtime::builtin::standard_registry;
+use flash_runtime::command::{
+    Carrier, CommandClassification, CommandLifecycle, CommandNamespaceEntry, CommandOutput,
+    CommandRegistry, CommandRegistryError, CommandSignature, NamespaceClass,
+};
 use flash_runtime::resolve::{ExecutableProbe, Resolution, ResolutionError, resolve_command};
 
 struct FakeExecutables(HashSet<OsString>);
@@ -33,6 +37,10 @@ impl ExecutableProbe for FakeExecutables {
 
 fn sig(name: &str, inputs: impl IntoIterator<Item = Carrier>, output: Carrier) -> CommandSignature {
     CommandSignature::new(name, inputs, output)
+}
+
+fn lifecycle() -> CommandLifecycle {
+    CommandLifecycle::introduced(1)
 }
 
 /// Extracts the searched name from a `NotFound`, failing on any other outcome.
@@ -119,6 +127,254 @@ fn registering_a_duplicate_name_is_rejected_and_keeps_the_first() {
     assert!(kept.accepts(Carrier::Empty));
     assert!(!kept.accepts(Carrier::Value));
     assert_eq!(registry.len(), 1);
+}
+
+#[test]
+fn the_standard_manifest_is_the_exact_v1_core_with_no_aliases_or_reservations() {
+    let registry = standard_registry();
+    let expected = [
+        "bg", "cd", "check", "collect", "command", "decode", "each", "encode", "exit", "fg",
+        "first", "from", "get", "help", "jobs", "kill", "last", "length", "lines", "ls", "open",
+        "pwd", "save", "select", "sort", "to", "update", "wait", "where", "which",
+    ];
+
+    assert_eq!(registry.language_major(), 1);
+    assert_eq!(registry.core_names().collect::<Vec<_>>(), expected);
+    assert_eq!(
+        registry.alias_names().collect::<Vec<_>>(),
+        Vec::<&str>::new()
+    );
+    assert_eq!(
+        registry.reserved_names().collect::<Vec<_>>(),
+        Vec::<&str>::new()
+    );
+    assert_eq!(
+        registry
+            .namespace_entries()
+            .map(|entry| (entry.name(), entry.class()))
+            .collect::<Vec<_>>(),
+        expected
+            .into_iter()
+            .map(|name| (name, NamespaceClass::Core))
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn namespace_iteration_and_classification_cover_all_entry_classes() {
+    let registry = CommandRegistry::try_from_entries(
+        1,
+        [
+            CommandNamespaceEntry::reserved("future", 1, "future command", Some("pwd")),
+            CommandNamespaceEntry::alias("cwd", "pwd", lifecycle()),
+            CommandNamespaceEntry::core(sig("pwd", [Carrier::Empty], Carrier::Value), lifecycle()),
+        ],
+    )
+    .expect("valid namespace");
+
+    assert_eq!(
+        registry
+            .namespace_entries()
+            .map(|entry| (entry.name(), entry.class()))
+            .collect::<Vec<_>>(),
+        [
+            ("cwd", NamespaceClass::Alias),
+            ("future", NamespaceClass::Reserved),
+            ("pwd", NamespaceClass::Core),
+        ]
+    );
+    assert!(matches!(
+        registry.classify("pwd"),
+        CommandClassification::Core { signature, lifecycle }
+            if signature.name() == "pwd" && lifecycle.introduced_major() == 1
+    ));
+    assert!(matches!(
+        registry.classify("cwd"),
+        CommandClassification::Alias {
+            canonical_name: "pwd",
+            signature,
+            lifecycle,
+        } if signature.name() == "pwd" && lifecycle.introduced_major() == 1
+    ));
+    assert!(matches!(
+        registry.classify("future"),
+        CommandClassification::Reserved {
+            purpose: "future command",
+            replacement: Some("pwd"),
+            introduced_major: 1,
+        }
+    ));
+    assert!(matches!(
+        registry.classify("missing"),
+        CommandClassification::Unknown
+    ));
+}
+
+#[test]
+fn aliases_resolve_to_the_canonical_signature_without_copying_it() {
+    let registry = CommandRegistry::try_from_entries(
+        1,
+        [
+            CommandNamespaceEntry::core(sig("pwd", [Carrier::Empty], Carrier::Value), lifecycle()),
+            CommandNamespaceEntry::alias("cwd", "pwd", lifecycle()),
+        ],
+    )
+    .expect("valid namespace");
+
+    let canonical = registry.lookup("pwd").expect("core signature");
+    let alias = registry.lookup("cwd").expect("alias signature");
+    assert!(std::ptr::eq(canonical, alias));
+    assert_eq!(alias.name(), "pwd");
+}
+
+#[test]
+fn namespace_construction_rejects_duplicate_empty_and_invalid_alias_entries() {
+    let duplicate = CommandRegistry::try_from_entries(
+        1,
+        [
+            CommandNamespaceEntry::core(sig("pwd", [Carrier::Empty], Carrier::Value), lifecycle()),
+            CommandNamespaceEntry::reserved("pwd", 1, "tombstone", None),
+        ],
+    );
+    assert!(matches!(
+        duplicate,
+        Err(CommandRegistryError::DuplicateName { name }) if name == "pwd"
+    ));
+
+    for entry in [
+        CommandNamespaceEntry::core(sig("", [Carrier::Empty], Carrier::Empty), lifecycle()),
+        CommandNamespaceEntry::alias("", "pwd", lifecycle()),
+        CommandNamespaceEntry::reserved("", 1, "future command", None),
+    ] {
+        assert!(matches!(
+            CommandRegistry::try_from_entries(1, [entry]),
+            Err(CommandRegistryError::EmptyName)
+        ));
+    }
+
+    let core =
+        || CommandNamespaceEntry::core(sig("pwd", [Carrier::Empty], Carrier::Value), lifecycle());
+    let missing = CommandRegistry::try_from_entries(
+        1,
+        [
+            core(),
+            CommandNamespaceEntry::alias("cwd", "missing", lifecycle()),
+        ],
+    );
+    assert!(matches!(
+        missing,
+        Err(CommandRegistryError::MissingAliasTarget { name, target })
+            if name == "cwd" && target == "missing"
+    ));
+
+    let self_alias = CommandRegistry::try_from_entries(
+        1,
+        [
+            core(),
+            CommandNamespaceEntry::alias("cwd", "cwd", lifecycle()),
+        ],
+    );
+    assert!(matches!(
+        self_alias,
+        Err(CommandRegistryError::SelfAlias { name }) if name == "cwd"
+    ));
+
+    let chain = CommandRegistry::try_from_entries(
+        1,
+        [
+            core(),
+            CommandNamespaceEntry::alias("cwd", "pwd", lifecycle()),
+            CommandNamespaceEntry::alias("whereami", "cwd", lifecycle()),
+        ],
+    );
+    assert!(matches!(
+        chain,
+        Err(CommandRegistryError::AliasTargetNotCore { name, target })
+            if name == "whereami" && target == "cwd"
+    ));
+
+    let cycle = CommandRegistry::try_from_entries(
+        1,
+        [
+            core(),
+            CommandNamespaceEntry::alias("left", "right", lifecycle()),
+            CommandNamespaceEntry::alias("right", "left", lifecycle()),
+        ],
+    );
+    assert!(matches!(
+        cycle,
+        Err(CommandRegistryError::AliasTargetNotCore { .. })
+    ));
+}
+
+#[test]
+fn namespace_construction_validates_lifecycle_and_replacement_metadata() {
+    let future = CommandRegistry::try_from_entries(
+        1,
+        [CommandNamespaceEntry::core(
+            sig("pwd", [Carrier::Empty], Carrier::Value),
+            CommandLifecycle::introduced(2),
+        )],
+    );
+    assert!(matches!(
+        future,
+        Err(CommandRegistryError::InvalidIntroducedMajor {
+            name,
+            introduced_major: 2,
+            language_major: 1,
+        }) if name == "pwd"
+    ));
+
+    let replacement_without_deprecation = CommandRegistry::try_from_entries(
+        1,
+        [CommandNamespaceEntry::core(
+            sig("pwd", [Carrier::Empty], Carrier::Value),
+            lifecycle().with_replacement("cd"),
+        )],
+    );
+    assert!(matches!(
+        replacement_without_deprecation,
+        Err(CommandRegistryError::ReplacementWithoutDeprecation { name }) if name == "pwd"
+    ));
+
+    let empty_deprecation = CommandRegistry::try_from_entries(
+        1,
+        [CommandNamespaceEntry::core(
+            sig("pwd", [Carrier::Empty], Carrier::Value),
+            lifecycle().deprecated_since(""),
+        )],
+    );
+    assert!(matches!(
+        empty_deprecation,
+        Err(CommandRegistryError::EmptyDeprecation { name }) if name == "pwd"
+    ));
+
+    let invalid_replacement = CommandRegistry::try_from_entries(
+        1,
+        [
+            CommandNamespaceEntry::core(
+                sig("pwd", [Carrier::Empty], Carrier::Value),
+                lifecycle()
+                    .deprecated_since("0.9")
+                    .with_replacement("missing"),
+            ),
+            CommandNamespaceEntry::core(sig("cd", [Carrier::Empty], Carrier::Empty), lifecycle()),
+        ],
+    );
+    assert!(matches!(
+        invalid_replacement,
+        Err(CommandRegistryError::InvalidReplacementTarget { name, replacement })
+            if name == "pwd" && replacement == "missing"
+    ));
+
+    let empty_purpose = CommandRegistry::try_from_entries(
+        1,
+        [CommandNamespaceEntry::reserved("future", 1, "", None)],
+    );
+    assert!(matches!(
+        empty_purpose,
+        Err(CommandRegistryError::EmptyReservationPurpose { name }) if name == "future"
+    ));
 }
 
 #[test]
