@@ -32,6 +32,7 @@ use flash_cli::interactive::{
     InteractiveNotice, InteractiveNoticeError, InteractiveNoticeId, InteractiveSessionError,
     format_job_notice, format_live_jobs, run_interactive_session,
 };
+use flash_cli::report::{HostReport, write_report};
 use flash_platform::{Platform, PlatformError};
 use flash_platform_posix::PosixPlatform;
 use flash_runtime::eval::{Clock, SystemClock};
@@ -43,7 +44,7 @@ use flash_runtime::plan::SessionOptions;
 use flash_runtime::resolve::ExecutableProbe;
 use flash_runtime::script::{execute_chain_subshell, execute_module_program};
 use flash_runtime::session::{BackgroundFailure, JobNoticeId, Session, SubmitError, SubmitOutcome};
-use flash_runtime::{Environment, ScopeStack, Status};
+use flash_runtime::{Environment, ScopeStack};
 
 const HELP: &str = "Flash command shell
 
@@ -114,29 +115,20 @@ fn main() -> ExitCode {
     let invocation = match parse_args(env::args_os().skip(1)) {
         Ok(invocation) => invocation,
         Err(error) => {
-            eprintln!("fsh: {}", error.message());
-            return ExitCode::from(2);
+            let message = error.message();
+            return emit_report(HostReport::misuse(&message));
         }
     };
 
     match invocation.mode {
-        Mode::Help => {
-            print!("{HELP}");
-            ExitCode::SUCCESS
-        }
+        Mode::Help => emit_report(HostReport::success(HELP.as_bytes())),
         Mode::Version => {
-            println!("fsh {}", flash_runtime::version());
-            ExitCode::SUCCESS
+            let version = format!("fsh {}\n", flash_runtime::version());
+            emit_report(HostReport::success(version.as_bytes()))
         }
-        Mode::CheckHelp => {
-            print!("{CHECK_HELP}");
-            ExitCode::SUCCESS
-        }
+        Mode::CheckHelp => emit_report(HostReport::success(CHECK_HELP.as_bytes())),
         Mode::Check { source } => run_checker(source),
-        Mode::FormatHelp => {
-            print!("{FORMAT_HELP}");
-            ExitCode::SUCCESS
-        }
+        Mode::FormatHelp => emit_report(HostReport::success(FORMAT_HELP.as_bytes())),
         Mode::Format { operation, paths } => run_formatter(operation, paths),
         Mode::Script { path, arguments } => run_script(&path, &arguments),
         Mode::AsyncChain {
@@ -148,16 +140,22 @@ fn main() -> ExitCode {
     }
 }
 
+fn emit_report(report: HostReport<'_>) -> ExitCode {
+    let stdout = io::stdout();
+    let stderr = io::stderr();
+    let mut output = stdout.lock();
+    let mut diagnostics = stderr.lock();
+    ExitCode::from(write_report(report, &mut output, &mut diagnostics).code())
+}
+
 fn run_checker(source: PathBuf) -> ExitCode {
     let request = CheckRequest::new(source);
     let run = check_source(&request, &HostCheckFilesystem);
-    for issue in run.rendered_issues() {
-        eprint!("{issue}");
-    }
     if run.is_success() {
-        ExitCode::SUCCESS
+        emit_report(HostReport::success(b""))
     } else {
-        ExitCode::FAILURE
+        let diagnostics = run.rendered_issues().concat();
+        emit_report(HostReport::failure(diagnostics.as_bytes()))
     }
 }
 
@@ -165,13 +163,15 @@ fn run_formatter(operation: flash_cli::cli::FormatOperation, paths: Vec<PathBuf>
     let request = FormatRequest::new(operation, paths);
     let mut filesystem = HostFormatFilesystem;
     let run = format_files(&request, &mut filesystem);
-    for failure in run.failures() {
-        eprint!("{}", failure.rendered());
-    }
     if run.is_success() {
-        ExitCode::SUCCESS
+        emit_report(HostReport::success(b""))
     } else {
-        ExitCode::FAILURE
+        let diagnostics = run
+            .failures()
+            .iter()
+            .map(|failure| failure.rendered())
+            .collect::<String>();
+        emit_report(HostReport::failure(diagnostics.as_bytes()))
     }
 }
 
@@ -535,7 +535,10 @@ fn run_script(path: &Path, arguments: &[String]) -> ExitCode {
     );
 
     match result {
-        Ok(completion) => completion.status().map_or(ExitCode::SUCCESS, status_exit),
+        Ok(completion) => completion.status().map_or_else(
+            || emit_report(HostReport::success(b"")),
+            |status| emit_report(HostReport::completed(status, b"")),
+        ),
         Err(error) => {
             eprint!("{}", error.render());
             ExitCode::FAILURE
@@ -591,24 +594,15 @@ fn run_async_chain(text: String, pipefail: bool, capture_limit: usize) -> ExitCo
     );
 
     match result {
-        Ok(completion) => completion.status().map_or(ExitCode::SUCCESS, status_exit),
+        Ok(completion) => completion.status().map_or_else(
+            || emit_report(HostReport::success(b"")),
+            |status| emit_report(HostReport::completed(status, b"")),
+        ),
         Err(error) => {
             eprint!("{}", error.render());
             ExitCode::FAILURE
         }
     }
-}
-
-fn status_exit(status: &Status) -> ExitCode {
-    let code = match (status.code(), status.signal()) {
-        (Some(code), None) => u8::try_from(code).unwrap_or(1),
-        (None, Some(signal)) => signal
-            .number()
-            .and_then(|number| u8::try_from(128_i64.saturating_add(number)).ok())
-            .unwrap_or(1),
-        _ => 1,
-    };
-    ExitCode::from(code)
 }
 
 struct NativeExecutableProbe;
