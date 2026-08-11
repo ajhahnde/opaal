@@ -364,7 +364,12 @@ preflight
 
 ### Command registry
 
-The [`CommandRegistry`](../crates/flash-runtime/src/command.rs) maps internal command names to signatures.
+The [`CommandRegistry`](../crates/flash-runtime/src/command.rs) owns one
+validated, deterministically ordered namespace manifest. Each spelling is a
+canonical core command, an alias targeting exactly one core command, or a
+reserved name protected from implicit external fallback. Core entries own
+signatures; aliases borrow the canonical signature rather than copying it; and
+reserved entries own no executable signature.
 
 A signature declares:
 
@@ -373,9 +378,26 @@ A signature declares:
 - command flags exposed to editor services;
 - a stable invocation spelling and normalized user-facing documentation.
 
-Duplicate command registration is rejected when the registry is constructed. Runtime command execution does not use registration order as an override mechanism.
+Invocable entries also carry their language-major introduction and optional
+deprecation/replacement lifecycle metadata. Construction rejects duplicate or
+empty names, invalid lifecycle data, missing or non-core alias targets, alias
+chains, and invalid replacements. Runtime command execution does not use
+manifest order as an override mechanism.
 
-A bare command name resolves against this registry before external executable lookup. A forced-external command bypasses the internal registry.
+One classification operation returns unknown, core, alias, or reserved state.
+Runtime resolution, planning, static analysis, background classification,
+help, completion, and `which` consume that operation rather than maintaining
+copied command lists or inferring namespace class from signature lookup. An
+alias classification retains both the source spelling and canonical executor
+identity, so every executor dispatches through the core implementation while
+diagnostics and inspection preserve the spelling the program used.
+
+A non-forced UTF-8 bare name is classified before external lookup. Core and
+alias entries resolve internally; a reserved entry fails before `PATH`; and an
+unknown name continues to external resolution. Forced-external and native
+non-UTF-8 names retain the external path. Static checking uses the same
+classification without probing host executables and gives a reserved stage an
+unknown carrier contract to suppress dependent pipeline cascades.
 
 ### External resolution
 

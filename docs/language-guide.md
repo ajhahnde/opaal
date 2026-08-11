@@ -515,6 +515,41 @@ let arguments = ["--mode", "check"]
 command $program ...$arguments
 ```
 
+The standard namespace classifies spellings as canonical core commands,
+invocable migration aliases, or reserved names protected from implicit
+external fallback. The Flash v1 standard manifest begins with no aliases and no
+reserved names.
+
+The Flash v1 core command inventory is:
+
+```text
+bg cd check collect command decode each encode exit fg first from get help jobs
+kill last length lines ls open pwd save select sort to update wait where which
+```
+
+`export` and `unset` are statement keywords rather than command-namespace
+entries. Core and alias entries may carry introduction, deprecation, and
+replacement metadata. An alias always targets one core entry and reuses its
+signature and behavior; a reserved entry is not executable as an internal
+command and blocks bare-name `PATH` fallback. `^name` and `command name` bypass
+every namespace class for explicit external execution.
+
+The namespace is part of the language-major contract:
+
+| Change | Compatibility class |
+| --- | --- |
+| Preserve an entry's name, class, canonical target, signature, and behavior while changing implementation or documentation | Compatible within the language major |
+| Add deprecation metadata without changing runtime behavior or canonical identity | Compatible within the language major |
+| Activate a name reserved at the start of the language major | Compatible within the language major |
+| Add a core command, alias, or reservation under a previously unknown name | Next language major |
+| Remove or rename a core command; remove or retarget an alias; or release a reservation | Next language major |
+| Change namespace class except when activating an existing reservation | Next language major |
+| Alter a command contract in a way that can change an existing successful program | Semantic review and normally the next language major |
+
+This classification concerns Flash source semantics, not whether a particular
+host currently has a same-named executable. Static analysis therefore never
+probes `PATH` to decide whether a namespace change is safe.
+
 ### Ordinary command words
 
 Each ordinary command word produces exactly one argument.
@@ -834,11 +869,15 @@ help greet
 ```
 
 The list includes each entry's kind, canonical signature or invocation, and
-summary. Detailed built-in output also shows its pipeline carrier contract and
-flags; detailed function output shows its resolved parameter/result types and
-defining location. An undocumented named function is still inspectable and is
-identified as `undocumented`. Built-ins and functions occupy distinct
-namespaces, so both entries are shown when they share a name.
+summary. Core entries use kind `builtin`. Alias entries use kind `alias`, name
+their canonical target, and share the target's invocation, carriers, flags, and
+prose. Reserved entries use kind `reserved`, show their purpose and optional
+replacement, and claim no executable signature. Deprecated core and alias
+entries expose their release and optional replacement. Detailed function output
+shows resolved parameter/result types and defining location. An undocumented
+named function is still inspectable and is identified as `undocumented`.
+Command entries and functions occupy distinct namespaces, so both entries are
+shown when they share a name.
 
 Runtime lookup follows ordinary lexical visibility and shadowing. A visible
 non-callable hides an outer function of the same name, imported functions keep

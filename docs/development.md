@@ -471,6 +471,47 @@ and panic-on-use process/platform adapters.
 Help lookup is inspection-only and must not execute the documented callable,
 probe an executable, or mutate the session merely to discover metadata.
 
+### Built-in namespace changes
+
+The standard manifest in
+[`builtin.rs`](../crates/flash-runtime/src/builtin.rs) is the sole inventory for
+core commands, aliases, reservations, and lifecycle metadata. A namespace
+change must not add a checker-owned, completion-owned, help-owned, or
+executor-owned copy of the inventory. The public Scripting and Language Guide
+inventories are checked against the standard manifest by the focused registry
+suite.
+
+Before changing the namespace, classify the source compatibility effect. A new
+core command, alias, or reservation under a previously unknown name requires a
+language-major decision because it changes bare-name external resolution.
+Activation of a name already reserved for the current major may be compatible.
+Removing or renaming a core command, removing or retargeting an alias, releasing
+a reservation, changing entry class outside reserved activation, or changing a
+successful command contract also requires explicit semantic review and normally
+the next language major.
+
+Every namespace change must cover the affected boundaries:
+
+- manifest validation, exact class inventories, deterministic order, lifecycle
+  rules, alias canonicalization, and public inventory alignment;
+- resolution, planning, canonical executor dispatch, background
+  classification, forced-external bypass, and native non-UTF-8 behavior;
+- host-free `CMD001` deprecation warnings and `CMD002` reserved errors,
+  including ordering, status, source spans, bypasses, and carrier-cascade
+  suppression;
+- help kinds, exact queries, lifecycle and target rendering, canonical alias
+  metadata reuse, and unchanged output for an unaffected core-only manifest;
+- completion inclusion of core and alias names, canonical alias flags, and
+  reserved-name exclusion; and
+- all five `which` result kinds, ordered `name`/`kind`/`target`/`path` fields,
+  path and target population, and final status.
+
+Run the focused registry, planner, built-in, module-analysis, help/session,
+completion, and interactive-driver suites before the complete locked workspace
+tests and strict all-feature/all-target Clippy gate. Namespace policy changes
+also require the public-boundary scan and review of Scripting, the Language
+Guide, Architecture, the Flash overview, and the changelog.
+
 ### Language-server contract
 
 The Flash language server is required for the v1 tooling surface. It must reuse the shared parser, syntax tree, module graph, name resolution, signatures, and diagnostics rather than implementing another version of the language.

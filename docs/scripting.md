@@ -320,6 +320,62 @@ ls
 
 In this example, `pwd` and `ls` select the Flash internal commands when those commands are registered.
 
+### Built-in namespace compatibility
+
+The standard command namespace distinguishes canonical **core** commands,
+invocable migration **aliases**, and **reserved** names that cannot fall through
+to an external executable. The Flash v1 standard manifest contains no aliases
+or reserved names.
+
+The Flash v1 core command inventory is:
+
+```text
+bg cd check collect command decode each encode exit fg first from get help jobs
+kill last length lines ls open pwd save select sort to update wait where which
+```
+
+`export` and `unset` are statement keywords, not commands in this inventory.
+The inventory is a source-language compatibility boundary because registering a
+previously unknown bare name can redirect an existing script away from an
+external executable.
+
+| Namespace change | Flash v1 compatibility |
+| --- | --- |
+| Change implementation, performance, or documentation without changing observable command behavior | Compatible within the language major |
+| Add deprecation metadata while preserving behavior and canonical identity | Compatible within the language major |
+| Activate a name already reserved at the start of the language major | Compatible within the language major |
+| Add a core command, alias, or reservation under a previously unknown name | Requires the next language major |
+| Remove or rename a core command; remove or retarget an alias; or release a reservation to external fallback | Requires the next language major |
+| Change an entry between core, alias, and reserved, except activation of an existing reservation | Requires the next language major |
+| Change carriers, arguments, flags, effects, output, status, or other behavior in a way that can alter a successful program | Requires semantic review and normally the next language major |
+
+An alias, when present in a future manifest, retains its source spelling but
+uses the canonical core command's signature and behavior. A reserved bare name
+fails before `PATH` lookup; intentional external execution remains available
+through `^name` or `command name`. Runtime execution does not print unsolicited
+deprecation warnings. `fsh check` reports deprecated exact command heads as
+`CMD001` warnings and reserved exact bare heads as `CMD002` errors without
+probing `PATH`.
+
+`help` includes every core, alias, and reserved entry and exposes lifecycle or
+migration details. Executable completion includes core commands and aliases,
+with aliases reusing canonical flags, but excludes reserved names. `which`
+returns ordered records with this schema:
+
+```text
+{
+  name: Path,
+  kind: "internal" | "alias" | "reserved" | "external" | "missing",
+  target: String | null,
+  path: Path | null
+}
+```
+
+`target` contains an alias's canonical command or a reserved entry's suggested
+replacement; other results use `null`. Only an external result populates
+`path`. Reserved and missing results select final status 1; internal, alias, and
+external results are successful.
+
 ### Forcing external execution
 
 Prefix a command with `^` to bypass the internal-command registry:

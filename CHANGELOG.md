@@ -23,6 +23,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   `fsh` executable, `/usr/bin/fsh`, `.fsh` scripts, and prompt protocol.
 
 ### Added
+- Ratify the Flash v1 built-in namespace as an exact 30-command core with no
+  current aliases or reserved names, validated core/alias/reserved lifecycle
+  metadata, and a language-major compatibility policy that prevents silent
+  capture or release of external names. Shared classification now drives
+  resolution, planning, execution identity, background routing, static
+  `CMD001`/`CMD002` migration diagnostics, help, completion, and `which`; the
+  latter reports ordered internal, alias, reserved, external, and missing
+  records with canonical target and executable path fields.
 - Ratify the v0.1 grammar, operator precedence, closure and backgrounding
   boundaries, and add the normative grammar-family corpus.
 - Ratify the v0.1 lexical surface and add the normative complete, incomplete,

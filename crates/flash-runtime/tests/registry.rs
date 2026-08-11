@@ -161,6 +161,40 @@ fn the_standard_manifest_is_the_exact_v1_core_with_no_aliases_or_reservations() 
 }
 
 #[test]
+fn public_v1_core_inventories_match_the_standard_manifest() {
+    const INVENTORY_INTRODUCTION: &str = "The Flash v1 core command inventory is:\n\n```text\n";
+
+    fn documented_inventory(document: &str) -> Vec<&str> {
+        let (_, inventory) = document
+            .split_once(INVENTORY_INTRODUCTION)
+            .expect("public guide contains the canonical inventory marker");
+        let (inventory, _) = inventory
+            .split_once("\n```")
+            .expect("public inventory is one fenced text block");
+        inventory.split_whitespace().collect()
+    }
+
+    let registry = standard_registry();
+    let expected = registry.core_names().collect::<Vec<_>>();
+    for (name, document) in [
+        (
+            "Scripting Guide",
+            include_str!("../../../docs/scripting.md"),
+        ),
+        (
+            "Language Guide",
+            include_str!("../../../docs/language-guide.md"),
+        ),
+    ] {
+        assert_eq!(
+            documented_inventory(document),
+            expected,
+            "{name} core inventory drifted from the standard manifest"
+        );
+    }
+}
+
+#[test]
 fn namespace_iteration_and_classification_cover_all_entry_classes() {
     let registry = CommandRegistry::try_from_entries(
         1,

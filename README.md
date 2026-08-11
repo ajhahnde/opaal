@@ -47,6 +47,13 @@ Flash v1 is the language-completion baseline, not a checkpoint that knowingly le
 
 A particular FlashOS release may expose only the parts of that contract that are implemented and qualified for its target environment. Unsupported or unqualified capabilities must remain visible rather than being silently replaced with weaker host-specific behavior.
 
+The Flash v1 built-in namespace is now ratified as an exact 30-command core
+with no current aliases or reserved names. Its validated manifest drives
+resolution, planning, static diagnostics, help, completion, `which`, background
+classification, and canonical execution identity. Capturing or releasing an
+ordinary external name requires a language-major decision; explicit external
+execution remains available through `^name` and `command name`.
+
 The detailed responsibilities are divided between the [Language Guide](docs/language-guide.md), [Scripting Guide](docs/scripting.md), [Architecture Guide](docs/architecture.md), and [Development Guide](docs/development.md).
 
 ## Current implementation
