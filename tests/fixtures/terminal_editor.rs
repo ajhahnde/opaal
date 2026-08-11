@@ -15,7 +15,7 @@ use std::process::ExitCode;
 
 use flash_cli::editor::EditorPrompt;
 use flash_cli::interactive::{
-    EvaluationControl, InteractiveDiagnostic, InteractiveEvaluator, InteractiveExit,
+    EvaluationControl, InteractiveEvaluationError, InteractiveEvaluator, InteractiveExit,
     run_interactive_session,
 };
 use flash_cli::terminal_editor::TerminalEditor;
@@ -42,12 +42,14 @@ fn main() -> ExitCode {
 
     let mut editor = TerminalEditor::new(PosixPlatform, io::stdin(), io::stdout());
     let mut evaluator = EchoEvaluator;
+    let mut output = io::stdout();
     let mut diagnostics = io::stderr();
 
     match run_interactive_session(
         &mut editor,
         &mut evaluator,
         &EditorPrompt::default(),
+        &mut output,
         &mut diagnostics,
     ) {
         Ok(InteractiveExit::EndOfInput) => ExitCode::SUCCESS,
@@ -66,13 +68,16 @@ fn main() -> ExitCode {
 struct EchoEvaluator;
 
 impl InteractiveEvaluator for EchoEvaluator {
-    fn evaluate(&mut self, source: &str) -> Result<EvaluationControl, InteractiveDiagnostic> {
+    fn evaluate(
+        &mut self,
+        source: &str,
+        output: &mut dyn Write,
+    ) -> Result<EvaluationControl, InteractiveEvaluationError> {
         if source == "exit" {
             return Ok(EvaluationControl::Exit(0));
         }
-        let mut output = io::stdout();
-        let _ = writeln!(output, "submitted: {source}");
-        let _ = output.flush();
+        writeln!(output, "submitted: {source}")
+            .map_err(InteractiveEvaluationError::ProgramOutput)?;
         Ok(EvaluationControl::Continue)
     }
 }

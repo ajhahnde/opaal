@@ -2,14 +2,17 @@
 
 use std::cell::RefCell;
 use std::collections::VecDeque;
+use std::io::{self, Write};
 use std::rc::Rc;
 
 use flash_cli::editor::{EditorError, EditorEvent, EditorPrompt, LineEditor};
 use flash_cli::interactive::{
-    EvaluationControl, ExitDecision, InteractiveDiagnostic, InteractiveEvaluator, InteractiveExit,
-    InteractiveNotice, InteractiveNoticeError, InteractiveNoticeId, InteractiveSessionError,
-    format_job_notice, run_interactive_session,
+    EvaluationControl, ExitDecision, InteractiveDiagnostic, InteractiveEvaluationError,
+    InteractiveEvaluator, InteractiveExit, InteractiveNotice, InteractiveNoticeError,
+    InteractiveNoticeId, InteractiveSessionError, format_job_notice, run_interactive_driver,
+    run_interactive_session,
 };
+use flash_cli::report::HostExit;
 use flash_platform::ProcessGroupId;
 use flash_runtime::background::JobNoticeKind;
 use flash_runtime::job::JobId;
@@ -88,7 +91,11 @@ impl InteractiveEvaluator for GatedEvaluator {
         }
     }
 
-    fn evaluate(&mut self, source: &str) -> Result<EvaluationControl, InteractiveDiagnostic> {
+    fn evaluate(
+        &mut self,
+        source: &str,
+        _output: &mut dyn Write,
+    ) -> Result<EvaluationControl, InteractiveEvaluationError> {
         match source {
             "exit 0" => Ok(EvaluationControl::Exit(0)),
             _ => Ok(EvaluationControl::Continue),
@@ -137,7 +144,11 @@ impl StatefulEvaluator {
 }
 
 impl InteractiveEvaluator for StatefulEvaluator {
-    fn evaluate(&mut self, source: &str) -> Result<EvaluationControl, InteractiveDiagnostic> {
+    fn evaluate(
+        &mut self,
+        source: &str,
+        _output: &mut dyn Write,
+    ) -> Result<EvaluationControl, InteractiveEvaluationError> {
         self.seen.push(source.to_owned());
         match source {
             "seed" => {
@@ -150,11 +161,11 @@ impl InteractiveEvaluator for StatefulEvaluator {
             }
             "parse-error" => {
                 self.assert_seeded();
-                Err(InteractiveDiagnostic::new("parse diagnostic\n"))
+                Err(InteractiveDiagnostic::new("parse diagnostic\n").into())
             }
             "runtime-error" => {
                 self.assert_seeded();
-                Err(InteractiveDiagnostic::new("runtime diagnostic\n"))
+                Err(InteractiveDiagnostic::new("runtime diagnostic\n").into())
             }
             "verify" => {
                 self.assert_seeded();
@@ -197,7 +208,11 @@ impl InteractiveEvaluator for NoticeEvaluator {
         Ok(())
     }
 
-    fn evaluate(&mut self, _source: &str) -> Result<EvaluationControl, InteractiveDiagnostic> {
+    fn evaluate(
+        &mut self,
+        _source: &str,
+        _output: &mut dyn Write,
+    ) -> Result<EvaluationControl, InteractiveEvaluationError> {
         self.calls.borrow_mut().push("evaluate".to_owned());
         if let Some(notice) = self.queue_during_evaluation.take() {
             self.notices.push_back(notice);
@@ -213,6 +228,175 @@ fn notice(id: u64, rendered: &str) -> InteractiveNotice {
     )
 }
 
+struct DriverEvaluator {
+    calls: CallLog,
+    diagnostic: Option<&'static str>,
+}
+
+impl InteractiveEvaluator for DriverEvaluator {
+    fn fatal_cleanup(&mut self) -> Vec<String> {
+        self.calls.borrow_mut().push("hang_up".to_owned());
+        Vec::new()
+    }
+
+    fn evaluate(
+        &mut self,
+        _source: &str,
+        _output: &mut dyn Write,
+    ) -> Result<EvaluationControl, InteractiveEvaluationError> {
+        match self.diagnostic {
+            Some(rendered) => Err(InteractiveDiagnostic::new(rendered).into()),
+            None => Ok(EvaluationControl::Continue),
+        }
+    }
+}
+
+struct RecordingWriter {
+    bytes: Vec<u8>,
+    calls: CallLog,
+    fail_flush: bool,
+}
+
+impl RecordingWriter {
+    fn new(calls: CallLog) -> Self {
+        Self {
+            bytes: Vec::new(),
+            calls,
+            fail_flush: false,
+        }
+    }
+
+    fn failing_flush(calls: CallLog) -> Self {
+        Self {
+            fail_flush: true,
+            ..Self::new(calls)
+        }
+    }
+}
+
+impl Write for RecordingWriter {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.calls.borrow_mut().push("write".to_owned());
+        self.bytes.extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.calls.borrow_mut().push("flush".to_owned());
+        if self.fail_flush {
+            Err(io::Error::other("scripted flush failure"))
+        } else {
+            Ok(())
+        }
+    }
+}
+
+#[test]
+fn a_recoverable_diagnostic_is_flushed_before_the_next_prompt() {
+    let calls = CallLog::default();
+    let mut editor = ScriptedEditor::new([
+        EditorEvent::Submitted("diagnose".to_owned()),
+        EditorEvent::EndOfInput,
+    ]);
+    let mut evaluator = DriverEvaluator {
+        calls: Rc::clone(&calls),
+        diagnostic: Some("recoverable diagnostic\n"),
+    };
+    let mut diagnostics = RecordingWriter::new(Rc::clone(&calls));
+
+    let exit = run_interactive_session(
+        &mut editor,
+        &mut evaluator,
+        &EditorPrompt::default(),
+        &mut Vec::new(),
+        &mut diagnostics,
+    )
+    .expect("a flushed diagnostic should remain recoverable");
+
+    assert_eq!(exit, InteractiveExit::EndOfInput);
+    assert_eq!(diagnostics.bytes, b"recoverable diagnostic\n");
+    assert_eq!(calls.borrow().as_slice(), ["write", "flush"]);
+}
+
+#[test]
+fn a_failed_diagnostic_flush_is_not_reported_recursively() {
+    let calls = CallLog::default();
+    let mut editor = ScriptedEditor::new([EditorEvent::Submitted("diagnose".to_owned())]);
+    let mut evaluator = DriverEvaluator {
+        calls: Rc::clone(&calls),
+        diagnostic: Some("recoverable diagnostic\n"),
+    };
+    let mut diagnostics = RecordingWriter::failing_flush(Rc::clone(&calls));
+
+    let exit = run_interactive_driver(
+        &mut editor,
+        &mut evaluator,
+        &EditorPrompt::default(),
+        &mut Vec::new(),
+        &mut diagnostics,
+    );
+
+    assert_eq!(exit, HostExit::Failure);
+    assert_eq!(diagnostics.bytes, b"recoverable diagnostic\n");
+    assert_eq!(calls.borrow().as_slice(), ["write", "flush", "hang_up"]);
+}
+
+#[test]
+fn fatal_interactive_exit_hangs_up_jobs_before_reporting_status_one() {
+    let calls = CallLog::default();
+    let mut editor = ScriptedEditor::new([EditorEvent::HostCommand("host".to_owned())]);
+    let mut evaluator = DriverEvaluator {
+        calls: Rc::clone(&calls),
+        diagnostic: None,
+    };
+    let mut diagnostics = RecordingWriter::new(Rc::clone(&calls));
+
+    let exit = run_interactive_driver(
+        &mut editor,
+        &mut evaluator,
+        &EditorPrompt::default(),
+        &mut Vec::new(),
+        &mut diagnostics,
+    );
+
+    assert_eq!(exit, HostExit::Failure);
+    assert_eq!(calls.borrow().as_slice(), ["hang_up", "write", "flush"]);
+    assert_eq!(
+        String::from_utf8(diagnostics.bytes).expect("fatal report should be UTF-8"),
+        "fsh: interactive editor event is not supported: host command\n"
+    );
+}
+
+#[test]
+fn a_failed_program_output_flush_is_a_fatal_interactive_failure() {
+    let calls = CallLog::default();
+    let mut editor = ScriptedEditor::new([EditorEvent::Submitted("continue".to_owned())]);
+    let mut evaluator = DriverEvaluator {
+        calls: Rc::clone(&calls),
+        diagnostic: None,
+    };
+    let mut output = RecordingWriter::failing_flush(CallLog::default());
+    let mut diagnostics = RecordingWriter::new(Rc::clone(&calls));
+
+    let exit = run_interactive_driver(
+        &mut editor,
+        &mut evaluator,
+        &EditorPrompt::default(),
+        &mut output,
+        &mut diagnostics,
+    );
+
+    assert_eq!(exit, HostExit::Failure);
+    assert_eq!(calls.borrow().first().map(String::as_str), Some("hang_up"));
+    assert_eq!(
+        String::from_utf8(diagnostics.bytes).expect("fatal report should be UTF-8"),
+        concat!(
+            "fsh: interactive command output failed: scripted flush failure\n",
+            "fsh:   caused by: scripted flush failure\n"
+        )
+    );
+}
+
 #[test]
 fn ctrl_c_reprompts_without_evaluation_and_empty_ctrl_d_exits() {
     let prompt = EditorPrompt::default();
@@ -222,10 +406,17 @@ fn ctrl_c_reprompts_without_evaluation_and_empty_ctrl_d_exits() {
         EditorEvent::EndOfInput,
     ]);
     let mut evaluator = StatefulEvaluator::default();
+    let mut output = Vec::new();
     let mut diagnostics = Vec::new();
 
-    let exit = run_interactive_session(&mut editor, &mut evaluator, &prompt, &mut diagnostics)
-        .expect("scripted session should finish cleanly");
+    let exit = run_interactive_session(
+        &mut editor,
+        &mut evaluator,
+        &prompt,
+        &mut output,
+        &mut diagnostics,
+    )
+    .expect("scripted session should finish cleanly");
 
     assert_eq!(exit, InteractiveExit::EndOfInput);
     assert_eq!(evaluator.seen, ["seed"]);
@@ -244,10 +435,17 @@ fn parse_and_runtime_diagnostics_recover_with_the_same_session_state() {
         EditorEvent::EndOfInput,
     ]);
     let mut evaluator = StatefulEvaluator::default();
+    let mut output = Vec::new();
     let mut diagnostics = Vec::new();
 
-    let exit = run_interactive_session(&mut editor, &mut evaluator, &prompt, &mut diagnostics)
-        .expect("diagnostics should be recoverable");
+    let exit = run_interactive_session(
+        &mut editor,
+        &mut evaluator,
+        &prompt,
+        &mut output,
+        &mut diagnostics,
+    )
+    .expect("diagnostics should be recoverable");
 
     assert_eq!(exit, InteractiveExit::EndOfInput);
     assert_eq!(
@@ -266,10 +464,17 @@ fn explicit_exit_stops_before_reading_or_evaluating_later_input() {
         EditorEvent::Submitted("verify".to_owned()),
     ]);
     let mut evaluator = StatefulEvaluator::default();
+    let mut output = Vec::new();
     let mut diagnostics = Vec::new();
 
-    let exit = run_interactive_session(&mut editor, &mut evaluator, &prompt, &mut diagnostics)
-        .expect("explicit exit should be normal");
+    let exit = run_interactive_session(
+        &mut editor,
+        &mut evaluator,
+        &prompt,
+        &mut output,
+        &mut diagnostics,
+    )
+    .expect("explicit exit should be normal");
 
     assert_eq!(exit, InteractiveExit::Requested(23));
     assert_eq!(evaluator.seen, ["exit"]);
@@ -288,6 +493,7 @@ fn notice_is_written_and_acknowledged_before_the_prompt_is_read() {
         &mut editor,
         &mut evaluator,
         &EditorPrompt::default(),
+        &mut Vec::new(),
         &mut diagnostics,
     )
     .expect("notice and prompt should finish cleanly");
@@ -315,6 +521,7 @@ fn every_pending_notice_is_acknowledged_before_one_prompt() {
         &mut editor,
         &mut evaluator,
         &EditorPrompt::default(),
+        &mut Vec::new(),
         &mut diagnostics,
     )
     .expect("notices and prompt should finish cleanly");
@@ -352,6 +559,7 @@ fn notice_queued_during_evaluation_waits_for_the_next_prompt_boundary() {
         &mut editor,
         &mut evaluator,
         &EditorPrompt::default(),
+        &mut Vec::new(),
         &mut diagnostics,
     )
     .expect("queued notice should be rendered at the next loop boundary");
@@ -383,6 +591,7 @@ fn failed_notice_write_prevents_acknowledgement_and_prompt_read() {
         &mut editor,
         &mut evaluator,
         &EditorPrompt::default(),
+        &mut Vec::new(),
         &mut diagnostics,
     )
     .expect_err("notice write failure should be fatal");
@@ -431,6 +640,7 @@ fn a_refused_exit_writes_the_refusal_and_keeps_the_session_alive() {
         &mut editor,
         &mut evaluator,
         &EditorPrompt::default(),
+        &mut Vec::new(),
         &mut diagnostics,
     )
     .expect("a refused exit is not a failure");
@@ -458,6 +668,7 @@ fn a_refused_explicit_exit_is_also_gated() {
         &mut evaluator,
         &EditorPrompt::default(),
         &mut Vec::new(),
+        &mut Vec::new(),
     )
     .expect("a refused exit is not a failure");
 
@@ -474,6 +685,7 @@ fn a_permitted_exit_asks_once_and_writes_nothing() {
         &mut editor,
         &mut evaluator,
         &EditorPrompt::default(),
+        &mut Vec::new(),
         &mut Vec::new(),
     )
     .expect("a permitted exit is not a failure");

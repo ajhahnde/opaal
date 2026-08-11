@@ -6,6 +6,7 @@ use flash_runtime::background::{JobNoticeKind, LiveJob, LiveJobState};
 use flash_runtime::job::JobId;
 
 use crate::editor::{EditorError, EditorEvent, EditorPrompt, LineEditor};
+use crate::report::HostExit;
 
 /// Control flow requested after evaluating one submitted edit buffer.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -31,6 +32,21 @@ impl InteractiveDiagnostic {
     #[must_use]
     pub fn rendered(&self) -> &str {
         &self.rendered
+    }
+}
+
+/// Result of one interactive evaluation attempt.
+#[derive(Debug)]
+pub enum InteractiveEvaluationError {
+    /// A source-backed or shell-owned diagnostic after which the session may recover.
+    Diagnostic(InteractiveDiagnostic),
+    /// A program-output failure that makes the interactive session unusable.
+    ProgramOutput(io::Error),
+}
+
+impl From<InteractiveDiagnostic> for InteractiveEvaluationError {
+    fn from(diagnostic: InteractiveDiagnostic) -> Self {
+        Self::Diagnostic(diagnostic)
     }
 }
 
@@ -197,7 +213,20 @@ pub trait InteractiveEvaluator {
         Ok(())
     }
 
-    fn evaluate(&mut self, source: &str) -> Result<EvaluationControl, InteractiveDiagnostic>;
+    /// Unconditionally clean up resources owned by a fatally ending session.
+    ///
+    /// The returned reports are already ordered and newline-terminated. They
+    /// are presented by the driver only while the diagnostic stream remains
+    /// usable.
+    fn fatal_cleanup(&mut self) -> Vec<String> {
+        Vec::new()
+    }
+
+    fn evaluate(
+        &mut self,
+        source: &str,
+        output: &mut dyn Write,
+    ) -> Result<EvaluationControl, InteractiveEvaluationError>;
 }
 
 /// Normal reason for leaving an interactive session.
@@ -212,6 +241,7 @@ pub enum InteractiveExit {
 pub enum InteractiveSessionError {
     Editor(EditorError),
     NoticeAcknowledgement(InteractiveNoticeError),
+    ProgramOutput(io::Error),
     DiagnosticOutput(io::Error),
     UnsupportedEditorEvent(&'static str),
 }
@@ -225,6 +255,9 @@ impl fmt::Display for InteractiveSessionError {
                     formatter,
                     "interactive notice acknowledgement failed: {error}"
                 )
+            }
+            Self::ProgramOutput(error) => {
+                write!(formatter, "interactive command output failed: {error}")
             }
             Self::DiagnosticOutput(error) => {
                 write!(formatter, "interactive diagnostic output failed: {error}")
@@ -244,6 +277,7 @@ impl Error for InteractiveSessionError {
         match self {
             Self::Editor(error) => Some(error),
             Self::NoticeAcknowledgement(error) => Some(error),
+            Self::ProgramOutput(error) => Some(error),
             Self::DiagnosticOutput(error) => Some(error),
             Self::UnsupportedEditorEvent(_) => None,
         }
@@ -275,6 +309,7 @@ pub fn run_interactive_session(
     editor: &mut dyn LineEditor,
     evaluator: &mut dyn InteractiveEvaluator,
     prompt: &EditorPrompt,
+    program_output: &mut dyn Write,
     diagnostic_output: &mut dyn Write,
 ) -> Result<InteractiveExit, InteractiveSessionError> {
     loop {
@@ -285,21 +320,38 @@ pub fn run_interactive_session(
             .map_err(InteractiveSessionError::Editor)?;
 
         match event {
-            EditorEvent::Submitted(source) => match evaluator.evaluate(&source) {
-                Ok(EvaluationControl::Continue) => {}
-                Ok(EvaluationControl::Exit(status)) => match evaluator.request_exit() {
-                    ExitDecision::Permitted => {
-                        render_pending_notices(editor, evaluator)?;
-                        return Ok(InteractiveExit::Requested(status));
+            EditorEvent::Submitted(source) => {
+                let evaluation = evaluator.evaluate(&source, program_output);
+                if let Err(InteractiveEvaluationError::ProgramOutput(error)) = evaluation {
+                    return Err(InteractiveSessionError::ProgramOutput(error));
+                }
+                program_output
+                    .flush()
+                    .map_err(InteractiveSessionError::ProgramOutput)?;
+                match evaluation {
+                    Ok(EvaluationControl::Continue) => {}
+                    Ok(EvaluationControl::Exit(status)) => match evaluator.request_exit() {
+                        ExitDecision::Permitted => {
+                            render_pending_notices(editor, evaluator)?;
+                            return Ok(InteractiveExit::Requested(status));
+                        }
+                        ExitDecision::Refused { rendered } => editor
+                            .write_notice(&rendered)
+                            .map_err(InteractiveSessionError::Editor)?,
+                    },
+                    Err(InteractiveEvaluationError::Diagnostic(diagnostic)) => {
+                        diagnostic_output
+                            .write_all(diagnostic.rendered().as_bytes())
+                            .map_err(InteractiveSessionError::DiagnosticOutput)?;
+                        diagnostic_output
+                            .flush()
+                            .map_err(InteractiveSessionError::DiagnosticOutput)?;
                     }
-                    ExitDecision::Refused { rendered } => editor
-                        .write_notice(&rendered)
-                        .map_err(InteractiveSessionError::Editor)?,
-                },
-                Err(diagnostic) => diagnostic_output
-                    .write_all(diagnostic.rendered().as_bytes())
-                    .map_err(InteractiveSessionError::DiagnosticOutput)?,
-            },
+                    Err(InteractiveEvaluationError::ProgramOutput(_)) => {
+                        unreachable!("program-output failure is returned before the required flush")
+                    }
+                }
+            }
             EditorEvent::Cancelled => {}
             EditorEvent::EndOfInput => match evaluator.request_exit() {
                 ExitDecision::Permitted => {
@@ -322,4 +374,46 @@ pub fn run_interactive_session(
             }
         }
     }
+}
+
+/// Run an interactive session and map its normal or fatal result to a host exit.
+///
+/// Fatal cleanup always runs before status 1 is selected. If the diagnostic
+/// stream itself failed, it is never reused to report that failure or cleanup
+/// results.
+pub fn run_interactive_driver(
+    editor: &mut dyn LineEditor,
+    evaluator: &mut dyn InteractiveEvaluator,
+    prompt: &EditorPrompt,
+    program_output: &mut dyn Write,
+    diagnostic_output: &mut dyn Write,
+) -> HostExit {
+    match run_interactive_session(editor, evaluator, prompt, program_output, diagnostic_output) {
+        Ok(InteractiveExit::EndOfInput) => HostExit::Success,
+        Ok(InteractiveExit::Requested(code)) => HostExit::Code(code),
+        Err(error) => {
+            let cleanup_reports = evaluator.fatal_cleanup();
+            if !matches!(error, InteractiveSessionError::DiagnosticOutput(_)) {
+                let rendered = render_fatal_report(&cleanup_reports, &error);
+                let _ = write_required(diagnostic_output, rendered.as_bytes());
+            }
+            HostExit::Failure
+        }
+    }
+}
+
+fn render_fatal_report(cleanup_reports: &[String], error: &InteractiveSessionError) -> String {
+    let mut rendered = cleanup_reports.concat();
+    let _ = writeln!(rendered, "fsh: {error}");
+    let mut source = error.source();
+    while let Some(cause) = source {
+        let _ = writeln!(rendered, "fsh:   caused by: {cause}");
+        source = cause.source();
+    }
+    rendered
+}
+
+fn write_required(output: &mut dyn Write, bytes: &[u8]) -> io::Result<()> {
+    output.write_all(bytes)?;
+    output.flush()
 }

@@ -28,9 +28,9 @@ use flash_cli::format::{FormatRequest, HostFormatFilesystem, format_files};
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 use flash_cli::history::{HistoryPlatform, ProcessHistoryEnvironment, select_history};
 use flash_cli::interactive::{
-    EvaluationControl, ExitDecision, InteractiveDiagnostic, InteractiveEvaluator, InteractiveExit,
-    InteractiveNotice, InteractiveNoticeError, InteractiveNoticeId, InteractiveSessionError,
-    format_job_notice, format_live_jobs, run_interactive_session,
+    EvaluationControl, ExitDecision, InteractiveDiagnostic, InteractiveEvaluationError,
+    InteractiveEvaluator, InteractiveNotice, InteractiveNoticeError, InteractiveNoticeId,
+    format_job_notice, format_live_jobs, run_interactive_driver,
 };
 use flash_cli::report::{HostReport, write_report};
 use flash_platform::{Platform, PlatformError};
@@ -268,18 +268,19 @@ fn run_interactive(no_config: bool, no_history: bool) -> ExitCode {
         SessionOptions::default(),
     );
     let mut evaluator = SessionEvaluator::new(session);
+    let mut output = io::stdout();
     let mut diagnostics = io::stderr();
 
-    match run_interactive_session(
-        &mut editor,
-        &mut evaluator,
-        startup.prompt(),
-        &mut diagnostics,
-    ) {
-        Ok(InteractiveExit::EndOfInput) => ExitCode::SUCCESS,
-        Ok(InteractiveExit::Requested(code)) => ExitCode::from(code),
-        Err(error) => fatal_interactive_exit(&mut evaluator, &error),
-    }
+    ExitCode::from(
+        run_interactive_driver(
+            &mut editor,
+            &mut evaluator,
+            startup.prompt(),
+            &mut output,
+            &mut diagnostics,
+        )
+        .code(),
+    )
 }
 
 #[cfg(target_os = "redox")]
@@ -320,6 +321,7 @@ fn run_interactive(_no_config: bool, _no_history: bool) -> ExitCode {
         SessionOptions::default(),
     );
     let mut evaluator = SessionEvaluator::new(session);
+    let mut output = io::stdout();
     let mut diagnostics = io::stderr();
 
     // A real terminal gets the raw-mode editor; a pipe or an uncooperative
@@ -329,54 +331,25 @@ fn run_interactive(_no_config: bool, _no_history: bool) -> ExitCode {
     let platform = PosixPlatform;
     let outcome = if platform.is_terminal() && platform.is_output_terminal() {
         let mut editor = TerminalEditor::new(platform, io::stdin(), io::stdout());
-        run_interactive_session(
+        run_interactive_driver(
             &mut editor,
             &mut evaluator,
             &EditorPrompt::default(),
+            &mut output,
             &mut diagnostics,
         )
     } else {
         let mut editor = RawLineEditor::new();
-        run_interactive_session(
+        run_interactive_driver(
             &mut editor,
             &mut evaluator,
             &EditorPrompt::default(),
+            &mut output,
             &mut diagnostics,
         )
     };
 
-    match outcome {
-        Ok(InteractiveExit::EndOfInput) => ExitCode::SUCCESS,
-        Ok(InteractiveExit::Requested(code)) => ExitCode::from(code),
-        Err(error) => fatal_interactive_exit(&mut evaluator, &error),
-    }
-}
-
-/// End a fatal interactive session, hanging up every live job first.
-///
-/// A fatal failure has no second attempt to offer, so it never refuses: it hangs
-/// up unconditionally and then propagates the original failure.
-fn fatal_interactive_exit(
-    evaluator: &mut SessionEvaluator,
-    error: &InteractiveSessionError,
-) -> ExitCode {
-    for failure in evaluator.hang_up(&PosixPlatform) {
-        eprintln!("fsh: {}", failure.render());
-    }
-    report_session_error(error);
-    ExitCode::FAILURE
-}
-
-fn report_session_error(error: &InteractiveSessionError) {
-    // A broken diagnostic channel cannot be reported through itself.
-    if !matches!(error, InteractiveSessionError::DiagnosticOutput(_)) {
-        eprintln!("fsh: {error}");
-        let mut source = std::error::Error::source(error);
-        while let Some(cause) = source {
-            eprintln!("fsh:   caused by: {cause}");
-            source = cause.source();
-        }
-    }
+    ExitCode::from(outcome.code())
 }
 
 /// Bridges the runtime session driver into the interactive evaluation loop.
@@ -403,14 +376,17 @@ impl SessionEvaluator {
             exit_refused: false,
         }
     }
-
-    /// Resume, hang up, and wait every live job before the session ends.
-    fn hang_up(&mut self, platform: &dyn Platform) -> Vec<BackgroundFailure> {
-        self.session.hang_up_background_jobs(platform)
-    }
 }
 
 impl InteractiveEvaluator for SessionEvaluator {
+    fn fatal_cleanup(&mut self) -> Vec<String> {
+        self.session
+            .hang_up_background_jobs(&self.platform)
+            .into_iter()
+            .map(|failure| format!("fsh: {}\n", failure.render()))
+            .collect()
+    }
+
     fn next_notice(&mut self) -> Option<InteractiveNotice> {
         let notice = self.session.next_job_notice()?;
         let id = notice.id();
@@ -466,16 +442,18 @@ impl InteractiveEvaluator for SessionEvaluator {
         ExitDecision::Permitted
     }
 
-    fn evaluate(&mut self, source: &str) -> Result<EvaluationControl, InteractiveDiagnostic> {
-        let stdout = io::stdout();
-        let mut output = stdout.lock();
+    fn evaluate(
+        &mut self,
+        source: &str,
+        output: &mut dyn Write,
+    ) -> Result<EvaluationControl, InteractiveEvaluationError> {
         let outcome = self.session.submit(
             "<interactive>",
             source,
             &self.probe,
             &self.platform,
             self.clock.as_ref(),
-            &mut output,
+            output,
         );
         // Any submitted input that is not itself an exit request, successful or
         // failing, clears the refusal: the warning must describe the state the
@@ -485,19 +463,17 @@ impl InteractiveEvaluator for SessionEvaluator {
             self.exit_refused = false;
         }
         match outcome {
-            Ok(SubmitOutcome::Continued) => {
-                let _ = output.flush();
-                Ok(EvaluationControl::Continue)
+            Ok(SubmitOutcome::Continued) => Ok(EvaluationControl::Continue),
+            Ok(SubmitOutcome::Exit(code)) => Ok(EvaluationControl::Exit(code)),
+            Err(SubmitError::Diagnostic(rendered)) => {
+                Err(InteractiveDiagnostic::new(rendered).into())
             }
-            Ok(SubmitOutcome::Exit(code)) => {
-                let _ = output.flush();
-                Ok(EvaluationControl::Exit(code))
+            Err(SubmitError::Runtime { rendered, .. }) => {
+                Err(InteractiveDiagnostic::new(rendered).into())
             }
-            Err(SubmitError::Diagnostic(rendered)) => Err(InteractiveDiagnostic::new(rendered)),
-            Err(SubmitError::Runtime { rendered, .. }) => Err(InteractiveDiagnostic::new(rendered)),
-            Err(SubmitError::Output(error)) => Err(InteractiveDiagnostic::new(format!(
-                "fsh: cannot write command output: {error}\n"
-            ))),
+            Err(SubmitError::Output(error)) => {
+                Err(InteractiveEvaluationError::ProgramOutput(error))
+            }
         }
     }
 }
