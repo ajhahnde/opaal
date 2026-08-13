@@ -4,3 +4,5 @@
 
 pub mod protocol;
 pub mod transport;
+pub mod uri;
+pub mod workspace;
