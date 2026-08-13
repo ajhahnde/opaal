@@ -15,13 +15,14 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use flash_syntax::{
     BinaryOperator, Block, Closure, CommandHeadKind, CommandItemKind, ConditionalChain,
-    ControlTransfer, Diagnostic, ElseBranch, Expression, ExpressionKind, LiteralKind, MatchArm,
-    ParseOutcome, Pattern, Pipeline, RecordKey, RedirectionKind, Script, Severity, SourceFile,
-    SourceId, Span, StageKind, Statement, StatementKind, TypeReference, UnaryOperator, Word,
-    WordPart, WordPartKind, parse, render_diagnostic_sources,
+    ControlTransfer, ControlledParseOutcome, Diagnostic, ElseBranch, Expression, ExpressionKind,
+    LiteralKind, MatchArm, ParseOutcome, Pattern, Pipeline, RecordKey, RedirectionKind, Script,
+    Severity, SourceFile, SourceId, Span, StageKind, Statement, StatementKind, TypeReference,
+    UnaryOperator, Word, WordPart, WordPartKind, parse_with_control, render_diagnostic_sources,
 };
 
 use crate::Value;
@@ -33,6 +34,36 @@ use crate::command::{
     Carrier, CommandClassification, CommandLifecycle, CommandOutput, CommandRegistry,
 };
 use crate::documentation::Documentation;
+
+/// Host-free cooperative cancellation for static source analysis.
+#[derive(Clone)]
+pub struct AnalysisControl {
+    is_cancelled: Arc<dyn Fn() -> bool + Send + Sync>,
+}
+
+impl AnalysisControl {
+    /// A control that preserves legacy checker and execution analysis behavior.
+    #[must_use]
+    pub fn never() -> Self {
+        Self::cooperative(|| false)
+    }
+
+    /// Creates a control backed by a thread-safe cancellation predicate.
+    ///
+    /// The predicate must remain `true` after it first requests cancellation.
+    #[must_use]
+    pub fn cooperative(predicate: impl Fn() -> bool + Send + Sync + 'static) -> Self {
+        Self {
+            is_cancelled: Arc::new(predicate),
+        }
+    }
+
+    /// Whether the current analysis should stop at its next polling boundary.
+    #[must_use]
+    pub fn is_cancelled(&self) -> bool {
+        (self.is_cancelled)()
+    }
+}
 
 /// The sole host capability needed to turn a candidate source path into its
 /// unique module path.
@@ -544,6 +575,7 @@ impl ModuleNameRegistry {
     fn analyze(
         graph: &ModuleGraph,
         sources: &ModuleSourceRegistry,
+        control: &AnalysisControl,
     ) -> Result<Self, Vec<ModuleNameError>> {
         let mut registry = Self::default();
         let mut errors = Vec::new();
@@ -551,6 +583,9 @@ impl ModuleNameRegistry {
         let mut poisoned_imports = BTreeMap::<ModuleId, BTreeSet<String>>::new();
 
         for entry in sources.entries() {
+            if control.is_cancelled() {
+                return Ok(registry);
+            }
             let mut names = ModuleNames::default();
             for statement in entry.script().statements() {
                 let identifier = match statement.kind() {
@@ -572,6 +607,9 @@ impl ModuleNameRegistry {
         }
 
         for entry in sources.entries() {
+            if control.is_cancelled() {
+                return Ok(registry);
+            }
             for statement in entry.script().statements() {
                 let StatementKind::ModuleExport(export) = statement.kind() else {
                     continue;
@@ -620,6 +658,9 @@ impl ModuleNameRegistry {
         }
 
         for entry in sources.entries() {
+            if control.is_cancelled() {
+                return Ok(registry);
+            }
             for statement in entry.script().statements() {
                 let StatementKind::Import(import) = statement.kind() else {
                     continue;
@@ -694,11 +735,15 @@ impl ModuleNameRegistry {
         }
 
         for entry in sources.entries() {
+            if control.is_cancelled() {
+                return Ok(registry);
+            }
             let (references, mut reference_errors) = ReferenceResolver::new(
                 entry,
                 &registry,
                 poisoned_imports.get(entry.module()),
                 entry.module() == graph.root(),
+                control,
             )
             .resolve();
             errors.append(&mut reference_errors);
@@ -968,7 +1013,7 @@ impl RuntimeBindingTypes {
             source: source.clone(),
             script: script.clone(),
         };
-        let (types, errors) = TypeCollector::new(&entry).collect();
+        let (types, errors) = TypeCollector::new(&entry, &AnalysisControl::never()).collect();
         if let Some(error) = errors.into_iter().next() {
             return Err(Box::new(error));
         }
@@ -1041,16 +1086,23 @@ impl ModuleTypeRegistry {
     fn analyze(
         sources: &ModuleSourceRegistry,
         names: &ModuleNameRegistry,
+        control: &AnalysisControl,
     ) -> Result<Self, Vec<ModuleTypeError>> {
         let mut registry = Self::default();
         let mut errors = Vec::new();
         for entry in sources.entries() {
-            let (types, mut source_errors) = TypeCollector::new(entry).collect();
+            if control.is_cancelled() {
+                return Ok(registry);
+            }
+            let (types, mut source_errors) = TypeCollector::new(entry, control).collect();
             errors.append(&mut source_errors);
             registry.by_module.insert(entry.module().clone(), types);
         }
         for entry in sources.entries() {
-            errors.extend(SignatureValidator::new(entry, names, &registry).validate());
+            if control.is_cancelled() {
+                return Ok(registry);
+            }
+            errors.extend(SignatureValidator::new(entry, names, &registry, control).validate());
         }
         let source_order = sources
             .entries()
@@ -1071,14 +1123,16 @@ struct TypeCollector<'a> {
     entry: &'a RegisteredModuleSource,
     types: ModuleTypes,
     errors: Vec<ModuleTypeError>,
+    control: &'a AnalysisControl,
 }
 
 impl<'a> TypeCollector<'a> {
-    fn new(entry: &'a RegisteredModuleSource) -> Self {
+    fn new(entry: &'a RegisteredModuleSource, control: &'a AnalysisControl) -> Self {
         Self {
             entry,
             types: ModuleTypes::default(),
             errors: Vec::new(),
+            control,
         }
     }
 
@@ -1090,12 +1144,18 @@ impl<'a> TypeCollector<'a> {
 
     fn statements(&mut self, statements: &[Statement]) -> Result<(), Box<ModuleTypeError>> {
         for statement in statements {
+            if self.control.is_cancelled() {
+                break;
+            }
             self.statement(statement)?;
         }
         Ok(())
     }
 
     fn statement(&mut self, statement: &Statement) -> Result<(), Box<ModuleTypeError>> {
+        if self.control.is_cancelled() {
+            return Ok(());
+        }
         match statement.kind() {
             StatementKind::Import(_) | StatementKind::ModuleExport(_) => Ok(()),
             StatementKind::Declaration(declaration) => {
@@ -1201,6 +1261,9 @@ impl<'a> TypeCollector<'a> {
     }
 
     fn chain(&mut self, chain: &ConditionalChain) -> Result<(), Box<ModuleTypeError>> {
+        if self.control.is_cancelled() {
+            return Ok(());
+        }
         for and_chain in chain.or_terms() {
             for pipeline in and_chain.and_terms() {
                 for stage in pipeline.stages() {
@@ -1227,6 +1290,9 @@ impl<'a> TypeCollector<'a> {
     }
 
     fn expression(&mut self, expression: &Expression) -> Result<(), Box<ModuleTypeError>> {
+        if self.control.is_cancelled() {
+            return Ok(());
+        }
         match expression.kind() {
             ExpressionKind::Literal(literal) => self.literal(literal),
             ExpressionKind::Variable(_) | ExpressionKind::Symbol(_) => Ok(()),
@@ -1270,6 +1336,9 @@ impl<'a> TypeCollector<'a> {
     }
 
     fn closure(&mut self, closure: &Closure) -> Result<(), Box<ModuleTypeError>> {
+        if self.control.is_cancelled() {
+            return Ok(());
+        }
         for parameter in &closure.parameters {
             if let Some(annotation) = &parameter.type_annotation {
                 let value_type = self.resolve_type(annotation);
@@ -1283,6 +1352,9 @@ impl<'a> TypeCollector<'a> {
     }
 
     fn literal(&mut self, literal: &flash_syntax::Literal) -> Result<(), Box<ModuleTypeError>> {
+        if self.control.is_cancelled() {
+            return Ok(());
+        }
         if let LiteralKind::DoubleQuoted(parts) = literal.kind() {
             self.word_parts(parts)?;
         }
@@ -1290,17 +1362,26 @@ impl<'a> TypeCollector<'a> {
     }
 
     fn word(&mut self, word: &Word) -> Result<(), Box<ModuleTypeError>> {
+        if self.control.is_cancelled() {
+            return Ok(());
+        }
         self.word_parts(word.parts())
     }
 
     fn word_parts(&mut self, parts: &[WordPart]) -> Result<(), Box<ModuleTypeError>> {
         for part in parts {
+            if self.control.is_cancelled() {
+                break;
+            }
             self.word_part(part)?;
         }
         Ok(())
     }
 
     fn word_part(&mut self, part: &WordPart) -> Result<(), Box<ModuleTypeError>> {
+        if self.control.is_cancelled() {
+            return Ok(());
+        }
         match part.kind() {
             WordPartKind::DoubleQuoted(parts) => self.word_parts(parts),
             WordPartKind::BracedInterpolation(expression) => self.expression(expression),
@@ -1310,6 +1391,9 @@ impl<'a> TypeCollector<'a> {
     }
 
     fn redirection(&mut self, redirection: &RedirectionKind) -> Result<(), Box<ModuleTypeError>> {
+        if self.control.is_cancelled() {
+            return Ok(());
+        }
         match redirection {
             RedirectionKind::Input { target, .. } => self.word(target),
             RedirectionKind::File(file) => self.word(&file.target),
@@ -1318,6 +1402,9 @@ impl<'a> TypeCollector<'a> {
     }
 
     fn resolve_type(&mut self, reference: &TypeReference) -> ValueType {
+        if self.control.is_cancelled() {
+            return ValueType::Any;
+        }
         let value_type = match self.resolve_type_value(reference) {
             Ok(value_type) => value_type,
             Err(error) => {
@@ -1336,6 +1423,9 @@ impl<'a> TypeCollector<'a> {
         &mut self,
         reference: &TypeReference,
     ) -> Result<ValueType, Box<ModuleTypeError>> {
+        if self.control.is_cancelled() {
+            return Ok(ValueType::Any);
+        }
         let name = self.text(reference.name.span());
         let value_type = if name == "List" {
             if reference.arguments.len() != 1 {
@@ -1400,6 +1490,7 @@ struct SignatureValidator<'a> {
     names: &'a ModuleNameRegistry,
     types: &'a ModuleTypeRegistry,
     errors: RefCell<Vec<ModuleTypeError>>,
+    control: &'a AnalysisControl,
 }
 
 impl<'a> SignatureValidator<'a> {
@@ -1407,12 +1498,14 @@ impl<'a> SignatureValidator<'a> {
         entry: &'a RegisteredModuleSource,
         names: &'a ModuleNameRegistry,
         types: &'a ModuleTypeRegistry,
+        control: &'a AnalysisControl,
     ) -> Self {
         Self {
             entry,
             names,
             types,
             errors: RefCell::new(Vec::new()),
+            control,
         }
     }
 
@@ -1424,6 +1517,9 @@ impl<'a> SignatureValidator<'a> {
 
     fn statements(&self, statements: &[Statement]) -> Result<(), Box<ModuleTypeError>> {
         for statement in statements {
+            if self.control.is_cancelled() {
+                break;
+            }
             self.statement(statement)?;
         }
         Ok(())
@@ -1433,6 +1529,9 @@ impl<'a> SignatureValidator<'a> {
         &self,
         function: &flash_syntax::FunctionDefinition,
     ) -> Result<(), Box<ModuleTypeError>> {
+        if self.control.is_cancelled() {
+            return Ok(());
+        }
         let signature = self
             .types
             .function(self.entry.module(), function.name.span())
@@ -1454,6 +1553,9 @@ impl<'a> SignatureValidator<'a> {
         statements: &[Statement],
         signature: &FunctionSignature,
     ) -> Result<(), Box<ModuleTypeError>> {
+        if self.control.is_cancelled() {
+            return Ok(());
+        }
         for statement in statements {
             self.function_statement(statement, signature)?;
         }
@@ -1465,6 +1567,9 @@ impl<'a> SignatureValidator<'a> {
         statement: &Statement,
         signature: &FunctionSignature,
     ) -> Result<(), Box<ModuleTypeError>> {
+        if self.control.is_cancelled() {
+            return Ok(());
+        }
         match statement.kind() {
             StatementKind::Function(function) => self.function(function),
             StatementKind::Control(ControlTransfer::Return(value)) => {
@@ -1556,6 +1661,9 @@ impl<'a> SignatureValidator<'a> {
     }
 
     fn statement(&self, statement: &Statement) -> Result<(), Box<ModuleTypeError>> {
+        if self.control.is_cancelled() {
+            return Ok(());
+        }
         match statement.kind() {
             StatementKind::Import(_) | StatementKind::ModuleExport(_) => Ok(()),
             StatementKind::Declaration(declaration) => {
@@ -1613,6 +1721,9 @@ impl<'a> SignatureValidator<'a> {
         &self,
         statement: &flash_syntax::IfStatement,
     ) -> Result<(), Box<ModuleTypeError>> {
+        if self.control.is_cancelled() {
+            return Ok(());
+        }
         self.chain(&statement.condition)?;
         self.statements(&statement.then_block.statements)?;
         match &statement.else_branch {
@@ -1623,6 +1734,9 @@ impl<'a> SignatureValidator<'a> {
     }
 
     fn chain(&self, chain: &ConditionalChain) -> Result<(), Box<ModuleTypeError>> {
+        if self.control.is_cancelled() {
+            return Ok(());
+        }
         for and_chain in chain.or_terms() {
             for pipeline in and_chain.and_terms() {
                 for stage in pipeline.stages() {
@@ -1656,6 +1770,9 @@ impl<'a> SignatureValidator<'a> {
         &self,
         chain: &ConditionalChain,
     ) -> Result<Option<(Span, ValueType)>, Box<ModuleTypeError>> {
+        if self.control.is_cancelled() {
+            return Ok(None);
+        }
         if chain.or_terms().len() != 1 || chain.or_terms()[0].and_terms().len() != 1 {
             return Ok(None);
         }
@@ -1675,6 +1792,9 @@ impl<'a> SignatureValidator<'a> {
         &self,
         expression: &Expression,
     ) -> Result<Option<ValueType>, Box<ModuleTypeError>> {
+        if self.control.is_cancelled() {
+            return Ok(None);
+        }
         match expression.kind() {
             ExpressionKind::Literal(literal) => self.literal(literal),
             ExpressionKind::Variable(_) => Ok(self
@@ -1843,6 +1963,9 @@ impl<'a> SignatureValidator<'a> {
         call_span: Span,
         call: &flash_syntax::CallExpression,
     ) -> Result<Option<ValueType>, Box<ModuleTypeError>> {
+        if self.control.is_cancelled() {
+            return Ok(None);
+        }
         if !matches!(call.callee.kind(), ExpressionKind::Symbol(_)) {
             self.expression(&call.callee)?;
         }
@@ -1924,6 +2047,9 @@ impl<'a> SignatureValidator<'a> {
         &self,
         literal: &flash_syntax::Literal,
     ) -> Result<Option<ValueType>, Box<ModuleTypeError>> {
+        if self.control.is_cancelled() {
+            return Ok(None);
+        }
         let value_type = match literal.kind() {
             LiteralKind::Null => ValueType::Null,
             LiteralKind::Boolean(_) => ValueType::Bool,
@@ -1939,17 +2065,26 @@ impl<'a> SignatureValidator<'a> {
     }
 
     fn word(&self, word: &Word) -> Result<(), Box<ModuleTypeError>> {
+        if self.control.is_cancelled() {
+            return Ok(());
+        }
         self.word_parts(word.parts())
     }
 
     fn word_parts(&self, parts: &[WordPart]) -> Result<(), Box<ModuleTypeError>> {
         for part in parts {
+            if self.control.is_cancelled() {
+                break;
+            }
             self.word_part(part)?;
         }
         Ok(())
     }
 
     fn word_part(&self, part: &WordPart) -> Result<(), Box<ModuleTypeError>> {
+        if self.control.is_cancelled() {
+            return Ok(());
+        }
         match part.kind() {
             WordPartKind::DoubleQuoted(parts) => self.word_parts(parts),
             WordPartKind::BracedInterpolation(expression) => {
@@ -1961,6 +2096,9 @@ impl<'a> SignatureValidator<'a> {
     }
 
     fn redirection(&self, redirection: &RedirectionKind) -> Result<(), Box<ModuleTypeError>> {
+        if self.control.is_cancelled() {
+            return Ok(());
+        }
         match redirection {
             RedirectionKind::Input { target, .. } => self.word(target),
             RedirectionKind::File(file) => self.word(&file.target),
@@ -1974,6 +2112,7 @@ struct ReferenceResolver<'a> {
     scopes: Vec<BTreeMap<String, Option<ModuleReferenceTarget>>>,
     references: Vec<ModuleNameReference>,
     errors: Vec<ModuleNameError>,
+    control: &'a AnalysisControl,
 }
 
 impl<'a> ReferenceResolver<'a> {
@@ -1982,6 +2121,7 @@ impl<'a> ReferenceResolver<'a> {
         registry: &ModuleNameRegistry,
         poisoned_imports: Option<&BTreeSet<String>>,
         is_root: bool,
+        control: &'a AnalysisControl,
     ) -> Self {
         let mut root = BTreeMap::new();
         for import in registry.imports(entry.module()) {
@@ -2023,6 +2163,7 @@ impl<'a> ReferenceResolver<'a> {
             scopes,
             references: Vec::new(),
             errors: Vec::new(),
+            control,
         }
     }
 
@@ -2034,12 +2175,18 @@ impl<'a> ReferenceResolver<'a> {
 
     fn statements(&mut self, statements: &[Statement]) -> Result<(), Box<ModuleNameError>> {
         for statement in statements {
+            if self.control.is_cancelled() {
+                break;
+            }
             self.statement(statement)?;
         }
         Ok(())
     }
 
     fn statement(&mut self, statement: &Statement) -> Result<(), Box<ModuleNameError>> {
+        if self.control.is_cancelled() {
+            return Ok(());
+        }
         match statement.kind() {
             StatementKind::Import(_) | StatementKind::ModuleExport(_) => Ok(()),
             StatementKind::Declaration(declaration) => {
@@ -2109,6 +2256,9 @@ impl<'a> ReferenceResolver<'a> {
         &mut self,
         statement: &flash_syntax::IfStatement,
     ) -> Result<(), Box<ModuleNameError>> {
+        if self.control.is_cancelled() {
+            return Ok(());
+        }
         self.chain(&statement.condition)?;
         self.block(&statement.then_block)?;
         match &statement.else_branch {
@@ -2119,6 +2269,9 @@ impl<'a> ReferenceResolver<'a> {
     }
 
     fn match_arm(&mut self, arm: &MatchArm) -> Result<(), Box<ModuleNameError>> {
+        if self.control.is_cancelled() {
+            return Ok(());
+        }
         self.push_scope();
         let result = (|| {
             match &arm.pattern {
@@ -2136,6 +2289,9 @@ impl<'a> ReferenceResolver<'a> {
     }
 
     fn block(&mut self, block: &Block) -> Result<(), Box<ModuleNameError>> {
+        if self.control.is_cancelled() {
+            return Ok(());
+        }
         self.push_scope();
         let result = self.statements(&block.statements);
         self.pop_scope();
@@ -2143,6 +2299,9 @@ impl<'a> ReferenceResolver<'a> {
     }
 
     fn chain(&mut self, chain: &ConditionalChain) -> Result<(), Box<ModuleNameError>> {
+        if self.control.is_cancelled() {
+            return Ok(());
+        }
         for and_chain in chain.or_terms() {
             for pipeline in and_chain.and_terms() {
                 self.pipeline(pipeline)?;
@@ -2152,6 +2311,9 @@ impl<'a> ReferenceResolver<'a> {
     }
 
     fn pipeline(&mut self, pipeline: &Pipeline) -> Result<(), Box<ModuleNameError>> {
+        if self.control.is_cancelled() {
+            return Ok(());
+        }
         for stage in pipeline.stages() {
             match stage.kind() {
                 StageKind::Command(command) => {
@@ -2176,6 +2338,9 @@ impl<'a> ReferenceResolver<'a> {
     }
 
     fn expression(&mut self, expression: &Expression) -> Result<(), Box<ModuleNameError>> {
+        if self.control.is_cancelled() {
+            return Ok(());
+        }
         match expression.kind() {
             ExpressionKind::Literal(literal) => self.literal(literal),
             ExpressionKind::Variable(variable) => {
@@ -2226,6 +2391,9 @@ impl<'a> ReferenceResolver<'a> {
     }
 
     fn closure(&mut self, closure: &Closure) -> Result<(), Box<ModuleNameError>> {
+        if self.control.is_cancelled() {
+            return Ok(());
+        }
         self.push_scope();
         let result = (|| {
             for parameter in &closure.parameters {
@@ -2238,6 +2406,9 @@ impl<'a> ReferenceResolver<'a> {
     }
 
     fn literal(&mut self, literal: &flash_syntax::Literal) -> Result<(), Box<ModuleNameError>> {
+        if self.control.is_cancelled() {
+            return Ok(());
+        }
         if let LiteralKind::DoubleQuoted(parts) = literal.kind() {
             self.word_parts(parts)?;
         }
@@ -2245,17 +2416,26 @@ impl<'a> ReferenceResolver<'a> {
     }
 
     fn word(&mut self, word: &Word) -> Result<(), Box<ModuleNameError>> {
+        if self.control.is_cancelled() {
+            return Ok(());
+        }
         self.word_parts(word.parts())
     }
 
     fn word_parts(&mut self, parts: &[WordPart]) -> Result<(), Box<ModuleNameError>> {
         for part in parts {
+            if self.control.is_cancelled() {
+                break;
+            }
             self.word_part(part)?;
         }
         Ok(())
     }
 
     fn word_part(&mut self, part: &WordPart) -> Result<(), Box<ModuleNameError>> {
+        if self.control.is_cancelled() {
+            return Ok(());
+        }
         match part.kind() {
             WordPartKind::Variable(identifier) => self.variable(identifier.span(), part.span()),
             WordPartKind::DoubleQuoted(parts) => self.word_parts(parts),
@@ -2270,6 +2450,9 @@ impl<'a> ReferenceResolver<'a> {
     }
 
     fn redirection(&mut self, redirection: &RedirectionKind) -> Result<(), Box<ModuleNameError>> {
+        if self.control.is_cancelled() {
+            return Ok(());
+        }
         match redirection {
             RedirectionKind::Input { target, .. } => self.word(target),
             RedirectionKind::File(file) => self.word(&file.target),
@@ -2540,9 +2723,13 @@ impl ModuleEffectRegistry {
         sources: &ModuleSourceRegistry,
         names: &ModuleNameRegistry,
         commands: &CommandRegistry,
+        control: &AnalysisControl,
     ) -> Self {
         let mut direct = BTreeMap::new();
         for entry in sources.entries() {
+            if control.is_cancelled() {
+                return Self::default();
+            }
             direct.insert(
                 entry.module().clone(),
                 StaticEffectAnalyzer::analyze(
@@ -2552,6 +2739,7 @@ impl ModuleEffectRegistry {
                     sources,
                     names,
                     commands,
+                    control,
                 ),
             );
         }
@@ -2562,12 +2750,20 @@ impl ModuleEffectRegistry {
             direct: &BTreeMap<ModuleId, ModuleEffectSummary>,
             initialized: &mut BTreeSet<ModuleId>,
             summary: &mut ModuleEffectSummary,
+            control: &AnalysisControl,
         ) {
-            if initialized.contains(module) {
+            if control.is_cancelled() || initialized.contains(module) {
                 return;
             }
             for import in names.imports(module) {
-                visit(import.target(), names, direct, initialized, summary);
+                visit(
+                    import.target(),
+                    names,
+                    direct,
+                    initialized,
+                    summary,
+                    control,
+                );
             }
             if initialized.insert(module.clone())
                 && let Some(module_summary) = direct.get(module)
@@ -2578,6 +2774,9 @@ impl ModuleEffectRegistry {
 
         let mut transitive = BTreeMap::new();
         for entry in sources.entries() {
+            if control.is_cancelled() {
+                return Self::default();
+            }
             let mut summary = ModuleEffectSummary::default();
             visit(
                 entry.module(),
@@ -2585,6 +2784,7 @@ impl ModuleEffectRegistry {
                 &direct,
                 &mut BTreeSet::new(),
                 &mut summary,
+                control,
             );
             transitive.insert(entry.module().clone(), summary);
         }
@@ -2601,6 +2801,7 @@ struct StaticEffectAnalyzer<'a> {
     commands: &'a CommandRegistry,
     summary: ModuleEffectSummary,
     active_functions: BTreeSet<(ModuleId, usize)>,
+    control: &'a AnalysisControl,
 }
 
 impl<'a> StaticEffectAnalyzer<'a> {
@@ -2611,6 +2812,7 @@ impl<'a> StaticEffectAnalyzer<'a> {
         sources: &'a ModuleSourceRegistry,
         names: &'a ModuleNameRegistry,
         commands: &'a CommandRegistry,
+        control: &'a AnalysisControl,
     ) -> ModuleEffectSummary {
         let mut analyzer = Self {
             module: module.clone(),
@@ -2620,6 +2822,7 @@ impl<'a> StaticEffectAnalyzer<'a> {
             commands,
             summary: ModuleEffectSummary::default(),
             active_functions: BTreeSet::new(),
+            control,
         };
         analyzer.statements(script.statements());
         analyzer.summary
@@ -2627,11 +2830,17 @@ impl<'a> StaticEffectAnalyzer<'a> {
 
     fn statements(&mut self, statements: &[Statement]) {
         for statement in statements {
+            if self.control.is_cancelled() {
+                break;
+            }
             self.statement(statement);
         }
     }
 
     fn statement(&mut self, statement: &Statement) {
+        if self.control.is_cancelled() {
+            return;
+        }
         match statement.kind() {
             StatementKind::Import(_)
             | StatementKind::ModuleExport(_)
@@ -2687,6 +2896,9 @@ impl<'a> StaticEffectAnalyzer<'a> {
     }
 
     fn if_statement(&mut self, statement: &flash_syntax::IfStatement) {
+        if self.control.is_cancelled() {
+            return;
+        }
         self.chain(&statement.condition);
         self.statements(&statement.then_block.statements);
         match &statement.else_branch {
@@ -2697,6 +2909,9 @@ impl<'a> StaticEffectAnalyzer<'a> {
     }
 
     fn chain(&mut self, chain: &ConditionalChain) {
+        if self.control.is_cancelled() {
+            return;
+        }
         for and_chain in chain.or_terms() {
             for pipeline in and_chain.and_terms() {
                 self.pipeline(pipeline);
@@ -2705,6 +2920,9 @@ impl<'a> StaticEffectAnalyzer<'a> {
     }
 
     fn pipeline(&mut self, pipeline: &Pipeline) {
+        if self.control.is_cancelled() {
+            return;
+        }
         if !self.pipeline_is_standalone_help(pipeline) {
             self.summary.push(ModuleEffect::Status, pipeline.span());
         }
@@ -2742,6 +2960,9 @@ impl<'a> StaticEffectAnalyzer<'a> {
     }
 
     fn command(&mut self, command: &flash_syntax::CommandStage, is_last: bool) {
+        if self.control.is_cancelled() {
+            return;
+        }
         self.word(command.head.word());
         let mut redirects_output = false;
         for item in &command.items {
@@ -2822,6 +3043,9 @@ impl<'a> StaticEffectAnalyzer<'a> {
     }
 
     fn redirection(&mut self, redirection: &RedirectionKind, span: Span) -> bool {
+        if self.control.is_cancelled() {
+            return false;
+        }
         match redirection {
             RedirectionKind::Input { target, .. } => {
                 self.summary.push(ModuleEffect::FilesystemRead, span);
@@ -2842,6 +3066,9 @@ impl<'a> StaticEffectAnalyzer<'a> {
     }
 
     fn expression(&mut self, expression: &Expression) {
+        if self.control.is_cancelled() {
+            return;
+        }
         match expression.kind() {
             ExpressionKind::Literal(literal) => self.literal(literal),
             ExpressionKind::Variable(_) | ExpressionKind::Symbol(_) => {}
@@ -2882,6 +3109,9 @@ impl<'a> StaticEffectAnalyzer<'a> {
     }
 
     fn call(&mut self, call_span: Span, callee: &Expression) {
+        if self.control.is_cancelled() {
+            return;
+        }
         let Some(reference) = self.names.reference(&self.module, callee.span()) else {
             self.expression(callee);
             self.summary.push(ModuleEffect::OpaqueExternal, call_span);
@@ -2933,6 +3163,9 @@ impl<'a> StaticEffectAnalyzer<'a> {
     }
 
     fn literal(&mut self, literal: &flash_syntax::Literal) {
+        if self.control.is_cancelled() {
+            return;
+        }
         if let LiteralKind::DoubleQuoted(parts) = literal.kind() {
             for part in parts {
                 self.word_part(part);
@@ -2941,12 +3174,18 @@ impl<'a> StaticEffectAnalyzer<'a> {
     }
 
     fn word(&mut self, word: &Word) {
+        if self.control.is_cancelled() {
+            return;
+        }
         for part in word.parts() {
             self.word_part(part);
         }
     }
 
     fn word_part(&mut self, part: &WordPart) {
+        if self.control.is_cancelled() {
+            return;
+        }
         match part.kind() {
             WordPartKind::DoubleQuoted(parts) => {
                 for part in parts {
@@ -3018,6 +3257,7 @@ struct StaticPipelineAnalyzer<'a> {
     source: &'a SourceFile,
     commands: &'a CommandRegistry,
     errors: Vec<ModulePipelineError>,
+    control: &'a AnalysisControl,
 }
 
 impl<'a> StaticPipelineAnalyzer<'a> {
@@ -3026,12 +3266,14 @@ impl<'a> StaticPipelineAnalyzer<'a> {
         source: &'a SourceFile,
         script: &'a Script,
         commands: &'a CommandRegistry,
+        control: &'a AnalysisControl,
     ) -> Vec<ModulePipelineError> {
         let mut analyzer = Self {
             module,
             source,
             commands,
             errors: Vec::new(),
+            control,
         };
         analyzer.statements(script.statements());
         analyzer
@@ -3042,11 +3284,17 @@ impl<'a> StaticPipelineAnalyzer<'a> {
 
     fn statements(&mut self, statements: &[Statement]) {
         for statement in statements {
+            if self.control.is_cancelled() {
+                break;
+            }
             self.statement(statement);
         }
     }
 
     fn statement(&mut self, statement: &Statement) {
+        if self.control.is_cancelled() {
+            return;
+        }
         match statement.kind() {
             StatementKind::Import(_) | StatementKind::ModuleExport(_) => {}
             StatementKind::Declaration(declaration) => self.expression(&declaration.value),
@@ -3089,6 +3337,9 @@ impl<'a> StaticPipelineAnalyzer<'a> {
     }
 
     fn if_statement(&mut self, statement: &flash_syntax::IfStatement) {
+        if self.control.is_cancelled() {
+            return;
+        }
         self.chain(&statement.condition);
         self.statements(&statement.then_block.statements);
         match &statement.else_branch {
@@ -3099,6 +3350,9 @@ impl<'a> StaticPipelineAnalyzer<'a> {
     }
 
     fn chain(&mut self, chain: &ConditionalChain) {
+        if self.control.is_cancelled() {
+            return;
+        }
         for and_chain in chain.or_terms() {
             for pipeline in and_chain.and_terms() {
                 self.pipeline(pipeline);
@@ -3107,6 +3361,9 @@ impl<'a> StaticPipelineAnalyzer<'a> {
     }
 
     fn pipeline(&mut self, pipeline: &Pipeline) {
+        if self.control.is_cancelled() {
+            return;
+        }
         let contracts = pipeline
             .stages()
             .iter()
@@ -3160,6 +3417,9 @@ impl<'a> StaticPipelineAnalyzer<'a> {
     }
 
     fn command_contract(&mut self, command: &flash_syntax::CommandStage) -> StageCarrierContract {
+        if self.control.is_cancelled() {
+            return StageCarrierContract::unknown();
+        }
         if command.head.kind() == CommandHeadKind::ForcedExternal {
             return StageCarrierContract::known(
                 self.source
@@ -3331,6 +3591,9 @@ impl<'a> StaticPipelineAnalyzer<'a> {
     }
 
     fn expression(&mut self, expression: &Expression) {
+        if self.control.is_cancelled() {
+            return;
+        }
         match expression.kind() {
             ExpressionKind::Literal(literal) => self.literal(literal),
             ExpressionKind::Variable(_) | ExpressionKind::Symbol(_) => {}
@@ -3371,26 +3634,41 @@ impl<'a> StaticPipelineAnalyzer<'a> {
     }
 
     fn closure(&mut self, closure: &Closure) {
+        if self.control.is_cancelled() {
+            return;
+        }
         self.chain(&closure.body);
     }
 
     fn literal(&mut self, literal: &flash_syntax::Literal) {
+        if self.control.is_cancelled() {
+            return;
+        }
         if let LiteralKind::DoubleQuoted(parts) = literal.kind() {
             self.word_parts(parts);
         }
     }
 
     fn word(&mut self, word: &Word) {
+        if self.control.is_cancelled() {
+            return;
+        }
         self.word_parts(word.parts());
     }
 
     fn word_parts(&mut self, parts: &[WordPart]) {
         for part in parts {
+            if self.control.is_cancelled() {
+                break;
+            }
             self.word_part(part);
         }
     }
 
     fn word_part(&mut self, part: &WordPart) {
+        if self.control.is_cancelled() {
+            return;
+        }
         match part.kind() {
             WordPartKind::DoubleQuoted(parts) => self.word_parts(parts),
             WordPartKind::BracedInterpolation(expression) => self.expression(expression),
@@ -3405,6 +3683,9 @@ impl<'a> StaticPipelineAnalyzer<'a> {
     }
 
     fn redirection(&mut self, redirection: &RedirectionKind) {
+        if self.control.is_cancelled() {
+            return;
+        }
         match redirection {
             RedirectionKind::Input { target, .. } => self.word(target),
             RedirectionKind::File(file) => self.word(&file.target),
@@ -3545,6 +3826,13 @@ pub struct ModuleAnalysisReport {
     sources: Vec<ModuleAnalysisSource>,
     issues: Vec<ModuleAnalysisIssue>,
     program: Option<ModuleProgram>,
+}
+
+/// A controlled analysis either exposes one complete report or no partial state.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ModuleAnalysisOutcome {
+    Complete(Box<ModuleAnalysisReport>),
+    Cancelled,
 }
 
 impl ModuleAnalysisReport {
@@ -3747,7 +4035,18 @@ impl<'a> ModuleProgramLoader<'a> {
     /// accumulates independent annotation, known-call, and result failures.
     #[must_use]
     pub fn analyze(&self, requested: &Path) -> ModuleAnalysisReport {
-        self.analyze_internal(requested, None)
+        self.complete_never_cancelled(self.analyze_controlled(requested, &AnalysisControl::never()))
+    }
+
+    /// Analyzes with cooperative cancellation and never exposes a partial
+    /// diagnostic report or program when cancellation wins.
+    #[must_use]
+    pub fn analyze_controlled(
+        &self,
+        requested: &Path,
+        control: &AnalysisControl,
+    ) -> ModuleAnalysisOutcome {
+        self.analyze_internal(requested, None, control)
     }
 
     /// Performs full non-executing analysis, including static pipeline carrier
@@ -3763,26 +4062,61 @@ impl<'a> ModuleProgramLoader<'a> {
         requested: &Path,
         commands: &CommandRegistry,
     ) -> ModuleAnalysisReport {
-        self.analyze_internal(requested, Some(commands))
+        self.complete_never_cancelled(self.analyze_with_commands_controlled(
+            requested,
+            commands,
+            &AnalysisControl::never(),
+        ))
+    }
+
+    /// Performs full command-aware analysis with cooperative cancellation.
+    #[must_use]
+    pub fn analyze_with_commands_controlled(
+        &self,
+        requested: &Path,
+        commands: &CommandRegistry,
+        control: &AnalysisControl,
+    ) -> ModuleAnalysisOutcome {
+        self.analyze_internal(requested, Some(commands), control)
+    }
+
+    fn complete_never_cancelled(&self, outcome: ModuleAnalysisOutcome) -> ModuleAnalysisReport {
+        match outcome {
+            ModuleAnalysisOutcome::Complete(report) => *report,
+            ModuleAnalysisOutcome::Cancelled => {
+                unreachable!("a never-cancelled analysis control cannot cancel")
+            }
+        }
     }
 
     fn analyze_internal(
         &self,
         requested: &Path,
         commands: Option<&CommandRegistry>,
-    ) -> ModuleAnalysisReport {
-        let root = match self.resolver.resolve_root(requested) {
+        control: &AnalysisControl,
+    ) -> ModuleAnalysisOutcome {
+        if control.is_cancelled() {
+            return ModuleAnalysisOutcome::Cancelled;
+        }
+        let root_result = self.resolver.resolve_root(requested);
+        if control.is_cancelled() {
+            return ModuleAnalysisOutcome::Cancelled;
+        }
+        let root = match root_result {
             Ok(root) => root,
             Err(error) => {
-                return ModuleAnalysisReport {
+                return ModuleAnalysisOutcome::Complete(Box::new(ModuleAnalysisReport {
                     sources: Vec::new(),
                     issues: vec![ModuleAnalysisIssue::new(ModuleProgramError::Resolution(
                         error,
                     ))],
                     program: None,
-                };
+                }));
             }
         };
+        if control.is_cancelled() {
+            return ModuleAnalysisOutcome::Cancelled;
+        }
         let mut graph = ModuleGraph::new(root.clone());
         let mut sources = ModuleSourceRegistry::default();
         let mut retained = Vec::new();
@@ -3796,37 +4130,52 @@ impl<'a> ModuleProgramLoader<'a> {
             &mut retained,
             &mut attempted,
             &mut issues,
+            control,
         );
-        let pipeline_issues = commands.map_or_else(Vec::new, |commands| {
-            retained
-                .iter()
-                .filter_map(|entry| {
-                    entry.script().map(|script| {
+        if control.is_cancelled() {
+            return ModuleAnalysisOutcome::Cancelled;
+        }
+        let mut pipeline_issues = Vec::new();
+        if let Some(commands) = commands {
+            for entry in &retained {
+                if control.is_cancelled() {
+                    return ModuleAnalysisOutcome::Cancelled;
+                }
+                if let Some(script) = entry.script() {
+                    pipeline_issues.extend(
                         StaticPipelineAnalyzer::analyze(
                             entry.module(),
                             entry.source(),
                             script,
                             commands,
+                            control,
                         )
-                    })
-                })
-                .flatten()
-                .map(|error| {
-                    ModuleAnalysisIssue::new(ModuleProgramError::Pipelines(Box::new(error)))
-                })
-                .collect::<Vec<_>>()
-        });
+                        .into_iter()
+                        .map(|error| {
+                            ModuleAnalysisIssue::new(ModuleProgramError::Pipelines(Box::new(error)))
+                        }),
+                    );
+                }
+            }
+        }
+        if control.is_cancelled() {
+            return ModuleAnalysisOutcome::Cancelled;
+        }
 
         if !issues.is_empty() {
             issues.extend(pipeline_issues);
-            return ModuleAnalysisReport {
+            return ModuleAnalysisOutcome::Complete(Box::new(ModuleAnalysisReport {
                 sources: retained,
                 issues,
                 program: None,
-            };
+            }));
         }
 
-        let names = match ModuleNameRegistry::analyze(&graph, &sources) {
+        let names_result = ModuleNameRegistry::analyze(&graph, &sources, control);
+        if control.is_cancelled() {
+            return ModuleAnalysisOutcome::Cancelled;
+        }
+        let names = match names_result {
             Ok(names) => names,
             Err(errors) => {
                 let mut issues = errors
@@ -3836,14 +4185,21 @@ impl<'a> ModuleProgramLoader<'a> {
                     })
                     .collect::<Vec<_>>();
                 issues.extend(pipeline_issues);
-                return ModuleAnalysisReport {
+                return ModuleAnalysisOutcome::Complete(Box::new(ModuleAnalysisReport {
                     sources: retained,
                     issues,
                     program: None,
-                };
+                }));
             }
         };
-        let types = match ModuleTypeRegistry::analyze(&sources, &names) {
+        if control.is_cancelled() {
+            return ModuleAnalysisOutcome::Cancelled;
+        }
+        let types_result = ModuleTypeRegistry::analyze(&sources, &names, control);
+        if control.is_cancelled() {
+            return ModuleAnalysisOutcome::Cancelled;
+        }
+        let types = match types_result {
             Ok(types) => types,
             Err(errors) => {
                 let mut issues = errors
@@ -3853,26 +4209,33 @@ impl<'a> ModuleProgramLoader<'a> {
                     })
                     .collect::<Vec<_>>();
                 issues.extend(pipeline_issues);
-                return ModuleAnalysisReport {
+                return ModuleAnalysisOutcome::Complete(Box::new(ModuleAnalysisReport {
                     sources: retained,
                     issues,
                     program: None,
-                };
+                }));
             }
         };
+        if control.is_cancelled() {
+            return ModuleAnalysisOutcome::Cancelled;
+        }
         if pipeline_issues
             .iter()
             .any(|issue| issue.severity() == Severity::Error)
         {
-            return ModuleAnalysisReport {
+            return ModuleAnalysisOutcome::Complete(Box::new(ModuleAnalysisReport {
                 sources: retained,
                 issues: pipeline_issues,
                 program: None,
-            };
+            }));
         }
         let effect_commands = commands.cloned().unwrap_or_else(standard_registry);
-        let effects = ModuleEffectRegistry::analyze(&graph, &sources, &names, &effect_commands);
-        ModuleAnalysisReport {
+        let effects =
+            ModuleEffectRegistry::analyze(&graph, &sources, &names, &effect_commands, control);
+        if control.is_cancelled() {
+            return ModuleAnalysisOutcome::Cancelled;
+        }
+        ModuleAnalysisOutcome::Complete(Box::new(ModuleAnalysisReport {
             sources: retained,
             issues: pipeline_issues,
             program: Some(ModuleProgram {
@@ -3882,7 +4245,7 @@ impl<'a> ModuleProgramLoader<'a> {
                 types,
                 effects,
             }),
-        }
+        }))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -3895,11 +4258,18 @@ impl<'a> ModuleProgramLoader<'a> {
         retained: &mut Vec<ModuleAnalysisSource>,
         attempted: &mut BTreeSet<ModuleId>,
         issues: &mut Vec<ModuleAnalysisIssue>,
+        control: &AnalysisControl,
     ) {
+        if control.is_cancelled() {
+            return;
+        }
         if !attempted.insert(module.clone()) {
             return;
         }
 
+        if control.is_cancelled() {
+            return;
+        }
         let bytes = match self.source_loader.load(&module) {
             Ok(bytes) => bytes,
             Err(cause) => {
@@ -3911,6 +4281,9 @@ impl<'a> ModuleProgramLoader<'a> {
                 return;
             }
         };
+        if control.is_cancelled() {
+            return;
+        }
         let source_id = match u32::try_from(retained.len()) {
             Ok(id) => SourceId::new(id),
             Err(_) => {
@@ -3932,9 +4305,10 @@ impl<'a> ModuleProgramLoader<'a> {
                 return;
             }
         };
-        let script = match parse(&source) {
-            ParseOutcome::Complete(script) => script,
-            ParseOutcome::Incomplete(incomplete) => {
+        let script = match parse_with_control(&source, &|| control.is_cancelled()) {
+            ControlledParseOutcome::Cancelled => return,
+            ControlledParseOutcome::Parsed(ParseOutcome::Complete(script)) => script,
+            ControlledParseOutcome::Parsed(ParseOutcome::Incomplete(incomplete)) => {
                 let diagnostic = Diagnostic::new(
                     Severity::Error,
                     "SYN002",
@@ -3956,7 +4330,7 @@ impl<'a> ModuleProgramLoader<'a> {
                 }));
                 return;
             }
-            ParseOutcome::Invalid(diagnostics) => {
+            ControlledParseOutcome::Parsed(ParseOutcome::Invalid(diagnostics)) => {
                 retained.push(ModuleAnalysisSource {
                     module: module.clone(),
                     source: source.clone(),
@@ -3970,6 +4344,9 @@ impl<'a> ModuleProgramLoader<'a> {
                 return;
             }
         };
+        if control.is_cancelled() {
+            return;
+        }
 
         let imports = script
             .statements()
@@ -3993,6 +4370,9 @@ impl<'a> ModuleProgramLoader<'a> {
         });
 
         for (requested, span) in imports {
+            if control.is_cancelled() {
+                return;
+            }
             let import = match self.resolver.resolve_import(&module, &requested, span) {
                 Ok(import) => import,
                 Err(error) => {
@@ -4014,6 +4394,7 @@ impl<'a> ModuleProgramLoader<'a> {
                 retained,
                 attempted,
                 issues,
+                control,
             );
         }
     }

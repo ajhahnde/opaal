@@ -1,3 +1,4 @@
+use crate::lexer::lex_with_control;
 use crate::{
     AndChain, AndOperator, Assignment, AstNode, BinaryExpression, BinaryOperator, Block,
     CallExpression, Closure, CommandHead, CommandHeadKind, CommandItem, CommandItemKind,
@@ -10,7 +11,7 @@ use crate::{
     Redirection, RedirectionKind, Script, Severity, SourceFile, Span, Stage, StageKind, Statement,
     StatementKind, SyntaxClassification, Token, TokenKind, TypeReference, UnaryExpression,
     UnaryOperator, VariableReference, WhileStatement, Word, WordPart, WordPartKind,
-    classify_tokens, lex,
+    classify_tokens,
 };
 
 /// The result of parsing one source file.
@@ -21,27 +22,67 @@ pub enum ParseOutcome {
     Invalid(Vec<Diagnostic>),
 }
 
+/// A controlled parse either completes with the ordinary result or is
+/// cancelled without exposing partial syntax or diagnostics.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ControlledParseOutcome {
+    Parsed(ParseOutcome),
+    Cancelled,
+}
+
 /// Parses a source file through the shared lexer and structural classifier.
 #[must_use]
 pub fn parse(source: &SourceFile) -> ParseOutcome {
-    let tokens = lex(source);
-    match classify_tokens(source, &tokens)
-        .expect("tokens produced from a source file have source-local spans")
-    {
+    match parse_with_control(source, &|| false) {
+        ControlledParseOutcome::Parsed(outcome) => outcome,
+        ControlledParseOutcome::Cancelled => unreachable!("the default parser never cancels"),
+    }
+}
+
+/// Parses with a cooperative cancellation predicate while preserving the
+/// ordinary parser's complete/incomplete/invalid result unchanged. The
+/// predicate must remain `true` after it first requests cancellation.
+#[must_use]
+pub fn parse_with_control(
+    source: &SourceFile,
+    is_cancelled: &dyn Fn() -> bool,
+) -> ControlledParseOutcome {
+    let Some(tokens) = lex_with_control(source, is_cancelled) else {
+        return ControlledParseOutcome::Cancelled;
+    };
+    if is_cancelled() {
+        return ControlledParseOutcome::Cancelled;
+    }
+    let classification = classify_tokens(source, &tokens)
+        .expect("tokens produced from a source file have source-local spans");
+    if is_cancelled() {
+        return ControlledParseOutcome::Cancelled;
+    }
+    match classification {
         SyntaxClassification::Incomplete(incomplete) => {
-            return ParseOutcome::Incomplete(incomplete);
+            return ControlledParseOutcome::Parsed(ParseOutcome::Incomplete(incomplete));
         }
         SyntaxClassification::Invalid(diagnostic) => {
-            return ParseOutcome::Invalid(vec![diagnostic]);
+            return ControlledParseOutcome::Parsed(ParseOutcome::Invalid(vec![diagnostic]));
         }
         SyntaxClassification::Complete => {}
     }
-
-    match Parser::new(source, tokens).parse_script() {
-        Ok(script) => ParseOutcome::Complete(script),
-        Err(ParseError::Incomplete(incomplete)) => ParseOutcome::Incomplete(incomplete),
-        Err(ParseError::Invalid(diagnostic)) => ParseOutcome::Invalid(vec![diagnostic]),
-        Err(ParseError::InvalidMany(diagnostics)) => ParseOutcome::Invalid(diagnostics),
+    let parsed = Parser::new(source, tokens, is_cancelled).parse_script();
+    if is_cancelled() {
+        return ControlledParseOutcome::Cancelled;
+    }
+    match parsed {
+        Ok(script) => ControlledParseOutcome::Parsed(ParseOutcome::Complete(script)),
+        Err(ParseError::Incomplete(incomplete)) => {
+            ControlledParseOutcome::Parsed(ParseOutcome::Incomplete(incomplete))
+        }
+        Err(ParseError::Invalid(diagnostic)) => {
+            ControlledParseOutcome::Parsed(ParseOutcome::Invalid(vec![diagnostic]))
+        }
+        Err(ParseError::InvalidMany(diagnostics)) => {
+            ControlledParseOutcome::Parsed(ParseOutcome::Invalid(diagnostics))
+        }
+        Err(ParseError::Cancelled) => ControlledParseOutcome::Cancelled,
     }
 }
 
@@ -49,30 +90,38 @@ enum ParseError {
     Incomplete(IncompleteInput),
     Invalid(Diagnostic),
     InvalidMany(Vec<Diagnostic>),
+    Cancelled,
 }
 
 type ParseResult<T> = Result<T, ParseError>;
 
-struct Parser<'source> {
+struct Parser<'source, 'control> {
     source: &'source SourceFile,
     tokens: Vec<Token>,
     position: usize,
     continuation_depth: usize,
     diagnostics: Vec<Diagnostic>,
+    is_cancelled: &'control dyn Fn() -> bool,
 }
 
-impl<'source> Parser<'source> {
-    fn new(source: &'source SourceFile, tokens: Vec<Token>) -> Self {
+impl<'source, 'control> Parser<'source, 'control> {
+    fn new(
+        source: &'source SourceFile,
+        tokens: Vec<Token>,
+        is_cancelled: &'control dyn Fn() -> bool,
+    ) -> Self {
         Self {
             source,
             tokens,
             position: 0,
             continuation_depth: 0,
             diagnostics: Vec::new(),
+            is_cancelled,
         }
     }
 
     fn parse_script(mut self) -> ParseResult<Script> {
+        self.check_cancelled()?;
         let statements = self.parse_statement_list(None)?;
         self.skip_separators();
         if !self.is_end() {
@@ -95,9 +144,11 @@ impl<'source> Parser<'source> {
     }
 
     fn parse_statement_list(&mut self, closing: Option<Delimiter>) -> ParseResult<Vec<Statement>> {
+        self.check_cancelled()?;
         let mut statements = Vec::new();
         let mut documentation = self.skip_separators_with_documentation();
         while !self.is_end() && !self.at_delimiter(closing) {
+            self.check_cancelled()?;
             let statement = match self.parse_statement(closing.is_none(), documentation.take()) {
                 Ok(statement) => statement,
                 Err(ParseError::Invalid(diagnostic)) => {
@@ -157,6 +208,7 @@ impl<'source> Parser<'source> {
         top_level: bool,
         documentation: Option<DocumentationBlock>,
     ) -> ParseResult<Statement> {
+        self.check_cancelled()?;
         self.skip_inline();
         match self.current_kind() {
             Some(TokenKind::Keyword(Keyword::Import)) if top_level => self.parse_import(),
@@ -631,12 +683,14 @@ impl<'source> Parser<'source> {
     }
 
     fn parse_conditional_chain(&mut self) -> ParseResult<ConditionalChain> {
+        self.check_cancelled()?;
         let first = self.parse_and_chain()?;
         let start = first.span();
         let mut end = first.span().end();
         let mut terms = vec![first];
         let mut operators = Vec::new();
         loop {
+            self.check_cancelled()?;
             self.skip_inline();
             let Some(operator) = self.take_operator(Operator::Or) else {
                 break;
@@ -660,12 +714,14 @@ impl<'source> Parser<'source> {
     }
 
     fn parse_and_chain(&mut self) -> ParseResult<AndChain> {
+        self.check_cancelled()?;
         let first = self.parse_pipeline()?;
         let start = first.span();
         let mut end = first.span().end();
         let mut terms = vec![first];
         let mut operators = Vec::new();
         loop {
+            self.check_cancelled()?;
             self.skip_inline();
             let Some(operator) = self.take_operator(Operator::And) else {
                 break;
@@ -689,12 +745,14 @@ impl<'source> Parser<'source> {
     }
 
     fn parse_pipeline(&mut self) -> ParseResult<Pipeline> {
+        self.check_cancelled()?;
         let first = self.parse_stage()?;
         let start = first.span();
         let mut end = first.span().end();
         let mut stages = vec![first];
         let mut operators = Vec::new();
         loop {
+            self.check_cancelled()?;
             self.skip_inline();
             let operator = match self.current_kind() {
                 Some(TokenKind::Operator(Operator::Pipe)) => PipeOperator::Stdout,
@@ -917,10 +975,12 @@ impl<'source> Parser<'source> {
     }
 
     fn parse_word(&mut self) -> ParseResult<Word> {
+        self.check_cancelled()?;
         let start = self.current_span()?;
         let mut parts = Vec::new();
         let mut end = start.start();
         loop {
+            self.check_cancelled()?;
             if !parts.is_empty() && self.current_span().is_ok_and(|span| span.start() != end) {
                 break;
             }
@@ -937,6 +997,7 @@ impl<'source> Parser<'source> {
     }
 
     fn parse_word_part(&mut self) -> ParseResult<Option<WordPart>> {
+        self.check_cancelled()?;
         let Some(token) = self.current().copied() else {
             return Ok(None);
         };
@@ -970,6 +1031,7 @@ impl<'source> Parser<'source> {
                     && next.span().start() == end
                     && is_bare_word_token(next.kind())
                 {
+                    self.check_cancelled()?;
                     end = next.span().end();
                     self.position += 1;
                 }
@@ -983,9 +1045,11 @@ impl<'source> Parser<'source> {
     }
 
     fn parse_double_quoted(&mut self) -> ParseResult<WordPart> {
+        self.check_cancelled()?;
         let open = self.take().expect("double quote opener is current");
         let mut parts = Vec::new();
         while self.current_kind() != Some(TokenKind::DoubleQuoteEnd) {
+            self.check_cancelled()?;
             let token = self.current().copied().ok_or_else(|| {
                 self.incomplete_at(IncompleteReason::UnmatchedDoubleQuote, open.span())
             })?;
@@ -1101,6 +1165,7 @@ impl<'source> Parser<'source> {
     }
 
     fn parse_expression(&mut self) -> ParseResult<Expression> {
+        self.check_cancelled()?;
         self.parse_equality()
     }
 
@@ -1180,6 +1245,7 @@ impl<'source> Parser<'source> {
     fn parse_additive(&mut self) -> ParseResult<Expression> {
         let mut expression = self.parse_multiplicative()?;
         loop {
+            self.check_cancelled()?;
             self.skip_inline();
             let operator = match self.current_kind() {
                 Some(TokenKind::Operator(Operator::Plus)) => BinaryOperator::Add,
@@ -1197,6 +1263,7 @@ impl<'source> Parser<'source> {
     fn parse_multiplicative(&mut self) -> ParseResult<Expression> {
         let mut expression = self.parse_unary()?;
         loop {
+            self.check_cancelled()?;
             self.skip_inline();
             let operator = match self.current_kind() {
                 Some(TokenKind::Operator(Operator::Star)) => BinaryOperator::Multiply,
@@ -1213,6 +1280,7 @@ impl<'source> Parser<'source> {
     }
 
     fn parse_unary(&mut self) -> ParseResult<Expression> {
+        self.check_cancelled()?;
         let operator = match self.current_kind() {
             Some(TokenKind::Operator(Operator::Bang)) => UnaryOperator::Not,
             Some(TokenKind::Operator(Operator::Plus)) => UnaryOperator::Positive,
@@ -1233,8 +1301,10 @@ impl<'source> Parser<'source> {
     }
 
     fn parse_postfix(&mut self) -> ParseResult<Expression> {
+        self.check_cancelled()?;
         let mut expression = self.parse_primary()?;
         loop {
+            self.check_cancelled()?;
             self.skip_inline();
             match self.current_kind() {
                 Some(TokenKind::Delimiter(Delimiter::LeftParenthesis)) => {
@@ -1303,6 +1373,7 @@ impl<'source> Parser<'source> {
     }
 
     fn parse_primary(&mut self) -> ParseResult<Expression> {
+        self.check_cancelled()?;
         self.skip_inline();
         let Some(kind) = self.current_kind() else {
             return Err(self.incomplete_here(IncompleteReason::Expression));
@@ -1658,6 +1729,9 @@ impl<'source> Parser<'source> {
             )
         ) || (self.continuation_depth > 0 && self.current_kind() == Some(TokenKind::Newline))
         {
+            if (self.is_cancelled)() {
+                break;
+            }
             self.position += 1;
         }
     }
@@ -1673,6 +1747,9 @@ impl<'source> Parser<'source> {
                     | TokenKind::Newline
             )
         ) {
+            if (self.is_cancelled)() {
+                break;
+            }
             self.position += 1;
         }
     }
@@ -1689,6 +1766,9 @@ impl<'source> Parser<'source> {
                     | TokenKind::Operator(Operator::Semicolon)
             )
         ) {
+            if (self.is_cancelled)() {
+                break;
+            }
             self.position += 1;
         }
     }
@@ -1698,6 +1778,9 @@ impl<'source> Parser<'source> {
         let mut newlines_after_documentation = 0usize;
 
         while let Some(token) = self.current().copied() {
+            if (self.is_cancelled)() {
+                break;
+            }
             match token.kind() {
                 TokenKind::DocumentationComment => {
                     if !lines.is_empty() && newlines_after_documentation != 1 {
@@ -1736,6 +1819,9 @@ impl<'source> Parser<'source> {
     fn synchronize(&mut self, closing: Option<Delimiter>) {
         let mut delimiters = Vec::new();
         while let Some(token) = self.current().copied() {
+            if (self.is_cancelled)() {
+                break;
+            }
             if delimiters.is_empty() {
                 if closing.is_some_and(|delimiter| token.kind() == TokenKind::Delimiter(delimiter))
                 {
@@ -1893,6 +1979,14 @@ impl<'source> Parser<'source> {
 
     fn is_end(&self) -> bool {
         self.position >= self.tokens.len()
+    }
+
+    fn check_cancelled(&self) -> ParseResult<()> {
+        if (self.is_cancelled)() {
+            Err(ParseError::Cancelled)
+        } else {
+            Ok(())
+        }
     }
 
     fn span(&self, start: usize, end: usize) -> Span {

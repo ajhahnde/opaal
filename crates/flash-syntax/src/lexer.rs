@@ -148,6 +148,13 @@ pub fn lex(source: &SourceFile) -> Vec<Token> {
     Lexer::new(source).run()
 }
 
+pub(crate) fn lex_with_control(
+    source: &SourceFile,
+    is_cancelled: &dyn Fn() -> bool,
+) -> Option<Vec<Token>> {
+    Lexer::new(source).run_with_control(is_cancelled)
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Context {
     Normal,
@@ -173,8 +180,16 @@ impl<'source> Lexer<'source> {
         }
     }
 
-    fn run(mut self) -> Vec<Token> {
+    fn run(self) -> Vec<Token> {
+        self.run_with_control(&|| false)
+            .expect("the default lexer never cancels")
+    }
+
+    fn run_with_control(mut self, is_cancelled: &dyn Fn() -> bool) -> Option<Vec<Token>> {
         while self.position < self.source.len() {
+            if is_cancelled() {
+                return None;
+            }
             let before = self.position;
             match self.contexts.last().copied().unwrap_or(Context::Normal) {
                 Context::DoubleQuoted => self.lex_double_quoted(),
@@ -187,7 +202,7 @@ impl<'source> Lexer<'source> {
                 "lexer must consume source on every step"
             );
         }
-        self.tokens
+        (!is_cancelled()).then_some(self.tokens)
     }
 
     fn lex_normal(&mut self) {

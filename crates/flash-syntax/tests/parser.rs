@@ -2,11 +2,27 @@
 
 use std::fs;
 use std::path::Path;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use flash_syntax::{
-    BinaryOperator, CommandItemKind, Expression, ExpressionKind, ParseOutcome, SourceFile,
-    SourceId, StageKind, StatementKind, parse,
+    BinaryOperator, CommandItemKind, ControlledParseOutcome, Expression, ExpressionKind,
+    ParseOutcome, SourceFile, SourceId, StageKind, StatementKind, parse, parse_with_control,
 };
+
+#[test]
+fn controlled_parsing_cancels_without_exposing_a_partial_parse_outcome() {
+    let text = (0..512)
+        .map(|index| format!("let value_{index} = [{index}, {index}]\n"))
+        .collect::<String>();
+    let source = SourceFile::new(SourceId::new(799), "cancelled.fsh", text);
+    let polls = AtomicUsize::new(0);
+
+    let outcome = parse_with_control(&source, &|| polls.fetch_add(1, Ordering::Relaxed) >= 32);
+
+    assert_eq!(outcome, ControlledParseOutcome::Cancelled);
+    assert!(polls.load(Ordering::Relaxed) >= 33);
+    assert!(matches!(parse(&source), ParseOutcome::Complete(_)));
+}
 
 #[test]
 fn grammar_manifest_boundaries_are_parsed_directly() {

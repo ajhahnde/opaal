@@ -11,7 +11,7 @@ use std::fmt;
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use flash_platform::{
@@ -27,9 +27,9 @@ use flash_runtime::command::{
 };
 use flash_runtime::eval::FakeClock;
 use flash_runtime::module::{
-    ModuleCanonicalizer, ModuleEffect, ModuleGraph, ModuleGraphError, ModulePathError,
-    ModuleProgramLoader, ModuleReferenceTarget, ModuleResolver, ModuleSourceError,
-    ModuleSourceLoader, ValueType,
+    AnalysisControl, ModuleAnalysisOutcome, ModuleCanonicalizer, ModuleEffect, ModuleGraph,
+    ModuleGraphError, ModulePathError, ModuleProgramLoader, ModuleReferenceTarget, ModuleResolver,
+    ModuleSourceError, ModuleSourceLoader, ValueType,
 };
 use flash_runtime::plan::SessionOptions;
 use flash_runtime::resolve::ExecutableProbe;
@@ -414,6 +414,146 @@ impl ModuleSourceLoader for FakeSourceLoader {
             .cloned()
             .unwrap_or_else(|| Err(ModuleSourceError::new("source was not mapped by the test")))
     }
+}
+
+struct CancellingSourceLoader {
+    cancelled: Arc<AtomicBool>,
+    bytes: Vec<u8>,
+    loads: AtomicUsize,
+}
+
+struct ArmingSourceLoader {
+    armed: Arc<AtomicBool>,
+    sources: BTreeMap<PathBuf, Vec<u8>>,
+}
+
+impl ModuleSourceLoader for ArmingSourceLoader {
+    fn load(&self, module: &flash_runtime::module::ModuleId) -> Result<Vec<u8>, ModuleSourceError> {
+        let bytes = self
+            .sources
+            .get(module.path())
+            .cloned()
+            .ok_or_else(|| ModuleSourceError::new("source was not mapped by the test"))?;
+        if module.path() == Path::new("/project/arm.fsh") {
+            self.armed.store(true, Ordering::Release);
+        }
+        Ok(bytes)
+    }
+}
+
+impl ModuleSourceLoader for CancellingSourceLoader {
+    fn load(
+        &self,
+        _module: &flash_runtime::module::ModuleId,
+    ) -> Result<Vec<u8>, ModuleSourceError> {
+        self.loads.fetch_add(1, Ordering::Relaxed);
+        self.cancelled.store(true, Ordering::Release);
+        Ok(self.bytes.clone())
+    }
+}
+
+#[test]
+fn controlled_analysis_cancels_after_source_loading_without_a_partial_report() {
+    let paths = FakeCanonicalizer::default().resolves("/project/main.fsh", "/project/main.fsh");
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let source_loader = CancellingSourceLoader {
+        cancelled: Arc::clone(&cancelled),
+        bytes: b"let answer = 42\n".to_vec(),
+        loads: AtomicUsize::new(0),
+    };
+    let control = AnalysisControl::cooperative({
+        let cancelled = Arc::clone(&cancelled);
+        move || cancelled.load(Ordering::Acquire)
+    });
+
+    let outcome = ModuleProgramLoader::new(&paths, &source_loader)
+        .analyze_controlled(Path::new("/project/main.fsh"), &control);
+
+    assert_eq!(outcome, ModuleAnalysisOutcome::Cancelled);
+    assert_eq!(source_loader.loads.load(Ordering::Relaxed), 1);
+}
+
+#[test]
+fn controlled_analysis_can_cancel_during_recursive_syntax_work() {
+    let paths = FakeCanonicalizer::default().resolves("/project/main.fsh", "/project/main.fsh");
+    let text = (0..512)
+        .map(|index| format!("let value_{index}: List[Int] = [{index}, {index}]\n"))
+        .collect::<String>();
+    let sources = FakeSourceLoader::default().contains("/project/main.fsh", &text);
+    let polls = Arc::new(AtomicUsize::new(0));
+    let control = AnalysisControl::cooperative({
+        let polls = Arc::clone(&polls);
+        move || polls.fetch_add(1, Ordering::Relaxed) >= 256
+    });
+
+    let outcome = ModuleProgramLoader::new(&paths, &sources).analyze_with_commands_controlled(
+        Path::new("/project/main.fsh"),
+        &standard_registry(),
+        &control,
+    );
+
+    assert_eq!(outcome, ModuleAnalysisOutcome::Cancelled);
+    assert_eq!(sources.load_count("/project/main.fsh"), 1);
+    assert!(polls.load(Ordering::Relaxed) >= 257);
+}
+
+#[test]
+fn controlled_analysis_polls_during_recursive_semantic_traversal() {
+    let paths = FakeCanonicalizer::default()
+        .resolves("/project/main.fsh", "/project/main.fsh")
+        .resolves("/project/arm.fsh", "/project/arm.fsh");
+    let root = format!(
+        "import './arm.fsh'\n{}",
+        (0..512)
+            .map(|index| format!("let value_{index}: List[Int] = [{index}, {index}]\n"))
+            .collect::<String>()
+    );
+    let armed = Arc::new(AtomicBool::new(false));
+    let sources = ArmingSourceLoader {
+        armed: Arc::clone(&armed),
+        sources: BTreeMap::from([
+            (PathBuf::from("/project/main.fsh"), root.into_bytes()),
+            (PathBuf::from("/project/arm.fsh"), Vec::new()),
+        ]),
+    };
+    let semantic_polls = Arc::new(AtomicUsize::new(0));
+    let control = AnalysisControl::cooperative({
+        let armed = Arc::clone(&armed);
+        let semantic_polls = Arc::clone(&semantic_polls);
+        move || {
+            armed.load(Ordering::Acquire) && semantic_polls.fetch_add(1, Ordering::Relaxed) >= 32
+        }
+    });
+
+    let outcome = ModuleProgramLoader::new(&paths, &sources).analyze_with_commands_controlled(
+        Path::new("/project/main.fsh"),
+        &standard_registry(),
+        &control,
+    );
+
+    assert_eq!(outcome, ModuleAnalysisOutcome::Cancelled);
+    assert!(semantic_polls.load(Ordering::Relaxed) >= 33);
+}
+
+#[test]
+fn never_cancelled_control_preserves_the_legacy_analysis_report_exactly() {
+    let paths = FakeCanonicalizer::default().resolves("/project/main.fsh", "/project/main.fsh");
+    let sources = FakeSourceLoader::default().contains(
+        "/project/main.fsh",
+        "let answer: Int = 42\nexport { answer }\n",
+    );
+    let loader = ModuleProgramLoader::new(&paths, &sources);
+    let expected =
+        loader.analyze_with_commands(Path::new("/project/main.fsh"), &standard_registry());
+
+    assert_eq!(
+        loader.analyze_with_commands_controlled(
+            Path::new("/project/main.fsh"),
+            &standard_registry(),
+            &AnalysisControl::never(),
+        ),
+        ModuleAnalysisOutcome::Complete(Box::new(expected))
+    );
 }
 
 fn source(id: u32, name: &str, text: &str) -> SourceFile {

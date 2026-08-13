@@ -22,7 +22,7 @@ pub use formatter::{FormatOutcome, format_source};
 pub use lexer::{
     Delimiter, InvalidTokenKind, Keyword, NumberKind, Operator, Token, TokenKind, lex,
 };
-pub use parser::{ParseOutcome, parse};
+pub use parser::{ControlledParseOutcome, ParseOutcome, parse, parse_with_control};
 pub use source::{
     LineColumn, LineIndex, PositionEncoding, PositionError, SourceFile, SourceId, Span, SpanError,
     TextPosition, TextRange,
