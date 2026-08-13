@@ -2,7 +2,11 @@
 
 [FlashOS](../../../README.md) › [Flash](../README.md) › [Documentation](README.md) › Development
 
-This guide describes the component-specific workflow for building, testing, documenting, and integrating Flash. It is intended for developers changing the language implementation, runtime, platform adapters, interactive front end, or `fsh` executable; repository-wide image development and verification policy remain documented under the main FlashOS documentation.
+This guide describes the component-specific workflow for building, testing,
+documenting, and integrating Flash. It is intended for developers changing the
+language implementation, runtime, platform adapters, interactive front end,
+`fsh`, or `flash-language-server`; repository-wide image development and
+verification policy remain documented under the main FlashOS documentation.
 
 > **Project status:** FlashOS as a complete operating system remains pre-alpha software. However, this Flash Development Guide supports the intended stable Flash v1.0 contract. Note that not every v1 feature is automatically available in every current FlashOS image or on every target platform, and successful test execution on a Linux or macOS development host is not automatic proof of FlashOS target support.
 
@@ -57,7 +61,7 @@ Development evidence is layered:
 | Formatting and Clippy      | Source-format and lint compliance for the host build                     |
 | Host tests                 | Portable behavior and supported host-platform integration                |
 | Fuzzing                    | Resilience of selected syntax entry points against generated inputs      |
-| `redoxer` build            | Compilation of the `fsh` binary for the Redox target environment         |
+| `redoxer` builds           | Compilation of the shipped Flash executables for the Redox target environment |
 | Package build              | Construction of the checkout-bound Flash workspace through the FlashOS recipe |
 | Image build                | Inclusion of that package in an assembled FlashOS image                  |
 | QEMU or hardware execution | Runtime behavior in the produced system                                  |
@@ -131,6 +135,7 @@ The principal implementation responsibilities are:
 | Portable operating-system capability contracts and deterministic test adapters | `flash-platform` |
 | Unix-like process, descriptor, filesystem, signal, and terminal operations | `flash-platform-posix` |
 | CLI modes, interactive editing, configuration, history, tooling entry points, and executable assembly | `flash-cli` |
+| Versioned overlays, JSON-RPC/LSP projection, stdio framing, and language-server assembly | `flash-lsp` |
 
 Supporting directories hold component documentation, fuzz targets, end-to-end tests, fixture executables, and golden corpora. Inspect the workspace manifest and the relevant directory before documenting an exact package or test inventory.
 
@@ -156,6 +161,7 @@ Replace `affected-package` with the owning package, for example:
 cargo test -p flash-syntax --locked
 cargo test -p flash-runtime --locked
 cargo test -p flash-cli --locked
+cargo test -p flash-lsp --locked
 ```
 
 Before completing the change, run the full host gate:
@@ -525,20 +531,83 @@ Guide, Architecture, the Flash overview, and the changelog.
 
 ### Language-server contract
 
-The Flash language server is required for the v1 tooling surface. It must reuse the shared parser, syntax tree, module graph, name resolution, signatures, and diagnostics rather than implementing another version of the language.
+The Flash language server is required for the v1 tooling surface. It reuses the
+shared parser, syntax tree, module graph, name resolution, signatures,
+diagnostics, command metadata, completion context, and formatter rather than
+implementing another version of the language.
 
-Language-server development should include:
+For an installed package, configure an editor's LSP client to start:
 
-- document open, change, and close behavior;
-- deterministic diagnostics;
-- cross-file module and name resolution;
-- signature and help information;
-- completion and navigation based on shared analysis;
-- protocol request and response tests;
-- cancellation and stale-document handling;
-- tests proving that requests do not execute user programs.
+```text
+/usr/bin/flash-language-server
+```
 
-Existing editor-local highlighting or completion does not replace the language-server contract.
+For a component-workspace development session, the exact equivalent is:
+
+```bash
+cd components/flash
+cargo run --locked -p flash-lsp --bin flash-language-server
+```
+
+Both invocations are stdio servers. Do not pass a source path or shell option,
+and do not treat stdout as a terminal stream: it contains only
+`Content-Length`-framed JSON-RPC messages. A generic editor registration should
+associate `.fsh` files with a Flash language identifier and use this launch
+record:
+
+```text
+command: ["flash-language-server"]
+transport: stdio
+document selector: .fsh files
+```
+
+Flash does not bundle an editor extension; use the editor's generic LSP client.
+The client must send absolute `file:` document URIs and full document text for
+every accepted change. The server
+advertises open/close plus full synchronization, UTF-8 positions when offered
+and UTF-16 otherwise, and these methods:
+
+```text
+textDocument/completion
+textDocument/hover
+textDocument/signatureHelp
+textDocument/definition
+textDocument/references
+textDocument/formatting
+```
+
+Diagnostics arrive through `textDocument/publishDiagnostics`. The lifecycle and
+sync surface also uses `initialize`, `initialized`, `shutdown`, `exit`,
+`$/cancelRequest`, `textDocument/didOpen`, `textDocument/didChange`, and
+`textDocument/didClose`. Incremental edits, non-file URIs, TCP or socket
+transport, project configuration, workspace file discovery, dynamic
+registration, and unadvertised methods are not supported.
+
+Language-server development must preserve immutable generation-scoped
+snapshots, deterministic diagnostics and queries, exact cancellation/stale
+result responses, and one response for every request. It must also prove that
+effectful source cannot initialize a module, execute a command, probe an
+executable or `PATH`, apply a redirection, mutate cwd or the environment, access
+a terminal or session, or load shell configuration/history.
+
+Run the focused language-tooling gate with:
+
+```bash
+cd components/flash
+cargo test -p flash-syntax --locked
+cargo test -p flash-runtime --test modules --locked
+cargo test -p flash-cli --test check_frontend --locked
+cargo test -p flash-cli --test checker_e2e --locked
+cargo test -p flash-cli --test context_aware_completion --locked
+cargo test -p flash-cli --test dependency_direction --locked
+cargo test -p flash-lsp --locked
+```
+
+Then run the complete locked workspace test, formatting, and strict lint gates.
+When the packaged executable or target-visible dependencies change, also build
+`flash-language-server` with `redoxer` and validate the package/profile contract
+before claiming target availability. Existing editor-local highlighting or
+completion does not replace this language-server contract.
 
 ## Develop the runtime
 
@@ -843,21 +912,26 @@ Generated fuzz artifacts, coverage files, and fuzz build output are ignored by G
 
 ## Target compilation
 
-Build the `fsh` executable for the Redox target with:
+Build both shipped Flash executables for the Redox target with:
 
 ```bash
 cd components/flash
 redoxer build -p flash-cli --bin fsh
+redoxer build -p flash-lsp --bin flash-language-server
 ```
 
-From the repository root, the helper equivalent is:
+From the repository root, the helper currently covers the `fsh` half of this
+gate:
 
 ```bash
 source ./flashos.sh
 flashos shell target
 ```
 
-The target build verifies that the selected crate graph compiles for the Redox environment. It can detect issues such as:
+Use the direct `redoxer` command above for `flash-language-server` until the
+helper exposes a combined target build.
+
+The target builds verify that both selected crate graphs compile for the Redox environment. They can detect issues such as:
 
 - unsupported dependencies;
 - incorrect conditional compilation;
@@ -1063,8 +1137,11 @@ Also verify:
 - signature and documentation information;
 - deterministic diagnostics;
 - cancellation or stale-document behavior where applicable;
+- full-sync versioning, absolute file-URI handling, and negotiated positions;
+- framing, lifecycle, stdout purity, and exact one-response completion;
+- dependency direction and package/profile installation of the separate binary;
 - no execution of user source during inspection;
-- relevant Language and Architecture documentation.
+- relevant Architecture, Development, overview, and changelog documentation.
 
 ### Runtime or command change
 
@@ -1107,6 +1184,7 @@ Also verify:
 ```bash
 cargo deny check advisories bans licenses sources
 redoxer build -p flash-cli --bin fsh
+redoxer build -p flash-lsp --bin flash-language-server
 ```
 
 Review `Cargo.lock` and the target-visible transitive graph.

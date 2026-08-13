@@ -12,8 +12,8 @@ This page is the central index for the public Flash documentation. It directs us
 | ------------------------------ | ----------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
 | Learn the Flash language  | [Language Guide](language-guide.md) | Source structure, values, bindings, expressions, functions, modules, imports, exports, name resolution, commands, and typed pipelines        |
 | Create and verify `.fsh` files | [Scripting](scripting.md)           | Script execution, script arguments, non-executing checks, canonical formatting, external processes, redirections, statuses, jobs, and limits |
-| Understand the implementation  | [Architecture](architecture.md)     | Dependency direction, source and module analysis, shared tooling services, runtime planning, platform capabilities, adapters, and lifecycle  |
-| Modify and qualify Flash  | [Development](development.md)       | Toolchains, formatter and checker gates, language-server development, tests, fixtures, fuzzing, target builds, and documentation validation   |
+| Understand the implementation  | [Architecture](architecture.md)     | Dependency direction, source and module analysis, language-server protocol boundary, runtime planning, platform capabilities, and lifecycle |
+| Modify and qualify Flash  | [Development](development.md)       | Toolchains, formatter and checker gates, language-server integration and gates, tests, fuzzing, target builds, and documentation validation   |
 
 Readers who are new to Flash should begin with the [component overview](../README.md), continue with the [Language Guide](language-guide.md), and then use the [Scripting Guide](scripting.md) for practical program execution. Developers changing the implementation should also read the [Architecture](architecture.md) and [Development](development.md) guides.
 
@@ -24,8 +24,14 @@ Each guide has a distinct responsibility:
 - The [Flash overview](../README.md) introduces the component, its role in FlashOS, the v1 contract boundary, implementation responsibilities, and the available documentation.
 - The [Language Guide](language-guide.md) owns language semantics, functions, modules, imports and exports, name resolution, typed function metadata, and structured pipelines. It is not the primary reference for build procedures.
 - The [Scripting Guide](scripting.md) owns practical `.fsh` execution, script arguments, non-executing checks, formatting modes, external processes, redirections, statuses, and jobs. It does not duplicate the complete language reference.
-- The [Architecture Guide](architecture.md) explains implementation responsibilities, source and module analysis, shared tooling services, runtime data flow, platform capabilities, adapters, and process lifecycle.
-- The [Development Guide](development.md) owns component-specific build and verification procedures, including formatter, checker, and language-server quality gates. Repository-wide verification layers remain documented in [FlashOS Verification](../../../docs/verification.md).
+- The [Architecture Guide](architecture.md) explains implementation
+  responsibilities, source and module analysis, the language-server protocol
+  boundary, runtime data flow, platform capabilities, adapters, and process
+  lifecycle.
+- The [Development Guide](development.md) owns component-specific build and
+  verification procedures, including language-server invocation, editor
+  integration, and quality gates. Repository-wide verification layers remain
+  documented in [FlashOS Verification](../../../docs/verification.md).
 
 When documentation and implementation appear to disagree, inspect the current source, tests, and configuration before relying on a behavior or changing a public claim.
 
@@ -40,6 +46,7 @@ Language and tooling responsibilities remain stable at the documentation level, 
 Focused implementation and verification areas maintain narrower README files beside the corresponding source or fixtures:
 
 - [Cargo workspace manifest](../Cargo.toml) — Workspace membership and shared package metadata.
+- [`flash-lsp` crate](../crates/flash-lsp/) — Stdio transport, versioned document workspace, protocol projection, and language-server executable.
 - [Fuzz targets](../fuzz/README.md) — Lexer and parser fuzz inputs, smoke campaigns, and corpus handling.
 - [End-to-end tests](../tests/e2e/README.md) — Location of black-box and pseudoterminal test fixtures.
 - [Test fixtures](../tests/fixtures/README.md) — Rust child programs used to observe process, descriptor, status, and stream behavior.

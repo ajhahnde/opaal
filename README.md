@@ -13,6 +13,7 @@ Flash (`fsh`) is the primary interactive shell and scripting interface of FlashO
 - [Flash v1 contract](#flash-v1-contract)
 - [Current implementation](#current-implementation)
 - [Using `fsh`](#using-fsh)
+- [Using the language server](#using-the-language-server)
 - [Development and verification](#development-and-verification)
 - [Documentation](#documentation)
 - [License](#license)
@@ -67,8 +68,13 @@ Flash is maintained as an independent Rust workspace inside the FlashOS reposito
 | `crates/flash-platform/`       | Platform capability contracts used by the runtime                                       |
 | `crates/flash-platform-posix/` | Process, filesystem, descriptor, signal, and terminal integration for supported targets |
 | `crates/flash-cli/`            | The `fsh` executable and its interactive and script entry points                        |
+| `crates/flash-lsp/`            | The non-executing `flash-language-server` protocol adapter                              |
 
-The separation between syntax, runtime, platform contracts, operating-system integration, and the command-line interface is intended to keep language semantics independent from target-specific terminal and process handling.
+The separation between syntax, runtime, protocol, platform contracts,
+operating-system integration, and the command-line interface keeps language
+semantics independent from target-specific terminal and process handling. The
+language server depends only on shared syntax and analysis services; it does not
+depend on the CLI or a platform adapter.
 
 Flash is implemented in Rust. The CLI prohibits unsafe code, while the low-level platform adapter permits explicitly scoped unsafe sections for operations such as process-group, signal, and file-descriptor setup.
 
@@ -95,6 +101,27 @@ fsh --help
 ```
 
 Language syntax and runtime behavior are documented in the [Language Guide](docs/language-guide.md). Guidance for organizing and executing `.fsh` files belongs in the [Scripting Guide](docs/scripting.md).
+
+## Using the language server
+
+The installed Flash package also provides `/usr/bin/flash-language-server`.
+Configure an editor's Language Server Protocol client to start it as a stdio
+process for `.fsh` files:
+
+```text
+command: ["flash-language-server"]
+transport: stdio
+```
+
+The executable accepts protocol input on stdin and reserves stdout for framed
+JSON-RPC messages. It uses full-document synchronization for absolute `file:`
+URIs and provides diagnostics, completion, hover, signature help, definition,
+references, and whole-document formatting without executing the open source.
+It does not provide a source-taking command-line mode, TCP transport, workspace
+configuration, or incremental edits. See the [Architecture
+Guide](docs/architecture.md#language-server-protocol-adapter) for the exact
+protocol surface and [Development](docs/development.md#language-server-contract)
+for editor setup and verification.
 
 ## Development and verification
 
@@ -128,7 +155,9 @@ The Flash documentation is organized as follows:
 - [Language Guide](docs/language-guide.md) — language concepts, modules, name resolution, function metadata, commands, and typed pipelines
 - [Scripting Guide](docs/scripting.md) — `.fsh` execution, script arguments, static checking, formatting, external processes, statuses, and jobs
 - [Architecture](docs/architecture.md) — internal responsibilities, analysis services, platform capabilities, adapters, and lifecycle boundaries
-- [Development](docs/development.md) — workspace setup, tests, formatter and checker gates, language-server development, target builds, and maintenance workflow
+- [Development](docs/development.md) — workspace setup, tests, formatter,
+  checker, and language-server integration and gates, target builds, and
+  maintenance workflow
 
 For building and booting FlashOS as a complete system, begin with the [FlashOS Getting Started Guide](../../docs/getting-started.md).
 

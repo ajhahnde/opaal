@@ -15,6 +15,7 @@ This document describes the internal architecture of Flash: crate boundaries, so
 - [Formatter launcher frontend](#formatter-launcher-frontend)
 - [Modules and static analysis](#modules-and-static-analysis)
 - [Shared tooling services](#shared-tooling-services)
+- [Language-server protocol adapter](#language-server-protocol-adapter)
 - [Runtime and session state](#runtime-and-session-state)
 - [Command resolution and execution planning](#command-resolution-and-execution-planning)
 - [Pipeline execution](#pipeline-execution)
@@ -113,8 +114,15 @@ Flash is a nested Cargo workspace rooted at [`components/flash/`](../Cargo.toml)
 | Portable operating-system capability contracts and deterministic test adapters | [`flash-platform`](../crates/flash-platform/) |
 | Unix-like process, descriptor, filesystem, signal, and terminal integration | [`flash-platform-posix`](../crates/flash-platform-posix/) |
 | Command-line modes, interactive front ends, configuration, history, tooling entry points, and `fsh` assembly | [`flash-cli`](../crates/flash-cli/) |
+| Versioned document overlays, JSON-RPC/LSP projection, stdio framing, and `flash-language-server` assembly | [`flash-lsp`](../crates/flash-lsp/) |
 
-Portable language semantics depend on syntax and abstract platform contracts, not on a concrete operating-system adapter. Concrete adapters depend on the abstract capability interface. The executable selects and assembles the appropriate adapter and user-facing services.
+Portable language semantics depend on syntax and abstract platform contracts,
+not on a concrete operating-system adapter. Concrete adapters depend on the
+abstract capability interface. `flash-cli` selects the appropriate runtime
+adapter and user-facing services. `flash-lsp` instead depends directly on
+`flash-syntax` and `flash-runtime`; it has no dependency on `flash-cli`,
+`flash-platform-posix`, or terminal integration and declares no direct
+dependency on `flash-platform`.
 
 New crates may be introduced as implementation responsibilities grow, but they must preserve this dependency direction and must not create an alternative grammar, evaluator, name resolver, or platform contract.
 
@@ -274,6 +282,58 @@ configuration loader, or history store. Execution remains a separate stage.
 Formatting, checking, help lookup, completion, navigation, and language-server
 requests must not start external commands or mutate the active shell session
 merely to obtain analysis results.
+
+## Language-server protocol adapter
+
+`flash-language-server` is a separate executable from `fsh`. It speaks JSON-RPC
+2.0 over stdin and stdout using LSP `Content-Length` framing. Stdout is reserved
+exclusively for framed protocol messages; the process does not inherit the
+shell launcher, prompt, configuration, history, terminal, or process-reporting
+paths. The first protocol surface is the stable LSP 3.17 core and remains
+compatible with 3.18 clients through capability negotiation.
+
+The implemented surface is:
+
+| Area | Methods and notifications |
+| --- | --- |
+| Lifecycle | `initialize`, `initialized`, `shutdown`, `exit`, and `$/cancelRequest` |
+| Synchronization | `textDocument/didOpen`, `textDocument/didChange`, and `textDocument/didClose` |
+| Diagnostics | `textDocument/publishDiagnostics` server notifications |
+| Discovery | `textDocument/completion`, `textDocument/hover`, and `textDocument/signatureHelp` |
+| Navigation | `textDocument/definition` and `textDocument/references` |
+| Formatting | `textDocument/formatting` |
+
+Synchronization is full-text with open and close notifications. Incremental
+edits are not advertised. The server negotiates UTF-8 positions when the client
+offers them and otherwise uses the protocol-default UTF-16 encoding; checked
+conversion remains owned by `flash-syntax`. Only absolute `file:` document URIs
+are accepted. TCP, sockets, batches, dynamic registration, workspace or watched
+file operations, custom methods, progress, partial results, rename, code
+actions, semantic tokens, and execute-command requests are outside this
+surface.
+
+Each open document owns an exact client version and an overlay over the
+read-only host loader. Unsaved roots and imported documents therefore enter the
+same canonical module graph as disk sources. One canonical module has at most
+one active overlay owner. Accepted open, full-change, close, or identity
+transitions advance the workspace generation and conservatively invalidate all
+open roots. Analysis jobs use immutable snapshots, merge diagnostics in
+deterministic canonical-root order, attach current open-document versions, and
+publish empty replacements for sources that leave the result set.
+
+A reader, receive-order coordinator, sole writer, and one bounded worker keep
+document changes and cancellation responsive while preserving deterministic
+request order. Explicitly cancelled requests return `RequestCancelled`;
+completed requests from an older generation return `ContentModified`; stale
+diagnostics are discarded. Every request receives exactly one response.
+
+Completion, hover, signature help, definition, references, and formatting are
+projections of shared syntax, command metadata, and complete current module
+programs. The adapter never initializes modules, evaluates expressions, expands
+words, probes `PATH` or executables, opens redirections, mutates cwd or the
+environment, accesses a terminal or runtime session, loads shell configuration
+or history, or starts a process. Whole-document formatting delegates to the
+shared canonical formatter and returns at most one edit.
 
 ## Runtime and session state
 
