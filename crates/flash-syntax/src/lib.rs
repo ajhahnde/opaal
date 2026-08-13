@@ -4,6 +4,7 @@
 
 mod ast;
 mod classification;
+mod completion;
 mod diagnostic;
 mod formatter;
 mod lexer;
@@ -14,6 +15,7 @@ pub use ast::*;
 pub use classification::{
     IncompleteInput, IncompleteReason, SyntaxClassification, classify_tokens,
 };
+pub use completion::{CompletionContext, CompletionTarget, completion_target};
 pub use diagnostic::{
     Diagnostic, Label, LabelStyle, RenderError, Severity, render_diagnostic,
     render_diagnostic_sources,

@@ -32,6 +32,7 @@ use flash_runtime::module::{
     ModuleSourceError, ModuleSourceLoader, ValueType,
 };
 use flash_runtime::plan::SessionOptions;
+use flash_runtime::query::{NameKind, SemanticHover};
 use flash_runtime::resolve::ExecutableProbe;
 use flash_runtime::script::execute_module_program as execute_module_program_with_output;
 use flash_runtime::{
@@ -4012,4 +4013,186 @@ fn rejecting_a_cycle_leaves_the_graph_unchanged() {
     ));
     assert_eq!(graph.modules().cloned().collect::<Vec<_>>(), modules_before);
     assert_eq!(graph.imports(), imports_before);
+}
+
+#[test]
+fn semantic_queries_expose_visible_names_definitions_references_and_hover_without_a_host() {
+    let paths = FakeCanonicalizer::default()
+        .resolves("/project/main.fsh", "/project/main.fsh")
+        .resolves("/project/library.fsh", "/project/library.fsh");
+    let root_text = concat!(
+        "import { greet } from './library.fsh'\n",
+        "let top: Int = 1\n",
+        "## Local helper\n",
+        "def local(value: String) -> String {\n",
+        "    let inside: String = $value\n",
+        "    $inside\n",
+        "}\n",
+        "let message = greet('world')\n",
+        "let copied = $top\n",
+    );
+    let library_text = concat!(
+        "## Imported greeting\n",
+        "def greet(name: String) -> String { $name }\n",
+        "export { greet }\n",
+        "cd '/tmp'\n",
+    );
+    let sources = FakeSourceLoader::default()
+        .contains("/project/main.fsh", root_text)
+        .contains("/project/library.fsh", library_text);
+    let program = ModuleProgramLoader::new(&paths, &sources)
+        .load(Path::new("/project/main.fsh"))
+        .expect("the semantic fixture is valid");
+    let commands = standard_registry();
+    let queries = program.semantic_queries(&commands);
+    let root = program.graph().root();
+    let library = program.graph().imports()[0].target();
+
+    let inside_read = root_text.find("$inside").unwrap() + 2;
+    let visible = queries.visible_names(root, inside_read).unwrap();
+    assert_eq!(
+        visible
+            .iter()
+            .map(|candidate| (candidate.name(), candidate.kind()))
+            .collect::<Vec<_>>(),
+        [
+            ("args", NameKind::ScriptArguments),
+            ("greet", NameKind::ImportedFunction),
+            ("inside", NameKind::Binding),
+            ("local", NameKind::Function),
+            ("top", NameKind::Binding),
+            ("value", NameKind::Binding),
+        ]
+    );
+
+    let call = root_text.find("greet('world')").unwrap() + 2;
+    let definition = queries.definition_at(root, call).unwrap();
+    assert_eq!(definition.module(), library);
+    assert_eq!(
+        program
+            .sources()
+            .source(library)
+            .unwrap()
+            .slice(definition.span())
+            .unwrap(),
+        "greet"
+    );
+    let references = queries.references_to(&definition, false);
+    assert_eq!(
+        references.len(),
+        3,
+        "the export, import, and call are references"
+    );
+    assert_eq!(
+        references
+            .iter()
+            .filter(|location| location.module() == root)
+            .count(),
+        2
+    );
+    assert_eq!(queries.references_to(&definition, true).len(), 4);
+
+    let inside_declaration = root_text.find("inside: String").unwrap() + 2;
+    let local_definition = queries.definition_at(root, inside_declaration).unwrap();
+    assert_eq!(local_definition.module(), root);
+    assert_eq!(
+        program
+            .sources()
+            .source(root)
+            .unwrap()
+            .slice(local_definition.span())
+            .unwrap(),
+        "inside"
+    );
+
+    let SemanticHover::Function(hover) = queries.hover_at(root, call).unwrap() else {
+        panic!("an imported callable read has function hover data");
+    };
+    assert_eq!(hover.signature().name(), "greet");
+    assert_eq!(
+        hover.signature().documentation().unwrap().text(),
+        "Imported greeting"
+    );
+
+    let top_read = root_text.rfind("$top").unwrap() + 1;
+    let SemanticHover::Binding(hover) = queries.hover_at(root, top_read).unwrap() else {
+        panic!("a typed lexical read has binding hover data");
+    };
+    assert_eq!(hover.name(), "top");
+    assert_eq!(hover.value_type(), &ValueType::Int);
+}
+
+#[test]
+fn semantic_queries_expose_signatures_commands_and_named_import_effects() {
+    let paths = FakeCanonicalizer::default()
+        .resolves("/project/main.fsh", "/project/main.fsh")
+        .resolves("/project/library.fsh", "/project/library.fsh");
+    let root_text = concat!(
+        "import { greet } from './library.fsh'\n",
+        "let message = greet('world')\n",
+    );
+    let library_text = concat!(
+        "def greet(name: String) -> String { $name }\n",
+        "export { greet }\n",
+        "cd '/tmp'\n",
+    );
+    let sources = FakeSourceLoader::default()
+        .contains("/project/main.fsh", root_text)
+        .contains("/project/library.fsh", library_text);
+    let program = ModuleProgramLoader::new(&paths, &sources)
+        .load(Path::new("/project/main.fsh"))
+        .expect("the semantic fixture is valid");
+    let commands = standard_registry();
+    let queries = program.semantic_queries(&commands);
+    let root = program.graph().root();
+    let library = program.graph().imports()[0].target();
+
+    let argument = root_text.find("'world'").unwrap() + 2;
+    let signature = queries.signature_at(root, argument).unwrap();
+    assert_eq!(signature.signature().name(), "greet");
+    assert_eq!(signature.active_parameter(), 0);
+    assert_eq!(signature.definition().module(), library);
+
+    let import_name = root_text.find("greet").unwrap() + 1;
+    let effects = queries.import_effects_at(root, import_name).unwrap();
+    assert_eq!(effects.target(), library);
+    assert!(
+        effects
+            .direct()
+            .occurrences()
+            .iter()
+            .any(|occurrence| occurrence.effect() == ModuleEffect::WorkingDirectory)
+    );
+    assert_eq!(effects.direct(), effects.transitive());
+
+    let command_offset = library_text.rfind("cd").unwrap() + 1;
+    let SemanticHover::Command(command) = queries.hover_at(library, command_offset).unwrap() else {
+        panic!("a standard command head has registry-owned hover data");
+    };
+    assert_eq!(command.name(), "cd");
+    assert_eq!(command.canonical_name(), "cd");
+    assert_eq!(
+        command.signature().documentation().invocation(),
+        "cd [PATH]"
+    );
+
+    assert_eq!(
+        queries
+            .command_candidates("pw")
+            .iter()
+            .map(|command| command.name())
+            .collect::<Vec<_>>(),
+        ["pwd"]
+    );
+    assert_eq!(
+        queries.command_flags("kill"),
+        [
+            "--continue",
+            "--hangup",
+            "--interrupt",
+            "--kill",
+            "--stop",
+            "--terminate",
+        ]
+    );
 }

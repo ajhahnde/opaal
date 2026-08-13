@@ -22,6 +22,7 @@ pub mod module;
 pub mod operation;
 pub mod plan;
 pub mod presentation;
+pub mod query;
 pub mod resolve;
 mod scope;
 pub mod script;

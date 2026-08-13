@@ -519,6 +519,26 @@ struct ModuleNames {
     exports: BTreeMap<String, ModuleExport>,
     imports: Vec<ModuleNameImport>,
     references: Vec<ModuleNameReference>,
+    visible: Vec<ModuleVisibleBinding>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ModuleVisibleBinding {
+    name: String,
+    target: ModuleReferenceTarget,
+    scope_span: Span,
+    visible_from: usize,
+    depth: usize,
+}
+
+impl ModuleVisibleBinding {
+    pub(crate) fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub(crate) const fn target(&self) -> &ModuleReferenceTarget {
+        &self.target
+    }
 }
 
 /// Deterministic local, exported, imported, and referenced names by module.
@@ -570,6 +590,99 @@ impl ModuleNameRegistry {
             .get(module)
             .into_iter()
             .flat_map(|names| names.exports.values())
+    }
+
+    pub(crate) fn visible_bindings(
+        &self,
+        module: &ModuleId,
+        cursor: usize,
+    ) -> Vec<&ModuleVisibleBinding> {
+        let Some(names) = self.by_module.get(module) else {
+            return Vec::new();
+        };
+        let mut selected = BTreeMap::<&str, &ModuleVisibleBinding>::new();
+        for binding in &names.visible {
+            if binding.scope_span.start() <= cursor
+                && cursor <= binding.scope_span.end()
+                && binding.visible_from <= cursor
+            {
+                let replace = selected.get(binding.name()).is_none_or(|current| {
+                    (binding.depth, binding.visible_from) > (current.depth, current.visible_from)
+                });
+                if replace {
+                    selected.insert(binding.name(), binding);
+                }
+            }
+        }
+        selected.into_values().collect()
+    }
+
+    pub(crate) fn target_at(
+        &self,
+        module: &ModuleId,
+        offset: usize,
+    ) -> Option<(String, ModuleReferenceTarget)> {
+        let names = self.by_module.get(module)?;
+        if let Some(reference) = names
+            .references
+            .iter()
+            .find(|reference| span_contains(reference.reference_span(), offset))
+        {
+            return Some((reference.name.clone(), reference.target.clone()));
+        }
+        if let Some(import) = names
+            .imports
+            .iter()
+            .find(|import| span_contains(import.name_span(), offset))
+        {
+            let export = self
+                .export(import.target(), import.name())
+                .expect("validated imports retain their target export");
+            return Some((
+                import.name.clone(),
+                ModuleReferenceTarget::Imported {
+                    import_span: import.name_span(),
+                    target_module: import.target().clone(),
+                    declaration_span: export.declaration_span(),
+                    export_span: export.export_span(),
+                },
+            ));
+        }
+        if let Some((name, declaration_span)) = names
+            .visible
+            .iter()
+            .filter_map(|binding| match &binding.target {
+                ModuleReferenceTarget::Local {
+                    module: target_module,
+                    declaration_span,
+                } if target_module == module => Some((binding.name(), *declaration_span)),
+                ModuleReferenceTarget::ScriptArguments
+                | ModuleReferenceTarget::Local { .. }
+                | ModuleReferenceTarget::Imported { .. } => None,
+            })
+            .find(|(_, span)| span_contains(*span, offset))
+        {
+            return Some((
+                name.to_owned(),
+                ModuleReferenceTarget::Local {
+                    module: module.clone(),
+                    declaration_span,
+                },
+            ));
+        }
+        names
+            .exports
+            .values()
+            .find(|export| span_contains(export.export_span(), offset))
+            .map(|export| {
+                (
+                    export.name.clone(),
+                    ModuleReferenceTarget::Local {
+                        module: module.clone(),
+                        declaration_span: export.declaration_span(),
+                    },
+                )
+            })
     }
 
     fn analyze(
@@ -738,7 +851,7 @@ impl ModuleNameRegistry {
             if control.is_cancelled() {
                 return Ok(registry);
             }
-            let (references, mut reference_errors) = ReferenceResolver::new(
+            let (references, visible, mut reference_errors) = ReferenceResolver::new(
                 entry,
                 &registry,
                 poisoned_imports.get(entry.module()),
@@ -747,11 +860,12 @@ impl ModuleNameRegistry {
             )
             .resolve();
             errors.append(&mut reference_errors);
-            registry
+            let names = registry
                 .by_module
                 .get_mut(entry.module())
-                .expect("every registered source has a name table")
-                .references = references;
+                .expect("every registered source has a name table");
+            names.references = references;
+            names.visible = visible;
         }
 
         if errors.is_empty() {
@@ -1071,7 +1185,11 @@ impl ModuleTypeRegistry {
             .find(|signature| signature.declaration_span() == declaration_span)
     }
 
-    fn binding_type(&self, module: &ModuleId, declaration_span: Span) -> Option<&ValueType> {
+    pub(crate) fn binding_type(
+        &self,
+        module: &ModuleId,
+        declaration_span: Span,
+    ) -> Option<&ValueType> {
         self.by_module
             .get(module)
             .and_then(|types| {
@@ -2109,10 +2227,16 @@ impl<'a> SignatureValidator<'a> {
 
 struct ReferenceResolver<'a> {
     entry: &'a RegisteredModuleSource,
-    scopes: Vec<BTreeMap<String, Option<ModuleReferenceTarget>>>,
+    scopes: Vec<ReferenceScope>,
     references: Vec<ModuleNameReference>,
+    visible: Vec<ModuleVisibleBinding>,
     errors: Vec<ModuleNameError>,
     control: &'a AnalysisControl,
+}
+
+struct ReferenceScope {
+    bindings: BTreeMap<String, Option<ModuleReferenceTarget>>,
+    span: Span,
 }
 
 impl<'a> ReferenceResolver<'a> {
@@ -2123,20 +2247,42 @@ impl<'a> ReferenceResolver<'a> {
         is_root: bool,
         control: &'a AnalysisControl,
     ) -> Self {
+        let source_span = entry.script().span();
+        let mut scopes = Vec::with_capacity(usize::from(is_root) + 1);
+        let mut visible = Vec::new();
+        if is_root {
+            let target = ModuleReferenceTarget::ScriptArguments;
+            scopes.push(ReferenceScope {
+                bindings: BTreeMap::from([("args".to_owned(), Some(target.clone()))]),
+                span: source_span,
+            });
+            visible.push(ModuleVisibleBinding {
+                name: "args".to_owned(),
+                target,
+                scope_span: source_span,
+                visible_from: source_span.start(),
+                depth: 0,
+            });
+        }
         let mut root = BTreeMap::new();
         for import in registry.imports(entry.module()) {
             let export = registry
                 .export(import.target(), import.name())
                 .expect("validated imports always retain their target export");
-            root.insert(
-                import.name().to_owned(),
-                Some(ModuleReferenceTarget::Imported {
-                    import_span: import.name_span(),
-                    target_module: import.target().clone(),
-                    declaration_span: export.declaration_span(),
-                    export_span: export.export_span(),
-                }),
-            );
+            let target = ModuleReferenceTarget::Imported {
+                import_span: import.name_span(),
+                target_module: import.target().clone(),
+                declaration_span: export.declaration_span(),
+                export_span: export.export_span(),
+            };
+            root.insert(import.name().to_owned(), Some(target.clone()));
+            visible.push(ModuleVisibleBinding {
+                name: import.name().to_owned(),
+                target,
+                scope_span: source_span,
+                visible_from: source_span.start(),
+                depth: scopes.len(),
+            });
         }
         if let Some(poisoned_imports) = poisoned_imports {
             let locals = &registry
@@ -2150,27 +2296,30 @@ impl<'a> ReferenceResolver<'a> {
                 }
             }
         }
-        let mut scopes = Vec::with_capacity(usize::from(is_root) + 1);
-        if is_root {
-            scopes.push(BTreeMap::from([(
-                "args".to_owned(),
-                Some(ModuleReferenceTarget::ScriptArguments),
-            )]));
-        }
-        scopes.push(root);
+        scopes.push(ReferenceScope {
+            bindings: root,
+            span: source_span,
+        });
         Self {
             entry,
             scopes,
             references: Vec::new(),
+            visible,
             errors: Vec::new(),
             control,
         }
     }
 
-    fn resolve(mut self) -> (Vec<ModuleNameReference>, Vec<ModuleNameError>) {
+    fn resolve(
+        mut self,
+    ) -> (
+        Vec<ModuleNameReference>,
+        Vec<ModuleVisibleBinding>,
+        Vec<ModuleNameError>,
+    ) {
         self.statements(self.entry.script().statements())
             .expect("accumulating name traversal does not fail fast");
-        (self.references, self.errors)
+        (self.references, self.visible, self.errors)
     }
 
     fn statements(&mut self, statements: &[Statement]) -> Result<(), Box<ModuleNameError>> {
@@ -2191,7 +2340,7 @@ impl<'a> ReferenceResolver<'a> {
             StatementKind::Import(_) | StatementKind::ModuleExport(_) => Ok(()),
             StatementKind::Declaration(declaration) => {
                 self.expression(&declaration.value)?;
-                self.declare(declaration.name.span())
+                self.declare(declaration.name.span(), statement.span().end())
             }
             StatementKind::Assignment(assignment) => {
                 self.variable(assignment.target.name.span(), assignment.target.span)?;
@@ -2203,12 +2352,12 @@ impl<'a> ReferenceResolver<'a> {
             },
             StatementKind::Function(function) => {
                 let available = self.ensure_available(function.name.span());
-                self.push_scope();
-                self.insert_local(function.name.span());
-                self.push_scope();
+                self.push_scope(function.body.span);
+                self.insert_local(function.name.span(), function.body.span.start());
+                self.push_scope(function.body.span);
                 let result = (|| {
                     for parameter in &function.parameters {
-                        self.declare(parameter.name.span())?;
+                        self.declare(parameter.name.span(), function.body.span.start())?;
                     }
                     self.block(&function.body)
                 })();
@@ -2216,7 +2365,7 @@ impl<'a> ReferenceResolver<'a> {
                 self.pop_scope();
                 result?;
                 if available {
-                    self.insert_local(function.name.span());
+                    self.insert_local(function.name.span(), statement.span().end());
                 }
                 Ok(())
             }
@@ -2227,9 +2376,9 @@ impl<'a> ReferenceResolver<'a> {
             }
             StatementKind::For(statement) => {
                 self.expression(&statement.iterable)?;
-                self.push_scope();
+                self.push_scope(statement.body.span);
                 let result = (|| {
-                    self.declare(statement.binding.span())?;
+                    self.declare(statement.binding.span(), statement.body.span.start())?;
                     self.statements(&statement.body.statements)
                 })();
                 self.pop_scope();
@@ -2272,10 +2421,12 @@ impl<'a> ReferenceResolver<'a> {
         if self.control.is_cancelled() {
             return Ok(());
         }
-        self.push_scope();
+        self.push_scope(arm.span);
         let result = (|| {
             match &arm.pattern {
-                Pattern::Binding(identifier) => self.declare(identifier.span())?,
+                Pattern::Binding(identifier) => {
+                    self.declare(identifier.span(), identifier.span().end())?
+                }
                 Pattern::Literal(literal) => self.literal(literal)?,
                 Pattern::Wildcard(_) => {}
             }
@@ -2292,7 +2443,7 @@ impl<'a> ReferenceResolver<'a> {
         if self.control.is_cancelled() {
             return Ok(());
         }
-        self.push_scope();
+        self.push_scope(block.span);
         let result = self.statements(&block.statements);
         self.pop_scope();
         result
@@ -2394,10 +2545,10 @@ impl<'a> ReferenceResolver<'a> {
         if self.control.is_cancelled() {
             return Ok(());
         }
-        self.push_scope();
+        self.push_scope(closure.span);
         let result = (|| {
             for parameter in &closure.parameters {
-                self.declare(parameter.name.span())?;
+                self.declare(parameter.name.span(), closure.body.span().start())?;
             }
             self.chain(&closure.body)
         })();
@@ -2470,7 +2621,7 @@ impl<'a> ReferenceResolver<'a> {
             .scopes
             .iter()
             .rev()
-            .find_map(|scope| scope.get(&name))
+            .find_map(|scope| scope.bindings.get(&name))
             .cloned()
         else {
             self.errors.push(ModuleNameError::UnknownReference {
@@ -2497,7 +2648,7 @@ impl<'a> ReferenceResolver<'a> {
             .scopes
             .last()
             .expect("reference resolution always retains a root scope");
-        if let Some(Some(first)) = scope.get(&name) {
+        if let Some(Some(first)) = scope.bindings.get(&name) {
             self.errors.push(ModuleNameError::DuplicateBinding {
                 module: self.entry.module().clone(),
                 name,
@@ -2509,29 +2660,43 @@ impl<'a> ReferenceResolver<'a> {
         true
     }
 
-    fn declare(&mut self, declaration_span: Span) -> Result<(), Box<ModuleNameError>> {
+    fn declare(
+        &mut self,
+        declaration_span: Span,
+        visible_from: usize,
+    ) -> Result<(), Box<ModuleNameError>> {
         if self.ensure_available(declaration_span) {
-            self.insert_local(declaration_span);
+            self.insert_local(declaration_span, visible_from);
         }
         Ok(())
     }
 
-    fn insert_local(&mut self, declaration_span: Span) {
+    fn insert_local(&mut self, declaration_span: Span, visible_from: usize) {
         let name = self.text(declaration_span).to_owned();
-        self.scopes
+        let target = ModuleReferenceTarget::Local {
+            module: self.entry.module().clone(),
+            declaration_span,
+        };
+        let depth = self.scopes.len().saturating_sub(1);
+        let scope = self
+            .scopes
             .last_mut()
-            .expect("reference resolution always retains a root scope")
-            .insert(
-                name,
-                Some(ModuleReferenceTarget::Local {
-                    module: self.entry.module().clone(),
-                    declaration_span,
-                }),
-            );
+            .expect("reference resolution always retains a root scope");
+        scope.bindings.insert(name.clone(), Some(target.clone()));
+        self.visible.push(ModuleVisibleBinding {
+            name,
+            target,
+            scope_span: scope.span,
+            visible_from,
+            depth,
+        });
     }
 
-    fn push_scope(&mut self) {
-        self.scopes.push(BTreeMap::new());
+    fn push_scope(&mut self, span: Span) {
+        self.scopes.push(ReferenceScope {
+            bindings: BTreeMap::new(),
+            span,
+        });
     }
 
     fn pop_scope(&mut self) {
@@ -2558,6 +2723,10 @@ fn binding_span(target: &ModuleReferenceTarget) -> Span {
         } => *declaration_span,
         ModuleReferenceTarget::Imported { import_span, .. } => *import_span,
     }
+}
+
+fn span_contains(span: Span, offset: usize) -> bool {
+    span.start() <= offset && offset < span.end()
 }
 
 impl ModuleSourceRegistry {
