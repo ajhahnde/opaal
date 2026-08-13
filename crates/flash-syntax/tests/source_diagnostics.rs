@@ -1,8 +1,8 @@
 #![forbid(unsafe_code)]
 
 use flash_syntax::{
-    Diagnostic, LabelStyle, Severity, SourceFile, SourceId, SpanError, render_diagnostic,
-    render_diagnostic_sources,
+    Diagnostic, LabelStyle, PositionEncoding, PositionError, Severity, SourceFile, SourceId,
+    SpanError, TextPosition, TextRange, render_diagnostic, render_diagnostic_sources,
 };
 
 #[test]
@@ -59,6 +59,84 @@ fn source_spans_and_locations_use_original_utf8_bytes() {
 #[test]
 fn byte_loading_rejects_non_utf8_source() {
     assert!(SourceFile::from_bytes(SourceId::new(1), "bad.fsh", vec![0xff]).is_err());
+}
+
+#[test]
+fn protocol_positions_are_checked_in_utf8_and_utf16_code_units() {
+    let source = SourceFile::new(SourceId::new(2), "unicode.fsh", "aé💡\r\nnext\n");
+
+    let cases = [
+        (0, 0, TextPosition::new(0, 0), TextPosition::new(0, 0)),
+        (1, 1, TextPosition::new(0, 1), TextPosition::new(0, 1)),
+        (3, 3, TextPosition::new(0, 3), TextPosition::new(0, 2)),
+        (7, 7, TextPosition::new(0, 7), TextPosition::new(0, 4)),
+        (8, 7, TextPosition::new(0, 7), TextPosition::new(0, 4)),
+        (9, 9, TextPosition::new(1, 0), TextPosition::new(1, 0)),
+        (13, 13, TextPosition::new(1, 4), TextPosition::new(1, 4)),
+        (14, 14, TextPosition::new(2, 0), TextPosition::new(2, 0)),
+    ];
+
+    for (offset, canonical_offset, utf8, utf16) in cases {
+        assert_eq!(
+            source.text_position(offset, PositionEncoding::Utf8),
+            Ok(utf8)
+        );
+        assert_eq!(
+            source.text_position(offset, PositionEncoding::Utf16),
+            Ok(utf16)
+        );
+        assert_eq!(
+            source.byte_offset(utf8, PositionEncoding::Utf8),
+            Ok(canonical_offset)
+        );
+        assert_eq!(
+            source.byte_offset(utf16, PositionEncoding::Utf16),
+            Ok(canonical_offset)
+        );
+    }
+
+    let span = source.span(1..7).unwrap();
+    assert_eq!(
+        source.text_range(span, PositionEncoding::Utf16),
+        Ok(TextRange::new(
+            TextPosition::new(0, 1),
+            TextPosition::new(0, 4)
+        ))
+    );
+}
+
+#[test]
+fn protocol_positions_reject_partial_scalars_surrogates_and_out_of_range_values() {
+    let source = SourceFile::new(SourceId::new(3), "unicode.fsh", "aé💡\r\n");
+
+    assert!(matches!(
+        source.text_position(2, PositionEncoding::Utf8),
+        Err(PositionError::NotUtf8Boundary { .. })
+    ));
+    assert_eq!(
+        source.text_position(8, PositionEncoding::Utf16),
+        Ok(TextPosition::new(0, 4))
+    );
+    assert!(matches!(
+        source.byte_offset(TextPosition::new(0, 2), PositionEncoding::Utf8),
+        Err(PositionError::NotUtf8Boundary { .. })
+    ));
+    assert!(matches!(
+        source.byte_offset(TextPosition::new(0, 3), PositionEncoding::Utf16),
+        Err(PositionError::InsideUtf16Scalar { .. })
+    ));
+    assert!(matches!(
+        source.byte_offset(TextPosition::new(0, 5), PositionEncoding::Utf16),
+        Err(PositionError::CharacterOutOfBounds { .. })
+    ));
+    assert!(matches!(
+        source.byte_offset(TextPosition::new(2, 0), PositionEncoding::Utf8),
+        Err(PositionError::LineOutOfBounds { .. })
+    ));
+    assert!(matches!(
+        source.text_position(source.len() + 1, PositionEncoding::Utf8),
+        Err(PositionError::ByteOutOfBounds { .. })
+    ));
 }
 
 #[test]

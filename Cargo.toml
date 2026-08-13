@@ -3,6 +3,7 @@ resolver = "3"
 members = [
     "crates/flash-syntax",
     "crates/flash-runtime",
+    "crates/flash-lsp",
     "crates/flash-platform",
     "crates/flash-platform-posix",
     "crates/flash-cli",

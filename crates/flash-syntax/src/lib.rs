@@ -23,7 +23,10 @@ pub use lexer::{
     Delimiter, InvalidTokenKind, Keyword, NumberKind, Operator, Token, TokenKind, lex,
 };
 pub use parser::{ParseOutcome, parse};
-pub use source::{LineColumn, LineIndex, SourceFile, SourceId, Span, SpanError};
+pub use source::{
+    LineColumn, LineIndex, PositionEncoding, PositionError, SourceFile, SourceId, Span, SpanError,
+    TextPosition, TextRange,
+};
 
 /// Stable package identifier for the syntax crate.
 pub const CRATE_NAME: &str = "flash-syntax";

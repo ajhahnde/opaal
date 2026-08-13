@@ -182,6 +182,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "flash-lsp"
+version = "0.1.0"
+dependencies = [
+ "flash-runtime",
+ "flash-syntax",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "flash-platform"
 version = "0.1.0"
 

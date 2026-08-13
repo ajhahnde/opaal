@@ -60,6 +60,61 @@ pub struct LineColumn {
     column: usize,
 }
 
+/// The code-unit convention used for zero-based text positions.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum PositionEncoding {
+    Utf8,
+    Utf16,
+}
+
+/// A zero-based line and code-unit position within source text.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct TextPosition {
+    line: usize,
+    character: usize,
+}
+
+impl TextPosition {
+    #[must_use]
+    pub const fn new(line: usize, character: usize) -> Self {
+        Self { line, character }
+    }
+
+    #[must_use]
+    pub const fn line(self) -> usize {
+        self.line
+    }
+
+    #[must_use]
+    pub const fn character(self) -> usize {
+        self.character
+    }
+}
+
+/// A half-open range expressed as zero-based text positions.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct TextRange {
+    start: TextPosition,
+    end: TextPosition,
+}
+
+impl TextRange {
+    #[must_use]
+    pub const fn new(start: TextPosition, end: TextPosition) -> Self {
+        Self { start, end }
+    }
+
+    #[must_use]
+    pub const fn start(self) -> TextPosition {
+        self.start
+    }
+
+    #[must_use]
+    pub const fn end(self) -> TextPosition {
+        self.end
+    }
+}
+
 impl LineColumn {
     #[must_use]
     pub const fn line(self) -> usize {
@@ -137,6 +192,92 @@ impl LineIndex {
         one_based_line
             .checked_sub(1)
             .and_then(|index| self.lines.get(index).copied())
+    }
+
+    fn text_position(
+        &self,
+        text: &str,
+        offset: usize,
+        encoding: PositionEncoding,
+    ) -> Result<TextPosition, PositionError> {
+        if offset > text.len() {
+            return Err(PositionError::ByteOutOfBounds {
+                offset,
+                len: text.len(),
+            });
+        }
+        if !text.is_char_boundary(offset) {
+            return Err(PositionError::NotUtf8Boundary { offset });
+        }
+
+        let line_index = self
+            .lines
+            .partition_point(|line| line.start <= offset)
+            .saturating_sub(1);
+        let line = self.lines[line_index];
+        let prefix = &text[line.start..offset.min(line.content_end)];
+        let character = match encoding {
+            PositionEncoding::Utf8 => prefix.len(),
+            PositionEncoding::Utf16 => prefix.encode_utf16().count(),
+        };
+        Ok(TextPosition::new(line_index, character))
+    }
+
+    fn byte_offset(
+        &self,
+        text: &str,
+        position: TextPosition,
+        encoding: PositionEncoding,
+    ) -> Result<usize, PositionError> {
+        let Some(line) = self.lines.get(position.line).copied() else {
+            return Err(PositionError::LineOutOfBounds {
+                line: position.line,
+                line_count: self.lines.len(),
+            });
+        };
+        let line_text = &text[line.start..line.content_end];
+
+        match encoding {
+            PositionEncoding::Utf8 => {
+                if position.character > line_text.len() {
+                    return Err(PositionError::CharacterOutOfBounds {
+                        line: position.line,
+                        character: position.character,
+                        maximum: line_text.len(),
+                    });
+                }
+                let offset = line.start + position.character;
+                if !text.is_char_boundary(offset) {
+                    return Err(PositionError::NotUtf8Boundary { offset });
+                }
+                Ok(offset)
+            }
+            PositionEncoding::Utf16 => {
+                let mut code_units = 0;
+                for (byte, scalar) in line_text.char_indices() {
+                    if code_units == position.character {
+                        return Ok(line.start + byte);
+                    }
+                    let next = code_units + scalar.len_utf16();
+                    if position.character < next {
+                        return Err(PositionError::InsideUtf16Scalar {
+                            line: position.line,
+                            character: position.character,
+                        });
+                    }
+                    code_units = next;
+                }
+                if code_units == position.character {
+                    Ok(line.content_end)
+                } else {
+                    Err(PositionError::CharacterOutOfBounds {
+                        line: position.line,
+                        character: position.character,
+                        maximum: code_units,
+                    })
+                }
+            }
+        }
     }
 }
 
@@ -229,6 +370,38 @@ impl SourceFile {
 
     pub fn location(&self, offset: usize) -> Result<LineColumn, SpanError> {
         self.line_index.location(&self.text, offset)
+    }
+
+    /// Converts one checked UTF-8 byte offset to a zero-based text position.
+    pub fn text_position(
+        &self,
+        offset: usize,
+        encoding: PositionEncoding,
+    ) -> Result<TextPosition, PositionError> {
+        self.line_index.text_position(&self.text, offset, encoding)
+    }
+
+    /// Converts one zero-based text position to a checked UTF-8 byte offset.
+    pub fn byte_offset(
+        &self,
+        position: TextPosition,
+        encoding: PositionEncoding,
+    ) -> Result<usize, PositionError> {
+        self.line_index.byte_offset(&self.text, position, encoding)
+    }
+
+    /// Converts a source-owned byte span to a checked zero-based text range.
+    pub fn text_range(
+        &self,
+        span: Span,
+        encoding: PositionEncoding,
+    ) -> Result<TextRange, PositionError> {
+        self.validate_span(span)
+            .map_err(PositionError::InvalidSpan)?;
+        Ok(TextRange::new(
+            self.text_position(span.start, encoding)?,
+            self.text_position(span.end, encoding)?,
+        ))
     }
 
     pub(crate) fn validate_span(&self, span: Span) -> Result<(), SpanError> {
@@ -329,3 +502,67 @@ impl fmt::Display for SpanError {
 }
 
 impl std::error::Error for SpanError {}
+
+/// Explains why a byte offset and encoded text position cannot be converted.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PositionError {
+    ByteOutOfBounds {
+        offset: usize,
+        len: usize,
+    },
+    NotUtf8Boundary {
+        offset: usize,
+    },
+    LineOutOfBounds {
+        line: usize,
+        line_count: usize,
+    },
+    CharacterOutOfBounds {
+        line: usize,
+        character: usize,
+        maximum: usize,
+    },
+    InsideUtf16Scalar {
+        line: usize,
+        character: usize,
+    },
+    InvalidSpan(SpanError),
+}
+
+impl fmt::Display for PositionError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::ByteOutOfBounds { offset, len } => {
+                write!(
+                    formatter,
+                    "byte offset {offset} exceeds source length {len}"
+                )
+            }
+            Self::NotUtf8Boundary { offset } => {
+                write!(
+                    formatter,
+                    "byte offset {offset} is not a UTF-8 character boundary"
+                )
+            }
+            Self::LineOutOfBounds { line, line_count } => write!(
+                formatter,
+                "zero-based line {line} exceeds the source's {line_count} lines"
+            ),
+            Self::CharacterOutOfBounds {
+                line,
+                character,
+                maximum,
+            } => write!(
+                formatter,
+                "character {character} exceeds line {line}'s maximum {maximum}"
+            ),
+            Self::InsideUtf16Scalar { line, character } => write!(
+                formatter,
+                "UTF-16 character {character} on line {line} splits a scalar"
+            ),
+            Self::InvalidSpan(error) => error.fmt(formatter),
+        }
+    }
+}
+
+impl std::error::Error for PositionError {}

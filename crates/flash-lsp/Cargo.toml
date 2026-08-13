@@ -1,0 +1,21 @@
+[package]
+name = "flash-lsp"
+description = "Language Server Protocol adapter for Flash"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "flash-language-server"
+path = "src/main.rs"
+
+[dependencies]
+flash-runtime = { path = "../flash-runtime" }
+flash-syntax = { path = "../flash-syntax" }
+serde = { version = "=1.0.229", default-features = false, features = ["std"] }
+serde_json = { version = "=1.0.151", default-features = false, features = ["std"] }
+
+[lints]
+workspace = true
