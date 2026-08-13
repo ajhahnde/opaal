@@ -8,8 +8,8 @@ use std::path::{Component, Path, PathBuf};
 
 use flash_runtime::builtin::standard_registry;
 use flash_runtime::module::{
-    ModuleAnalysisReport, ModuleCanonicalizer, ModuleId, ModulePathError, ModuleProgramLoader,
-    ModuleSourceError, ModuleSourceLoader,
+    AnalysisControl, ModuleAnalysisOutcome, ModuleAnalysisReport, ModuleCanonicalizer, ModuleId,
+    ModulePathError, ModuleProgramLoader, ModuleSourceError, ModuleSourceLoader,
 };
 use flash_syntax::{
     Diagnostic, LabelStyle, PositionEncoding, PositionError, Severity, SourceFile, SourceId,
@@ -696,11 +696,35 @@ impl WorkspaceSnapshot {
         &self,
         encoding: PositionEncoding,
     ) -> Result<DiagnosticAnalysis, DiagnosticProjectionError> {
+        self.analyze_diagnostics_controlled(encoding, &AnalysisControl::never())
+            .map(|analysis| {
+                let mut analysis = analysis.expect("never-cancelled analysis must complete");
+                analysis
+                    .documents
+                    .retain(|document| !document.diagnostics.is_empty());
+                analysis
+            })
+    }
+
+    /// Runs complete diagnostics with cooperative worker cancellation.
+    pub(crate) fn analyze_diagnostics_controlled(
+        &self,
+        encoding: PositionEncoding,
+        control: &AnalysisControl,
+    ) -> Result<Option<DiagnosticAnalysis>, DiagnosticProjectionError> {
         let commands = standard_registry();
         let loader = ModuleProgramLoader::new(self, self);
         let mut by_uri = BTreeMap::<DocumentUri, Vec<WorkspaceDiagnostic>>::new();
         for root in &self.roots {
-            let report = loader.analyze_with_commands(root.module_path(), &commands);
+            by_uri.entry(root.uri.clone()).or_default();
+            let report = match loader.analyze_with_commands_controlled(
+                root.module_path(),
+                &commands,
+                control,
+            ) {
+                ModuleAnalysisOutcome::Complete(report) => report,
+                ModuleAnalysisOutcome::Cancelled => return Ok(None),
+            };
             self.normalize_report(root, &report, encoding, &mut by_uri)?;
         }
         let documents = by_uri
@@ -711,10 +735,10 @@ impl WorkspaceSnapshot {
                 diagnostics,
             })
             .collect();
-        Ok(DiagnosticAnalysis {
+        Ok(Some(DiagnosticAnalysis {
             generation: self.generation,
             documents,
-        })
+        }))
     }
 
     fn normalize_report(

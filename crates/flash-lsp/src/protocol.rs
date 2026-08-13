@@ -66,7 +66,7 @@ pub fn run(input: &mut impl BufRead, output: &mut impl Write) -> Result<ExitStat
     }
 }
 
-fn write_message(output: &mut impl Write, message: &Value) -> Result<(), ServerError> {
+pub(crate) fn write_message(output: &mut impl Write, message: &Value) -> Result<(), ServerError> {
     let body = serde_json::to_vec(message).map_err(|error| {
         ServerError::Output(io::Error::other(format!("cannot encode response: {error}")))
     })?;
@@ -224,7 +224,7 @@ fn offered_utf8(params: &Map<String, Value>) -> bool {
         .is_some_and(|encodings| encodings.iter().any(|encoding| encoding == "utf-8"))
 }
 
-fn initialize_result(position_encoding: &str) -> Value {
+pub(crate) fn initialize_result(position_encoding: &str) -> Value {
     json!({
         "capabilities": {
             "positionEncoding": position_encoding,

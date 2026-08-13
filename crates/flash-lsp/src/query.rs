@@ -22,7 +22,10 @@ use crate::workspace::{OpenDocument, Workspace, WorkspaceSnapshot};
 
 /// Cooperative cancellation state owned by one protocol request ID.
 #[derive(Clone, Debug, Default)]
-pub struct RequestControl(Arc<AtomicBool>);
+pub struct RequestControl {
+    cancelled: Arc<AtomicBool>,
+    invalidated: Arc<AtomicBool>,
+}
 
 impl RequestControl {
     /// Creates an active request control.
@@ -33,18 +36,30 @@ impl RequestControl {
 
     /// Marks the request as explicitly cancelled.
     pub fn cancel(&self) {
-        self.0.store(true, Ordering::Release);
+        self.cancelled.store(true, Ordering::Release);
     }
 
-    /// Whether explicit request cancellation has been observed.
+    /// Stops analysis because a newer workspace generation superseded it.
+    pub(crate) fn invalidate(&self) {
+        self.invalidated.store(true, Ordering::Release);
+    }
+
+    /// Whether explicit cancellation or workspace invalidation has been observed.
     #[must_use]
     pub fn is_cancelled(&self) -> bool {
-        self.0.load(Ordering::Acquire)
+        self.cancelled.load(Ordering::Acquire) || self.invalidated.load(Ordering::Acquire)
     }
 
-    fn analysis_control(&self) -> AnalysisControl {
-        let cancelled = Arc::clone(&self.0);
-        AnalysisControl::cooperative(move || cancelled.load(Ordering::Acquire))
+    pub(crate) fn was_explicitly_cancelled(&self) -> bool {
+        self.cancelled.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn analysis_control(&self) -> AnalysisControl {
+        let cancelled = Arc::clone(&self.cancelled);
+        let invalidated = Arc::clone(&self.invalidated);
+        AnalysisControl::cooperative(move || {
+            cancelled.load(Ordering::Acquire) || invalidated.load(Ordering::Acquire)
+        })
     }
 }
 
@@ -89,9 +104,7 @@ pub struct PreparedResponse {
 impl PreparedResponse {
     /// Applies cancellation and workspace-generation precedence before reply.
     pub fn finish(&self, workspace: &Workspace) -> Result<Value, RequestError> {
-        if self.control.is_cancelled()
-            || matches!(self.outcome, Err(RequestError::RequestCancelled))
-        {
+        if self.control.was_explicitly_cancelled() {
             return Err(RequestError::RequestCancelled);
         }
         if self.generation != workspace.generation() {

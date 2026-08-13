@@ -31,6 +31,7 @@ fn workspace_crates_follow_the_ratified_dependency_direction() {
         ("flash-syntax", &[]),
         ("flash-platform", &[]),
         ("flash-runtime", &["flash-platform", "flash-syntax"]),
+        ("flash-lsp", &["flash-runtime", "flash-syntax"]),
         ("flash-platform-posix", &["flash-platform"]),
         (
             "flash-cli",
