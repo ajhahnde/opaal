@@ -5,6 +5,7 @@ use std::io::{self, BufRead, Write};
 
 use serde_json::{Map, Value, json};
 
+use crate::query::RequestError;
 use crate::transport::{FrameError, read_frame, write_frame};
 
 const PARSE_ERROR: i64 = -32_700;
@@ -12,7 +13,6 @@ const INVALID_REQUEST: i64 = -32_600;
 const METHOD_NOT_FOUND: i64 = -32_601;
 const INVALID_PARAMS: i64 = -32_602;
 const SERVER_NOT_INITIALIZED: i64 = -32_002;
-const REQUEST_CANCELLED: i64 = -32_800;
 
 /// The process-level result required by the LSP shutdown handshake.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -77,7 +77,13 @@ fn write_message(output: &mut impl Write, message: &Value) -> Result<(), ServerE
 /// Builds the exact standard LSP response for an explicitly cancelled request.
 #[must_use]
 pub fn request_cancelled(id: Value) -> Value {
-    error_response(id, REQUEST_CANCELLED, "Request cancelled")
+    request_failure_response(id, RequestError::RequestCancelled)
+}
+
+/// Builds the exact standard JSON-RPC response for one language request error.
+#[must_use]
+pub fn request_failure_response(id: Value, error: RequestError) -> Value {
+    error_response(id, error.code(), error.message())
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

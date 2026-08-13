@@ -3,6 +3,7 @@
 //! Language Server Protocol transport and lifecycle support for Flash.
 
 pub mod protocol;
+pub mod query;
 pub mod transport;
 pub mod uri;
 pub mod workspace;

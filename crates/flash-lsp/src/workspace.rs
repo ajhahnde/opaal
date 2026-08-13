@@ -808,7 +808,10 @@ impl WorkspaceSnapshot {
         Ok(DiagnosticLocation { uri, range })
     }
 
-    fn uri_for_module(&self, module: &ModuleId) -> Result<DocumentUri, DiagnosticProjectionError> {
+    pub(crate) fn uri_for_module(
+        &self,
+        module: &ModuleId,
+    ) -> Result<DocumentUri, DiagnosticProjectionError> {
         if let Some(uri) = self.owners.get(module.path()) {
             return Ok(uri.clone());
         }
