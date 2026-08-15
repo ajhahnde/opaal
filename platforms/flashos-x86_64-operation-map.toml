@@ -1,0 +1,580 @@
+# Per-operation map from Flash's portable capability requirements to the
+# current x86_64 FlashOS Rust, relibc, and Redox userland seams. Mapping a seam
+# records where an operation crosses the boundary; it does not classify the
+# operation or capability as native, adapted, unsupported, or kernel work.
+
+schema_version = 1
+platform = "flashos"
+architecture = "x86_64"
+target = "x86_64-unknown-redox"
+platform_baseline = "flashos-x86_64.toml"
+capability_evidence = "flashos-x86_64-capability-evidence.toml"
+contract_source = "components/flash/crates/flash-platform/src/lib.rs"
+selected_adapter = "flash-platform-posix::PosixPlatform"
+classification = "deferred"
+
+[compiler_source]
+repository = "https://gitlab.redox-os.org/redox-os/rust.git"
+selector_kind = "branch"
+selector = "redox-2026-05-24"
+revision = "unknown"
+mapping_scope = "public-std-api"
+
+[libc_source]
+repository = "https://gitlab.redox-os.org/redox-os/relibc.git"
+mapping_revision = "5f6afb52692e62dae79154f4dbec2d0e79a07602"
+binary_revision = "6571dca5b4a5f2619a42d4de196f8b787d649a8b"
+mapping_scope = "configured-source"
+
+[[abi_seam]]
+id = "rust-environment"
+provider = "rust-std"
+revision = "unknown"
+tracked_path = "components/flash/crates/flash-platform-posix/src/lib.rs"
+tracked_markers = [".env_clear()", ".envs("]
+paths = []
+interfaces = ["std::env::vars_os", "std::process::Command::env_clear", "std::process::Command::envs"]
+symbols = []
+observation = "The selected code reaches public Rust standard-library environment APIs. The target compiler source commit is unknown, so the underlying relibc route is not asserted."
+
+[[abi_seam]]
+id = "rust-filesystem"
+provider = "rust-std"
+revision = "unknown"
+tracked_path = "components/flash/crates/flash-platform-posix/src/lib.rs"
+tracked_markers = ["std::path::absolute", "std::fs::canonicalize", "OpenOptions::new()"]
+paths = []
+interfaces = ["std::env::current_dir", "std::path::absolute", "std::fs::canonicalize", "std::fs::metadata", "std::fs::OpenOptions"]
+symbols = []
+observation = "Working-directory and file-open operations reach public Rust standard-library APIs; their target implementation cannot be pinned beyond that API boundary."
+
+[[abi_seam]]
+id = "rust-descriptors"
+provider = "rust-std"
+revision = "unknown"
+tracked_path = "components/flash/crates/flash-platform-posix/src/lib.rs"
+tracked_markers = ["io::pipe()", ".try_clone()", ".read(buffer)", ".write(buffer)"]
+paths = []
+interfaces = ["std::fs::File::try_clone", "std::io::pipe", "std::io::Read::read", "std::io::Write::write", "std::process::Stdio"]
+symbols = []
+observation = "Owned descriptors, anonymous pipes, byte transfer, and standard child streams reach public Rust standard-library APIs whose target implementation revision is unknown."
+
+[[abi_seam]]
+id = "rust-process"
+provider = "rust-std"
+revision = "unknown"
+tracked_path = "components/flash/crates/flash-platform-posix/src/lib.rs"
+tracked_markers = ["Command::new(executable)", "self.child.id()", ".kill()", ".spawn()"]
+paths = []
+interfaces = ["std::process::Command::spawn", "std::process::Child::id", "std::process::Child::kill"]
+symbols = []
+observation = "Direct spawn, child identity, and termination enter the target standard library. This map does not infer its fork, exec, or signal implementation from another Unix target."
+
+[[abi_seam]]
+id = "rust-directory"
+provider = "rust-std"
+revision = "unknown"
+tracked_path = "components/flash/crates/flash-platform-posix/src/lib.rs"
+tracked_markers = ["fs::read_dir(path)", "self.entries.next()", "entry.file_name()"]
+paths = []
+interfaces = ["std::fs::read_dir", "std::fs::ReadDir::next", "std::fs::DirEntry::file_name", "std::fs::Metadata"]
+symbols = []
+observation = "Directory enumeration and metadata projection reach public Rust standard-library APIs; the exact target libc calls remain outside the known compiler-source boundary."
+
+[[abi_seam]]
+id = "rust-time"
+provider = "rust-std"
+revision = "unknown"
+tracked_path = "components/flash/crates/flash-runtime/src/eval.rs"
+tracked_markers = ["origin: SystemInstant", "SystemInstant::now()", "self.origin.elapsed()"]
+paths = []
+interfaces = ["std::time::Instant::now", "std::time::Instant::elapsed"]
+symbols = []
+observation = "The runtime clock reaches Rust Instant. The unknown target compiler source commit prevents asserting a particular relibc clock call."
+
+[[abi_seam]]
+id = "rust-current-exe"
+provider = "rust-std"
+revision = "unknown"
+tracked_path = "components/flash/crates/flash-platform-posix/src/lib.rs"
+tracked_markers = ["fn shell_executable(&self)", "std::env::current_exe()"]
+paths = []
+interfaces = ["std::env::current_exe"]
+symbols = []
+observation = "Shell executable discovery reaches the public Rust standard-library API; the target-specific process or filesystem route is not pinned."
+
+[[abi_seam]]
+id = "relibc-descriptor-actions"
+provider = "relibc"
+revision = "5f6afb52692e62dae79154f4dbec2d0e79a07602"
+tracked_path = "components/flash/crates/flash-platform-posix/src/lib.rs"
+tracked_markers = ["fn dup2(source: c_int, target: c_int)", "fn close(descriptor: c_int)", "command.pre_exec(move ||"]
+paths = ["src/header/unistd/mod.rs", "src/platform/redox/mod.rs", "redox-rt/src/sys.rs"]
+interfaces = ["dup2", "close"]
+symbols = ["dup2", "close"]
+observation = "Flash's pre-exec descriptor hook calls the relibc C ABI directly; configured relibc routes descriptor-table changes through its Redox platform and runtime layers."
+
+[[abi_seam]]
+id = "relibc-child-wait"
+provider = "relibc"
+revision = "5f6afb52692e62dae79154f4dbec2d0e79a07602"
+tracked_path = "components/flash/crates/flash-platform-posix/src/lib.rs"
+tracked_markers = ["libc::waitpid(pid, &raw mut status, flags)", "libc::WUNTRACED | libc::WCONTINUED"]
+paths = ["src/header/sys_wait/mod.rs", "src/platform/redox/mod.rs", "redox-rt/src/sys.rs"]
+interfaces = ["waitpid"]
+symbols = ["waitpid"]
+observation = "Flash calls waitpid directly for completion and transition observation; configured relibc maps it into the Redox process-wait runtime seam."
+
+[[abi_seam]]
+id = "relibc-process-groups"
+provider = "relibc"
+revision = "5f6afb52692e62dae79154f4dbec2d0e79a07602"
+tracked_path = "components/flash/crates/flash-platform-posix/src/lib.rs"
+tracked_markers = ["libc::setpgid(0, target)", "libc::setpgid(pid, target)"]
+paths = ["src/header/unistd/mod.rs", "src/platform/redox/mod.rs"]
+interfaces = ["setpgid", "getpgid"]
+symbols = ["setpgid", "getpgid"]
+observation = "Child and parent group placement and group identity use the configured relibc process-group ABI."
+
+[[abi_seam]]
+id = "relibc-terminal-ownership"
+provider = "relibc"
+revision = "5f6afb52692e62dae79154f4dbec2d0e79a07602"
+tracked_path = "components/flash/crates/flash-platform-posix/src/lib.rs"
+tracked_markers = ["libc::tcgetpgrp(fd.as_raw_fd())", "libc::tcsetpgrp(fd.as_raw_fd(), group)"]
+paths = ["src/header/unistd/mod.rs", "src/header/sys_ioctl/redox/mod.rs"]
+interfaces = ["tcgetpgrp", "tcsetpgrp"]
+symbols = ["tcgetpgrp", "tcsetpgrp"]
+observation = "Foreground ownership queries and transfers call the configured relibc terminal-control ABI, whose Redox implementation uses ioctl-style descriptor operations."
+
+[[abi_seam]]
+id = "relibc-signals"
+provider = "relibc"
+revision = "5f6afb52692e62dae79154f4dbec2d0e79a07602"
+tracked_path = "components/flash/crates/flash-platform-posix/src/lib.rs"
+tracked_markers = ["libc::sigaction(", "libc::sigemptyset(", "libc::sigprocmask(", "libc::kill(target, number)"]
+paths = ["src/header/signal/mod.rs", "src/platform/redox/signal.rs", "redox-rt/src/signal.rs"]
+interfaces = ["kill", "sigaction", "sigemptyset", "sigprocmask"]
+symbols = ["kill", "sigaction", "sigemptyset", "sigprocmask"]
+observation = "Group delivery, shell dispositions, child resets, and signal-mask changes call relibc's C ABI and configured Redox signal layer directly."
+
+[[abi_seam]]
+id = "relibc-terminal-mode"
+provider = "relibc"
+revision = "5f6afb52692e62dae79154f4dbec2d0e79a07602"
+tracked_path = "components/flash/crates/flash-platform-posix/src/lib.rs"
+tracked_markers = ["libc::isatty(", "libc::ioctl(", "libc::tcgetattr(", "libc::tcsetattr(", "libc::cfmakeraw("]
+paths = ["src/header/unistd/mod.rs", "src/header/termios/mod.rs", "src/header/sys_ioctl/redox/mod.rs"]
+interfaces = ["isatty", "ioctl", "tcgetattr", "tcsetattr", "cfmakeraw"]
+symbols = ["isatty", "ioctl", "tcgetattr", "tcsetattr", "cfmakeraw"]
+observation = "Terminal detection, dimensions, attributes, and raw-mode conversion call configured relibc interfaces; the Redox ioctl adapter owns terminal descriptor requests."
+
+[[operation]]
+id = "environment-snapshot"
+capability = "environment"
+requirement = "snapshot native process variables"
+source_evidence = ["process-environment"]
+abi_seams = ["rust-environment"]
+boundary = "rust-std"
+mapping_observation = "Flash snapshots OsString pairs through std::env::vars_os before creating the session."
+classification = "deferred"
+
+[[operation]]
+id = "environment-session-mutation"
+capability = "environment"
+requirement = "mutate the session child environment"
+source_evidence = ["process-environment"]
+abi_seams = []
+boundary = "flash-internal"
+mapping_observation = "Mutation changes Flash's in-memory Environment; it crosses no operating-system seam until a child request is installed."
+classification = "deferred"
+
+[[operation]]
+id = "environment-child-install"
+capability = "environment"
+requirement = "install the complete native child environment"
+source_evidence = ["adapter-process-request"]
+abi_seams = ["rust-environment", "rust-process"]
+boundary = "rust-std"
+mapping_observation = "The adapter clears Command's inherited environment and supplies the complete native request before spawn."
+classification = "deferred"
+
+[[operation]]
+id = "cwd-startup-read"
+capability = "working-directory"
+requirement = "read the startup directory"
+source_evidence = ["redox-selects-posix"]
+abi_seams = ["rust-filesystem"]
+boundary = "rust-std"
+mapping_observation = "The Redox client obtains the startup cwd through std::env::current_dir."
+classification = "deferred"
+
+[[operation]]
+id = "cwd-resolve-validate"
+capability = "working-directory"
+requirement = "resolve and validate a logical directory"
+source_evidence = ["adapter-working-directory"]
+abi_seams = ["rust-filesystem"]
+boundary = "rust-std"
+mapping_observation = "The adapter joins relative input, canonicalizes it, reads metadata, and requires a directory through Rust filesystem APIs."
+classification = "deferred"
+
+[[operation]]
+id = "cwd-child-select"
+capability = "working-directory"
+requirement = "select a child working directory"
+source_evidence = ["adapter-process-request"]
+abi_seams = ["rust-process", "rust-filesystem"]
+boundary = "rust-std"
+mapping_observation = "The requested cwd is made absolute and passed to Command::current_dir before spawn."
+classification = "deferred"
+
+[[operation]]
+id = "file-open-target"
+capability = "file-actions"
+requirement = "open redirection targets"
+source_evidence = ["adapter-file-actions"]
+abi_seams = ["rust-filesystem"]
+boundary = "rust-std"
+mapping_observation = "Read, truncate, and append requests reach std::fs::OpenOptions with paths resolved against the stage cwd."
+classification = "deferred"
+
+[[operation]]
+id = "file-duplicate-inherit"
+capability = "file-actions"
+requirement = "duplicate and inherit owned descriptors"
+source_evidence = ["adapter-file-actions"]
+abi_seams = ["rust-descriptors", "relibc-descriptor-actions"]
+boundary = "libc-abi"
+mapping_observation = "Rust descriptor owners clone inherited endpoints; arbitrary child targets are installed by the direct dup2 pre-exec hook."
+classification = "deferred"
+
+[[operation]]
+id = "file-close-child"
+capability = "file-actions"
+requirement = "close unused child descriptors"
+source_evidence = ["adapter-file-actions"]
+abi_seams = ["relibc-descriptor-actions"]
+boundary = "libc-abi"
+mapping_observation = "The pre-exec descriptor hook closes every explicit unused child descriptor through relibc close."
+classification = "deferred"
+
+[[operation]]
+id = "file-stream-in-process"
+capability = "file-actions"
+requirement = "stream files in-process"
+source_evidence = ["adapter-file-actions"]
+abi_seams = ["rust-descriptors"]
+boundary = "rust-std"
+mapping_observation = "Internal commands transfer bounded byte slices through Rust File Read and Write methods."
+classification = "deferred"
+
+[[operation]]
+id = "pipe-create"
+capability = "pipes"
+requirement = "create one anonymous byte pipe"
+source_evidence = ["adapter-pipes"]
+abi_seams = ["rust-descriptors"]
+boundary = "rust-std"
+mapping_observation = "The adapter creates one pair through std::io::pipe."
+classification = "deferred"
+
+[[operation]]
+id = "pipe-own-close"
+capability = "pipes"
+requirement = "own and close both endpoints"
+source_evidence = ["adapter-pipes"]
+abi_seams = ["rust-descriptors"]
+boundary = "rust-std"
+mapping_observation = "OwnedFd-backed endpoints carry unique ownership and close through ordinary Rust drop semantics."
+classification = "deferred"
+
+[[operation]]
+id = "pipe-read-write"
+capability = "pipes"
+requirement = "read and write bounded chunks"
+source_evidence = ["adapter-pipes"]
+abi_seams = ["rust-descriptors"]
+boundary = "rust-std"
+mapping_observation = "Descriptor endpoints transfer caller-bounded slices through Rust Read and Write methods."
+classification = "deferred"
+
+[[operation]]
+id = "process-spawn-argv"
+capability = "process-spawn"
+requirement = "spawn a resolved executable with exact argv"
+source_evidence = ["adapter-process-request"]
+abi_seams = ["rust-process"]
+boundary = "rust-std"
+mapping_observation = "The adapter supplies explicit argv zero and every later native argument to Command before direct spawn; the target std implementation revision is unknown."
+classification = "deferred"
+
+[[operation]]
+id = "process-wait-transitions"
+capability = "process-spawn"
+requirement = "wait for completion and transitions"
+source_evidence = ["adapter-process-lifecycle"]
+abi_seams = ["relibc-child-wait"]
+boundary = "libc-abi"
+mapping_observation = "The owned child calls relibc waitpid directly, with WUNTRACED and WCONTINUED for transition observation."
+classification = "deferred"
+
+[[operation]]
+id = "process-terminate-reap"
+capability = "process-spawn"
+requirement = "terminate and reap on cleanup"
+source_evidence = ["adapter-process-lifecycle"]
+abi_seams = ["rust-process", "relibc-child-wait"]
+boundary = "rust-std"
+mapping_observation = "Termination enters Child::kill and final cleanup reaps through the adapter's direct waitpid path."
+classification = "deferred"
+
+[[operation]]
+id = "process-group-create"
+capability = "process-groups"
+requirement = "make the first pipeline child a group leader"
+source_evidence = ["runtime-process-groups", "adapter-process-groups"]
+abi_seams = ["relibc-process-groups"]
+boundary = "libc-abi"
+mapping_observation = "The child and parent pre/post-spawn hooks call setpgid with a zero group request for the new leader."
+classification = "deferred"
+
+[[operation]]
+id = "process-group-join"
+capability = "process-groups"
+requirement = "join later children to that group"
+source_evidence = ["runtime-process-groups", "adapter-process-groups"]
+abi_seams = ["relibc-process-groups"]
+boundary = "libc-abi"
+mapping_observation = "The same two-sided setpgid seam places later children in the established group."
+classification = "deferred"
+
+[[operation]]
+id = "process-group-report"
+capability = "process-groups"
+requirement = "report the established group"
+source_evidence = ["adapter-process-groups"]
+abi_seams = ["rust-process", "relibc-process-groups"]
+boundary = "libc-abi"
+mapping_observation = "The adapter combines Child::id with the requested placement and relibc process-group identity."
+classification = "deferred"
+
+[[operation]]
+id = "foreground-query"
+capability = "foreground-terminal"
+requirement = "query the current terminal owner"
+source_evidence = ["adapter-foreground-terminal"]
+abi_seams = ["relibc-terminal-ownership"]
+boundary = "libc-abi"
+mapping_observation = "The adapter calls tcgetpgrp on standard input."
+classification = "deferred"
+
+[[operation]]
+id = "foreground-hand-over"
+capability = "foreground-terminal"
+requirement = "hand the terminal to a process group"
+source_evidence = ["runtime-foreground-terminal", "adapter-foreground-terminal"]
+abi_seams = ["relibc-terminal-ownership", "relibc-signals"]
+boundary = "libc-abi"
+mapping_observation = "Terminal handoff calls tcsetpgrp while relibc signal-mask calls temporarily block terminal-stop signals."
+classification = "deferred"
+
+[[operation]]
+id = "foreground-restore"
+capability = "foreground-terminal"
+requirement = "restore the previous owner"
+source_evidence = ["runtime-foreground-terminal", "adapter-foreground-terminal"]
+abi_seams = ["relibc-terminal-ownership", "relibc-signals"]
+boundary = "libc-abi"
+mapping_observation = "The guard repeats the masked tcsetpgrp route for the saved owner on explicit release or drop."
+classification = "deferred"
+
+[[operation]]
+id = "signals-shell-dispositions"
+capability = "signals"
+requirement = "install and restore shell job-control dispositions"
+source_evidence = ["adapter-signals"]
+abi_seams = ["relibc-signals"]
+boundary = "libc-abi"
+mapping_observation = "The adapter installs and restores the five shell dispositions through sigaction; child pre-exec resets six dispositions and clears its mask."
+classification = "deferred"
+
+[[operation]]
+id = "signals-group-delivery"
+capability = "signals"
+requirement = "send the portable signal set to a group"
+source_evidence = ["adapter-signals"]
+abi_seams = ["relibc-signals"]
+boundary = "libc-abi"
+mapping_observation = "Portable signals are translated to relibc signal constants and sent through kill with a negated process-group identifier."
+classification = "deferred"
+
+[[operation]]
+id = "signals-transition-observation"
+capability = "signals"
+requirement = "observe stopped, continued, exited, and signaled child transitions"
+source_evidence = ["adapter-process-lifecycle", "adapter-signals"]
+abi_seams = ["relibc-child-wait"]
+boundary = "libc-abi"
+mapping_observation = "waitpid status macros decode the four portable transition classes after a blocking observation."
+classification = "deferred"
+
+[[operation]]
+id = "terminal-detect-ends"
+capability = "terminal-info"
+requirement = "detect terminal input and output independently"
+source_evidence = ["adapter-terminal-info"]
+abi_seams = ["relibc-terminal-mode"]
+boundary = "libc-abi"
+mapping_observation = "The adapter calls isatty separately for standard input and standard output."
+classification = "deferred"
+
+[[operation]]
+id = "terminal-read-size"
+capability = "terminal-info"
+requirement = "read terminal dimensions"
+source_evidence = ["adapter-terminal-info"]
+abi_seams = ["relibc-terminal-mode"]
+boundary = "libc-abi"
+mapping_observation = "The adapter issues ioctl TIOCGWINSZ on standard input and applies its documented 80x24 fallback for zero or failed results."
+classification = "deferred"
+
+[[operation]]
+id = "terminal-raw-mode"
+capability = "terminal-info"
+requirement = "enter and restore raw input mode"
+source_evidence = ["adapter-terminal-info"]
+abi_seams = ["relibc-terminal-mode"]
+boundary = "libc-abi"
+mapping_observation = "The adapter reads attributes with tcgetattr, transforms them with cfmakeraw, and applies or restores them with tcsetattr."
+classification = "deferred"
+
+[[operation]]
+id = "clock-read-monotonic"
+capability = "monotonic-clock"
+requirement = "read a nondecreasing monotonic instant"
+source_evidence = ["runtime-monotonic-clock"]
+abi_seams = ["rust-time"]
+boundary = "rust-std"
+mapping_observation = "SystemClock reads std::time::Instant; the unknown target std source prevents fixing the underlying clock ABI here."
+classification = "deferred"
+
+[[operation]]
+id = "clock-timestamp-events"
+capability = "monotonic-clock"
+requirement = "timestamp process and job events"
+source_evidence = ["runtime-monotonic-clock"]
+abi_seams = ["rust-time"]
+boundary = "rust-std"
+mapping_observation = "Runtime event timestamps use the same SystemClock Instant origin."
+classification = "deferred"
+
+[[operation]]
+id = "clock-cancellation-deadlines"
+capability = "monotonic-clock"
+requirement = "drive cancellation deadlines"
+source_evidence = ["runtime-monotonic-clock"]
+abi_seams = ["rust-time"]
+boundary = "rust-std"
+mapping_observation = "Deadline accounting uses elapsed readings from the same Rust Instant seam."
+classification = "deferred"
+
+[[operation]]
+id = "directories-discover"
+capability = "standard-directories"
+requirement = "discover home, configuration, cache, and state locations"
+source_evidence = ["redox-standard-directories-gap"]
+abi_seams = []
+boundary = "unrouted"
+mapping_observation = "The Redox interactive path does not call the standard-directory selectors and no FlashOS convention is currently selected."
+classification = "deferred"
+
+[[operation]]
+id = "directories-preserve-paths"
+capability = "standard-directories"
+requirement = "preserve native path values"
+source_evidence = ["redox-standard-directories-gap"]
+abi_seams = []
+boundary = "unrouted"
+mapping_observation = "No Redox configuration, cache, or state path currently enters Flash, so there is no target path-value seam to map."
+classification = "deferred"
+
+[[operation]]
+id = "directories-target-fallback"
+capability = "standard-directories"
+requirement = "define target-specific fallback conventions"
+source_evidence = ["redox-standard-directories-gap"]
+abi_seams = []
+boundary = "unrouted"
+mapping_observation = "Flash has no selected FlashOS fallback convention; defining one remains a later design and classification input."
+classification = "deferred"
+
+[[operation]]
+id = "directory-open-relative"
+capability = "directory-read"
+requirement = "open a directory relative to logical cwd"
+source_evidence = ["adapter-directory-read"]
+abi_seams = ["rust-filesystem", "rust-directory"]
+boundary = "rust-std"
+mapping_observation = "The adapter makes cwd absolute, joins a relative target, and opens it with std::fs::read_dir."
+classification = "deferred"
+
+[[operation]]
+id = "directory-advance-lazy"
+capability = "directory-read"
+requirement = "advance a lazy entry stream"
+source_evidence = ["adapter-directory-read"]
+abi_seams = ["rust-directory"]
+boundary = "rust-std"
+mapping_observation = "PosixDirectoryStream advances the owned std::fs::ReadDir iterator one entry at a time."
+classification = "deferred"
+
+[[operation]]
+id = "directory-preserve-name-kind"
+capability = "directory-read"
+requirement = "preserve native names, entry kind, and regular-file size"
+source_evidence = ["adapter-directory-read"]
+abi_seams = ["rust-directory"]
+boundary = "rust-std"
+mapping_observation = "The adapter returns the native file_name and projects symlink-aware metadata into the portable kind and optional size."
+classification = "deferred"
+
+[[operation]]
+id = "shell-executable-resolve"
+capability = "shell-executable"
+requirement = "resolve the running shell executable independently of argv zero"
+source_evidence = ["adapter-shell-executable"]
+abi_seams = ["rust-current-exe"]
+boundary = "rust-std"
+mapping_observation = "The adapter calls std::env::current_exe rather than inspecting argv zero."
+classification = "deferred"
+
+[[operation]]
+id = "shell-executable-native-path"
+capability = "shell-executable"
+requirement = "preserve a native absolute path suitable for supervisor re-execution"
+source_evidence = ["adapter-shell-executable"]
+abi_seams = ["rust-current-exe"]
+boundary = "rust-std"
+mapping_observation = "The PathBuf returned by current_exe crosses unchanged into the supervisor spawn request; the target-specific lookup remains behind std."
+classification = "deferred"
+
+[[operation]]
+id = "hangup-ignore-supervisor"
+capability = "hangup-disposition"
+requirement = "ignore hang-up in the background chain supervisor"
+source_evidence = ["adapter-hangup-disposition"]
+abi_seams = ["relibc-signals"]
+boundary = "libc-abi"
+mapping_observation = "The supervisor installs SIG_IGN for SIGHUP through relibc sigaction."
+classification = "deferred"
+
+[[operation]]
+id = "hangup-reap-child"
+capability = "hangup-disposition"
+requirement = "keep the supervisor alive until its child is reaped"
+source_evidence = ["adapter-hangup-disposition", "adapter-process-lifecycle"]
+abi_seams = ["relibc-signals", "relibc-child-wait"]
+boundary = "libc-abi"
+mapping_observation = "The ignored hang-up disposition keeps the supervisor on its existing execution path, whose child completion is reaped through waitpid."
+classification = "deferred"

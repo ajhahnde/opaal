@@ -160,8 +160,24 @@ python3 ci/check_flashos_capabilities.py
 This inventory is deliberately not a support matrix. A source method or a
 full-capability declaration does not establish target behavior, and a missing
 runtime observation does not establish that the target is incapable of the
-operation. Keep classification, ABI-operation mapping, and new runtime claims
-in their own reviewed changes with the evidence those claims require.
+operation.
+
+The adjacent
+[`platforms/flashos-x86_64-operation-map.toml`](../platforms/flashos-x86_64-operation-map.toml)
+file maps every requirement from that inventory to the current Flash-internal,
+Rust standard-library, direct `relibc`, or unrouted boundary. Validate its
+ordered coverage and source identities from the repository root:
+
+```bash
+python3 ci/check_flashos_operation_map.py
+```
+
+The map deliberately stops Rust standard-library routes at public APIs because
+the target compiler source commit is unknown. Direct C ABI routes cite the
+configured `relibc` source revision while preserving the different staged
+binary-package revision. Mapping is not support classification or runtime
+qualification; keep those later claims in their own reviewed changes with
+their required evidence.
 
 ## Workspace layout
 

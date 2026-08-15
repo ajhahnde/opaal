@@ -730,6 +730,17 @@ classifications. In particular, the selected adapter's full-capability
 declaration remains a claim under comparison; it is not accepted as target
 qualification merely because the same code passes on Linux or macOS.
 
+The paired
+[`flashos-x86_64-operation-map.toml`](../platforms/flashos-x86_64-operation-map.toml)
+then maps every requirement in that inventory to its current boundary. Some
+operations remain entirely inside Flash, direct job-control and terminal calls
+reach configured `relibc` ABI and Redox userland paths, and higher-level
+environment, process, filesystem, directory, executable, and time calls stop at
+public Rust standard-library APIs because the target compiler source commit is
+unknown. Configuration-directory operations are recorded as currently
+unrouted. These are mapping facts, not native, adapted, unsupported, or
+kernel-work classifications, and they do not replace target behavior evidence.
+
 ### Test adapters
 
 The platform crate also provides deterministic fake and recording adapters.
