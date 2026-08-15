@@ -741,6 +741,17 @@ unknown. Configuration-directory operations are recorded as currently
 unrouted. These are mapping facts, not native, adapted, unsupported, or
 kernel-work classifications, and they do not replace target behavior evidence.
 
+The separate
+[`flashos-x86_64-capability-classification.toml`](../platforms/flashos-x86_64-capability-classification.toml)
+consumes the complete map and classifies the implementation route for every
+operation and capability. Existing Flash-internal, target standard-library,
+and configured-`relibc` routes are native. Standard-directory discovery,
+native-path preservation, and fallback policy are shimmed because FlashOS must
+define and wire an explicit target convention over existing filesystem
+primitives. No current operation is deliberately unsupported or requires
+kernel work. All target-runtime qualification remains pending; an architectural
+route verdict is not a behavioral support claim.
+
 ### Test adapters
 
 The platform crate also provides deterministic fake and recording adapters.

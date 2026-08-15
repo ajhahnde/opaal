@@ -179,6 +179,22 @@ binary-package revision. Mapping is not support classification or runtime
 qualification; keep those later claims in their own reviewed changes with
 their required evidence.
 
+The separate
+[`platforms/flashos-x86_64-capability-classification.toml`](../platforms/flashos-x86_64-capability-classification.toml)
+file consumes that complete map and gives every operation and capability an
+architectural route verdict. Validate its ordered coverage, aggregation, and
+qualification boundary from the repository root:
+
+```bash
+python3 ci/check_flashos_capability_classification.py
+```
+
+The current classification records 38 native operations and one
+three-operation FlashOS policy shim for standard-directory selection. No
+operation is deliberately unsupported or requires kernel work. These verdicts
+select implementation routes; every capability remains pending target-runtime
+qualification, so the classification does not make a support claim.
+
 ## Workspace layout
 
 The current workspace membership is defined by [`components/flash/Cargo.toml`](../Cargo.toml). Do not treat a fixed crate count as a permanent project contract.

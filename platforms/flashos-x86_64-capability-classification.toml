@@ -1,0 +1,422 @@
+# Architectural classification of Flash's platform requirements for the
+# current x86_64 FlashOS integration. A native or shimmed verdict identifies
+# the implementation route; target-runtime qualification remains pending.
+
+schema_version = 1
+platform = "flashos"
+architecture = "x86_64"
+target = "x86_64-unknown-redox"
+platform_baseline = "flashos-x86_64.toml"
+capability_evidence = "flashos-x86_64-capability-evidence.toml"
+operation_map = "flashos-x86_64-operation-map.toml"
+contract_source = "components/flash/crates/flash-platform/src/lib.rs"
+selected_adapter = "flash-platform-posix::PosixPlatform"
+classification = "complete"
+target_qualification = "pending"
+
+[semantics]
+native = "The complete requirement has an existing Flash-internal, Rust standard-library, or configured-relibc route and needs no FlashOS-specific compatibility code."
+shimmed = "Existing target primitives are sufficient, but Flash must add explicit FlashOS-specific adapter or policy code."
+deliberately_unsupported = "Flash intentionally will not provide the requirement on this target and must report a precise unsupported-capability diagnostic."
+kernel_work = "No current userland route can satisfy the requirement; any implementation requires separately authorized kernel work."
+aggregation = "A capability takes the strongest operation verdict in kernel-work, deliberately-unsupported, shimmed, native order."
+qualification = "Classification selects an implementation route; only later target-runtime evidence may qualify behavior as supported."
+
+[[operation]]
+id = "environment-snapshot"
+capability = "environment"
+classification = "native"
+basis = "existing-rust-std-route"
+rationale = "The selected executable already snapshots native process variables through the target standard library."
+
+[[operation]]
+id = "environment-session-mutation"
+capability = "environment"
+classification = "native"
+basis = "existing-flash-route"
+rationale = "Session child-environment mutation is owned entirely by Flash and needs no target compatibility code."
+
+[[operation]]
+id = "environment-child-install"
+capability = "environment"
+classification = "native"
+basis = "existing-rust-std-route"
+rationale = "The selected adapter already installs the complete requested native environment through Command."
+
+[[operation]]
+id = "cwd-startup-read"
+capability = "working-directory"
+classification = "native"
+basis = "existing-rust-std-route"
+rationale = "The target standard-library route already supplies the process working directory."
+
+[[operation]]
+id = "cwd-resolve-validate"
+capability = "working-directory"
+classification = "native"
+basis = "existing-rust-std-route"
+rationale = "The selected adapter already resolves and validates logical directories through target filesystem APIs."
+
+[[operation]]
+id = "cwd-child-select"
+capability = "working-directory"
+classification = "native"
+basis = "existing-rust-std-route"
+rationale = "The selected adapter already applies the requested child directory through Command."
+
+[[operation]]
+id = "file-open-target"
+capability = "file-actions"
+classification = "native"
+basis = "existing-rust-std-route"
+rationale = "The selected adapter already opens redirection targets through target filesystem APIs."
+
+[[operation]]
+id = "file-duplicate-inherit"
+capability = "file-actions"
+classification = "native"
+basis = "existing-libc-abi-route"
+rationale = "Configured relibc already exposes the descriptor duplication ABI used by the adapter."
+
+[[operation]]
+id = "file-close-child"
+capability = "file-actions"
+classification = "native"
+basis = "existing-libc-abi-route"
+rationale = "Configured relibc already exposes the child descriptor close ABI used by the adapter."
+
+[[operation]]
+id = "file-stream-in-process"
+capability = "file-actions"
+classification = "native"
+basis = "existing-rust-std-route"
+rationale = "The target standard-library route already supports bounded in-process file transfer."
+
+[[operation]]
+id = "pipe-create"
+capability = "pipes"
+classification = "native"
+basis = "existing-rust-std-route"
+rationale = "The target standard library already creates owned anonymous pipe endpoints."
+
+[[operation]]
+id = "pipe-own-close"
+capability = "pipes"
+classification = "native"
+basis = "existing-rust-std-route"
+rationale = "Existing owned-descriptor semantics already provide unique ownership and closure."
+
+[[operation]]
+id = "pipe-read-write"
+capability = "pipes"
+classification = "native"
+basis = "existing-rust-std-route"
+rationale = "Existing target Read and Write routes already transfer bounded byte chunks."
+
+[[operation]]
+id = "process-spawn-argv"
+capability = "process-spawn"
+classification = "native"
+basis = "existing-rust-std-route"
+rationale = "The selected adapter already issues direct Command requests with exact native argv."
+
+[[operation]]
+id = "process-wait-transitions"
+capability = "process-spawn"
+classification = "native"
+basis = "existing-libc-abi-route"
+rationale = "Configured relibc already exposes the waitpid transition ABI used by the adapter."
+
+[[operation]]
+id = "process-terminate-reap"
+capability = "process-spawn"
+classification = "native"
+basis = "existing-rust-std-route"
+rationale = "Existing Child termination plus the configured wait route already provide cleanup and reaping."
+
+[[operation]]
+id = "process-group-create"
+capability = "process-groups"
+classification = "native"
+basis = "existing-libc-abi-route"
+rationale = "Configured relibc already exposes process-group creation through setpgid."
+
+[[operation]]
+id = "process-group-join"
+capability = "process-groups"
+classification = "native"
+basis = "existing-libc-abi-route"
+rationale = "Configured relibc already exposes process-group membership through setpgid."
+
+[[operation]]
+id = "process-group-report"
+capability = "process-groups"
+classification = "native"
+basis = "existing-libc-abi-route"
+rationale = "Existing child identity and relibc process-group APIs already report the established group."
+
+[[operation]]
+id = "foreground-query"
+capability = "foreground-terminal"
+classification = "native"
+basis = "existing-libc-abi-route"
+rationale = "Configured relibc already exposes foreground terminal ownership queries."
+
+[[operation]]
+id = "foreground-hand-over"
+capability = "foreground-terminal"
+classification = "native"
+basis = "existing-libc-abi-route"
+rationale = "Configured relibc already exposes terminal handoff and the signal-mask operations required around it."
+
+[[operation]]
+id = "foreground-restore"
+capability = "foreground-terminal"
+classification = "native"
+basis = "existing-libc-abi-route"
+rationale = "Configured relibc already exposes the terminal and signal operations needed for guarded restoration."
+
+[[operation]]
+id = "signals-shell-dispositions"
+capability = "signals"
+classification = "native"
+basis = "existing-libc-abi-route"
+rationale = "Configured relibc already exposes the signal disposition and mask ABI used by the adapter."
+
+[[operation]]
+id = "signals-group-delivery"
+capability = "signals"
+classification = "native"
+basis = "existing-libc-abi-route"
+rationale = "Configured relibc already exposes group-directed delivery through kill."
+
+[[operation]]
+id = "signals-transition-observation"
+capability = "signals"
+classification = "native"
+basis = "existing-libc-abi-route"
+rationale = "Configured relibc already exposes stopped, continued, exited, and signaled wait states."
+
+[[operation]]
+id = "terminal-detect-ends"
+capability = "terminal-info"
+classification = "native"
+basis = "existing-libc-abi-route"
+rationale = "Configured relibc already exposes the terminal query route used for both standard ends."
+
+[[operation]]
+id = "terminal-read-size"
+capability = "terminal-info"
+classification = "native"
+basis = "existing-libc-abi-route"
+rationale = "Configured relibc already exposes the terminal-size query used by the adapter."
+
+[[operation]]
+id = "terminal-raw-mode"
+capability = "terminal-info"
+classification = "native"
+basis = "existing-libc-abi-route"
+rationale = "Configured relibc already exposes terminal attribute reads and writes for guarded raw mode."
+
+[[operation]]
+id = "clock-read-monotonic"
+capability = "monotonic-clock"
+classification = "native"
+basis = "existing-rust-std-route"
+rationale = "The runtime already obtains nondecreasing readings from the target Instant implementation."
+
+[[operation]]
+id = "clock-timestamp-events"
+capability = "monotonic-clock"
+classification = "native"
+basis = "existing-rust-std-route"
+rationale = "The existing runtime clock seam already timestamps process and job events."
+
+[[operation]]
+id = "clock-cancellation-deadlines"
+capability = "monotonic-clock"
+classification = "native"
+basis = "existing-rust-std-route"
+rationale = "The existing runtime clock seam already supplies elapsed time for cancellation deadlines."
+
+[[operation]]
+id = "directories-discover"
+capability = "standard-directories"
+classification = "shimmed"
+basis = "flashos-policy-shim"
+rationale = "FlashOS must select home, configuration, cache, and state locations because the Redox executable currently has no route."
+
+[[operation]]
+id = "directories-preserve-paths"
+capability = "standard-directories"
+classification = "shimmed"
+basis = "flashos-policy-shim"
+rationale = "The FlashOS directory selector must preserve native path values while applying the target policy."
+
+[[operation]]
+id = "directories-target-fallback"
+capability = "standard-directories"
+classification = "shimmed"
+basis = "flashos-policy-shim"
+rationale = "FlashOS must define deterministic fallback conventions without inventing weaker runtime behavior."
+
+[[operation]]
+id = "directory-open-relative"
+capability = "directory-read"
+classification = "native"
+basis = "existing-rust-std-route"
+rationale = "The selected adapter already opens a directory relative to Flash's logical working directory."
+
+[[operation]]
+id = "directory-advance-lazy"
+capability = "directory-read"
+classification = "native"
+basis = "existing-rust-std-route"
+rationale = "The target standard-library route already advances the owned directory stream lazily."
+
+[[operation]]
+id = "directory-preserve-name-kind"
+capability = "directory-read"
+classification = "native"
+basis = "existing-rust-std-route"
+rationale = "The selected adapter already preserves native names and projects entry metadata into the portable contract."
+
+[[operation]]
+id = "shell-executable-resolve"
+capability = "shell-executable"
+classification = "native"
+basis = "existing-rust-std-route"
+rationale = "The target standard library already resolves the running executable independently of argv zero."
+
+[[operation]]
+id = "shell-executable-native-path"
+capability = "shell-executable"
+classification = "native"
+basis = "existing-rust-std-route"
+rationale = "The existing route returns the native absolute path required for supervisor re-execution."
+
+[[operation]]
+id = "hangup-ignore-supervisor"
+capability = "hangup-disposition"
+classification = "native"
+basis = "existing-libc-abi-route"
+rationale = "Configured relibc already exposes the hang-up disposition used by the supervisor."
+
+[[operation]]
+id = "hangup-reap-child"
+capability = "hangup-disposition"
+classification = "native"
+basis = "existing-libc-abi-route"
+rationale = "Existing relibc signal and wait routes already keep the supervisor alive through final reaping."
+
+[[capability]]
+name = "environment"
+rust_variant = "Environment"
+operation_ids = ["environment-snapshot", "environment-session-mutation", "environment-child-install"]
+classification = "native"
+target_qualification = "pending"
+rationale = "Every environment operation has an existing route; target preservation and mutation behavior still requires qualification."
+
+[[capability]]
+name = "working-directory"
+rust_variant = "WorkingDirectory"
+operation_ids = ["cwd-startup-read", "cwd-resolve-validate", "cwd-child-select"]
+classification = "native"
+target_qualification = "pending"
+rationale = "Every working-directory operation has an existing target standard-library route."
+
+[[capability]]
+name = "file-actions"
+rust_variant = "FileActions"
+operation_ids = ["file-open-target", "file-duplicate-inherit", "file-close-child", "file-stream-in-process"]
+classification = "native"
+target_qualification = "pending"
+rationale = "Existing target standard-library and relibc routes cover the complete file-action group."
+
+[[capability]]
+name = "pipes"
+rust_variant = "Pipes"
+operation_ids = ["pipe-create", "pipe-own-close", "pipe-read-write"]
+classification = "native"
+target_qualification = "pending"
+rationale = "Existing target standard-library descriptor routes cover the complete pipe group."
+
+[[capability]]
+name = "process-spawn"
+rust_variant = "ProcessSpawn"
+operation_ids = ["process-spawn-argv", "process-wait-transitions", "process-terminate-reap"]
+classification = "native"
+target_qualification = "pending"
+rationale = "Existing Command, Child, and configured wait routes cover direct spawn and lifecycle operations."
+
+[[capability]]
+name = "process-groups"
+rust_variant = "ProcessGroups"
+operation_ids = ["process-group-create", "process-group-join", "process-group-report"]
+classification = "native"
+target_qualification = "pending"
+rationale = "Configured relibc process-group operations cover creation, membership, and reporting."
+
+[[capability]]
+name = "foreground-terminal"
+rust_variant = "ForegroundTerminal"
+operation_ids = ["foreground-query", "foreground-hand-over", "foreground-restore"]
+classification = "native"
+target_qualification = "pending"
+rationale = "Configured relibc terminal ownership and signal-mask operations cover guarded handoff and restoration."
+
+[[capability]]
+name = "signals"
+rust_variant = "Signals"
+operation_ids = ["signals-shell-dispositions", "signals-group-delivery", "signals-transition-observation"]
+classification = "native"
+target_qualification = "pending"
+rationale = "Configured relibc signal and wait operations cover the complete portable job-signal contract."
+
+[[capability]]
+name = "terminal-info"
+rust_variant = "TerminalInfo"
+operation_ids = ["terminal-detect-ends", "terminal-read-size", "terminal-raw-mode"]
+classification = "native"
+target_qualification = "pending"
+rationale = "Configured relibc terminal queries and attribute operations cover the complete terminal-information group."
+
+[[capability]]
+name = "monotonic-clock"
+rust_variant = "MonotonicClock"
+operation_ids = ["clock-read-monotonic", "clock-timestamp-events", "clock-cancellation-deadlines"]
+classification = "native"
+target_qualification = "pending"
+rationale = "The existing target Instant and runtime clock seam cover every monotonic-clock operation."
+
+[[capability]]
+name = "standard-directories"
+rust_variant = "StandardDirectories"
+operation_ids = ["directories-discover", "directories-preserve-paths", "directories-target-fallback"]
+classification = "shimmed"
+target_qualification = "pending"
+rationale = "Existing filesystem primitives are sufficient, but FlashOS must add an explicit target directory convention and wire it into the executable."
+
+[[capability]]
+name = "directory-read"
+rust_variant = "DirectoryRead"
+operation_ids = ["directory-open-relative", "directory-advance-lazy", "directory-preserve-name-kind"]
+classification = "native"
+target_qualification = "pending"
+rationale = "Existing target standard-library directory operations cover opening, lazy iteration, native names, and metadata."
+
+[[capability]]
+name = "shell-executable"
+rust_variant = "ShellExecutable"
+operation_ids = ["shell-executable-resolve", "shell-executable-native-path"]
+classification = "native"
+target_qualification = "pending"
+rationale = "The existing target standard-library route provides the native executable identity needed for re-execution."
+
+[[capability]]
+name = "hangup-disposition"
+rust_variant = "HangupDisposition"
+operation_ids = ["hangup-ignore-supervisor", "hangup-reap-child"]
+classification = "native"
+target_qualification = "pending"
+rationale = "Configured relibc signal and wait operations cover the supervisor hang-up and reaping contract."
