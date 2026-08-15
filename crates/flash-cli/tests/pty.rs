@@ -512,6 +512,24 @@ fn assert_notice_precedes_prompt(rendered: &str, notice: &str) {
     );
 }
 
+fn await_completion_notice(session: &mut Pty, start: usize, notice: &str) -> String {
+    let deadline = Instant::now() + TIMEOUT;
+    loop {
+        let prompt_mark = session.mark();
+        session.send(CTRL_C);
+        session.await_prompt(prompt_mark);
+
+        let rendered = session.rendered_from(start);
+        if rendered.contains(notice) {
+            return rendered;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the background job completed without a prompt-boundary notice:\n{rendered}"
+        );
+    }
+}
+
 #[test]
 fn draws_the_primary_prompt_and_runs_a_command() {
     let cwd = unique_dir("prompt");
@@ -1162,13 +1180,9 @@ fn a_background_pipeline_has_one_job_identity_and_one_completion_notice() {
         "pipeline members must not receive separate job identities:\n{launch}"
     );
 
-    fs::write(&release, b"complete").expect("release both pipeline members");
-    thread::sleep(SETTLE);
     let completion_mark = session.mark();
-    session.send(CTRL_C);
-    session.expect_from(completion_mark, "[1] Done");
-    session.expect_from(completion_mark, ">> ");
-    let completion = session.rendered_from(completion_mark);
+    fs::write(&release, b"complete").expect("release both pipeline members");
+    let completion = await_completion_notice(&mut session, completion_mark, "[1] Done");
     assert_notice_precedes_prompt(&completion, "[1] Done");
     assert_eq!(
         completion.matches("[1] Done").count(),
@@ -1215,12 +1229,8 @@ fn a_background_and_chain_reaches_an_internal_command_before_completion() {
     let component = cwd.file_name().unwrap().to_string_lossy().into_owned();
     session.expect_from(result_mark, &component);
 
-    thread::sleep(SETTLE);
     let completion_mark = session.mark();
-    session.send(CTRL_C);
-    session.expect_from(completion_mark, "[1] Done");
-    session.expect_from(completion_mark, ">> ");
-    let completion = session.rendered_from(completion_mark);
+    let completion = await_completion_notice(&mut session, completion_mark, "[1] Done");
     assert_notice_precedes_prompt(&completion, "[1] Done");
 
     session.send(b"exit 0");
@@ -1254,19 +1264,15 @@ fn a_background_or_chain_short_circuits_before_its_internal_command() {
     assert_eq!(await_group_reports(&cwd, 1).len(), 1);
 
     let result_mark = session.mark();
-    fs::write(&release, b"complete").expect("release the successful left side");
-    thread::sleep(SETTLE);
     let completion_mark = session.mark();
-    session.send(CTRL_C);
-    session.expect_from(completion_mark, "[1] Done");
-    session.expect_from(completion_mark, ">> ");
+    fs::write(&release, b"complete").expect("release the successful left side");
+    let completion = await_completion_notice(&mut session, completion_mark, "[1] Done");
     let result = session.rendered_from(result_mark);
     let component = cwd.file_name().unwrap().to_string_lossy();
     assert!(
         !result.contains(component.as_ref()),
         "the successful left side must skip the internal right side:\n{result}"
     );
-    let completion = session.rendered_from(completion_mark);
     assert_notice_precedes_prompt(&completion, "[1] Done");
 
     session.send(b"exit 0");
