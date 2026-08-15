@@ -691,6 +691,35 @@ The v1 architecture also reserves a FlashOS-specific adapter role. That adapter 
 
 The runtime depends only on the abstract capability contract. It must not silently emulate a missing target capability with weaker POSIX behavior. Release and target evidence determine which adapter capabilities may be claimed publicly.
 
+### FlashOS target baseline
+
+The machine-readable
+[`flashos-x86_64.toml`](../platforms/flashos-x86_64.toml) record identifies the
+platform boundary that a FlashOS adapter targets. The current baseline records:
+
+| Boundary | Current identity |
+| --- | --- |
+| Rust target | `x86_64-unknown-redox` |
+| Rust target configuration | `target_os="redox"`, `target_env="relibc"`, 64-bit little-endian ELF |
+| Target compiler | Redox Rust branch selector `redox-2026-05-24`, reporting `rustc 1.98.0-dev`, unknown source commit, and LLVM 21.1.2 |
+| C runtime | `relibc`, `libc.so.6`, with `/lib/ld64.so.1` as the executable interpreter |
+| Flash executable | x86_64 position-independent ELF requiring `libc.so.6` and `libgcc_s.so.1` |
+
+The record deliberately distinguishes the `relibc` revision selected by the
+source recipe from the revision reported by the binary package used by the
+current clean-room image path. This makes the effective userland input visible
+without presenting a binary-package revision as the source-build selection.
+The compiler likewise reports its release and LLVM identity but no source
+commit; the record preserves that limitation instead of turning the dated
+branch selector into a revision claim.
+
+Source validation keeps the record aligned with the image profile, build
+toolchain, Rust recipe, and `relibc` recipe. Image qualification additionally
+checks Cargo's compiler fingerprint, the staged `relibc` package metadata, and
+the ELF headers of the staged `fsh` and C runtime. These facts establish target
+identity only. They do not classify a platform capability as supported or
+prove that a capability works at runtime.
+
 ### Test adapters
 
 The platform crate also provides deterministic fake and recording adapters.

@@ -1,0 +1,44 @@
+# Machine-readable identity of the FlashOS target that Flash integrates with.
+# This is an ABI/toolchain baseline, not a capability or runtime-support report.
+
+schema_version = 1
+platform = "flashos"
+architecture = "x86_64"
+image_profiles = ["flashos", "flashos-release"]
+
+[target]
+triple = "x86_64-unknown-redox"
+os = "redox"
+environment = "relibc"
+family = "unix"
+pointer_width = 64
+endianness = "little"
+object_format = "elf"
+
+[build]
+root_toolchain = "nightly-2026-05-24"
+
+[compiler]
+source = "https://gitlab.redox-os.org/redox-os/rust.git"
+source_selector_kind = "branch"
+source_selector = "redox-2026-05-24"
+release = "1.98.0-dev"
+commit = "unknown"
+llvm_version = "21.1.2"
+
+[libc]
+name = "relibc"
+source = "https://gitlab.redox-os.org/redox-os/relibc.git"
+configured_revision = "5f6afb52692e62dae79154f4dbec2d0e79a07602"
+binary_revision = "6571dca5b4a5f2619a42d4de196f8b787d649a8b"
+soname = "libc.so.6"
+dynamic_linker = "/lib/ld64.so.1"
+
+[executable]
+format = "elf"
+class = 64
+endianness = "little"
+machine = "x86_64"
+type = "shared-object"
+position_independent = true
+required_libraries = ["libc.so.6", "libgcc_s.so.1"]

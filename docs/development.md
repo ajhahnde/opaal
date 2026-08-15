@@ -122,6 +122,30 @@ redoxer --version
 
 A developer working only on portable syntax or runtime code may begin with host checks, but a change that affects target-selected code, process behavior, terminal behavior, or the shipped executable requires the target build as an additional check.
 
+### FlashOS target baseline
+
+The tracked
+[`platforms/flashos-x86_64.toml`](../platforms/flashos-x86_64.toml) file records
+the Rust target, target-compiler identity, C runtime, dynamic linker, and ELF
+contract used by FlashOS integration. Validate its source-owned fields from the
+repository root:
+
+```bash
+python3 ci/check_flashos_platform.py
+```
+
+After an image build has populated the compiler fingerprint and staged package
+trees, validate the observed toolchain, package metadata, and ELF outputs:
+
+```bash
+python3 ci/check_flashos_platform.py --artifacts
+```
+
+The artifact mode verifies the target that produced the staged `fsh`; it is not
+a replacement for target execution, QEMU qualification, or a capability
+report. Update the baseline only from an intentional toolchain, ABI, or binary
+userland transition, not merely to accept unexplained build drift.
+
 ## Workspace layout
 
 The current workspace membership is defined by [`components/flash/Cargo.toml`](../Cargo.toml). Do not treat a fixed crate count as a permanent project contract.
