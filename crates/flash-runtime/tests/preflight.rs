@@ -168,6 +168,79 @@ fn a_byte_passthrough_internal_connects_to_an_external_stage() {
 }
 
 #[test]
+fn carrier_valid_multi_island_shapes_pass_complete_preflight() {
+    let mut registry = empty();
+    registry.register(CommandSignature::new(
+        "bytes",
+        [Carrier::Empty, Carrier::ByteStream],
+        Carrier::ByteStream,
+    ));
+    let probe = FakeProbe::with(&["/bin/cat"]);
+
+    for source in [
+        "bytes | ^cat | bytes",
+        "bytes | ^cat | bytes | ^cat",
+        "^cat | bytes | ^cat | bytes",
+        "^cat | bytes | ^cat | bytes | ^cat",
+        "bytes | ^cat | bytes | ^cat | bytes",
+        "bytes | ^cat | ^cat | bytes",
+    ] {
+        check(source, &registry, &probe)
+            .unwrap_or_else(|error| panic!("preflight rejected {source:?}: {error:?}"));
+    }
+}
+
+#[test]
+fn repeated_internal_boundaries_retain_explicit_carrier_and_pipe_both_checks() {
+    let mut registry = empty();
+    registry.register(CommandSignature::new(
+        "bytes",
+        [Carrier::Empty, Carrier::ByteStream],
+        Carrier::ByteStream,
+    ));
+    registry.register(CommandSignature::new(
+        "values",
+        [Carrier::ByteStream],
+        Carrier::ValueStream,
+    ));
+    let probe = FakeProbe::with(&["/bin/cat"]);
+
+    let mismatch = check("bytes | ^cat | values | ^cat", &registry, &probe)
+        .expect_err("the later structured-to-byte boundary needs an explicit encoder");
+    assert!(matches!(
+        mismatch.kind(),
+        RuntimeErrorKind::CarrierMismatch(_)
+    ));
+
+    let merged = check("bytes | ^cat | values |& ^cat", &registry, &probe)
+        .expect_err("the repeated merged edge still needs a byte producer");
+    assert!(matches!(
+        merged.kind(),
+        RuntimeErrorKind::MergedEdgeNotByteStream { .. }
+    ));
+}
+
+#[test]
+fn internal_tail_stdout_routes_are_resolved_after_pipeline_assignment() {
+    let mut registry = empty();
+    registry.register(CommandSignature::new(
+        "bytes",
+        [Carrier::Empty],
+        Carrier::ByteStream,
+    ));
+    let probe = FakeProbe::with(&["/bin/cat"]);
+
+    let error = check("bytes 1>&2 | ^cat", &registry, &probe)
+        .expect_err("inherited stderr is not an internal byte sink");
+    assert!(matches!(error.kind(), RuntimeErrorKind::Unsupported { .. }));
+
+    check("bytes 1>&2 |& ^cat", &registry, &probe)
+        .expect("pipe-both assigns stderr before the local stdout duplicate");
+    check("bytes 1>&2 > out.bin | ^cat", &registry, &probe)
+        .expect("a later local file route replaces the unsupported duplicate");
+}
+
+#[test]
 fn a_merged_stdout_stderr_edge_requires_a_byte_producer() {
     let mut registry = empty();
     registry.register(CommandSignature::new(

@@ -674,6 +674,23 @@ For execution changes, cover more than the successful result. Relevant cases may
 - stopped and continued process observations;
 - status aggregation with and without `pipefail`.
 
+For a mixed-pipeline executor change, also cover more than one internal segment:
+
+- alternating start/end topologies and adjacent external runs;
+- large bounded streaming and downstream early close;
+- repeated carrier and `|&` preflight at every boundary;
+- source-ordered status leaves, default selection, `pipefail`, and deferred
+  external-predecessor `check`;
+- failure, cancellation, child reaping, endpoint release, and terminal
+  restoration from first, middle, and last segments;
+- pending-state commit and rollback, source-ordered closure deltas, and explicit
+  `exit`; and
+- local descriptor override/EOF plus interactive, script, and supervised
+  background-chain parity.
+
+Do not make structured streams or their pull closures cross threads merely to
+schedule another segment. The concurrent boundary is an owned byte descriptor.
+
 Do not replace a runtime error with a synthetic command status merely to simplify a test. Statuses, evaluation errors, cancellation, and platform failures are separate public outcomes.
 
 ### Keep planning side-effect free

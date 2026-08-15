@@ -303,6 +303,32 @@ fn a_script_runs_and_joins_a_background_conditional_chain() {
 }
 
 #[test]
+fn a_background_supervisor_executes_a_multi_island_pipeline() {
+    let temp = TempDir::new("background-multi-island");
+    let marker = temp.path().join("reached.txt");
+    let script = temp.script(
+        "background-multi-island.fsh",
+        &format!(
+            "^{0} exit 0 | decode bytes | encode bytes | \
+             ^{0} exit 0 | decode bytes | encode bytes | ^{0} exit 0 && \
+             ^{0} late 0 {1} 0 &\n^{0} exit 0\n",
+            status_fixture(),
+            marker.display(),
+        ),
+    );
+
+    let output = run_script(&script, temp.path(), fixture_directory());
+
+    assert!(output.status.success(), "{output:?}");
+    assert!(output.stdout.is_empty());
+    assert!(output.stderr.is_empty());
+    assert!(
+        marker.exists(),
+        "the background child shell should complete every mixed segment"
+    );
+}
+
+#[test]
 fn static_imports_are_loaded_from_the_filesystem_without_execution() {
     let temp = TempDir::new("static-import");
     let marker = temp.path().join("import-ran.txt");
@@ -630,6 +656,50 @@ fn generated_64_mib_mixed_pipeline_streams_without_capture_or_deadlock() {
 }
 
 #[test]
+fn external_internal_alternation_round_trips_text() {
+    let temp = TempDir::new("alternating-text-stream");
+    let input = b"one\ntwo\nthree\n";
+    fs::write(temp.path().join("input.txt"), input).expect("text fixture should be written");
+    let script = temp.script(
+        "alternating-text.fsh",
+        &format!(
+            "^{0} relay 0 < input.txt | decode utf8 | encode utf8 | \
+             ^{0} relay 0 | decode utf8 | encode utf8 | \
+             ^{0} relay 0 > output.txt\n",
+            stream_fixture()
+        ),
+    );
+
+    let output = run_script(&script, temp.path(), fixture_directory());
+
+    assert!(output.status.success(), "{output:?}");
+    assert!(output.stdout.is_empty());
+    assert!(output.stderr.is_empty());
+    assert_eq!(fs::read(temp.path().join("output.txt")).unwrap(), input);
+}
+
+#[test]
+fn generated_64_mib_three_island_pipeline_streams_with_bounded_consumption() {
+    let temp = TempDir::new("large-three-island-stream");
+    let script = temp.script(
+        "large-three-island.fsh",
+        &format!(
+            "^{0} source 67108864 0 | decode bytes | encode bytes | \
+             ^{0} relay 0 | decode bytes | encode bytes | \
+             ^{0} relay 0 | decode bytes | encode bytes | \
+             ^{0} sink 67108864 0\n",
+            stream_fixture()
+        ),
+    );
+
+    let output = run_script(&script, temp.path(), fixture_directory());
+
+    assert!(output.status.success(), "{output:?}");
+    assert!(output.stdout.is_empty());
+    assert!(output.stderr.is_empty());
+}
+
+#[test]
 fn a_closed_pipeline_reader_preserves_the_last_stage_status() {
     let temp = TempDir::new("broken-pipe");
     let script = temp.script(
@@ -665,6 +735,33 @@ fn a_closed_mixed_pipeline_reader_stops_the_internal_bridge() {
     assert!(output.status.success(), "{output:?}");
     assert!(output.stdout.is_empty());
     assert!(output.stderr.is_empty());
+}
+
+#[test]
+fn a_deferred_check_failure_survives_downstream_early_exit() {
+    let temp = TempDir::new("deferred-check-early-exit");
+    let marker = temp.path().join("unreached.txt");
+    let script = temp.script(
+        "deferred-check-early-exit.fsh",
+        &format!(
+            "^{0} source 1048576 7 | check | ^{1} exit 0 && \
+             ^{1} late 0 {2} 0\n",
+            stream_fixture(),
+            status_fixture(),
+            marker.display()
+        ),
+    );
+
+    let output = run_script(&script, temp.path(), fixture_directory());
+
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert!(output.stdout.is_empty());
+    assert!(!marker.exists(), "the runtime error must abort the chain");
+    let stderr = String::from_utf8(output.stderr).expect("diagnostics should be UTF-8");
+    assert!(
+        stderr.contains("checked command was unsuccessful"),
+        "{stderr}"
+    );
 }
 
 #[test]

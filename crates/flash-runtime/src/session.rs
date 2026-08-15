@@ -7,7 +7,8 @@
 //! and `export`/`unset` reuse the shared scope and environment, an all-internal
 //! pipeline moves owned structured carriers through the internal executor, and
 //! an external foreground pipeline runs through the ordinary byte executor,
-//! and one contiguous internal island streams through owned process pipes.
+//! and maximal internal segments stream concurrently through owned process
+//! pipes.
 //! Parse and runtime failures are recoverable and leave the accumulated state
 //! untouched; only a failure to write built-in output to the caller's sink is
 //! fatal.
@@ -21,7 +22,8 @@ use std::ffi::OsString;
 use std::io::{self, Write};
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Condvar, Mutex};
+use std::thread;
 
 use flash_platform::{
     DescriptorEndpoint, DescriptorReadError, DescriptorWriteError, FileOpenMode, FileOpenRequest,
@@ -39,10 +41,13 @@ use crate::builtin::{SessionState, standard_registry};
 use crate::closure::OwnedClosureContext;
 use crate::command::CommandRegistry;
 use crate::eval::{
-    Clock, Completion, EvalLimits, ExpandedWord, RuntimeError, RuntimeErrorKind,
-    evaluate_in_environment_owned_with_binding_types, expand_word,
+    CancellationToken, Clock, Completion, EvalLimits, ExpandedWord, ResourceBudget, RuntimeError,
+    RuntimeErrorKind, evaluate_in_environment_owned_with_binding_types, expand_word,
 };
-use crate::execute::{execute_foreground_status, start_mixed_pipeline};
+use crate::execute::{
+    MixedPipelineControl, MixedSegment, aggregate_statuses, execute_foreground_status,
+    start_mixed_pipeline,
+};
 use crate::internal::{
     DEFAULT_MATERIALIZATION_LIMIT, InternalPayload, InternalPipelineOutcome, StageOutcome,
     execute_internal_pipeline, execute_internal_suffix, execute_stage,
@@ -50,8 +55,8 @@ use crate::internal::{
 use crate::job::JobPlacement;
 use crate::module::RuntimeBindingTypes;
 use crate::plan::{
-    ExecutionPlan, PlannedResolution, PlannedStage, RedirectionAction, SessionOptions,
-    plan_pipeline_with_options_and_binding_types, preflight,
+    ExecutionPlan, InternalStdoutRoute, PlannedResolution, PlannedStage, SessionOptions,
+    internal_stdout_route, plan_pipeline_with_options_and_binding_types, preflight,
 };
 use crate::presentation::{
     OutputDestination, TerminalPresentation, render_table, select_terminal_presentation,
@@ -1589,141 +1594,578 @@ fn run_mixed_pipeline(
     clock: &dyn Clock,
     output: &mut dyn Write,
 ) -> Result<ChainStep, Interrupt> {
-    let first_internal = plan
+    let topology = plan
+        .mixed_topology()
+        .expect("the caller found a mixed pipeline topology");
+    let last_internal = topology
+        .internal_segments()
+        .last()
+        .expect("a mixed topology has an internal segment")
         .stages()
-        .iter()
-        .position(|stage| matches!(stage.resolution(), PlannedResolution::Internal { .. }))
-        .expect("the caller found an internal stage");
-    let last_internal = plan
-        .stages()
-        .iter()
-        .rposition(|stage| matches!(stage.resolution(), PlannedResolution::Internal { .. }))
-        .expect("the caller found an internal stage");
-    let internal = first_internal..last_internal + 1;
+        .end
+        .checked_sub(1)
+        .expect("an internal segment is nonempty");
 
     let presentation = if last_internal + 1 == plan.stages().len() {
         let final_stage = &plan.stages()[last_internal];
         let destination = output_destination(final_stage, platform)?;
-        Some(
-            select_terminal_presentation(final_stage.output_carrier(), destination).map_err(
-                |error| {
-                    RuntimeError::new(RuntimeErrorKind::Presentation(error), final_stage.span())
-                },
-            )?,
-        )
+        select_terminal_presentation(final_stage.output_carrier(), destination).map_err(
+            |error| RuntimeError::new(RuntimeErrorKind::Presentation(error), final_stage.span()),
+        )?
     } else {
         None
     };
 
-    let mut pending_state = state.clone();
-    let closure_environment = pending_state.environment().clone();
-    let closure_context = OwnedClosureContext::new(
-        source.clone(),
-        closure_environment.clone(),
-        EvalLimits::default(),
-    );
-    let mut mixed = start_mixed_pipeline(plan, platform, clock, internal.clone())?;
-    let mut payload = mixed.take_input().map_or(InternalPayload::Empty, |reader| {
-        InternalPayload::ByteStream(pipe_byte_stream(
-            reader,
-            plan.stages()[first_internal].span(),
-        ))
+    let closure_environment = state.environment().clone();
+    let preparation = Arc::new(MixedPreparation::new(state.clone()));
+    let mut mixed = start_mixed_pipeline(plan, platform, clock)?;
+    let control = mixed.control();
+    let mut segments = mixed.take_segments();
+    let final_segment = (last_internal + 1 == plan.stages().len()).then(|| {
+        segments
+            .pop()
+            .expect("the final internal segment has resources")
     });
-    let mut indexed_statuses = Vec::with_capacity(plan.stages().len());
 
-    let internal_result = (|| {
-        for index in internal {
-            let stage = &plan.stages()[index];
-            let PlannedResolution::Internal { canonical_name, .. } = stage.resolution() else {
-                return Err(Interrupt::Runtime(RuntimeError::new(
-                    RuntimeErrorKind::Unsupported {
-                        feature: "a mixed pipeline with more than one internal stage island",
-                    },
-                    stage.span(),
-                )));
-            };
-            let upstream = indexed_statuses.last().map(|(_, status)| status);
-            match execute_stage(
-                canonical_name,
-                stage,
-                payload,
-                upstream,
-                &mut pending_state,
+    let mut segment_results = thread::scope(|scope| {
+        let mut workers = Vec::with_capacity(segments.len());
+        for segment in segments {
+            let preparation = Arc::clone(&preparation);
+            let closure_environment = closure_environment.clone();
+            let control = control.clone();
+            workers.push(scope.spawn(move || {
+                let result = run_mixed_segment(
+                    segment,
+                    plan,
+                    registry,
+                    source,
+                    probe,
+                    platform,
+                    preparation,
+                    closure_environment,
+                    control.clone(),
+                    None,
+                    None,
+                );
+                if result.as_ref().is_err_and(|failure| !failure.triggered) {
+                    control.cancel_and_reap();
+                }
+                result
+            }));
+        }
+
+        let final_result = final_segment.map(|segment| {
+            let result = run_mixed_segment(
+                segment,
+                plan,
                 registry,
+                source,
                 probe,
                 platform,
-                plan.cwd(),
-                &closure_context,
-            )? {
-                StageOutcome::Completed {
-                    payload: output_payload,
-                    status,
-                } => {
-                    payload = output_payload;
-                    indexed_statuses.push((index, status));
-                }
-                StageOutcome::Exit(code) => return Ok(Some(ChainStep::Exit(code))),
+                Arc::clone(&preparation),
+                closure_environment.clone(),
+                control.clone(),
+                presentation.as_ref(),
+                Some(output),
+            );
+            if result.as_ref().is_err_and(|failure| !failure.triggered) {
+                control.cancel_and_reap();
             }
-        }
+            result
+        });
 
-        if let Some(writer) = mixed.take_output() {
-            drain_payload_to_pipe(payload, writer, plan.stages()[last_internal].span())?;
-        } else {
-            let final_stage = &plan.stages()[last_internal];
-            render_payload(
-                payload,
-                presentation
-                    .as_ref()
-                    .expect("a final internal stage selected presentation")
-                    .as_ref(),
-                final_stage.span(),
-                output,
-            )?;
+        let mut results = workers
+            .into_iter()
+            .map(|worker| {
+                worker
+                    .join()
+                    .expect("a mixed segment worker must not panic")
+            })
+            .collect::<Vec<_>>();
+        if let Some(result) = final_result {
+            results.push(result);
         }
-        Ok(None)
-    })();
+        results
+    });
 
-    let requested_exit = match internal_result {
-        Ok(exit) => exit,
-        Err(error) => {
-            mixed.terminate();
-            return Err(error);
-        }
-    };
-    if let Some(exit) = requested_exit {
+    segment_results.sort_by_key(|result| match result {
+        Ok(result) => result.ordinal(),
+        Err(failure) => failure.stage_index,
+    });
+    let requested_exit_stage = segment_results.iter().find_map(|result| match result {
+        Ok(MixedSegmentResult::Exit { stage_index, .. }) => Some(*stage_index),
+        _ => None,
+    });
+    let failure_index = segment_results
+        .iter()
+        .position(|result| {
+            matches!(
+                result,
+                Err(failure)
+                    if !failure.triggered
+                        && requested_exit_stage
+                            .is_none_or(|exit_stage| failure.stage_index < exit_stage)
+            )
+        })
+        .or_else(|| {
+            requested_exit_stage
+                .is_none()
+                .then(|| segment_results.iter().position(Result::is_err))
+                .flatten()
+        });
+    if let Some(failure_index) = failure_index {
+        let Err(failure) = segment_results.remove(failure_index) else {
+            unreachable!("the selected mixed segment result is a failure");
+        };
         mixed.terminate();
-        pending_state.environment_mut().apply_delta(
-            &closure_environment,
-            &closure_context.environment_snapshot(),
-        );
+        return Err(*failure.interrupt);
+    }
+
+    let mut pending_state = preparation
+        .state
+        .lock()
+        .expect("mixed preparation state must not be poisoned")
+        .pending_state
+        .clone();
+    let mut status_slots = StageStatusSlots::new(plan.stages().len());
+    let mut deferred_checks = Vec::new();
+    let mut requested_exit = None;
+    for result in segment_results.into_iter().flatten() {
+        match result {
+            MixedSegmentResult::Completed {
+                statuses,
+                deferred_checks: segment_checks,
+                closure_environment: updated,
+                ..
+            } => {
+                for (index, status) in statuses {
+                    status_slots.complete(index, status);
+                }
+                deferred_checks.extend(segment_checks);
+                pending_state
+                    .environment_mut()
+                    .apply_delta(&closure_environment, &updated);
+            }
+            MixedSegmentResult::Exit {
+                code,
+                closure_environment: updated,
+                ..
+            } => {
+                pending_state
+                    .environment_mut()
+                    .apply_delta(&closure_environment, &updated);
+                requested_exit = Some(code);
+            }
+            MixedSegmentResult::StoppedByExit {
+                closure_environment: updated,
+                ..
+            } => {
+                pending_state
+                    .environment_mut()
+                    .apply_delta(&closure_environment, &updated);
+            }
+            MixedSegmentResult::Skipped { .. } => {}
+        }
+    }
+    if let Some(code) = requested_exit {
+        mixed.terminate();
         *state = pending_state;
-        return Ok(exit);
+        return Ok(ChainStep::Exit(code));
     }
 
     let (external_statuses, pipeline_duration) = mixed.wait(plan, platform, clock)?;
-    indexed_statuses.extend(external_statuses);
-    indexed_statuses.sort_by_key(|(index, _)| *index);
-    let statuses: Vec<Status> = indexed_statuses
-        .into_iter()
-        .map(|(_, status)| status)
-        .collect();
-    let selected = if plan.pipefail() {
-        statuses
-            .iter()
-            .rposition(|status| !status.is_ok())
-            .unwrap_or(statuses.len() - 1)
-    } else {
-        statuses.len() - 1
-    };
-    let status = Status::aggregate(statuses, selected, pipeline_duration)
-        .expect("a mixed pipeline has source-ordered leaf statuses");
-    pending_state.set_current_status(Some(status.clone()));
-    pending_state.environment_mut().apply_delta(
-        &closure_environment,
-        &closure_context.environment_snapshot(),
+    for (index, status) in external_statuses {
+        status_slots.complete(index, status);
+    }
+    deferred_checks.sort_by_key(|check| check.check_stage);
+    for check in deferred_checks {
+        let upstream = status_slots.completed(check.upstream_stage);
+        if !upstream.is_ok() {
+            return Err(Interrupt::Runtime(RuntimeError::new(
+                RuntimeErrorKind::UnsuccessfulStatus {
+                    status: Box::new(upstream.clone()),
+                },
+                plan.stages()[check.check_stage].span(),
+            )));
+        }
+    }
+    let status = aggregate_statuses(
+        status_slots.into_statuses(),
+        plan.pipefail(),
+        pipeline_duration,
     );
+    pending_state.set_current_status(Some(status.clone()));
     *state = pending_state;
     Ok(ChainStep::Status(status))
+}
+
+enum StageStatusSlot {
+    Pending,
+    Completed(Status),
+}
+
+struct StageStatusSlots {
+    slots: Vec<StageStatusSlot>,
+}
+
+impl StageStatusSlots {
+    fn new(stage_count: usize) -> Self {
+        Self {
+            slots: std::iter::repeat_with(|| StageStatusSlot::Pending)
+                .take(stage_count)
+                .collect(),
+        }
+    }
+
+    fn complete(&mut self, index: usize, status: Status) {
+        let slot = self
+            .slots
+            .get_mut(index)
+            .expect("a mixed status index belongs to the source plan");
+        assert!(
+            matches!(slot, StageStatusSlot::Pending),
+            "a mixed source stage completes exactly once"
+        );
+        *slot = StageStatusSlot::Completed(status);
+    }
+
+    fn completed(&self, index: usize) -> &Status {
+        match self
+            .slots
+            .get(index)
+            .expect("a deferred check names a source stage")
+        {
+            StageStatusSlot::Completed(status) => status,
+            StageStatusSlot::Pending => {
+                panic!("a deferred check runs only after its upstream status completes")
+            }
+        }
+    }
+
+    fn into_statuses(self) -> Vec<Status> {
+        self.slots
+            .into_iter()
+            .map(|slot| match slot {
+                StageStatusSlot::Completed(status) => status,
+                StageStatusSlot::Pending => {
+                    panic!("a mixed pipeline aggregates only complete status slots")
+                }
+            })
+            .collect()
+    }
+}
+
+struct DeferredCheck {
+    check_stage: usize,
+    upstream_stage: usize,
+}
+
+struct MixedPreparation {
+    state: Mutex<MixedPreparationState>,
+    ready: Condvar,
+}
+
+impl MixedPreparation {
+    fn new(pending_state: SessionState) -> Self {
+        Self {
+            state: Mutex::new(MixedPreparationState {
+                next_segment: 0,
+                stopped: false,
+                requested_exit: None,
+                pending_state,
+            }),
+            ready: Condvar::new(),
+        }
+    }
+}
+
+struct MixedPreparationState {
+    next_segment: usize,
+    stopped: bool,
+    requested_exit: Option<MixedExit>,
+    pending_state: SessionState,
+}
+
+#[derive(Clone, Copy)]
+struct MixedExit {
+    ordinal: usize,
+}
+
+struct MixedSegmentFailure {
+    stage_index: usize,
+    triggered: bool,
+    interrupt: Box<Interrupt>,
+}
+
+impl MixedSegmentFailure {
+    fn runtime(
+        stage_index: usize,
+        error: RuntimeError,
+        cancellation_was_active: bool,
+        control: &MixedPipelineControl,
+    ) -> Self {
+        let triggered = cancellation_was_active
+            || (control.is_cancelled()
+                && matches!(error.kind(), RuntimeErrorKind::StreamCancelled { .. }));
+        Self {
+            stage_index,
+            triggered,
+            interrupt: Box::new(Interrupt::Runtime(error)),
+        }
+    }
+
+    fn interrupt(
+        stage_index: usize,
+        interrupt: Interrupt,
+        cancellation_was_active: bool,
+        control: &MixedPipelineControl,
+    ) -> Self {
+        let triggered = cancellation_was_active
+            || (control.is_cancelled()
+                && matches!(
+                    &interrupt,
+                    Interrupt::Runtime(error)
+                        if matches!(error.kind(), RuntimeErrorKind::StreamCancelled { .. })
+                ));
+        Self {
+            stage_index,
+            triggered,
+            interrupt: Box::new(interrupt),
+        }
+    }
+}
+
+enum MixedSegmentResult {
+    Completed {
+        ordinal: usize,
+        statuses: Vec<(usize, Status)>,
+        deferred_checks: Vec<DeferredCheck>,
+        closure_environment: Environment,
+    },
+    Exit {
+        ordinal: usize,
+        stage_index: usize,
+        code: u8,
+        closure_environment: Environment,
+    },
+    StoppedByExit {
+        ordinal: usize,
+        closure_environment: Environment,
+    },
+    Skipped {
+        ordinal: usize,
+    },
+}
+
+impl MixedSegmentResult {
+    const fn ordinal(&self) -> usize {
+        match self {
+            Self::Completed { ordinal, .. }
+            | Self::Exit { ordinal, .. }
+            | Self::StoppedByExit { ordinal, .. }
+            | Self::Skipped { ordinal } => *ordinal,
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_mixed_segment(
+    mut resource: MixedSegment,
+    plan: &ExecutionPlan,
+    registry: &CommandRegistry,
+    source: &SourceFile,
+    probe: &dyn ExecutableProbe,
+    platform: &dyn Platform,
+    preparation: Arc<MixedPreparation>,
+    closure_environment: Environment,
+    control: MixedPipelineControl,
+    presentation: Option<&TerminalPresentation>,
+    output: Option<&mut dyn Write>,
+) -> Result<MixedSegmentResult, MixedSegmentFailure> {
+    let ordinal = resource.segment().ordinal();
+    let stages = resource.segment().stages();
+    let first_stage = stages.start;
+    let last_stage = stages
+        .end
+        .checked_sub(1)
+        .expect("an internal segment is nonempty");
+    let mut payload = resource
+        .take_input()
+        .map_or(InternalPayload::Empty, |reader| {
+            InternalPayload::ByteStream(pipe_byte_stream(reader, plan.stages()[first_stage].span()))
+        });
+    let cancellation_control = control.clone();
+    let closure_context = OwnedClosureContext::new(
+        source.clone(),
+        closure_environment,
+        EvalLimits::new(
+            CancellationToken::from_fn(move || cancellation_control.is_cancelled()),
+            ResourceBudget::unlimited(),
+        ),
+    );
+    let mut statuses = Vec::with_capacity(stages.len());
+    let mut deferred_checks = Vec::new();
+
+    let mut prepared = preparation
+        .state
+        .lock()
+        .expect("mixed preparation state must not be poisoned");
+    while !prepared.stopped && prepared.next_segment != ordinal {
+        prepared = preparation
+            .ready
+            .wait(prepared)
+            .expect("mixed preparation state must not be poisoned");
+    }
+    if prepared.stopped {
+        return Ok(MixedSegmentResult::Skipped { ordinal });
+    }
+
+    for index in stages {
+        let cancellation_was_active = control.is_cancelled();
+        if cancellation_was_active {
+            prepared.stopped = true;
+            preparation.ready.notify_all();
+            return Ok(MixedSegmentResult::Skipped { ordinal });
+        }
+        let stage = &plan.stages()[index];
+        let PlannedResolution::Internal { canonical_name, .. } = stage.resolution() else {
+            unreachable!("mixed topology contains only internal segment stages");
+        };
+        let deferred_check = canonical_name == "check"
+            && index == first_stage
+            && index > 0
+            && matches!(
+                plan.stages()[index - 1].resolution(),
+                PlannedResolution::External { .. }
+            );
+        // The ordinary check path still validates its carrier and arity and
+        // creates its zero-valued leaf. This provisional status is never used
+        // as evidence: the coordinator retains the exact external dependency
+        // below and must validate it after the child has been waited.
+        let provisional_upstream = deferred_check.then(|| {
+            Status::exit(0, Duration::ZERO).expect("a deferred check placeholder is valid")
+        });
+        let upstream = provisional_upstream
+            .as_ref()
+            .or_else(|| statuses.last().map(|(_, status)| status));
+        match execute_stage(
+            canonical_name,
+            stage,
+            payload,
+            upstream,
+            &mut prepared.pending_state,
+            registry,
+            probe,
+            platform,
+            plan.cwd(),
+            &closure_context,
+        ) {
+            Ok(StageOutcome::Completed {
+                payload: output_payload,
+                status,
+            }) => {
+                payload = output_payload;
+                statuses.push((index, status));
+                if deferred_check {
+                    deferred_checks.push(DeferredCheck {
+                        check_stage: index,
+                        upstream_stage: index - 1,
+                    });
+                }
+            }
+            Ok(StageOutcome::Exit(code)) => {
+                prepared.stopped = true;
+                prepared.requested_exit = Some(MixedExit { ordinal });
+                preparation.ready.notify_all();
+                let result = MixedSegmentResult::Exit {
+                    ordinal,
+                    stage_index: index,
+                    code,
+                    closure_environment: closure_context.environment_snapshot(),
+                };
+                drop(prepared);
+                drop(resource);
+                control.cancel_and_reap();
+                return Ok(result);
+            }
+            Err(error) => {
+                prepared.stopped = true;
+                preparation.ready.notify_all();
+                return Err(MixedSegmentFailure::runtime(
+                    index,
+                    error,
+                    cancellation_was_active,
+                    &control,
+                ));
+            }
+        }
+    }
+    prepared.next_segment += 1;
+    preparation.ready.notify_all();
+    drop(prepared);
+
+    if control.is_cancelled() {
+        let requested_exit = preparation
+            .state
+            .lock()
+            .expect("mixed preparation state must not be poisoned")
+            .requested_exit;
+        if requested_exit.is_some_and(|exit| ordinal < exit.ordinal) {
+            return Ok(MixedSegmentResult::StoppedByExit {
+                ordinal,
+                closure_environment: closure_context.environment_snapshot(),
+            });
+        }
+        return Ok(MixedSegmentResult::Skipped { ordinal });
+    }
+    let cancellation_was_active = false;
+    let drained = if let Some(writer) = resource.take_output() {
+        drain_payload_to_pipe(payload, writer, plan.stages()[last_stage].span())
+    } else {
+        render_payload_with_redirection(
+            payload,
+            presentation,
+            &plan.stages()[last_stage],
+            plan.cwd(),
+            platform,
+            output.expect("a final internal segment owns the session output"),
+        )
+    };
+    if let Err(interrupt) = drained {
+        let mut prepared = preparation
+            .state
+            .lock()
+            .expect("mixed preparation state must not be poisoned");
+        prepared.stopped = true;
+        preparation.ready.notify_all();
+        if prepared
+            .requested_exit
+            .is_some_and(|exit| ordinal < exit.ordinal)
+            && matches!(
+                &interrupt,
+                Interrupt::Runtime(error)
+                    if matches!(error.kind(), RuntimeErrorKind::StreamCancelled { .. })
+            )
+        {
+            return Ok(MixedSegmentResult::StoppedByExit {
+                ordinal,
+                closure_environment: closure_context.environment_snapshot(),
+            });
+        }
+        return Err(MixedSegmentFailure::interrupt(
+            last_stage,
+            interrupt,
+            cancellation_was_active,
+            &control,
+        ));
+    }
+
+    Ok(MixedSegmentResult::Completed {
+        ordinal,
+        statuses,
+        deferred_checks,
+        closure_environment: closure_context.environment_snapshot(),
+    })
 }
 
 fn pipe_byte_stream(
@@ -1760,13 +2202,17 @@ fn drain_payload_to_pipe(
     mut writer: Box<dyn DescriptorEndpoint>,
     span: flash_syntax::Span,
 ) -> Result<(), Interrupt> {
-    let InternalPayload::ByteStream(mut bytes) = payload else {
-        return Err(Interrupt::Runtime(RuntimeError::new(
-            RuntimeErrorKind::Unsupported {
-                feature: "an implicit structured-to-external conversion",
-            },
-            span,
-        )));
+    let mut bytes = match payload {
+        InternalPayload::Empty => return Ok(()),
+        InternalPayload::ByteStream(bytes) => bytes,
+        InternalPayload::Value(_) | InternalPayload::ValueStream(_) => {
+            return Err(Interrupt::Runtime(RuntimeError::new(
+                RuntimeErrorKind::Unsupported {
+                    feature: "an implicit structured-to-external conversion",
+                },
+                span,
+            )));
+        }
     };
     loop {
         match bytes.pull() {
@@ -1831,15 +2277,10 @@ fn output_destination(
     stage: &PlannedStage,
     platform: &dyn Platform,
 ) -> Result<OutputDestination, RuntimeError> {
-    if stage.redirections().iter().any(|redirection| {
-        let descriptor = match redirection.action() {
-            RedirectionAction::Input { descriptor, .. }
-            | RedirectionAction::Output { descriptor, .. }
-            | RedirectionAction::Duplicate { descriptor, .. }
-            | RedirectionAction::Close { descriptor, .. } => descriptor,
-        };
-        *descriptor == 1
-    }) {
+    if !matches!(
+        internal_stdout_route(stage, false),
+        InternalStdoutRoute::Default
+    ) {
         return Ok(OutputDestination::Redirected);
     }
     if !platform.is_output_terminal() {
@@ -1940,71 +2381,41 @@ fn render_payload_with_redirection(
     platform: &dyn Platform,
     sink: &mut dyn Write,
 ) -> Result<(), Interrupt> {
-    enum StdoutRoute<'stage> {
-        Sink,
-        File {
-            target: &'stage ExpandedWord,
-            mode: FileOpenMode,
-        },
-        Unsupported,
-    }
-
-    let mut route = StdoutRoute::Sink;
-    for redirection in stage.redirections() {
-        match redirection.action() {
-            RedirectionAction::Output {
-                descriptor,
-                mode,
-                target,
-                ..
-            } if *descriptor == 1 => {
-                route = StdoutRoute::File {
-                    target,
-                    mode: match mode {
-                        OutputMode::Truncate => FileOpenMode::WriteTruncate,
-                        OutputMode::Append => FileOpenMode::WriteAppend,
-                    },
-                };
-            }
-            RedirectionAction::Input { descriptor, .. }
-            | RedirectionAction::Duplicate { descriptor, .. }
-            | RedirectionAction::Close { descriptor, .. }
-                if *descriptor == 1 =>
-            {
-                route = StdoutRoute::Unsupported;
-            }
-            _ => {}
+    match internal_stdout_route(stage, false) {
+        InternalStdoutRoute::Default => render_payload(payload, presentation, stage.span(), sink),
+        InternalStdoutRoute::File { target, mode } => {
+            drain_payload_to_redirected_file(payload, target, mode, stage, cwd, platform)
         }
-    }
-
-    match route {
-        StdoutRoute::Sink => render_payload(payload, presentation, stage.span(), sink),
-        StdoutRoute::File { target, mode } => {
-            let endpoint = platform
-                .open_file(FileOpenRequest::new(Path::new(target.value()), cwd, mode))
-                .map_err(|error| {
-                    Interrupt::Runtime(RuntimeError::new(
-                        RuntimeErrorKind::RedirectionSetup(error),
-                        target.span(),
-                    ))
-                })?;
-            match payload {
-                InternalPayload::Empty => Ok(()),
-                bytes @ InternalPayload::ByteStream(_) => {
-                    drain_payload_to_pipe(bytes, endpoint, stage.span())
-                }
-                InternalPayload::Value(_) | InternalPayload::ValueStream(_) => {
-                    unreachable!("structured output redirection is rejected before execution")
-                }
-            }
-        }
-        StdoutRoute::Unsupported => Err(Interrupt::Runtime(RuntimeError::new(
+        InternalStdoutRoute::Unsupported => Err(Interrupt::Runtime(RuntimeError::new(
             RuntimeErrorKind::Unsupported {
-                feature: "this stdout redirection on an internal byte stream",
+                feature: "this resolved stdout route on an internal byte stream",
             },
             stage.span(),
         ))),
     }
+}
+
+fn drain_payload_to_redirected_file(
+    payload: InternalPayload,
+    target: &ExpandedWord,
+    mode: OutputMode,
+    stage: &PlannedStage,
+    cwd: &Path,
+    platform: &dyn Platform,
+) -> Result<(), Interrupt> {
+    let mode = match mode {
+        OutputMode::Truncate => FileOpenMode::WriteTruncate,
+        OutputMode::Append => FileOpenMode::WriteAppend,
+    };
+    let endpoint = platform
+        .open_file(FileOpenRequest::new(Path::new(target.value()), cwd, mode))
+        .map_err(|error| {
+            Interrupt::Runtime(RuntimeError::new(
+                RuntimeErrorKind::RedirectionSetup(error),
+                target.span(),
+            ))
+        })?;
+    drain_payload_to_pipe(payload, endpoint, stage.span())
 }
 
 /// Present one consecutive run of records as a single width-aware table.

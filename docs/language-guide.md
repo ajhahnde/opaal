@@ -1033,6 +1033,13 @@ External processes consume and produce byte streams. Internal commands declare t
 
 A pipeline may alternate between external byte-stream stages and internal typed stages any number of times. Each edge is checked independently; there is no language-level limit of one internal stage island. Every transition must still use carriers accepted by both adjacent stages.
 
+Each maximal internal segment owns its structured carriers and lazy closure
+state. Segments may drain concurrently across external byte boundaries, but
+internal stage preparation, session-state effects, closure-delta commit, and
+status aggregation remain deterministic in source order. Successful completion
+commits pending in-memory session state once; an execution failure discards it
+without claiming to roll back bytes, files, or process effects already observed.
+
 Flash does not automatically:
 
 - decode bytes as text;

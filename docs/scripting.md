@@ -603,6 +603,34 @@ The external stages remain byte-oriented, while each internal island keeps its s
 
 Interactive rendering of a record, list, or table is for human inspection. It is not a stable serialization format. Use an explicit encoder or formatter when a file or external process requires bytes.
 
+### Alternating mixed pipelines
+
+Flash executes every carrier-compatible alternating shape without capturing an
+external segment into memory. External children start first, then maximal
+internal segments drain concurrently through bounded operating-system pipes.
+Structured values and lazy pull closures stay inside the internal segment that
+owns them; only byte descriptors cross a concurrent segment boundary.
+
+Internal stage preparation remains source ordered. Session commands therefore
+apply cwd and child-environment changes deterministically even when segment
+drains overlap. Lazy closure changes are visible within their segment and merge
+in segment source order only after the complete pipeline succeeds.
+
+On normal completion, every source stage contributes exactly one status leaf.
+A `check` immediately after an external stage forwards its bytes before
+waiting, then checks that stage's real completion status after all bytes have
+drained. A failed check, runtime error, output failure, or wait failure prevents
+pending cwd, environment, closure, and status changes from committing. Output
+already written, files already changed, and completed process effects are not
+rolled back.
+
+Failure or explicit `exit` stops later preparation, closes owned endpoints,
+terminates and waits live external children, and restores terminal ownership.
+When independent stages fail concurrently, the earliest source-stage failure
+is reported. A downstream consumer closing early remains ordinary pipeline
+backpressure cleanup rather than fabricated success or an implicit status
+conversion.
+
 ### Pipeline completion
 
 Every normally completed stage has its own status. A multi-stage pipeline additionally produces an aggregate status whose stage list remains in source order.
@@ -682,6 +710,12 @@ Only standard error reaches `consumer`.
 ```
 
 The consumer reads `input.dat` instead of the pipe.
+
+The same rule applies to an internal byte-producing segment tail. If its final
+stdout route is a local file, Flash writes the bytes there and closes the unused
+pipeline writer, so the downstream external stage observes EOF. A final
+inherited, read-only, or closed stdout binding that the internal executor cannot
+write is rejected during preflight.
 
 An upstream process whose pipe no longer has a reader retains its real completion result, including a possible broken-pipe signal. This is not reported as a redirection setup failure.
 

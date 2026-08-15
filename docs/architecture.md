@@ -553,28 +553,71 @@ Command substitution and other capture paths drain output concurrently with chil
 
 ### Mixed pipelines
 
-The current mixed executor supports one contiguous island of internal stages surrounded by external stages:
+The mixed executor partitions a plan into maximal internal segments and
+individual external stages. There is no topology limit on how many times they
+alternate:
 
 ```text
-external prefix
-    ↓ byte pipe
-internal stage island
-    ↓ byte pipe
-external suffix
+external === byte pipe === [internal segment] === byte pipe === external
+   === byte pipe === [internal segment] === byte pipe === external
 ```
 
-External-to-external edges remain ordinary operating-system pipes. The two edges adjacent to the internal island retain a parent-owned endpoint so the runtime can pull bytes from the prefix or push bytes into the suffix without materializing the entire stream.
+Complete preflight validates every carrier edge and descriptor route before the
+executor creates a pipe, opens a target, or starts a child. External-to-external
+edges remain ordinary operating-system pipes. Every edge touching an internal
+segment retains exactly the parent-owned endpoint that segment needs.
 
-A structured carrier cannot cross an external boundary directly. The internal island must produce or consume a byte carrier through an explicit codec or format command.
+All external children start before internal draining begins. Nonterminal
+internal segments drain on scoped workers; a final internal segment remains on
+the session thread so its output sink does not acquire a cross-thread
+requirement. Each segment creates, transforms, and destroys its own structured
+payload. Only owned byte-descriptor endpoints and immutable plan data cross a
+worker boundary, so lazy `ByteStream` and `ValueStream` pull closures remain
+single-threaded.
 
-The one-island shape is an implementation constraint of the current session-thread bridge, not a language-semantic restriction. The Flash v1 contract permits any number of alternating internal and external segments when every adjacent carrier is compatible. Before the v1 runtime contract is frozen, the executor must generalize this bridge while preserving bounded streaming, backpressure, cancellation, cleanup, transactional session state, and source-ordered aggregate status.
+A source-order sequencer admits internal stage preparation deterministically
+while already prepared segments drain concurrently through bounded pipes.
+Session built-ins update one pending state under that sequencer. Lazy closure
+environments remain segment-local and merge into the pending environment in
+segment source order only after the complete pipeline succeeds.
+
+The coordinator owns one status slot per source stage. Worker completion order
+cannot reorder the aggregate. A `check` immediately after an external stage
+forwards bytes without waiting, then validates that exact predecessor after
+child completion; an unsuccessful deferred check is the ordinary structured
+runtime error and prevents state commit.
+
+Success commits pending cwd, environment, closure deltas, and aggregate status
+once, after every segment drain, final output, child wait, deferred assertion,
+and status slot succeeds. Runtime, cancellation, output, or wait failure
+discards that in-memory transaction. Bytes already displayed, files already
+changed, and process effects remain observable because they are not
+transactional.
+
+One shared failure controller owns every external child until all segment
+workers quiesce. A genuine segment or output failure closes endpoints,
+cooperatively cancels peers, terminates and waits children, and selects the
+earliest source-stage failure rather than a scheduler-race winner. `BrokenPipe`
+at an internal-to-external boundary remains ordinary downstream early
+completion. Explicit `exit` stops later preparation, cleans up children, and
+commits only source-prior admitted state before returning its requested code.
+
+Pipeline assignment still precedes local redirection. A byte-producing segment
+tail either drains to its external successor or to its final resolved local
+file route; an overridden pipe writer is dropped so the successor observes EOF.
+Unsupported internal descriptor shapes fail preflight. A structured carrier
+cannot cross an external boundary directly and still requires an explicit codec
+or format command.
 
 This architecture preserves:
 
 - ordinary streaming for external programs;
 - structured lazy evaluation between internal stages;
-- bounded bridging at the two representation boundaries;
-- one aggregate status in original stage order.
+- bounded bridging at every repeated representation boundary;
+- deterministic source-ordered preparation and aggregate status;
+- transactional in-memory session state without false rollback claims for
+  external effects; and
+- exact child, endpoint, and terminal cleanup on every exit route.
 
 ### Terminal presentation
 
@@ -823,6 +866,12 @@ Cleanup failures do not automatically replace the more informative originating f
 Preflight prevents many failures before execution begins, but process and filesystem execution is not a transaction.
 
 For example, a source-ordered redirection may successfully create or truncate one file before a later file action fails. Flash cleans up owned resources, but it does not claim to reverse completed operating-system side effects.
+
+Mixed execution does use one pending in-memory session transaction. Cwd,
+environment, closure deltas, and aggregate status become caller-visible only
+after final output, child waits, deferred checks, and status construction all
+succeed. That narrower transaction does not include bytes already written,
+filesystem changes, or process activity.
 
 ## Safety and portability boundaries
 

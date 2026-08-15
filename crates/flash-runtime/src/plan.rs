@@ -15,6 +15,7 @@
 
 use std::collections::BTreeSet;
 use std::ffi::OsStr;
+use std::ops::Range;
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -53,7 +54,172 @@ pub struct ExecutionPlan {
     span: Span,
 }
 
+/// The maximal internal segments and external stages in one mixed plan.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct MixedTopology {
+    internal_segments: Vec<InternalSegment>,
+    external_indices: Vec<usize>,
+}
+
+impl MixedTopology {
+    pub(crate) fn internal_segments(&self) -> &[InternalSegment] {
+        &self.internal_segments
+    }
+
+    pub(crate) fn external_indices(&self) -> &[usize] {
+        &self.external_indices
+    }
+}
+
+/// One maximal source-ordered range of internal stages in a mixed plan.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct InternalSegment {
+    ordinal: usize,
+    stages: Range<usize>,
+}
+
+/// The final standard-output destination of an internal segment tail.
+///
+/// Pipeline assignment is applied before the stage's source-ordered local
+/// redirections. The mixed executor uses this result to decide whether the
+/// tail still drains into its external successor or into a local file.
+pub(crate) enum InternalStdoutRoute<'a> {
+    /// The initially assigned pipeline or session output remains selected.
+    Default,
+    /// A local byte-file redirection replaced the initially assigned output.
+    File {
+        target: &'a ExpandedWord,
+        mode: OutputMode,
+    },
+    /// The resolved binding is not a writable byte destination the internal
+    /// executor supports.
+    Unsupported,
+}
+
+#[derive(Clone, Copy)]
+enum InternalDescriptorRoute<'a> {
+    DefaultOutput,
+    Inherited,
+    InputFile,
+    OutputFile {
+        target: &'a ExpandedWord,
+        mode: OutputMode,
+    },
+}
+
+/// Resolve an internal segment tail's stdout after pipeline assignment and
+/// local redirections have applied from left to right.
+pub(crate) fn internal_stdout_route(
+    stage: &PlannedStage,
+    merge_pipeline_output: bool,
+) -> InternalStdoutRoute<'_> {
+    let mut bindings = std::collections::BTreeMap::from([
+        (0, InternalDescriptorRoute::Inherited),
+        (1, InternalDescriptorRoute::DefaultOutput),
+        (
+            2,
+            if merge_pipeline_output {
+                InternalDescriptorRoute::DefaultOutput
+            } else {
+                InternalDescriptorRoute::Inherited
+            },
+        ),
+    ]);
+
+    for redirection in stage.redirections() {
+        match redirection.action() {
+            RedirectionAction::Input { descriptor, .. } => {
+                bindings.insert(*descriptor, InternalDescriptorRoute::InputFile);
+            }
+            RedirectionAction::Output {
+                descriptor,
+                target,
+                mode,
+                ..
+            } => {
+                bindings.insert(
+                    *descriptor,
+                    InternalDescriptorRoute::OutputFile {
+                        target,
+                        mode: *mode,
+                    },
+                );
+            }
+            RedirectionAction::Duplicate {
+                descriptor, source, ..
+            } => {
+                let Some(route) = bindings.get(source).copied() else {
+                    return InternalStdoutRoute::Unsupported;
+                };
+                bindings.insert(*descriptor, route);
+            }
+            RedirectionAction::Close { descriptor, .. } => {
+                bindings.remove(descriptor);
+            }
+        }
+    }
+
+    match bindings.get(&1) {
+        Some(InternalDescriptorRoute::DefaultOutput) => InternalStdoutRoute::Default,
+        Some(InternalDescriptorRoute::OutputFile { target, mode }) => InternalStdoutRoute::File {
+            target,
+            mode: *mode,
+        },
+        Some(InternalDescriptorRoute::Inherited | InternalDescriptorRoute::InputFile) | None => {
+            InternalStdoutRoute::Unsupported
+        }
+    }
+}
+
+impl InternalSegment {
+    pub(crate) const fn ordinal(&self) -> usize {
+        self.ordinal
+    }
+
+    pub(crate) fn stages(&self) -> Range<usize> {
+        self.stages.clone()
+    }
+}
+
 impl ExecutionPlan {
+    /// Partition a mixed plan into maximal internal segments and external stages.
+    ///
+    /// All-internal and all-external plans retain their dedicated executors and
+    /// therefore do not have a mixed topology.
+    pub(crate) fn mixed_topology(&self) -> Option<MixedTopology> {
+        let mut internal_segments = Vec::new();
+        let mut external_indices = Vec::new();
+        let mut open_segment = None;
+
+        for (index, stage) in self.stages.iter().enumerate() {
+            match stage.resolution() {
+                PlannedResolution::Internal { .. } => {
+                    open_segment.get_or_insert(index);
+                }
+                PlannedResolution::External { .. } => {
+                    if let Some(start) = open_segment.take() {
+                        internal_segments.push(InternalSegment {
+                            ordinal: internal_segments.len(),
+                            stages: start..index,
+                        });
+                    }
+                    external_indices.push(index);
+                }
+            }
+        }
+        if let Some(start) = open_segment {
+            internal_segments.push(InternalSegment {
+                ordinal: internal_segments.len(),
+                stages: start..self.stages.len(),
+            });
+        }
+
+        (!internal_segments.is_empty() && !external_indices.is_empty()).then_some(MixedTopology {
+            internal_segments,
+            external_indices,
+        })
+    }
+
     /// Build a one-stage external plan whose argument vector is already known.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn single_external(
@@ -1029,8 +1195,9 @@ fn descriptor_value(number: IoNumber, source: &SourceFile) -> Result<u32, Runtim
 /// Preflight rejects the statically detectable faults: a NUL byte in any argv
 /// argument or redirection target (no external argv or platform path can carry
 /// it), a descriptor duplication whose source is not open in the stage's
-/// descriptor map, a pipeline head whose command cannot begin a pipeline (it
-/// does not accept an empty input), and an incompatible pipeline edge (a
+/// descriptor map, an unsupported resolved stdout route at an internal segment
+/// tail, a pipeline head whose command cannot begin a pipeline (it does not
+/// accept an empty input), and an incompatible pipeline edge (a
 /// producer carrier the consumer does not accept, or a merged stdout+stderr edge
 /// whose producer is not a byte stream). A carrier mismatch carries an
 /// actionable diagnostic naming both commands, the accepted carrier set, and the
@@ -1038,11 +1205,43 @@ fn descriptor_value(number: IoNumber, source: &SourceFile) -> Result<u32, Runtim
 /// capability validation occurs at execution time so this pass remains
 /// platform-independent.
 pub fn preflight(plan: &ExecutionPlan) -> Result<(), RuntimeError> {
-    for stage in plan.stages() {
+    for (index, stage) in plan.stages().iter().enumerate() {
         check_nul(stage)?;
         check_descriptor_ownership(stage)?;
+        check_internal_stdout_route(plan, index, stage)?;
     }
     check_carriers(plan)?;
+    Ok(())
+}
+
+fn check_internal_stdout_route(
+    plan: &ExecutionPlan,
+    index: usize,
+    stage: &PlannedStage,
+) -> Result<(), RuntimeError> {
+    if !matches!(stage.resolution(), PlannedResolution::Internal { .. })
+        || plan
+            .stages()
+            .get(index + 1)
+            .is_some_and(|next| matches!(next.resolution(), PlannedResolution::Internal { .. }))
+    {
+        return Ok(());
+    }
+    let merge_pipeline_output = plan
+        .edges()
+        .get(index)
+        .is_some_and(|edge| edge.kind() == PipeOperator::StdoutAndStderr);
+    if matches!(
+        internal_stdout_route(stage, merge_pipeline_output),
+        InternalStdoutRoute::Unsupported
+    ) {
+        return Err(RuntimeError::new(
+            RuntimeErrorKind::Unsupported {
+                feature: "this resolved stdout route on an internal byte stream",
+            },
+            stage.span(),
+        ));
+    }
     Ok(())
 }
 
@@ -1176,4 +1375,94 @@ fn check_descriptor_ownership(stage: &PlannedStage) -> Result<(), RuntimeError> 
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use flash_syntax::SourceId;
+
+    fn topology_plan(kinds: &str) -> ExecutionPlan {
+        let source = SourceFile::new(SourceId::new(1), "topology.fsh", kinds);
+        let stages = kinds
+            .char_indices()
+            .map(|(index, kind)| PlannedStage {
+                resolution: match kind {
+                    'I' => PlannedResolution::Internal {
+                        source_name: format!("internal-{index}"),
+                        canonical_name: format!("internal-{index}"),
+                    },
+                    'E' => PlannedResolution::External {
+                        path: PathBuf::from(format!("/bin/external-{index}")),
+                    },
+                    other => panic!("unexpected topology stage {other:?}"),
+                },
+                input_carriers: BTreeSet::from([Carrier::ByteStream]),
+                output_carrier: Carrier::ByteStream,
+                argv: Vec::new(),
+                arguments: Vec::new(),
+                redirections: Vec::new(),
+                help: None,
+                span: source
+                    .span(index..index + 1)
+                    .expect("a topology stage has a valid span"),
+            })
+            .collect::<Vec<_>>();
+        let edges = (0..stages.len().saturating_sub(1))
+            .map(|index| PipelineEdge {
+                kind: PipeOperator::Stdout,
+                operator_span: source
+                    .span(index..index + 1)
+                    .expect("a topology edge has a valid span"),
+            })
+            .collect();
+        ExecutionPlan {
+            cwd: PathBuf::from("/work"),
+            environment: Environment::new(),
+            stages,
+            edges,
+            pipefail: false,
+            capture_limit: SessionOptions::DEFAULT_CAPTURE_LIMIT,
+            process_group_policy: ProcessGroupPolicy::Isolate,
+            span: source
+                .span(0..kinds.len())
+                .expect("a topology plan has a valid span"),
+        }
+    }
+
+    #[test]
+    fn mixed_topology_partitions_maximal_internal_segments() {
+        let cases = [
+            ("I", None),
+            ("III", None),
+            ("E", None),
+            ("EEE", None),
+            ("IEI", Some((vec![0..1, 2..3], vec![1]))),
+            ("IEIE", Some((vec![0..1, 2..3], vec![1, 3]))),
+            ("EIEI", Some((vec![1..2, 3..4], vec![0, 2]))),
+            ("EIE", Some((std::iter::once(1..2).collect(), vec![0, 2]))),
+            ("IEEI", Some((vec![0..1, 3..4], vec![1, 2]))),
+            ("IIEEIIEII", Some((vec![0..2, 4..6, 7..9], vec![2, 3, 6]))),
+            (
+                "EIIEEIIEIIE",
+                Some((vec![1..3, 5..7, 8..10], vec![0, 3, 4, 7, 10])),
+            ),
+        ];
+
+        for (kinds, expected) in cases {
+            let actual = topology_plan(kinds).mixed_topology().map(|topology| {
+                let segments = topology
+                    .internal_segments()
+                    .iter()
+                    .enumerate()
+                    .map(|(ordinal, segment)| {
+                        assert_eq!(segment.ordinal(), ordinal, "topology {kinds}");
+                        segment.stages()
+                    })
+                    .collect::<Vec<_>>();
+                (segments, topology.external_indices().to_vec())
+            });
+            assert_eq!(actual, expected, "topology {kinds}");
+        }
+    }
 }

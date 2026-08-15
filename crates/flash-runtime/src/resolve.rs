@@ -19,7 +19,7 @@ use crate::command::{CommandClassification, CommandRegistry, CommandSignature};
 ///
 /// The runtime supplies only this capability to resolution; the real
 /// executable, regular-file, and permission checks live in the platform adapter.
-pub trait ExecutableProbe {
+pub trait ExecutableProbe: Send + Sync {
     /// Whether `path` names a file that can be executed.
     fn is_executable(&self, path: &OsStr) -> bool;
 }

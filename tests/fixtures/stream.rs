@@ -44,14 +44,25 @@ fn relay(arguments: &[String]) -> ExitCode {
 fn sink(arguments: &[String]) -> ExitCode {
     let expected = parse(arguments, 2);
     let code = parse(arguments, 3) as u8;
-    let mut bytes = Vec::new();
-    if io::stdin().lock().read_to_end(&mut bytes).is_err()
-        || bytes.len() != expected
-        || bytes.iter().any(|byte| *byte != b'x')
-    {
-        return ExitCode::from(93);
+    let mut stdin = io::stdin().lock();
+    let mut chunk = [0; 16 * 1024];
+    let mut received = 0;
+    loop {
+        let amount = match stdin.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(amount) => amount,
+            Err(_) => return ExitCode::from(93),
+        };
+        if chunk[..amount].iter().any(|byte| *byte != b'x') {
+            return ExitCode::from(93);
+        }
+        received += amount;
     }
-    ExitCode::from(code)
+    if received == expected {
+        ExitCode::from(code)
+    } else {
+        ExitCode::from(93)
+    }
 }
 
 fn both(arguments: &[String]) -> ExitCode {

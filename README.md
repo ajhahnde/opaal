@@ -44,6 +44,12 @@ The component follows several implementation boundaries:
 
 The public Flash documentation defines the intended v1 language, runtime, and tooling contract. That contract covers the existing value, command, pipeline, status, and job model together with maintainable multi-file scripts, explicit module boundaries and initializer effects, a stable built-in namespace compatibility policy, script arguments, typed function metadata, discoverable help, canonical formatting, non-executing static checks, language-server integration, and explicit platform capabilities.
 
+Carrier-compatible pipelines may alternate between external byte stages and
+internal typed segments any number of times. Flash preserves bounded streaming,
+explicit representation changes, source-ordered status and state semantics,
+transactional in-memory commit, and exact failure cleanup across every repeated
+boundary without making lazy structured streams cross threads.
+
 Flash v1 is the language-completion baseline, not a checkpoint that knowingly leaves foundational semantic or executor-topology restrictions for a later release. Post-v1 development may add compatible capabilities, diagnostics, tooling, and optimizations, while incompatible language redesign belongs to an explicit future major-version decision.
 
 A particular FlashOS release may expose only the parts of that contract that are implemented and qualified for its target environment. Unsupported or unqualified capabilities must remain visible rather than being silently replaced with weaker host-specific behavior.
