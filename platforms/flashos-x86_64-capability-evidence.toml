@@ -1,0 +1,396 @@
+# Evidence inventory for comparing Flash's portable capability contract with
+# the current x86_64 FlashOS integration path. This file records observations;
+# it does not classify a capability as native, adapted, unsupported, or as
+# requiring kernel work.
+
+schema_version = 1
+platform = "flashos"
+architecture = "x86_64"
+target = "x86_64-unknown-redox"
+platform_baseline = "flashos-x86_64.toml"
+contract_source = "components/flash/crates/flash-platform/src/lib.rs"
+selected_adapter = "flash-platform-posix::PosixPlatform"
+classification = "deferred"
+
+[[source_evidence]]
+id = "redox-selects-posix"
+path = "components/flash/crates/flash-cli/src/main.rs"
+markers = [
+  '#[cfg(target_os = "redox")]',
+  'use flash_cli::TerminalEditor;',
+  'let platform = PosixPlatform;',
+]
+observation = "The Redox executable path instantiates PosixPlatform and its target-only terminal editor."
+
+[[source_evidence]]
+id = "adapter-declares-full"
+path = "components/flash/crates/flash-platform-posix/src/lib.rs"
+markers = [
+  "impl Platform for PosixPlatform",
+  "fn capabilities(&self) -> Capabilities",
+  "Capabilities::full()",
+]
+observation = "The currently selected adapter advertises every contract capability; this declaration is a claim to compare, not target evidence by itself."
+
+[[source_evidence]]
+id = "process-environment"
+path = "components/flash/crates/flash-cli/src/main.rs"
+markers = [
+  "fn process_environment() -> Environment",
+  "env::vars_os()",
+  "Environment::from_snapshot",
+]
+observation = "Flash snapshots the process environment with native values before session creation."
+
+[[source_evidence]]
+id = "adapter-process-request"
+path = "components/flash/crates/flash-platform-posix/src/lib.rs"
+markers = [
+  "fn spawn(&self, request: &SpawnRequest<'_>)",
+  ".arg0(&request.argv()[0])",
+  ".env_clear()",
+  ".current_dir(cwd)",
+]
+observation = "The selected adapter passes explicit argv, the complete requested environment, and the requested working directory to a direct child spawn."
+
+[[source_evidence]]
+id = "adapter-working-directory"
+path = "components/flash/crates/flash-platform-posix/src/lib.rs"
+markers = [
+  "fn resolve_working_directory",
+  "std::fs::canonicalize(candidate)",
+  "metadata.is_dir()",
+]
+observation = "The selected adapter resolves a logical request and validates that the result is a directory."
+
+[[source_evidence]]
+id = "adapter-file-actions"
+path = "components/flash/crates/flash-platform-posix/src/lib.rs"
+markers = [
+  "fn open_file(",
+  "fn open_file_io(",
+  "fn inherit_descriptor(",
+  "closed_descriptors()",
+]
+observation = "The selected adapter owns redirection opens, in-process file transfer, deliberate inherited descriptors, and explicit child closes."
+
+[[source_evidence]]
+id = "adapter-pipes"
+path = "components/flash/crates/flash-platform-posix/src/lib.rs"
+markers = [
+  "fn pipe(&self) -> Result<PipeEndpoints, PipeError>",
+  "io::pipe()",
+  "fn read_descriptor(",
+]
+observation = "The selected adapter creates owned anonymous endpoints and exposes synchronous descriptor reads."
+
+[[source_evidence]]
+id = "adapter-process-lifecycle"
+path = "components/flash/crates/flash-platform-posix/src/lib.rs"
+markers = [
+  "impl ChildProcess for PosixChild",
+  "fn wait(&mut self) -> Result<ProcessStatus, WaitError>",
+  "fn wait_for_transition(&mut self)",
+  "fn terminate(&mut self) -> Result<(), TerminateError>",
+]
+observation = "The selected adapter owns child completion, transition observation, termination, and final reaping."
+
+[[source_evidence]]
+id = "runtime-process-groups"
+path = "components/flash/crates/flash-runtime/src/execute.rs"
+markers = [
+  "if platform.capabilities().supports(Capability::ProcessGroups)",
+  "ProcessGroup::New",
+  "ProcessGroup::Join(group)",
+]
+observation = "The runtime requests a new group for an isolated pipeline and joins later members to the reported leader group."
+
+[[source_evidence]]
+id = "adapter-process-groups"
+path = "components/flash/crates/flash-platform-posix/src/lib.rs"
+markers = [
+  "request.process_group().requires_capability()",
+  "process_group::configure",
+  "process_group::adopt",
+]
+observation = "The selected adapter performs requested child group placement and reports the resulting group."
+
+[[source_evidence]]
+id = "runtime-foreground-terminal"
+path = "components/flash/crates/flash-runtime/src/execute.rs"
+markers = [
+  "pub(crate) fn take_foreground",
+  "platform.enter_foreground(group)",
+  "pub(crate) fn release_foreground",
+]
+observation = "The runtime conditionally hands a terminal to the established group and explicitly restores it after waiting."
+
+[[source_evidence]]
+id = "adapter-foreground-terminal"
+path = "components/flash/crates/flash-platform-posix/src/lib.rs"
+markers = [
+  "fn foreground_process_group",
+  "fn enter_foreground(",
+  "foreground_terminal::hand_over",
+]
+observation = "The selected adapter queries, transfers, and restores foreground terminal ownership."
+
+[[source_evidence]]
+id = "adapter-signals"
+path = "components/flash/crates/flash-platform-posix/src/lib.rs"
+markers = [
+  "fn install_job_control_signals",
+  "fn signal_process_group(",
+  "job_control_signals::install()",
+  "process_signals::deliver(group, signal)",
+]
+observation = "The selected adapter installs shell signal dispositions and sends the portable outbound set to a process group."
+
+[[source_evidence]]
+id = "adapter-terminal-info"
+path = "components/flash/crates/flash-platform-posix/src/lib.rs"
+markers = [
+  "fn is_terminal(&self) -> bool",
+  "fn is_output_terminal(&self) -> bool",
+  "fn terminal_size(&self)",
+  "fn enter_raw_mode(&self)",
+]
+observation = "The selected adapter detects both terminal ends, reads size, and owns raw-mode entry and restoration."
+
+[[source_evidence]]
+id = "runtime-monotonic-clock"
+path = "components/flash/crates/flash-runtime/src/eval.rs"
+markers = [
+  "pub trait Clock: Send + Sync",
+  "pub struct SystemClock",
+  "origin: SystemInstant",
+  "self.origin.elapsed()",
+]
+observation = "Flash currently obtains monotonic readings from a runtime clock seam rather than a Platform method."
+
+[[source_evidence]]
+id = "redox-standard-directories-gap"
+path = "components/flash/crates/flash-cli/src/main.rs"
+markers = [
+  "fn run_interactive(_no_config: bool, _no_history: bool)",
+  "ConfigPlatform::current()",
+  "HistoryPlatform::current()",
+]
+observation = "The Redox interactive path accepts but ignores config/history switches, while standard-directory selectors are used only by the macOS/Linux path."
+
+[[source_evidence]]
+id = "adapter-directory-read"
+path = "components/flash/crates/flash-platform-posix/src/lib.rs"
+markers = [
+  "fn read_directory(",
+  "fs::read_dir(path)",
+  "PosixDirectoryStream",
+]
+observation = "The selected adapter opens a lazy standard-library directory iterator."
+
+[[source_evidence]]
+id = "adapter-shell-executable"
+path = "components/flash/crates/flash-platform-posix/src/lib.rs"
+markers = [
+  "fn shell_executable(&self)",
+  "std::env::current_exe()",
+]
+observation = "The selected adapter asks the standard library for the running executable path."
+
+[[source_evidence]]
+id = "adapter-hangup-disposition"
+path = "components/flash/crates/flash-platform-posix/src/lib.rs"
+markers = [
+  "fn ignore_hangup(&self)",
+  "hangup_disposition::ignore()",
+]
+observation = "The selected adapter installs an ignored hang-up disposition for a background chain supervisor."
+
+[[runtime_evidence]]
+id = "qemu-pipeline"
+path = "ci/qemu_smoke.py"
+markers = [
+  "send(b\"printf 'hallo\\\\nwelt\\\\n' | head -n 1\\r\")",
+  'collect_until(b"hallo", shell_start)',
+]
+observation = "The current image streams bytes through an external pipeline and returns to the prompt."
+
+[[runtime_evidence]]
+id = "qemu-terminal-editor"
+path = "ci/qemu_smoke.py"
+markers = [
+  "# Interactive editing. This is the only place the raw-mode editor is proven",
+  'edit_mark = submit_line(b"echo hallo\x7f\x7fx", b">> echo halx")',
+  'send(b"\x03")',
+]
+observation = "The current image enters the target-only raw editor, handles byte editing and recall, and restores an empty prompt after Ctrl-C abandons input."
+
+[[runtime_evidence]]
+id = "qemu-process-status"
+path = "ci/qemu_smoke.py"
+markers = [
+  "# Exit status reaches the || branch.",
+  'b"^false || echo fellback"',
+  'collect_until(b"fellback", status_mark)',
+]
+observation = "The current image directly spawns an external command, observes its nonzero completion, and evaluates the fallback branch."
+
+[[runtime_evidence]]
+id = "qemu-file-actions"
+path = "ci/qemu_smoke.py"
+markers = [
+  'b"echo persisted > /home/user/smoke.txt"',
+  'b"cat /home/user/smoke.txt"',
+  'b"echo nope > /etc/smoke.txt"',
+]
+observation = "The current image performs a successful redirection and readback and observes a denied redirection outside the user boundary."
+
+[[runtime_evidence]]
+id = "qemu-foreground-return"
+path = "ci/qemu_smoke.py"
+markers = [
+  "# A direct non-zero external completion must return through the managed",
+  'b"cat /home/user/definitely-missing"',
+  'collect_until(EMPTY_PROMPT_ROW, missing_mark)',
+]
+observation = "The current interactive image returns from a direct foreground child failure to a usable prompt through the managed foreground path."
+
+[[capability]]
+name = "environment"
+rust_variant = "Environment"
+requirements = ["snapshot native process variables", "mutate the session child environment", "install the complete native child environment"]
+source_evidence = ["redox-selects-posix", "process-environment", "adapter-process-request", "adapter-declares-full"]
+runtime_evidence = []
+source_observation = "The selected path snapshots native values and installs the complete requested environment for children."
+runtime_observation = "No current FlashOS target-runtime evidence checks environment preservation or mutation."
+classification = "deferred"
+
+[[capability]]
+name = "working-directory"
+rust_variant = "WorkingDirectory"
+requirements = ["read the startup directory", "resolve and validate a logical directory", "select a child working directory"]
+source_evidence = ["redox-selects-posix", "adapter-working-directory", "adapter-process-request", "adapter-declares-full"]
+runtime_evidence = []
+source_observation = "The selected path reads the process directory and the adapter resolves, validates, and applies child directories."
+runtime_observation = "No current FlashOS target-runtime evidence changes directory or checks child cwd."
+classification = "deferred"
+
+[[capability]]
+name = "file-actions"
+rust_variant = "FileActions"
+requirements = ["open redirection targets", "duplicate and inherit owned descriptors", "close unused child descriptors", "stream files in-process"]
+source_evidence = ["redox-selects-posix", "adapter-file-actions", "adapter-declares-full"]
+runtime_evidence = ["qemu-file-actions"]
+source_observation = "The selected adapter contains the required owned redirection and descriptor operations."
+runtime_observation = "The current image proves ordinary output redirection, readback, removal, and a denied write; it does not exhaust descriptor duplication or append/input modes."
+classification = "deferred"
+
+[[capability]]
+name = "pipes"
+rust_variant = "Pipes"
+requirements = ["create one anonymous byte pipe", "own and close both endpoints", "read and write bounded chunks"]
+source_evidence = ["redox-selects-posix", "adapter-pipes", "adapter-declares-full"]
+runtime_evidence = ["qemu-pipeline"]
+source_observation = "The selected adapter creates and operates on owned anonymous pipe endpoints."
+runtime_observation = "The current image proves one external byte pipeline; it does not independently qualify closure, backpressure, or cancellation behavior."
+classification = "deferred"
+
+[[capability]]
+name = "process-spawn"
+rust_variant = "ProcessSpawn"
+requirements = ["spawn a resolved executable with exact argv", "wait for completion and transitions", "terminate and reap on cleanup"]
+source_evidence = ["redox-selects-posix", "adapter-process-request", "adapter-process-lifecycle", "adapter-declares-full"]
+runtime_evidence = ["qemu-pipeline", "qemu-process-status", "qemu-file-actions", "qemu-foreground-return"]
+source_observation = "The selected adapter implements direct requests and owned child lifecycle operations."
+runtime_observation = "The current image proves several direct child spawns and completion statuses; it does not qualify every argv byte case, transition, or cleanup failure."
+classification = "deferred"
+
+[[capability]]
+name = "process-groups"
+rust_variant = "ProcessGroups"
+requirements = ["make the first pipeline child a group leader", "join later children to that group", "report the established group"]
+source_evidence = ["redox-selects-posix", "runtime-process-groups", "adapter-process-groups", "adapter-declares-full"]
+runtime_evidence = ["qemu-foreground-return"]
+source_observation = "The runtime requests group isolation and the selected adapter contains placement/reporting operations."
+runtime_observation = "The foreground-return smoke path exercises the grouped interactive path indirectly; it does not observe group identity or multi-member membership."
+classification = "deferred"
+
+[[capability]]
+name = "foreground-terminal"
+rust_variant = "ForegroundTerminal"
+requirements = ["query the current terminal owner", "hand the terminal to a process group", "restore the previous owner"]
+source_evidence = ["redox-selects-posix", "runtime-foreground-terminal", "adapter-foreground-terminal", "adapter-declares-full"]
+runtime_evidence = ["qemu-foreground-return"]
+source_observation = "The runtime and selected adapter contain guarded terminal handoff and explicit restoration."
+runtime_observation = "The current image returns from a managed direct foreground child to the prompt; it does not directly observe the owner before, during, and after handoff."
+classification = "deferred"
+
+[[capability]]
+name = "signals"
+rust_variant = "Signals"
+requirements = ["install and restore shell job-control dispositions", "send the portable signal set to a group", "observe stopped, continued, exited, and signaled child transitions"]
+source_evidence = ["redox-selects-posix", "adapter-signals", "adapter-process-lifecycle", "adapter-declares-full"]
+runtime_evidence = []
+source_observation = "The selected adapter contains signal disposition, group delivery, and child transition operations."
+runtime_observation = "No current FlashOS target-runtime evidence signals an external job or observes stop, continue, or signaled completion."
+classification = "deferred"
+
+[[capability]]
+name = "terminal-info"
+rust_variant = "TerminalInfo"
+requirements = ["detect terminal input and output independently", "read terminal dimensions", "enter and restore raw input mode"]
+source_evidence = ["redox-selects-posix", "adapter-terminal-info", "adapter-declares-full"]
+runtime_evidence = ["qemu-terminal-editor"]
+source_observation = "The selected target path and adapter contain terminal detection, sizing, raw-mode entry, and restoration."
+runtime_observation = "The current image proves target-only raw editing, recall, multiline input, Ctrl-C abandonment, and prompt recovery; it does not assert a non-default terminal size."
+classification = "deferred"
+
+[[capability]]
+name = "monotonic-clock"
+rust_variant = "MonotonicClock"
+requirements = ["read a nondecreasing monotonic instant", "timestamp process and job events", "drive cancellation deadlines"]
+source_evidence = ["runtime-monotonic-clock", "redox-selects-posix", "adapter-declares-full"]
+runtime_evidence = []
+source_observation = "Flash uses std::time::Instant behind a runtime Clock seam; the Platform capability currently has no method."
+runtime_observation = "No current FlashOS target-runtime evidence observes timestamps, elapsed time, or deadline behavior."
+classification = "deferred"
+
+[[capability]]
+name = "standard-directories"
+rust_variant = "StandardDirectories"
+requirements = ["discover home, configuration, cache, and state locations", "preserve native path values", "define target-specific fallback conventions"]
+source_evidence = ["redox-standard-directories-gap", "redox-selects-posix", "adapter-declares-full"]
+runtime_evidence = []
+source_observation = "The Redox path currently disables config/history integration and has no Redox directory convention despite the adapter's full declaration."
+runtime_observation = "No current FlashOS target-runtime evidence loads configuration, persists history, or discovers cache/state paths."
+classification = "deferred"
+
+[[capability]]
+name = "directory-read"
+rust_variant = "DirectoryRead"
+requirements = ["open a directory relative to logical cwd", "advance a lazy entry stream", "preserve native names, entry kind, and regular-file size"]
+source_evidence = ["redox-selects-posix", "adapter-directory-read", "adapter-declares-full"]
+runtime_evidence = []
+source_observation = "The selected adapter delegates lazy directory iteration and metadata projection to the standard library."
+runtime_observation = "No current FlashOS target-runtime evidence executes Flash directory enumeration."
+classification = "deferred"
+
+[[capability]]
+name = "shell-executable"
+rust_variant = "ShellExecutable"
+requirements = ["resolve the running shell executable independently of argv zero", "preserve a native absolute path suitable for supervisor re-execution"]
+source_evidence = ["redox-selects-posix", "adapter-shell-executable", "adapter-declares-full"]
+runtime_evidence = []
+source_observation = "The selected adapter delegates executable discovery to std::env::current_exe."
+runtime_observation = "No current FlashOS target-runtime evidence starts a background conditional-chain supervisor that re-executes Flash."
+classification = "deferred"
+
+[[capability]]
+name = "hangup-disposition"
+rust_variant = "HangupDisposition"
+requirements = ["ignore hang-up in the background chain supervisor", "keep the supervisor alive until its child is reaped"]
+source_evidence = ["redox-selects-posix", "adapter-hangup-disposition", "adapter-declares-full"]
+runtime_evidence = []
+source_observation = "The selected adapter contains a process-wide ignored hang-up operation used by the chain supervisor."
+runtime_observation = "No current FlashOS target-runtime evidence sends hang-up to a background chain and observes final reaping."
+classification = "deferred"

@@ -146,6 +146,23 @@ a replacement for target execution, QEMU qualification, or a capability
 report. Update the baseline only from an intentional toolchain, ABI, or binary
 userland transition, not merely to accept unexplained build drift.
 
+The adjacent
+[`platforms/flashos-x86_64-capability-evidence.toml`](../platforms/flashos-x86_64-capability-evidence.toml)
+file compares the complete portable capability enum with the current Redox
+executable path, selected adapter source, and existing FlashOS QEMU
+observations. Validate its source markers and evidence references from the
+repository root:
+
+```bash
+python3 ci/check_flashos_capabilities.py
+```
+
+This inventory is deliberately not a support matrix. A source method or a
+full-capability declaration does not establish target behavior, and a missing
+runtime observation does not establish that the target is incapable of the
+operation. Keep classification, ABI-operation mapping, and new runtime claims
+in their own reviewed changes with the evidence those claims require.
+
 ## Workspace layout
 
 The current workspace membership is defined by [`components/flash/Cargo.toml`](../Cargo.toml). Do not treat a fixed crate count as a permanent project contract.

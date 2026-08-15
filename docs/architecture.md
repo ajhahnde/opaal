@@ -720,6 +720,16 @@ the ELF headers of the staged `fsh` and C runtime. These facts establish target
 identity only. They do not classify a platform capability as supported or
 prove that a capability works at runtime.
 
+The separate
+[`flashos-x86_64-capability-evidence.toml`](../platforms/flashos-x86_64-capability-evidence.toml)
+inventory compares every current `Capability` variant with the source path
+selected by the Redox executable and with observations already made by the
+FlashOS QEMU contract. It records requirements, source observations, runtime
+observations, and explicit evidence gaps without turning them into support
+classifications. In particular, the selected adapter's full-capability
+declaration remains a claim under comparison; it is not accepted as target
+qualification merely because the same code passes on Linux or macOS.
+
 ### Test adapters
 
 The platform crate also provides deterministic fake and recording adapters.
