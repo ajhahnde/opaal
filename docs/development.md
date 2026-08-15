@@ -193,7 +193,10 @@ The current classification records 38 native operations and one
 three-operation FlashOS policy shim for standard-directory selection. No
 operation is deliberately unsupported or requires kernel work. These verdicts
 select implementation routes; every capability remains pending target-runtime
-qualification, so the classification does not make a support claim.
+qualification, so the classification does not make a support claim. The
+`flash-platform-flashos` crate implements the classified routes and directory
+policy, but its capability set remains empty and the executable does not select
+it until later bring-up and target qualification.
 
 ## Workspace layout
 
@@ -207,6 +210,7 @@ The principal implementation responsibilities are:
 | Values, scopes, evaluation, functions, command metadata, planning, pipelines, modules, sessions, and jobs | `flash-runtime` and shared analysis interfaces |
 | Portable operating-system capability contracts and deterministic test adapters | `flash-platform` |
 | Unix-like process, descriptor, filesystem, signal, and terminal operations | `flash-platform-posix` |
+| FlashOS target policy, classified route composition, and qualification-gated adapter | `flash-platform-flashos` |
 | CLI modes, interactive editing, configuration, history, tooling entry points, and executable assembly | `flash-cli` |
 | Versioned overlays, JSON-RPC/LSP projection, stdio framing, and language-server assembly | `flash-lsp` |
 
@@ -784,7 +788,7 @@ Side effects belong to the executor after successful planning and preflight.
 
 Changes to capability contracts, owned process handles, descriptors, clocks, directory streams, or test adapters belong in `flash-platform`.
 
-Changes that call concrete operating-system interfaces belong in `flash-platform-posix`.
+Changes that call shared Unix-like operating-system interfaces belong in `flash-platform-posix`. FlashOS-specific policy, route composition, and qualification state belong in `flash-platform-flashos`; target details must not move into `flash-runtime`.
 
 Run the platform-contract tests with:
 
@@ -796,6 +800,12 @@ Run the concrete-adapter tests with:
 
 ```bash
 cargo test -p flash-platform-posix --locked
+```
+
+Run the FlashOS adapter and policy tests with:
+
+```bash
+cargo test -p flash-platform-flashos --locked
 ```
 
 The concrete adapter tests exercise behavior such as:
@@ -1261,6 +1271,7 @@ Also verify:
 
 - abstract platform tests;
 - concrete-adapter tests;
+- FlashOS adapter and standard-directory policy tests when the target boundary changes;
 - deterministic fixture coverage;
 - CLI or PTY coverage where applicable;
 - resource cleanup and restoration;

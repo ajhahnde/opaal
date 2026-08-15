@@ -52,6 +52,9 @@ flash-platform-posix = { path = "../flash-platform-posix" }
 flash-runtime = { path = "../flash-runtime" }
 flash-syntax = { path = "../flash-syntax" }
 
+[target.'cfg(target_os = "redox")'.dependencies]
+flash-platform-flashos = { path = "../flash-platform-flashos" }
+
 [target.'cfg(any(target_os = "macos", target_os = "linux"))'.dependencies]
 fd-lock = "=4.0.4"
 nu-ansi-term = "=0.50.3"

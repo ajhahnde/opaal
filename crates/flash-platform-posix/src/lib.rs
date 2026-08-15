@@ -1,20 +1,20 @@
 #![deny(unsafe_code)]
 
-//! POSIX platform adapter for Flash.
+//! Unix-like platform primitives for Flash.
 //!
-//! macOS and Linux provide every Flash platform capability. The concrete
-//! descriptor and direct-spawn primitives are implemented here; pipeline,
-//! redirection, process-group, and terminal behavior is built out as the
-//! features that need it land. The adapter reports the full capability set so
-//! the runtime resolves internal-vs-external and plan preflight against a
-//! truthful host profile.
+//! [`PosixPlatform`] is the concrete macOS/Linux adapter and reports the full
+//! capability set for those hosts. The dedicated FlashOS adapter also composes
+//! the classified Rust and `relibc` routes implemented here, while owning its
+//! target policy and qualification state separately.
 
 use std::any::Any;
 use std::collections::BTreeSet;
+use std::ffi::OsStr;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd};
 use std::os::unix::process::CommandExt;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 
 use flash_platform::{
@@ -23,8 +23,9 @@ use flash_platform::{
     DirectoryReadRequest, DirectoryStream, FileActionError, FileIoEndpoint, FileOpenMode,
     FileOpenRequest, ForegroundTerminalGuard, JobControlSignalGuard, JobSignal, PipeEndpoints,
     PipeError, Platform, PlatformError, ProcessGroupId, ProcessStatus, ProcessTransition,
-    SignalError, SpawnError, SpawnRequest, TerminalModeGuard, TerminalSize, TerminateError,
-    WaitError, WorkingDirectoryError, WorkingDirectoryRequest,
+    SignalError, SpawnError, SpawnRequest, StandardDirectories, StandardDirectoryEnvironment,
+    TerminalModeGuard, TerminalSize, TerminateError, WaitError, WorkingDirectoryError,
+    WorkingDirectoryRequest,
 };
 
 /// A uniquely owned POSIX descriptor with close-on-exec discipline.
@@ -294,6 +295,26 @@ impl Platform for PosixPlatform {
         hangup_disposition::ignore()
     }
 
+    fn standard_directories(
+        &self,
+        environment: &dyn StandardDirectoryEnvironment,
+    ) -> Result<StandardDirectories, PlatformError> {
+        self.require(Capability::StandardDirectories)?;
+        let home = absolute_environment_path(environment, "HOME").ok_or_else(|| {
+            PlatformError::Unavailable {
+                capability: Capability::StandardDirectories,
+                reason: "HOME does not name an absolute directory".to_owned(),
+            }
+        })?;
+        let config = absolute_environment_path(environment, "XDG_CONFIG_HOME")
+            .unwrap_or_else(|| host_config_root(&home));
+        let cache = absolute_environment_path(environment, "XDG_CACHE_HOME")
+            .unwrap_or_else(|| host_cache_root(&home));
+        let state = absolute_environment_path(environment, "XDG_STATE_HOME")
+            .unwrap_or_else(|| host_state_root(&home));
+        Ok(StandardDirectories::new(home, config, cache, state))
+    }
+
     fn signal_process_group(
         &self,
         group: ProcessGroupId,
@@ -507,6 +528,46 @@ impl Platform for PosixPlatform {
             })
             .map_err(spawn_error)
     }
+}
+
+fn absolute_environment_path(
+    environment: &dyn StandardDirectoryEnvironment,
+    name: &str,
+) -> Option<PathBuf> {
+    environment
+        .value(OsStr::new(name))
+        .filter(|value| !value.is_empty() && Path::new(value).is_absolute())
+        .map(PathBuf::from)
+}
+
+#[cfg(target_os = "macos")]
+fn host_config_root(home: &Path) -> PathBuf {
+    home.join("Library/Application Support")
+}
+
+#[cfg(not(target_os = "macos"))]
+fn host_config_root(home: &Path) -> PathBuf {
+    home.join(".config")
+}
+
+#[cfg(target_os = "macos")]
+fn host_cache_root(home: &Path) -> PathBuf {
+    home.join("Library/Caches")
+}
+
+#[cfg(not(target_os = "macos"))]
+fn host_cache_root(home: &Path) -> PathBuf {
+    home.join(".cache")
+}
+
+#[cfg(target_os = "macos")]
+fn host_state_root(home: &Path) -> PathBuf {
+    home.join("Library/Application Support")
+}
+
+#[cfg(not(target_os = "macos"))]
+fn host_state_root(home: &Path) -> PathBuf {
+    home.join(".local/state")
 }
 
 fn clone_avoiding_targets(

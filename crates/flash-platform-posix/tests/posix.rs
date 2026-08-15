@@ -15,9 +15,20 @@ use flash_platform::{
     Capability, ChildDescriptor, DirectoryEntry, DirectoryEntryKind, DirectoryReadError,
     DirectoryReadRequest, FileOpenMode, FileOpenRequest, JobSignal, Platform, PlatformError,
     ProcessGroup, ProcessGroupId, ProcessStatus, ProcessTransition, SignalError, SpawnError,
-    SpawnRequest, TerminalSize, WorkingDirectoryError, WorkingDirectoryRequest,
+    SpawnRequest, StandardDirectoryEnvironment, TerminalSize, WorkingDirectoryError,
+    WorkingDirectoryRequest,
 };
 use flash_platform_posix::{OwnedDescriptor, PosixPlatform};
+
+struct DirectoryEnvironment(Vec<(OsString, OsString)>);
+
+impl StandardDirectoryEnvironment for DirectoryEnvironment {
+    fn value(&self, name: &OsStr) -> Option<OsString> {
+        self.0
+            .iter()
+            .find_map(|(key, value)| (key == name).then(|| value.clone()))
+    }
+}
 
 #[test]
 fn posix_platform_supports_every_capability() {
@@ -40,6 +51,34 @@ fn the_adapter_names_the_running_executable() {
     let expected = std::env::current_exe().expect("the test binary has a path");
 
     assert_eq!(reported, expected);
+}
+
+#[test]
+fn posix_standard_directories_preserve_absolute_native_overrides() {
+    let environment = DirectoryEnvironment(vec![
+        (OsString::from("HOME"), OsString::from("/users/test")),
+        (
+            OsString::from("XDG_CONFIG_HOME"),
+            OsString::from("/native/config"),
+        ),
+        (
+            OsString::from("XDG_CACHE_HOME"),
+            OsString::from("/native/cache"),
+        ),
+        (
+            OsString::from("XDG_STATE_HOME"),
+            OsString::from("/native/state"),
+        ),
+    ]);
+
+    let directories = PosixPlatform
+        .standard_directories(&environment)
+        .expect("the POSIX host selects all standard directories");
+
+    assert_eq!(directories.home(), Path::new("/users/test"));
+    assert_eq!(directories.config(), Path::new("/native/config"));
+    assert_eq!(directories.cache(), Path::new("/native/cache"));
+    assert_eq!(directories.state(), Path::new("/native/state"));
 }
 
 #[test]

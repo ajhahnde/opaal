@@ -5,6 +5,7 @@ members = [
     "crates/flash-runtime",
     "crates/flash-lsp",
     "crates/flash-platform",
+    "crates/flash-platform-flashos",
     "crates/flash-platform-posix",
     "crates/flash-cli",
 ]

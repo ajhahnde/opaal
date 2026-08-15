@@ -113,6 +113,7 @@ Flash is a nested Cargo workspace rooted at [`components/flash/`](../Cargo.toml)
 | Values, scopes, evaluation, functions, command metadata, planning, pipelines, sessions, jobs, module analysis, and shared semantic services | [`flash-runtime`](../crates/flash-runtime/) and syntax-owned analysis interfaces |
 | Portable operating-system capability contracts and deterministic test adapters | [`flash-platform`](../crates/flash-platform/) |
 | Unix-like process, descriptor, filesystem, signal, and terminal integration | [`flash-platform-posix`](../crates/flash-platform-posix/) |
+| FlashOS target policy, route composition, and qualification-gated adapter | [`flash-platform-flashos`](../crates/flash-platform-flashos/) |
 | Command-line modes, interactive front ends, configuration, history, tooling entry points, and `fsh` assembly | [`flash-cli`](../crates/flash-cli/) |
 | Versioned document overlays, JSON-RPC/LSP projection, stdio framing, and `flash-language-server` assembly | [`flash-lsp`](../crates/flash-lsp/) |
 
@@ -685,9 +686,11 @@ Restoration is also performed when a guard is dropped, providing a cleanup bound
 
 A concrete adapter implements the abstract platform capability contract for one operating-system environment.
 
-[`flash-platform-posix`](../crates/flash-platform-posix/src/lib.rs) provides the Unix-like host and target integration used by the current executable where that adapter is selected. Its behavior on Linux or macOS is host evidence, not automatic FlashOS qualification.
+[`flash-platform-posix`](../crates/flash-platform-posix/src/lib.rs) provides the Unix-like process, descriptor, filesystem, signal, and terminal routes used by the current executable. Its behavior on Linux or macOS is host evidence, not automatic FlashOS qualification.
 
-The v1 architecture also reserves a FlashOS-specific adapter role. That adapter maps Flash capabilities to the actual FlashOS ABI and classifies each capability as native, adapted, deliberately unsupported, temporarily unavailable, or not yet qualified. A concrete public implementation is referenced only when it is part of the current workspace.
+[`flash-platform-flashos`](../crates/flash-platform-flashos/src/lib.rs) is the dedicated FlashOS adapter. It composes the 38 classified existing Rust and `relibc` routes behind the portable contract and owns the shimmed standard-directory policy: absolute native `HOME` and XDG roots are preserved, while missing or relative values receive deterministic FlashOS home, configuration, cache, and state fallbacks. These target details do not enter `flash-runtime`.
+
+The Redox-target `fsh` dependency graph compiles the FlashOS adapter, but the executable does not select it yet. Its public capability set remains empty until later target-runtime qualification enables individual groups. This keeps implementation, selection, and behavioral support claims as separate reviewable steps.
 
 The runtime depends only on the abstract capability contract. It must not silently emulate a missing target capability with weaker POSIX behavior. Release and target evidence determine which adapter capabilities may be claimed publicly.
 
@@ -750,7 +753,9 @@ native-path preservation, and fallback policy are shimmed because FlashOS must
 define and wire an explicit target convention over existing filesystem
 primitives. No current operation is deliberately unsupported or requires
 kernel work. All target-runtime qualification remains pending; an architectural
-route verdict is not a behavioral support claim.
+route verdict is not a behavioral support claim. The dedicated adapter now
+implements those routes without enabling any capability or changing the
+executable's selected adapter.
 
 ### Test adapters
 
@@ -1007,6 +1012,7 @@ Use the following files when evaluating or changing an architectural contract:
 | Job identities and states                             | [`job.rs`](../crates/flash-runtime/src/job.rs)                                      |
 | Platform capabilities and test adapters               | [`flash-platform/src/lib.rs`](../crates/flash-platform/src/lib.rs)                     |
 | Concrete Unix-like platform operations                | [`flash-platform-posix/src/lib.rs`](../crates/flash-platform-posix/src/lib.rs)         |
+| FlashOS adapter and standard-directory policy         | [`flash-platform-flashos/src/lib.rs`](../crates/flash-platform-flashos/src/lib.rs)     |
 | CLI assembly and target selection                     | [`flash-cli/src/main.rs`](../crates/flash-cli/src/main.rs)                             |
 | Interactive editor contract                           | [`editor.rs`](../crates/flash-cli/src/editor.rs)                                       |
 | Interactive control loop                              | [`interactive.rs`](../crates/flash-cli/src/interactive.rs)                             |

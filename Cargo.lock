@@ -173,6 +173,7 @@ version = "0.1.0"
 dependencies = [
  "fd-lock",
  "flash-platform",
+ "flash-platform-flashos",
  "flash-platform-posix",
  "flash-runtime",
  "flash-syntax",
@@ -194,6 +195,14 @@ dependencies = [
 [[package]]
 name = "flash-platform"
 version = "0.1.0"
+
+[[package]]
+name = "flash-platform-flashos"
+version = "0.1.0"
+dependencies = [
+ "flash-platform",
+ "flash-platform-posix",
+]
 
 [[package]]
 name = "flash-platform-posix"

@@ -1,0 +1,15 @@
+[package]
+name = "flash-platform-flashos"
+description = "FlashOS platform adapter for Flash"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+flash-platform = { path = "../flash-platform" }
+flash-platform-posix = { path = "../flash-platform-posix" }
+
+[lints]
+workspace = true

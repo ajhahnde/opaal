@@ -1,6 +1,6 @@
 //! Acceptance tests for the platform capability foundation.
 
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::path::Path;
 
 use flash_platform::{
@@ -10,8 +10,16 @@ use flash_platform::{
     FileOpenRequest, JobControlSignalGuard, JobSignal, NoopJobControlSignalGuard, PipeEndpoints,
     PipeError, Platform, PlatformError, ProcessGroup, ProcessGroupId, ProcessStatus,
     ProcessTransition, RecordingPlatform, SignalError, SpawnError, SpawnRequest, SpawnRequestError,
-    WorkingDirectoryError, WorkingDirectoryRequest,
+    StandardDirectoryEnvironment, WorkingDirectoryError, WorkingDirectoryRequest,
 };
+
+struct EmptyDirectoryEnvironment;
+
+impl StandardDirectoryEnvironment for EmptyDirectoryEnvironment {
+    fn value(&self, _name: &OsStr) -> Option<OsString> {
+        None
+    }
+}
 
 #[test]
 fn fake_platform_reports_its_scripted_capability_set() {
@@ -88,6 +96,25 @@ fn full_supports_every_capability_and_empty_supports_none() {
             "empty unexpectedly has {capability:?}",
         );
     }
+}
+
+#[test]
+fn fake_standard_directories_are_native_and_capability_gated() {
+    let directories = FakePlatform::full()
+        .standard_directories(&EmptyDirectoryEnvironment)
+        .expect("the full fake exposes deterministic directories");
+
+    assert_eq!(directories.home(), Path::new("/home/fake"));
+    assert_eq!(directories.config(), Path::new("/home/fake/.config"));
+    assert_eq!(directories.cache(), Path::new("/home/fake/.cache"));
+    assert_eq!(directories.state(), Path::new("/home/fake/.local/state"));
+
+    assert_eq!(
+        FakePlatform::none().standard_directories(&EmptyDirectoryEnvironment),
+        Err(PlatformError::Unsupported {
+            capability: Capability::StandardDirectories,
+        }),
+    );
 }
 
 #[test]

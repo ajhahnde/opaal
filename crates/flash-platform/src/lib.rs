@@ -183,6 +183,62 @@ impl fmt::Display for PlatformError {
 
 impl std::error::Error for PlatformError {}
 
+/// Native environment lookup used by platform-owned directory policy.
+///
+/// The caller supplies the process or session environment, while each adapter
+/// owns the variable names, validation, and fallback convention it understands.
+/// This keeps XDG, macOS, and FlashOS policy out of portable runtime code.
+pub trait StandardDirectoryEnvironment {
+    /// Return one native environment value without lossy text conversion.
+    fn value(&self, name: &OsStr) -> Option<OsString>;
+}
+
+/// The native per-user roots selected by one platform adapter.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StandardDirectories {
+    home: PathBuf,
+    config: PathBuf,
+    cache: PathBuf,
+    state: PathBuf,
+}
+
+impl StandardDirectories {
+    /// Build one complete standard-directory selection.
+    #[must_use]
+    pub fn new(home: PathBuf, config: PathBuf, cache: PathBuf, state: PathBuf) -> Self {
+        Self {
+            home,
+            config,
+            cache,
+            state,
+        }
+    }
+
+    /// The selected home directory.
+    #[must_use]
+    pub fn home(&self) -> &Path {
+        &self.home
+    }
+
+    /// The selected per-user configuration root.
+    #[must_use]
+    pub fn config(&self) -> &Path {
+        &self.config
+    }
+
+    /// The selected per-user cache root.
+    #[must_use]
+    pub fn cache(&self) -> &Path {
+        &self.cache
+    }
+
+    /// The selected per-user persistent state root.
+    #[must_use]
+    pub fn state(&self) -> &Path {
+        &self.state
+    }
+}
+
 /// One uniquely owned descriptor resource returned by a platform adapter.
 ///
 /// Child descriptor maps borrow endpoints opaquely. An anonymous-pipe endpoint
@@ -1233,6 +1289,19 @@ pub trait Platform: Send + Sync {
         })
     }
 
+    /// Select native per-user home, configuration, cache, and state roots.
+    fn standard_directories(
+        &self,
+        environment: &dyn StandardDirectoryEnvironment,
+    ) -> Result<StandardDirectories, PlatformError> {
+        self.require(Capability::StandardDirectories)?;
+        let _ = environment;
+        Err(PlatformError::Unavailable {
+            capability: Capability::StandardDirectories,
+            reason: "the adapter does not implement standard-directory discovery".to_owned(),
+        })
+    }
+
     /// Resolve and validate one logical working directory.
     fn resolve_working_directory(
         &self,
@@ -1410,6 +1479,20 @@ impl Platform for FakePlatform {
 
     fn ignore_hangup(&self) -> Result<(), PlatformError> {
         self.require(Capability::HangupDisposition)
+    }
+
+    fn standard_directories(
+        &self,
+        _environment: &dyn StandardDirectoryEnvironment,
+    ) -> Result<StandardDirectories, PlatformError> {
+        self.require(Capability::StandardDirectories)?;
+        let home = PathBuf::from("/home/fake");
+        Ok(StandardDirectories::new(
+            home.clone(),
+            home.join(".config"),
+            home.join(".cache"),
+            home.join(".local/state"),
+        ))
     }
 
     fn resolve_working_directory(
@@ -1774,6 +1857,13 @@ impl Platform for RecordingPlatform {
 
     fn ignore_hangup(&self) -> Result<(), PlatformError> {
         self.inner.ignore_hangup()
+    }
+
+    fn standard_directories(
+        &self,
+        environment: &dyn StandardDirectoryEnvironment,
+    ) -> Result<StandardDirectories, PlatformError> {
+        self.inner.standard_directories(environment)
     }
 
     fn resolve_working_directory(

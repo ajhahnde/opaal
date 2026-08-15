@@ -1,6 +1,6 @@
 [package]
 name = "flash-platform-posix"
-description = "macOS and Linux platform adapter for Flash"
+description = "Unix-like platform primitives for Flash"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
