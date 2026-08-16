@@ -80,6 +80,91 @@ fn successful_config_commits_bindings_functions_and_exports_atomically() {
 }
 
 #[test]
+fn successful_config_commits_typed_session_and_editor_settings_without_leaking_bindings() {
+    let source = Source::text(
+        "$pipefail = true\n$capture_limit = 0\n$completion = false\n$history = false\n",
+    );
+    let startup = initialize_config(
+        request(),
+        &Home,
+        &source,
+        &defaults(),
+        &ConfigLimits::test_default(),
+    )
+    .expect("valid settings should commit");
+
+    assert_eq!(startup.metadata().status(), ConfigStatus::Loaded);
+    assert!(startup.session_options().pipefail());
+    assert_eq!(startup.session_options().capture_limit(), 0);
+    assert!(!startup.interactive_settings().completion());
+    assert!(!startup.interactive_settings().history());
+    for name in ["pipefail", "capture_limit", "completion", "history"] {
+        assert!(
+            startup.scope().get(name).is_none(),
+            "config-only binding {name:?} must not enter the live scope"
+        );
+    }
+}
+
+#[test]
+fn a_reserved_setting_in_host_defaults_is_a_typed_fatal_error() {
+    let mut scope = ScopeStack::new();
+    scope
+        .declare("pipefail", BindingMutability::Immutable, Value::Bool(false))
+        .unwrap();
+    let defaults = ConfigDefaults::new(scope, Environment::new());
+
+    let result = initialize_config(
+        request(),
+        &Home,
+        &Source::text("$pipefail = true\n"),
+        &defaults,
+        &ConfigLimits::test_default(),
+    );
+
+    assert!(matches!(result, Err(ConfigFatalError::InvalidDefaults(_))));
+}
+
+#[test]
+fn invalid_settings_roll_back_scope_environment_options_and_editor_state() {
+    for source in [
+        "$pipefail = 1\n",
+        "$capture_limit = -1\n",
+        "$completion = 'yes'\n",
+        "$history = null\n",
+    ] {
+        let startup = initialize_config(
+            request(),
+            &Home,
+            &Source::text(&format!(
+                "let partial = 2\nexport MODE = 'partial'\n{source}"
+            )),
+            &defaults(),
+            &ConfigLimits::test_default(),
+        )
+        .expect("a config setting failure should enter safe mode");
+
+        assert_eq!(startup.metadata().status(), ConfigStatus::SafeMode);
+        assert_eq!(
+            startup.metadata().failure().map(|failure| failure.kind()),
+            Some(ConfigFailureKind::ConfigEvaluation)
+        );
+        assert!(startup.metadata().failure().unwrap().span().is_some());
+        assert!(startup.scope().get("partial").is_none());
+        assert_eq!(startup.environment().get("MODE"), Some(OsStr::new("base")));
+        assert_eq!(
+            startup.session_options(),
+            flash_runtime::plan::SessionOptions::default()
+        );
+        assert!(startup.interactive_settings().completion());
+        assert!(startup.interactive_settings().history());
+        for name in ["pipefail", "capture_limit", "completion", "history"] {
+            assert!(startup.scope().get(name).is_none());
+        }
+    }
+}
+
+#[test]
 fn parse_and_evaluation_failures_discard_the_complete_overlay() {
     for (source, expected) in [
         ("let unfinished =", ConfigFailureKind::ConfigParse),

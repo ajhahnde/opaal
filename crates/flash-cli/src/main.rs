@@ -17,6 +17,7 @@ use flash_cli::ReedlineEditor;
 use flash_cli::TerminalEditor;
 use flash_cli::check::{CheckRequest, HostCheckFilesystem, check_source};
 use flash_cli::cli::{Mode, parse_args};
+use flash_cli::completion::{CompletionCatalog, CompletionSnapshotLimits, live_completion_catalog};
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 use flash_cli::config::{
     ConfigDefaults, ConfigFatalError, ConfigInvocation, ConfigLimits, ConfigPlatform,
@@ -235,6 +236,10 @@ fn run_interactive(no_config: bool, no_history: bool) -> ExitCode {
             eprintln!("fsh: startup configuration was cancelled");
             return ExitCode::FAILURE;
         }
+        Err(ConfigFatalError::InvalidDefaults(detail)) => {
+            eprintln!("fsh: cannot initialize startup defaults: {detail}");
+            return ExitCode::FAILURE;
+        }
     };
 
     // A safe-mode diagnostic is written before the first prompt is ever drawn.
@@ -243,7 +248,7 @@ fn run_interactive(no_config: bool, no_history: bool) -> ExitCode {
     }
 
     let selection = match select_history(
-        no_history,
+        no_history || !startup.interactive_settings().history(),
         HistoryPlatform::current(),
         &ProcessHistoryEnvironment,
     ) {
@@ -265,9 +270,9 @@ fn run_interactive(no_config: bool, no_history: bool) -> ExitCode {
         startup.scope().clone(),
         cwd,
         startup.environment().clone(),
-        SessionOptions::default(),
+        startup.session_options(),
     );
-    let mut evaluator = SessionEvaluator::new(session);
+    let mut evaluator = SessionEvaluator::new(session, startup.interactive_settings().completion());
     let mut output = io::stdout();
     let mut diagnostics = io::stderr();
 
@@ -320,7 +325,7 @@ fn run_interactive(_no_config: bool, _no_history: bool) -> ExitCode {
         process_environment(),
         SessionOptions::default(),
     );
-    let mut evaluator = SessionEvaluator::new(session);
+    let mut evaluator = SessionEvaluator::new(session, false);
     let mut output = io::stdout();
     let mut diagnostics = io::stderr();
 
@@ -361,10 +366,11 @@ struct SessionEvaluator {
     pending_notice: Option<JobNoticeId>,
     /// Whether the immediately preceding submission was a refused exit.
     exit_refused: bool,
+    completion_enabled: bool,
 }
 
 impl SessionEvaluator {
-    fn new(mut session: Session) -> Self {
+    fn new(mut session: Session, completion_enabled: bool) -> Self {
         let clock = Arc::new(SystemClock::new());
         session.enable_interactive_job_control(clock.clone());
         Self {
@@ -374,11 +380,26 @@ impl SessionEvaluator {
             clock,
             pending_notice: None,
             exit_refused: false,
+            completion_enabled,
         }
     }
 }
 
 impl InteractiveEvaluator for SessionEvaluator {
+    fn completion_catalog(&mut self) -> Option<CompletionCatalog> {
+        Some(if self.completion_enabled {
+            live_completion_catalog(
+                self.session.registry(),
+                self.session.scope(),
+                self.session.cwd(),
+                self.session.environment(),
+                CompletionSnapshotLimits::default(),
+            )
+        } else {
+            CompletionCatalog::new()
+        })
+    }
+
     fn fatal_cleanup(&mut self) -> Vec<String> {
         self.session
             .hang_up_background_jobs(&self.platform)

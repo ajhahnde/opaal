@@ -23,6 +23,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   `fsh` executable, `/usr/bin/fsh`, `.fsh` scripts, and prompt protocol.
 
 ### Added
+
+- Connect interactive startup configuration to live session state. Config can
+  transactionally set `pipefail`, the command-capture byte limit, completion,
+  and history through config-only typed bindings; safe mode and CLI bypasses
+  retain clean defaults. Completion now refreshes at every prompt from live
+  scope, cwd, child `PATH`, and bounded UTF-8 host snapshots without filesystem
+  work in the keypress callback.
 - Add explicit `glob(String | Path) -> List[Path]` filesystem matching through
   the portable directory-read capability. Component wildcards, character
   classes, and recursive `**` preserve native paths, sort deterministically,

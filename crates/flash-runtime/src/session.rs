@@ -184,6 +184,18 @@ impl Session {
         self.state.environment()
     }
 
+    /// The live lexical scope used by later interactive submissions.
+    #[must_use]
+    pub const fn scope(&self) -> &ScopeStack {
+        &self.scope
+    }
+
+    /// The command namespace used for planning and interactive discovery.
+    #[must_use]
+    pub const fn registry(&self) -> &CommandRegistry {
+        &self.registry
+    }
+
     /// The most recent normally completed status, if a job has run.
     #[must_use]
     pub const fn current_status(&self) -> Option<&Status> {

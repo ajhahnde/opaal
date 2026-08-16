@@ -10,7 +10,8 @@ use flash_runtime::eval::{
     CancelReason, Cancellation, CancellationToken, Completion, EvalLimits, Instant, ResourceBudget,
     RestrictedCapability, RuntimeError, RuntimeErrorKind, SystemClock, evaluate_in_environment,
 };
-use flash_runtime::{Environment, ScopeStack};
+use flash_runtime::plan::SessionOptions;
+use flash_runtime::{BindingMutability, Environment, ScopeStack, Value};
 use flash_syntax::{
     Diagnostic, IncompleteInput, LabelStyle, ParseOutcome, Severity, SourceFile, SourceId, Span,
     parse, render_diagnostic,
@@ -24,6 +25,11 @@ pub const DEFAULT_CONFIG_SOURCE_LIMIT: usize = 256 * 1024;
 pub const DEFAULT_CONFIG_STEP_LIMIT: u64 = 100_000;
 /// Host evaluation deadline measured from construction of the limits.
 pub const DEFAULT_CONFIG_DEADLINE_NANOS: u64 = 250_000_000;
+
+const PIPEFAIL_SETTING: &str = "pipefail";
+const CAPTURE_LIMIT_SETTING: &str = "capture_limit";
+const COMPLETION_SETTING: &str = "completion";
+const HISTORY_SETTING: &str = "history";
 
 /// Invocation families considered before any config discovery.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -352,6 +358,7 @@ pub enum ConfigFailureCause {
     Parse(Vec<Diagnostic>),
     Runtime(RuntimeError),
     Cancellation(Cancellation),
+    Settings(String),
 }
 
 impl ConfigFailure {
@@ -421,6 +428,8 @@ impl ConfigMetadata {
 pub struct ConfigStartup {
     scope: ScopeStack,
     environment: Environment,
+    session_options: SessionOptions,
+    interactive_settings: InteractiveSettings,
     metadata: ConfigMetadata,
     prompt: EditorPrompt,
     diagnostic: Option<String>,
@@ -435,6 +444,16 @@ impl ConfigStartup {
     #[must_use]
     pub const fn environment(&self) -> &Environment {
         &self.environment
+    }
+
+    #[must_use]
+    pub const fn session_options(&self) -> SessionOptions {
+        self.session_options
+    }
+
+    #[must_use]
+    pub const fn interactive_settings(&self) -> InteractiveSettings {
+        self.interactive_settings
     }
 
     #[must_use]
@@ -453,10 +472,39 @@ impl ConfigStartup {
     }
 }
 
+/// Interactive-only editor policy committed by startup configuration.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct InteractiveSettings {
+    completion: bool,
+    history: bool,
+}
+
+impl InteractiveSettings {
+    #[must_use]
+    pub const fn completion(self) -> bool {
+        self.completion
+    }
+
+    #[must_use]
+    pub const fn history(self) -> bool {
+        self.history
+    }
+}
+
+impl Default for InteractiveSettings {
+    fn default() -> Self {
+        Self {
+            completion: true,
+            history: true,
+        }
+    }
+}
+
 /// Fatal startup outcomes that must not degrade into config safe mode.
 #[derive(Clone, Debug)]
 pub enum ConfigFatalError {
     Cancelled(Cancellation),
+    InvalidDefaults(String),
 }
 
 /// Discover, load, and transactionally evaluate the one eligible config.
@@ -551,6 +599,7 @@ pub fn initialize_config(
     };
 
     let mut scope = defaults.scope.clone();
+    install_config_settings(&mut scope).map_err(ConfigFatalError::InvalidDefaults)?;
     let mut startup_environment = defaults.environment.clone();
     let eval_limits = EvalLimits::startup(limits.cancellation.clone(), limits.budget);
     match evaluate_in_environment(
@@ -560,17 +609,32 @@ pub fn initialize_config(
         &mut startup_environment,
         &eval_limits,
     ) {
-        Ok(Completion::Value(_)) => Ok(ConfigStartup {
-            scope,
-            environment: startup_environment,
-            metadata: ConfigMetadata {
-                status: ConfigStatus::Loaded,
-                selected_path: Some(path),
-                failure: None,
-            },
-            prompt: EditorPrompt::default(),
-            diagnostic: None,
-        }),
+        Ok(Completion::Value(_)) => match extract_config_settings(&mut scope) {
+            Ok((session_options, interactive_settings)) => Ok(ConfigStartup {
+                scope,
+                environment: startup_environment,
+                session_options,
+                interactive_settings,
+                metadata: ConfigMetadata {
+                    status: ConfigStatus::Loaded,
+                    selected_path: Some(path),
+                    failure: None,
+                },
+                prompt: EditorPrompt::default(),
+                diagnostic: None,
+            }),
+            Err(detail) => Ok(safe_startup(
+                Some(path),
+                ConfigFailure {
+                    kind: ConfigFailureKind::ConfigEvaluation,
+                    detail: detail.clone(),
+                    capability: None,
+                    span: Some(script.span()),
+                    cause: ConfigFailureCause::Settings(detail),
+                },
+                defaults,
+            )),
+        },
         Ok(Completion::Cancelled(cancellation))
             if cancellation.reason() == CancelReason::Requested =>
         {
@@ -642,6 +706,80 @@ fn file_failure(error: ConfigFileError) -> ConfigFailure {
     }
 }
 
+fn install_config_settings(scope: &mut ScopeStack) -> Result<(), String> {
+    for (name, value) in [
+        (
+            PIPEFAIL_SETTING,
+            Value::Bool(SessionOptions::default().pipefail()),
+        ),
+        (
+            CAPTURE_LIMIT_SETTING,
+            Value::Int(
+                i64::try_from(SessionOptions::DEFAULT_CAPTURE_LIMIT)
+                    .expect("the built-in capture limit fits in a Flash Int"),
+            ),
+        ),
+        (
+            COMPLETION_SETTING,
+            Value::Bool(InteractiveSettings::default().completion()),
+        ),
+        (
+            HISTORY_SETTING,
+            Value::Bool(InteractiveSettings::default().history()),
+        ),
+    ] {
+        scope
+            .declare(name, BindingMutability::Mutable, value)
+            .map_err(|error| format!("config setting binding {name:?} is reserved: {error}"))?;
+    }
+    Ok(())
+}
+
+fn extract_config_settings(
+    scope: &mut ScopeStack,
+) -> Result<(SessionOptions, InteractiveSettings), String> {
+    let pipefail = take_bool_setting(scope, PIPEFAIL_SETTING)?;
+    let capture_limit = match take_setting(scope, CAPTURE_LIMIT_SETTING)? {
+        Value::Int(value) => usize::try_from(value).map_err(|_| {
+            format!(
+                "config setting `${CAPTURE_LIMIT_SETTING}` requires a nonnegative Int representable as usize"
+            )
+        })?,
+        value => return Err(setting_type_error(CAPTURE_LIMIT_SETTING, "Int", &value)),
+    };
+    let completion = take_bool_setting(scope, COMPLETION_SETTING)?;
+    let history = take_bool_setting(scope, HISTORY_SETTING)?;
+    Ok((
+        SessionOptions::default()
+            .with_pipefail(pipefail)
+            .with_capture_limit(capture_limit),
+        InteractiveSettings {
+            completion,
+            history,
+        },
+    ))
+}
+
+fn take_bool_setting(scope: &mut ScopeStack, name: &str) -> Result<bool, String> {
+    match take_setting(scope, name)? {
+        Value::Bool(value) => Ok(value),
+        value => Err(setting_type_error(name, "Bool", &value)),
+    }
+}
+
+fn take_setting(scope: &mut ScopeStack, name: &str) -> Result<Value, String> {
+    scope
+        .remove(name)
+        .ok_or_else(|| format!("config setting `${name}` is unavailable"))
+}
+
+fn setting_type_error(name: &str, expected: &str, actual: &Value) -> String {
+    format!(
+        "config setting `${name}` requires {expected}, found {}",
+        actual.family_name()
+    )
+}
+
 fn clean_startup(
     status: ConfigStatus,
     selected_path: Option<PathBuf>,
@@ -650,6 +788,8 @@ fn clean_startup(
     ConfigStartup {
         scope: defaults.scope.clone(),
         environment: defaults.environment.clone(),
+        session_options: SessionOptions::default(),
+        interactive_settings: InteractiveSettings::default(),
         metadata: ConfigMetadata {
             status,
             selected_path,
@@ -677,6 +817,8 @@ fn safe_startup(
     ConfigStartup {
         scope: defaults.scope.clone(),
         environment: defaults.environment.clone(),
+        session_options: SessionOptions::default(),
+        interactive_settings: InteractiveSettings::default(),
         metadata: ConfigMetadata {
             status: ConfigStatus::SafeMode,
             selected_path,

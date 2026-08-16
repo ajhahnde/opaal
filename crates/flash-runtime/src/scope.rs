@@ -181,6 +181,24 @@ impl ScopeStack {
         Err(ScopeError::UnknownBinding(name.to_owned()))
     }
 
+    /// Removes the innermost visible binding named `name` and returns its value.
+    ///
+    /// Host startup integration uses this to consume temporary configuration
+    /// bindings before installing the committed lexical scope.
+    pub fn remove(&mut self, name: &str) -> Option<Value> {
+        for frame in self.frames.iter_mut().rev() {
+            let Some(index) = frame
+                .bindings
+                .iter()
+                .position(|(candidate, _)| candidate.as_ref() == name)
+            else {
+                continue;
+            };
+            return Some(frame.bindings.remove(index).1.value);
+        }
+        None
+    }
+
     /// Returns the visible bindings in name order, with inner frames shadowing
     /// bindings of the same name in outer frames.
     #[must_use]
@@ -246,3 +264,25 @@ impl fmt::Display for ScopeError {
 }
 
 impl Error for ScopeError {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn removal_consumes_the_innermost_visible_binding() {
+        let mut scope = ScopeStack::new();
+        scope
+            .declare("setting", BindingMutability::Mutable, Value::Int(1))
+            .unwrap();
+        scope.push();
+        scope
+            .declare("setting", BindingMutability::Immutable, Value::Int(2))
+            .unwrap();
+
+        assert_eq!(scope.remove("setting"), Some(Value::Int(2)));
+        assert_eq!(scope.get("setting"), Some(&Value::Int(1)));
+        assert_eq!(scope.remove("setting"), Some(Value::Int(1)));
+        assert_eq!(scope.remove("setting"), None);
+    }
+}

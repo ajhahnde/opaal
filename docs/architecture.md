@@ -815,13 +815,38 @@ macOS and Linux builds use the Reedline-backed adapter for parser-driven multili
 
 The Redox path uses the Flash terminal editor when both input and output are terminals. A canonical line reader remains available as a fallback when raw terminal editing is unavailable or output is redirected.
 
-These adapters share the same session evaluator and syntax implementation. Differences in editor facilities do not create different script semantics.
+These adapters share the same session evaluator, syntax implementation, and
+editor-neutral completion catalog. The current Redox raw editor accepts catalog
+refreshes but does not yet expose a completion key; FlashOS runtime
+qualification must activate that presentation path or retain the limitation
+explicitly before completion is claimed for the target. Differences in editor
+facilities do not create different script semantics.
 
 ### Configuration and history
 
-Host configuration and history selection occur before the interactive `Session` is created. A successfully initialized configuration can seed the session scope, environment, and prompts.
+Host configuration and history selection occur before the interactive
+`Session` is created. A successfully initialized configuration seeds the
+session scope and environment plus typed `pipefail` and capture-limit options
+and completion/history policy. Four config-only mutable bindings carry those
+settings through the isolated transaction and are removed before the live
+lexical scope is installed. Safe mode and config bypass retain clean defaults;
+the CLI `--no-history` policy remains an unconditional override.
 
-These host-facing facilities are compile-time separated from the Redox editor path. Their presence in a development-host build is therefore not evidence that identical startup storage and integration are available inside a FlashOS image.
+At each prompt boundary the interactive evaluator snapshots the live registry
+and lexical scope, then collects executable names from the child `PATH` and
+immediate path candidates from the logical cwd. Collection is outside the
+keypress callback and is bounded to 256 `PATH` directories and 4,096 entries
+per host candidate family. Crossing a ceiling discards that family for the
+prompt, preserving deterministic results instead of retaining a host-ordered
+prefix. Reedline swaps the resulting immutable engine before it starts reading
+the next edit.
+
+The config-file and history backends are compile-time separated from the Redox
+editor path. The completion catalog interface is shared, but the current Redox
+wiring supplies an empty catalog because its raw editor cannot present
+completion yet. Development-host behavior is therefore not evidence that
+identical startup storage and editor integration are available inside a
+FlashOS image.
 
 ### Prompt-safe notices
 

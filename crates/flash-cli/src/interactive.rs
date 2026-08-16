@@ -5,6 +5,7 @@ use std::io::{self, Write};
 use flash_runtime::background::{JobNoticeKind, LiveJob, LiveJobState};
 use flash_runtime::job::JobId;
 
+use crate::completion::CompletionCatalog;
 use crate::editor::{EditorError, EditorEvent, EditorPrompt, LineEditor};
 use crate::report::HostExit;
 
@@ -192,6 +193,11 @@ pub enum ExitDecision {
 
 /// Stateful evaluation boundary owned for the lifetime of an interactive session.
 pub trait InteractiveEvaluator {
+    /// Snapshots live completion candidates at one deterministic prompt boundary.
+    fn completion_catalog(&mut self) -> Option<CompletionCatalog> {
+        None
+    }
+
     /// Peek one notice to present before the next prompt.
     fn next_notice(&mut self) -> Option<InteractiveNotice> {
         None
@@ -314,6 +320,10 @@ pub fn run_interactive_session(
 ) -> Result<InteractiveExit, InteractiveSessionError> {
     loop {
         render_pending_notices(editor, evaluator)?;
+
+        if let Some(catalog) = evaluator.completion_catalog() {
+            editor.set_completion_catalog(catalog);
+        }
 
         let event = editor
             .read_line(prompt)

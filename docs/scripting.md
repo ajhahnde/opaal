@@ -149,6 +149,39 @@ fsh --no-config
 
 starts an interactive session without loading its startup configuration. The `--no-history` option similarly disables interactive history for that session. These policies do not turn script execution into an interactive session.
 
+### Interactive startup settings
+
+The interactive config is ordinary Flash source. During its isolated startup
+transaction, four mutable settings are available:
+
+```text
+$pipefail = true
+$capture_limit = 1048576
+$completion = true
+$history = false
+```
+
+`$pipefail`, `$completion`, and `$history` require `Bool` values.
+`$capture_limit` requires a nonnegative `Int` that fits the host byte-count
+range; zero is valid. These bindings exist only while config is evaluated and
+are not visible to scripts or at the interactive prompt. A successful config
+commits the resulting session options and editor settings together with its
+ordinary bindings and staged environment. A parse, evaluation, setting, or
+startup-policy failure discards all of them and enters visible safe mode with
+clean defaults.
+
+`--no-config` wins before config discovery, and `--no-history` wins over a
+config request to enable history. No interactive config or setting is loaded by
+script, command, checker, formatter, help, or version modes.
+
+Completion candidates refresh before every prompt from the committed command
+registry, visible lexical scope, logical working directory, child `PATH`, and
+the executable and directory entries visible in bounded host snapshots. This
+makes config functions, later definitions, cwd changes, exports, and `PATH`
+changes visible without performing environment or filesystem I/O during a Tab
+keypress. Native names that are not UTF-8 and path spellings that would require
+quoted completion are omitted.
+
 ## Checking and formatting without execution
 
 Flash v1 provides inspection modes for validating and normalizing source without running the program.

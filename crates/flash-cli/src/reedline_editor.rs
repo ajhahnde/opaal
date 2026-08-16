@@ -1,5 +1,6 @@
 use std::borrow::Cow;
 use std::io::{self, Write};
+use std::sync::{Arc, RwLock};
 
 use flash_syntax::{ParseOutcome, SourceFile, SourceId, parse};
 use nu_ansi_term::{Color, Style};
@@ -19,29 +20,39 @@ use crate::history::{EditorHistory, HistoryError, HistorySelection};
 /// macOS/Linux terminal editor backed by the pinned Reedline implementation.
 pub struct ReedlineEditor {
     inner: Reedline,
+    completion: Arc<RwLock<CompletionEngine>>,
 }
 
 impl ReedlineEditor {
     #[must_use]
     pub fn new() -> Self {
+        let completion = default_completion();
         Self {
-            inner: editor_engine(),
+            inner: editor_engine(Arc::clone(&completion)),
+            completion,
         }
     }
 
     /// Constructs the editor with a Flash-selected history policy.
     pub fn with_history(selection: HistorySelection) -> Result<Self, HistoryError> {
         let history = EditorHistory::open(selection)?;
+        let completion = default_completion();
         Ok(Self {
-            inner: editor_engine().with_history(history.into_backend()),
+            inner: editor_engine(Arc::clone(&completion)).with_history(history.into_backend()),
+            completion,
         })
     }
 }
 
-fn editor_engine() -> Reedline {
+fn default_completion() -> Arc<RwLock<CompletionEngine>> {
     let registry = flash_runtime::builtin::standard_registry();
     let scope = flash_runtime::ScopeStack::new();
-    let catalog = CompletionCatalog::from_runtime(&registry, &scope);
+    Arc::new(RwLock::new(CompletionEngine::new(
+        CompletionCatalog::from_runtime(&registry, &scope),
+    )))
+}
+
+fn editor_engine(completion: Arc<RwLock<CompletionEngine>>) -> Reedline {
     // Bind Tab to the completion menu so the installed completer is reachable.
     let mut keybindings = default_emacs_keybindings();
     keybindings.add_binding(
@@ -56,9 +67,7 @@ fn editor_engine() -> Reedline {
         .with_cwd(Some(String::new()))
         .with_validator(Box::new(FlashValidator))
         .with_highlighter(Box::new(ReedlineSyntaxHighlighter))
-        .with_completer(Box::new(ReedlineCompleter {
-            engine: CompletionEngine::new(catalog),
-        }))
+        .with_completer(Box::new(ReedlineCompleter { engine: completion }))
         .with_menu(ReedlineMenu::EngineCompleter(Box::new(
             ColumnarMenu::default().with_name(COMPLETION_MENU),
         )))
@@ -82,6 +91,14 @@ impl LineEditor for ReedlineEditor {
             .write_all(rendered.as_bytes())
             .and_then(|()| output.flush())
             .map_err(|error| EditorError::with_source("notice write failed", error))
+    }
+
+    fn set_completion_catalog(&mut self, catalog: CompletionCatalog) {
+        let mut completion = self
+            .completion
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *completion = CompletionEngine::new(catalog);
     }
 
     fn read_line(&mut self, prompt: &EditorPrompt) -> Result<EditorEvent, EditorError> {
@@ -124,12 +141,14 @@ impl Highlighter for ReedlineSyntaxHighlighter {
 }
 
 struct ReedlineCompleter {
-    engine: CompletionEngine,
+    engine: Arc<RwLock<CompletionEngine>>,
 }
 
 impl Completer for ReedlineCompleter {
     fn complete(&mut self, line: &str, pos: usize) -> Vec<Suggestion> {
         self.engine
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .complete(line, pos)
             .into_iter()
             .map(|completion| {
@@ -345,7 +364,9 @@ mod tests {
         let registry = flash_runtime::builtin::standard_registry();
         let scope = flash_runtime::ScopeStack::new();
         let mut completer = ReedlineCompleter {
-            engine: CompletionEngine::new(CompletionCatalog::from_runtime(&registry, &scope)),
+            engine: Arc::new(RwLock::new(CompletionEngine::new(
+                CompletionCatalog::from_runtime(&registry, &scope),
+            ))),
         };
 
         let suggestions = completer.complete("pw", 2);

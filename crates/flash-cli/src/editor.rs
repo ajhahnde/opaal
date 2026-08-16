@@ -1,6 +1,8 @@
 use std::error::Error;
 use std::fmt;
 
+use crate::completion::CompletionCatalog;
+
 pub const DEFAULT_PRIMARY_PROMPT: &str = ">> ";
 pub const DEFAULT_CONTINUATION_PROMPT: &str = "...> ";
 
@@ -98,6 +100,9 @@ impl Error for EditorError {
 pub trait LineEditor {
     /// Write and flush one complete shell-owned notice before drawing a prompt.
     fn write_notice(&mut self, rendered: &str) -> Result<(), EditorError>;
+
+    /// Replaces immutable completion candidates before the next edit begins.
+    fn set_completion_catalog(&mut self, _catalog: CompletionCatalog) {}
 
     fn read_line(&mut self, prompt: &EditorPrompt) -> Result<EditorEvent, EditorError>;
 }

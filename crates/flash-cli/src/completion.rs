@@ -1,11 +1,15 @@
 //! Editor-neutral, parser-aware completion over immutable candidate snapshots.
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::ffi::OsString;
+use std::fs;
 use std::ops::Range;
+use std::os::unix::fs::PermissionsExt;
+use std::path::Path;
 
-use flash_runtime::ScopeStack;
 use flash_runtime::command::{CommandClassification, CommandRegistry};
 use flash_runtime::intrinsic::{DynamicBinding, ExpressionIntrinsic};
+use flash_runtime::{Environment, ScopeStack};
 use flash_syntax::{
     CompletionContext, CompletionTarget, ParseOutcome, SourceFile, SourceId, completion_target,
     parse,
@@ -28,6 +32,35 @@ pub enum CompletionKind {
     Flag,
     /// A UTF-8 path spelling supplied by a host snapshot.
     Path,
+}
+
+/// Fixed ceilings for host candidate collection at one prompt boundary.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CompletionSnapshotLimits {
+    max_path_directories: usize,
+    max_entries: usize,
+}
+
+impl CompletionSnapshotLimits {
+    pub const DEFAULT_MAX_PATH_DIRECTORIES: usize = 256;
+    pub const DEFAULT_MAX_ENTRIES: usize = 4_096;
+
+    #[must_use]
+    pub const fn new(max_path_directories: usize, max_entries: usize) -> Self {
+        Self {
+            max_path_directories,
+            max_entries,
+        }
+    }
+}
+
+impl Default for CompletionSnapshotLimits {
+    fn default() -> Self {
+        Self::new(
+            Self::DEFAULT_MAX_PATH_DIRECTORIES,
+            Self::DEFAULT_MAX_ENTRIES,
+        )
+    }
 }
 
 /// One editor-neutral replacement.
@@ -146,6 +179,143 @@ impl CompletionCatalog {
     pub fn with_paths(mut self, paths: impl IntoIterator<Item = impl Into<String>>) -> Self {
         self.paths = paths.into_iter().map(Into::into).collect();
         self
+    }
+}
+
+/// Builds one immutable prompt-boundary catalog from live session and host state.
+///
+/// Filesystem and environment work completes here; [`CompletionEngine`] retains
+/// only UTF-8 candidates and performs no host I/O during a keypress.
+#[must_use]
+pub fn live_completion_catalog(
+    registry: &CommandRegistry,
+    scope: &ScopeStack,
+    cwd: &Path,
+    environment: &Environment,
+    limits: CompletionSnapshotLimits,
+) -> CompletionCatalog {
+    CompletionCatalog::from_runtime(registry, scope)
+        .with_external_commands(external_commands(environment, limits))
+        .with_paths(cwd_paths(cwd, limits))
+}
+
+fn external_commands(
+    environment: &Environment,
+    limits: CompletionSnapshotLimits,
+) -> BTreeSet<String> {
+    let Some(path) = environment.get("PATH") else {
+        return BTreeSet::new();
+    };
+    let directories: Vec<_> = std::env::split_paths(path)
+        .take(limits.max_path_directories.saturating_add(1))
+        .collect();
+    if directories.len() > limits.max_path_directories {
+        return BTreeSet::new();
+    }
+
+    let mut observed = 0_usize;
+    let mut commands = BTreeSet::new();
+    for directory in directories {
+        let Ok(entries) = fs::read_dir(directory) else {
+            continue;
+        };
+        for entry in entries {
+            let Ok(entry) = entry else {
+                continue;
+            };
+            observed = observed.saturating_add(1);
+            if observed > limits.max_entries {
+                return BTreeSet::new();
+            }
+            let Some(name) = insertable_native_name(entry.file_name()) else {
+                continue;
+            };
+            if fs::metadata(entry.path()).is_ok_and(|metadata| {
+                metadata.is_file() && metadata.permissions().mode() & 0o111 != 0
+            }) {
+                commands.insert(name);
+            }
+        }
+    }
+    commands
+}
+
+fn cwd_paths(cwd: &Path, limits: CompletionSnapshotLimits) -> BTreeSet<String> {
+    let Ok(entries) = fs::read_dir(cwd) else {
+        return BTreeSet::new();
+    };
+    let mut observed = 0_usize;
+    let mut paths = BTreeSet::new();
+    for entry in entries {
+        let Ok(entry) = entry else {
+            continue;
+        };
+        observed = observed.saturating_add(1);
+        if observed > limits.max_entries {
+            return BTreeSet::new();
+        }
+        let Some(mut name) = insertable_native_name(entry.file_name()) else {
+            continue;
+        };
+        if fs::metadata(entry.path()).is_ok_and(|metadata| metadata.is_dir()) {
+            name.push('/');
+        }
+        paths.insert(name.clone());
+        paths.insert(format!("./{name}"));
+    }
+    paths
+}
+
+fn insertable_native_name(value: OsString) -> Option<String> {
+    value
+        .into_string()
+        .ok()
+        .filter(|value| insertable_unquoted(value))
+}
+
+fn insertable_unquoted(value: &str) -> bool {
+    !value.is_empty()
+        && value.chars().all(|character| {
+            !character.is_whitespace()
+                && !character.is_control()
+                && !matches!(
+                    character,
+                    '|' | '&'
+                        | ';'
+                        | '<'
+                        | '>'
+                        | '('
+                        | ')'
+                        | '{'
+                        | '}'
+                        | '['
+                        | ']'
+                        | '$'
+                        | '\''
+                        | '"'
+                        | '\\'
+                        | '#'
+                )
+        })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::os::unix::ffi::OsStringExt;
+
+    use super::*;
+
+    #[test]
+    fn native_names_require_lossless_utf8_and_unquoted_spelling() {
+        assert_eq!(
+            insertable_native_name(OsString::from("plain-name")),
+            Some("plain-name".to_owned())
+        );
+        assert_eq!(insertable_native_name(OsString::from("two words")), None);
+        assert_eq!(
+            insertable_native_name(OsString::from_vec(vec![b'n', 0xff])),
+            None
+        );
     }
 }
 

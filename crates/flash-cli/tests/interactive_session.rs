@@ -5,6 +5,7 @@ use std::collections::VecDeque;
 use std::io::{self, Write};
 use std::rc::Rc;
 
+use flash_cli::completion::{CompletionCatalog, CompletionEngine};
 use flash_cli::editor::{EditorError, EditorEvent, EditorPrompt, LineEditor};
 use flash_cli::interactive::{
     EvaluationControl, ExitDecision, InteractiveDiagnostic, InteractiveEvaluationError,
@@ -15,7 +16,9 @@ use flash_cli::interactive::{
 use flash_cli::report::HostExit;
 use flash_platform::ProcessGroupId;
 use flash_runtime::background::JobNoticeKind;
+use flash_runtime::builtin::standard_registry;
 use flash_runtime::job::JobId;
+use flash_runtime::{BindingMutability, ScopeStack, Value};
 
 type CallLog = Rc<RefCell<Vec<String>>>;
 
@@ -24,6 +27,7 @@ struct ScriptedEditor {
     prompts: Vec<EditorPrompt>,
     notices: Vec<String>,
     notice_results: VecDeque<Result<(), EditorError>>,
+    completion_values: Vec<Vec<String>>,
     calls: Option<CallLog>,
 }
 
@@ -34,6 +38,7 @@ impl ScriptedEditor {
             prompts: Vec::new(),
             notices: Vec::new(),
             notice_results: VecDeque::new(),
+            completion_values: Vec::new(),
             calls: None,
         }
     }
@@ -120,6 +125,45 @@ impl LineEditor for ScriptedEditor {
         self.events
             .pop_front()
             .unwrap_or_else(|| Err(EditorError::new("scripted input exhausted")))
+    }
+
+    fn set_completion_catalog(&mut self, catalog: CompletionCatalog) {
+        if let Some(calls) = &self.calls {
+            calls.borrow_mut().push("set_completion_catalog".to_owned());
+        }
+        self.completion_values.push(
+            CompletionEngine::new(catalog)
+                .complete("$la", 3)
+                .into_iter()
+                .map(|completion| completion.value().to_owned())
+                .collect(),
+        );
+    }
+}
+
+#[derive(Default)]
+struct SnapshotEvaluator {
+    scope: ScopeStack,
+}
+
+impl InteractiveEvaluator for SnapshotEvaluator {
+    fn completion_catalog(&mut self) -> Option<CompletionCatalog> {
+        Some(CompletionCatalog::from_runtime(
+            &standard_registry(),
+            &self.scope,
+        ))
+    }
+
+    fn evaluate(
+        &mut self,
+        source: &str,
+        _output: &mut dyn Write,
+    ) -> Result<EvaluationControl, InteractiveEvaluationError> {
+        assert_eq!(source, "define");
+        self.scope
+            .declare("later", BindingMutability::Immutable, Value::Int(1))
+            .expect("the scripted binding is new");
+        Ok(EvaluationControl::Continue)
     }
 }
 
@@ -422,6 +466,43 @@ fn ctrl_c_reprompts_without_evaluation_and_empty_ctrl_d_exits() {
     assert_eq!(evaluator.seen, ["seed"]);
     assert_eq!(editor.prompts, vec![prompt; 3]);
     assert!(diagnostics.is_empty());
+}
+
+#[test]
+fn completion_is_refreshed_from_live_state_before_every_prompt() {
+    let calls = CallLog::default();
+    let mut editor = ScriptedEditor::with_calls(
+        [
+            EditorEvent::Submitted("define".to_owned()),
+            EditorEvent::EndOfInput,
+        ],
+        Rc::clone(&calls),
+    );
+    let mut evaluator = SnapshotEvaluator::default();
+
+    let exit = run_interactive_session(
+        &mut editor,
+        &mut evaluator,
+        &EditorPrompt::default(),
+        &mut Vec::new(),
+        &mut Vec::new(),
+    )
+    .expect("snapshot refresh should not change session control");
+
+    assert_eq!(exit, InteractiveExit::EndOfInput);
+    assert_eq!(
+        editor.completion_values,
+        [Vec::<String>::new(), vec!["$later".to_owned()]]
+    );
+    assert_eq!(
+        calls.borrow().as_slice(),
+        [
+            "set_completion_catalog",
+            "read_line",
+            "set_completion_catalog",
+            "read_line",
+        ]
+    );
 }
 
 #[test]

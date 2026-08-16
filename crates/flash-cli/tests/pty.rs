@@ -12,6 +12,7 @@
 
 use std::fs::{self, File};
 use std::io::{Read, Write};
+use std::os::unix::fs::PermissionsExt;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -310,6 +311,35 @@ fn unique_dir(tag: &str) -> PathBuf {
 
 fn interactive(cwd: &Path) -> Pty {
     Pty::spawn(&["--no-config", "--no-history"], &[], cwd)
+}
+
+fn configured(cwd: &Path, source: &str, extra_env: &[(&str, &str)]) -> Pty {
+    let home = unique_dir("config-home");
+    let config_root = home.join(".config");
+    let state_root = home.join(".local/state");
+    let config_directory = config_root.join("flash");
+    fs::create_dir_all(&config_directory).expect("create config directory");
+    let mut directory_permissions = fs::metadata(&config_directory).unwrap().permissions();
+    directory_permissions.set_mode(0o700);
+    fs::set_permissions(&config_directory, directory_permissions)
+        .expect("secure config and history directory");
+    let config = config_directory.join("config.fsh");
+    fs::write(&config, source).expect("write startup config");
+    let mut permissions = fs::metadata(&config).unwrap().permissions();
+    permissions.set_mode(0o600);
+    fs::set_permissions(&config, permissions).expect("secure startup config");
+    let home = home.to_str().expect("config home is UTF-8");
+    let config_root = config_root.to_str().expect("config root is UTF-8");
+    let state_root = state_root.to_str().expect("state root is UTF-8");
+    // Runner/user XDG overrides must not redirect config or history outside
+    // this fixture. A test-specific override in `extra_env` still wins below.
+    let mut environment = vec![
+        ("HOME", home),
+        ("XDG_CONFIG_HOME", config_root),
+        ("XDG_STATE_HOME", state_root),
+    ];
+    environment.extend_from_slice(extra_env);
+    Pty::spawn(&[], &environment, cwd)
 }
 
 fn await_process_group_reports(directory: &Path, count: usize) -> Vec<(Pid, Pid)> {
@@ -684,6 +714,184 @@ fn tab_completes_a_command_name() {
     // The completion menu surfaces the standard `pwd` command name. The session
     // is torn down by the harness rather than through a menu-active exit path.
     session.expect_from(mark, "pwd");
+}
+
+#[test]
+fn config_commits_pipefail_and_capture_limit_into_the_real_session() {
+    let cwd = unique_dir("config-options");
+    let mut session = configured(
+        &cwd,
+        "$pipefail = true\n$capture_limit = 3\n$history = false\n",
+        &[("XDG_STATE_HOME", "/dev/null")],
+    );
+    session.await_prompt(0);
+
+    let exact_mark = session.mark();
+    session.send(b"let exact = $(^printf abc)");
+    session.send(ENTER);
+    session.await_prompt(exact_mark);
+
+    let overflow_mark = session.mark();
+    session.send(b"let overflow = $(^printf abcd)");
+    session.send(ENTER);
+    session.expect_from(overflow_mark, "capture limit");
+    session.await_prompt(overflow_mark);
+
+    let pipeline_mark = session.mark();
+    session.send(b"^false | ^true");
+    session.send(ENTER);
+    session.await_prompt(pipeline_mark);
+    session.send(b"exit");
+    session.send(ENTER);
+    assert_eq!(session.wait_code(), 1);
+}
+
+#[test]
+fn config_capture_limit_zero_accepts_empty_and_rejects_one_byte() {
+    let cwd = unique_dir("config-zero-capture");
+    let mut session = configured(&cwd, "$capture_limit = 0\n", &[]);
+    session.await_prompt(0);
+
+    let empty_mark = session.mark();
+    session.send(b"let empty = $(^true)");
+    session.send(ENTER);
+    session.await_prompt(empty_mark);
+
+    let overflow_mark = session.mark();
+    session.send(b"let overflow = $(^printf x)");
+    session.send(ENTER);
+    session.expect_from(overflow_mark, "capture limit");
+}
+
+#[test]
+fn disabled_and_failed_config_use_clean_session_defaults() {
+    let cwd = unique_dir("config-defaults");
+    let home = unique_dir("disabled-config-home");
+    let config_directory = if cfg!(target_os = "macos") {
+        home.join("Library/Application Support/flash")
+    } else {
+        home.join(".config/flash")
+    };
+    fs::create_dir_all(&config_directory).unwrap();
+    fs::write(config_directory.join("config.fsh"), "$pipefail = true\n").unwrap();
+    let home_text = home.to_str().unwrap();
+    let mut disabled = Pty::spawn(
+        &["--no-config", "--no-history"],
+        &[("HOME", home_text)],
+        &cwd,
+    );
+    disabled.await_prompt(0);
+    let mark = disabled.mark();
+    disabled.send(b"^false | ^true");
+    disabled.send(ENTER);
+    disabled.await_prompt(mark);
+    disabled.send(b"exit");
+    disabled.send(ENTER);
+    assert_eq!(disabled.wait_code(), 0);
+
+    let mut failed = configured(&cwd, "$pipefail = 'yes'\n", &[]);
+    failed.expect("ConfigEvaluation");
+    failed.expect("[SAFE] >> ");
+    let mark = failed.mark();
+    failed.send(b"^false | ^true");
+    failed.send(ENTER);
+    failed.await_prompt(mark);
+    failed.send(b"exit");
+    failed.send(ENTER);
+    assert_eq!(failed.wait_code(), 0);
+}
+
+#[test]
+fn live_completion_refreshes_config_repl_path_and_cwd_candidates() {
+    let cwd = unique_dir("live-completion");
+    let bin = unique_dir("live-completion-bin");
+    let later_bin = unique_dir("live-completion-later-bin");
+    let executable = bin.join("flash-path-candidate");
+    fs::write(&executable, b"#!/bin/sh\nexit 0\n").unwrap();
+    let mut permissions = fs::metadata(&executable).unwrap().permissions();
+    permissions.set_mode(0o700);
+    fs::set_permissions(&executable, permissions).unwrap();
+    let later_executable = later_bin.join("flash-later-candidate");
+    fs::write(&later_executable, b"#!/bin/sh\nexit 0\n").unwrap();
+    let mut permissions = fs::metadata(&later_executable).unwrap().permissions();
+    permissions.set_mode(0o700);
+    fs::set_permissions(&later_executable, permissions).unwrap();
+    fs::write(cwd.join("output-candidate"), b"").unwrap();
+    fs::create_dir(cwd.join("nested")).unwrap();
+    fs::write(cwd.join("nested/nested-candidate"), b"").unwrap();
+    let path = bin.to_str().unwrap();
+    let mut session = configured(
+        &cwd,
+        "def configcandidate() {\n    return 1\n}\n",
+        &[("PATH", path)],
+    );
+    session.await_prompt(0);
+
+    for (source, candidate) in [
+        ("configcan", "configcandidate"),
+        ("^flash-path", "flash-path-candidate"),
+        ("pwd > output-c", "output-candidate"),
+    ] {
+        session.send(source.as_bytes());
+        let mark = session.mark();
+        session.send(TAB);
+        session.expect_from(mark, candidate);
+        let prompt_mark = session.mark();
+        session.send(CTRL_C);
+        session.await_prompt(prompt_mark);
+    }
+
+    let define_mark = session.mark();
+    session.send(b"def latercandidate() { return 1 }");
+    session.send(ENTER);
+    session.await_prompt(define_mark);
+    session.send(b"latercan");
+    let mark = session.mark();
+    session.send(TAB);
+    session.expect_from(mark, "latercandidate");
+    let prompt_mark = session.mark();
+    session.send(CTRL_C);
+    session.await_prompt(prompt_mark);
+
+    export_path(&mut session, "PATH", &later_bin);
+    session.send(b"^flash-later");
+    let mark = session.mark();
+    session.send(TAB);
+    session.expect_from(mark, "flash-later-candidate");
+    let prompt_mark = session.mark();
+    session.send(CTRL_C);
+    session.await_prompt(prompt_mark);
+
+    let cd_mark = session.mark();
+    session.send(b"cd nested");
+    session.send(ENTER);
+    session.await_prompt(cd_mark);
+    session.send(b"pwd > nested-c");
+    let mark = session.mark();
+    session.send(TAB);
+    session.expect_from(mark, "nested-candidate");
+}
+
+#[test]
+fn config_can_disable_completion_before_the_first_prompt() {
+    let cwd = unique_dir("completion-disabled");
+    let mut session = configured(&cwd, "$completion = false\n$history = false\n", &[]);
+    session.await_prompt(0);
+
+    session.send(b"pw");
+    let mark = session.mark();
+    session.send(TAB);
+    thread::sleep(SETTLE);
+    assert!(
+        !session.rendered_from(mark).contains("pwd"),
+        "a disabled completer must not expose the standard command catalog"
+    );
+    let prompt_mark = session.mark();
+    session.send(CTRL_C);
+    session.await_prompt(prompt_mark);
+    session.send(b"exit 0");
+    session.send(ENTER);
+    assert_eq!(session.wait_code(), 0);
 }
 
 #[test]
