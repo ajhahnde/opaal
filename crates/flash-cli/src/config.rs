@@ -739,6 +739,7 @@ fn runtime_failure(source: &SourceFile, error: &RuntimeError) -> ConfigFailure {
             Some(match capability {
                 RestrictedCapability::ProcessExecution => "process execution",
                 RestrictedCapability::CommandSubstitution => "command substitution",
+                RestrictedCapability::FilesystemRead => "filesystem reads",
             }),
         ),
         RuntimeErrorKind::ResourceBudgetExceeded => (ConfigFailureKind::ConfigBudget, None),

@@ -9,6 +9,7 @@ use flash_syntax::{
 };
 
 use crate::command::{CommandClassification, CommandRegistry, CommandSignature, NamespaceClass};
+use crate::intrinsic::{DynamicBinding, ExpressionIntrinsic};
 use crate::module::{
     FunctionSignature, ModuleEffectSummary, ModuleId, ModuleNameImport, ModuleProgram,
     ModuleReferenceTarget, ValueType,
@@ -33,14 +34,42 @@ impl SourceLocation {
     }
 }
 
-/// The semantic class of one visible lexical name.
+/// The semantic class of one visible lexical or intrinsic name.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum NameKind {
+    Intrinsic,
+    DynamicBinding,
     ScriptArguments,
     Binding,
     Function,
     ImportedBinding,
     ImportedFunction,
+}
+
+/// Hover data for one reserved value supplied by the active evaluation host.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DynamicBindingHover {
+    binding: DynamicBinding,
+}
+
+impl DynamicBindingHover {
+    #[must_use]
+    pub const fn binding(self) -> DynamicBinding {
+        self.binding
+    }
+}
+
+/// Hover data for one unshadowed expression intrinsic.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct IntrinsicHover {
+    intrinsic: ExpressionIntrinsic,
+}
+
+impl IntrinsicHover {
+    #[must_use]
+    pub const fn intrinsic(self) -> ExpressionIntrinsic {
+        self.intrinsic
+    }
 }
 
 /// One deterministically ordered name visible at a source byte cursor.
@@ -177,9 +206,36 @@ impl NamedImportEffects {
 /// The protocol-neutral hover variants owned by shared semantic data.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SemanticHover {
+    Intrinsic(IntrinsicHover),
+    DynamicBinding(DynamicBindingHover),
     Binding(BindingHover),
     Function(FunctionHover),
     Command(CommandMetadata),
+}
+
+/// One enclosing intrinsic call and its active argument.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct IntrinsicSignatureContext {
+    call_span: Span,
+    active_parameter: usize,
+    intrinsic: ExpressionIntrinsic,
+}
+
+impl IntrinsicSignatureContext {
+    #[must_use]
+    pub const fn call_span(self) -> Span {
+        self.call_span
+    }
+
+    #[must_use]
+    pub const fn active_parameter(self) -> usize {
+        self.active_parameter
+    }
+
+    #[must_use]
+    pub const fn intrinsic(self) -> ExpressionIntrinsic {
+        self.intrinsic
+    }
 }
 
 /// One enclosing resolved function call and its active argument.
@@ -234,37 +290,49 @@ impl ModuleProgram {
 }
 
 impl SemanticQueries<'_> {
-    /// Returns visible lexical names in exact name order.
+    /// Returns visible lexical and unshadowed intrinsic names in exact name order.
     #[must_use]
     pub fn visible_names(&self, module: &ModuleId, cursor: usize) -> Option<Vec<VisibleName>> {
         let source = self.program.sources().source(module)?;
         if cursor > source.len() || !source.text().is_char_boundary(cursor) {
             return None;
         }
-        Some(
-            self.program
-                .names()
-                .visible_bindings(module, cursor)
-                .into_iter()
-                .map(|binding| {
-                    let (definition, value_type, function, imported) =
-                        self.target_metadata(binding.target());
-                    let kind = match (binding.target(), function, imported) {
-                        (ModuleReferenceTarget::ScriptArguments, _, _) => NameKind::ScriptArguments,
-                        (_, true, true) => NameKind::ImportedFunction,
-                        (_, false, true) => NameKind::ImportedBinding,
-                        (_, true, false) => NameKind::Function,
-                        (_, false, false) => NameKind::Binding,
-                    };
-                    VisibleName {
-                        name: binding.name().to_owned(),
-                        kind,
-                        definition,
-                        value_type,
-                    }
-                })
-                .collect(),
-        )
+        let mut visible = self
+            .program
+            .names()
+            .visible_bindings(module, cursor)
+            .into_iter()
+            .map(|binding| {
+                let (definition, value_type, function, imported) =
+                    self.target_metadata(binding.target());
+                let kind = match (binding.target(), function, imported) {
+                    (ModuleReferenceTarget::DynamicStatus, _, _) => NameKind::DynamicBinding,
+                    (ModuleReferenceTarget::ScriptArguments, _, _) => NameKind::ScriptArguments,
+                    (_, true, true) => NameKind::ImportedFunction,
+                    (_, false, true) => NameKind::ImportedBinding,
+                    (_, true, false) => NameKind::Function,
+                    (_, false, false) => NameKind::Binding,
+                };
+                VisibleName {
+                    name: binding.name().to_owned(),
+                    kind,
+                    definition,
+                    value_type,
+                }
+            })
+            .map(|name| (name.name.clone(), name))
+            .collect::<BTreeMap<_, _>>();
+        for intrinsic in ExpressionIntrinsic::ALL {
+            visible
+                .entry(intrinsic.name().to_owned())
+                .or_insert_with(|| VisibleName {
+                    name: intrinsic.name().to_owned(),
+                    kind: NameKind::Intrinsic,
+                    definition: None,
+                    value_type: ValueType::Function,
+                });
+        }
+        Some(visible.into_values().collect())
     }
 
     /// Resolves a lexical read, import, export, or declaration to its definition.
@@ -337,6 +405,11 @@ impl SemanticQueries<'_> {
     #[must_use]
     pub fn hover_at(&self, module: &ModuleId, offset: usize) -> Option<SemanticHover> {
         if let Some((name, target)) = self.program.names().target_at(module, offset) {
+            if matches!(target, ModuleReferenceTarget::DynamicStatus) {
+                return Some(SemanticHover::DynamicBinding(DynamicBindingHover {
+                    binding: DynamicBinding::CurrentStatus,
+                }));
+            }
             let (definition, value_type, function, _) = self.target_metadata(&target);
             if function {
                 let definition = definition?;
@@ -356,7 +429,9 @@ impl SemanticQueries<'_> {
                 value_type,
             }));
         }
-        self.command_at(module, offset).map(SemanticHover::Command)
+        self.intrinsic_at(module, offset)
+            .map(|intrinsic| SemanticHover::Intrinsic(IntrinsicHover { intrinsic }))
+            .or_else(|| self.command_at(module, offset).map(SemanticHover::Command))
     }
 
     /// Finds the smallest enclosing resolved function call and active argument.
@@ -381,6 +456,28 @@ impl SemanticQueries<'_> {
             active_parameter,
             definition,
             signature,
+        })
+    }
+
+    /// Finds the smallest enclosing unshadowed intrinsic call and active argument.
+    #[must_use]
+    pub fn intrinsic_signature_at(
+        &self,
+        module: &ModuleId,
+        offset: usize,
+    ) -> Option<IntrinsicSignatureContext> {
+        let script = self.program.sources().script(module)?;
+        let (call, call_span) = CallFinder::new(offset).find(script.statements())?;
+        let intrinsic = self.intrinsic_call(module, call, call.callee.span().start())?;
+        let active_parameter = call
+            .arguments
+            .iter()
+            .position(|argument| offset <= argument.span().end())
+            .unwrap_or(call.arguments.len());
+        Some(IntrinsicSignatureContext {
+            call_span,
+            active_parameter,
+            intrinsic,
         })
     }
 
@@ -428,6 +525,14 @@ impl SemanticQueries<'_> {
         &self,
         target: &ModuleReferenceTarget,
     ) -> (Option<SourceLocation>, ValueType, bool, bool) {
+        if matches!(target, ModuleReferenceTarget::DynamicStatus) {
+            return (
+                None,
+                DynamicBinding::CurrentStatus.result_type(),
+                false,
+                false,
+            );
+        }
         let Some(definition) = target_location(target) else {
             return (
                 None,
@@ -488,6 +593,34 @@ impl SemanticQueries<'_> {
         self.command_metadata(name)
     }
 
+    fn intrinsic_at(&self, module: &ModuleId, offset: usize) -> Option<ExpressionIntrinsic> {
+        let script = self.program.sources().script(module)?;
+        let (call, _) = CallFinder::new(offset).find(script.statements())?;
+        self.intrinsic_call(module, call, offset)
+    }
+
+    fn intrinsic_call(
+        &self,
+        module: &ModuleId,
+        call: &flash_syntax::CallExpression,
+        offset: usize,
+    ) -> Option<ExpressionIntrinsic> {
+        if !contains(call.callee.span(), offset)
+            || self
+                .program
+                .names()
+                .reference(module, call.callee.span())
+                .is_some()
+        {
+            return None;
+        }
+        let ExpressionKind::Symbol(identifier) = call.callee.kind() else {
+            return None;
+        };
+        let source = self.program.sources().source(module)?;
+        ExpressionIntrinsic::lookup(source.slice(identifier.span()).ok()?)
+    }
+
     fn command_metadata(&self, name: &str) -> Option<CommandMetadata> {
         match self.commands.classify(name) {
             CommandClassification::Core { signature, .. } => Some(CommandMetadata {
@@ -513,7 +646,7 @@ impl SemanticQueries<'_> {
 
 fn target_location(target: &ModuleReferenceTarget) -> Option<SourceLocation> {
     match target {
-        ModuleReferenceTarget::ScriptArguments => None,
+        ModuleReferenceTarget::DynamicStatus | ModuleReferenceTarget::ScriptArguments => None,
         ModuleReferenceTarget::Local {
             module,
             declaration_span,

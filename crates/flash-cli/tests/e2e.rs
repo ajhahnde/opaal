@@ -175,6 +175,125 @@ fn completed_program_codes_propagate_exactly_without_diagnostics() {
 }
 
 #[test]
+fn explicit_environment_and_live_status_reads_reach_the_fsh_host_boundary() {
+    let temp = TempDir::new("dynamic-session-reads");
+    let script = temp.script(
+        "dynamic-session-reads.fsh",
+        &format!(
+            concat!(
+                "if env('FLASH_DYNAMIC') == 'present' && $status == null {{\n",
+                "    ^{} exit 0\n",
+                "}} else {{\n",
+                "    exit 91\n",
+                "}}\n",
+                "if $status.ok && $status.code == 0 && $status.signal == null ",
+                "&& $status.stages == [] {{\n",
+                "    exit 0\n",
+                "}} else {{\n",
+                "    exit 92\n",
+                "}}\n",
+            ),
+            status_fixture(),
+        ),
+    );
+    let output = Command::new(env!("CARGO_BIN_EXE_fsh"))
+        .arg(script)
+        .current_dir(temp.path())
+        .env("PATH", fixture_directory())
+        .env("FLASH_DYNAMIC", "present")
+        .output()
+        .expect("fsh should start");
+
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert!(output.stdout.is_empty(), "{output:?}");
+    assert!(output.stderr.is_empty(), "{output:?}");
+}
+
+#[test]
+fn recursive_command_composition_reaches_the_fsh_host_boundary() {
+    let temp = TempDir::new("recursive-command-composition");
+    let report = temp.path().join("report.bin");
+    let script = temp.script(
+        "recursive-command-composition.fsh",
+        &format!(
+            concat!(
+                "def capture_probe() {{\n",
+                "    if ^{0} exit 0 {{\n",
+                "        return $(^{1} source 3 0)\n",
+                "    }} else {{\n",
+                "        return 'unreached'\n",
+                "    }}\n",
+                "}}\n",
+                "let captured = capture_probe()\n",
+                "flash-e2e-process-observer-fixture $captured\n",
+            ),
+            status_fixture(),
+            stream_fixture(),
+        ),
+    );
+
+    let output = Command::new(env!("CARGO_BIN_EXE_fsh"))
+        .arg(&script)
+        .current_dir(temp.path())
+        .env("PATH", fixture_directory())
+        .env("FLASH_PROBE_REPORT", &report)
+        .output()
+        .expect("fsh should start");
+
+    assert!(output.status.success(), "{output:?}");
+    assert!(output.stdout.is_empty(), "{output:?}");
+    assert!(output.stderr.is_empty(), "{output:?}");
+    let observed = ProcessReport::read(&report);
+    assert_eq!(
+        observed.argv,
+        [
+            b"flash-e2e-process-observer-fixture".as_slice(),
+            b"xxx".as_slice(),
+        ]
+    );
+}
+
+#[test]
+fn explicit_glob_reaches_module_initialization_and_real_argv() {
+    let temp = TempDir::new("glob-module-argv");
+    fs::create_dir_all(temp.path().join("inputs/nested")).unwrap();
+    fs::write(temp.path().join("inputs/a.fsh"), b"").unwrap();
+    fs::write(temp.path().join("inputs/nested/b.fsh"), b"").unwrap();
+    fs::write(temp.path().join("inputs/ignored.txt"), b"").unwrap();
+    let report = temp.path().join("report.bin");
+    temp.script(
+        "dependency.fsh",
+        "let files = glob('inputs/**/*.fsh')\nexport { files }\n",
+    );
+    let script = temp.script(
+        "glob.fsh",
+        "import { files } from './dependency.fsh'\n\
+         flash-e2e-process-observer-fixture ...$files\n",
+    );
+
+    let output = Command::new(env!("CARGO_BIN_EXE_fsh"))
+        .arg(&script)
+        .current_dir(temp.path())
+        .env("PATH", fixture_directory())
+        .env("FLASH_PROBE_REPORT", &report)
+        .output()
+        .expect("fsh should start");
+
+    assert!(output.status.success(), "{output:?}");
+    assert!(output.stdout.is_empty(), "{output:?}");
+    assert!(output.stderr.is_empty(), "{output:?}");
+    let observed = ProcessReport::read(&report);
+    assert_eq!(
+        observed.argv,
+        [
+            b"flash-e2e-process-observer-fixture".as_slice(),
+            b"inputs/a.fsh".as_slice(),
+            b"inputs/nested/b.fsh".as_slice(),
+        ]
+    );
+}
+
+#[test]
 fn completed_signal_maps_to_128_plus_its_number_without_a_shell_report() {
     let temp = TempDir::new("completed-signal");
     let script = temp.script("signal.fsh", &format!("^{} signal\n", status_fixture()));

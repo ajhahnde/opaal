@@ -23,6 +23,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   `fsh` executable, `/usr/bin/fsh`, `.fsh` scripts, and prompt protocol.
 
 ### Added
+- Add explicit `glob(String | Path) -> List[Path]` filesystem matching through
+  the portable directory-read capability. Component wildcards, character
+  classes, and recursive `**` preserve native paths, sort deterministically,
+  require explicit hidden-entry intent, avoid directory-symlink traversal, and
+  remain cancellation- and resource-bounded without changing ordinary command
+  word cardinality.
 - Ratify the Flash v1 built-in namespace as an exact 30-command core with no
   current aliases or reserved names, validated core/alias/reserved lifecycle
   metadata, and a language-major compatibility policy that prevents silent

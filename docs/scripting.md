@@ -321,6 +321,12 @@ Remove an environment entry with `unset`:
 unset BUILD_MODE
 ```
 
+Use `env("BUILD_MODE")` to read the current child-environment entry. The result
+is a `String`, or `null` when the name is absent. Flash does not treat `$NAME` as
+an environment lookup, and a present native value that is not valid UTF-8 fails
+explicitly rather than being decoded lossily. Reads observe successful
+`export` and `unset` changes in source order.
+
 Environment changes belong to the running Flash session. They do not modify the environment of the process that started `fsh`.
 
 ## Invoking commands
@@ -484,6 +490,12 @@ Use `glob` and spread the resulting list when filesystem matching is required:
 let scripts = glob("scripts/**/*.fsh")
 command "example" ...$scripts
 ```
+
+`glob` accepts a string or path pattern and returns a sorted list of native path
+values. `*`, `?`, and character classes match within one component; a complete
+`**` component recurses without following directory symlinks. Leading-dot names
+require an explicitly leading dot in that component, and no matches produces an
+empty list rather than the original pattern.
 
 For the complete expansion rules and eligible argument value types, see [Commands and argument expansion](language-guide.md#commands-and-argument-expansion).
 

@@ -758,6 +758,234 @@ fn every_builtin_type_spelling_resolves_in_source_annotations() {
 }
 
 #[test]
+fn expression_intrinsics_and_double_quoted_values_reach_assembled_scripts() {
+    let paths = FakeCanonicalizer::default().resolves("/project/main.fsh", "/project/main.fsh");
+    let sources = FakeSourceLoader::default().contains(
+        "/project/main.fsh",
+        concat!(
+            "let product = \"FlashOS\"\n",
+            "let whole: Int = int(3.9)\n",
+            "let decimal: Float = float(7)\n",
+            "export PRODUCT = \"$product\"\n",
+            "export WHOLE = $whole\n",
+            "export DECIMAL = $decimal\n",
+        ),
+    );
+    let program = ModuleProgramLoader::new(&paths, &sources)
+        .load(Path::new("/project/main.fsh"))
+        .expect("the documented expressions pass assembled static analysis");
+    let mut environment = Environment::new();
+
+    execute_module_program(
+        &program,
+        &[],
+        Path::new("/project"),
+        &mut environment,
+        &standard_registry(),
+        &NoExecutables,
+        &SessionOptions::default(),
+        &FakePlatform::none(),
+        Arc::new(FakeClock::new()),
+    )
+    .expect("the documented expressions execute through the script session");
+
+    assert_eq!(environment.get("PRODUCT"), Some(OsStr::new("FlashOS")));
+    assert_eq!(environment.get("WHOLE"), Some(OsStr::new("3")));
+    assert_eq!(environment.get("DECIMAL"), Some(OsStr::new("7.0")));
+}
+
+#[test]
+fn expression_intrinsic_analysis_reports_types_arity_and_shadowing() {
+    let paths = FakeCanonicalizer::default().resolves("/project/main.fsh", "/project/main.fsh");
+    let text = concat!(
+        "let whole = int(3.9)\n",
+        "let decimal = float($whole)\n",
+        "let home = env('HOME')\n",
+        "let files = glob('*.fsh')\n",
+        "let latest = $status\n",
+    );
+    let sources = FakeSourceLoader::default().contains("/project/main.fsh", text);
+    let program = ModuleProgramLoader::new(&paths, &sources)
+        .load(Path::new("/project/main.fsh"))
+        .expect("unshadowed intrinsics resolve during static analysis");
+    let root = program.graph().root();
+    let commands = standard_registry();
+    let queries = program.semantic_queries(&commands);
+    let visible = queries.visible_names(root, text.len()).unwrap();
+    assert!(
+        visible
+            .iter()
+            .any(|name| name.name() == "int" && name.kind() == NameKind::Intrinsic)
+    );
+    assert!(
+        visible
+            .iter()
+            .any(|name| name.name() == "float" && name.kind() == NameKind::Intrinsic)
+    );
+    assert!(
+        visible
+            .iter()
+            .any(|name| name.name() == "env" && name.kind() == NameKind::Intrinsic)
+    );
+    assert!(
+        visible
+            .iter()
+            .any(|name| name.name() == "glob" && name.kind() == NameKind::Intrinsic)
+    );
+    assert!(visible.iter().any(|name| {
+        name.name() == "status"
+            && name.kind() == NameKind::DynamicBinding
+            && name.value_type() == &ValueType::Any
+    }));
+    let int_callee = text.find("int(3.9)").unwrap() + 1;
+    let SemanticHover::Intrinsic(hover) = queries.hover_at(root, int_callee).unwrap() else {
+        panic!("an unshadowed intrinsic has shared hover metadata");
+    };
+    assert_eq!(hover.intrinsic().name(), "int");
+    assert_eq!(hover.intrinsic().result_type(), ValueType::Int);
+    let signature = queries
+        .intrinsic_signature_at(root, text.find("3.9").unwrap() + 1)
+        .expect("an intrinsic call has shared signature metadata");
+    assert_eq!(signature.intrinsic().name(), "int");
+    assert_eq!(signature.active_parameter(), 0);
+    let glob_callee = text.find("glob('*.fsh')").unwrap() + 1;
+    let SemanticHover::Intrinsic(glob_hover) = queries.hover_at(root, glob_callee).unwrap() else {
+        panic!("glob has shared intrinsic hover metadata");
+    };
+    assert_eq!(
+        glob_hover.intrinsic().result_type(),
+        ValueType::List(Box::new(ValueType::Path))
+    );
+    let effects = program.effects().direct(root).occurrences();
+    assert!(
+        !effects
+            .iter()
+            .any(|occurrence| occurrence.effect() == ModuleEffect::OpaqueExternal),
+        "known dynamic reads do not gain an opaque external effect"
+    );
+    assert!(
+        effects
+            .iter()
+            .any(|occurrence| occurrence.effect() == ModuleEffect::ChildEnvironment)
+    );
+    assert!(
+        effects
+            .iter()
+            .any(|occurrence| occurrence.effect() == ModuleEffect::FilesystemRead)
+    );
+    assert!(
+        effects
+            .iter()
+            .any(|occurrence| occurrence.effect() == ModuleEffect::Status)
+    );
+    let status_read = text.find("$status").unwrap() + 1;
+    let reference = program
+        .names()
+        .references(root)
+        .iter()
+        .find(|reference| reference.name() == "status")
+        .expect("the current status read is resolved");
+    assert_eq!(reference.target(), &ModuleReferenceTarget::DynamicStatus);
+    assert!(matches!(
+        queries.hover_at(root, status_read),
+        Some(SemanticHover::DynamicBinding(_))
+    ));
+
+    for (source, code) in [
+        ("int()\n", "SIG003"),
+        ("float('text')\n", "SIG004"),
+        ("env(1)\n", "SIG004"),
+        ("glob(true)\n", "SIG004"),
+    ] {
+        let sources = FakeSourceLoader::default().contains("/project/main.fsh", source);
+        let error = ModuleProgramLoader::new(&paths, &sources)
+            .load(Path::new("/project/main.fsh"))
+            .expect_err("an invalid intrinsic call fails static analysis");
+        assert_eq!(error.diagnostics()[0].code(), code, "{source}");
+        assert_eq!(error.diagnostics()[0].labels().len(), 1, "{source}");
+    }
+    for source in [
+        concat!(
+            "def needs_float(value: Float) -> Null { null }\n",
+            "needs_float(int(3.9))\n",
+        ),
+        concat!(
+            "def needs_int(value: Int) -> Null { null }\n",
+            "needs_int(float(7))\n",
+        ),
+    ] {
+        let sources = FakeSourceLoader::default().contains("/project/main.fsh", source);
+        let error = ModuleProgramLoader::new(&paths, &sources)
+            .load(Path::new("/project/main.fsh"))
+            .expect_err("an intrinsic result keeps its exact static type");
+        assert_eq!(error.diagnostics()[0].code(), "SIG004", "{source}");
+    }
+
+    let shadowed_text = concat!(
+        "def int(value: String) -> String { $value }\n",
+        "let result = int('shadowed')\n",
+        "export RESULT = $result\n",
+    );
+    let shadowed_sources = FakeSourceLoader::default().contains("/project/main.fsh", shadowed_text);
+    let shadowed = ModuleProgramLoader::new(&paths, &shadowed_sources)
+        .load(Path::new("/project/main.fsh"))
+        .expect("a lexical callable shadows the intrinsic");
+    let root = shadowed.graph().root();
+    let call = shadowed_text.rfind("int('shadowed')").unwrap() + 1;
+    assert!(matches!(
+        shadowed
+            .semantic_queries(&standard_registry())
+            .hover_at(root, call),
+        Some(SemanticHover::Function(_))
+    ));
+    let mut environment = Environment::new();
+    execute_module_program(
+        &shadowed,
+        &[],
+        Path::new("/project"),
+        &mut environment,
+        &standard_registry(),
+        &NoExecutables,
+        &SessionOptions::default(),
+        &FakePlatform::none(),
+        Arc::new(FakeClock::new()),
+    )
+    .expect("the lexical callable executes instead of the intrinsic");
+    assert_eq!(environment.get("RESULT"), Some(OsStr::new("shadowed")));
+}
+
+#[test]
+fn current_status_name_is_reserved_across_static_binding_forms() {
+    let paths = FakeCanonicalizer::default().resolves("/project/main.fsh", "/project/main.fsh");
+    for text in [
+        "let status = 1\n",
+        "mut status = 1\n",
+        "def status() { null }\n",
+        "def callable(status) { $status }\n",
+        "let callable = {|status| $status}\n",
+        "for status in [1] { null }\n",
+        "match 1 { status => { null } }\n",
+    ] {
+        let sources = FakeSourceLoader::default().contains("/project/main.fsh", text);
+        let error = ModuleProgramLoader::new(&paths, &sources)
+            .load(Path::new("/project/main.fsh"))
+            .expect_err("the dynamic status name cannot become lexical");
+        assert_eq!(error.diagnostics()[0].code(), "MOD011", "{text}");
+    }
+
+    let import_paths = FakeCanonicalizer::default()
+        .resolves("/project/main.fsh", "/project/main.fsh")
+        .resolves("/project/lib.fsh", "/project/lib.fsh");
+    let import_sources = FakeSourceLoader::default()
+        .contains("/project/main.fsh", "import { status } from './lib.fsh'\n")
+        .contains("/project/lib.fsh", "let value = 1\nexport { value }\n");
+    let error = ModuleProgramLoader::new(&import_paths, &import_sources)
+        .load(Path::new("/project/main.fsh"))
+        .expect_err("an import cannot occupy the dynamic status name");
+    assert_eq!(error.diagnostics()[0].code(), "MOD011");
+}
+
+#[test]
 fn unknown_type_names_and_invalid_type_arity_report_stable_diagnostics() {
     let paths = FakeCanonicalizer::default().resolves("/project/main.fsh", "/project/main.fsh");
     let cases = [
@@ -1466,6 +1694,7 @@ fn local_references_follow_source_order_shadowing_and_callable_capture() {
     let declaration_starts = references
         .iter()
         .map(|reference| match reference.target() {
+            ModuleReferenceTarget::DynamicStatus => panic!("fixture has no dynamic reads"),
             ModuleReferenceTarget::ScriptArguments => panic!("all bindings are source locals"),
             ModuleReferenceTarget::Local {
                 declaration_span, ..
@@ -2580,6 +2809,8 @@ fn dependency_order_shares_cwd_environment_status_and_output_until_root_exit() {
                 "export TOKEN = 'dependency'\n",
                 "which exit | get kind | encode utf8\n",
                 "^/bin/mark status\n",
+                "export STATUS_CODE = $status.code\n",
+                "export SEEN_PWD = env('PWD')\n",
                 "let ready = true\n",
                 "export { ready }\n",
             ),
@@ -2607,6 +2838,11 @@ fn dependency_order_shares_cwd_environment_status_and_output_until_root_exit() {
 
     assert_eq!(completion.status().and_then(Status::code), Some(7));
     assert_eq!(environment.get("TOKEN"), Some(OsStr::new("dependency")));
+    assert_eq!(environment.get("STATUS_CODE"), Some(OsStr::new("7")));
+    assert_eq!(
+        environment.get("SEEN_PWD"),
+        Some(OsStr::new("/project/nested"))
+    );
     assert_eq!(environment.get("PWD"), Some(OsStr::new("/project/nested")));
     let spawns = platform.spawns();
     assert_eq!(
@@ -4057,9 +4293,14 @@ fn semantic_queries_expose_visible_names_definitions_references_and_hover_withou
             .collect::<Vec<_>>(),
         [
             ("args", NameKind::ScriptArguments),
+            ("env", NameKind::Intrinsic),
+            ("float", NameKind::Intrinsic),
+            ("glob", NameKind::Intrinsic),
             ("greet", NameKind::ImportedFunction),
             ("inside", NameKind::Binding),
+            ("int", NameKind::Intrinsic),
             ("local", NameKind::Function),
+            ("status", NameKind::DynamicBinding),
             ("top", NameKind::Binding),
             ("value", NameKind::Binding),
         ]

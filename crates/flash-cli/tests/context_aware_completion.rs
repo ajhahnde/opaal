@@ -98,6 +98,72 @@ fn variable_completion_uses_visible_scope_and_replaces_the_dollar_word() {
             && !completion.append_whitespace()
     }));
     assert!(engine.complete(source, 6).is_empty());
+    assert_eq!(engine.complete("echo $sta", 9)[0].value(), "$status");
+}
+
+#[test]
+fn expression_completion_uses_intrinsics_and_respects_lexical_shadowing() {
+    let registry = CommandRegistry::new();
+    let source = "let value = fl(3.9)";
+    let cursor = source.find('(').unwrap();
+    let intrinsic = CompletionEngine::new(CompletionCatalog::from_runtime(
+        &registry,
+        &ScopeStack::new(),
+    ))
+    .complete(source, cursor);
+    assert_eq!(
+        intrinsic
+            .iter()
+            .map(|completion| (completion.value(), completion.kind()))
+            .collect::<Vec<_>>(),
+        [("float", CompletionKind::Intrinsic)]
+    );
+    assert_eq!(intrinsic[0].replacement(), 12..14);
+    assert!(!intrinsic[0].append_whitespace());
+
+    let env_source = "let home = en('HOME')";
+    let env_cursor = env_source.find('(').unwrap();
+    let env = CompletionEngine::new(CompletionCatalog::from_runtime(
+        &registry,
+        &ScopeStack::new(),
+    ))
+    .complete(env_source, env_cursor);
+    assert_eq!(env[0].value(), "env");
+    assert_eq!(env[0].kind(), CompletionKind::Intrinsic);
+
+    let glob_source = "let files = gl('*.fsh')";
+    let glob_cursor = glob_source.find('(').unwrap();
+    let glob = CompletionEngine::new(CompletionCatalog::from_runtime(
+        &registry,
+        &ScopeStack::new(),
+    ))
+    .complete(glob_source, glob_cursor);
+    assert_eq!(glob[0].value(), "glob");
+    assert_eq!(glob[0].kind(), CompletionKind::Intrinsic);
+
+    let mut value_shadow = ScopeStack::new();
+    value_shadow
+        .declare("float", BindingMutability::Immutable, Value::Null)
+        .expect("unique shadow");
+    assert!(
+        CompletionEngine::new(CompletionCatalog::from_runtime(&registry, &value_shadow))
+            .complete(source, cursor)
+            .is_empty()
+    );
+
+    let mut function_shadow = ScopeStack::new();
+    function_shadow
+        .declare(
+            "float",
+            BindingMutability::Immutable,
+            Value::Callable(Arc::new(NamedFunction)),
+        )
+        .expect("unique function shadow");
+    let function =
+        CompletionEngine::new(CompletionCatalog::from_runtime(&registry, &function_shadow))
+            .complete(source, cursor);
+    assert_eq!(function[0].kind(), CompletionKind::Function);
+    assert!(!function[0].append_whitespace());
 }
 
 #[test]

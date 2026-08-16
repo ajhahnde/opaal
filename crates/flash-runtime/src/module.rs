@@ -34,6 +34,7 @@ use crate::command::{
     Carrier, CommandClassification, CommandLifecycle, CommandOutput, CommandRegistry,
 };
 use crate::documentation::Documentation;
+use crate::intrinsic::{DynamicBinding, ExpressionIntrinsic};
 
 /// Host-free cooperative cancellation for static source analysis.
 #[derive(Clone)]
@@ -436,6 +437,8 @@ pub struct ModuleNameImport {
 /// The lexical binding selected by one statically resolved name read.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ModuleReferenceTarget {
+    /// The reserved live current-status value supplied by the evaluation host.
+    DynamicStatus,
     /// The synthetic immutable `args: List[String]` root-program input.
     ScriptArguments,
     /// A declaration in the same canonical source module.
@@ -657,6 +660,7 @@ impl ModuleNameRegistry {
                     declaration_span,
                 } if target_module == module => Some((binding.name(), *declaration_span)),
                 ModuleReferenceTarget::ScriptArguments
+                | ModuleReferenceTarget::DynamicStatus
                 | ModuleReferenceTarget::Local { .. }
                 | ModuleReferenceTarget::Imported { .. } => None,
             })
@@ -714,6 +718,14 @@ impl ModuleNameRegistry {
                     .slice(identifier.span())
                     .expect("parsed identifiers belong to their module source")
                     .to_owned();
+                if DynamicBinding::lookup(&name).is_some() {
+                    errors.push(ModuleNameError::ReservedBinding {
+                        module: entry.module().clone(),
+                        name,
+                        declaration_span: identifier.span(),
+                    });
+                    continue;
+                }
                 names.locals.entry(name).or_insert(identifier.span());
             }
             registry.by_module.insert(entry.module().clone(), names);
@@ -792,6 +804,14 @@ impl ModuleNameRegistry {
                         .slice(identifier.span())
                         .expect("parsed identifiers belong to their module source")
                         .to_owned();
+                    if DynamicBinding::lookup(&name).is_some() {
+                        errors.push(ModuleNameError::ReservedBinding {
+                            module: entry.module().clone(),
+                            name,
+                            declaration_span: identifier.span(),
+                        });
+                        continue;
+                    }
                     let target_names = registry
                         .by_module
                         .get(edge.target())
@@ -1988,6 +2008,7 @@ impl<'a> SignatureValidator<'a> {
 
     fn reference_type(&self, target: &ModuleReferenceTarget) -> Option<ValueType> {
         match target {
+            ModuleReferenceTarget::DynamicStatus => Some(ValueType::Any),
             ModuleReferenceTarget::ScriptArguments => {
                 Some(ValueType::List(Box::new(ValueType::String)))
             }
@@ -2096,10 +2117,22 @@ impl<'a> SignatureValidator<'a> {
             .names
             .reference(self.entry.module(), call.callee.span())
         else {
+            if let ExpressionKind::Symbol(identifier) = call.callee.kind()
+                && let Some(intrinsic) = ExpressionIntrinsic::lookup(self.text(identifier.span()))
+            {
+                return Ok(Some(self.validate_intrinsic_call(
+                    intrinsic,
+                    call_span,
+                    call,
+                    &argument_types,
+                )));
+            }
             return Ok(None);
         };
         let (target_module, declaration_span) = match reference.target() {
-            ModuleReferenceTarget::ScriptArguments => return Ok(None),
+            ModuleReferenceTarget::DynamicStatus | ModuleReferenceTarget::ScriptArguments => {
+                return Ok(None);
+            }
             ModuleReferenceTarget::Local {
                 module,
                 declaration_span,
@@ -2159,6 +2192,51 @@ impl<'a> SignatureValidator<'a> {
         } else {
             signature.result().clone()
         }))
+    }
+
+    fn validate_intrinsic_call(
+        &self,
+        intrinsic: ExpressionIntrinsic,
+        call_span: Span,
+        call: &flash_syntax::CallExpression,
+        argument_types: &[Option<ValueType>],
+    ) -> ValueType {
+        if call.arguments.len() != intrinsic.arity() {
+            self.errors
+                .borrow_mut()
+                .push(ModuleTypeError::IntrinsicCallArity {
+                    module: self.entry.module().clone(),
+                    name: intrinsic.name(),
+                    call_span,
+                    expected: intrinsic.arity(),
+                    actual: call.arguments.len(),
+                });
+            return ValueType::Any;
+        }
+        let Some(actual) = argument_types[0].as_ref() else {
+            return intrinsic.result_type();
+        };
+        if !intrinsic.accepts_type(actual) {
+            self.errors
+                .borrow_mut()
+                .push(ModuleTypeError::IntrinsicArgumentMismatch {
+                    module: self.entry.module().clone(),
+                    name: intrinsic.name(),
+                    argument_span: call.arguments[0].span(),
+                    expected: intrinsic.parameter_type_label(),
+                    actual: actual.clone(),
+                });
+            ValueType::Any
+        } else {
+            intrinsic.result_type()
+        }
+    }
+
+    fn text(&self, span: Span) -> &str {
+        self.entry
+            .source()
+            .slice(span)
+            .expect("parsed syntax spans belong to their module source")
     }
 
     fn literal(
@@ -2248,8 +2326,23 @@ impl<'a> ReferenceResolver<'a> {
         control: &'a AnalysisControl,
     ) -> Self {
         let source_span = entry.script().span();
-        let mut scopes = Vec::with_capacity(usize::from(is_root) + 1);
+        let mut scopes = Vec::with_capacity(usize::from(is_root) + 2);
         let mut visible = Vec::new();
+        let dynamic_target = ModuleReferenceTarget::DynamicStatus;
+        scopes.push(ReferenceScope {
+            bindings: BTreeMap::from([(
+                DynamicBinding::CurrentStatus.name().to_owned(),
+                Some(dynamic_target.clone()),
+            )]),
+            span: source_span,
+        });
+        visible.push(ModuleVisibleBinding {
+            name: DynamicBinding::CurrentStatus.name().to_owned(),
+            target: dynamic_target,
+            scope_span: source_span,
+            visible_from: source_span.start(),
+            depth: 0,
+        });
         if is_root {
             let target = ModuleReferenceTarget::ScriptArguments;
             scopes.push(ReferenceScope {
@@ -2261,7 +2354,7 @@ impl<'a> ReferenceResolver<'a> {
                 target,
                 scope_span: source_span,
                 visible_from: source_span.start(),
-                depth: 0,
+                depth: scopes.len().saturating_sub(1),
             });
         }
         let mut root = BTreeMap::new();
@@ -2519,7 +2612,12 @@ impl<'a> ReferenceResolver<'a> {
             }
             ExpressionKind::Call(call) => {
                 if let ExpressionKind::Symbol(identifier) = call.callee.kind() {
-                    self.variable(identifier.span(), call.callee.span())?;
+                    let name = self.text(identifier.span());
+                    if ExpressionIntrinsic::lookup(name).is_none()
+                        || self.visible_target(name).is_some()
+                    {
+                        self.variable(identifier.span(), call.callee.span())?;
+                    }
                 } else {
                     self.expression(&call.callee)?;
                 }
@@ -2617,13 +2715,7 @@ impl<'a> ReferenceResolver<'a> {
         reference_span: Span,
     ) -> Result<(), Box<ModuleNameError>> {
         let name = self.text(name_span).to_owned();
-        let Some(target) = self
-            .scopes
-            .iter()
-            .rev()
-            .find_map(|scope| scope.bindings.get(&name))
-            .cloned()
-        else {
+        let Some(target) = self.visible_target(&name) else {
             self.errors.push(ModuleNameError::UnknownReference {
                 module: self.entry.module().clone(),
                 name,
@@ -2642,8 +2734,24 @@ impl<'a> ReferenceResolver<'a> {
         Ok(())
     }
 
+    fn visible_target(&self, name: &str) -> Option<Option<ModuleReferenceTarget>> {
+        self.scopes
+            .iter()
+            .rev()
+            .find_map(|scope| scope.bindings.get(name))
+            .cloned()
+    }
+
     fn ensure_available(&mut self, declaration_span: Span) -> bool {
         let name = self.text(declaration_span).to_owned();
+        if DynamicBinding::lookup(&name).is_some() {
+            self.errors.push(ModuleNameError::ReservedBinding {
+                module: self.entry.module().clone(),
+                name,
+                declaration_span,
+            });
+            return false;
+        }
         let scope = self
             .scopes
             .last()
@@ -2715,6 +2823,9 @@ impl<'a> ReferenceResolver<'a> {
 
 fn binding_span(target: &ModuleReferenceTarget) -> Span {
     match target {
+        ModuleReferenceTarget::DynamicStatus => {
+            unreachable!("the reserved dynamic binding cannot collide as a lexical binding")
+        }
         ModuleReferenceTarget::ScriptArguments => {
             unreachable!("the synthetic parent input cannot collide in a module scope")
         }
@@ -3240,7 +3351,18 @@ impl<'a> StaticEffectAnalyzer<'a> {
         }
         match expression.kind() {
             ExpressionKind::Literal(literal) => self.literal(literal),
-            ExpressionKind::Variable(_) | ExpressionKind::Symbol(_) => {}
+            ExpressionKind::Variable(_) => {
+                if self
+                    .names
+                    .reference(&self.module, expression.span())
+                    .is_some_and(|reference| {
+                        matches!(reference.target(), ModuleReferenceTarget::DynamicStatus)
+                    })
+                {
+                    self.summary.push(ModuleEffect::Status, expression.span());
+                }
+            }
+            ExpressionKind::Symbol(_) => {}
             ExpressionKind::List(items) => {
                 for item in items {
                     self.expression(item);
@@ -3282,6 +3404,24 @@ impl<'a> StaticEffectAnalyzer<'a> {
             return;
         }
         let Some(reference) = self.names.reference(&self.module, callee.span()) else {
+            if let ExpressionKind::Symbol(identifier) = callee.kind()
+                && let Some(intrinsic) = self
+                    .source
+                    .slice(identifier.span())
+                    .ok()
+                    .and_then(ExpressionIntrinsic::lookup)
+            {
+                match intrinsic {
+                    ExpressionIntrinsic::Env => {
+                        self.summary.push(ModuleEffect::ChildEnvironment, call_span);
+                    }
+                    ExpressionIntrinsic::Glob => {
+                        self.summary.push(ModuleEffect::FilesystemRead, call_span);
+                    }
+                    ExpressionIntrinsic::Float | ExpressionIntrinsic::Int => {}
+                }
+                return;
+            }
             self.expression(callee);
             self.summary.push(ModuleEffect::OpaqueExternal, call_span);
             return;
@@ -3296,7 +3436,7 @@ impl<'a> StaticEffectAnalyzer<'a> {
                 declaration_span,
                 ..
             } => (target_module.clone(), *declaration_span),
-            ModuleReferenceTarget::ScriptArguments => {
+            ModuleReferenceTarget::DynamicStatus | ModuleReferenceTarget::ScriptArguments => {
                 self.summary.push(ModuleEffect::OpaqueExternal, call_span);
                 return;
             }
@@ -4572,6 +4712,12 @@ impl<'a> ModuleProgramLoader<'a> {
 /// A failure while building explicit module export/import-name tables.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ModuleNameError {
+    /// A lexical declaration attempts to occupy a reserved dynamic name.
+    ReservedBinding {
+        module: ModuleId,
+        name: String,
+        declaration_span: Span,
+    },
     /// An export list names no top-level lexical declaration or function.
     UnknownExport {
         module: ModuleId,
@@ -4620,7 +4766,8 @@ impl ModuleNameError {
     #[must_use]
     pub const fn module(&self) -> &ModuleId {
         match self {
-            Self::UnknownExport { module, .. }
+            Self::ReservedBinding { module, .. }
+            | Self::UnknownExport { module, .. }
             | Self::DuplicateExport { module, .. }
             | Self::ImportConflict { module, .. }
             | Self::UnknownReference { module, .. }
@@ -4633,6 +4780,14 @@ impl ModuleNameError {
     #[must_use]
     pub fn diagnostic(&self) -> Diagnostic {
         match self {
+            Self::ReservedBinding {
+                declaration_span,
+                name,
+                ..
+            } => Diagnostic::new(Severity::Error, "MOD011", self.to_string()).with_primary(
+                *declaration_span,
+                format!("`{name}` is a reserved dynamic binding"),
+            ),
             Self::UnknownExport {
                 export_span, name, ..
             } => Diagnostic::new(Severity::Error, "MOD005", self.to_string()).with_primary(
@@ -4691,6 +4846,11 @@ impl ModuleNameError {
 impl fmt::Display for ModuleNameError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::ReservedBinding { module, name, .. } => write!(
+                formatter,
+                "module `{}` cannot declare reserved binding `{name}`",
+                module.path().display()
+            ),
             Self::UnknownExport { module, name, .. } => write!(
                 formatter,
                 "module `{}` cannot export unknown name `{name}`",
@@ -4750,6 +4910,13 @@ pub enum ModuleTypeError {
         actual: usize,
         declaration_span: Span,
     },
+    IntrinsicCallArity {
+        module: ModuleId,
+        name: &'static str,
+        call_span: Span,
+        expected: usize,
+        actual: usize,
+    },
     ArgumentMismatch {
         module: ModuleId,
         name: String,
@@ -4758,6 +4925,13 @@ pub enum ModuleTypeError {
         expected: ValueType,
         actual: ValueType,
         parameter_span: Span,
+    },
+    IntrinsicArgumentMismatch {
+        module: ModuleId,
+        name: &'static str,
+        argument_span: Span,
+        expected: &'static str,
+        actual: ValueType,
     },
     ResultMismatch {
         module: ModuleId,
@@ -4776,7 +4950,9 @@ impl ModuleTypeError {
             Self::UnknownType { module, .. }
             | Self::InvalidTypeArity { module, .. }
             | Self::CallArity { module, .. }
+            | Self::IntrinsicCallArity { module, .. }
             | Self::ArgumentMismatch { module, .. }
+            | Self::IntrinsicArgumentMismatch { module, .. }
             | Self::ResultMismatch { module, .. } => module,
         }
     }
@@ -4784,8 +4960,11 @@ impl ModuleTypeError {
     const fn primary_span(&self) -> Span {
         match self {
             Self::UnknownType { span, .. } | Self::InvalidTypeArity { span, .. } => *span,
-            Self::CallArity { call_span, .. } => *call_span,
-            Self::ArgumentMismatch { argument_span, .. } => *argument_span,
+            Self::CallArity { call_span, .. } | Self::IntrinsicCallArity { call_span, .. } => {
+                *call_span
+            }
+            Self::ArgumentMismatch { argument_span, .. }
+            | Self::IntrinsicArgumentMismatch { argument_span, .. } => *argument_span,
             Self::ResultMismatch { result_span, .. } => *result_span,
         }
     }
@@ -4818,6 +4997,15 @@ impl ModuleTypeError {
                     format!("expected {expected} arguments, found {actual}"),
                 )
                 .with_secondary(*declaration_span, "function declared here"),
+            Self::IntrinsicCallArity {
+                call_span,
+                expected,
+                actual,
+                ..
+            } => Diagnostic::new(Severity::Error, "SIG003", self.to_string()).with_primary(
+                *call_span,
+                format!("expected {expected} arguments, found {actual}"),
+            ),
             Self::ArgumentMismatch {
                 argument_span,
                 parameter_span,
@@ -4830,6 +5018,15 @@ impl ModuleTypeError {
                     format!("this argument is `{actual}`, expected `{expected}`"),
                 )
                 .with_secondary(*parameter_span, "parameter type declared here"),
+            Self::IntrinsicArgumentMismatch {
+                argument_span,
+                expected,
+                actual,
+                ..
+            } => Diagnostic::new(Severity::Error, "SIG004", self.to_string()).with_primary(
+                *argument_span,
+                format!("this argument is `{actual}`, expected `{expected}`"),
+            ),
             Self::ResultMismatch {
                 result_span,
                 annotation_span,
@@ -4876,6 +5073,17 @@ impl fmt::Display for ModuleTypeError {
                 "module `{}` calls `{name}` with {actual} arguments; expected {expected}",
                 module.path().display()
             ),
+            Self::IntrinsicCallArity {
+                module,
+                name,
+                expected,
+                actual,
+                ..
+            } => write!(
+                formatter,
+                "module `{}` calls intrinsic `{name}` with {actual} arguments; expected {expected}",
+                module.path().display()
+            ),
             Self::ArgumentMismatch {
                 module,
                 name,
@@ -4886,6 +5094,17 @@ impl fmt::Display for ModuleTypeError {
             } => write!(
                 formatter,
                 "module `{}` passes `{actual}` to `{name}` parameter `{parameter}`; expected `{expected}`",
+                module.path().display()
+            ),
+            Self::IntrinsicArgumentMismatch {
+                module,
+                name,
+                expected,
+                actual,
+                ..
+            } => write!(
+                formatter,
+                "module `{}` passes `{actual}` to intrinsic `{name}`; expected `{expected}`",
                 module.path().display()
             ),
             Self::ResultMismatch {

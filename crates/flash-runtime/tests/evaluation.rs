@@ -43,6 +43,7 @@ fn literals_and_operators_produce_the_last_expression_value() {
     assert_eq!(ok("true"), Value::Bool(true));
     assert_eq!(ok("null"), Value::Null);
     assert_eq!(ok("'exact'"), Value::string("exact"));
+    assert_eq!(ok("\"decoded\\ntext\""), Value::string("decoded\ntext"));
     assert_eq!(ok("2 in [1, 2, 3]"), Value::Bool(true));
     assert_eq!(
         ok("[10, 20, 30]"),
@@ -50,6 +51,40 @@ fn literals_and_operators_produce_the_last_expression_value() {
     );
     // An empty program evaluates to null.
     assert_eq!(ok(""), Value::Null);
+}
+
+#[test]
+fn double_quoted_values_interpolate_scalars_and_record_keys() {
+    assert_eq!(
+        ok("let project = \"FlashOS\"\nlet major = 1\n\"$project ${$major}.0\""),
+        Value::string("FlashOS 1.0")
+    );
+    assert_eq!(
+        ok("let record = {\"display name\": \"Flash\"}\n$record[\"display name\"]"),
+        Value::string("Flash")
+    );
+}
+
+#[test]
+fn ratified_numeric_conversions_are_callable_expressions() {
+    assert_eq!(ok("int(3.9)"), int(3));
+    assert_eq!(
+        ok("float(7)"),
+        Value::from(flash_runtime::FiniteFloat::new(7.0).unwrap())
+    );
+}
+
+#[test]
+fn current_status_is_dynamic_and_reserved_from_lexical_declaration() {
+    assert_eq!(ok("$status"), Value::Null);
+    assert!(matches!(
+        err("let status = 1"),
+        RuntimeErrorKind::Scope(ScopeError::ReservedBinding(name)) if name == "status"
+    ));
+    assert!(matches!(
+        err("$status = null"),
+        RuntimeErrorKind::Scope(ScopeError::ImmutableBinding(name)) if name == "status"
+    ));
 }
 
 #[test]
@@ -167,10 +202,6 @@ fn deferred_forms_report_precise_errors_with_spans() {
     assert!(matches!(
         err("let x = $(echo hi)"),
         RuntimeErrorKind::ExecutionUnsupported
-    ));
-    assert!(matches!(
-        err("let x = \"hi\""),
-        RuntimeErrorKind::Unsupported { .. }
     ));
     assert!(matches!(
         err("break"),

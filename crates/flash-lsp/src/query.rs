@@ -211,6 +211,7 @@ fn completion(
         CompletionContext::Command {
             forced_external: true,
         }
+        | CompletionContext::Expression
         | CompletionContext::Variable
         | CompletionContext::Path
         | CompletionContext::None => {}
@@ -220,7 +221,8 @@ fn completion(
         target.context(),
         CompletionContext::Command {
             forced_external: false
-        } | CompletionContext::Variable
+        } | CompletionContext::Expression
+            | CompletionContext::Variable
     ) && let Some(report) = analyze(snapshot, document, &commands, control)?
         && let Some(program) = report.program()
         && let Some(module) = module_for_document(program, document)
@@ -235,11 +237,22 @@ fn completion(
         {
             match target.context() {
                 CompletionContext::Command { .. }
-                    if matches!(name.kind(), NameKind::Function | NameKind::ImportedFunction) =>
+                    if matches!(
+                        name.kind(),
+                        NameKind::Intrinsic | NameKind::Function | NameKind::ImportedFunction
+                    ) =>
                 {
                     candidates.push(CompletionCandidate::new(name.name(), name.name(), 1, 3));
                 }
-                CompletionContext::Variable => {
+                CompletionContext::Expression
+                    if matches!(
+                        name.kind(),
+                        NameKind::Intrinsic | NameKind::Function | NameKind::ImportedFunction
+                    ) =>
+                {
+                    candidates.push(CompletionCandidate::new(name.name(), name.name(), 1, 3));
+                }
+                CompletionContext::Variable if name.kind() != NameKind::Intrinsic => {
                     candidates.push(CompletionCandidate::new(
                         format!("${}", name.name()),
                         name.name(),
@@ -304,6 +317,26 @@ fn hover(
         render_effects(effects.direct(), effects.transitive())
     } else {
         match queries.hover_at(module, cursor) {
+            Some(SemanticHover::Intrinsic(hover)) => {
+                let intrinsic = hover.intrinsic();
+                format!(
+                    "```flash\n{}({}: {}) -> {}\n```\n\n{}",
+                    intrinsic.name(),
+                    intrinsic.parameter_name(),
+                    intrinsic.parameter_type_label(),
+                    intrinsic.result_type(),
+                    intrinsic.documentation(),
+                )
+            }
+            Some(SemanticHover::DynamicBinding(hover)) => {
+                let binding = hover.binding();
+                format!(
+                    "```flash\ndynamic ${}: {}\n```\n\n{}",
+                    binding.name(),
+                    binding.result_type(),
+                    binding.documentation(),
+                )
+            }
             Some(SemanticHover::Binding(binding)) => {
                 format!(
                     "```flash\nlet {}: {}\n```",
@@ -353,11 +386,36 @@ fn signature_help(
     let Some(module) = module_for_document(program, document) else {
         return Ok(Value::Null);
     };
-    let Some(signature) = program
-        .semantic_queries(&commands)
-        .signature_at(module, cursor)
-    else {
-        return Ok(Value::Null);
+    let queries = program.semantic_queries(&commands);
+    let Some(signature) = queries.signature_at(module, cursor) else {
+        let Some(signature) = queries.intrinsic_signature_at(module, cursor) else {
+            return Ok(Value::Null);
+        };
+        let intrinsic = signature.intrinsic();
+        return Ok(json!({
+            "signatures": [{
+                "label": format!(
+                    "{}({}: {}) -> {}",
+                    intrinsic.name(),
+                    intrinsic.parameter_name(),
+                    intrinsic.parameter_type_label(),
+                    intrinsic.result_type(),
+                ),
+                "documentation": {
+                    "kind": "markdown",
+                    "value": intrinsic.documentation(),
+                },
+                "parameters": [{
+                    "label": format!(
+                        "{}: {}",
+                        intrinsic.parameter_name(),
+                        intrinsic.parameter_type_label(),
+                    )
+                }]
+            }],
+            "activeSignature": 0,
+            "activeParameter": signature.active_parameter(),
+        }));
     };
     let parameters = signature
         .signature()

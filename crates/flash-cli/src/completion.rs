@@ -5,6 +5,7 @@ use std::ops::Range;
 
 use flash_runtime::ScopeStack;
 use flash_runtime::command::{CommandClassification, CommandRegistry};
+use flash_runtime::intrinsic::{DynamicBinding, ExpressionIntrinsic};
 use flash_syntax::{
     CompletionContext, CompletionTarget, ParseOutcome, SourceFile, SourceId, completion_target,
     parse,
@@ -13,6 +14,8 @@ use flash_syntax::{
 /// The semantic source of one completion candidate.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum CompletionKind {
+    /// A built-in callable available in expression position.
+    Intrinsic,
     /// A command registered inside Flash.
     InternalCommand,
     /// A named callable visible in the lexical scope.
@@ -65,6 +68,7 @@ impl Completion {
 /// Immutable candidates used by [`CompletionEngine`].
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct CompletionCatalog {
+    intrinsics: BTreeSet<String>,
     internal: BTreeMap<String, BTreeSet<String>>,
     functions: BTreeSet<String>,
     variables: BTreeSet<String>,
@@ -105,7 +109,20 @@ impl CompletionCatalog {
                 functions.insert(name.to_owned());
             }
         }
+        variables.extend(
+            DynamicBinding::ALL
+                .into_iter()
+                .map(DynamicBinding::name)
+                .map(str::to_owned),
+        );
+        let intrinsics = ExpressionIntrinsic::ALL
+            .into_iter()
+            .map(ExpressionIntrinsic::name)
+            .filter(|name| !variables.contains(*name))
+            .map(str::to_owned)
+            .collect();
         Self {
+            intrinsics,
             internal,
             functions,
             variables,
@@ -166,7 +183,11 @@ impl CompletionEngine {
         let mut completions = Vec::new();
         let mut seen = HashSet::new();
         let replacement = target.replacement();
-        let mut add = |values: &BTreeSet<String>, kind, prefix: &str, decorate: bool| {
+        let mut add = |values: &BTreeSet<String>,
+                       kind,
+                       prefix: &str,
+                       decorate: bool,
+                       append_whitespace: bool| {
             for value in values.iter().filter(|value| value.starts_with(prefix)) {
                 let replacement_value = if decorate {
                     format!("${value}")
@@ -178,10 +199,7 @@ impl CompletionEngine {
                         value: replacement_value,
                         replacement: replacement.clone(),
                         kind,
-                        append_whitespace: !matches!(
-                            kind,
-                            CompletionKind::Variable | CompletionKind::Path
-                        ),
+                        append_whitespace,
                     });
                 }
             }
@@ -196,18 +214,37 @@ impl CompletionEngine {
                         CompletionKind::InternalCommand,
                         target.prefix(),
                         false,
+                        true,
                     );
                     add(
                         &self.catalog.functions,
                         CompletionKind::Function,
                         target.prefix(),
                         false,
+                        true,
                     );
                 }
                 add(
                     &self.catalog.external,
                     CompletionKind::ExternalCommand,
                     target.prefix(),
+                    false,
+                    true,
+                );
+            }
+            CompletionContext::Expression => {
+                add(
+                    &self.catalog.functions,
+                    CompletionKind::Function,
+                    target.prefix(),
+                    false,
+                    false,
+                );
+                add(
+                    &self.catalog.intrinsics,
+                    CompletionKind::Intrinsic,
+                    target.prefix(),
+                    false,
                     false,
                 );
             }
@@ -216,16 +253,18 @@ impl CompletionEngine {
                 CompletionKind::Variable,
                 target.prefix().strip_prefix('$').unwrap_or(target.prefix()),
                 true,
+                false,
             ),
             CompletionContext::Flag { command } => {
                 if let Some(flags) = self.catalog.internal.get(command.as_str()) {
-                    add(flags, CompletionKind::Flag, target.prefix(), false);
+                    add(flags, CompletionKind::Flag, target.prefix(), false, true);
                 }
             }
             CompletionContext::Path => add(
                 &self.catalog.paths,
                 CompletionKind::Path,
                 target.prefix(),
+                false,
                 false,
             ),
             CompletionContext::None => {}

@@ -42,6 +42,12 @@ fn command_variable_flag_and_path_contexts_are_source_spanned() {
         completion_target("echo value > ./ou", 17).expect("a redirect operand is a path context");
     assert_eq!(redirect.context(), &CompletionContext::Path);
     assert_eq!(redirect.prefix(), "./ou");
+
+    let expression = completion_target("let value = int(3.9)", 15)
+        .expect("a call callee is an expression completion context");
+    assert_eq!(expression.context(), &CompletionContext::Expression);
+    assert_eq!(expression.replacement(), 12..15);
+    assert_eq!(expression.prefix(), "int");
 }
 
 #[test]

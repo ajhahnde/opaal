@@ -21,6 +21,8 @@ pub enum OperationError {
         operator: &'static str,
         operands: Vec<&'static str>,
     },
+    /// An operation in the shared catalog requires the active evaluator host.
+    HostContextRequired { operation: &'static str },
     /// Checked integer arithmetic overflowed the `i64` range.
     IntegerOverflow { operator: &'static str },
     /// A float operation produced a non-finite result.
@@ -51,6 +53,12 @@ impl fmt::Display for OperationError {
                     formatter.write_str(family)?;
                 }
                 Ok(())
+            }
+            Self::HostContextRequired { operation } => {
+                write!(
+                    formatter,
+                    "operation `{operation}` requires evaluator host context"
+                )
             }
             Self::IntegerOverflow { operator } => {
                 write!(formatter, "integer `{operator}` overflowed")
@@ -380,6 +388,32 @@ pub fn field(target: &Value, name: &str) -> Result<Value, OperationError> {
                     name: name.to_owned(),
                 })
         }
+        Value::Status(status) => match name {
+            "code" => Ok(status.code().map_or(Value::Null, Value::Int)),
+            "signal" => Ok(status.signal().map_or(Value::Null, |signal| {
+                Value::Record(
+                    crate::Record::new(vec![
+                        (
+                            "number".to_owned(),
+                            signal.number().map_or(Value::Null, Value::Int),
+                        ),
+                        (
+                            "name".to_owned(),
+                            signal.name().map_or(Value::Null, Value::string),
+                        ),
+                    ])
+                    .expect("signal field names are distinct"),
+                )
+            })),
+            "ok" => Ok(Value::Bool(status.is_ok())),
+            "stages" => Ok(Value::list(
+                status.stages().iter().cloned().map(Value::Status).collect(),
+            )),
+            "duration" => Ok(Value::Duration(status.duration())),
+            _ => Err(OperationError::MissingField {
+                name: name.to_owned(),
+            }),
+        },
         _ => Err(unsupported(".", [target])),
     }
 }

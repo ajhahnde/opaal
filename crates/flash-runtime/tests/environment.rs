@@ -6,8 +6,11 @@
 
 use std::ffi::{OsStr, OsString};
 
-use flash_runtime::eval::{Completion, EvalLimits, RuntimeErrorKind, evaluate_in_environment};
-use flash_runtime::{Environment, ScopeStack};
+use flash_runtime::eval::{
+    CancellationToken, Completion, EvalLimits, ResourceBudget, RuntimeErrorKind,
+    evaluate_in_environment,
+};
+use flash_runtime::{Environment, ScopeStack, Value};
 use flash_syntax::{ParseOutcome, SourceFile, SourceId, parse};
 
 fn source(text: &str) -> SourceFile {
@@ -16,14 +19,27 @@ fn source(text: &str) -> SourceFile {
 
 /// Runs a script against a fresh scope and the given environment.
 fn run_in(text: &str, env: &mut Environment) -> Result<(), RuntimeErrorKind> {
+    run_value_in(text, env).map(|_| ())
+}
+
+/// Runs a script against a fresh scope and returns its final value.
+fn run_value_in(text: &str, env: &mut Environment) -> Result<Value, RuntimeErrorKind> {
+    run_value_with_limits(text, env, &EvalLimits::default())
+}
+
+fn run_value_with_limits(
+    text: &str,
+    env: &mut Environment,
+    limits: &EvalLimits,
+) -> Result<Value, RuntimeErrorKind> {
     let file = source(text);
     let script = match parse(&file) {
         ParseOutcome::Complete(script) => script,
         other => panic!("source did not parse: {other:?}"),
     };
     let mut scope = ScopeStack::new();
-    match evaluate_in_environment(&script, &file, &mut scope, env, &EvalLimits::default()) {
-        Ok(Completion::Value(_)) => Ok(()),
+    match evaluate_in_environment(&script, &file, &mut scope, env, limits) {
+        Ok(Completion::Value(value)) => Ok(value),
         Ok(Completion::Cancelled(_)) => panic!("unexpected cancellation"),
         Err(error) => Err(error.kind().clone()),
     }
@@ -87,6 +103,87 @@ fn unset_does_not_touch_a_lexical_binding() {
     let mut env = Environment::new();
     run_in("let x = 5\nunset x", &mut env).unwrap();
     assert!(env.is_empty());
+}
+
+#[test]
+fn env_intrinsic_reads_present_absent_and_source_ordered_changes() {
+    let mut env = Environment::from_snapshot([("HOME", os("/home/me"))]);
+    assert_eq!(
+        run_value_in("env('HOME')", &mut env).unwrap(),
+        Value::string("/home/me")
+    );
+    assert_eq!(
+        run_value_in("env('MISSING')", &mut env).unwrap(),
+        Value::Null
+    );
+    assert_eq!(
+        run_value_in("export EDITOR = 'hx'\nenv('EDITOR')", &mut env).unwrap(),
+        Value::string("hx")
+    );
+    assert_eq!(
+        run_value_in("unset EDITOR\nenv('EDITOR')", &mut env).unwrap(),
+        Value::Null
+    );
+}
+
+#[test]
+fn env_intrinsic_rejects_non_string_names() {
+    assert!(matches!(
+        run_value_in("env(1)", &mut Environment::new()).unwrap_err(),
+        RuntimeErrorKind::Operation(_)
+    ));
+}
+
+#[test]
+fn lexical_callable_may_shadow_the_env_intrinsic() {
+    assert_eq!(
+        run_value_in(
+            "def env(name: String) -> String { 'shadowed' }\nenv('HOME')",
+            &mut Environment::from_snapshot([("HOME", os("/home/me"))]),
+        )
+        .unwrap(),
+        Value::string("shadowed")
+    );
+}
+
+#[test]
+fn env_intrinsic_is_available_during_restricted_startup_evaluation() {
+    let mut env = Environment::from_snapshot([("FLASH_THEME", os("dark"))]);
+    let limits = EvalLimits::startup(CancellationToken::never(), ResourceBudget::unlimited());
+    assert_eq!(
+        run_value_with_limits(
+            "export COPIED_THEME = env('FLASH_THEME')",
+            &mut env,
+            &limits,
+        )
+        .unwrap(),
+        Value::Null
+    );
+    assert_eq!(env.get("COPIED_THEME"), Some(OsStr::new("dark")));
+}
+
+#[test]
+fn glob_intrinsic_is_rejected_as_startup_filesystem_io() {
+    let limits = EvalLimits::startup(CancellationToken::never(), ResourceBudget::unlimited());
+    assert!(matches!(
+        run_value_with_limits("glob('*.fsh')", &mut Environment::new(), &limits).unwrap_err(),
+        RuntimeErrorKind::RestrictedStartup { .. }
+    ));
+}
+
+#[cfg(unix)]
+#[test]
+fn env_intrinsic_rejects_present_non_utf8_values_without_loss() {
+    use std::os::unix::ffi::{OsStrExt, OsStringExt};
+
+    let mut env = Environment::from_snapshot([("NATIVE", OsString::from_vec(vec![0xff]))]);
+    assert_eq!(
+        run_value_in("env('NATIVE')", &mut env).unwrap_err(),
+        RuntimeErrorKind::EnvironmentValueNotUtf8 {
+            name: "NATIVE".to_owned()
+        }
+    );
+    assert_eq!(env.get("NATIVE"), Some(OsStr::from_bytes(&[0xff])));
 }
 
 #[test]

@@ -189,6 +189,27 @@ markers = [
 observation = "The selected adapter opens a lazy standard-library directory iterator."
 
 [[source_evidence]]
+id = "runtime-explicit-glob"
+path = "components/flash/crates/flash-runtime/src/eval.rs"
+markers = [
+  "ExpressionIntrinsic::Glob => return self.glob(&argument, span)",
+  "read_directory(path)",
+  "stream.next_entry()",
+]
+observation = "The explicit glob intrinsic reaches only the evaluator host directory-read seam and charges cancellation and resource checks around lazy entry advancement."
+
+[[source_evidence]]
+id = "runtime-glob-traversal"
+path = "components/flash/crates/flash-runtime/src/glob.rs"
+markers = [
+  "PatternSegment::Recursive",
+  "entry.kind() != DirectoryEntryKind::Directory",
+  "path.push(entry.name())",
+  "paths.sort()",
+]
+observation = "Flash owns deterministic native-path matching and recursive traversal and descends only through entries reported as directories."
+
+[[source_evidence]]
 id = "adapter-shell-executable"
 path = "components/flash/crates/flash-platform-posix/src/lib.rs"
 markers = [
@@ -369,10 +390,10 @@ classification = "deferred"
 name = "directory-read"
 rust_variant = "DirectoryRead"
 requirements = ["open a directory relative to logical cwd", "advance a lazy entry stream", "preserve native names, entry kind, and regular-file size"]
-source_evidence = ["redox-selects-posix", "adapter-directory-read", "adapter-declares-full"]
+source_evidence = ["redox-selects-posix", "adapter-directory-read", "runtime-explicit-glob", "runtime-glob-traversal", "adapter-declares-full"]
 runtime_evidence = []
-source_observation = "The selected adapter delegates lazy directory iteration and metadata projection to the standard library."
-runtime_observation = "No current FlashOS target-runtime evidence executes Flash directory enumeration."
+source_observation = "The selected adapter delegates lazy directory iteration and metadata projection to the standard library; Flash's explicit glob expression consumes only that portable seam for deterministic traversal."
+runtime_observation = "No current FlashOS target-runtime evidence executes Flash directory enumeration or explicit glob matching."
 classification = "deferred"
 
 [[capability]]

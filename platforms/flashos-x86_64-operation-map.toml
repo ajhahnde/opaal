@@ -513,30 +513,30 @@ classification = "deferred"
 id = "directory-open-relative"
 capability = "directory-read"
 requirement = "open a directory relative to logical cwd"
-source_evidence = ["adapter-directory-read"]
+source_evidence = ["adapter-directory-read", "runtime-explicit-glob"]
 abi_seams = ["rust-filesystem", "rust-directory"]
 boundary = "rust-std"
-mapping_observation = "The adapter makes cwd absolute, joins a relative target, and opens it with std::fs::read_dir."
+mapping_observation = "The glob and structured-listing consumers reach the host seam; the adapter makes cwd absolute, joins a relative target, and opens it with std::fs::read_dir."
 classification = "deferred"
 
 [[operation]]
 id = "directory-advance-lazy"
 capability = "directory-read"
 requirement = "advance a lazy entry stream"
-source_evidence = ["adapter-directory-read"]
+source_evidence = ["adapter-directory-read", "runtime-explicit-glob"]
 abi_seams = ["rust-directory"]
 boundary = "rust-std"
-mapping_observation = "PosixDirectoryStream advances the owned std::fs::ReadDir iterator one entry at a time."
+mapping_observation = "PosixDirectoryStream advances the owned std::fs::ReadDir iterator one entry at a time; glob retains cancellation and resource checks around each advance."
 classification = "deferred"
 
 [[operation]]
 id = "directory-preserve-name-kind"
 capability = "directory-read"
 requirement = "preserve native names, entry kind, and regular-file size"
-source_evidence = ["adapter-directory-read"]
+source_evidence = ["adapter-directory-read", "runtime-glob-traversal"]
 abi_seams = ["rust-directory"]
 boundary = "rust-std"
-mapping_observation = "The adapter returns the native file_name and projects symlink-aware metadata into the portable kind and optional size."
+mapping_observation = "The adapter returns the native file_name and projects symlink-aware metadata into the portable kind and optional size; glob preserves the name in Path results and traverses only reported directories."
 classification = "deferred"
 
 [[operation]]

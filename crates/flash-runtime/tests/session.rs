@@ -288,6 +288,7 @@ struct ControlledBackgroundPlatform {
     pipe_write_failures: Mutex<Vec<usize>>,
     pipe_write_failure_barrier: Mutex<Option<Arc<Barrier>>>,
     pipe_read_data: Mutex<BTreeMap<usize, Vec<u8>>>,
+    descriptor_read_data: Mutex<VecDeque<Vec<u8>>>,
     spawn_calls: AtomicUsize,
     spawn_failure: Mutex<Option<usize>>,
     active_endpoints: Arc<AtomicUsize>,
@@ -403,6 +404,13 @@ impl ControlledBackgroundPlatform {
             .lock()
             .expect("pipe data lock")
             .insert(pipe_index, data.into());
+    }
+
+    fn feed_descriptor_read(&self, data: impl Into<Vec<u8>>) {
+        self.descriptor_read_data
+            .lock()
+            .expect("descriptor data lock")
+            .push_back(data.into());
     }
 
     fn synchronize_pipe_write_failures(&self, count: usize) {
@@ -553,6 +561,7 @@ impl ControlledBackgroundPlatform {
                 pipe_write_failures: Mutex::new(Vec::new()),
                 pipe_write_failure_barrier: Mutex::new(None),
                 pipe_read_data: Mutex::new(BTreeMap::new()),
+                descriptor_read_data: Mutex::new(VecDeque::new()),
                 spawn_calls: AtomicUsize::new(0),
                 spawn_failure: Mutex::new(None),
                 active_endpoints: Arc::new(AtomicUsize::new(0)),
@@ -653,9 +662,19 @@ impl Platform for ControlledBackgroundPlatform {
     fn read_descriptor(
         &self,
         _endpoint: &dyn DescriptorEndpoint,
-        _buffer: &mut [u8],
+        buffer: &mut [u8],
     ) -> Result<usize, DescriptorReadError> {
-        Ok(0)
+        let Some(data) = self
+            .descriptor_read_data
+            .lock()
+            .expect("descriptor data lock")
+            .pop_front()
+        else {
+            return Ok(0);
+        };
+        let amount = data.len().min(buffer.len());
+        buffer[..amount].copy_from_slice(&data[..amount]);
+        Ok(amount)
     }
 
     fn enter_foreground(
@@ -921,6 +940,381 @@ fn pure_bindings_persist_across_submissions() {
     );
 
     assert_eq!(session.environment().get("DERIVED"), Some(OsStr::new("41")));
+}
+
+#[test]
+fn a_failing_statement_discards_its_pending_scope_and_environment() {
+    let mut session = session();
+    let probe = Probe::default();
+    let mut sink = Vec::new();
+
+    let error = session
+        .submit(
+            "<interactive>",
+            "mut keep = 0\n\
+             export COMMITTED = 'yes'\n\
+             while $keep < 1 {\n\
+                 $keep = 1\n\
+                 export LEAK = 'no'\n\
+                 $missing\n\
+             }",
+            &probe,
+            &terminal_platform(),
+            &FakeClock::new(),
+            &mut sink,
+        )
+        .expect_err("the reached unknown binding should fail the final statement");
+
+    assert!(
+        error.render().contains("unknown binding \"missing\""),
+        "{}",
+        error.render()
+    );
+    assert_eq!(
+        session.environment().get("COMMITTED"),
+        Some(OsStr::new("yes"))
+    );
+    assert_eq!(session.environment().get("LEAK"), None);
+    assert_eq!(
+        submit(&mut session, "export RETAINED = $keep", &probe),
+        SubmitOutcome::Continued
+    );
+    assert_eq!(session.environment().get("RETAINED"), Some(OsStr::new("0")));
+}
+
+#[test]
+fn nested_commands_run_only_in_selected_control_flow() {
+    let mut session = session();
+    let probe = Probe::default();
+
+    assert_eq!(
+        submit(
+            &mut session,
+            "if false { cd /skipped }\nif true { cd /selected }",
+            &probe,
+        ),
+        SubmitOutcome::Continued
+    );
+    assert_eq!(session.cwd(), Path::new("/selected"));
+    assert_eq!(session.current_status().and_then(Status::code), Some(0));
+}
+
+#[test]
+fn current_status_reads_are_live_across_foreground_commands() {
+    let mut session = session();
+    let probe = Probe::default();
+
+    assert_eq!(
+        submit(
+            &mut session,
+            "if $status == null { export BEFORE_STATUS = 'none' }",
+            &probe,
+        ),
+        SubmitOutcome::Continued
+    );
+    assert_eq!(
+        session.environment().get("BEFORE_STATUS"),
+        Some(OsStr::new("none"))
+    );
+    assert_eq!(
+        submit(&mut session, "def current_code() { $status.code }", &probe,),
+        SubmitOutcome::Continued
+    );
+
+    assert_eq!(
+        submit(&mut session, "cd /status-read", &probe),
+        SubmitOutcome::Continued
+    );
+    assert_eq!(
+        submit(
+            &mut session,
+            "if $status.ok && current_code() == 0 && $status.signal == null {\n\
+                 export AFTER_STATUS = 'success'\n\
+             }",
+            &probe,
+        ),
+        SubmitOutcome::Continued
+    );
+    assert_eq!(
+        session.environment().get("AFTER_STATUS"),
+        Some(OsStr::new("success"))
+    );
+}
+
+#[test]
+fn nested_commands_compose_through_conditions_loops_match_and_grouping() {
+    let mut session = session();
+    let probe = Probe::default();
+
+    assert_eq!(
+        submit(
+            &mut session,
+            "if cd /condition { cd selected } else { cd /skipped }",
+            &probe,
+        ),
+        SubmitOutcome::Continued
+    );
+    assert_eq!(session.cwd(), Path::new("/condition/selected"));
+
+    assert_eq!(
+        submit(
+            &mut session,
+            "mut iteration = 0\n\
+             while true {\n\
+                 $iteration = $iteration + 1\n\
+                 if $iteration == 1 {\n\
+                     cd continued\n\
+                     continue\n\
+                 }\n\
+                 cd broken\n\
+                 break\n\
+             }",
+            &probe,
+        ),
+        SubmitOutcome::Continued
+    );
+    assert_eq!(
+        session.cwd(),
+        Path::new("/condition/selected/continued/broken")
+    );
+
+    assert_eq!(
+        submit(
+            &mut session,
+            "for path in ['/for-first', '/for-last'] { cd $path }\n\
+             match 2 {\n\
+                 1 => { cd /skipped }\n\
+                 2 => { cd /matched }\n\
+             }\n\
+             let grouped = (cd /grouped)",
+            &probe,
+        ),
+        SubmitOutcome::Continued
+    );
+    assert_eq!(session.cwd(), Path::new("/grouped"));
+    assert_eq!(session.current_status().and_then(Status::code), Some(0));
+}
+
+#[test]
+fn callable_failures_and_exit_keep_the_statement_transaction_boundary() {
+    let probe = Probe::default();
+
+    let mut runtime_failure = session();
+    assert_eq!(
+        submit(
+            &mut runtime_failure,
+            "def fail() {\n\
+                 cd /runtime-leak\n\
+                 missing-command\n\
+             }",
+            &probe,
+        ),
+        SubmitOutcome::Continued
+    );
+    let mut sink = Vec::new();
+    runtime_failure
+        .submit(
+            "<interactive>",
+            "fail()",
+            &probe,
+            &FakePlatform::full(),
+            &FakeClock::new(),
+            &mut sink,
+        )
+        .expect_err("a command resolution failure should escape the callable");
+    assert_eq!(runtime_failure.cwd(), Path::new("/work"));
+    assert!(runtime_failure.current_status().is_none());
+
+    let mut output_failure = session();
+    assert_eq!(
+        submit(
+            &mut output_failure,
+            "def fail_output() {\n\
+                 cd /output-leak\n\
+                 pwd\n\
+             }",
+            &probe,
+        ),
+        SubmitOutcome::Continued
+    );
+    let error = output_failure
+        .submit(
+            "<interactive>",
+            "fail_output()",
+            &probe,
+            &terminal_platform(),
+            &FakeClock::new(),
+            &mut FailingOutput,
+        )
+        .expect_err("a fatal output failure should escape the callable");
+    let flash_runtime::session::SubmitError::Output(error) = error else {
+        panic!("a callable sink failure must retain its output-error channel: {error:?}");
+    };
+    assert!(
+        error
+            .to_string()
+            .contains("the injected session output failed")
+    );
+    assert_eq!(output_failure.cwd(), Path::new("/work"));
+    assert!(output_failure.current_status().is_none());
+
+    let mut explicit_exit = session();
+    assert_eq!(
+        submit(
+            &mut explicit_exit,
+            "def leave() {\n\
+                 cd /committed-exit\n\
+                 exit 7\n\
+             }",
+            &probe,
+        ),
+        SubmitOutcome::Continued
+    );
+    assert_eq!(
+        submit(&mut explicit_exit, "leave()", &probe),
+        SubmitOutcome::Exit(7)
+    );
+    assert_eq!(explicit_exit.cwd(), Path::new("/committed-exit"));
+}
+
+#[test]
+fn named_functions_and_closures_reuse_the_active_session_host() {
+    let mut session = session();
+    let probe = Probe::default();
+
+    assert_eq!(
+        submit(
+            &mut session,
+            "def enter(path) {\n\
+                 cd $path\n\
+                 return $(pwd)\n\
+             }\n\
+             let entered = enter('/function')\n\
+             export ENTERED = $entered",
+            &probe,
+        ),
+        SubmitOutcome::Continued
+    );
+    assert_eq!(session.cwd(), Path::new("/function"));
+    assert_eq!(
+        session.environment().get("ENTERED"),
+        Some(OsStr::new("/function"))
+    );
+
+    assert_eq!(
+        submit(
+            &mut session,
+            "let enter_closure = {|path| cd $path}\n\
+             let result = $enter_closure('/closure')\n\
+             if $result { export CLOSURE_REACHED = 'yes' }",
+            &probe,
+        ),
+        SubmitOutcome::Continued
+    );
+    assert_eq!(session.cwd(), Path::new("/closure"));
+    assert_eq!(
+        session.environment().get("CLOSURE_REACHED"),
+        Some(OsStr::new("yes"))
+    );
+    assert_eq!(session.current_status().and_then(Status::code), Some(0));
+}
+
+#[test]
+fn command_substitution_captures_only_when_reached() {
+    let mut session = session();
+    let probe = Probe::default();
+
+    assert_eq!(
+        submit(
+            &mut session,
+            "if false { let ignored = $(cd /skipped) }\n\
+             let captured = $(pwd)\n\
+             let label = \"cwd=$(pwd)\"\n\
+             export CAPTURED = $captured\n\
+             export CAPTURED_LABEL = $label",
+            &probe,
+        ),
+        SubmitOutcome::Continued
+    );
+    assert_eq!(session.cwd(), Path::new("/work"));
+    assert_eq!(
+        session.environment().get("CAPTURED"),
+        Some(OsStr::new("/work"))
+    );
+    assert_eq!(
+        session.environment().get("CAPTURED_LABEL"),
+        Some(OsStr::new("cwd=/work"))
+    );
+}
+
+#[test]
+fn command_substitution_captures_a_mixed_internal_tail() {
+    let clock = FakeClock::new();
+    let mut session = session();
+    let (platform, controls) = ControlledBackgroundPlatform::in_groups_for_session(&[&[901]]);
+    let probe = Probe::new(["/bin/tool"]);
+    platform.feed_pipe_read(0, b"abc".to_vec());
+    controls[0]
+        .steps
+        .send(Ok(ProcessTransition::Completed(ProcessStatus::Exited(0))))
+        .expect("complete the external producer");
+    let mut sink = Vec::new();
+
+    assert_eq!(
+        session
+            .submit(
+                "<interactive>",
+                "let captured = $(^tool | decode utf8)\nexport CAPTURED = $captured",
+                &probe,
+                &platform,
+                &clock,
+                &mut sink,
+            )
+            .expect("the mixed internal tail should capture"),
+        SubmitOutcome::Continued
+    );
+    assert_eq!(
+        session.environment().get("CAPTURED"),
+        Some(OsStr::new("abc"))
+    );
+    assert!(sink.is_empty());
+    assert_eq!(platform.active_endpoints(), 0);
+}
+
+#[test]
+fn command_substitution_captures_a_mixed_external_tail() {
+    let clock = FakeClock::new();
+    let mut session = session();
+    let (platform, controls) = ControlledBackgroundPlatform::in_groups_for_session(&[&[902]]);
+    let probe = Probe::new(["/bin/tool"]);
+    platform.feed_descriptor_read(b"external tail\r\n".to_vec());
+    controls[0]
+        .steps
+        .send(Ok(ProcessTransition::Completed(ProcessStatus::Exited(7))))
+        .expect("complete the external tail");
+    let mut sink = Vec::new();
+
+    assert_eq!(
+        session
+            .submit(
+                "<interactive>",
+                "let captured = $(which pwd | get kind | encode utf8 | ^tool)\n\
+                 export CAPTURED = $captured",
+                &probe,
+                &platform,
+                &clock,
+                &mut sink,
+            )
+            .expect("the mixed external tail should capture"),
+        SubmitOutcome::Continued
+    );
+    assert_eq!(
+        session.environment().get("CAPTURED"),
+        Some(OsStr::new("external tail"))
+    );
+    assert_eq!(session.current_status().and_then(Status::code), Some(7));
+    assert!(sink.is_empty());
+    assert_eq!(platform.active_endpoints(), 0);
 }
 
 #[test]
@@ -3911,6 +4305,80 @@ fn an_aggregate_foreground_stop_retains_one_complete_addressable_job() {
             .send(Ok(ProcessTransition::Completed(ProcessStatus::Exited(0))))
             .expect("release the retained observer");
     }
+    assert_eq!(
+        rendered(&mut session, "wait %1", &probe, &platform, clock.as_ref()),
+        ""
+    );
+    assert!(session.background_job(job_id(1)).is_none());
+}
+
+#[test]
+fn a_nested_foreground_stop_discards_pending_state_and_retains_the_job() {
+    let clock = Arc::new(FakeClock::new());
+    let mut session = session();
+    session.enable_interactive_job_control(clock.clone());
+    let (platform, controls) = ControlledBackgroundPlatform::new(&[613]);
+    let probe = Probe::new(["/bin/tool"]);
+
+    assert_eq!(
+        rendered(
+            &mut session,
+            "def stop_nested() {\n    cd /pending-stop\n    ^tool\n}",
+            &probe,
+            &platform,
+            clock.as_ref(),
+        ),
+        ""
+    );
+    controls[0]
+        .steps
+        .send(Ok(ProcessTransition::Stopped { signal: 19 }))
+        .expect("stop the nested managed foreground member");
+
+    assert_eq!(
+        rendered(
+            &mut session,
+            "stop_nested()",
+            &probe,
+            &platform,
+            clock.as_ref(),
+        ),
+        ""
+    );
+    assert_eq!(
+        controls[0]
+            .wait_entries
+            .recv()
+            .expect("observer-owned nested stop"),
+        1
+    );
+    assert_eq!(
+        session.cwd(),
+        Path::new("/work"),
+        "the stopped call must discard its pending cwd mutation"
+    );
+    assert!(
+        session.current_status().is_none(),
+        "the stopped call must not publish a pending status"
+    );
+    let job = session
+        .background_job(job_id(1))
+        .expect("the nested stopped foreground job remains addressable");
+    assert!(matches!(job.state(), JobState::Stopped { .. }));
+    assert_eq!(
+        job.placement(),
+        Some(flash_runtime::job::JobPlacement::Foreground)
+    );
+    let stopped = session
+        .next_job_notice()
+        .expect("the nested stop queues one notice");
+    assert_eq!(stopped.job(), job_id(1));
+    assert_eq!(stopped.kind(), &JobNoticeKind::Stopped);
+
+    controls[0]
+        .steps
+        .send(Ok(ProcessTransition::Completed(ProcessStatus::Exited(0))))
+        .expect("release the retained nested observer");
     assert_eq!(
         rendered(&mut session, "wait %1", &probe, &platform, clock.as_ref()),
         ""

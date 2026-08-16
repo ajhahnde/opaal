@@ -8,6 +8,7 @@ use crate::{Delimiter, Operator, SourceFile, SourceId, Token, TokenKind, lex};
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum CompletionContext {
     Command { forced_external: bool },
+    Expression,
     Variable,
     Flag { command: String },
     Path,
@@ -56,8 +57,16 @@ pub fn completion_target(source: &str, cursor: usize) -> Option<CompletionTarget
     }
     let prior = significant_before(&tokens, active.range.start);
     let stage = current_stage(&prior);
+    let context = if tokens.iter().any(|token| {
+        token.span().start() == active.range.end
+            && token.kind() == TokenKind::Delimiter(Delimiter::LeftParenthesis)
+    }) {
+        CompletionContext::Expression
+    } else {
+        classify_context(source, stage, &active)
+    };
     Some(CompletionTarget {
-        context: classify_context(source, stage, &active),
+        context,
         replacement: active.range,
         prefix: active.text.to_owned(),
     })

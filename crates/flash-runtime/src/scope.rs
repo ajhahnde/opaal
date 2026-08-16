@@ -214,6 +214,7 @@ impl Default for ScopeStack {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ScopeError {
     DuplicateBinding(String),
+    ReservedBinding(String),
     UnknownBinding(String),
     ImmutableBinding(String),
     TypeMismatch {
@@ -228,6 +229,9 @@ impl fmt::Display for ScopeError {
         match self {
             Self::DuplicateBinding(name) => {
                 write!(formatter, "binding {name:?} already exists in this scope")
+            }
+            Self::ReservedBinding(name) => {
+                write!(formatter, "binding name {name:?} is reserved")
             }
             Self::UnknownBinding(name) => write!(formatter, "unknown binding {name:?}"),
             Self::ImmutableBinding(name) => {

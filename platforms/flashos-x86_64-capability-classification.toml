@@ -403,7 +403,7 @@ rust_variant = "DirectoryRead"
 operation_ids = ["directory-open-relative", "directory-advance-lazy", "directory-preserve-name-kind"]
 classification = "native"
 target_qualification = "pending"
-rationale = "Existing target standard-library directory operations cover opening, lazy iteration, native names, and metadata."
+rationale = "Existing target standard-library directory operations cover opening, lazy iteration, native names, and metadata for both structured listing and Flash-owned explicit glob traversal."
 
 [[capability]]
 name = "shell-executable"

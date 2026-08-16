@@ -233,24 +233,18 @@ pub fn capture_command_substitution_bytes(
     platform: &dyn Platform,
     clock: &dyn Clock,
 ) -> Result<CommandCapture<Vec<u8>>, RuntimeError> {
-    let mut collector = BoundedCapture::new(options.capture_limit());
-    let status = execute_conditional_chain_with(chain, &mut |pipeline| {
-        let plan = plan_pipeline_with_options(
-            pipeline,
-            cwd,
-            source,
-            scope,
-            environment,
-            registry,
-            probe,
-            options,
-        )?;
-        let mut collect = |chunk: &[u8]| collector.push(chunk);
-        let status = execute_foreground_with_stdout_drain(&plan, platform, clock, &mut collect)?;
-        collector.ensure_within_limit(chain.span())?;
-        Ok(status)
-    })?;
-    collector.finish(status, chain.span())
+    crate::session::capture_command_substitution_compat(
+        chain,
+        cwd,
+        source,
+        scope,
+        environment,
+        registry,
+        probe,
+        options,
+        platform,
+        clock,
+    )
 }
 
 /// Execute the conditional-chain body of a command substitution and capture all
@@ -283,7 +277,7 @@ pub fn capture_command_substitution_text(
     decode_text_capture(captured, chain.span())
 }
 
-fn decode_text_capture(
+pub(crate) fn decode_text_capture(
     captured: CommandCapture<Vec<u8>>,
     span: flash_syntax::Span,
 ) -> Result<CommandCapture<String>, RuntimeError> {
@@ -305,14 +299,14 @@ fn decode_text_capture(
     Ok(CommandCapture { output, status })
 }
 
-struct BoundedCapture {
+pub(crate) struct BoundedCapture {
     output: Vec<u8>,
     limit: usize,
     exceeded: bool,
 }
 
 impl BoundedCapture {
-    const fn new(limit: usize) -> Self {
+    pub(crate) const fn new(limit: usize) -> Self {
         Self {
             output: Vec::new(),
             limit,
@@ -320,14 +314,14 @@ impl BoundedCapture {
         }
     }
 
-    fn push(&mut self, chunk: &[u8]) {
+    pub(crate) fn push(&mut self, chunk: &[u8]) {
         let remaining = self.limit.saturating_sub(self.output.len());
         let retained = remaining.min(chunk.len());
         self.output.extend_from_slice(&chunk[..retained]);
         self.exceeded |= retained != chunk.len();
     }
 
-    fn finish(
+    pub(crate) fn finish(
         self,
         status: Status,
         span: flash_syntax::Span,
@@ -339,13 +333,24 @@ impl BoundedCapture {
         })
     }
 
-    fn ensure_within_limit(&self, span: flash_syntax::Span) -> Result<(), RuntimeError> {
+    pub(crate) fn ensure_within_limit(&self, span: flash_syntax::Span) -> Result<(), RuntimeError> {
         if self.exceeded {
             return Err(RuntimeError::new(
                 RuntimeErrorKind::CaptureLimitExceeded { limit: self.limit },
                 span,
             ));
         }
+        Ok(())
+    }
+}
+
+impl std::io::Write for BoundedCapture {
+    fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+        self.push(buffer);
+        Ok(buffer.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
         Ok(())
     }
 }
@@ -918,6 +923,7 @@ pub(crate) struct MixedPipeline {
     /// Retained so a member that reports a stop can be resumed as one job.
     group: Option<ProcessGroupId>,
     segments: Vec<MixedSegment>,
+    captured_output: Option<Box<dyn DescriptorEndpoint>>,
     started_at: Instant,
 }
 
@@ -930,6 +936,11 @@ impl MixedPipeline {
     /// Take every source-ordered internal segment resource.
     pub(crate) fn take_segments(&mut self) -> Vec<MixedSegment> {
         std::mem::take(&mut self.segments)
+    }
+
+    /// Take the reader installed for a captured final external stage.
+    pub(crate) fn take_captured_output(&mut self) -> Option<Box<dyn DescriptorEndpoint>> {
+        self.captured_output.take()
     }
 
     /// Wait every external stage and return source-indexed language statuses.
@@ -1058,6 +1069,7 @@ pub(crate) fn start_mixed_pipeline(
     plan: &ExecutionPlan,
     platform: &dyn Platform,
     clock: &dyn Clock,
+    capture_final_stdout: bool,
 ) -> Result<MixedPipeline, RuntimeError> {
     preflight(plan)?;
     let topology = plan.mixed_topology().ok_or_else(|| {
@@ -1088,6 +1100,24 @@ pub(crate) fn start_mixed_pipeline(
         let (reader, writer) = endpoints.into_parts();
         pipes.push((Some(reader), Some(writer)));
     }
+
+    let final_stage = plan
+        .stages()
+        .last()
+        .expect("a mixed pipeline has a final stage");
+    let (mut captured_output, mut capture_writer) = if capture_final_stdout
+        && matches!(final_stage.resolution(), PlannedResolution::External { .. })
+    {
+        let (reader, writer) = platform
+            .pipe()
+            .map_err(|error| {
+                RuntimeError::new(RuntimeErrorKind::CapturePipe(error), final_stage.span())
+            })?
+            .into_parts();
+        (Some(reader), Some(writer))
+    } else {
+        (None, None)
+    };
 
     let mut segments = Vec::with_capacity(topology.internal_segments().len());
     for segment in topology.internal_segments().iter().cloned() {
@@ -1149,9 +1179,14 @@ pub(crate) fn start_mixed_pipeline(
             continue;
         }
         let input_endpoint = index.checked_sub(1).and_then(|edge| pipes[edge].0.take());
-        let edge_output = pipes.get_mut(index).and_then(|edge| edge.1.take());
-        let merge_output =
-            edge_output.is_some() && plan.edges()[index].kind() == PipeOperator::StdoutAndStderr;
+        let pipeline_output = pipes.get_mut(index).and_then(|edge| edge.1.take());
+        let merge_output = pipeline_output.is_some()
+            && plan.edges()[index].kind() == PipeOperator::StdoutAndStderr;
+        let edge_output = pipeline_output.or_else(|| {
+            (index + 1 == plan.stages().len())
+                .then(|| capture_writer.take())
+                .flatten()
+        });
         let mut descriptor_map = StageDescriptorMap::new(input_endpoint, edge_output, merge_output);
         if let Err(error) =
             descriptor_map.apply_redirections(stage.redirections(), plan.cwd(), platform)
@@ -1225,6 +1260,7 @@ pub(crate) fn start_mixed_pipeline(
         foreground,
         group: established,
         segments,
+        captured_output: captured_output.take(),
         started_at,
     })
 }

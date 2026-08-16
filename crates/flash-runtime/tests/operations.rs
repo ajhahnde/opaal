@@ -5,7 +5,7 @@ use flash_runtime::operation::{
     less_equal, member, multiply, negate, not_equal, plus, range, remainder, subtract, to_float,
     to_int,
 };
-use flash_runtime::{FiniteFloat, Range, Record, Table, Value};
+use flash_runtime::{Duration, FiniteFloat, Range, Record, Signal, Status, Table, Value};
 
 fn int(value: i64) -> Value {
     Value::Int(value)
@@ -219,6 +219,47 @@ fn indexing_and_member_access_reject_absent_and_negative_positions() {
     assert!(matches!(
         index(&int(1), &int(0)),
         Err(OperationError::UnsupportedOperands { .. })
+    ));
+}
+
+#[test]
+fn status_member_access_exposes_the_ratified_value_contract() {
+    let first = Status::exit(0, Duration::from_nanos(3)).unwrap();
+    let second = Status::signaled(
+        Signal::new(Some(15), Some("TERM".to_owned())).unwrap(),
+        Duration::from_nanos(5),
+    )
+    .unwrap();
+    let aggregate = Value::Status(
+        Status::aggregate(
+            vec![first.clone(), second.clone()],
+            1,
+            Duration::from_nanos(8),
+        )
+        .unwrap(),
+    );
+
+    assert_eq!(field(&aggregate, "code").unwrap(), Value::Null);
+    assert_eq!(field(&aggregate, "ok").unwrap(), Value::Bool(false));
+    assert_eq!(
+        field(&aggregate, "stages").unwrap(),
+        Value::list(vec![Value::Status(first), Value::Status(second)])
+    );
+    assert_eq!(
+        field(&aggregate, "duration").unwrap(),
+        Value::from(Duration::from_nanos(8))
+    );
+    assert_eq!(
+        field(&field(&aggregate, "signal").unwrap(), "number").unwrap(),
+        int(15)
+    );
+    assert_eq!(
+        field(&field(&aggregate, "signal").unwrap(), "name").unwrap(),
+        Value::string("TERM")
+    );
+    assert!(matches!(
+        field(&aggregate, "missing"),
+        Err(OperationError::MissingField { .. })
     ));
 }
 

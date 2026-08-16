@@ -218,6 +218,16 @@ fn an_unknown_binding_in_a_word_is_a_scope_error() {
 }
 
 #[test]
+fn pure_word_expansion_keeps_command_substitution_deferred() {
+    assert_eq!(
+        expand("show pre$(emit)post").unwrap_err(),
+        RuntimeErrorKind::Unsupported {
+            feature: "command substitution in a word"
+        }
+    );
+}
+
+#[test]
 fn provenance_records_each_contributing_part() {
     // `pre${$count}post` has three contributing parts once `count` is bound.
     let mut scope = ScopeStack::new();

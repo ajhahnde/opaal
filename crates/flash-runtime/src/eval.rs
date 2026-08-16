@@ -1,21 +1,24 @@
-//! Pure tree-walking evaluation of a parsed script.
+//! Host-injected tree-walking evaluation of a parsed script.
 //!
-//! This layer turns a `Script` into a `Value` without any process, terminal,
-//! filesystem, or environment dependency. Command execution and boolean
-//! short-circuiting are deferred to the slices that own them and currently
-//! surface as precise unsupported errors.
+//! The evaluator owns Flash expression, statement, callable, and control-flow
+//! semantics while an injected host owns environment mutation and reached
+//! command effects. Public pure-evaluation entry points use a host that rejects
+//! process execution with the established structured diagnostics.
 
 use std::any::Any;
 use std::error::Error;
 use std::ffi::{OsStr, OsString};
 use std::fmt;
+use std::io;
+use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant as SystemInstant;
 
 use flash_platform::{
-    DescriptorReadError, DescriptorWriteError, DirectoryReadError, FileActionError, PipeError,
-    PlatformError, SignalError, SpawnError, WaitError, WorkingDirectoryError,
+    DescriptorReadError, DescriptorWriteError, DirectoryEntry, DirectoryReadError, DirectoryStream,
+    FileActionError, PipeError, PlatformError, SignalError, SpawnError, WaitError,
+    WorkingDirectoryError,
 };
 use flash_syntax::{
     AndChain, Assignment, BinaryOperator, Block, CallExpression, Closure, ConditionalChain,
@@ -25,9 +28,14 @@ use flash_syntax::{
     UnaryOperator, VariableReference, WhileStatement, Word, WordPart, WordPartKind,
 };
 
+use crate::glob::{DEFAULT_GLOB_ENTRY_LIMIT, GlobPattern};
+use crate::intrinsic::{DynamicBinding, ExpressionIntrinsic};
 use crate::module::{RuntimeBindingTypes, ValueType};
 use crate::operation::{self, OperationError};
-use crate::{BindingMutability, Callable, Environment, Record, ScopeError, ScopeStack, Value};
+use crate::{
+    BindingMutability, Callable, Environment, NativePath, Record, ScopeError, ScopeStack, Status,
+    Value,
+};
 
 /// Successful automatic continuations allowed for one member in one blocking operation.
 pub(crate) const AUTOMATIC_RESUME_LIMIT: usize = 16;
@@ -79,7 +87,7 @@ impl RuntimeError {
         self.source.as_deref()
     }
 
-    fn with_source(mut self, source: Arc<SourceFile>) -> Self {
+    pub(crate) fn with_source(mut self, source: Arc<SourceFile>) -> Self {
         self.source = Some(source);
         self
     }
@@ -148,6 +156,8 @@ pub enum RestrictedCapability {
     ProcessExecution,
     /// Capturing the output of a command substitution.
     CommandSubstitution,
+    /// Reading directories for explicit filesystem matching.
+    FilesystemRead,
 }
 
 impl RestrictedCapability {
@@ -157,6 +167,7 @@ impl RestrictedCapability {
         match self {
             Self::ProcessExecution => "process execution",
             Self::CommandSubstitution => "command substitution",
+            Self::FilesystemRead => "filesystem reads",
         }
     }
 }
@@ -229,6 +240,15 @@ pub enum RuntimeErrorKind {
     FloatLiteralOverflow,
     /// A record literal repeating a key.
     DuplicateRecordKey { key: String },
+    /// A double-quoted value interpolation produced native units that cannot
+    /// be represented by the UTF-8 `String` value family.
+    StringInterpolationNotUtf8,
+    /// A present native environment entry cannot be represented by `String`.
+    EnvironmentValueNotUtf8 { name: String },
+    /// An explicit glob pattern is malformed.
+    GlobPattern { message: String },
+    /// An explicit glob inspected more entries than its finite traversal limit.
+    GlobLimitExceeded { limit: usize },
     /// An ordinary word interpolation produced a value that cannot become an
     /// argument. `actual` names the offending value family.
     WordValueNotWordEligible { actual: &'static str },
@@ -489,6 +509,16 @@ impl fmt::Display for RuntimeErrorKind {
             Self::FloatLiteralOverflow => formatter.write_str("float literal is not finite"),
             Self::DuplicateRecordKey { key } => {
                 write!(formatter, "duplicate record key {key:?}")
+            }
+            Self::StringInterpolationNotUtf8 => {
+                formatter.write_str("double-quoted value interpolation is not valid UTF-8")
+            }
+            Self::EnvironmentValueNotUtf8 { name } => {
+                write!(formatter, "environment entry {name:?} is not valid UTF-8")
+            }
+            Self::GlobPattern { message } => write!(formatter, "invalid glob pattern: {message}"),
+            Self::GlobLimitExceeded { limit } => {
+                write!(formatter, "glob exceeded its {limit}-entry traversal limit")
             }
             Self::WordValueNotWordEligible { actual } => write!(
                 formatter,
@@ -1018,7 +1048,7 @@ pub struct EvalLimits {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum EvaluationPolicy {
+pub(crate) enum EvaluationPolicy {
     General,
     Startup,
 }
@@ -1060,14 +1090,34 @@ pub enum Completion {
     Cancelled(Cancellation),
 }
 
-/// An in-flight evaluation abort: a runtime error or a cancellation.
+/// Rich completion returned to an evaluator host such as an interactive session.
+#[allow(dead_code)] // Session-only variants are connected in the next seam phase.
+pub(crate) enum HostedEvaluationOutcome {
+    Value(Value),
+    Cancelled(Cancellation),
+    Exit(u8),
+    Stopped(crate::job::JobId),
+}
+
+/// Failures that remain distinct from evaluator control outcomes.
+#[allow(dead_code)] // Fatal session output is connected in the next seam phase.
+pub(crate) enum HostedEvaluationFailure {
+    Runtime(RuntimeError),
+    Output(io::Error),
+}
+
+/// An in-flight evaluation abort, including session control and fatal effects.
 ///
 /// This is the internal short-circuit channel. A `RuntimeError` converts into the
 /// `Error` arm through `?`, while cancellation rides the separate `Cancelled` arm
 /// so it never becomes a `RuntimeError` at the public boundary.
-enum Abort {
+#[allow(dead_code)] // Session-only outcomes are connected in the next seam phase.
+pub(crate) enum Abort {
     Error(RuntimeError),
     Cancelled(Cancellation),
+    Exit(u8),
+    Stopped(crate::job::JobId),
+    Output(io::Error),
 }
 
 impl Abort {
@@ -1075,7 +1125,7 @@ impl Abort {
     fn with_frame(self, frame: CallFrame) -> Self {
         match self {
             Self::Error(error) => Self::Error(error.with_frame(frame)),
-            cancelled @ Self::Cancelled(_) => cancelled,
+            other => other,
         }
     }
 }
@@ -1088,6 +1138,114 @@ impl From<RuntimeError> for Abort {
 
 /// The internal evaluation result type, short-circuiting on error or cancel.
 type Eval<T> = Result<T, Abort>;
+
+/// Source and analysis identity supplied to an evaluation host invocation.
+pub(crate) struct EvaluationContext {
+    pub(crate) source: Arc<SourceFile>,
+    pub(crate) binding_types: Arc<RuntimeBindingTypes>,
+    pub(crate) cancel: CancellationToken,
+    /// Whether this pipeline is the complete submitted conditional chain and
+    /// may therefore publish a managed foreground job.
+    pub(crate) manage_foreground: bool,
+}
+
+/// Successful bounded output captured from one reached conditional chain.
+pub(crate) struct CapturedChain {
+    pub(crate) text: String,
+    pub(crate) status: Status,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum CapturePosition {
+    Expression,
+    Word,
+}
+
+/// The effect boundary used by recursive language evaluation.
+pub(crate) trait EvaluationHost {
+    fn environment(&mut self) -> &mut Environment;
+    fn current_status(&self) -> Option<&Status>;
+    fn policy(&self) -> EvaluationPolicy;
+
+    fn read_directory(&mut self, path: &Path)
+    -> Result<Box<dyn DirectoryStream>, RuntimeErrorKind>;
+
+    fn execute_chain(
+        &mut self,
+        chain: &ConditionalChain,
+        scope: &mut ScopeStack,
+        context: EvaluationContext,
+    ) -> Result<Status, Abort>;
+
+    fn capture_chain(
+        &mut self,
+        chain: &ConditionalChain,
+        scope: &mut ScopeStack,
+        span: Span,
+        position: CapturePosition,
+        context: EvaluationContext,
+    ) -> Result<CapturedChain, Abort>;
+}
+
+/// Host used by the public evaluator APIs that deliberately cannot run jobs.
+struct PureEvaluationHost<'environment> {
+    environment: &'environment mut Environment,
+    policy: EvaluationPolicy,
+}
+
+impl EvaluationHost for PureEvaluationHost<'_> {
+    fn environment(&mut self) -> &mut Environment {
+        self.environment
+    }
+
+    fn current_status(&self) -> Option<&Status> {
+        None
+    }
+
+    fn policy(&self) -> EvaluationPolicy {
+        self.policy
+    }
+
+    fn read_directory(
+        &mut self,
+        _path: &Path,
+    ) -> Result<Box<dyn DirectoryStream>, RuntimeErrorKind> {
+        Err(RuntimeErrorKind::ExecutionUnsupported)
+    }
+
+    fn execute_chain(
+        &mut self,
+        chain: &ConditionalChain,
+        _scope: &mut ScopeStack,
+        context: EvaluationContext,
+    ) -> Result<Status, Abort> {
+        let _ = (&context.binding_types, &context.cancel);
+        Err(Abort::Error(
+            RuntimeError::new(RuntimeErrorKind::ExecutionUnsupported, chain.span())
+                .with_source(context.source),
+        ))
+    }
+
+    fn capture_chain(
+        &mut self,
+        _chain: &ConditionalChain,
+        _scope: &mut ScopeStack,
+        span: Span,
+        position: CapturePosition,
+        context: EvaluationContext,
+    ) -> Result<CapturedChain, Abort> {
+        let _ = (&context.binding_types, &context.cancel);
+        let kind = match position {
+            CapturePosition::Expression => RuntimeErrorKind::ExecutionUnsupported,
+            CapturePosition::Word => RuntimeErrorKind::Unsupported {
+                feature: "command substitution in a word",
+            },
+        };
+        Err(Abort::Error(
+            RuntimeError::new(kind, span).with_source(context.source),
+        ))
+    }
+}
 
 /// Evaluates a parsed script against a scope stack, returning its final value.
 ///
@@ -1178,49 +1336,80 @@ pub(crate) fn evaluate_in_environment_owned_with_binding_types(
     limits: &EvalLimits,
     binding_types: Arc<RuntimeBindingTypes>,
 ) -> Result<Completion, RuntimeError> {
+    let mut host = PureEvaluationHost {
+        environment: env,
+        policy: limits.policy,
+    };
+    match evaluate_with_host(script, source, scope, limits, binding_types, &mut host) {
+        Ok(HostedEvaluationOutcome::Value(value)) => Ok(Completion::Value(value)),
+        Ok(HostedEvaluationOutcome::Cancelled(cancellation)) => {
+            Ok(Completion::Cancelled(cancellation))
+        }
+        Err(HostedEvaluationFailure::Runtime(error)) => Err(error),
+        Ok(HostedEvaluationOutcome::Exit(_) | HostedEvaluationOutcome::Stopped(_))
+        | Err(HostedEvaluationFailure::Output(_)) => {
+            unreachable!("the pure evaluation host cannot produce session outcomes")
+        }
+    }
+}
+
+pub(crate) fn evaluate_with_host(
+    script: &flash_syntax::Script,
+    source: Arc<SourceFile>,
+    scope: &mut ScopeStack,
+    limits: &EvalLimits,
+    binding_types: Arc<RuntimeBindingTypes>,
+    host: &mut dyn EvaluationHost,
+) -> Result<HostedEvaluationOutcome, HostedEvaluationFailure> {
     let mut evaluator = Evaluator {
         source,
         binding_types,
         cancel: limits.cancel.clone(),
         budget: limits.budget,
-        policy: limits.policy,
-        env,
+        host,
     };
     let mut last = Value::Null;
     for statement in script.statements() {
         let flow = match evaluator.statement(statement, scope) {
             Ok(flow) => flow,
-            Err(Abort::Cancelled(cancellation)) => return Ok(Completion::Cancelled(cancellation)),
-            Err(Abort::Error(error)) => return Err(error),
+            Err(Abort::Cancelled(cancellation)) => {
+                return Ok(HostedEvaluationOutcome::Cancelled(cancellation));
+            }
+            Err(Abort::Error(error)) => {
+                return Err(HostedEvaluationFailure::Runtime(error));
+            }
+            Err(Abort::Exit(code)) => return Ok(HostedEvaluationOutcome::Exit(code)),
+            Err(Abort::Stopped(job)) => return Ok(HostedEvaluationOutcome::Stopped(job)),
+            Err(Abort::Output(error)) => return Err(HostedEvaluationFailure::Output(error)),
         };
         match flow {
             Flow::Fallthrough(Some(result)) => last = result.value,
             Flow::Fallthrough(None) => {}
             Flow::Break(span) => {
-                return Err(RuntimeError::new(
+                return Err(HostedEvaluationFailure::Runtime(RuntimeError::new(
                     RuntimeErrorKind::ControlOutsideLoop {
                         control: ControlKind::Break,
                     },
                     span,
-                ));
+                )));
             }
             Flow::Continue(span) => {
-                return Err(RuntimeError::new(
+                return Err(HostedEvaluationFailure::Runtime(RuntimeError::new(
                     RuntimeErrorKind::ControlOutsideLoop {
                         control: ControlKind::Continue,
                     },
                     span,
-                ));
+                )));
             }
             Flow::Return(_, span) => {
-                return Err(RuntimeError::new(
+                return Err(HostedEvaluationFailure::Runtime(RuntimeError::new(
                     RuntimeErrorKind::ReturnOutsideFunction,
                     span,
-                ));
+                )));
             }
         }
     }
-    Ok(Completion::Value(last))
+    Ok(HostedEvaluationOutcome::Value(last))
 }
 
 /// Evaluates one parsed closure command argument into its captured callable
@@ -1250,19 +1439,25 @@ pub(crate) fn evaluate_closure_argument_with_binding_types(
 ) -> Result<Value, RuntimeError> {
     let limits = EvalLimits::default();
     let mut env = Environment::new();
+    let mut host = PureEvaluationHost {
+        environment: &mut env,
+        policy: limits.policy,
+    };
     let evaluator = Evaluator {
         source: Arc::new(source.clone()),
         binding_types,
         cancel: limits.cancel,
         budget: limits.budget,
-        policy: limits.policy,
-        env: &mut env,
+        host: &mut host,
     };
     match evaluator.make_closure(closure, scope) {
         Ok(value) => Ok(value),
         Err(Abort::Error(error)) => Err(error),
         Err(Abort::Cancelled(_)) => {
             unreachable!("creating a closure does not poll cancellation")
+        }
+        Err(Abort::Exit(_) | Abort::Stopped(_) | Abort::Output(_)) => {
+            unreachable!("the pure evaluation host cannot produce session outcomes")
         }
     }
 }
@@ -1312,19 +1507,25 @@ pub fn apply_callable(
         ));
     }
 
+    let mut host = PureEvaluationHost {
+        environment: env,
+        policy: limits.policy,
+    };
     let mut evaluator = Evaluator {
         source: Arc::new(source.clone()),
         binding_types: Arc::clone(&function.binding_types),
         cancel: limits.cancel.clone(),
         budget: limits.budget,
-        policy: limits.policy,
-        env,
+        host: &mut host,
     };
     // Cancellation is polled before entering the body, matching an ordinary call.
     if let Err(abort) = evaluator.check_cancel(span) {
         return match abort {
             Abort::Cancelled(cancellation) => Ok(Completion::Cancelled(cancellation)),
             Abort::Error(error) => Err(error),
+            Abort::Exit(_) | Abort::Stopped(_) | Abort::Output(_) => {
+                unreachable!("the pure evaluation host cannot produce session outcomes")
+            }
         };
     }
     let arguments = arguments
@@ -1335,6 +1536,9 @@ pub fn apply_callable(
         Ok(value) => Ok(Completion::Value(value)),
         Err(Abort::Cancelled(cancellation)) => Ok(Completion::Cancelled(cancellation)),
         Err(Abort::Error(error)) => Err(error),
+        Err(Abort::Exit(_) | Abort::Stopped(_) | Abort::Output(_)) => {
+            unreachable!("the pure evaluation host cannot produce session outcomes")
+        }
     }
 }
 
@@ -1398,19 +1602,25 @@ pub fn expand_word(
     let limits = EvalLimits::default();
     // Word expansion never touches the environment; a throwaway is sufficient.
     let mut env = Environment::new();
+    let mut host = PureEvaluationHost {
+        environment: &mut env,
+        policy: limits.policy,
+    };
     let mut evaluator = Evaluator {
         source: Arc::new(source.clone()),
         binding_types: Arc::new(RuntimeBindingTypes::default()),
         cancel: limits.cancel.clone(),
         budget: limits.budget,
-        policy: limits.policy,
-        env: &mut env,
+        host: &mut host,
     };
     match evaluator.expand_word(word, scope) {
         Ok(expanded) => Ok(expanded),
         Err(Abort::Error(error)) => Err(error),
         Err(Abort::Cancelled(_)) => {
             unreachable!("a never-cancelling token cannot produce a cancellation")
+        }
+        Err(Abort::Exit(_) | Abort::Stopped(_) | Abort::Output(_)) => {
+            unreachable!("the pure evaluation host cannot produce session outcomes")
         }
     }
 }
@@ -1433,19 +1643,25 @@ pub fn expand_spread(
     let limits = EvalLimits::default();
     // Spread expansion never touches the environment; a throwaway is sufficient.
     let mut env = Environment::new();
+    let mut host = PureEvaluationHost {
+        environment: &mut env,
+        policy: limits.policy,
+    };
     let mut evaluator = Evaluator {
         source: Arc::new(source.clone()),
         binding_types: Arc::new(RuntimeBindingTypes::default()),
         cancel: limits.cancel.clone(),
         budget: limits.budget,
-        policy: limits.policy,
-        env: &mut env,
+        host: &mut host,
     };
     match evaluator.expand_spread(variable, item_span, scope) {
         Ok(expanded) => Ok(expanded),
         Err(Abort::Error(error)) => Err(error),
         Err(Abort::Cancelled(_)) => {
             unreachable!("a never-cancelling token cannot produce a cancellation")
+        }
+        Err(Abort::Exit(_) | Abort::Stopped(_) | Abort::Output(_)) => {
+            unreachable!("the pure evaluation host cannot produce session outcomes")
         }
     }
 }
@@ -1483,13 +1699,12 @@ struct FlowValue {
     span: Span,
 }
 
-struct Evaluator<'environment> {
+struct Evaluator<'host> {
     source: Arc<SourceFile>,
     binding_types: Arc<RuntimeBindingTypes>,
     cancel: CancellationToken,
     budget: ResourceBudget,
-    policy: EvaluationPolicy,
-    env: &'environment mut Environment,
+    host: &'host mut dyn EvaluationHost,
 }
 
 impl Evaluator<'_> {
@@ -1543,7 +1758,7 @@ impl Evaluator<'_> {
             StatementKind::Match(match_statement) => self.match_statement(match_statement, scope),
             StatementKind::Control(control) => self.control(control, scope, span),
             StatementKind::Job(job) => {
-                if self.policy == EvaluationPolicy::Startup {
+                if self.host.policy() == EvaluationPolicy::Startup {
                     return Err(self.error(
                         RuntimeErrorKind::RestrictedStartup {
                             capability: RestrictedCapability::ProcessExecution,
@@ -1564,8 +1779,9 @@ impl Evaluator<'_> {
     }
 
     fn declaration(&mut self, declaration: &Declaration, scope: &mut ScopeStack) -> Eval<()> {
+        let name = self.text(declaration.name.span()).to_owned();
+        self.ensure_lexical_name(&name, declaration.name.span())?;
         let value = self.expression(&declaration.value, scope)?;
-        let name = self.text(declaration.name.span());
         let mutability = if declaration.mutable {
             BindingMutability::Mutable
         } else {
@@ -1588,9 +1804,15 @@ impl Evaluator<'_> {
     }
 
     fn assignment(&mut self, assignment: &Assignment, scope: &mut ScopeStack) -> Eval<()> {
+        let name = self.text(assignment.target.name.span()).to_owned();
+        if DynamicBinding::lookup(&name).is_some() {
+            return Err(self.error(
+                RuntimeErrorKind::Scope(ScopeError::ImmutableBinding(name.clone())),
+                assignment.target.span,
+            ));
+        }
         let value = self.expression(&assignment.value, scope)?;
-        let name = self.text(assignment.target.name.span());
-        scope.assign(name, value).map_err(|error| {
+        scope.assign(&name, value).map_err(|error| {
             let span = if matches!(error, ScopeError::TypeMismatch { .. }) {
                 assignment.value.span()
             } else {
@@ -1620,11 +1842,11 @@ impl Evaluator<'_> {
                     )
                 })?;
                 let name = self.text(name.span()).to_owned();
-                self.env.set(name, encoded);
+                self.host.environment().set(name, encoded);
             }
             EnvironmentStatement::Unset { name } => {
                 let name = self.text(name.span()).to_owned();
-                self.env.remove(&name);
+                self.host.environment().remove(&name);
             }
         }
         Ok(())
@@ -1663,8 +1885,9 @@ impl Evaluator<'_> {
     }
 
     fn for_statement(&mut self, statement: &ForStatement, scope: &mut ScopeStack) -> Eval<Flow> {
-        let iterable = self.expression(&statement.iterable, scope)?;
         let name = self.text(statement.binding.span()).to_owned();
+        self.ensure_lexical_name(&name, statement.binding.span())?;
+        let iterable = self.expression(&statement.iterable, scope)?;
         let boundary = statement.iterable.span();
         match iterable {
             Value::List(items) => {
@@ -1758,11 +1981,12 @@ impl Evaluator<'_> {
         match pattern {
             Pattern::Wildcard(_) => Ok(true),
             Pattern::Literal(literal) => {
-                let expected = self.literal(literal)?;
+                let expected = self.literal(literal, scope)?;
                 Ok(&expected == subject)
             }
             Pattern::Binding(identifier) => {
                 let name = self.text(identifier.span());
+                self.ensure_lexical_name(name, identifier.span())?;
                 scope
                     .declare(name, BindingMutability::Immutable, subject.clone())
                     .map_err(|error| {
@@ -1840,22 +2064,58 @@ impl Evaluator<'_> {
         self.expect_condition(&value, chain.span())
     }
 
+    fn context(&self, manage_foreground: bool) -> EvaluationContext {
+        EvaluationContext {
+            source: Arc::clone(&self.source),
+            binding_types: Arc::clone(&self.binding_types),
+            cancel: self.cancel.clone(),
+            manage_foreground,
+        }
+    }
+
+    fn execute_chain(
+        &mut self,
+        chain: &ConditionalChain,
+        scope: &mut ScopeStack,
+        manage_foreground: bool,
+    ) -> Eval<Status> {
+        let context = self.context(manage_foreground);
+        self.host.execute_chain(chain, scope, context)
+    }
+
+    fn capture_chain(
+        &mut self,
+        chain: &ConditionalChain,
+        scope: &mut ScopeStack,
+        span: Span,
+        position: CapturePosition,
+    ) -> Eval<String> {
+        let context = self.context(false);
+        let CapturedChain { text, status } = self
+            .host
+            .capture_chain(chain, scope, span, position, context)?;
+        let _ = status;
+        Ok(text)
+    }
+
     /// Evaluates a conditional chain to a value.
     ///
     /// A single-term chain is transparent. Multiple `||` terms return the last
     /// evaluated operand and branch over either `Bool` or `Status`.
     fn eval_chain(&mut self, chain: &ConditionalChain, scope: &mut ScopeStack) -> Eval<Value> {
+        let manage_foreground =
+            chain.or_terms().len() == 1 && chain.or_terms()[0].and_terms().len() == 1;
         let mut terms = chain.or_terms().iter();
         let first = terms
             .next()
             .expect("a parsed conditional chain contains an operand");
-        let mut value = self.eval_and_chain(first, scope)?;
+        let mut value = self.eval_and_chain(first, scope, manage_foreground)?;
         let mut value_span = first.span();
         for and_chain in terms {
             if self.expect_logic_condition(&value, value_span)? {
                 return Ok(value);
             }
-            value = self.eval_and_chain(and_chain, scope)?;
+            value = self.eval_and_chain(and_chain, scope, false)?;
             value_span = and_chain.span();
         }
         if chain.or_terms().len() > 1 {
@@ -1865,18 +2125,23 @@ impl Evaluator<'_> {
     }
 
     /// Evaluates one `&&` chain and returns its last evaluated operand.
-    fn eval_and_chain(&mut self, and_chain: &AndChain, scope: &mut ScopeStack) -> Eval<Value> {
+    fn eval_and_chain(
+        &mut self,
+        and_chain: &AndChain,
+        scope: &mut ScopeStack,
+        manage_foreground: bool,
+    ) -> Eval<Value> {
         let mut terms = and_chain.and_terms().iter();
         let first = terms
             .next()
             .expect("a parsed and-chain contains an operand");
-        let mut value = self.eval_pipeline(first, scope)?;
+        let mut value = self.eval_pipeline(first, scope, manage_foreground)?;
         let mut value_span = first.span();
         for pipeline in terms {
             if !self.expect_logic_condition(&value, value_span)? {
                 return Ok(value);
             }
-            value = self.eval_pipeline(pipeline, scope)?;
+            value = self.eval_pipeline(pipeline, scope, false)?;
             value_span = pipeline.span();
         }
         if and_chain.and_terms().len() > 1 {
@@ -1885,32 +2150,30 @@ impl Evaluator<'_> {
         Ok(value)
     }
 
-    /// Evaluates a single-stage expression pipeline. A multi-stage pipeline or a
-    /// command stage needs process execution and is unsupported here.
-    fn eval_pipeline(&mut self, pipeline: &Pipeline, scope: &mut ScopeStack) -> Eval<Value> {
-        let [stage] = pipeline.stages() else {
-            if self.policy == EvaluationPolicy::Startup {
-                return Err(self.error(
-                    RuntimeErrorKind::RestrictedStartup {
-                        capability: RestrictedCapability::ProcessExecution,
-                    },
-                    pipeline.span(),
-                ));
-            }
-            return Err(self.error(RuntimeErrorKind::ExecutionUnsupported, pipeline.span()));
-        };
-        match stage.kind() {
-            StageKind::Expression(expression) => self.expression(expression, scope),
-            StageKind::Command(_) if self.policy == EvaluationPolicy::Startup => Err(self.error(
+    /// Evaluates a pure single-stage expression or delegates one reached
+    /// effectful pipeline through the active host.
+    fn eval_pipeline(
+        &mut self,
+        pipeline: &Pipeline,
+        scope: &mut ScopeStack,
+        manage_foreground: bool,
+    ) -> Eval<Value> {
+        if let [stage] = pipeline.stages()
+            && let StageKind::Expression(expression) = stage.kind()
+        {
+            return self.expression(expression, scope);
+        }
+        if self.host.policy() == EvaluationPolicy::Startup {
+            return Err(self.error(
                 RuntimeErrorKind::RestrictedStartup {
                     capability: RestrictedCapability::ProcessExecution,
                 },
                 pipeline.span(),
-            )),
-            StageKind::Command(_) => {
-                Err(self.error(RuntimeErrorKind::ExecutionUnsupported, pipeline.span()))
-            }
+            ));
         }
+        let chain = ConditionalChain::from_pipeline(pipeline.clone());
+        self.execute_chain(&chain, scope, manage_foreground)
+            .map(Value::Status)
     }
 
     /// Requires a value to be `Bool` or `Status` at a conditional-chain edge.
@@ -1958,15 +2221,10 @@ impl Evaluator<'_> {
         let span = expression.span();
         self.charge(span)?;
         match expression.kind() {
-            ExpressionKind::Literal(literal) => self.literal(literal),
+            ExpressionKind::Literal(literal) => self.literal(literal, scope),
             ExpressionKind::Variable(variable) => {
                 let name = self.text(variable.name.span());
-                scope.get(name).cloned().ok_or_else(|| {
-                    self.error(
-                        RuntimeErrorKind::Scope(ScopeError::UnknownBinding(name.to_owned())),
-                        span,
-                    )
-                })
+                self.binding_value(name, scope, span)
             }
             ExpressionKind::Symbol(_) => Err(self.unsupported("bare symbol", span)),
             ExpressionKind::List(elements) => {
@@ -1979,7 +2237,7 @@ impl Evaluator<'_> {
             ExpressionKind::Record(entries) => {
                 let mut pairs = Vec::with_capacity(entries.len());
                 for entry in entries {
-                    let key = self.record_key(&entry.key)?;
+                    let key = self.record_key(&entry.key, scope)?;
                     let value = self.expression(&entry.value, scope)?;
                     pairs.push((key, value));
                 }
@@ -2035,7 +2293,9 @@ impl Evaluator<'_> {
         match expression.kind() {
             // A parenthesized pure expression is evaluated; a grouped command is not.
             ExpressionKind::GroupedJob(chain) => self.eval_chain(chain, scope),
-            ExpressionKind::CommandSubstitution(_) if self.policy == EvaluationPolicy::Startup => {
+            ExpressionKind::CommandSubstitution(_)
+                if self.host.policy() == EvaluationPolicy::Startup =>
+            {
                 Err(self.error(
                     RuntimeErrorKind::RestrictedStartup {
                         capability: RestrictedCapability::CommandSubstitution,
@@ -2043,9 +2303,9 @@ impl Evaluator<'_> {
                     span,
                 ))
             }
-            ExpressionKind::CommandSubstitution(_) => {
-                Err(self.error(RuntimeErrorKind::ExecutionUnsupported, span))
-            }
+            ExpressionKind::CommandSubstitution(chain) => self
+                .capture_chain(chain, scope, span, CapturePosition::Expression)
+                .map(Value::string),
             _ => unreachable!("caller restricts this to grouped jobs and substitutions"),
         }
     }
@@ -2078,7 +2338,7 @@ impl Evaluator<'_> {
         }
     }
 
-    fn literal(&self, literal: &Literal) -> Eval<Value> {
+    fn literal(&mut self, literal: &Literal, scope: &mut ScopeStack) -> Eval<Value> {
         let span = literal.span();
         match literal.kind() {
             LiteralKind::Null => Ok(Value::Null),
@@ -2091,7 +2351,7 @@ impl Evaluator<'_> {
                 let inner = &raw[1..raw.len() - 1];
                 Ok(Value::string(inner))
             }
-            LiteralKind::DoubleQuoted(_) => Err(self.unsupported("double-quoted string", span)),
+            LiteralKind::DoubleQuoted(parts) => self.double_quoted_value(parts, scope, span),
         }
     }
 
@@ -2120,17 +2380,37 @@ impl Evaluator<'_> {
             .ok_or_else(|| self.error(RuntimeErrorKind::FloatLiteralOverflow, span))
     }
 
-    fn record_key(&self, key: &RecordKey) -> Eval<String> {
+    fn record_key(&mut self, key: &RecordKey, scope: &mut ScopeStack) -> Eval<String> {
         match key {
             RecordKey::Identifier(identifier) => Ok(self.text(identifier.span()).to_owned()),
             RecordKey::SingleQuoted(span) => {
                 let raw = self.text(*span);
                 Ok(raw[1..raw.len() - 1].to_owned())
             }
-            RecordKey::DoubleQuoted(part) => {
-                Err(self.unsupported("double-quoted key", part.span()))
-            }
+            RecordKey::DoubleQuoted(part) => self
+                .double_quoted_value(std::slice::from_ref(part), scope, part.span())
+                .map(|value| match value {
+                    Value::String(key) => key.to_string(),
+                    _ => unreachable!("double-quoted values always produce strings"),
+                }),
         }
+    }
+
+    fn double_quoted_value(
+        &mut self,
+        parts: &[WordPart],
+        scope: &mut ScopeStack,
+        span: Span,
+    ) -> Eval<Value> {
+        let mut value = OsString::new();
+        let mut provenance = Vec::new();
+        for part in parts {
+            self.expand_part(part, scope, &mut value, &mut provenance)?;
+        }
+        value
+            .into_string()
+            .map(Value::string)
+            .map_err(|_| self.error(RuntimeErrorKind::StringInterpolationNotUtf8, span))
     }
 
     /// Expands one ordinary word into a single native argument.
@@ -2186,20 +2466,15 @@ impl Evaluator<'_> {
             }
             WordPartKind::Variable(identifier) => {
                 let name = self.text(identifier.span());
-                let resolved = scope.get(name).cloned().ok_or_else(|| {
-                    self.error(
-                        RuntimeErrorKind::Scope(ScopeError::UnknownBinding(name.to_owned())),
-                        span,
-                    )
-                })?;
+                let resolved = self.binding_value(name, scope, span)?;
                 value.push(self.encode_scalar(&resolved, span)?);
             }
             WordPartKind::BracedInterpolation(expression) => {
                 let resolved = self.expression(expression, scope)?;
                 value.push(self.encode_scalar(&resolved, span)?);
             }
-            WordPartKind::CommandSubstitution(_) => {
-                if self.policy == EvaluationPolicy::Startup {
+            WordPartKind::CommandSubstitution(chain) => {
+                if self.host.policy() == EvaluationPolicy::Startup {
                     return Err(self.error(
                         RuntimeErrorKind::RestrictedStartup {
                             capability: RestrictedCapability::CommandSubstitution,
@@ -2207,7 +2482,7 @@ impl Evaluator<'_> {
                         span,
                     ));
                 }
-                return Err(self.unsupported("command substitution in a word", span));
+                value.push(self.capture_chain(chain, scope, span, CapturePosition::Word)?);
             }
             WordPartKind::DoubleQuoted(_) => unreachable!("handled before provenance tracking"),
         }
@@ -2242,12 +2517,7 @@ impl Evaluator<'_> {
     ) -> Eval<Vec<ExpandedWord>> {
         self.charge(item_span)?;
         let name = self.text(variable.name.span());
-        let resolved = scope.get(name).cloned().ok_or_else(|| {
-            self.error(
-                RuntimeErrorKind::Scope(ScopeError::UnknownBinding(name.to_owned())),
-                item_span,
-            )
-        })?;
+        let resolved = self.binding_value(name, scope, item_span)?;
         let elements = match resolved {
             Value::List(elements) => elements,
             other => {
@@ -2316,12 +2586,43 @@ impl Evaluator<'_> {
         self.error(RuntimeErrorKind::Operation(error), span)
     }
 
+    fn ensure_lexical_name(&self, name: &str, span: Span) -> Eval<()> {
+        if DynamicBinding::lookup(name).is_some() {
+            Err(self.error(
+                RuntimeErrorKind::Scope(ScopeError::ReservedBinding(name.to_owned())),
+                span,
+            ))
+        } else {
+            Ok(())
+        }
+    }
+
+    fn binding_value(&self, name: &str, scope: &ScopeStack, span: Span) -> Eval<Value> {
+        if let Some(dynamic) = DynamicBinding::lookup(name) {
+            return Ok(match dynamic {
+                DynamicBinding::CurrentStatus => self
+                    .host
+                    .current_status()
+                    .cloned()
+                    .map(Value::Status)
+                    .unwrap_or(Value::Null),
+            });
+        }
+        scope.get(name).cloned().ok_or_else(|| {
+            self.error(
+                RuntimeErrorKind::Scope(ScopeError::UnknownBinding(name.to_owned())),
+                span,
+            )
+        })
+    }
+
     fn function_definition(
         &self,
         definition: &FunctionDefinition,
         scope: &mut ScopeStack,
     ) -> Eval<()> {
         let name: Arc<str> = Arc::from(self.text(definition.name.span()));
+        self.ensure_lexical_name(&name, definition.name.span())?;
         let parameters = self.parameters(&definition.parameters)?;
         let inspection = self
             .binding_types
@@ -2371,6 +2672,7 @@ impl Evaluator<'_> {
         let mut resolved = Vec::with_capacity(parameters.len());
         for parameter in parameters {
             let name = self.text(parameter.name.span());
+            self.ensure_lexical_name(name, parameter.name.span())?;
             if resolved
                 .iter()
                 .any(|existing: &CallableParameter| existing.name.as_ref() == name)
@@ -2398,6 +2700,53 @@ impl Evaluator<'_> {
     fn call(&mut self, call: &CallExpression, scope: &mut ScopeStack, span: Span) -> Eval<Value> {
         // Cancellation is polled before entering any call.
         self.check_cancel(span)?;
+
+        if let ExpressionKind::Symbol(identifier) = call.callee.kind() {
+            let name = self.text(identifier.span());
+            if let Some(intrinsic) = ExpressionIntrinsic::lookup(name)
+                && scope.get(name).is_none()
+            {
+                if call.arguments.len() != intrinsic.arity() {
+                    return Err(self.error(
+                        RuntimeErrorKind::ArityMismatch {
+                            expected: intrinsic.arity(),
+                            actual: call.arguments.len(),
+                        },
+                        span,
+                    ));
+                }
+                let argument = self.expression(&call.arguments[0], scope)?;
+                match intrinsic {
+                    ExpressionIntrinsic::Env => {
+                        let Value::String(name) = argument else {
+                            return Err(self.operation(
+                                OperationError::UnsupportedOperands {
+                                    operator: "env",
+                                    operands: vec![argument.family_name()],
+                                },
+                                call.arguments[0].span(),
+                            ));
+                        };
+                        let value = self.host.environment().get(&name).map(OsStr::to_os_string);
+                        return value.map_or(Ok(Value::Null), |value| {
+                            value.into_string().map(Value::string).map_err(|_| {
+                                self.error(
+                                    RuntimeErrorKind::EnvironmentValueNotUtf8 {
+                                        name: name.to_string(),
+                                    },
+                                    span,
+                                )
+                            })
+                        });
+                    }
+                    ExpressionIntrinsic::Glob => return self.glob(&argument, span),
+                    ExpressionIntrinsic::Float | ExpressionIntrinsic::Int => {}
+                }
+                return intrinsic
+                    .invoke(&argument)
+                    .map_err(|error| self.operation(error, span));
+            }
+        }
 
         let callee = self.callee_value(&call.callee, scope)?;
         let Value::Callable(callable) = callee else {
@@ -2432,6 +2781,84 @@ impl Evaluator<'_> {
         }
 
         self.run_call(&callable, function, arguments, span)
+    }
+
+    fn glob(&mut self, value: &Value, span: Span) -> Eval<Value> {
+        if self.host.policy() == EvaluationPolicy::Startup {
+            return Err(self.error(
+                RuntimeErrorKind::RestrictedStartup {
+                    capability: RestrictedCapability::FilesystemRead,
+                },
+                span,
+            ));
+        }
+        let pattern = match value {
+            Value::String(pattern) => OsString::from(pattern.as_ref()),
+            Value::Path(pattern) => pattern.as_os_str().to_os_string(),
+            other => {
+                return Err(self.operation(
+                    OperationError::UnsupportedOperands {
+                        operator: "glob",
+                        operands: vec![other.family_name()],
+                    },
+                    span,
+                ));
+            }
+        };
+        let pattern = GlobPattern::parse(&pattern).map_err(|error| {
+            self.error(
+                RuntimeErrorKind::GlobPattern {
+                    message: error.message().to_owned(),
+                },
+                span,
+            )
+        })?;
+        let mut remaining = DEFAULT_GLOB_ENTRY_LIMIT;
+        let paths = pattern.expand(|directory| {
+            let entries = self.glob_directory(directory, span, remaining)?;
+            remaining -= entries.len();
+            Ok::<_, Abort>(entries)
+        })?;
+        Ok(Value::list(
+            paths
+                .into_iter()
+                .map(|path| Value::Path(NativePath::new(path.into_os_string())))
+                .collect(),
+        ))
+    }
+
+    fn glob_directory(
+        &mut self,
+        path: &Path,
+        span: Span,
+        remaining: usize,
+    ) -> Eval<Vec<DirectoryEntry>> {
+        self.check_cancel(span)?;
+        self.charge(span)?;
+        let mut stream = self
+            .host
+            .read_directory(path)
+            .map_err(|kind| self.error(kind, span))?;
+        let mut entries = Vec::new();
+        loop {
+            self.check_cancel(span)?;
+            self.charge(span)?;
+            match stream.next_entry() {
+                Ok(Some(_)) if entries.len() == remaining => {
+                    return Err(self.error(
+                        RuntimeErrorKind::GlobLimitExceeded {
+                            limit: DEFAULT_GLOB_ENTRY_LIMIT,
+                        },
+                        span,
+                    ));
+                }
+                Ok(Some(entry)) => entries.push(entry),
+                Ok(None) => return Ok(entries),
+                Err(error) => {
+                    return Err(self.error(RuntimeErrorKind::DirectoryRead(error), span));
+                }
+            }
+        }
     }
 
     /// Binds already-evaluated `arguments` to a callable's parameters and runs its
@@ -2567,12 +2994,7 @@ impl Evaluator<'_> {
     fn callee_value(&mut self, callee: &Expression, scope: &mut ScopeStack) -> Eval<Value> {
         if let ExpressionKind::Symbol(identifier) = callee.kind() {
             let name = self.text(identifier.span());
-            return scope.get(name).cloned().ok_or_else(|| {
-                self.error(
-                    RuntimeErrorKind::Scope(ScopeError::UnknownBinding(name.to_owned())),
-                    callee.span(),
-                )
-            });
+            return self.binding_value(name, scope, callee.span());
         }
         self.expression(callee, scope)
     }
@@ -2708,5 +3130,262 @@ fn decode_double_escape(raw: &str) -> String {
                 .map_or_else(|| body.to_owned(), |scalar| scalar.to_string())
         }
         _ => body.to_owned(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use flash_platform::{DirectoryEntry, DirectoryEntryKind, DirectoryReadError};
+    use flash_syntax::{ParseOutcome, SourceId, parse};
+
+    use super::*;
+
+    struct DirectoryHost {
+        environment: Environment,
+        advances: Arc<AtomicUsize>,
+    }
+
+    impl EvaluationHost for DirectoryHost {
+        fn environment(&mut self) -> &mut Environment {
+            &mut self.environment
+        }
+
+        fn current_status(&self) -> Option<&Status> {
+            None
+        }
+
+        fn policy(&self) -> EvaluationPolicy {
+            EvaluationPolicy::General
+        }
+
+        fn read_directory(
+            &mut self,
+            _path: &Path,
+        ) -> Result<Box<dyn DirectoryStream>, RuntimeErrorKind> {
+            Ok(Box::new(CountingDirectoryStream {
+                entries: vec![
+                    DirectoryEntry::new("a.fsh".into(), DirectoryEntryKind::File, Some(0)),
+                    DirectoryEntry::new("b.fsh".into(), DirectoryEntryKind::File, Some(0)),
+                ]
+                .into_iter(),
+                advances: Arc::clone(&self.advances),
+            }))
+        }
+
+        fn execute_chain(
+            &mut self,
+            _chain: &ConditionalChain,
+            _scope: &mut ScopeStack,
+            _context: EvaluationContext,
+        ) -> Result<Status, Abort> {
+            unreachable!("glob tests do not execute commands")
+        }
+
+        fn capture_chain(
+            &mut self,
+            _chain: &ConditionalChain,
+            _scope: &mut ScopeStack,
+            _span: Span,
+            _position: CapturePosition,
+            _context: EvaluationContext,
+        ) -> Result<CapturedChain, Abort> {
+            unreachable!("glob tests do not capture commands")
+        }
+    }
+
+    struct CancellingCaptureHost {
+        environment: Environment,
+    }
+
+    impl EvaluationHost for CancellingCaptureHost {
+        fn environment(&mut self) -> &mut Environment {
+            &mut self.environment
+        }
+
+        fn current_status(&self) -> Option<&Status> {
+            None
+        }
+
+        fn policy(&self) -> EvaluationPolicy {
+            EvaluationPolicy::General
+        }
+
+        fn read_directory(
+            &mut self,
+            _path: &Path,
+        ) -> Result<Box<dyn DirectoryStream>, RuntimeErrorKind> {
+            unreachable!("capture cancellation does not read directories")
+        }
+
+        fn execute_chain(
+            &mut self,
+            _chain: &ConditionalChain,
+            _scope: &mut ScopeStack,
+            _context: EvaluationContext,
+        ) -> Result<Status, Abort> {
+            unreachable!("capture cancellation does not execute an uncaptured chain")
+        }
+
+        fn capture_chain(
+            &mut self,
+            _chain: &ConditionalChain,
+            _scope: &mut ScopeStack,
+            span: Span,
+            _position: CapturePosition,
+            context: EvaluationContext,
+        ) -> Result<CapturedChain, Abort> {
+            assert!(
+                context.cancel.is_cancelled(),
+                "the active evaluator token reaches recursive capture"
+            );
+            Err(Abort::Cancelled(Cancellation::new(
+                context.cancel.reason(),
+                span,
+            )))
+        }
+    }
+
+    #[derive(Debug)]
+    struct CountingDirectoryStream {
+        entries: std::vec::IntoIter<DirectoryEntry>,
+        advances: Arc<AtomicUsize>,
+    }
+
+    impl DirectoryStream for CountingDirectoryStream {
+        fn next_entry(&mut self) -> Result<Option<DirectoryEntry>, DirectoryReadError> {
+            self.advances.fetch_add(1, Ordering::SeqCst);
+            Ok(self.entries.next())
+        }
+    }
+
+    fn evaluate_glob(
+        limits: &EvalLimits,
+        advances: Arc<AtomicUsize>,
+    ) -> Result<HostedEvaluationOutcome, HostedEvaluationFailure> {
+        let source = Arc::new(SourceFile::new(
+            SourceId::new(1),
+            "glob.fsh",
+            "glob('*.fsh')",
+        ));
+        let script = match parse(&source) {
+            ParseOutcome::Complete(script) => script,
+            other => panic!("glob fixture did not parse: {other:?}"),
+        };
+        let mut scope = ScopeStack::new();
+        let mut host = DirectoryHost {
+            environment: Environment::new(),
+            advances,
+        };
+        evaluate_with_host(
+            &script,
+            source,
+            &mut scope,
+            limits,
+            Arc::new(RuntimeBindingTypes::default()),
+            &mut host,
+        )
+    }
+
+    #[test]
+    fn glob_cancellation_aborts_mid_walk_without_returning_a_partial_list() {
+        let checks = Arc::new(AtomicUsize::new(0));
+        let token_checks = Arc::clone(&checks);
+        let token =
+            CancellationToken::from_fn(move || token_checks.fetch_add(1, Ordering::SeqCst) >= 3);
+        let advances = Arc::new(AtomicUsize::new(0));
+        let limits = EvalLimits::new(token, ResourceBudget::unlimited());
+
+        assert!(matches!(
+            evaluate_glob(&limits, Arc::clone(&advances)),
+            Ok(HostedEvaluationOutcome::Cancelled(_))
+        ));
+        assert_eq!(advances.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn recursive_capture_cancellation_remains_a_distinct_hosted_outcome() {
+        let source = Arc::new(SourceFile::new(
+            SourceId::new(1),
+            "capture.fsh",
+            "def capture() { return $(^tool) }\ncapture()",
+        ));
+        let script = match parse(&source) {
+            ParseOutcome::Complete(script) => script,
+            other => panic!("capture fixture did not parse: {other:?}"),
+        };
+        let polls = Arc::new(AtomicUsize::new(0));
+        let token_polls = Arc::clone(&polls);
+        let limits = EvalLimits::new(
+            CancellationToken::from_fn(move || token_polls.fetch_add(1, Ordering::SeqCst) >= 1),
+            ResourceBudget::unlimited(),
+        );
+        let mut scope = ScopeStack::new();
+        let mut host = CancellingCaptureHost {
+            environment: Environment::new(),
+        };
+
+        let outcome = match evaluate_with_host(
+            &script,
+            Arc::clone(&source),
+            &mut scope,
+            &limits,
+            Arc::new(RuntimeBindingTypes::default()),
+            &mut host,
+        ) {
+            Ok(outcome) => outcome,
+            Err(_) => panic!("cancellation must not become a hosted evaluation failure"),
+        };
+        let HostedEvaluationOutcome::Cancelled(cancellation) = outcome else {
+            panic!("recursive capture should preserve cancellation");
+        };
+        assert_eq!(cancellation.reason(), CancelReason::Requested);
+        assert_eq!(source.slice(cancellation.span()).unwrap(), "$(^tool)");
+        assert_eq!(polls.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn glob_charges_each_walk_step_to_the_evaluation_budget() {
+        let advances = Arc::new(AtomicUsize::new(0));
+        let limits = EvalLimits::new(CancellationToken::never(), ResourceBudget::steps(5));
+
+        assert!(matches!(
+            evaluate_glob(&limits, Arc::clone(&advances)),
+            Err(HostedEvaluationFailure::Runtime(RuntimeError {
+                kind: RuntimeErrorKind::ResourceBudgetExceeded,
+                ..
+            }))
+        ));
+        assert_eq!(advances.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn glob_entry_limit_fails_before_a_partial_batch_can_escape() {
+        let source = Arc::new(SourceFile::new(SourceId::new(1), "glob.fsh", "glob('*')"));
+        let span = source.span(0..source.text().len()).unwrap();
+        let advances = Arc::new(AtomicUsize::new(0));
+        let mut host = DirectoryHost {
+            environment: Environment::new(),
+            advances: Arc::clone(&advances),
+        };
+        let mut evaluator = Evaluator {
+            source,
+            binding_types: Arc::new(RuntimeBindingTypes::default()),
+            cancel: CancellationToken::never(),
+            budget: ResourceBudget::unlimited(),
+            host: &mut host,
+        };
+
+        assert!(matches!(
+            evaluator.glob_directory(Path::new("."), span, 1),
+            Err(Abort::Error(RuntimeError {
+                kind: RuntimeErrorKind::GlobLimitExceeded {
+                    limit: DEFAULT_GLOB_ENTRY_LIMIT
+                },
+                ..
+            }))
+        ));
+        assert_eq!(advances.load(Ordering::SeqCst), 2);
     }
 }

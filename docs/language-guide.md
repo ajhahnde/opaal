@@ -379,7 +379,19 @@ Use `unset` to remove an environment entry:
 unset EDITOR
 ```
 
-Exporting a name does not create a normal lexical binding, and declaring a lexical binding does not automatically export it.
+Read an environment entry explicitly with `env(name)`:
+
+```text
+let editor = env("EDITOR")
+```
+
+The name argument must be a `String`. The result is a `String` when the entry
+exists and is valid UTF-8, or `null` when it is absent. A present native value
+that is not valid UTF-8 is a runtime error rather than a lossy conversion.
+`$NAME` remains a lexical read and never falls back to the process environment.
+Exporting a name does not create a normal lexical binding, and declaring a
+lexical binding does not automatically export it. A lexical callable may shadow
+the `env` intrinsic under the ordinary intrinsic-shadowing rule.
 
 ## Expressions and operators
 
@@ -605,7 +617,25 @@ let files = glob("scripts/**/*.fsh")
 command "example-program" ...$files
 ```
 
-`glob` returns path values. Expansion into separate command arguments remains explicit through `...`.
+`glob(pattern)` accepts one `String` or `Path` and returns a deterministically
+sorted `List[Path]`. Expansion into separate command arguments remains explicit
+through `...`; an unmatched pattern returns an empty list and therefore spreads
+to no arguments.
+
+Within one path component, `*` matches zero or more characters, `?` matches one,
+and character classes such as `[abc]`, `[a-z]`, and `[!abc]` match one selected
+character. A backslash quotes the following pattern character. A component that
+is exactly `**` recursively matches directory levels, so
+`scripts/**/*.fsh` includes matches directly in `scripts` and below it.
+
+Wildcard components do not select leading-dot names unless the component starts
+with a literal dot. Recursive matching does not follow directory symlinks;
+symlinks can still be returned as final matches. Relative patterns produce
+relative paths, absolute patterns produce absolute paths, and native path units
+are preserved without lossy UTF-8 conversion. A malformed pattern, directory
+read failure, cancellation, or evaluation-budget exhaustion fails the complete
+expression instead of returning partial matches. One expression may inspect at
+most 1,000,000 directory entries.
 
 ### No source reparsing
 
@@ -1124,6 +1154,20 @@ A `Status` records information such as:
 - an optional terminating signal;
 - per-stage pipeline status;
 - execution duration.
+
+Read the live session status with the reserved dynamic binding `$status`. It is
+`null` before any current status exists and otherwise holds the exact `Status`
+from the latest operation that updates session status. The name `status` cannot
+be declared, shadowed, or assigned, and reads inside functions and closures
+remain live rather than capturing an older value.
+
+Status members follow the value contract:
+
+- `.code` is an `Int` for normal exit or `null` for signal termination;
+- `.signal` is `null` or a record with optional `number` and `name` fields;
+- `.ok` is the derived success Boolean;
+- `.stages` is the source-ordered list of leaf statuses for a pipeline;
+- `.duration` is the measured `Duration`.
 
 A successful status behaves as true in a condition. An unsuccessful status behaves as false.
 
