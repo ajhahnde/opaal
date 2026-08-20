@@ -3,7 +3,7 @@
 # records where an operation crosses the boundary; it does not classify the
 # operation or capability as native, adapted, unsupported, or kernel work.
 
-schema_version = 1
+schema_version = 2
 platform = "flashos"
 architecture = "x86_64"
 target = "x86_64-unknown-redox"
@@ -23,7 +23,6 @@ mapping_scope = "public-std-api"
 [libc_source]
 repository = "https://gitlab.redox-os.org/redox-os/relibc.git"
 mapping_revision = "5f6afb52692e62dae79154f4dbec2d0e79a07602"
-binary_revision = "6571dca5b4a5f2619a42d4de196f8b787d649a8b"
 mapping_scope = "configured-source"
 
 [[abi_seam]]

@@ -708,20 +708,20 @@ platform boundary that a FlashOS adapter targets. The current baseline records:
 | C runtime | `relibc`, `libc.so.6`, with `/lib/ld64.so.1` as the executable interpreter |
 | Flash executable | x86_64 position-independent ELF requiring `libc.so.6` and `libgcc_s.so.1` |
 
-The record deliberately distinguishes the `relibc` revision selected by the
-source recipe from the revision reported by the binary package used by the
-current clean-room image path. This makes the effective userland input visible
-without presenting a binary-package revision as the source-build selection.
+Candidate and release images cook their selected packages from tracked recipes.
+The record binds the staged `relibc` package's source identity to the revision
+selected by its recipe, preventing a moving binary feed from silently replacing
+the configured userland input.
 The compiler likewise reports its release and LLVM identity but no source
 commit; the record preserves that limitation instead of turning the dated
 branch selector into a revision claim.
 
-Source validation keeps the record aligned with the image profile, build
-toolchain, Rust recipe, and `relibc` recipe. Image qualification additionally
-checks Cargo's compiler fingerprint, the staged `relibc` package metadata, and
-the ELF headers of the staged `fsh` and C runtime. These facts establish target
-identity only. They do not classify a platform capability as supported or
-prove that a capability works at runtime.
+Source validation keeps the record aligned with the image profile, source
+package rule, build toolchain, Rust recipe, and `relibc` recipe. Image
+qualification additionally checks Cargo's compiler fingerprint, the staged
+`relibc` source identity, and the ELF headers of the staged `fsh` and C runtime.
+These facts establish target identity only. They do not classify a platform
+capability as supported or prove that a capability works at runtime.
 
 The separate
 [`flashos-x86_64-capability-evidence.toml`](../platforms/flashos-x86_64-capability-evidence.toml)

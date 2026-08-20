@@ -143,8 +143,8 @@ python3 ci/check_flashos_platform.py --artifacts
 
 The artifact mode verifies the target that produced the staged `fsh`; it is not
 a replacement for target execution, QEMU qualification, or a capability
-report. Update the baseline only from an intentional toolchain, ABI, or binary
-userland transition, not merely to accept unexplained build drift.
+report. Update the baseline only from an intentional toolchain, ABI, or
+source-recipe transition, not merely to accept unexplained build drift.
 
 The adjacent
 [`platforms/flashos-x86_64-capability-evidence.toml`](../platforms/flashos-x86_64-capability-evidence.toml)
@@ -174,10 +174,10 @@ python3 ci/check_flashos_operation_map.py
 
 The map deliberately stops Rust standard-library routes at public APIs because
 the target compiler source commit is unknown. Direct C ABI routes cite the
-configured `relibc` source revision while preserving the different staged
-binary-package revision. Mapping is not support classification or runtime
-qualification; keep those later claims in their own reviewed changes with
-their required evidence.
+configured `relibc` source revision, which candidate image qualification also
+requires in the staged package. Mapping is not support classification or
+runtime qualification; keep those later claims in their own reviewed changes
+with their required evidence.
 
 The separate
 [`platforms/flashos-x86_64-capability-classification.toml`](../platforms/flashos-x86_64-capability-classification.toml)
