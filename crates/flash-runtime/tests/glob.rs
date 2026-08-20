@@ -6,6 +6,7 @@ use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Mutex, MutexGuard};
 
 use flash_platform::{
     Capabilities, ChildProcess, DescriptorEndpoint, DirectoryEntry, DirectoryEntryKind,
@@ -29,6 +30,14 @@ impl ExecutableProbe for NoExecutables {
 }
 
 struct TempDirectory(PathBuf);
+
+static FILESYSTEM_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+fn filesystem_test_lock() -> MutexGuard<'static, ()> {
+    FILESYSTEM_TEST_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
 
 impl TempDirectory {
     fn new(label: &str) -> Self {
@@ -72,6 +81,7 @@ fn submit(session: &mut Session, source: &str) -> Result<(), SubmitError> {
 
 #[test]
 fn recursive_glob_is_sorted_and_does_not_cross_hidden_or_symlink_directories() {
+    let _filesystem = filesystem_test_lock();
     let temp = TempDirectory::new("recursive");
     let scripts = temp.path().join("scripts");
     fs::create_dir_all(scripts.join("nested/deep")).unwrap();
@@ -113,6 +123,7 @@ fn recursive_glob_is_sorted_and_does_not_cross_hidden_or_symlink_directories() {
 
 #[test]
 fn component_patterns_select_hidden_entries_only_with_an_explicit_dot() {
+    let _filesystem = filesystem_test_lock();
     let temp = TempDirectory::new("components");
     fs::write(temp.path().join("alpha.fsh"), b"").unwrap();
     fs::write(temp.path().join("beta.fsh"), b"").unwrap();
@@ -154,6 +165,7 @@ fn component_patterns_select_hidden_entries_only_with_an_explicit_dot() {
 
 #[test]
 fn question_negated_class_escape_and_unicode_character_matching_are_exact() {
+    let _filesystem = filesystem_test_lock();
     let temp = TempDirectory::new("pattern-atoms");
     fs::create_dir_all(temp.path().join("patterns")).unwrap();
     fs::create_dir_all(temp.path().join("unicode")).unwrap();
@@ -190,6 +202,7 @@ fn question_negated_class_escape_and_unicode_character_matching_are_exact() {
 
 #[test]
 fn absolute_and_path_patterns_preserve_their_native_spelling() {
+    let _filesystem = filesystem_test_lock();
     let temp = TempDirectory::new("absolute");
     fs::write(temp.path().join("only.fsh"), b"").unwrap();
     let absolute_pattern = fs::canonicalize(temp.path()).unwrap().join("*.fsh");
