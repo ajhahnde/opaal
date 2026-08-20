@@ -110,6 +110,7 @@ fn semantic_completion_hover_and_signature_help_use_shared_program_data() {
         "let files = glob('*.fsh')\n",
         "let latest = $status\n",
         "pwd\n",
+        "command tool\n",
         "kill --kill 1\n",
     );
     let library = concat!(
@@ -283,6 +284,25 @@ fn semantic_completion_hover_and_signature_help_use_shared_program_data() {
             .as_str()
             .unwrap()
             .contains("pwd")
+    );
+
+    let dynamic_command = root.find("command tool").unwrap() + 2;
+    let dynamic_command_hover = request(
+        &workspace,
+        PositionEncoding::Utf16,
+        &control,
+        "textDocument/hover",
+        positional(&root_uri, root, dynamic_command, PositionEncoding::Utf16),
+    )
+    .unwrap();
+    let dynamic_command_hover = dynamic_command_hover["contents"]["value"].as_str().unwrap();
+    assert!(
+        dynamic_command_hover.contains("command NAME [ARG...]"),
+        "{dynamic_command_hover}"
+    );
+    assert!(
+        dynamic_command_hover.contains("explicit external resolution"),
+        "{dynamic_command_hover}"
     );
 
     let flag_cursor = root.find("--kill").unwrap() + 4;

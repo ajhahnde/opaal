@@ -88,7 +88,7 @@ fn one_pipeline_prints_the_resolved_plan_without_running_or_opening_it() {
     let source = temp.source(
         "command.fsh",
         format!(
-            "^flash-e2e-status-fixture late 0 '{}' 0 > '{}'\n",
+            "command flash-e2e-status-fixture late 0 '{}' 0 > '{}'\n",
             marker.display(),
             redirected.display()
         ),
@@ -110,6 +110,8 @@ fn one_pipeline_prints_the_resolved_plan_without_running_or_opening_it() {
     assert!(stdout.contains(&format!("cwd [{}]", temp.path().display())));
     assert!(stdout.contains("[FLASH_PLAN_EXACT]=[inherited]"));
     assert!(stdout.contains("flash-e2e-status-fixture"));
+    assert!(stdout.contains("external"));
+    assert!(!stdout.contains("internal command"));
     assert!(stdout.contains(&format!("[{}]", redirected.display())));
     assert!(!marker.exists(), "the external command must not run");
     assert!(!redirected.exists(), "the redirection target must not open");

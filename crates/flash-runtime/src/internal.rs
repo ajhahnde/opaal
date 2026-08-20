@@ -674,12 +674,6 @@ fn execute_session_builtin(
             })
         }
         BuiltinOutcome::Exit(request) => Ok(StageOutcome::Exit(request.code())),
-        BuiltinOutcome::External(_) => Err(RuntimeError::new(
-            RuntimeErrorKind::Unsupported {
-                feature: "the command built-in inside an all-internal pipeline",
-            },
-            stage.span(),
-        )),
     }
 }
 

@@ -3146,6 +3146,30 @@ fn module_effect_summaries_fold_named_dependencies_and_exclude_load_only_modules
 }
 
 #[test]
+fn dynamic_external_command_has_the_external_process_effect_contract() {
+    let paths = FakeCanonicalizer::default().resolves("/project/main.fsh", "/project/main.fsh");
+    let sources = FakeSourceLoader::default().contains(
+        "/project/main.fsh",
+        "let selected = 'tool'\ncommand $selected argument\n",
+    );
+    let program = ModuleProgramLoader::new(&paths, &sources)
+        .load(Path::new("/project/main.fsh"))
+        .expect("the dynamic external source loads without execution");
+    let effects = program
+        .effects()
+        .direct(program.graph().root())
+        .occurrences()
+        .iter()
+        .map(|occurrence| occurrence.effect())
+        .collect::<std::collections::BTreeSet<_>>();
+
+    assert!(effects.contains(&ModuleEffect::Process));
+    assert!(effects.contains(&ModuleEffect::OpaqueExternal));
+    assert!(effects.contains(&ModuleEffect::Output));
+    assert!(effects.contains(&ModuleEffect::Status));
+}
+
+#[test]
 fn module_exports_must_name_locals_once() {
     let paths = FakeCanonicalizer::default().resolves("/project/main.fsh", "/project/main.fsh");
     let unknown = FakeSourceLoader::default().contains("/project/main.fsh", "export { missing }\n");

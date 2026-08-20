@@ -1,6 +1,6 @@
 //! Standard platform-independent internal commands and session state.
 
-use std::ffi::{OsStr, OsString};
+use std::ffi::OsStr;
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 
@@ -13,9 +13,7 @@ use crate::command::{
 use crate::documentation::{CommandDocumentation, Documentation};
 use crate::eval::{RuntimeError, RuntimeErrorKind};
 use crate::plan::{PlannedArgument, PlannedResolution, PlannedStage};
-use crate::resolve::{
-    ExecutableProbe, Resolution, ResolutionError, resolve_command, resolve_external,
-};
+use crate::resolve::{ExecutableProbe, Resolution, ResolutionError, resolve_command};
 use crate::{Duration, Environment, NativePath, Record, Status, Value};
 
 /// Mutable shell-session state shared by built-ins and later execution layers.
@@ -99,27 +97,6 @@ impl BuiltinCompletion {
     }
 }
 
-/// A forced-external invocation prepared by the `command` built-in.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ExternalInvocation {
-    executable: PathBuf,
-    argv: Vec<OsString>,
-}
-
-impl ExternalInvocation {
-    /// The resolved executable path.
-    #[must_use]
-    pub fn executable(&self) -> &Path {
-        &self.executable
-    }
-
-    /// Exact native argv, including explicit argv zero.
-    #[must_use]
-    pub fn argv(&self) -> &[OsString] {
-        &self.argv
-    }
-}
-
 /// A request for the session boundary to terminate with one host exit code.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ExitRequest {
@@ -134,13 +111,11 @@ impl ExitRequest {
     }
 }
 
-/// The three possible successful control outcomes of a standard built-in.
+/// The possible successful control outcomes of a standard built-in.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum BuiltinOutcome {
     /// The command completed inside the runtime.
     Completed(BuiltinCompletion),
-    /// `command` prepared an external invocation for the process executor.
-    External(ExternalInvocation),
     /// `exit` requested session termination.
     Exit(ExitRequest),
 }
@@ -418,7 +393,7 @@ pub fn execute_builtin(
         "cd" => execute_cd(stage, session, platform),
         "pwd" => execute_pwd(stage, session),
         "which" => execute_which(stage, session, registry, probe),
-        "command" => execute_command(stage, session, probe),
+        "command" => unreachable!("command stages are lowered to external stages while planning"),
         "exit" => execute_exit(stage, session),
         "check" => execute_check(stage, input, upstream_status, session),
         _ => unreachable!("standard_name returns only standard built-ins"),
@@ -538,41 +513,6 @@ fn execute_which(
         BuiltinOutput::ValueStream(output),
         i64::from(missing),
     ))
-}
-
-fn execute_command(
-    stage: &PlannedStage,
-    session: &SessionState,
-    probe: &dyn ExecutableProbe,
-) -> Result<BuiltinOutcome, RuntimeError> {
-    expect_arity(stage, "command", 1, None)?;
-    let name = word_argument(
-        "command",
-        stage
-            .arguments()
-            .first()
-            .expect("arity guarantees one command name"),
-    )?;
-    let resolved =
-        resolve_external(name.value(), &session.environment, probe).map_err(|error| {
-            let ResolutionError::NotFound { name: missing } = error else {
-                unreachable!("direct external resolution cannot observe namespace reservations");
-            };
-            RuntimeError::new(
-                RuntimeErrorKind::CommandNotFound { name: missing },
-                name.span(),
-            )
-        })?;
-    Ok(BuiltinOutcome::External(ExternalInvocation {
-        executable: resolved.path().to_owned(),
-        argv: stage
-            .arguments()
-            .iter()
-            .map(|argument| {
-                word_argument("command", argument).map(|word| word.value().to_os_string())
-            })
-            .collect::<Result<Vec<_>, _>>()?,
-    }))
 }
 
 fn execute_exit(

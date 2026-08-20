@@ -254,6 +254,140 @@ fn recursive_command_composition_reaches_the_fsh_host_boundary() {
 }
 
 #[test]
+fn dynamically_selected_external_preserves_argv_through_real_fsh() {
+    let temp = TempDir::new("dynamic-external-argv");
+    let report = temp.path().join("report.bin");
+    let script = temp.script(
+        "dynamic-external-argv.fsh",
+        concat!(
+            "let program = 'flash-e2e-process-observer-fixture'\n",
+            "let arguments = ['', 'two words', 'Grüße 🌍']\n",
+            "command $program ...$arguments\n",
+        ),
+    );
+
+    let output = Command::new(env!("CARGO_BIN_EXE_fsh"))
+        .arg(&script)
+        .current_dir(temp.path())
+        .env("PATH", fixture_directory())
+        .env("FLASH_PROBE_REPORT", &report)
+        .output()
+        .expect("fsh should start");
+
+    assert!(output.status.success(), "{output:?}");
+    assert!(output.stdout.is_empty(), "{output:?}");
+    assert!(output.stderr.is_empty(), "{output:?}");
+    let observed = ProcessReport::read(&report);
+    assert_eq!(observed.cwd, temp.path().as_os_str().as_bytes());
+    assert_eq!(
+        observed.argv,
+        [
+            b"flash-e2e-process-observer-fixture".as_slice(),
+            b"".as_slice(),
+            b"two words".as_slice(),
+            "Grüße 🌍".as_bytes(),
+        ]
+    );
+}
+
+#[test]
+fn dynamic_external_composes_with_callables_conditions_pipelines_and_capture() {
+    let temp = TempDir::new("dynamic-external-composition");
+    let report = temp.path().join("report.bin");
+    let script = temp.script(
+        "dynamic-external-composition.fsh",
+        concat!(
+            "def succeeds(program) { command $program exit 0 }\n",
+            "let status_program = 'flash-e2e-status-fixture'\n",
+            "let stream_program = 'flash-e2e-stream-fixture'\n",
+            "if succeeds($status_program) {\n",
+            "    let captured = $(command $stream_program source 3 0 | decode utf8)\n",
+            "    command flash-e2e-process-observer-fixture $captured\n",
+            "} else {\n",
+            "    exit 99\n",
+            "}\n",
+        ),
+    );
+
+    let output = Command::new(env!("CARGO_BIN_EXE_fsh"))
+        .arg(&script)
+        .current_dir(temp.path())
+        .env("PATH", fixture_directory())
+        .env("FLASH_PROBE_REPORT", &report)
+        .output()
+        .expect("fsh should start");
+
+    assert!(output.status.success(), "{output:?}");
+    assert!(output.stdout.is_empty(), "{output:?}");
+    assert!(output.stderr.is_empty(), "{output:?}");
+    assert_eq!(
+        ProcessReport::read(&report).argv,
+        [
+            b"flash-e2e-process-observer-fixture".as_slice(),
+            b"xxx".as_slice(),
+        ]
+    );
+}
+
+#[test]
+fn dynamic_external_preserves_redirection_and_background_execution() {
+    let temp = TempDir::new("dynamic-external-effects");
+    let redirected = temp.path().join("redirected.bin");
+    let marker = temp.path().join("background.txt");
+    let script = temp.script(
+        "dynamic-external-effects.fsh",
+        &format!(
+            concat!(
+                "command flash-e2e-stream-fixture source 4 0 | \
+                 command flash-e2e-stream-fixture sink 4 0\n",
+                "command flash-e2e-stream-fixture source 4 0 > '{}'\n",
+                "command flash-e2e-status-fixture late 0 '{}' 0 &\n",
+                "command flash-e2e-status-fixture exit 0\n",
+            ),
+            redirected.display(),
+            marker.display(),
+        ),
+    );
+
+    let output = run_script(&script, temp.path(), fixture_directory());
+
+    assert!(output.status.success(), "{output:?}");
+    assert!(output.stdout.is_empty(), "{output:?}");
+    assert!(output.stderr.is_empty(), "{output:?}");
+    assert_eq!(fs::read(redirected).unwrap(), b"xxxx");
+    assert_eq!(fs::read(marker).unwrap(), b"late");
+}
+
+#[test]
+fn dynamic_external_missing_target_is_a_runtime_resolution_error() {
+    let temp = TempDir::new("dynamic-external-missing");
+    let marker = temp.path().join("unreached.txt");
+    let script = temp.script(
+        "dynamic-external-missing.fsh",
+        &format!(
+            "command flash-e2e-command-that-does-not-exist \
+             $(command flash-e2e-status-fixture late 0 '{}' 0)\n",
+            marker.display(),
+        ),
+    );
+
+    let output = run_script(&script, temp.path(), fixture_directory());
+
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert!(output.stdout.is_empty(), "{output:?}");
+    let stderr = String::from_utf8(output.stderr).expect("diagnostics should be UTF-8");
+    assert!(stderr.contains("command not found"), "{stderr}");
+    assert!(
+        stderr.contains("flash-e2e-command-that-does-not-exist"),
+        "{stderr}"
+    );
+    assert!(
+        !marker.exists(),
+        "later arguments must not expand after target resolution fails"
+    );
+}
+
+#[test]
 fn explicit_glob_reaches_module_initialization_and_real_argv() {
     let temp = TempDir::new("glob-module-argv");
     fs::create_dir_all(temp.path().join("inputs/nested")).unwrap();

@@ -2773,6 +2773,9 @@ fn help_keeps_builtin_and_function_namespaces_and_orders_list_output() {
             "    User-defined help function.\n",
         )
     );
+    let command_detail = rendered(&mut session, "help command", &probe, &platform, &clock);
+    assert!(command_detail.contains("invocation: command NAME [ARG...]"));
+    assert!(command_detail.contains("Run a command through explicit external resolution."));
     assert_eq!(
         rendered(&mut session, "help 'zzz'", &probe, &platform, &clock),
         concat!(

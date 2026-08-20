@@ -13,7 +13,7 @@ use flash_runtime::command::{
     Carrier, CommandLifecycle, CommandNamespaceEntry, CommandOutput, CommandRegistry,
 };
 use flash_runtime::eval::RuntimeErrorKind;
-use flash_runtime::plan::{ExecutionPlan, plan_pipeline};
+use flash_runtime::plan::{ExecutionPlan, PlannedResolution, plan_pipeline};
 use flash_runtime::resolve::ExecutableProbe;
 use flash_runtime::{Duration, Environment, ScopeStack, Status, Value};
 use flash_syntax::{ParseOutcome, Pipeline, SourceFile, SourceId, StatementKind, parse};
@@ -529,24 +529,21 @@ fn which_reports_all_namespace_kinds_targets_paths_order_and_status() {
 #[test]
 fn command_forces_external_resolution_and_preserves_native_argv() {
     let probe = Probe::new(["/bin/pwd"]);
-    let mut session = state();
+    let session = state();
     let plan = build("command pwd 'two words' ''", session.environment(), &probe);
-    let outcome = execute_builtin(
-        &plan.stages()[0],
-        Carrier::Empty,
-        None,
-        &mut session,
-        &standard_registry(),
-        &probe,
-        &FakePlatform::none(),
-    )
-    .expect("command should resolve the external pwd");
-    let BuiltinOutcome::External(invocation) = outcome else {
-        panic!("command should request external execution");
-    };
-    assert_eq!(invocation.executable(), Path::new("/bin/pwd"));
+    let stage = &plan.stages()[0];
     assert_eq!(
-        invocation.argv(),
+        stage.resolution(),
+        &PlannedResolution::External {
+            path: PathBuf::from("/bin/pwd")
+        }
+    );
+    assert_eq!(
+        stage
+            .argv()
+            .iter()
+            .map(|word| word.value().to_os_string())
+            .collect::<Vec<_>>(),
         [
             OsString::from("pwd"),
             OsString::from("two words"),
@@ -573,25 +570,20 @@ fn command_dynamically_bypasses_a_reserved_name() {
     )
     .expect("valid namespace");
     let probe = Probe::new(["/bin/future"]);
-    let mut session = state();
+    let session = state();
     let plan = build_with_registry("command future", session.environment(), &registry, &probe);
-
-    let outcome = execute_builtin(
-        &plan.stages()[0],
-        Carrier::Empty,
-        None,
-        &mut session,
-        &registry,
-        &probe,
-        &FakePlatform::none(),
-    )
-    .expect("command should bypass the reservation");
-
-    let BuiltinOutcome::External(invocation) = outcome else {
-        panic!("command should request external execution");
-    };
-    assert_eq!(invocation.executable(), Path::new("/bin/future"));
-    assert_eq!(invocation.argv(), [OsString::from("future")]);
+    let stage = &plan.stages()[0];
+    assert_eq!(
+        stage.resolution(),
+        &PlannedResolution::External {
+            path: PathBuf::from("/bin/future")
+        }
+    );
+    assert_eq!(
+        stage.argv()[0].value(),
+        OsStr::new("future"),
+        "the selected command becomes argv zero"
+    );
 }
 
 #[test]

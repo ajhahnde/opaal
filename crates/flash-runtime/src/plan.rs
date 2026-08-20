@@ -33,7 +33,9 @@ use crate::eval::{
 };
 use crate::help::{HelpCatalog, HelpSnapshot, render_help};
 use crate::module::RuntimeBindingTypes;
-use crate::resolve::{ExecutableProbe, Resolution, ResolutionError, resolve_command};
+use crate::resolve::{
+    ExecutableProbe, Resolution, ResolutionError, resolve_command, resolve_external,
+};
 use crate::{Environment, ScopeStack, Value};
 
 /// A complete, inspectable plan for one command pipeline.
@@ -970,7 +972,7 @@ fn plan_stage(
     // resolution and is never part of the name.
     let head = expand_word(command.head.word(), context.source, scope)?;
     let force_external = command.head.kind() == flash_syntax::CommandHeadKind::ForcedExternal;
-    let (resolution, input_carriers, output_carrier) =
+    let (mut resolution, mut input_carriers, mut output_carrier) =
         resolve(head.value(), force_external, command.head.span(), context)?;
     if matches!(
         &resolution,
@@ -984,6 +986,11 @@ fn plan_stage(
             command.head.span(),
         ));
     }
+    let lower_command = matches!(
+        &resolution,
+        PlannedResolution::Internal { canonical_name, .. } if canonical_name == "command"
+    );
+    let mut command_path = None;
 
     let mut argv = vec![head];
     let mut arguments = Vec::new();
@@ -992,15 +999,33 @@ fn plan_stage(
         match item.kind() {
             CommandItemKind::Word(word) => {
                 let word = expand_word(word, context.source, scope)?;
+                if lower_command && command_path.is_none() {
+                    command_path = Some(resolve_dynamic_external(&word, context)?);
+                }
                 argv.push(word.clone());
                 arguments.push(PlannedArgument::Word(word));
             }
             CommandItemKind::Spread(variable) => {
                 let words = expand_spread(variable, item.span(), context.source, scope)?;
+                if lower_command
+                    && command_path.is_none()
+                    && let Some(word) = words.first()
+                {
+                    command_path = Some(resolve_dynamic_external(word, context)?);
+                }
                 argv.extend(words.iter().cloned());
                 arguments.extend(words.into_iter().map(PlannedArgument::Word));
             }
             CommandItemKind::Closure(closure) => {
+                if lower_command {
+                    return Err(RuntimeError::new(
+                        RuntimeErrorKind::BuiltinArgument {
+                            command: "command",
+                            message: "expected a word argument, found a typed value".to_owned(),
+                        },
+                        item.span(),
+                    ));
+                }
                 if matches!(resolution, PlannedResolution::External { .. }) {
                     return Err(RuntimeError::new(
                         RuntimeErrorKind::Unsupported {
@@ -1029,6 +1054,25 @@ fn plan_stage(
         }
     }
 
+    if lower_command {
+        let Some(path) = command_path else {
+            return Err(RuntimeError::new(
+                RuntimeErrorKind::BuiltinArity {
+                    command: "command",
+                    minimum: 1,
+                    maximum: None,
+                    actual: 0,
+                },
+                span,
+            ));
+        };
+        resolution = PlannedResolution::External { path };
+        input_carriers = BTreeSet::from([Carrier::ByteStream]);
+        output_carrier = Carrier::ByteStream;
+        argv.remove(0);
+        arguments.clear();
+    }
+
     Ok(PlannedStage {
         resolution,
         input_carriers,
@@ -1039,6 +1083,20 @@ fn plan_stage(
         help: None,
         span,
     })
+}
+
+fn resolve_dynamic_external(
+    target: &ExpandedWord,
+    context: &StagePlanningContext<'_>,
+) -> Result<PathBuf, RuntimeError> {
+    let resolved =
+        resolve_external(target.value(), context.environment, context.probe).map_err(|error| {
+            let ResolutionError::NotFound { name } = error else {
+                unreachable!("direct external resolution cannot observe namespace reservations");
+            };
+            RuntimeError::new(RuntimeErrorKind::CommandNotFound { name }, target.span())
+        })?;
+    Ok(resolved.path().to_owned())
 }
 
 fn plan_help_stage(

@@ -124,6 +124,115 @@ fn external_command_plans_argv_resolution_cwd_and_spans() {
 }
 
 #[test]
+fn command_lowers_to_the_external_stage_contract() {
+    let registry = flash_runtime::builtin::standard_registry();
+    let probe = FakeProbe::with(&["/bin/tool"]);
+    let mut scope = ScopeStack::new();
+    scope
+        .declare(
+            "program",
+            BindingMutability::Immutable,
+            Value::string("tool"),
+        )
+        .expect("declare program");
+    scope
+        .declare(
+            "arguments",
+            BindingMutability::Immutable,
+            Value::list(vec![Value::string("two words"), Value::string("")]),
+        )
+        .expect("declare arguments");
+    let environment = Environment::from_snapshot([("PATH", "/bin")]);
+
+    let plan = plan_with(
+        "command $program ...$arguments",
+        "/work",
+        &mut scope,
+        &environment,
+        &registry,
+        &probe,
+    )
+    .expect("the command stage should lower");
+    let stage = &plan.stages()[0];
+
+    assert_eq!(
+        stage.resolution(),
+        &PlannedResolution::External {
+            path: PathBuf::from("/bin/tool"),
+        }
+    );
+    assert_eq!(
+        argv_values(&plan, 0),
+        [
+            OsString::from("tool"),
+            OsString::from("two words"),
+            OsString::new(),
+        ]
+    );
+    assert!(stage.arguments().is_empty());
+    assert!(stage.accepts_input(Carrier::ByteStream));
+    assert_eq!(stage.output_carrier(), Carrier::ByteStream);
+}
+
+#[test]
+fn command_requires_a_target_during_planning() {
+    let error = plan_with(
+        "command",
+        "/work",
+        &mut ScopeStack::new(),
+        &Environment::from_snapshot([("PATH", "/bin")]),
+        &flash_runtime::builtin::standard_registry(),
+        &FakeProbe::with(&[]),
+    )
+    .expect_err("command without a target should fail");
+
+    assert!(matches!(
+        error,
+        RuntimeErrorKind::BuiltinArity {
+            command: "command",
+            minimum: 1,
+            maximum: None,
+            actual: 0,
+        }
+    ));
+}
+
+#[cfg(unix)]
+#[test]
+fn command_preserves_a_native_non_utf8_target_as_argv_zero() {
+    use std::os::unix::ffi::OsStringExt;
+
+    let target = OsString::from_vec(b"/bin/tool-\xff".to_vec());
+    let mut scope = ScopeStack::new();
+    scope
+        .declare(
+            "program",
+            BindingMutability::Immutable,
+            Value::Path(flash_runtime::NativePath::new(target.clone())),
+        )
+        .expect("declare native program");
+    let plan = plan_with(
+        "command $program argument",
+        "/work",
+        &mut scope,
+        &Environment::new(),
+        &flash_runtime::builtin::standard_registry(),
+        &FakeProbe {
+            executables: vec![target.clone()],
+        },
+    )
+    .expect("native command target should lower");
+
+    assert_eq!(
+        plan.stages()[0].resolution(),
+        &PlannedResolution::External {
+            path: PathBuf::from(target.clone()),
+        }
+    );
+    assert_eq!(plan.stages()[0].argv()[0].value(), target.as_os_str());
+}
+
+#[test]
 fn bare_command_resolves_internal_before_external() {
     let mut registry = CommandRegistry::new();
     registry.register(CommandSignature::new(
