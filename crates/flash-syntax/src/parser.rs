@@ -1,14 +1,15 @@
 use crate::lexer::lex_with_control;
 use crate::{
     AndChain, AndOperator, Assignment, AstNode, BinaryExpression, BinaryOperator, Block,
-    CallExpression, Closure, CommandHead, CommandHeadKind, CommandItem, CommandItemKind,
-    CommandStage, ConditionalChain, ConditionalOperator, ControlTransfer, Declaration, Delimiter,
-    Diagnostic, DocumentationBlock, ElseBranch, EnvironmentStatement, Expression, ExpressionKind,
-    FileRedirection, ForStatement, FunctionDefinition, Identifier, IfStatement, ImportStatement,
-    IncompleteInput, IncompleteReason, IndexExpression, IoNumber, JobStatement, Keyword, Literal,
-    LiteralKind, MatchArm, MatchStatement, MemberExpression, ModuleExportStatement, NumberKind,
-    Operator, OutputMode, Parameter, Pattern, PipeOperator, Pipeline, RecordEntry, RecordKey,
-    Redirection, RedirectionKind, Script, Severity, SourceFile, Span, Stage, StageKind, Statement,
+    CallExpression, Closure, CommandCaptureKind, CommandHead, CommandHeadKind, CommandItem,
+    CommandItemKind, CommandStage, CommandSubstitution, ConditionalChain, ConditionalOperator,
+    ControlTransfer, Declaration, Delimiter, Diagnostic, DocumentationBlock, ElseBranch,
+    EnvironmentStatement, Expression, ExpressionKind, FileRedirection, ForStatement,
+    FunctionDefinition, Identifier, IfStatement, ImportStatement, IncompleteInput,
+    IncompleteReason, IndexExpression, IoNumber, JobStatement, Keyword, Literal, LiteralKind,
+    MatchArm, MatchStatement, MemberExpression, ModuleExportStatement, NumberKind, Operator,
+    OutputMode, Parameter, Pattern, PipeOperator, Pipeline, RecordEntry, RecordKey, Redirection,
+    RedirectionKind, Script, Severity, SourceFile, Span, Stage, StageKind, Statement,
     StatementKind, SyntaxClassification, Token, TokenKind, TypeReference, UnaryExpression,
     UnaryOperator, VariableReference, WhileStatement, Word, WordPart, WordPartKind,
     classify_tokens,
@@ -1096,7 +1097,13 @@ impl<'source, 'control> Parser<'source, 'control> {
 
     fn parse_command_substitution(&mut self) -> ParseResult<WordPart> {
         let open = self.take().expect("command substitution opener is current");
-        self.skip_separators();
+        self.skip_layout();
+        let (capture, modifier_span) = self.take_command_capture_modifier();
+        if modifier_span.is_some() {
+            self.skip_layout();
+        } else {
+            self.skip_separators();
+        }
         self.continuation_depth += 1;
         let chain = self.parse_conditional_chain()?;
         self.skip_separators();
@@ -1106,9 +1113,38 @@ impl<'source, 'control> Parser<'source, 'control> {
         )?;
         self.continuation_depth -= 1;
         Ok(WordPart::new(
-            WordPartKind::CommandSubstitution(Box::new(chain)),
+            WordPartKind::CommandSubstitution(CommandSubstitution::new(
+                capture,
+                modifier_span,
+                Box::new(chain),
+            )),
             self.span(open.span().start(), close.span().end()),
         ))
+    }
+
+    fn take_command_capture_modifier(&mut self) -> (CommandCaptureKind, Option<Span>) {
+        let Some(identifier) = self.current().copied() else {
+            return (CommandCaptureKind::Text, None);
+        };
+        let Some(colon) = self.tokens.get(self.position + 1).copied() else {
+            return (CommandCaptureKind::Text, None);
+        };
+        if identifier.kind() != TokenKind::Identifier
+            || colon.kind() != TokenKind::Operator(Operator::Colon)
+            || !identifier.is_adjacent_to(&colon)
+        {
+            return (CommandCaptureKind::Text, None);
+        }
+        let capture = match identifier.text(self.source).ok() {
+            Some("text") => CommandCaptureKind::Text,
+            Some("bytes") => CommandCaptureKind::Bytes,
+            _ => return (CommandCaptureKind::Text, None),
+        };
+        self.position += 2;
+        (
+            capture,
+            Some(self.span(identifier.span().start(), colon.span().end())),
+        )
     }
 
     fn parse_closure(&mut self) -> ParseResult<Closure> {
@@ -1412,11 +1448,11 @@ impl<'source, 'control> Parser<'source, 'control> {
             TokenKind::CommandSubstitutionStart => {
                 let part = self.parse_command_substitution()?;
                 let span = part.span();
-                let WordPartKind::CommandSubstitution(chain) = part.into_kind() else {
+                let WordPartKind::CommandSubstitution(substitution) = part.into_kind() else {
                     unreachable!("command substitution parser returns its matching part")
                 };
                 Ok(Expression::new(
-                    ExpressionKind::CommandSubstitution(chain),
+                    ExpressionKind::CommandSubstitution(substitution),
                     span,
                 ))
             }

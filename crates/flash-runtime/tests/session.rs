@@ -38,7 +38,7 @@ use flash_runtime::script::execute_script;
 use flash_runtime::session::{
     BackgroundFailureReason, JobNoticeKind, LiveJobState, Session, SubmitOutcome,
 };
-use flash_runtime::{Duration, Environment, ScopeStack, Status};
+use flash_runtime::{Duration, Environment, ScopeStack, Status, Value};
 
 #[derive(Default)]
 struct Probe {
@@ -1315,6 +1315,160 @@ fn command_substitution_captures_a_mixed_external_tail() {
     assert_eq!(session.current_status().and_then(Status::code), Some(7));
     assert!(sink.is_empty());
     assert_eq!(platform.active_endpoints(), 0);
+}
+
+#[test]
+fn typed_command_substitution_preserves_bytes_and_explicit_text() {
+    let clock = FakeClock::new();
+    let mut session = session();
+    let (platform, controls) =
+        ControlledBackgroundPlatform::in_groups_for_session(&[&[903], &[904]]);
+    let probe = Probe::new(["/bin/tool"]);
+    platform.feed_descriptor_read(vec![0, 0xff, b'\n']);
+    controls[0]
+        .steps
+        .send(Ok(ProcessTransition::Completed(ProcessStatus::Exited(7))))
+        .expect("complete the byte producer");
+    controls[1]
+        .steps
+        .send(Ok(ProcessTransition::Completed(ProcessStatus::Exited(0))))
+        .expect("complete the text producer");
+    let mut sink = Vec::new();
+
+    assert_eq!(
+        session
+            .submit(
+                "<interactive>",
+                "let binary = $(bytes: ^tool)",
+                &probe,
+                &platform,
+                &clock,
+                &mut sink,
+            )
+            .expect("both typed capture modes should succeed"),
+        SubmitOutcome::Continued
+    );
+    assert_eq!(
+        session.scope().get("binary"),
+        Some(&Value::bytes(vec![0, 0xff, b'\n']))
+    );
+    assert_eq!(session.current_status().and_then(Status::code), Some(7));
+
+    platform.feed_descriptor_read(b"line\r\n".to_vec());
+    assert_eq!(
+        session
+            .submit(
+                "<interactive>",
+                "let text = $(text: ^tool)",
+                &probe,
+                &platform,
+                &clock,
+                &mut sink,
+            )
+            .expect("explicit text capture should succeed"),
+        SubmitOutcome::Continued
+    );
+    assert_eq!(session.scope().get("text"), Some(&Value::string("line")));
+    assert_eq!(session.current_status().and_then(Status::code), Some(0));
+    assert!(sink.is_empty());
+    assert_eq!(platform.active_endpoints(), 0);
+}
+
+#[test]
+fn byte_capture_uses_the_shared_callable_mixed_pipeline_and_reachability_paths() {
+    let clock = FakeClock::new();
+    let mut session = session();
+    let (platform, controls) = ControlledBackgroundPlatform::in_groups_for_session(&[&[905]]);
+    let probe = Probe::new(["/bin/tool"]);
+    platform.feed_pipe_read(0, b"callable bytes\n".to_vec());
+    controls[0]
+        .steps
+        .send(Ok(ProcessTransition::Completed(ProcessStatus::Exited(9))))
+        .expect("complete the external producer");
+    let mut sink = Vec::new();
+
+    assert_eq!(
+        session
+            .submit(
+                "<interactive>",
+                "def collect() { return $(bytes: ^tool | decode utf8 | encode utf8) }\n\
+                 if false { let skipped = $(bytes: ^missing) }\n\
+                 let binary = collect()",
+                &probe,
+                &platform,
+                &clock,
+                &mut sink,
+            )
+            .expect("reached callable capture should use the ordinary mixed pipeline"),
+        SubmitOutcome::Continued
+    );
+    assert_eq!(
+        session.scope().get("binary"),
+        Some(&Value::bytes(b"callable bytes\n".to_vec()))
+    );
+    assert_eq!(session.current_status().and_then(Status::code), Some(0));
+    assert!(sink.is_empty());
+    assert_eq!(platform.active_endpoints(), 0);
+}
+
+#[test]
+fn typed_byte_capture_honors_exact_and_overflow_limits_after_reaping() {
+    let probe = Probe::new(["/bin/tool"]);
+
+    let mut exact = Session::new(
+        "/work",
+        environment(),
+        SessionOptions::default().with_capture_limit(3),
+    );
+    let (exact_platform, exact_controls) =
+        ControlledBackgroundPlatform::in_groups_for_session(&[&[906]]);
+    exact_platform.feed_descriptor_read(b"abc".to_vec());
+    exact_controls[0]
+        .steps
+        .send(Ok(ProcessTransition::Completed(ProcessStatus::Exited(0))))
+        .expect("complete the exact-limit producer");
+    let mut sink = Vec::new();
+    exact
+        .submit(
+            "<interactive>",
+            "let binary = $(bytes: ^tool)",
+            &probe,
+            &exact_platform,
+            &FakeClock::new(),
+            &mut sink,
+        )
+        .expect("the exact raw-byte limit should succeed");
+    assert_eq!(
+        exact.scope().get("binary"),
+        Some(&Value::bytes(b"abc".to_vec()))
+    );
+    assert_eq!(exact_platform.active_endpoints(), 0);
+
+    let mut overflow = Session::new(
+        "/work",
+        environment(),
+        SessionOptions::default().with_capture_limit(2),
+    );
+    let (overflow_platform, overflow_controls) =
+        ControlledBackgroundPlatform::in_groups_for_session(&[&[907]]);
+    overflow_platform.feed_descriptor_read(b"abc".to_vec());
+    overflow_controls[0]
+        .steps
+        .send(Ok(ProcessTransition::Completed(ProcessStatus::Exited(0))))
+        .expect("complete the overflowing producer");
+    let error = overflow
+        .submit(
+            "<interactive>",
+            "let binary = $(bytes: ^tool)",
+            &probe,
+            &overflow_platform,
+            &FakeClock::new(),
+            &mut sink,
+        )
+        .expect_err("one byte beyond the raw limit must fail");
+    assert!(error.render().contains("2-byte capture limit"));
+    assert_eq!(overflow.scope().get("binary"), None);
+    assert_eq!(overflow_platform.active_endpoints(), 0);
 }
 
 #[test]

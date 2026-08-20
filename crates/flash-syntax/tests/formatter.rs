@@ -109,6 +109,20 @@ fn explicit_module_name_spacing_is_canonical() {
 }
 
 #[test]
+fn typed_command_capture_modifiers_keep_their_grammar_slot() {
+    let source = SourceFile::new(
+        SourceId::new(3_005),
+        "capture.fsh",
+        "let binary = $(bytes:   ^tool)\nlet text = $(text:^tool)\n",
+    );
+
+    assert_eq!(
+        complete_format(&source),
+        "let binary = $(bytes: ^tool)\nlet text = $(text:^tool)\n"
+    );
+}
+
+#[test]
 fn incomplete_and_invalid_inputs_keep_their_parse_outcomes() {
     let incomplete = SourceFile::new(SourceId::new(3_001), "incomplete.fsh", "echo \"");
     let FormatOutcome::Incomplete(reason) = format_source(&incomplete) else {

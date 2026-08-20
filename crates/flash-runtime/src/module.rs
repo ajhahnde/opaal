@@ -1297,8 +1297,20 @@ impl<'a> TypeCollector<'a> {
         match statement.kind() {
             StatementKind::Import(_) | StatementKind::ModuleExport(_) => Ok(()),
             StatementKind::Declaration(declaration) => {
-                if let Some(annotation) = &declaration.type_annotation {
-                    let value_type = self.resolve_type(annotation);
+                let value_type = declaration
+                    .type_annotation
+                    .as_ref()
+                    .map(|annotation| self.resolve_type(annotation))
+                    .or_else(|| match declaration.value.kind() {
+                        ExpressionKind::CommandSubstitution(substitution) => {
+                            Some(match substitution.capture() {
+                                flash_syntax::CommandCaptureKind::Text => ValueType::String,
+                                flash_syntax::CommandCaptureKind::Bytes => ValueType::Bytes,
+                            })
+                        }
+                        _ => None,
+                    });
+                if let Some(value_type) = value_type {
                     self.types.bindings.push(ResolvedBindingType {
                         declaration_span: declaration.name.span(),
                         value_type,
@@ -1450,9 +1462,8 @@ impl<'a> TypeCollector<'a> {
                 Ok(())
             }
             ExpressionKind::Closure(closure) => self.closure(closure),
-            ExpressionKind::CommandSubstitution(chain) | ExpressionKind::GroupedJob(chain) => {
-                self.chain(chain)
-            }
+            ExpressionKind::CommandSubstitution(substitution) => self.chain(substitution.chain()),
+            ExpressionKind::GroupedJob(chain) => self.chain(chain),
             ExpressionKind::Call(call) => {
                 self.expression(&call.callee)?;
                 for argument in &call.arguments {
@@ -1523,7 +1534,16 @@ impl<'a> TypeCollector<'a> {
         match part.kind() {
             WordPartKind::DoubleQuoted(parts) => self.word_parts(parts),
             WordPartKind::BracedInterpolation(expression) => self.expression(expression),
-            WordPartKind::CommandSubstitution(chain) => self.chain(chain),
+            WordPartKind::CommandSubstitution(substitution) => {
+                self.chain(substitution.chain())?;
+                if substitution.capture() == flash_syntax::CommandCaptureKind::Bytes {
+                    self.errors.push(ModuleTypeError::ByteCaptureInWord {
+                        module: self.entry.module().clone(),
+                        span: substitution.modifier_span().unwrap_or_else(|| part.span()),
+                    });
+                }
+                Ok(())
+            }
             _ => Ok(()),
         }
     }
@@ -1969,7 +1989,14 @@ impl<'a> SignatureValidator<'a> {
                 self.chain(&closure.body)?;
                 Ok(Some(ValueType::Closure))
             }
-            ExpressionKind::CommandSubstitution(chain) | ExpressionKind::GroupedJob(chain) => {
+            ExpressionKind::CommandSubstitution(substitution) => {
+                self.chain(substitution.chain())?;
+                Ok(Some(match substitution.capture() {
+                    flash_syntax::CommandCaptureKind::Text => ValueType::String,
+                    flash_syntax::CommandCaptureKind::Bytes => ValueType::Bytes,
+                }))
+            }
+            ExpressionKind::GroupedJob(chain) => {
                 self.chain(chain)?;
                 Ok(None)
             }
@@ -2286,7 +2313,7 @@ impl<'a> SignatureValidator<'a> {
             WordPartKind::BracedInterpolation(expression) => {
                 self.expression(expression).map(|_| ())
             }
-            WordPartKind::CommandSubstitution(chain) => self.chain(chain),
+            WordPartKind::CommandSubstitution(substitution) => self.chain(substitution.chain()),
             _ => Ok(()),
         }
     }
@@ -2607,9 +2634,8 @@ impl<'a> ReferenceResolver<'a> {
                 Ok(())
             }
             ExpressionKind::Closure(closure) => self.closure(closure),
-            ExpressionKind::CommandSubstitution(chain) | ExpressionKind::GroupedJob(chain) => {
-                self.chain(chain)
-            }
+            ExpressionKind::CommandSubstitution(substitution) => self.chain(substitution.chain()),
+            ExpressionKind::GroupedJob(chain) => self.chain(chain),
             ExpressionKind::Call(call) => {
                 if let ExpressionKind::Symbol(identifier) = call.callee.kind() {
                     let name = self.text(identifier.span());
@@ -2689,7 +2715,7 @@ impl<'a> ReferenceResolver<'a> {
             WordPartKind::Variable(identifier) => self.variable(identifier.span(), part.span()),
             WordPartKind::DoubleQuoted(parts) => self.word_parts(parts),
             WordPartKind::BracedInterpolation(expression) => self.expression(expression),
-            WordPartKind::CommandSubstitution(chain) => self.chain(chain),
+            WordPartKind::CommandSubstitution(substitution) => self.chain(substitution.chain()),
             WordPartKind::Bare
             | WordPartKind::BareEscape
             | WordPartKind::SingleQuoted
@@ -3377,9 +3403,8 @@ impl<'a> StaticEffectAnalyzer<'a> {
                 }
             }
             ExpressionKind::Closure(_) => {}
-            ExpressionKind::CommandSubstitution(chain) | ExpressionKind::GroupedJob(chain) => {
-                self.chain(chain);
-            }
+            ExpressionKind::CommandSubstitution(substitution) => self.chain(substitution.chain()),
+            ExpressionKind::GroupedJob(chain) => self.chain(chain),
             ExpressionKind::Call(call) => {
                 for argument in &call.arguments {
                     self.expression(argument);
@@ -3502,7 +3527,7 @@ impl<'a> StaticEffectAnalyzer<'a> {
                 }
             }
             WordPartKind::BracedInterpolation(expression) => self.expression(expression),
-            WordPartKind::CommandSubstitution(chain) => self.chain(chain),
+            WordPartKind::CommandSubstitution(substitution) => self.chain(substitution.chain()),
             WordPartKind::Bare
             | WordPartKind::BareEscape
             | WordPartKind::SingleQuoted
@@ -3920,9 +3945,8 @@ impl<'a> StaticPipelineAnalyzer<'a> {
                 }
             }
             ExpressionKind::Closure(closure) => self.closure(closure),
-            ExpressionKind::CommandSubstitution(chain) | ExpressionKind::GroupedJob(chain) => {
-                self.chain(chain);
-            }
+            ExpressionKind::CommandSubstitution(substitution) => self.chain(substitution.chain()),
+            ExpressionKind::GroupedJob(chain) => self.chain(chain),
             ExpressionKind::Call(call) => {
                 self.expression(&call.callee);
                 for argument in &call.arguments {
@@ -3981,7 +4005,7 @@ impl<'a> StaticPipelineAnalyzer<'a> {
         match part.kind() {
             WordPartKind::DoubleQuoted(parts) => self.word_parts(parts),
             WordPartKind::BracedInterpolation(expression) => self.expression(expression),
-            WordPartKind::CommandSubstitution(chain) => self.chain(chain),
+            WordPartKind::CommandSubstitution(substitution) => self.chain(substitution.chain()),
             WordPartKind::Bare
             | WordPartKind::BareEscape
             | WordPartKind::SingleQuoted
@@ -4941,6 +4965,10 @@ pub enum ModuleTypeError {
         actual: ValueType,
         annotation_span: Span,
     },
+    ByteCaptureInWord {
+        module: ModuleId,
+        span: Span,
+    },
 }
 
 impl ModuleTypeError {
@@ -4953,7 +4981,8 @@ impl ModuleTypeError {
             | Self::IntrinsicCallArity { module, .. }
             | Self::ArgumentMismatch { module, .. }
             | Self::IntrinsicArgumentMismatch { module, .. }
-            | Self::ResultMismatch { module, .. } => module,
+            | Self::ResultMismatch { module, .. }
+            | Self::ByteCaptureInWord { module, .. } => module,
         }
     }
 
@@ -4966,6 +4995,7 @@ impl ModuleTypeError {
             Self::ArgumentMismatch { argument_span, .. }
             | Self::IntrinsicArgumentMismatch { argument_span, .. } => *argument_span,
             Self::ResultMismatch { result_span, .. } => *result_span,
+            Self::ByteCaptureInWord { span, .. } => *span,
         }
     }
 
@@ -5039,6 +5069,12 @@ impl ModuleTypeError {
                     format!("this result is `{actual}`, expected `{expected}`"),
                 )
                 .with_secondary(*annotation_span, "function result type declared here"),
+            Self::ByteCaptureInWord { span, .. } => {
+                Diagnostic::new(Severity::Error, "SIG006", self.to_string()).with_primary(
+                    *span,
+                    "byte capture is a `Bytes` value and cannot be inserted into a command word",
+                )
+            }
         }
     }
 }
@@ -5116,6 +5152,11 @@ impl fmt::Display for ModuleTypeError {
             } => write!(
                 formatter,
                 "module `{}` returns `{actual}` from `{name}`; expected `{expected}`",
+                module.path().display()
+            ),
+            Self::ByteCaptureInWord { module, .. } => write!(
+                formatter,
+                "module `{}` inserts a `Bytes` capture into a command word; decode it explicitly or bind it as a value",
                 module.path().display()
             ),
         }

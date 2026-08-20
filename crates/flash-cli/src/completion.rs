@@ -18,6 +18,8 @@ use flash_syntax::{
 /// The semantic source of one completion candidate.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum CompletionKind {
+    /// A typed command-substitution capture modifier.
+    CommandCaptureModifier,
     /// A built-in callable available in expression position.
     Intrinsic,
     /// A command registered inside Flash.
@@ -376,6 +378,16 @@ impl CompletionEngine {
         };
 
         match target.context() {
+            CompletionContext::CommandSubstitutionModifier => {
+                let modifiers = BTreeSet::from(["bytes:".to_owned(), "text:".to_owned()]);
+                add(
+                    &modifiers,
+                    CompletionKind::CommandCaptureModifier,
+                    target.prefix(),
+                    false,
+                    true,
+                );
+            }
             CompletionContext::Command { forced_external } => {
                 if !*forced_external {
                     let names = self.catalog.internal.keys().cloned().collect();

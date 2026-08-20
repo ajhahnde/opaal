@@ -102,6 +102,33 @@ fn variable_completion_uses_visible_scope_and_replaces_the_dollar_word() {
 }
 
 #[test]
+fn command_substitution_modifier_completion_is_exact_and_contextual() {
+    let engine = CompletionEngine::new(CompletionCatalog::from_runtime(
+        &CommandRegistry::new(),
+        &ScopeStack::new(),
+    ));
+
+    let all = engine.complete("let value = $(", 14);
+    assert_eq!(
+        all.iter()
+            .map(|completion| (completion.value(), completion.kind()))
+            .collect::<Vec<_>>(),
+        [
+            ("bytes:", CompletionKind::CommandCaptureModifier),
+            ("text:", CompletionKind::CommandCaptureModifier),
+        ]
+    );
+    assert!(all.iter().all(|completion| completion.append_whitespace()));
+
+    let bytes = engine.complete("let value = $(by", 16);
+    assert_eq!(bytes.len(), 1);
+    assert_eq!(bytes[0].value(), "bytes:");
+    assert_eq!(bytes[0].replacement(), 14..16);
+
+    assert!(engine.complete("^tool by", 8).is_empty());
+}
+
+#[test]
 fn expression_completion_uses_intrinsics_and_respects_lexical_shadowing() {
     let registry = CommandRegistry::new();
     let source = "let value = fl(3.9)";

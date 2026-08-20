@@ -817,9 +817,10 @@ impl<'a> CallFinder<'a> {
                 }
             }
             ExpressionKind::Closure(closure) => self.chain(&closure.body),
-            ExpressionKind::CommandSubstitution(chain) | ExpressionKind::GroupedJob(chain) => {
-                self.chain(chain);
+            ExpressionKind::CommandSubstitution(substitution) => {
+                self.chain(substitution.chain());
             }
+            ExpressionKind::GroupedJob(chain) => self.chain(chain),
             ExpressionKind::Call(call) => {
                 self.expression(&call.callee);
                 for argument in &call.arguments {
@@ -867,7 +868,7 @@ impl<'a> CallFinder<'a> {
                 }
             }
             WordPartKind::BracedInterpolation(expression) => self.expression(expression),
-            WordPartKind::CommandSubstitution(chain) => self.chain(chain),
+            WordPartKind::CommandSubstitution(substitution) => self.chain(substitution.chain()),
             WordPartKind::Bare
             | WordPartKind::BareEscape
             | WordPartKind::SingleQuoted

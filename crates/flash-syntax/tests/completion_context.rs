@@ -62,8 +62,16 @@ fn classification_is_checked_but_does_not_require_a_complete_ast() {
         &CompletionContext::None
     );
 
-    let incomplete = completion_target("echo $(ec", 9)
-        .expect("an incomplete substitution still has a token context");
+    let modifier = completion_target("let value = $(by", 16)
+        .expect("an incomplete modifier remains classifiable");
+    assert_eq!(
+        modifier.context(),
+        &CompletionContext::CommandSubstitutionModifier
+    );
+    assert_eq!(modifier.prefix(), "by");
+
+    let incomplete = completion_target("echo $(text: ec", 15)
+        .expect("a command after a modifier still has a token context");
     assert_eq!(
         incomplete.context(),
         &CompletionContext::Command {

@@ -652,6 +652,60 @@ fn typed_function_signatures_are_resolved_before_known_calls_are_validated() {
 }
 
 #[test]
+fn typed_command_capture_drives_analysis_hover_and_word_diagnostics() {
+    let paths = FakeCanonicalizer::default().resolves("/project/main.fsh", "/project/main.fsh");
+    let text = concat!(
+        "def accept_bytes(value: Bytes) -> Bytes { $value }\n",
+        "def accept_text(value: String) -> String { $value }\n",
+        "let binary = $(bytes: ^tool)\n",
+        "let text = $(text: ^tool)\n",
+        "accept_bytes($binary)\n",
+        "accept_text($text)\n",
+    );
+    let sources = FakeSourceLoader::default().contains("/project/main.fsh", text);
+    let program = ModuleProgramLoader::new(&paths, &sources)
+        .load(Path::new("/project/main.fsh"))
+        .expect("capture result types should satisfy matching signatures");
+    let root = program.graph().root();
+    let binary_reference = text.rfind("$binary").expect("binary reference is present") + 1;
+    let text_reference = text.rfind("$text").expect("text reference is present") + 1;
+    let registry = standard_registry();
+    let queries = program.semantic_queries(&registry);
+
+    let SemanticHover::Binding(binary) = queries
+        .hover_at(root, binary_reference)
+        .expect("byte capture binding has hover data")
+    else {
+        panic!("expected binding hover");
+    };
+    assert_eq!(binary.value_type(), &ValueType::Bytes);
+    let SemanticHover::Binding(text_hover) = queries
+        .hover_at(root, text_reference)
+        .expect("text capture binding has hover data")
+    else {
+        panic!("expected binding hover");
+    };
+    assert_eq!(text_hover.value_type(), &ValueType::String);
+
+    for (invalid, code) in [
+        (
+            concat!(
+                "def accept_text(value: String) -> String { $value }\n",
+                "accept_text($(bytes: ^tool))\n",
+            ),
+            "SIG004",
+        ),
+        ("^tool $(bytes: ^tool)\n", "SIG006"),
+    ] {
+        let sources = FakeSourceLoader::default().contains("/project/main.fsh", invalid);
+        let error = ModuleProgramLoader::new(&paths, &sources)
+            .load(Path::new("/project/main.fsh"))
+            .expect_err("an incompatible byte capture must fail static analysis");
+        assert_eq!(error.diagnostics()[0].code(), code, "{invalid}");
+    }
+}
+
+#[test]
 fn function_documentation_is_normalized_beside_resolved_module_signatures_without_activation() {
     let paths = FakeCanonicalizer::default()
         .resolves("/project/main.fsh", "/project/main.fsh")
@@ -2498,6 +2552,45 @@ fn imported_callables_execute_against_their_defining_source() {
     .expect("the imported callable uses its defining source");
 
     assert_eq!(environment.get("RESULT"), Some(OsStr::new("42")));
+}
+
+#[test]
+fn imported_module_initializers_preserve_typed_byte_captures() {
+    let paths = FakeCanonicalizer::default()
+        .resolves("/project/main.fsh", "/project/main.fsh")
+        .resolves("/project/lib.fsh", "/project/lib.fsh");
+    let sources = FakeSourceLoader::default()
+        .contains(
+            "/project/main.fsh",
+            concat!(
+                "import { binary } from './lib.fsh'\n",
+                "def accept(value: Bytes) -> String { 'captured' }\n",
+                "export RESULT = accept($binary)\n",
+            ),
+        )
+        .contains(
+            "/project/lib.fsh",
+            "let binary: Bytes = $(bytes: pwd)\nexport { binary }\n",
+        );
+    let program = ModuleProgramLoader::new(&paths, &sources)
+        .load(Path::new("/project/main.fsh"))
+        .expect("the typed imported capture should analyze");
+    let mut environment = Environment::new();
+
+    execute_module_program(
+        &program,
+        &[],
+        Path::new("/project"),
+        &mut environment,
+        &standard_registry(),
+        &NoExecutables,
+        &SessionOptions::default(),
+        &FakePlatform::none(),
+        Arc::new(FakeClock::new()),
+    )
+    .expect("the imported initializer should produce a Bytes value");
+
+    assert_eq!(environment.get("RESULT"), Some(OsStr::new("captured")));
 }
 
 #[test]

@@ -5,8 +5,9 @@ use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use flash_syntax::{
-    BinaryOperator, CommandItemKind, ControlledParseOutcome, Expression, ExpressionKind,
-    ParseOutcome, SourceFile, SourceId, StageKind, StatementKind, parse, parse_with_control,
+    BinaryOperator, CommandCaptureKind, CommandItemKind, ControlledParseOutcome, Expression,
+    ExpressionKind, ParseOutcome, SourceFile, SourceId, StageKind, StatementKind, parse,
+    parse_with_control,
 };
 
 #[test]
@@ -174,6 +175,49 @@ fn command_control_precedence_has_distinct_ast_layers() {
     assert_eq!(job.chain.or_terms()[0].operators().len(), 1);
     assert_eq!(job.chain.or_terms()[0].and_terms()[0].stages().len(), 2);
     assert_eq!(job.chain.or_terms()[0].and_terms()[0].operators().len(), 1);
+}
+
+#[test]
+fn command_substitution_modifiers_select_capture_only_in_the_leading_slot() {
+    let text = concat!(
+        "let binary = $(bytes: ^tool)\n",
+        "let explicit_text = $(text: ^tool)\n",
+        "let shorthand = $(^tool)\n",
+        "let ordinary = $(; bytes: ^tool)\n",
+        "^bytes bytes: text:\n",
+    );
+    let script = complete(text);
+
+    for (index, expected) in [
+        (0, CommandCaptureKind::Bytes),
+        (1, CommandCaptureKind::Text),
+        (2, CommandCaptureKind::Text),
+        (3, CommandCaptureKind::Text),
+    ] {
+        let StatementKind::Declaration(declaration) = script.statements()[index].kind() else {
+            panic!("expected declaration");
+        };
+        let ExpressionKind::CommandSubstitution(substitution) = declaration.value.kind() else {
+            panic!("expected command substitution");
+        };
+        assert_eq!(substitution.capture(), expected);
+        assert_eq!(
+            substitution
+                .modifier_span()
+                .map(|span| source_text(text, span)),
+            match index {
+                0 => Some("bytes:"),
+                1 => Some("text:"),
+                _ => None,
+            }
+        );
+        assert_eq!(substitution.chain().or_terms().len(), 1);
+    }
+
+    assert!(matches!(
+        script.statements()[4].kind(),
+        StatementKind::Job(_)
+    ));
 }
 
 #[test]

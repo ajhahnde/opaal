@@ -168,13 +168,15 @@ In a bare word, a backslash quotes the following Unicode scalar so that it becom
 
 ### Interpolation
 
-Bare and double-quoted words support three interpolation forms:
+Flash recognizes these interpolation and command-capture forms:
 
-| Form            | Meaning                        |
-| --------------- | ------------------------------ |
-| `$name`         | Read a binding                 |
-| `${expression}` | Evaluate an expression         |
-| `$(command)`    | Capture command output as text |
+| Form                | Meaning                                      |
+| ------------------- | -------------------------------------------- |
+| `$name`             | Read a binding                               |
+| `${expression}`     | Evaluate an expression                       |
+| `$(command)`        | Capture command output as text               |
+| `$(text: command)`  | Explicitly capture command output as text    |
+| `$(bytes: command)` | Capture exact command output as `Bytes` data |
 
 Example:
 
@@ -192,7 +194,22 @@ Command substitution evaluates one foreground command or conditional chain:
 let location = "$(pwd)"
 ```
 
-Its standard output must be valid UTF-8. Trailing LF and CRLF line endings are removed, and the remaining text becomes one `String` value. The result is not reparsed as source or divided into multiple arguments.
+The shorthand and `text:` forms require valid UTF-8. Trailing LF and CRLF line
+endings are removed, and the remaining text becomes one `String` value. The
+result is not reparsed as source or divided into multiple arguments.
+
+Use `$(bytes: command)` when output must remain exact:
+
+```text
+let payload = $(bytes: ^program --binary)
+```
+
+Byte capture produces one `Bytes` value without decoding or trimming. It is an
+expression value that can be bound, passed, or inspected as structured data,
+but it is not eligible for implicit insertion into a bare or double-quoted
+command word. The `text:` and `bytes:` spellings are contextual modifiers only
+immediately after `$(`; both names remain ordinary identifiers and command
+names everywhere else.
 
 Process behavior and substitution failures are described in the [Scripting Guide](scripting.md).
 

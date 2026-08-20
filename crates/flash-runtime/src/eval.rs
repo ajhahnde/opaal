@@ -678,7 +678,7 @@ impl fmt::Display for RuntimeErrorKind {
                 if let Some(length) = error_len {
                     write!(formatter, " (invalid sequence length {length})")?;
                 }
-                formatter.write_str("; use capture bytes to preserve arbitrary output")
+                formatter.write_str("; use `$(bytes: ...)` to preserve arbitrary output")
             }
             Self::RedirectionSetup(error) => error.fmt(formatter),
             Self::ProcessSpawn(error) => error.fmt(formatter),
@@ -1151,7 +1151,7 @@ pub(crate) struct EvaluationContext {
 
 /// Successful bounded output captured from one reached conditional chain.
 pub(crate) struct CapturedChain {
-    pub(crate) text: String,
+    pub(crate) bytes: Vec<u8>,
     pub(crate) status: Status,
 }
 
@@ -2089,13 +2089,21 @@ impl Evaluator<'_> {
         scope: &mut ScopeStack,
         span: Span,
         position: CapturePosition,
-    ) -> Eval<String> {
+        capture: flash_syntax::CommandCaptureKind,
+    ) -> Eval<Value> {
         let context = self.context(false);
-        let CapturedChain { text, status } = self
+        let CapturedChain { bytes, status } = self
             .host
             .capture_chain(chain, scope, span, position, context)?;
         let _ = status;
-        Ok(text)
+        match capture {
+            flash_syntax::CommandCaptureKind::Text => {
+                crate::execute::decode_text_bytes(bytes, span)
+                    .map(Value::string)
+                    .map_err(Abort::Error)
+            }
+            flash_syntax::CommandCaptureKind::Bytes => Ok(Value::bytes(bytes)),
+        }
     }
 
     /// Evaluates a conditional chain to a value.
@@ -2303,9 +2311,13 @@ impl Evaluator<'_> {
                     span,
                 ))
             }
-            ExpressionKind::CommandSubstitution(chain) => self
-                .capture_chain(chain, scope, span, CapturePosition::Expression)
-                .map(Value::string),
+            ExpressionKind::CommandSubstitution(substitution) => self.capture_chain(
+                substitution.chain(),
+                scope,
+                span,
+                CapturePosition::Expression,
+                substitution.capture(),
+            ),
             _ => unreachable!("caller restricts this to grouped jobs and substitutions"),
         }
     }
@@ -2473,7 +2485,7 @@ impl Evaluator<'_> {
                 let resolved = self.expression(expression, scope)?;
                 value.push(self.encode_scalar(&resolved, span)?);
             }
-            WordPartKind::CommandSubstitution(chain) => {
+            WordPartKind::CommandSubstitution(substitution) => {
                 if self.host.policy() == EvaluationPolicy::Startup {
                     return Err(self.error(
                         RuntimeErrorKind::RestrictedStartup {
@@ -2482,7 +2494,14 @@ impl Evaluator<'_> {
                         span,
                     ));
                 }
-                value.push(self.capture_chain(chain, scope, span, CapturePosition::Word)?);
+                let captured = self.capture_chain(
+                    substitution.chain(),
+                    scope,
+                    span,
+                    CapturePosition::Word,
+                    substitution.capture(),
+                )?;
+                value.push(self.encode_scalar(&captured, span)?);
             }
             WordPartKind::DoubleQuoted(_) => unreachable!("handled before provenance tracking"),
         }

@@ -330,6 +330,37 @@ fn dynamic_external_composes_with_callables_conditions_pipelines_and_capture() {
 }
 
 #[test]
+fn typed_byte_capture_preserves_real_process_output_and_nested_status() {
+    let temp = TempDir::new("typed-byte-capture");
+    let script = temp.script(
+        "capture.fsh",
+        &format!(
+            concat!(
+                "let binary = $(bytes: ^{} binary 7)\n",
+                "if $status.code != 7 {{ exit 91 }}\n",
+                "let expected = $(bytes: ^{} binary 0)\n",
+                "if $binary != $expected {{ exit 92 }}\n",
+                "let redirected = $(bytes: ^{} binary 0 > payload.bin)\n",
+                "let empty = $(bytes: ^{} source 0 0)\n",
+                "if $redirected != $empty {{ exit 93 }}\n",
+                "open payload.bin | ^{} binary-sink\n",
+            ),
+            stream_fixture(),
+            stream_fixture(),
+            stream_fixture(),
+            stream_fixture(),
+            stream_fixture(),
+        ),
+    );
+
+    let output = run_script(&script, temp.path(), fixture_directory());
+
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert!(output.stdout.is_empty());
+    assert!(output.stderr.is_empty());
+}
+
+#[test]
 fn dynamic_external_preserves_redirection_and_background_execution() {
     let temp = TempDir::new("dynamic-external-effects");
     let redirected = temp.path().join("redirected.bin");

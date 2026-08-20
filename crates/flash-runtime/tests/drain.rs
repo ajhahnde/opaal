@@ -356,7 +356,7 @@ fn invalid_utf8_is_a_source_anchored_capture_error() {
         }
     ));
     assert_eq!(error.span(), plan.span());
-    assert!(error.to_string().contains("capture bytes"));
+    assert!(error.to_string().contains("$(bytes: ...)"));
 }
 
 #[test]

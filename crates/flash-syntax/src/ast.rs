@@ -229,6 +229,51 @@ pub struct VariableReference {
 
 pub type Expression = AstNode<ExpressionKind>;
 
+/// The exact value family produced by one command substitution.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum CommandCaptureKind {
+    Text,
+    Bytes,
+}
+
+/// One command substitution and its explicit or shorthand capture contract.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CommandSubstitution {
+    capture: CommandCaptureKind,
+    modifier_span: Option<Span>,
+    chain: Box<ConditionalChain>,
+}
+
+impl CommandSubstitution {
+    #[must_use]
+    pub const fn new(
+        capture: CommandCaptureKind,
+        modifier_span: Option<Span>,
+        chain: Box<ConditionalChain>,
+    ) -> Self {
+        Self {
+            capture,
+            modifier_span,
+            chain,
+        }
+    }
+
+    #[must_use]
+    pub const fn capture(&self) -> CommandCaptureKind {
+        self.capture
+    }
+
+    #[must_use]
+    pub const fn modifier_span(&self) -> Option<Span> {
+        self.modifier_span
+    }
+
+    #[must_use]
+    pub const fn chain(&self) -> &ConditionalChain {
+        &self.chain
+    }
+}
+
 /// Expression syntax before name resolution or evaluation.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ExpressionKind {
@@ -238,7 +283,7 @@ pub enum ExpressionKind {
     List(Vec<Expression>),
     Record(Vec<RecordEntry>),
     Closure(Closure),
-    CommandSubstitution(Box<ConditionalChain>),
+    CommandSubstitution(CommandSubstitution),
     GroupedJob(Box<ConditionalChain>),
     Call(CallExpression),
     Index(IndexExpression),
@@ -619,7 +664,7 @@ pub enum WordPartKind {
     DoubleEscape,
     Variable(Identifier),
     BracedInterpolation(Box<Expression>),
-    CommandSubstitution(Box<ConditionalChain>),
+    CommandSubstitution(CommandSubstitution),
 }
 
 pub type Redirection = AstNode<RedirectionKind>;

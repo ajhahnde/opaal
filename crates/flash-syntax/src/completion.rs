@@ -8,6 +8,7 @@ use crate::{Delimiter, Operator, SourceFile, SourceId, Token, TokenKind, lex};
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum CompletionContext {
     Command { forced_external: bool },
+    CommandSubstitutionModifier,
     Expression,
     Variable,
     Flag { command: String },
@@ -56,8 +57,13 @@ pub fn completion_target(source: &str, cursor: usize) -> Option<CompletionTarget
         return None;
     }
     let prior = significant_before(&tokens, active.range.start);
-    let stage = current_stage(&prior);
-    let context = if tokens.iter().any(|token| {
+    let stage = strip_command_substitution_modifier(source, current_stage(&prior));
+    let context = if prior
+        .last()
+        .is_some_and(|token| token.kind() == TokenKind::CommandSubstitutionStart)
+    {
+        CompletionContext::CommandSubstitutionModifier
+    } else if tokens.iter().any(|token| {
         token.span().start() == active.range.end
             && token.kind() == TokenKind::Delimiter(Delimiter::LeftParenthesis)
     }) {
@@ -70,6 +76,23 @@ pub fn completion_target(source: &str, cursor: usize) -> Option<CompletionTarget
         replacement: active.range,
         prefix: active.text.to_owned(),
     })
+}
+
+fn strip_command_substitution_modifier<'tokens>(
+    source: &str,
+    stage: &'tokens [&'tokens Token],
+) -> &'tokens [&'tokens Token] {
+    let [identifier, colon, rest @ ..] = stage else {
+        return stage;
+    };
+    let contextual = identifier.kind() == TokenKind::Identifier
+        && colon.kind() == TokenKind::Operator(Operator::Colon)
+        && identifier.is_adjacent_to(colon)
+        && matches!(
+            source.get(identifier.span().start()..identifier.span().end()),
+            Some("text" | "bytes")
+        );
+    if contextual { rest } else { stage }
 }
 
 struct ActiveWord<'source> {

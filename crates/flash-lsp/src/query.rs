@@ -186,6 +186,13 @@ fn completion(
     let mut candidates = Vec::new();
 
     match target.context() {
+        CompletionContext::CommandSubstitutionModifier => {
+            for modifier in ["bytes:", "text:"] {
+                if modifier.starts_with(target.prefix()) {
+                    candidates.push(CompletionCandidate::new(modifier, modifier, 0, 14));
+                }
+            }
+        }
         CompletionContext::Command {
             forced_external: false,
         } => {

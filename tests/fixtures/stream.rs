@@ -9,11 +9,33 @@ fn main() -> ExitCode {
     let arguments: Vec<String> = env::args().collect();
     match arguments.get(1).map(String::as_str) {
         Some("source") => source(&arguments),
+        Some("binary") => binary(&arguments),
+        Some("binary-sink") => binary_sink(),
         Some("relay") => relay(&arguments),
         Some("sink") => sink(&arguments),
         Some("both") => both(&arguments),
         Some("both-closed") => both_closed(&arguments),
         _ => ExitCode::from(90),
+    }
+}
+
+fn binary(arguments: &[String]) -> ExitCode {
+    let code = parse(arguments, 2) as u8;
+    if io::stdout().write_all(&[0, 0xff, b'\n']).is_err() {
+        return ExitCode::from(91);
+    }
+    ExitCode::from(code)
+}
+
+fn binary_sink() -> ExitCode {
+    let mut input = Vec::new();
+    if io::stdin().read_to_end(&mut input).is_err() {
+        return ExitCode::from(93);
+    }
+    if input == [0, 0xff, b'\n'] {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::from(93)
     }
 }
 

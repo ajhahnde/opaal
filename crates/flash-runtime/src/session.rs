@@ -48,8 +48,7 @@ use crate::eval::{
 };
 use crate::execute::{
     BoundedCapture, CommandCapture, MixedPipelineControl, MixedSegment, aggregate_statuses,
-    decode_text_capture, execute_foreground_status, execute_foreground_with_stdout_drain,
-    start_mixed_pipeline,
+    execute_foreground_status, execute_foreground_with_stdout_drain, start_mixed_pipeline,
 };
 use crate::format::{ToTextStep, to_text};
 use crate::internal::{
@@ -689,10 +688,9 @@ impl EvaluationHost for SessionEvaluationHost<'_> {
         self.state.set_current_status(Some(status.clone()));
         let captured = collector
             .finish(status, span)
-            .and_then(|capture| decode_text_capture(capture, span))
             .map_err(|error| Abort::Error(error.with_source(context.source)))?;
-        let (text, status) = captured.into_parts();
-        Ok(CapturedChain { text, status })
+        let (bytes, status) = captured.into_parts();
+        Ok(CapturedChain { bytes, status })
     }
 }
 
@@ -837,7 +835,7 @@ impl BackgroundChainValidator<'_> {
                 Ok(())
             }
             WordPartKind::BracedInterpolation(expression) => self.expression(expression),
-            WordPartKind::CommandSubstitution(chain) => self.chain(chain),
+            WordPartKind::CommandSubstitution(substitution) => self.chain(substitution.chain()),
             WordPartKind::Bare
             | WordPartKind::BareEscape
             | WordPartKind::SingleQuoted
@@ -884,9 +882,8 @@ impl BackgroundChainValidator<'_> {
                 Ok(())
             }
             ExpressionKind::Closure(closure) => self.closure(closure),
-            ExpressionKind::CommandSubstitution(chain) | ExpressionKind::GroupedJob(chain) => {
-                self.chain(chain)
-            }
+            ExpressionKind::CommandSubstitution(substitution) => self.chain(substitution.chain()),
+            ExpressionKind::GroupedJob(chain) => self.chain(chain),
             ExpressionKind::Call(call) => {
                 if let ExpressionKind::Symbol(identifier) = call.callee.kind() {
                     let name = self.text(identifier.span());

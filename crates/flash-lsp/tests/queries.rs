@@ -332,6 +332,83 @@ fn semantic_completion_hover_and_signature_help_use_shared_program_data() {
 }
 
 #[test]
+fn typed_command_capture_is_shared_by_completion_hover_and_signature_help() {
+    let directory = TestDirectory::new();
+    let uri = directory.uri("main.fsh");
+    let text = concat!(
+        "def accept(value: Bytes) -> Bytes { $value }\n",
+        "let binary = $(bytes: ^tool)\n",
+        "let text = $(text: ^tool)\n",
+        "accept($(bytes: ^tool))\n",
+        "let copy = $binary\n",
+        "let label = $text\n",
+    );
+    let mut workspace = Workspace::new();
+    workspace.open(uri.clone(), 1, text.into()).unwrap();
+    let control = RequestControl::new();
+
+    let byte_reference = text.rfind("$binary").unwrap() + 2;
+    let byte_hover = request(
+        &workspace,
+        PositionEncoding::Utf16,
+        &control,
+        "textDocument/hover",
+        positional(&uri, text, byte_reference, PositionEncoding::Utf16),
+    )
+    .unwrap();
+    assert!(
+        byte_hover["contents"]["value"]
+            .as_str()
+            .unwrap()
+            .contains("let binary: Bytes")
+    );
+
+    let text_reference = text.rfind("$text").unwrap() + 2;
+    let text_hover = request(
+        &workspace,
+        PositionEncoding::Utf16,
+        &control,
+        "textDocument/hover",
+        positional(&uri, text, text_reference, PositionEncoding::Utf16),
+    )
+    .unwrap();
+    assert!(
+        text_hover["contents"]["value"]
+            .as_str()
+            .unwrap()
+            .contains("let text: String")
+    );
+
+    let argument = text.find("$(bytes: ^tool))").unwrap() + 10;
+    let signature = request(
+        &workspace,
+        PositionEncoding::Utf16,
+        &control,
+        "textDocument/signatureHelp",
+        positional(&uri, text, argument, PositionEncoding::Utf16),
+    )
+    .unwrap();
+    assert_eq!(
+        signature["signatures"][0]["label"],
+        "accept(value: Bytes) -> Bytes"
+    );
+
+    let incomplete = "let binary = $(by";
+    workspace.change(&uri, Some(2), incomplete.into()).unwrap();
+    let completion = request(
+        &workspace,
+        PositionEncoding::Utf16,
+        &control,
+        "textDocument/completion",
+        positional(&uri, incomplete, incomplete.len(), PositionEncoding::Utf16),
+    )
+    .unwrap();
+    assert_eq!(completion.as_array().unwrap().len(), 1);
+    assert_eq!(completion[0]["label"], "bytes:");
+    assert_eq!(completion[0]["textEdit"]["newText"], "bytes:");
+}
+
+#[test]
 fn definition_and_references_project_canonical_cross_file_locations() {
     let directory = TestDirectory::new();
     let root_uri = directory.uri("main.fsh");

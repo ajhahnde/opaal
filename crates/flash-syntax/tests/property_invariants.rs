@@ -402,9 +402,8 @@ impl<'source> SpanChecker<'source> {
                 }
             }
             ExpressionKind::Closure(closure) => self.closure(closure),
-            ExpressionKind::CommandSubstitution(chain) | ExpressionKind::GroupedJob(chain) => {
-                self.chain(chain)
-            }
+            ExpressionKind::CommandSubstitution(substitution) => self.chain(substitution.chain()),
+            ExpressionKind::GroupedJob(chain) => self.chain(chain),
             ExpressionKind::Call(call) => {
                 self.expression(&call.callee);
                 for argument in &call.arguments {
@@ -521,7 +520,7 @@ impl<'source> SpanChecker<'source> {
             }
             WordPartKind::Variable(identifier) => self.identifier(*identifier),
             WordPartKind::BracedInterpolation(expression) => self.expression(expression),
-            WordPartKind::CommandSubstitution(chain) => self.chain(chain),
+            WordPartKind::CommandSubstitution(substitution) => self.chain(substitution.chain()),
             WordPartKind::Bare
             | WordPartKind::BareEscape
             | WordPartKind::SingleQuoted

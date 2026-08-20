@@ -577,13 +577,16 @@ For the complete expansion rules and eligible argument value types, see [Command
 
 ## Command substitution
 
-Command substitution captures standard output as one string:
+Command substitution captures standard output as text or exact bytes:
 
 ```text
 let directory = "$(pwd)"
+let explicit_text = $(text: ^program --version)
+let payload = $(bytes: ^program --binary)
 ```
 
-The `$(...)` form evaluates one foreground command or conditional chain. It does not start an intermediate shell.
+The `$(...)`, `$(text: ...)`, and `$(bytes: ...)` forms evaluate one foreground
+command or conditional chain. They do not start an intermediate shell.
 
 Successful text capture:
 
@@ -596,6 +599,12 @@ Successful text capture:
 
 An empty capture therefore produces one empty string rather than no value.
 
+Byte capture reads the same reached standard output under the same limit and
+status rules, but produces exactly one `Bytes` value. The capture operation
+never decodes, trims, displays, serializes, reparses, or splits the data. A byte
+capture is not eligible for implicit command-word insertion; bind or pass it as
+a value and cross to text only through an explicit decoding boundary.
+
 Standard error remains inherited unless the source redirects it:
 
 ```text
@@ -606,7 +615,8 @@ A nonzero command exit still produces captured output paired with its actual sta
 
 Capture is bounded by the session capture limit. If the output exceeds that limit, Flash continues draining and reaping the started processes before returning a capture-limit runtime error. This prevents the memory bound from causing a pipe deadlock.
 
-Invalid UTF-8 similarly produces a runtime error rather than silently replacing bytes. Use byte-oriented pipelines and explicit decoding when arbitrary binary output is expected.
+Invalid UTF-8 similarly produces a runtime error rather than silently replacing
+bytes. Use `$(bytes: ...)` when arbitrary binary output must be preserved.
 
 ## Pipelines
 

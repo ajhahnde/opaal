@@ -282,6 +282,14 @@ pub(crate) fn decode_text_capture(
     span: flash_syntax::Span,
 ) -> Result<CommandCapture<String>, RuntimeError> {
     let (bytes, status) = captured.into_parts();
+    let output = decode_text_bytes(bytes, span)?;
+    Ok(CommandCapture { output, status })
+}
+
+pub(crate) fn decode_text_bytes(
+    bytes: Vec<u8>,
+    span: flash_syntax::Span,
+) -> Result<String, RuntimeError> {
     let mut output = match String::from_utf8(bytes) {
         Ok(output) => output,
         Err(error) => {
@@ -296,7 +304,7 @@ pub(crate) fn decode_text_capture(
         }
     };
     trim_trailing_line_endings(&mut output);
-    Ok(CommandCapture { output, status })
+    Ok(output)
 }
 
 pub(crate) struct BoundedCapture {
