@@ -31,7 +31,7 @@ use crate::eval::{
     ExpandedWord, ReservedCommandDetails, RuntimeError, RuntimeErrorKind,
     evaluate_closure_argument_with_binding_types, expand_spread, expand_word,
 };
-use crate::help::{HelpCatalog, HelpSnapshot};
+use crate::help::{HelpCatalog, HelpSnapshot, render_help};
 use crate::module::RuntimeBindingTypes;
 use crate::resolve::{ExecutableProbe, Resolution, ResolutionError, resolve_command};
 use crate::{Environment, ScopeStack, Value};
@@ -309,44 +309,80 @@ impl ExecutionPlan {
     /// Renders the plan as deterministic, human-readable text without executing
     /// it — what a plan-inspection command would print for a reader.
     ///
-    /// Every native value (cwd, environment, argv, redirection targets) is shown
-    /// with a lossy Unicode rendering, since this text is for a human reader, not
-    /// serialization. Stages are listed in pipeline order with their resolution,
-    /// argv, carrier contract, and source-order redirections; the byte-pipeline
-    /// edges between them follow.
+    /// Native values use escaped byte rendering so distinct plans never collapse
+    /// through lossy Unicode. Stages, arguments, retained spans, redirections,
+    /// help snapshots, and byte-pipeline edges remain in source order. This is
+    /// human-facing inspection output, not serialization or executable input.
     #[must_use]
     pub fn render(&self) -> String {
         use std::fmt::Write as _;
 
         let mut out = String::new();
         // A plan never renders through `?`: writing to a `String` cannot fail.
-        let _ = writeln!(out, "cwd {}", self.cwd.display());
+        let _ = writeln!(out, "plan span {}..{}", self.span.start(), self.span.end());
+        let _ = writeln!(out, "cwd {}", render_native(self.cwd.as_os_str()));
         out.push_str("env\n");
         for (name, value) in self.environment.iter() {
-            let _ = writeln!(out, "  {name}={}", value.to_string_lossy());
+            let _ = writeln!(
+                out,
+                "  {}={}",
+                render_bytes(name.as_bytes()),
+                render_native(value)
+            );
         }
+        let _ = writeln!(out, "pipefail {}", self.pipefail);
+        let _ = writeln!(out, "capture-limit {}", self.capture_limit);
+        let _ = writeln!(
+            out,
+            "process-group {}",
+            match self.process_group_policy {
+                ProcessGroupPolicy::Isolate => "isolate",
+                ProcessGroupPolicy::Inherit => "inherit",
+            }
+        );
         for (index, stage) in self.stages.iter().enumerate() {
             let _ = writeln!(
                 out,
-                "stage {index} {}",
+                "stage {index} span {}..{} {}",
+                stage.span.start(),
+                stage.span.end(),
                 render_resolution(&stage.resolution)
             );
-            out.push_str("  argv");
-            for argument in &stage.argv {
-                let _ = write!(out, " [{}]", argument.value().to_string_lossy());
+            out.push_str("  argv\n");
+            for (argument_index, argument) in stage.argv.iter().enumerate() {
+                let _ = writeln!(
+                    out,
+                    "    {argument_index} span {}..{} {}",
+                    argument.span().start(),
+                    argument.span().end(),
+                    render_native(argument.value())
+                );
             }
-            out.push('\n');
-            let values = stage
-                .arguments
-                .iter()
-                .filter_map(PlannedArgument::as_value)
-                .collect::<Vec<_>>();
-            if !values.is_empty() {
-                out.push_str("  values");
-                for value in values {
-                    let _ = write!(out, " [{value:?}]");
+            if !stage.arguments.is_empty() {
+                out.push_str("  arguments\n");
+                for (argument_index, argument) in stage.arguments.iter().enumerate() {
+                    match argument {
+                        PlannedArgument::Word(word) => {
+                            let _ = writeln!(
+                                out,
+                                "    {argument_index} word span {}..{} {}",
+                                word.span().start(),
+                                word.span().end(),
+                                render_native(word.value())
+                            );
+                        }
+                        PlannedArgument::Value { value, span } => {
+                            let rendered = format!("{value:?}");
+                            let _ = writeln!(
+                                out,
+                                "    {argument_index} value span {}..{} {}",
+                                span.start(),
+                                span.end(),
+                                render_bytes(rendered.as_bytes())
+                            );
+                        }
+                    }
                 }
-                out.push('\n');
             }
             let inputs = stage
                 .input_carriers
@@ -356,7 +392,27 @@ impl ExecutionPlan {
                 .join("|");
             let _ = writeln!(out, "  carriers in {inputs} out {:?}", stage.output_carrier);
             for redirection in &stage.redirections {
-                let _ = writeln!(out, "  redir {}", render_redirection(&redirection.action));
+                let _ = writeln!(
+                    out,
+                    "  redir span {}..{} {}",
+                    redirection.span.start(),
+                    redirection.span.end(),
+                    render_redirection(&redirection.action)
+                );
+            }
+            if let Some(snapshot) = &stage.help {
+                let mode = if snapshot.detailed() {
+                    "detail"
+                } else {
+                    "list"
+                };
+                let rendered = render_help(snapshot);
+                let _ = writeln!(
+                    out,
+                    "  help {mode} entries {} {}",
+                    snapshot.entries().len(),
+                    render_bytes(&rendered)
+                );
             }
         }
         for (index, edge) in self.edges.iter().enumerate() {
@@ -364,7 +420,13 @@ impl ExecutionPlan {
                 PipeOperator::Stdout => "|",
                 PipeOperator::StdoutAndStderr => "|&",
             };
-            let _ = writeln!(out, "edge {index} {operator} {}", index + 1);
+            let _ = writeln!(
+                out,
+                "edge {index} span {}..{} {operator} {}",
+                edge.operator_span.start(),
+                edge.operator_span.end(),
+                index + 1
+            );
         }
         out
     }
@@ -452,35 +514,93 @@ fn render_resolution(resolution: &PlannedResolution) -> String {
         PlannedResolution::Internal { canonical_name, .. } => {
             format!("internal {canonical_name}")
         }
-        PlannedResolution::External { path } => format!("external {}", path.display()),
+        PlannedResolution::External { path } => {
+            format!("external {}", render_native(path.as_os_str()))
+        }
     }
+}
+
+/// Renders one native unit with unambiguous byte escapes.
+fn render_native(value: &OsStr) -> String {
+    render_bytes(value.as_bytes())
+}
+
+fn render_bytes(bytes: &[u8]) -> String {
+    use std::fmt::Write as _;
+
+    let mut rendered = String::from("[");
+    for byte in bytes {
+        match *byte {
+            b'\\' => rendered.push_str("\\\\"),
+            b'[' => rendered.push_str("\\["),
+            b']' => rendered.push_str("\\]"),
+            0x20..=0x7e => rendered.push(char::from(*byte)),
+            byte => {
+                let _ = write!(rendered, "\\x{byte:02x}");
+            }
+        }
+    }
+    rendered.push(']');
+    rendered
 }
 
 /// Renders one descriptor action in its familiar redirection spelling.
 fn render_redirection(action: &RedirectionAction) -> String {
     match action {
         RedirectionAction::Input {
-            descriptor, target, ..
-        } => format!("{descriptor}< [{}]", target.value().to_string_lossy()),
+            descriptor,
+            operator_span,
+            target,
+        } => format!(
+            "{descriptor}< operator-span {}..{} target-span {}..{} {}",
+            operator_span.start(),
+            operator_span.end(),
+            target.span().start(),
+            target.span().end(),
+            render_native(target.value())
+        ),
         RedirectionAction::Output {
             descriptor,
             mode,
+            operator_span,
             target,
-            ..
         } => {
             let operator = match mode {
                 OutputMode::Truncate => ">",
                 OutputMode::Append => ">>",
             };
             format!(
-                "{descriptor}{operator} [{}]",
-                target.value().to_string_lossy()
+                "{descriptor}{operator} operator-span {}..{} target-span {}..{} {}",
+                operator_span.start(),
+                operator_span.end(),
+                target.span().start(),
+                target.span().end(),
+                render_native(target.value())
             )
         }
         RedirectionAction::Duplicate {
-            descriptor, source, ..
-        } => format!("{descriptor}>&{source}"),
-        RedirectionAction::Close { descriptor, .. } => format!("{descriptor}>&-"),
+            descriptor,
+            operator_span,
+            source,
+            target_span,
+        } => format!(
+            "{descriptor}>&{source} operator-span {}..{} target-span {}..{}",
+            operator_span.start(),
+            operator_span.end(),
+            target_span.start(),
+            target_span.end()
+        ),
+        RedirectionAction::Close {
+            descriptor,
+            operator_span,
+            target_span,
+        } => format!(
+            "{descriptor}>&- operator-span {}..{} target-span {}..{}",
+            operator_span.start(),
+            operator_span.end(),
+            target_span.start(),
+            target_span.end()
+        ),
     }
 }
 

@@ -255,6 +255,49 @@ server. Success means only that the supported non-executing analyses completed
 without error diagnostics; target capabilities and runtime-only data remain
 separate concerns.
 
+### Execution-plan inspection
+
+Inspect one exact command pipeline with:
+
+```bash
+fsh plan command.fsh
+fsh plan -- --maintenance.fsh
+fsh plan --help
+```
+
+The named regular UTF-8 source must contain exactly one top-level foreground
+job with one pipeline. Declarations, assignments, imports, environment
+statements, control flow, callable definitions, background jobs, and
+status-dependent `&&` or `||` chains are rejected because their exact plan can
+depend on execution or prior state. Stdin, multiple roots, script arguments,
+configuration, and history are not accepted.
+
+Inspection parses and statically analyzes the source with the standard command
+registry, then expands the pipeline against an empty lexical scope, the
+inherited process environment, the launcher's current working directory, and
+default session options. Bare and forced external commands use read-only
+executable metadata checks, so the plan shows the executable selected from the
+inherited `PATH`. Command substitution is rejected rather than evaluated.
+
+The deterministic plan includes its source spans, native cwd and child
+environment, session options, process-group policy, source-ordered stage
+resolution, exact escaped native arguments, typed internal arguments, carrier
+contracts, redirections, help snapshots, and pipeline edges. Native units use
+escaped bytes so distinct non-UTF-8 values do not collapse through replacement
+characters. The output is human-facing inspection text, not executable input or
+a serialization format.
+
+The plan contains the complete inherited child environment and may therefore
+include credentials or other secrets. Treat captured or shared plan output as
+sensitive data.
+
+Successful inspection writes the newline-terminated plan to stdout and exits 0.
+Source, analysis, shape, expansion, resolution, or preflight failure writes a
+source-backed diagnostic to stderr and exits 1. Invocation misuse exits 2.
+Inspection never initializes a session, mutates lexical/environment/cwd state,
+opens a redirection, creates a pipe, spawns or waits for a process, starts
+background work, or accesses a terminal.
+
 ### Canonical formatting
 
 Use the launcher formatter modes on one or more explicit files:

@@ -29,6 +29,10 @@ pub enum Mode {
     /// Analyze one root source and its canonical import closure without
     /// executing it.
     Check { source: PathBuf },
+    /// Print execution-plan inspection help and exit.
+    PlanHelp,
+    /// Inspect one exact foreground command pipeline without executing it.
+    Plan { source: PathBuf },
     /// Print formatter subcommand help and exit.
     FormatHelp,
     /// Format explicit source paths without executing them.
@@ -90,6 +94,12 @@ pub enum CliError {
     UnexpectedCheckSource(String),
     /// The checker received the unsupported stdin sentinel.
     StdinCheckSource,
+    /// The planner did not receive its one required source.
+    MissingPlanSource,
+    /// The planner received more than one source.
+    UnexpectedPlanSource(String),
+    /// The planner received the unsupported stdin sentinel.
+    StdinPlanSource,
 }
 
 impl CliError {
@@ -122,6 +132,11 @@ impl CliError {
             Self::UnexpectedCheckSource(_) => "check accepts exactly one source path".to_owned(),
             Self::StdinCheckSource => {
                 "'-' is not supported as a checker source; name a file".to_owned()
+            }
+            Self::MissingPlanSource => "plan requires exactly one source path".to_owned(),
+            Self::UnexpectedPlanSource(_) => "plan accepts exactly one source path".to_owned(),
+            Self::StdinPlanSource => {
+                "'-' is not supported as a planner source; name a file".to_owned()
             }
         }
     }
@@ -264,6 +279,32 @@ where
                 }
                 return parse_check_args(arguments);
             }
+            Some("plan") => {
+                if help {
+                    return Ok(Invocation {
+                        mode: Mode::Help,
+                        no_config,
+                        no_history,
+                    });
+                }
+                if version {
+                    return Ok(Invocation {
+                        mode: Mode::Version,
+                        no_config,
+                        no_history,
+                    });
+                }
+                if no_config {
+                    return Err(CliError::UnknownOption("--no-config".to_owned()));
+                }
+                if no_history {
+                    return Err(CliError::UnknownOption("--no-history".to_owned()));
+                }
+                if async_chain.is_some() || async_pipefail || async_capture_limit.is_some() {
+                    return Err(CliError::UnexpectedArgument("plan".to_owned()));
+                }
+                return parse_plan_args(arguments);
+            }
             Some(text) if text.starts_with('-') && text != "-" => {
                 return Err(CliError::UnknownOption(text.to_owned()));
             }
@@ -302,6 +343,71 @@ where
         mode,
         no_config,
         no_history,
+    })
+}
+
+fn parse_plan_args<I>(arguments: I) -> Result<Invocation, CliError>
+where
+    I: IntoIterator<Item = OsString>,
+{
+    let mut help = false;
+    let mut source = None;
+    let mut options_ended = false;
+
+    for argument in arguments {
+        if options_ended {
+            if argument == "-" {
+                return Err(CliError::StdinPlanSource);
+            }
+            if source.replace(PathBuf::from(&argument)).is_some() {
+                return Err(CliError::UnexpectedPlanSource(
+                    argument.to_string_lossy().into_owned(),
+                ));
+            }
+            continue;
+        }
+
+        match argument.to_str() {
+            Some("--help") => {
+                if help {
+                    return Err(CliError::DuplicateOption("--help"));
+                }
+                help = true;
+            }
+            Some("--") => options_ended = true,
+            Some("-") => return Err(CliError::StdinPlanSource),
+            Some(text) if text.starts_with('-') => {
+                return Err(CliError::UnknownOption(text.to_owned()));
+            }
+            _ => {
+                if source.replace(PathBuf::from(&argument)).is_some() {
+                    return Err(CliError::UnexpectedPlanSource(
+                        argument.to_string_lossy().into_owned(),
+                    ));
+                }
+            }
+        }
+    }
+
+    if help {
+        if let Some(source) = source {
+            return Err(CliError::UnexpectedPlanSource(
+                source.to_string_lossy().into_owned(),
+            ));
+        }
+        return Ok(Invocation {
+            mode: Mode::PlanHelp,
+            no_config: false,
+            no_history: false,
+        });
+    }
+
+    Ok(Invocation {
+        mode: Mode::Plan {
+            source: source.ok_or(CliError::MissingPlanSource)?,
+        },
+        no_config: false,
+        no_history: false,
     })
 }
 
@@ -851,6 +957,119 @@ mod tests {
         assert_eq!(
             invocation.mode,
             Mode::Check {
+                source: PathBuf::from(path),
+            }
+        );
+    }
+
+    #[test]
+    fn planner_accepts_exactly_one_source_with_an_optional_separator() {
+        assert_eq!(
+            parse(&["plan", "command.fsh"]).unwrap().mode,
+            Mode::Plan {
+                source: PathBuf::from("command.fsh"),
+            }
+        );
+        assert_eq!(
+            parse(&["plan", "--", "--command.fsh"]).unwrap().mode,
+            Mode::Plan {
+                source: PathBuf::from("--command.fsh"),
+            }
+        );
+    }
+
+    #[test]
+    fn planner_help_is_a_distinct_launcher_mode() {
+        assert_eq!(parse(&["plan", "--help"]).unwrap().mode, Mode::PlanHelp);
+        assert_eq!(
+            parse(&["--help", "plan", "command.fsh"]).unwrap().mode,
+            Mode::Help,
+            "top-level help keeps precedence before the planner operand"
+        );
+        assert_eq!(
+            parse(&["--version", "plan", "command.fsh"]).unwrap().mode,
+            Mode::Version,
+            "top-level version keeps precedence before the planner operand"
+        );
+    }
+
+    #[test]
+    fn planner_rejects_missing_extra_stdin_and_inapplicable_options() {
+        for arguments in [
+            &["plan"][..],
+            &["plan", "one.fsh", "two.fsh"],
+            &["plan", "-"],
+            &["plan", "--", "-"],
+            &["plan", "--unknown", "one.fsh"],
+            &["plan", "--no-config", "one.fsh"],
+            &["plan", "--no-history", "one.fsh"],
+            &["--no-config", "plan", "one.fsh"],
+            &["--no-history", "plan", "one.fsh"],
+            &["plan", "--help", "one.fsh"],
+            &["plan", "--help", "--help"],
+        ] {
+            assert!(
+                parse(arguments).is_err(),
+                "planner misuse must fail: {arguments:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn planner_cannot_combine_with_the_reserved_chain_mode() {
+        assert!(
+            parse(&[
+                "--async-chain",
+                "^tool",
+                "--async-capture-limit",
+                "4096",
+                "plan",
+                "one.fsh",
+            ])
+            .is_err()
+        );
+        assert!(
+            parse(&[
+                "plan",
+                "one.fsh",
+                "--async-chain",
+                "^tool",
+                "--async-capture-limit",
+                "4096",
+            ])
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn planner_spelling_remains_reachable_as_a_script_path() {
+        assert_eq!(
+            parse(&["./plan", "argument"]).unwrap().mode,
+            Mode::Script {
+                path: PathBuf::from("./plan"),
+                arguments: vec!["argument".to_owned()],
+            }
+        );
+        assert_eq!(
+            parse(&["--", "plan", "argument"]).unwrap().mode,
+            Mode::Script {
+                path: PathBuf::from("plan"),
+                arguments: vec!["argument".to_owned()],
+            }
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn planner_source_preserves_native_non_utf8_spelling() {
+        use std::os::unix::ffi::OsStringExt;
+
+        let path = OsString::from_vec(b"source-\xff.fsh".to_vec());
+        let invocation = parse_args([OsString::from("plan"), path.clone()])
+            .expect("native planner source is valid");
+        assert_eq!(
+            invocation.mode,
+            Mode::Plan {
                 source: PathBuf::from(path),
             }
         );

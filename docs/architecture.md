@@ -13,6 +13,7 @@ This document describes the internal architecture of Flash: crate boundaries, so
 - [Workspace and dependency direction](#workspace-and-dependency-direction)
 - [Source and syntax front end](#source-and-syntax-front-end)
 - [Formatter launcher frontend](#formatter-launcher-frontend)
+- [Execution-plan inspection frontend](#execution-plan-inspection-frontend)
 - [Modules and static analysis](#modules-and-static-analysis)
 - [Shared tooling services](#shared-tooling-services)
 - [Language-server protocol adapter](#language-server-protocol-adapter)
@@ -185,6 +186,24 @@ bytes and permission bits, and replaces each changed file through a unique
 same-directory temporary file using complete write, file synchronization, and
 atomic rename. The adapter preserves permission bits only and deliberately
 does not present ordered per-file replacement as a multi-file transaction.
+
+## Execution-plan inspection frontend
+
+`fsh plan [--] SOURCE` exposes the runtime's concrete planning boundary for one
+top-level foreground command pipeline. The CLI frontend first uses the shared
+module parser and static command analysis, then supplies a fresh lexical scope,
+the inherited cwd and environment, default session options, the standard
+command registry, and a read-only executable probe to the ordinary planner. It
+runs structural preflight before rendering the plan.
+
+The frontend's capability surface contains source canonicalization/loading and
+executable metadata probing, but no runtime platform, session, editor,
+configuration, history, writable filesystem, terminal, or process interface.
+Command substitution and broader script shapes are rejected rather than
+approximated. `ExecutionPlan::render` is the single deterministic rendering
+owner and preserves source order, retained spans, and escaped native bytes; its
+output is inspection text rather than source, serialization, or a launcher
+protocol.
 
 ### Shared editor services
 

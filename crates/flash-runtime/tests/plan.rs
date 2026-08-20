@@ -580,8 +580,7 @@ fn an_internal_closure_argument_is_captured_without_entering_native_argv() {
         "the typed argument retains its exact source span"
     );
     assert!(
-        plan.render()
-            .contains("values [<closure at test.fsh:1:18>]"),
+        plan.render().contains("[<closure at test.fsh:1:18>]"),
         "plan inspection includes typed arguments without calling them argv"
     );
 }
@@ -621,16 +620,25 @@ fn render_prints_an_external_byte_pipeline_without_executing() {
     assert_eq!(
         plan.render(),
         "\
-cwd /work
+plan span 0..15
+cwd [/work]
 env
-  PATH=/bin
-stage 0 external /bin/echo
-  argv [echo] [hi]
+  [PATH]=[/bin]
+pipefail false
+capture-limit 8388608
+process-group isolate
+stage 0 span 0..8 external [/bin/echo]
+  argv
+    0 span 1..5 [echo]
+    1 span 6..8 [hi]
+  arguments
+    0 word span 6..8 [hi]
   carriers in ByteStream out ByteStream
-stage 1 external /bin/cat
-  argv [cat]
+stage 1 span 11..15 external [/bin/cat]
+  argv
+    0 span 12..15 [cat]
   carriers in ByteStream out ByteStream
-edge 0 | 1
+edge 0 span 9..10 | 1
 "
     );
 }
@@ -654,10 +662,15 @@ fn render_shows_internal_resolution_and_carrier_contract() {
     assert_eq!(
         plan.render(),
         "\
-cwd /work
+plan span 0..5
+cwd [/work]
 env
-stage 0 internal where
-  argv [where]
+pipefail false
+capture-limit 8388608
+process-group isolate
+stage 0 span 0..5 internal where
+  argv
+    0 span 0..5 [where]
   carriers in Value|ValueStream out ValueStream
 "
     );
@@ -676,18 +689,80 @@ fn render_prints_redirections_in_source_order() {
     assert_eq!(
         plan.render(),
         "\
-cwd /work
+plan span 0..38
+cwd [/work]
 env
-  PATH=/bin
-stage 0 external /bin/build
-  argv [build]
+  [PATH]=[/bin]
+pipefail false
+capture-limit 8388608
+process-group isolate
+stage 0 span 0..38 external [/bin/build]
+  argv
+    0 span 1..6 [build]
   carriers in ByteStream out ByteStream
-  redir 1> [out.txt]
-  redir 2>> [err.txt]
-  redir 1>&2
-  redir 3>&-
+  redir span 7..16 1> operator-span 7..8 target-span 9..16 [out.txt]
+  redir span 17..28 2>> operator-span 18..20 target-span 21..28 [err.txt]
+  redir span 29..33 1>&2 operator-span 30..32 target-span 32..33
+  redir span 34..38 3>&- operator-span 35..37 target-span 37..38
 "
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn render_escapes_native_non_utf8_without_collapsing_distinct_plans() {
+    use std::os::unix::ffi::OsStringExt;
+
+    let executable = OsString::from_vec(b"/bin/tool-\xff".to_vec());
+    let argument = OsString::from_vec(b"argument-\xfe".to_vec());
+    let target = OsString::from_vec(b"target-\xfd".to_vec());
+    let cwd = OsString::from_vec(b"/work-\xfc".to_vec());
+    let environment =
+        Environment::from_snapshot([("VALUE", OsString::from_vec(b"native-\xfb".to_vec()))]);
+    let mut scope = ScopeStack::new();
+    for (name, value) in [
+        ("tool", executable.clone()),
+        ("argument", argument),
+        ("target", target),
+    ] {
+        scope
+            .declare(
+                name,
+                BindingMutability::Immutable,
+                Value::Path(flash_runtime::NativePath::new(value)),
+            )
+            .unwrap();
+    }
+    let registry = CommandRegistry::new();
+    let file = source("^$tool $argument > $target");
+    let pipeline = pipeline(&file);
+    let plan = plan_pipeline(
+        &pipeline,
+        PathBuf::from(cwd),
+        &file,
+        &mut scope,
+        &environment,
+        &registry,
+        &FakeProbe {
+            executables: vec![executable],
+        },
+    )
+    .expect("native values should plan");
+
+    let rendered = plan.render();
+    for expected in [
+        "[/work-\\xfc]",
+        "[native-\\xfb]",
+        "external [/bin/tool-\\xff]",
+        "[argument-\\xfe]",
+        "[target-\\xfd]",
+    ] {
+        assert!(
+            rendered.contains(expected),
+            "missing {expected:?}: {rendered}"
+        );
+    }
+    assert!(!rendered.contains('\u{fffd}'));
 }
 
 #[test]

@@ -24,6 +24,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- Add `fsh plan [--] SOURCE` for deterministic inspection of one exact command
+  pipeline through shared parsing, analysis, planning, PATH resolution, and
+  structural preflight. Inspection renders escaped native plan data and source
+  spans without substitution, mutation, redirection opening, process, config,
+  history, or terminal access.
 - Connect interactive startup configuration to live session state. Config can
   transactionally set `pipefail`, the command-capture byte limit, completion,
   and history through config-only typed bindings; safe mode and CLI bypasses

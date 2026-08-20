@@ -543,6 +543,31 @@ that analysis does not initialize modules, start external processes, apply
 redirections, mutate the caller's environment, change the working directory,
 or require interactive terminal state.
 
+### Execution-plan inspection contract
+
+The shipped planner surface is:
+
+```text
+fsh plan [--] SOURCE
+fsh plan --help
+```
+
+`SOURCE` must contain exactly one top-level foreground command pipeline. The
+planner frontend shares canonical loading, parsing, static command analysis,
+ordinary expansion/resolution, structural preflight, and
+`ExecutionPlan::render`. It may receive an inherited cwd/environment snapshot
+and a read-only executable probe, but it must not gain a runtime platform,
+session, config/history provider, writable filesystem, editor, terminal, or
+process capability. Tests must prove that substitutions are rejected and that
+redirection targets and external fixtures remain untouched.
+
+Focused planner coverage is:
+
+```bash
+cargo test -p flash-runtime --test plan
+cargo test -p flash-cli --test plan_frontend --test planner_e2e
+```
+
 ### Help and documentation metadata
 
 Built-in and user-function help must use the same names, signatures, and documentation metadata consumed by static analysis and editor tooling. Tests should prevent help text, checker signatures, and language-server information from drifting into separate incompatible definitions.

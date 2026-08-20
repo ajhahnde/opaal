@@ -98,6 +98,9 @@ fsh program.fsh
 # Check one root and its canonical import closure without execution.
 fsh check program.fsh
 
+# Inspect one exact command pipeline without executing it.
+fsh plan command.fsh
+
 # Check or atomically rewrite canonical source formatting.
 fsh format --check program.fsh
 fsh format --write program.fsh

@@ -33,6 +33,7 @@ use flash_cli::interactive::{
     InteractiveEvaluator, InteractiveNotice, InteractiveNoticeError, InteractiveNoticeId,
     format_job_notice, format_live_jobs, run_interactive_driver,
 };
+use flash_cli::plan::{PlanRequest, inspect_source};
 use flash_cli::report::{HostReport, write_report};
 use flash_platform::{Platform, PlatformError};
 use flash_platform_posix::PosixPlatform;
@@ -56,6 +57,8 @@ Usage:
   fsh [OPTIONS] SCRIPT [ARGUMENT]...
   fsh check [--] SOURCE
   fsh check --help
+  fsh plan [--] SOURCE
+  fsh plan --help
   fsh format --check [--] PATH...
   fsh format --write [--] PATH...
   fsh format --help
@@ -114,6 +117,29 @@ check and write operations are silent. Changed files preserve permission bits;
 other metadata and multi-file transactionality are not promised.
 ";
 
+const PLAN_HELP: &str = "Inspect one Flash execution plan without executing it
+
+Usage:
+  fsh plan [--] SOURCE
+  fsh plan --help
+
+Arguments:
+  SOURCE     Regular source file containing one foreground command pipeline
+
+Options:
+      --         Stop parsing planner options; the next operand is SOURCE
+      --help     Print planner help
+
+Inspection parses and statically analyzes SOURCE, expands its one pipeline against
+an empty lexical scope and the inherited environment, resolves executables through
+read-only PATH metadata checks, and performs structural preflight. It does not load
+configuration or history, evaluate command substitution, mutate session state, open
+redirections, create pipes, spawn processes, or access a terminal. The deterministic
+plan is written to stdout; diagnostics are written to stderr.
+The plan includes inherited environment values and may contain secrets; treat the
+output as sensitive.
+";
+
 fn main() -> ExitCode {
     let invocation = match parse_args(env::args_os().skip(1)) {
         Ok(invocation) => invocation,
@@ -131,6 +157,8 @@ fn main() -> ExitCode {
         }
         Mode::CheckHelp => emit_report(HostReport::success(CHECK_HELP.as_bytes())),
         Mode::Check { source } => run_checker(source),
+        Mode::PlanHelp => emit_report(HostReport::success(PLAN_HELP.as_bytes())),
+        Mode::Plan { source } => run_planner(source),
         Mode::FormatHelp => emit_report(HostReport::success(FORMAT_HELP.as_bytes())),
         Mode::Format { operation, paths } => run_formatter(operation, paths),
         Mode::Script { path, arguments } => run_script(&path, &arguments),
@@ -156,6 +184,24 @@ fn run_checker(source: PathBuf) -> ExitCode {
     let run = check_source(&request, &HostCheckFilesystem);
     if run.is_success() {
         emit_report(HostReport::success(b""))
+    } else {
+        let diagnostics = run.rendered_issues().concat();
+        emit_report(HostReport::failure(diagnostics.as_bytes()))
+    }
+}
+
+fn run_planner(source: PathBuf) -> ExitCode {
+    let cwd = match env::current_dir() {
+        Ok(cwd) => cwd,
+        Err(error) => {
+            let diagnostic = format!("fsh: cannot read the current directory: {error}\n");
+            return emit_report(HostReport::failure(diagnostic.as_bytes()));
+        }
+    };
+    let request = PlanRequest::new(source, cwd, process_environment());
+    let run = inspect_source(&request, &HostCheckFilesystem, &NativeExecutableProbe);
+    if let Some(plan) = run.rendered_plan() {
+        emit_report(HostReport::success(plan.as_bytes()))
     } else {
         let diagnostics = run.rendered_issues().concat();
         emit_report(HostReport::failure(diagnostics.as_bytes()))

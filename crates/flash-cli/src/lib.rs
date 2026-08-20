@@ -14,6 +14,7 @@ pub mod hint;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 pub mod history;
 pub mod interactive;
+pub mod plan;
 pub mod report;
 pub mod terminal_editor;
 
