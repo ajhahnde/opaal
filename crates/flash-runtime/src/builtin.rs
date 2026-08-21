@@ -164,7 +164,7 @@ pub fn standard_registry() -> CommandRegistry {
                 ],
             ),
             "check",
-            "Require the upstream stage to have succeeded.",
+            "Raise a catchable error unless the upstream stage succeeded.",
         ),
         // The explicit byte/structured boundaries (see the value-model spec).
         // `decode`/`from` parse a byte stream into structured values; `encode`/`to`

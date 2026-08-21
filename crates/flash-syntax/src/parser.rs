@@ -10,9 +10,9 @@ use crate::{
     MatchArm, MatchStatement, MemberExpression, ModuleExportStatement, NumberKind, Operator,
     OutputMode, Parameter, Pattern, PipeOperator, Pipeline, RecordEntry, RecordKey, Redirection,
     RedirectionKind, Script, Severity, SourceFile, Span, Stage, StageKind, Statement,
-    StatementKind, SyntaxClassification, Token, TokenKind, TypeReference, UnaryExpression,
-    UnaryOperator, VariableReference, WhileStatement, Word, WordPart, WordPartKind,
-    classify_tokens,
+    StatementKind, SyntaxClassification, Token, TokenKind, TryStatement, TypeReference,
+    UnaryExpression, UnaryOperator, VariableReference, WhileStatement, Word, WordPart,
+    WordPartKind, classify_tokens,
 };
 
 /// The result of parsing one source file.
@@ -229,6 +229,8 @@ impl<'source, 'control> Parser<'source, 'control> {
             Some(TokenKind::Keyword(Keyword::While)) => self.parse_while(),
             Some(TokenKind::Keyword(Keyword::For)) => self.parse_for(),
             Some(TokenKind::Keyword(Keyword::Match)) => self.parse_match(),
+            Some(TokenKind::Keyword(Keyword::Try)) => self.parse_try(),
+            Some(TokenKind::Keyword(Keyword::Throw)) => self.parse_throw(),
             Some(TokenKind::Keyword(Keyword::Break)) => self.parse_control(ControlTransfer::Break),
             Some(TokenKind::Keyword(Keyword::Continue)) => {
                 self.parse_control(ControlTransfer::Continue)
@@ -236,6 +238,9 @@ impl<'source, 'control> Parser<'source, 'control> {
             Some(TokenKind::Keyword(Keyword::Return)) => self.parse_return(),
             Some(TokenKind::Keyword(Keyword::Else)) => {
                 Err(self.invalid_here("else requires a preceding if statement"))
+            }
+            Some(TokenKind::Keyword(Keyword::Catch)) => {
+                Err(self.invalid_here("catch requires a preceding try statement"))
             }
             Some(TokenKind::Variable) if self.variable_is_assignment() => self.parse_assignment(),
             Some(_) => self.parse_job_statement(),
@@ -415,6 +420,35 @@ impl<'source, 'control> Parser<'source, 'control> {
             }),
             span,
         ))
+    }
+
+    fn parse_try(&mut self) -> ParseResult<Statement> {
+        let start = self.take().expect("try keyword is current").span();
+        self.skip_inline();
+        let try_block = self.parse_block()?;
+        self.skip_inline();
+        self.expect_keyword(Keyword::Catch, "try statement requires `catch`")?;
+        self.skip_inline();
+        let catch_binding = self.parse_identifier()?;
+        self.skip_inline();
+        let catch_block = self.parse_block()?;
+        let span = self.span(start.start(), catch_block.span.end());
+        Ok(Statement::new(
+            StatementKind::Try(TryStatement {
+                try_block,
+                catch_binding,
+                catch_block,
+            }),
+            span,
+        ))
+    }
+
+    fn parse_throw(&mut self) -> ParseResult<Statement> {
+        let start = self.take().expect("throw keyword is current").span();
+        self.skip_layout();
+        let expression = self.parse_expression()?;
+        let span = self.span(start.start(), expression.span().end());
+        Ok(Statement::new(StatementKind::Throw(expression), span))
     }
 
     fn parse_if_node(&mut self) -> ParseResult<AstNode<IfStatement>> {

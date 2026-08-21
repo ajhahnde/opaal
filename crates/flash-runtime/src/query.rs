@@ -729,6 +729,11 @@ impl<'a> CallFinder<'a> {
                     self.match_arm(arm);
                 }
             }
+            StatementKind::Try(statement) => {
+                self.block(&statement.try_block);
+                self.block(&statement.catch_block);
+            }
+            StatementKind::Throw(expression) => self.expression(expression),
             StatementKind::Control(ControlTransfer::Return(Some(expression))) => {
                 self.expression(expression);
             }

@@ -2,7 +2,7 @@
 
 [FlashOS](../../../README.md) › [Flash](../README.md) › [Documentation](README.md) › Scripting
 
-This guide explains how to run and inspect `.fsh` programs, pass script arguments, use non-executing checks and canonical formatting, invoke external processes, connect pipeline stages, redirect file descriptors, handle command statuses, and manage background jobs. Language syntax, values, bindings, expressions, modules, function metadata, and structured-data operations are documented in the [Language Guide](language-guide.md).
+This guide explains how to run and inspect `.fsh` programs, pass script arguments, use non-executing checks and canonical formatting, invoke external processes, connect pipeline stages, redirect file descriptors, handle command statuses and structured errors, and manage background jobs. Language syntax, values, bindings, expressions, modules, function metadata, and structured-data operations are documented in the [Language Guide](language-guide.md).
 
 > **Project status:** FlashOS as a complete operating system remains pre-alpha software. However, this Flash Scripting Guide defines the intended stable Flash v1.0 contract for scripting and execution. Note that not every v1 feature is automatically available in every current FlashOS image or on every target platform, and successful execution on a Linux or macOS development host is not automatic proof of FlashOS target support.
 
@@ -951,6 +951,41 @@ Use `check` when an unsuccessful status must propagate as a runtime error:
 It does not convert parse failures, command-resolution failures, redirection failures, decoding errors, cancellation, or other runtime errors. Those outcomes already propagate through their own error paths.
 
 Output delivered before a streaming failure or unsuccessful checked completion remains observable.
+
+### Catching and raising runtime errors
+
+Use a `try` statement when a script can recover from a runtime failure:
+
+```text
+try {
+    ^build | check
+} catch error {
+    ^log $error.category $error.message
+}
+```
+
+The catch binding is immutable and exists only inside its block. The catch
+starts with the lexical bindings, logical working directory, child environment,
+session options, and current status from before the `try`. Successful changes
+made by the catch then commit normally. Bytes already written, filesystem
+changes, and child-process effects remain observable.
+
+`throw "message"` raises a source-anchored user error. `throw $error` rethrows
+an existing `Error` with its source, labels, nested-call frames, cause, and
+optional status intact. Throwing any other value is itself a typed runtime
+error.
+
+Only runtime errors are caught. In particular:
+
+- a nonzero or signalled command completion remains an ordinary `Status` until
+  a reached `check` converts it;
+- cancellation and explicit `exit` bypass the catch and retain their cleanup
+  behavior; and
+- parse or analysis failures, stopped-job control, and fatal output/editor
+  failures never become catch values.
+
+The complete `Error` member and equality contract is in the
+[Language Guide](language-guide.md#structured-error-handling).
 
 ### Explicit script exit
 

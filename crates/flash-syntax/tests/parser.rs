@@ -77,6 +77,41 @@ fn a_static_import_retains_its_exact_path_span() {
 }
 
 #[test]
+fn structured_error_statements_retain_blocks_bindings_and_operands() {
+    let text = "try { throw \"boom\" } catch error { throw $error }\n";
+    let script = complete(text);
+    let StatementKind::Try(statement) = script.statements()[0].kind() else {
+        panic!("expected try statement");
+    };
+
+    assert_eq!(source_text(text, statement.catch_binding.span()), "error");
+    assert!(matches!(
+        statement.try_block.statements[0].kind(),
+        StatementKind::Throw(_)
+    ));
+    let StatementKind::Throw(expression) = statement.catch_block.statements[0].kind() else {
+        panic!("expected rethrow statement");
+    };
+    assert_eq!(source_text(text, expression.span()), "$error");
+}
+
+#[test]
+fn catch_without_try_is_rejected_at_its_reserved_keyword() {
+    let source = SourceFile::new(SourceId::new(91), "catch.fsh", "catch error { null }");
+    let ParseOutcome::Invalid(diagnostics) = parse(&source) else {
+        panic!("orphan catch should be invalid");
+    };
+    assert_eq!(
+        diagnostics[0].message(),
+        "catch requires a preceding try statement"
+    );
+    assert_eq!(
+        source.slice(diagnostics[0].labels()[0].span()).unwrap(),
+        "catch"
+    );
+}
+
+#[test]
 fn explicit_module_exports_and_imports_retain_name_spans() {
     let text = concat!(
         "let answer = 42\n",

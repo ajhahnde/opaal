@@ -914,6 +914,7 @@ pub enum ValueType {
     Table,
     Range,
     Status,
+    Error,
     Function,
     Closure,
 }
@@ -943,6 +944,7 @@ impl ValueType {
             (Self::Table, Value::Table(_)) => true,
             (Self::Range, Value::Range(_)) => true,
             (Self::Status, Value::Status(_)) => true,
+            (Self::Error, Value::Error(_)) => true,
             (Self::Function, Value::Callable(callable)) => callable.family() == "function",
             (Self::Closure, Value::Callable(callable)) => callable.family() == "closure",
             _ => false,
@@ -976,6 +978,7 @@ impl fmt::Display for ValueType {
             Self::Table => formatter.write_str("Table"),
             Self::Range => formatter.write_str("Range"),
             Self::Status => formatter.write_str("Status"),
+            Self::Error => formatter.write_str("Error"),
             Self::Function => formatter.write_str("Function"),
             Self::Closure => formatter.write_str("Closure"),
         }
@@ -1400,6 +1403,15 @@ impl<'a> TypeCollector<'a> {
                 }
                 Ok(())
             }
+            StatementKind::Try(statement) => {
+                self.statements(&statement.try_block.statements)?;
+                self.types.bindings.push(ResolvedBindingType {
+                    declaration_span: statement.catch_binding.span(),
+                    value_type: ValueType::Error,
+                });
+                self.statements(&statement.catch_block.statements)
+            }
+            StatementKind::Throw(expression) => self.expression(expression),
             StatementKind::Control(ControlTransfer::Return(Some(expression))) => {
                 self.expression(expression)
             }
@@ -1621,6 +1633,7 @@ impl<'a> TypeCollector<'a> {
                 "Table" => ValueType::Table,
                 "Range" => ValueType::Range,
                 "Status" => ValueType::Status,
+                "Error" => ValueType::Error,
                 "Function" => ValueType::Function,
                 "Closure" => ValueType::Closure,
                 _ => {
@@ -1771,6 +1784,10 @@ impl<'a> SignatureValidator<'a> {
                 }
                 Ok(())
             }
+            StatementKind::Try(statement) => {
+                self.function_statements(&statement.try_block.statements, signature)?;
+                self.function_statements(&statement.catch_block.statements, signature)
+            }
             _ => self.statement(statement),
         }
     }
@@ -1862,6 +1879,28 @@ impl<'a> SignatureValidator<'a> {
                         self.expression(guard)?;
                     }
                     self.statements(&arm.body.statements)?;
+                }
+                Ok(())
+            }
+            StatementKind::Try(statement) => {
+                self.statements(&statement.try_block.statements)?;
+                self.statements(&statement.catch_block.statements)
+            }
+            StatementKind::Throw(expression) => {
+                let actual = self.expression(expression)?;
+                if let Some(actual) = actual
+                    && !matches!(
+                        actual,
+                        ValueType::Any | ValueType::String | ValueType::Error
+                    )
+                {
+                    self.errors
+                        .borrow_mut()
+                        .push(ModuleTypeError::ThrowMismatch {
+                            module: self.entry.module().clone(),
+                            span: expression.span(),
+                            actual,
+                        });
                 }
                 Ok(())
             }
@@ -2011,8 +2050,21 @@ impl<'a> SignatureValidator<'a> {
                 })
             }
             ExpressionKind::Member(member) => {
-                self.expression(&member.target)?;
-                Ok(None)
+                let target = self.expression(&member.target)?;
+                let name = self.text(member.member.span());
+                Ok(match (target, name) {
+                    (Some(ValueType::Status), "ok") => Some(ValueType::Bool),
+                    (Some(ValueType::Status), "stages") => {
+                        Some(ValueType::List(Box::new(ValueType::Status)))
+                    }
+                    (Some(ValueType::Status), "duration") => Some(ValueType::Duration),
+                    (Some(ValueType::Error), "category" | "message") => Some(ValueType::String),
+                    (Some(ValueType::Error), "labels" | "frames") => {
+                        Some(ValueType::List(Box::new(ValueType::Record)))
+                    }
+                    (Some(ValueType::Error), "source" | "cause" | "status") => Some(ValueType::Any),
+                    _ => None,
+                })
             }
             ExpressionKind::Unary(unary) => {
                 let operand = self.expression(&unary.operand)?;
@@ -2511,6 +2563,20 @@ impl<'a> ReferenceResolver<'a> {
                 }
                 Ok(())
             }
+            StatementKind::Try(statement) => {
+                self.block(&statement.try_block)?;
+                self.push_scope(statement.catch_block.span);
+                let result = (|| {
+                    self.declare(
+                        statement.catch_binding.span(),
+                        statement.catch_block.span.start(),
+                    )?;
+                    self.statements(&statement.catch_block.statements)
+                })();
+                self.pop_scope();
+                result
+            }
+            StatementKind::Throw(expression) => self.expression(expression),
             StatementKind::Control(control) => match control {
                 ControlTransfer::Return(Some(expression)) => self.expression(expression),
                 ControlTransfer::Break
@@ -3183,6 +3249,11 @@ impl<'a> StaticEffectAnalyzer<'a> {
                     self.statements(&arm.body.statements);
                 }
             }
+            StatementKind::Try(statement) => {
+                self.statements(&statement.try_block.statements);
+                self.statements(&statement.catch_block.statements);
+            }
+            StatementKind::Throw(expression) => self.expression(expression),
             StatementKind::Control(ControlTransfer::Return(Some(expression))) => {
                 self.expression(expression);
             }
@@ -3660,6 +3731,11 @@ impl<'a> StaticPipelineAnalyzer<'a> {
                     self.statements(&arm.body.statements);
                 }
             }
+            StatementKind::Try(statement) => {
+                self.statements(&statement.try_block.statements);
+                self.statements(&statement.catch_block.statements);
+            }
+            StatementKind::Throw(expression) => self.expression(expression),
             StatementKind::Control(ControlTransfer::Return(Some(expression))) => {
                 self.expression(expression);
             }
@@ -4969,6 +5045,11 @@ pub enum ModuleTypeError {
         module: ModuleId,
         span: Span,
     },
+    ThrowMismatch {
+        module: ModuleId,
+        span: Span,
+        actual: ValueType,
+    },
 }
 
 impl ModuleTypeError {
@@ -4982,7 +5063,8 @@ impl ModuleTypeError {
             | Self::ArgumentMismatch { module, .. }
             | Self::IntrinsicArgumentMismatch { module, .. }
             | Self::ResultMismatch { module, .. }
-            | Self::ByteCaptureInWord { module, .. } => module,
+            | Self::ByteCaptureInWord { module, .. }
+            | Self::ThrowMismatch { module, .. } => module,
         }
     }
 
@@ -4995,7 +5077,7 @@ impl ModuleTypeError {
             Self::ArgumentMismatch { argument_span, .. }
             | Self::IntrinsicArgumentMismatch { argument_span, .. } => *argument_span,
             Self::ResultMismatch { result_span, .. } => *result_span,
-            Self::ByteCaptureInWord { span, .. } => *span,
+            Self::ByteCaptureInWord { span, .. } | Self::ThrowMismatch { span, .. } => *span,
         }
     }
 
@@ -5073,6 +5155,12 @@ impl ModuleTypeError {
                 Diagnostic::new(Severity::Error, "SIG006", self.to_string()).with_primary(
                     *span,
                     "byte capture is a `Bytes` value and cannot be inserted into a command word",
+                )
+            }
+            Self::ThrowMismatch { span, actual, .. } => {
+                Diagnostic::new(Severity::Error, "SIG007", self.to_string()).with_primary(
+                    *span,
+                    format!("this value is `{actual}`; throw requires `String` or `Error`"),
                 )
             }
         }
@@ -5157,6 +5245,11 @@ impl fmt::Display for ModuleTypeError {
             Self::ByteCaptureInWord { module, .. } => write!(
                 formatter,
                 "module `{}` inserts a `Bytes` capture into a command word; decode it explicitly or bind it as a value",
+                module.path().display()
+            ),
+            Self::ThrowMismatch { module, actual, .. } => write!(
+                formatter,
+                "module `{}` throws `{actual}`; expected `String` or `Error`",
                 module.path().display()
             ),
         }

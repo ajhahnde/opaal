@@ -5,6 +5,7 @@ complete/environment.fsh	environment.ast
 complete/functions.fsh	functions.ast
 complete/control-flow.fsh	control-flow.ast
 complete/control-transfer.fsh	control-transfer.ast
+complete/structured-errors.fsh	structured-errors.ast
 complete/commands.fsh	commands.ast
 complete/calls-and-grouping.fsh	calls-and-grouping.ast
 complete/pipelines.fsh	pipelines.ast

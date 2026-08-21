@@ -433,7 +433,7 @@ Structured values and pipeline carriers are related but distinct:
 ```text
 Runtime value
     Null, Bool, Int, Float, String, Bytes, Path, Duration,
-    ByteSize, List, Record, Table, Range, Status, Function, Closure
+    ByteSize, List, Record, Table, Range, Status, Error, Function, Closure
 
 Pipeline carrier
     Empty, ByteStream, Value, ValueStream
@@ -613,6 +613,14 @@ and status slot succeeds. Runtime, cancellation, output, or wait failure
 discards that in-memory transaction. Bytes already displayed, files already
 changed, and process effects remain observable because they are not
 transactional.
+
+A language `try` adds an enclosing checkpoint across lexical scope and the
+host-owned in-memory session state. When a runtime error reaches it, the catch
+block starts from that pre-try checkpoint with one fresh immutable `Error`
+binding. Successful try or catch work follows the ordinary commit rules.
+Cancellation, explicit exit, stopped-job control, and fatal host failures bypass
+this boundary. The same external-effect limit applies: a catch cannot undo
+bytes, files, or process effects that have already occurred.
 
 One shared failure controller owns every external child until all segment
 workers quiesce. A genuine segment or output failure closes endpoints,

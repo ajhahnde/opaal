@@ -61,6 +61,19 @@ fn a_cancelled_token_stops_an_unbounded_loop() {
 }
 
 #[test]
+fn cancellation_bypasses_language_catch() {
+    let source = "try {\n    while true {\n    }\n} catch error {\n    throw \"wrong\"\n}";
+    let (file, completion) = run(source, &CancellationToken::from_fn(|| true));
+    match completion {
+        Completion::Cancelled(cancellation) => {
+            assert_eq!(cancellation.reason(), CancelReason::Requested);
+            assert_eq!(file.slice(cancellation.span()).unwrap(), "true");
+        }
+        Completion::Value(value) => panic!("catch intercepted cancellation: {value:?}"),
+    }
+}
+
+#[test]
 fn cancellation_is_polled_before_each_iteration() {
     // A token that trips on its fourth poll lets exactly three iterations run: the
     // boundary is checked once per loop turn before the condition.

@@ -1,0 +1,103 @@
+Script {
+    statements: [
+        AstNode {
+            kind: Try(
+                TryStatement {
+                    try_block: Block {
+                        statements: [
+                            AstNode {
+                                kind: Throw(
+                                    AstNode {
+                                        kind: Literal(
+                                            Literal {
+                                                kind: DoubleQuoted(
+                                                    [
+                                                        AstNode {
+                                                            kind: DoubleText,
+                                                            span: Span(17..23),
+                                                        },
+                                                    ],
+                                                ),
+                                                span: Span(16..24),
+                                            },
+                                        ),
+                                        span: Span(16..24),
+                                    },
+                                ),
+                                span: Span(10..24),
+                            },
+                        ],
+                        span: Span(4..26),
+                    },
+                    catch_binding: Identifier {
+                        span: Span(33..38),
+                    },
+                    catch_block: Block {
+                        statements: [
+                            AstNode {
+                                kind: Declaration(
+                                    Declaration {
+                                        mutable: false,
+                                        name: Identifier {
+                                            span: Span(49..57),
+                                        },
+                                        type_annotation: Some(
+                                            TypeReference {
+                                                name: Identifier {
+                                                    span: Span(59..65),
+                                                },
+                                                arguments: [],
+                                                span: Span(59..65),
+                                            },
+                                        ),
+                                        value: AstNode {
+                                            kind: Member(
+                                                MemberExpression {
+                                                    target: AstNode {
+                                                        kind: Variable(
+                                                            VariableReference {
+                                                                name: Identifier {
+                                                                    span: Span(69..74),
+                                                                },
+                                                                span: Span(68..74),
+                                                            },
+                                                        ),
+                                                        span: Span(68..74),
+                                                    },
+                                                    member: Identifier {
+                                                        span: Span(75..83),
+                                                    },
+                                                },
+                                            ),
+                                            span: Span(68..83),
+                                        },
+                                    },
+                                ),
+                                span: Span(45..83),
+                            },
+                            AstNode {
+                                kind: Throw(
+                                    AstNode {
+                                        kind: Variable(
+                                            VariableReference {
+                                                name: Identifier {
+                                                    span: Span(95..100),
+                                                },
+                                                span: Span(94..100),
+                                            },
+                                        ),
+                                        span: Span(94..100),
+                                    },
+                                ),
+                                span: Span(88..100),
+                            },
+                        ],
+                        span: Span(39..102),
+                    },
+                },
+            ),
+            span: Span(0..102),
+        },
+    ],
+    span: Span(0..103),
+}

@@ -25,7 +25,7 @@ use flash_runtime::builtin::standard_registry;
 use flash_runtime::command::{
     Carrier, CommandLifecycle, CommandNamespaceEntry, CommandRegistry, CommandSignature,
 };
-use flash_runtime::eval::FakeClock;
+use flash_runtime::eval::{FakeClock, RuntimeError, RuntimeErrorKind};
 use flash_runtime::module::{
     AnalysisControl, ModuleAnalysisOutcome, ModuleCanonicalizer, ModuleEffect, ModuleGraph,
     ModuleGraphError, ModulePathError, ModuleProgramLoader, ModuleReferenceTarget, ModuleResolver,
@@ -706,6 +706,45 @@ fn typed_command_capture_drives_analysis_hover_and_word_diagnostics() {
 }
 
 #[test]
+fn structured_error_bindings_types_hover_and_throw_diagnostics_agree() {
+    let paths = FakeCanonicalizer::default().resolves("/project/main.fsh", "/project/main.fsh");
+    let text = concat!(
+        "mut observed = ''\n",
+        "try {\n",
+        "    throw \"boom\"\n",
+        "} catch error {\n",
+        "    let typed: Error = $error\n",
+        "    $observed = $error.message\n",
+        "}\n",
+        "$observed\n",
+    );
+    let sources = FakeSourceLoader::default().contains("/project/main.fsh", text);
+    let program = ModuleProgramLoader::new(&paths, &sources)
+        .load(Path::new("/project/main.fsh"))
+        .expect("structured error bindings should analyze");
+    let root = program.graph().root();
+    let reference = text
+        .find("$error.message")
+        .expect("error reference is present")
+        + 1;
+    let registry = standard_registry();
+    let queries = program.semantic_queries(&registry);
+    let SemanticHover::Binding(hover) = queries
+        .hover_at(root, reference)
+        .expect("catch binding has hover data")
+    else {
+        panic!("expected catch-binding hover");
+    };
+    assert_eq!(hover.value_type(), &ValueType::Error);
+
+    let invalid = FakeSourceLoader::default().contains("/project/main.fsh", "throw 42\n");
+    let error = ModuleProgramLoader::new(&paths, &invalid)
+        .load(Path::new("/project/main.fsh"))
+        .expect_err("a statically known invalid throw operand must fail analysis");
+    assert_eq!(error.diagnostics()[0].code(), "SIG007");
+}
+
+#[test]
 fn function_documentation_is_normalized_beside_resolved_module_signatures_without_activation() {
     let paths = FakeCanonicalizer::default()
         .resolves("/project/main.fsh", "/project/main.fsh")
@@ -760,7 +799,8 @@ fn every_builtin_type_spelling_resolves_in_source_annotations() {
         "float_value: Float, string_value: String, bytes_value: Bytes, path_value: Path, ",
         "duration_value: Duration, size_value: ByteSize, strings: List[String], ",
         "nested: List[List[Int]], record_value: Record, table_value: Table, range_value: Range, ",
-        "status_value: Status, function_value: Function, closure_value: Closure) -> Any { null }\n",
+        "status_value: Status, error_value: Error, function_value: Function, ",
+        "closure_value: Closure) -> Any { null }\n",
     );
     let sources = FakeSourceLoader::default().contains("/project/main.fsh", text);
     let program = ModuleProgramLoader::new(&paths, &sources)
@@ -797,6 +837,7 @@ fn every_builtin_type_spelling_resolves_in_source_annotations() {
         ValueType::Table,
         ValueType::Range,
         ValueType::Status,
+        ValueType::Error,
         ValueType::Function,
         ValueType::Closure,
     ];
@@ -1456,6 +1497,8 @@ fn conservatively_known_function_result_mismatches_fail_without_execution() {
 
 #[test]
 fn value_types_match_exact_runtime_families_and_recursive_lists() {
+    let error_source = SourceFile::new(SourceId::new(99), "error.fsh", "throw 'x'");
+    let error_span = error_source.span(6..9).expect("test error span is valid");
     let cases = vec![
         (ValueType::Null, Value::Null),
         (ValueType::Bool, Value::Bool(true)),
@@ -1485,6 +1528,15 @@ fn value_types_match_exact_runtime_families_and_recursive_lists() {
         (
             ValueType::Status,
             Value::from(Status::exit(0, Duration::ZERO).expect("valid status")),
+        ),
+        (
+            ValueType::Error,
+            Value::Error(Arc::new(RuntimeError::new(
+                RuntimeErrorKind::UserThrown {
+                    message: "x".to_owned(),
+                },
+                error_span,
+            ))),
         ),
         (
             ValueType::Function,

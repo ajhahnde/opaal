@@ -983,6 +983,97 @@ fn a_failing_statement_discards_its_pending_scope_and_environment() {
 }
 
 #[test]
+fn catch_handles_host_runtime_errors_and_rolls_back_session_state() {
+    let mut session = session();
+    let probe = Probe::default();
+
+    assert_eq!(
+        submit(
+            &mut session,
+            "try {\n\
+                 cd /changed\n\
+                 export LEAK = 'no'\n\
+                 check\n\
+             } catch error {\n\
+                 export CAUGHT = $error.category\n\
+             }",
+            &probe,
+        ),
+        SubmitOutcome::Continued
+    );
+    assert_eq!(session.cwd(), Path::new("/work"));
+    assert_eq!(session.environment().get("LEAK"), None);
+    assert_eq!(
+        session.environment().get("CAUGHT"),
+        Some(OsStr::new("control"))
+    );
+}
+
+#[test]
+fn unsuccessful_status_and_explicit_exit_are_not_caught() {
+    let clock = Arc::new(FakeClock::new());
+    let mut active = session();
+    let (platform, controls) = ControlledBackgroundPlatform::in_groups_for_session(&[&[690]]);
+    controls[0]
+        .steps
+        .send(Ok(ProcessTransition::Completed(ProcessStatus::Exited(7))))
+        .expect("complete the external command unsuccessfully");
+    let probe = Probe::new(["/bin/tool"]);
+    let mut sink = Vec::new();
+
+    assert_eq!(
+        active
+            .submit(
+                "<interactive>",
+                "mut caught = false\n\
+                 try { ^tool } catch error { $caught = true }\n\
+                 export CAUGHT = $caught",
+                &probe,
+                &platform,
+                clock.as_ref(),
+                &mut sink,
+            )
+            .expect("an ordinary unsuccessful status is not a runtime error"),
+        SubmitOutcome::Continued
+    );
+    assert_eq!(
+        active.environment().get("CAUGHT"),
+        Some(OsStr::new("false"))
+    );
+    assert_eq!(active.current_status().and_then(Status::code), Some(7));
+
+    let mut exiting = session();
+    assert_eq!(
+        submit(
+            &mut exiting,
+            "try { exit 9 } catch error { export CAUGHT = 'yes' }",
+            &Probe::default(),
+        ),
+        SubmitOutcome::Exit(9)
+    );
+    assert_eq!(exiting.environment().get("CAUGHT"), None);
+}
+
+#[test]
+fn fatal_output_failure_bypasses_catch() {
+    let mut session = session();
+    let mut output = FailingOutput;
+    let error = session
+        .submit(
+            "<interactive>",
+            "try { pwd } catch error { export CAUGHT = 'yes' }",
+            &Probe::default(),
+            &terminal_platform(),
+            &FakeClock::new(),
+            &mut output,
+        )
+        .expect_err("fatal output failure must bypass language catch");
+
+    assert!(error.render().is_empty());
+    assert_eq!(session.environment().get("CAUGHT"), None);
+}
+
+#[test]
 fn nested_commands_run_only_in_selected_control_flow() {
     let mut session = session();
     let probe = Probe::default();
@@ -2930,6 +3021,9 @@ fn help_keeps_builtin_and_function_namespaces_and_orders_list_output() {
     let command_detail = rendered(&mut session, "help command", &probe, &platform, &clock);
     assert!(command_detail.contains("invocation: command NAME [ARG...]"));
     assert!(command_detail.contains("Run a command through explicit external resolution."));
+    let check_detail = rendered(&mut session, "help check", &probe, &platform, &clock);
+    assert!(check_detail.contains("invocation: check"));
+    assert!(check_detail.contains("Raise a catchable error unless the upstream stage succeeded."));
     assert_eq!(
         rendered(&mut session, "help 'zzz'", &probe, &platform, &clock),
         concat!(

@@ -661,6 +661,25 @@ fn a_runtime_error_is_reported_and_the_session_recovers() {
 }
 
 #[test]
+fn structured_errors_are_caught_in_the_real_interactive_session() {
+    let cwd = unique_dir("interactive-structured-error");
+    let mut session = interactive(&cwd);
+    session.await_prompt(0);
+
+    let mark = session.mark();
+    session.send(b"try { throw \"interactive\" } catch error { echo ${$error.message} }");
+    session.send(ENTER);
+    session.await_prompt(mark);
+    let rendered = session.rendered_from(mark);
+    assert!(rendered.contains("interactive"), "{rendered}");
+    assert!(!rendered.contains("error[RUN001]"), "{rendered}");
+
+    session.send(b"exit 0");
+    session.send(ENTER);
+    assert_eq!(session.wait_code(), 0);
+}
+
+#[test]
 fn the_session_survives_a_terminal_resize() {
     let cwd = unique_dir("resize");
     let mut session = interactive(&cwd);

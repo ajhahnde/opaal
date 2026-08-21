@@ -128,6 +128,34 @@ fn diagnostics_are_stderr_only_and_keep_analysis_and_source_order() {
 }
 
 #[test]
+fn checker_accepts_structured_error_contracts_and_rejects_invalid_throw_types() {
+    let temp = TempDir::new("structured-errors");
+    let valid = temp.source(
+        "valid.fsh",
+        concat!(
+            "try { throw \"boom\" } catch error {\n",
+            "    let typed: Error = $error\n",
+            "}\n",
+        ),
+    );
+    let valid_output = fsh([OsString::from("check"), valid.as_os_str().to_owned()]);
+    assert!(valid_output.status.success(), "{valid_output:?}");
+    assert!(valid_output.stdout.is_empty());
+    assert!(valid_output.stderr.is_empty());
+
+    let invalid = temp.source("invalid.fsh", "throw 42\n");
+    let invalid_output = fsh([OsString::from("check"), invalid.as_os_str().to_owned()]);
+    assert_eq!(invalid_output.status.code(), Some(1), "{invalid_output:?}");
+    assert!(invalid_output.stdout.is_empty());
+    let stderr = String::from_utf8(invalid_output.stderr).unwrap();
+    assert!(stderr.contains("error[SIG007]"), "{stderr}");
+    assert!(
+        stderr.contains("throw requires `String` or `Error`"),
+        "{stderr}"
+    );
+}
+
+#[test]
 fn directories_and_special_files_are_rejected_as_roots_and_imports() {
     let temp = TempDir::new("unsupported-targets");
     let directory = temp.path().join("directory.fsh");

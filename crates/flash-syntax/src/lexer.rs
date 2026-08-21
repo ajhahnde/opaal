@@ -4,6 +4,7 @@ use crate::{SourceFile, Span, SpanError};
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum Keyword {
     Break,
+    Catch,
     Continue,
     Def,
     Else,
@@ -18,7 +19,9 @@ pub enum Keyword {
     Mut,
     Null,
     Return,
+    Throw,
     True,
+    Try,
     Unset,
     While,
 }
@@ -779,6 +782,7 @@ fn is_identifier_continue(byte: u8) -> bool {
 fn keyword(text: &str) -> Option<Keyword> {
     Some(match text {
         "break" => Keyword::Break,
+        "catch" => Keyword::Catch,
         "continue" => Keyword::Continue,
         "def" => Keyword::Def,
         "else" => Keyword::Else,
@@ -793,7 +797,9 @@ fn keyword(text: &str) -> Option<Keyword> {
         "mut" => Keyword::Mut,
         "null" => Keyword::Null,
         "return" => Keyword::Return,
+        "throw" => Keyword::Throw,
         "true" => Keyword::True,
+        "try" => Keyword::Try,
         "unset" => Keyword::Unset,
         "while" => Keyword::While,
         _ => return None,

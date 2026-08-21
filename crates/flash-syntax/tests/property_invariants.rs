@@ -341,6 +341,12 @@ impl<'source> SpanChecker<'source> {
                     self.block(&arm.body);
                 }
             }
+            StatementKind::Try(statement) => {
+                self.block(&statement.try_block);
+                self.identifier(statement.catch_binding);
+                self.block(&statement.catch_block);
+            }
+            StatementKind::Throw(expression) => self.expression(expression),
             StatementKind::Control(ControlTransfer::Return(Some(expression))) => {
                 self.expression(expression)
             }

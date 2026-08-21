@@ -25,7 +25,7 @@ use flash_syntax::{
     ControlTransfer, Declaration, ElseBranch, EnvironmentStatement, Expression, ExpressionKind,
     ForStatement, FunctionDefinition, IfStatement, Literal, LiteralKind, MatchArm, MatchStatement,
     Parameter, Pattern, Pipeline, RecordKey, SourceFile, Span, StageKind, Statement, StatementKind,
-    UnaryOperator, VariableReference, WhileStatement, Word, WordPart, WordPartKind,
+    TryStatement, UnaryOperator, VariableReference, WhileStatement, Word, WordPart, WordPartKind,
 };
 
 use crate::glob::{DEFAULT_GLOB_ENTRY_LIMIT, GlobPattern};
@@ -47,31 +47,47 @@ pub(crate) const AUTOMATIC_RESUME_LIMIT: usize = 16;
 /// call nearest the failure outward; a top-level failure has no frames.
 #[derive(Clone, Debug, PartialEq)]
 pub struct RuntimeError {
-    kind: RuntimeErrorKind,
+    kind: Box<RuntimeErrorKind>,
     span: Span,
+    labels: Vec<ErrorLabel>,
     frames: Vec<CallFrame>,
     source: Option<Arc<SourceFile>>,
+    cause: Option<Arc<Self>>,
 }
 
 impl RuntimeError {
     #[must_use]
-    pub const fn new(kind: RuntimeErrorKind, span: Span) -> Self {
+    pub fn new(kind: RuntimeErrorKind, span: Span) -> Self {
         Self {
-            kind,
+            kind: Box::new(kind),
             span,
+            labels: Vec::new(),
             frames: Vec::new(),
             source: None,
+            cause: None,
         }
     }
 
     #[must_use]
-    pub const fn kind(&self) -> &RuntimeErrorKind {
-        &self.kind
+    pub fn kind(&self) -> &RuntimeErrorKind {
+        self.kind.as_ref()
     }
 
     #[must_use]
     pub const fn span(&self) -> Span {
         self.span
+    }
+
+    /// Stable language-facing category for this failure.
+    #[must_use]
+    pub fn category(&self) -> ErrorCategory {
+        self.kind().category()
+    }
+
+    /// Ordered secondary labels attached to the failure.
+    #[must_use]
+    pub fn labels(&self) -> &[ErrorLabel] {
+        &self.labels
     }
 
     /// The innermost-first call frames the error unwound through.
@@ -87,6 +103,35 @@ impl RuntimeError {
         self.source.as_deref()
     }
 
+    /// An underlying structured failure, when this error wraps another one.
+    #[must_use]
+    pub fn cause(&self) -> Option<&Self> {
+        self.cause.as_deref()
+    }
+
+    /// The completed status carried by this failure, when applicable.
+    #[must_use]
+    pub fn status(&self) -> Option<&Status> {
+        match self.kind() {
+            RuntimeErrorKind::UnsuccessfulStatus { status } => Some(status),
+            _ => None,
+        }
+    }
+
+    /// Appends one ordered secondary label.
+    #[must_use]
+    pub fn with_label(mut self, label: ErrorLabel) -> Self {
+        self.labels.push(label);
+        self
+    }
+
+    /// Attaches one nested structured cause.
+    #[must_use]
+    pub fn with_cause(mut self, cause: Arc<Self>) -> Self {
+        self.cause = Some(cause);
+        self
+    }
+
     pub(crate) fn with_source(mut self, source: Arc<SourceFile>) -> Self {
         self.source = Some(source);
         self
@@ -97,6 +142,83 @@ impl RuntimeError {
     fn with_frame(mut self, frame: CallFrame) -> Self {
         self.frames.push(frame);
         self
+    }
+}
+
+/// Stable, language-facing families for structured runtime errors.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum ErrorCategory {
+    User,
+    Type,
+    Name,
+    Control,
+    Operation,
+    Command,
+    Io,
+    Process,
+    Job,
+    Resource,
+    Platform,
+    Internal,
+}
+
+impl ErrorCategory {
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::User => "user",
+            Self::Type => "type",
+            Self::Name => "name",
+            Self::Control => "control",
+            Self::Operation => "operation",
+            Self::Command => "command",
+            Self::Io => "io",
+            Self::Process => "process",
+            Self::Job => "job",
+            Self::Resource => "resource",
+            Self::Platform => "platform",
+            Self::Internal => "internal",
+        }
+    }
+}
+
+impl fmt::Display for ErrorCategory {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.name())
+    }
+}
+
+/// One ordered secondary label retained by a structured runtime error.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ErrorLabel {
+    source: Arc<SourceFile>,
+    span: Span,
+    message: Arc<str>,
+}
+
+impl ErrorLabel {
+    #[must_use]
+    pub fn new(source: Arc<SourceFile>, span: Span, message: impl Into<Arc<str>>) -> Self {
+        Self {
+            source,
+            span,
+            message: message.into(),
+        }
+    }
+
+    #[must_use]
+    pub fn source(&self) -> &SourceFile {
+        &self.source
+    }
+
+    #[must_use]
+    pub const fn span(&self) -> Span {
+        self.span
+    }
+
+    #[must_use]
+    pub fn message(&self) -> &str {
+        &self.message
     }
 }
 
@@ -186,6 +308,10 @@ pub use crate::carrier::{CarrierBridge, CarrierMismatch};
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub enum RuntimeErrorKind {
+    /// A script explicitly raised a string as a user error.
+    UserThrown { message: String },
+    /// A `throw` operand was neither `String` nor `Error`.
+    ThrowValueNotErrorOrString { actual: &'static str },
     /// A pure-operation failure raised while evaluating an operator.
     Operation(OperationError),
     /// A lexical-scope failure raised by a binding, read, or assignment.
@@ -422,6 +548,92 @@ pub enum RuntimeErrorKind {
     UngroupedStop,
 }
 
+impl RuntimeErrorKind {
+    fn category(&self) -> ErrorCategory {
+        match self {
+            Self::UserThrown { .. } => ErrorCategory::User,
+            Self::Scope(_) => ErrorCategory::Name,
+            Self::Operation(_) => ErrorCategory::Operation,
+            Self::ThrowValueNotErrorOrString { .. }
+            | Self::ConditionNotBool { .. }
+            | Self::LogicOperandNotBool { .. }
+            | Self::ConditionalOperandNotBoolOrStatus { .. }
+            | Self::NotIterable { .. }
+            | Self::NotCallable { .. }
+            | Self::ArityMismatch { .. }
+            | Self::BindingTypeMismatch { .. }
+            | Self::ParameterTypeMismatch { .. }
+            | Self::FunctionResultTypeMismatch { .. }
+            | Self::IntegerLiteralOverflow
+            | Self::FloatLiteralOverflow
+            | Self::DuplicateRecordKey { .. }
+            | Self::StringInterpolationNotUtf8
+            | Self::EnvironmentValueNotUtf8 { .. }
+            | Self::WordValueNotWordEligible { .. }
+            | Self::SpreadValueNotList { .. }
+            | Self::SpreadElementNotWordEligible { .. }
+            | Self::ExportValueNotEligible { .. }
+            | Self::ArgumentContainsNul
+            | Self::CarrierMismatch(_)
+            | Self::MergedEdgeNotByteStream { .. }
+            | Self::PipelineHeadInput { .. }
+            | Self::BuiltinInputCarrier { .. } => ErrorCategory::Type,
+            Self::ControlOutsideLoop { .. }
+            | Self::ReturnOutsideFunction
+            | Self::NoMatchingArm
+            | Self::CheckRequiresUpstream
+            | Self::UnsuccessfulStatus { .. } => ErrorCategory::Control,
+            Self::CommandNotFound { .. }
+            | Self::ReservedCommand(_)
+            | Self::BuiltinArity { .. }
+            | Self::BuiltinArgument { .. }
+            | Self::StructuredCommand { .. }
+            | Self::MissingHome
+            | Self::InvalidExitCode => ErrorCategory::Command,
+            Self::ResourceBudgetExceeded
+            | Self::GlobLimitExceeded { .. }
+            | Self::CaptureLimitExceeded { .. }
+            | Self::BackgroundIdentityExhausted => ErrorCategory::Resource,
+            Self::DirectoryRead(_)
+            | Self::WorkingDirectory(_)
+            | Self::DescriptorNotOpen { .. }
+            | Self::PipeCreate(_)
+            | Self::CapturePipe(_)
+            | Self::CaptureRead(_)
+            | Self::PipelineRead(_)
+            | Self::PipelineWrite(_)
+            | Self::RedirectionSetup(_) => ErrorCategory::Io,
+            Self::ProcessSpawn(_)
+            | Self::ProcessWait(_)
+            | Self::RepeatedStop { .. }
+            | Self::BackgroundProcessGroupUnavailable
+            | Self::InvalidProcessIdentity => ErrorCategory::Process,
+            Self::JobControlUnavailable { .. }
+            | Self::JobControlNotInternal { .. }
+            | Self::JobControlNotSoleStage { .. }
+            | Self::JobOperation { .. }
+            | Self::JobSignal(_)
+            | Self::UngroupedStop
+            | Self::BackgroundObserverUnavailable { .. }
+            | Self::BackgroundAssignmentUnavailable
+            | Self::ForegroundObservation { .. }
+            | Self::BackgroundJobState { .. } => ErrorCategory::Job,
+            Self::Presentation(_)
+            | Self::TerminalPresentation(_)
+            | Self::ShellExecutable(_)
+            | Self::ForegroundTerminal(_) => ErrorCategory::Platform,
+            Self::GlobPattern { .. }
+            | Self::CaptureInvalidUtf8 { .. }
+            | Self::StreamCancelled { .. }
+            | Self::RestrictedStartup { .. }
+            | Self::ExecutionUnsupported
+            | Self::Unsupported { .. }
+            | Self::DuplicateParameter { .. }
+            | Self::RedirectionDescriptorOverflow => ErrorCategory::Internal,
+        }
+    }
+}
+
 /// Renders a carrier set as a human list: `A`, `A or B`, or `A, B, or C`.
 fn render_carrier_set(carriers: &[crate::command::Carrier]) -> String {
     match carriers {
@@ -442,6 +654,13 @@ fn render_carrier_set(carriers: &[crate::command::Carrier]) -> String {
 impl fmt::Display for RuntimeErrorKind {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::UserThrown { message } => formatter.write_str(message),
+            Self::ThrowValueNotErrorOrString { actual } => {
+                write!(
+                    formatter,
+                    "throw requires a string or error, found {actual}"
+                )
+            }
             Self::Operation(error) => error.fmt(formatter),
             Self::Scope(error) => error.fmt(formatter),
             Self::ConditionNotBool { actual } => {
@@ -1167,6 +1386,18 @@ pub(crate) trait EvaluationHost {
     fn current_status(&self) -> Option<&Status>;
     fn policy(&self) -> EvaluationPolicy;
 
+    /// Snapshots language-owned host state before a catchable transaction.
+    fn language_state_checkpoint(&mut self) -> Box<dyn Any> {
+        Box::new(self.environment().clone())
+    }
+
+    /// Restores a checkpoint produced by [`Self::language_state_checkpoint`].
+    fn restore_language_state(&mut self, checkpoint: Box<dyn Any>) {
+        *self.environment() = *checkpoint
+            .downcast::<Environment>()
+            .expect("the default evaluation checkpoint is an environment");
+    }
+
     fn read_directory(&mut self, path: &Path)
     -> Result<Box<dyn DirectoryStream>, RuntimeErrorKind>;
 
@@ -1756,6 +1987,8 @@ impl Evaluator<'_> {
             StatementKind::While(while_statement) => self.while_statement(while_statement, scope),
             StatementKind::For(for_statement) => self.for_statement(for_statement, scope),
             StatementKind::Match(match_statement) => self.match_statement(match_statement, scope),
+            StatementKind::Try(try_statement) => self.try_statement(try_statement, scope),
+            StatementKind::Throw(expression) => self.throw(expression, scope),
             StatementKind::Control(control) => self.control(control, scope, span),
             StatementKind::Job(job) => {
                 if self.host.policy() == EvaluationPolicy::Startup {
@@ -1946,6 +2179,58 @@ impl Evaluator<'_> {
             }
         }
         Err(self.error(RuntimeErrorKind::NoMatchingArm, statement.value.span()))
+    }
+
+    fn try_statement(&mut self, statement: &TryStatement, scope: &mut ScopeStack) -> Eval<Flow> {
+        let scope_checkpoint = scope.clone();
+        let host_checkpoint = self.host.language_state_checkpoint();
+        match self.block(&statement.try_block, scope) {
+            Ok(flow) => Ok(flow),
+            Err(Abort::Error(error)) => {
+                *scope = scope_checkpoint;
+                self.host.restore_language_state(host_checkpoint);
+
+                let name = self.text(statement.catch_binding.span()).to_owned();
+                self.ensure_lexical_name(&name, statement.catch_binding.span())?;
+                scope.push();
+                let outcome = (|| {
+                    scope
+                        .declare(
+                            name,
+                            BindingMutability::Immutable,
+                            Value::Error(Arc::new(error)),
+                        )
+                        .map_err(|error| {
+                            self.error(
+                                RuntimeErrorKind::Scope(error),
+                                statement.catch_binding.span(),
+                            )
+                        })?;
+                    self.statements(&statement.catch_block.statements, scope)
+                })();
+                scope.pop().expect("a catch block pushes exactly one frame");
+                outcome
+            }
+            Err(other) => Err(other),
+        }
+    }
+
+    fn throw(&mut self, expression: &Expression, scope: &mut ScopeStack) -> Eval<Flow> {
+        match self.expression(expression, scope)? {
+            Value::String(message) => Err(self.error(
+                RuntimeErrorKind::UserThrown {
+                    message: message.to_string(),
+                },
+                expression.span(),
+            )),
+            Value::Error(error) => Err(Abort::Error((*error).clone())),
+            value => Err(self.error(
+                RuntimeErrorKind::ThrowValueNotErrorOrString {
+                    actual: value.family_name(),
+                },
+                expression.span(),
+            )),
+        }
     }
 
     /// Tries one arm against the subject in the already-pushed arm frame.
@@ -3266,6 +3551,53 @@ mod tests {
         }
     }
 
+    struct StoppedHost {
+        environment: Environment,
+    }
+
+    impl EvaluationHost for StoppedHost {
+        fn environment(&mut self) -> &mut Environment {
+            &mut self.environment
+        }
+
+        fn current_status(&self) -> Option<&Status> {
+            None
+        }
+
+        fn policy(&self) -> EvaluationPolicy {
+            EvaluationPolicy::General
+        }
+
+        fn read_directory(
+            &mut self,
+            _path: &Path,
+        ) -> Result<Box<dyn DirectoryStream>, RuntimeErrorKind> {
+            unreachable!("stopped control test does not read directories")
+        }
+
+        fn execute_chain(
+            &mut self,
+            _chain: &ConditionalChain,
+            _scope: &mut ScopeStack,
+            _context: EvaluationContext,
+        ) -> Result<Status, Abort> {
+            Err(Abort::Stopped(
+                crate::job::JobId::new(1).expect("test job identity is nonzero"),
+            ))
+        }
+
+        fn capture_chain(
+            &mut self,
+            _chain: &ConditionalChain,
+            _scope: &mut ScopeStack,
+            _span: Span,
+            _position: CapturePosition,
+            _context: EvaluationContext,
+        ) -> Result<CapturedChain, Abort> {
+            unreachable!("stopped control test does not capture commands")
+        }
+    }
+
     #[derive(Debug)]
     struct CountingDirectoryStream {
         entries: std::vec::IntoIter<DirectoryEntry>,
@@ -3365,16 +3697,42 @@ mod tests {
     }
 
     #[test]
+    fn stopped_job_control_bypasses_language_catch() {
+        let source = Arc::new(SourceFile::new(
+            SourceId::new(1),
+            "stopped.fsh",
+            "try { pwd } catch error { throw \"caught\" }",
+        ));
+        let script = match parse(&source) {
+            ParseOutcome::Complete(script) => script,
+            other => panic!("stopped fixture did not parse: {other:?}"),
+        };
+        let mut scope = ScopeStack::new();
+        let mut host = StoppedHost {
+            environment: Environment::new(),
+        };
+
+        let outcome = evaluate_with_host(
+            &script,
+            source,
+            &mut scope,
+            &EvalLimits::default(),
+            Arc::new(RuntimeBindingTypes::default()),
+            &mut host,
+        )
+        .unwrap_or_else(|_| panic!("stopped control must not become a runtime failure"));
+        assert!(matches!(outcome, HostedEvaluationOutcome::Stopped(job) if job.get() == 1));
+    }
+
+    #[test]
     fn glob_charges_each_walk_step_to_the_evaluation_budget() {
         let advances = Arc::new(AtomicUsize::new(0));
         let limits = EvalLimits::new(CancellationToken::never(), ResourceBudget::steps(5));
 
         assert!(matches!(
             evaluate_glob(&limits, Arc::clone(&advances)),
-            Err(HostedEvaluationFailure::Runtime(RuntimeError {
-                kind: RuntimeErrorKind::ResourceBudgetExceeded,
-                ..
-            }))
+            Err(HostedEvaluationFailure::Runtime(error))
+                if matches!(error.kind(), RuntimeErrorKind::ResourceBudgetExceeded)
         ));
         assert_eq!(advances.load(Ordering::SeqCst), 1);
     }
@@ -3398,12 +3756,13 @@ mod tests {
 
         assert!(matches!(
             evaluator.glob_directory(Path::new("."), span, 1),
-            Err(Abort::Error(RuntimeError {
-                kind: RuntimeErrorKind::GlobLimitExceeded {
-                    limit: DEFAULT_GLOB_ENTRY_LIMIT
-                },
-                ..
-            }))
+            Err(Abort::Error(error))
+                if matches!(
+                    error.kind(),
+                    RuntimeErrorKind::GlobLimitExceeded {
+                        limit: DEFAULT_GLOB_ENTRY_LIMIT
+                    }
+                )
         ));
         assert_eq!(advances.load(Ordering::SeqCst), 2);
     }

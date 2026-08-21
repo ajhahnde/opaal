@@ -699,6 +699,7 @@ pub enum Value {
     Table(Table),
     Range(Range),
     Status(Status),
+    Error(Arc<crate::eval::RuntimeError>),
     Callable(Arc<dyn Callable>),
 }
 
@@ -744,6 +745,7 @@ impl Value {
             Self::Table(_) => "table",
             Self::Range(_) => "range",
             Self::Status(_) => "status",
+            Self::Error(_) => "error",
             Self::Callable(value) => value.family(),
         }
     }
@@ -769,6 +771,7 @@ impl PartialEq for Value {
             (Self::Table(left), Self::Table(right)) => left == right,
             (Self::Range(left), Self::Range(right)) => left == right,
             (Self::Status(left), Self::Status(right)) => left == right,
+            (Self::Error(left), Self::Error(right)) => left == right,
             (Self::Callable(left), Self::Callable(right)) => Arc::ptr_eq(left, right),
             _ => false,
         }
@@ -807,6 +810,12 @@ impl fmt::Debug for Value {
             Self::Table(value) => value.fmt(formatter),
             Self::Range(value) => value.fmt(formatter),
             Self::Status(value) => value.fmt(formatter),
+            Self::Error(value) => write!(
+                formatter,
+                "error({}: {:?})",
+                value.category(),
+                value.to_string()
+            ),
             Self::Callable(value) => fmt::Debug::fmt(value, formatter),
         }
     }
@@ -827,6 +836,7 @@ impl fmt::Display for Value {
             Self::List(_) | Self::Record(_) | Self::Table(_) => fmt::Debug::fmt(self, formatter),
             Self::Range(value) => value.fmt(formatter),
             Self::Status(value) => value.fmt(formatter),
+            Self::Error(value) => value.fmt(formatter),
             Self::Callable(value) => value.display(formatter),
         }
     }

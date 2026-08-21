@@ -601,6 +601,16 @@ impl EvaluationHost for SessionEvaluationHost<'_> {
         EvaluationPolicy::General
     }
 
+    fn language_state_checkpoint(&mut self) -> Box<dyn std::any::Any> {
+        Box::new(self.state.clone())
+    }
+
+    fn restore_language_state(&mut self, checkpoint: Box<dyn std::any::Any>) {
+        *self.state = *checkpoint
+            .downcast::<SessionState>()
+            .expect("a session evaluation checkpoint is session state");
+    }
+
     fn read_directory(
         &mut self,
         path: &Path,
@@ -1068,6 +1078,14 @@ fn background_shell_plan(
 impl Interrupt {
     fn into_abort(self, source: Arc<SourceFile>) -> Abort {
         match self {
+            Self::Runtime(error)
+                if matches!(error.kind(), RuntimeErrorKind::StreamCancelled { .. }) =>
+            {
+                let RuntimeErrorKind::StreamCancelled { reason } = error.kind() else {
+                    unreachable!("guard selected stream cancellation")
+                };
+                Abort::Cancelled(crate::eval::Cancellation::new(*reason, error.span()))
+            }
             Self::Runtime(error) if error.source().is_some() => Abort::Error(error),
             Self::Runtime(error) => Abort::Error(error.with_source(source)),
             Self::Output(error) => Abort::Output(error),
@@ -2891,12 +2909,23 @@ pub(crate) fn render_runtime_diagnostic(
 ) -> String {
     let mut diagnostic = Diagnostic::new(Severity::Error, "RUN001", error.to_string())
         .with_primary(error.span(), "runtime failure");
+    for label in error.labels() {
+        diagnostic = diagnostic.with_secondary(label.span(), label.message());
+    }
     for frame in error.frames() {
         diagnostic = diagnostic.with_secondary(frame.call_site(), "called from here");
     }
     let mut sources = Vec::<SourceFile>::new();
     if let Some(primary) = error.source() {
         sources.push(primary.clone());
+    }
+    for label in error.labels() {
+        if !sources
+            .iter()
+            .any(|candidate| candidate.id() == label.source().id())
+        {
+            sources.push(label.source().clone());
+        }
     }
     for frame in error.frames() {
         if !sources

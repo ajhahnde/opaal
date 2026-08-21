@@ -534,6 +534,59 @@ fn parse_import_and_runtime_failures_are_status_one_on_stderr() {
 }
 
 #[test]
+fn structured_errors_catch_host_failures_and_preserve_cross_file_frames() {
+    let temp = TempDir::new("structured-errors");
+    temp.script(
+        "dependency.fsh",
+        concat!(
+            "def fail() {\n",
+            "    throw \"module failure\"\n",
+            "}\n",
+            "export { fail }\n",
+        ),
+    );
+    let script = temp.script(
+        "main.fsh",
+        concat!(
+            "import { fail } from './dependency.fsh'\n",
+            "try {\n",
+            "    fail()\n",
+            "} catch error {\n",
+            "    ^/bin/echo \"${$error.category}|${$error.message}|",
+            "${$error.source.name}|${$error.frames[0].callee}\"\n",
+            "}\n",
+            "try {\n",
+            "    ^definitely-not-a-flash-command\n",
+            "} catch error {\n",
+            "    ^/bin/echo \"${$error.category}|${$error.message}\"\n",
+            "}\n",
+            "try {\n",
+            "    ^/bin/sh -c 'exit 7' | check\n",
+            "} catch error {\n",
+            "    ^/bin/echo \"${$error.category}|${$error.status.code}\"\n",
+            "}\n",
+        ),
+    );
+
+    let output = run_script(&script, temp.path(), fixture_directory());
+
+    assert!(output.status.success(), "{output:?}");
+    let stdout = std::str::from_utf8(&output.stdout).expect("caught error output should be UTF-8");
+    let mut lines = stdout.lines();
+    let module = lines.next().expect("module error line is present");
+    assert!(module.starts_with("user|module failure|"), "{module}");
+    assert!(module.contains("dependency.fsh|fail"), "{module}");
+    let host = lines.next().expect("host error line is present");
+    assert!(host.starts_with("command|command not found:"), "{host}");
+    assert_eq!(
+        lines.next().expect("checked-status error line is present"),
+        "control|7"
+    );
+    assert!(lines.next().is_none(), "{stdout}");
+    assert!(output.stderr.is_empty(), "{output:?}");
+}
+
+#[test]
 fn background_failures_report_in_job_order_and_the_first_owns_status() {
     let temp = TempDir::new("ordered-background-failures");
     let script = temp.script(

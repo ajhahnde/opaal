@@ -10,7 +10,8 @@ use std::error::Error;
 use std::fmt;
 use std::sync::Arc;
 
-use crate::{FiniteFloat, Range, Value};
+use crate::eval::{FrameCallee, RuntimeError};
+use crate::{FiniteFloat, Range, Record, Value};
 
 /// A pure-operation failure, reported without a source span.
 #[derive(Clone, Debug, PartialEq)]
@@ -414,8 +415,74 @@ pub fn field(target: &Value, name: &str) -> Result<Value, OperationError> {
                 name: name.to_owned(),
             }),
         },
+        Value::Error(error) => error_field(error, name),
         _ => Err(unsupported(".", [target])),
     }
+}
+
+fn error_field(error: &RuntimeError, name: &str) -> Result<Value, OperationError> {
+    match name {
+        "category" => Ok(Value::string(error.category().name())),
+        "message" => Ok(Value::string(error.to_string())),
+        "source" => Ok(error.source().map_or(Value::Null, |source| {
+            source_span_value(source.name(), error.span())
+        })),
+        "labels" => Ok(Value::list(
+            error
+                .labels()
+                .iter()
+                .map(|label| {
+                    let mut fields = source_span_fields(label.source().name(), label.span());
+                    fields.push(("message".to_owned(), Value::string(label.message())));
+                    Value::Record(Record::new(fields).expect("error label fields are distinct"))
+                })
+                .collect(),
+        )),
+        "frames" => Ok(Value::list(
+            error
+                .frames()
+                .iter()
+                .map(|frame| {
+                    let mut fields = source_span_fields(frame.source().name(), frame.call_site());
+                    let callee = match frame.callee() {
+                        FrameCallee::Function(name) => name.as_str(),
+                        FrameCallee::Closure => "<closure>",
+                    };
+                    fields.push(("callee".to_owned(), Value::string(callee)));
+                    Value::Record(Record::new(fields).expect("error frame fields are distinct"))
+                })
+                .collect(),
+        )),
+        "cause" => Ok(error
+            .cause()
+            .map_or(Value::Null, |cause| Value::Error(Arc::new(cause.clone())))),
+        "status" => Ok(error
+            .status()
+            .map_or(Value::Null, |status| Value::Status(status.clone()))),
+        _ => Err(OperationError::MissingField {
+            name: name.to_owned(),
+        }),
+    }
+}
+
+fn source_span_value(source: &str, span: flash_syntax::Span) -> Value {
+    Value::Record(
+        Record::new(source_span_fields(source, span)).expect("source location fields are distinct"),
+    )
+}
+
+fn source_span_fields(source: &str, span: flash_syntax::Span) -> Vec<(String, Value)> {
+    vec![
+        ("name".to_owned(), Value::string(source)),
+        (
+            "start".to_owned(),
+            Value::Int(i64::try_from(span.start()).unwrap_or(i64::MAX)),
+        ),
+        (
+            "end".to_owned(),
+            Value::Int(i64::try_from(span.end()).unwrap_or(i64::MAX)),
+        ),
+    ]
 }
 
 /// Builds a `Range` value from `Int` endpoints.

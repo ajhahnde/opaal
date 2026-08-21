@@ -86,6 +86,8 @@ pub enum StatementKind {
     While(WhileStatement),
     For(ForStatement),
     Match(MatchStatement),
+    Try(TryStatement),
+    Throw(Expression),
     Control(ControlTransfer),
     Job(JobStatement),
 }
@@ -197,6 +199,15 @@ pub struct MatchArm {
     pub guard: Option<Expression>,
     pub body: Block,
     pub span: Span,
+}
+
+/// One runtime-error handler. The catch binding is immutable and visible only
+/// while evaluating `catch_block`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TryStatement {
+    pub try_block: Block,
+    pub catch_binding: Identifier,
+    pub catch_block: Block,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

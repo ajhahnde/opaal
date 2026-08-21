@@ -77,6 +77,7 @@ The following words are reserved:
 
 ```text
 break
+catch
 continue
 def
 else
@@ -91,7 +92,9 @@ match
 mut
 null
 return
+throw
 true
+try
 unset
 while
 ```
@@ -233,7 +236,8 @@ Flash evaluates source into structured runtime values.
 | `Table`      | Structured tabular data                         |
 | `Range`      | Integer range                                   |
 | `Status`     | Result of command execution                     |
-| `Function`   | Named Flash function                       |
+| `Error`      | Immutable structured runtime failure            |
+| `Function`   | Named Flash function                            |
 | `Closure`    | Anonymous callable value with captured bindings |
 
 ### Scalar literals
@@ -600,7 +604,9 @@ An ordinary interpolated value must be one of these scalar families:
 - `Duration`;
 - `ByteSize`.
 
-Values such as `Null`, `Bytes`, `List`, `Record`, `Table`, `Range`, `Status`, `Function`, and `Closure` cannot be inserted into an ordinary command word implicitly.
+Values such as `Null`, `Bytes`, `List`, `Record`, `Table`, `Range`, `Status`,
+`Error`, `Function`, and `Closure` cannot be inserted into an ordinary command
+word implicitly.
 
 An empty string still produces one empty argument. `null` does not mean “omit this argument”; using it as an ordinary command word is a type error.
 
@@ -870,7 +876,7 @@ Type names are case-sensitive. The closed built-in namespace is:
 
 ```text
 Any Null Bool Int Float String Bytes Path Duration ByteSize
-List[T] Record Table Range Status Function Closure
+List[T] Record Table Range Status Error Function Closure
 ```
 
 `List` requires exactly one type argument; the other built-in types accept no
@@ -1190,6 +1196,52 @@ A successful status behaves as true in a condition. An unsuccessful status behav
 
 An unsuccessful status is not automatically a runtime error. Use the `check` command when unsuccessful execution must terminate the current evaluation as an error.
 
+### Structured error handling
+
+Use `try` and `catch` to recover from a runtime error:
+
+```text
+try {
+    ^build | check
+} catch error {
+    let summary = $error.message
+}
+```
+
+The catch name is a fresh immutable `Error` binding visible only inside the
+catch block. A successful try block skips the catch. If a runtime error reaches
+the boundary, the catch begins from the language state that existed before the
+`try`; successful catch changes then commit normally. Output already displayed,
+files already changed, and external process effects are not rolled back.
+
+Raise a user error from a string, or rethrow an existing error without losing
+its structure and call frames:
+
+```text
+throw "configuration is incomplete"
+throw $error
+```
+
+No other value family is accepted by `throw`.
+
+An `Error` exposes these read-only members:
+
+| Member | Value |
+| --- | --- |
+| `.category` | Stable lowercase category string |
+| `.message` | Human-readable message |
+| `.source` | Primary `{name, start, end}` source record, or `null` |
+| `.labels` | Ordered secondary `{name, start, end, message}` records |
+| `.frames` | Innermost-first `{name, start, end, callee}` call records |
+| `.cause` | Nested `Error`, or `null` |
+| `.status` | Wrapped completed `Status`, or `null` |
+
+The stable category strings are `user`, `type`, `name`, `control`, `operation`,
+`command`, `io`, `process`, `job`, `resource`, `platform`, and `internal`.
+Errors compare structurally rather than by allocation identity. Their display
+form is the message; their deterministic debug form includes the category and
+quoted message. Neither form replaces the queryable structure.
+
 ### Error categories
 
 Flash distinguishes several kinds of failure:
@@ -1201,6 +1253,11 @@ Flash distinguishes several kinds of failure:
 - **Cancellation** represents interrupted execution.
 
 Conditional fallback with `||` handles a false Boolean or unsuccessful status. It is not a general runtime-error handler.
+
+Only runtime errors enter `catch`. Incomplete or invalid source and static
+analysis failures occur before execution. Ordinary unsuccessful statuses,
+cancellation, explicit `exit`, stopped jobs, and fatal output or editor failures
+retain their distinct control paths and bypass the catch block.
 
 Diagnostics preserve source locations where available so that syntax and evaluation failures can identify the relevant part of the program.
 

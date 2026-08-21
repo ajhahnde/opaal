@@ -4,8 +4,11 @@
 //! call stack frames over the pure evaluator.
 
 use flash_runtime::ScopeError;
-use flash_runtime::eval::{FrameCallee, RuntimeError, RuntimeErrorKind, evaluate};
-use flash_runtime::{ScopeStack, Value};
+use std::sync::Arc;
+
+use flash_runtime::eval::{ErrorLabel, FrameCallee, RuntimeError, RuntimeErrorKind, evaluate};
+use flash_runtime::operation;
+use flash_runtime::{Duration, Record, ScopeStack, Status, Value};
 use flash_syntax::{ParseOutcome, SourceFile, SourceId, parse};
 
 /// Parses and evaluates `source`, returning the file so span text can be resolved.
@@ -132,4 +135,197 @@ one(1, 2)";
         RuntimeErrorKind::Scope(ScopeError::UnknownBinding(name)) if name == "missing"
     ));
     assert_eq!(argument_error.frames(), &[]);
+}
+
+#[test]
+fn catch_exposes_structured_error_fields_and_call_frames() {
+    let source = "\
+mut observed = []
+def boom() {
+    $missing
+}
+try {
+    boom()
+} catch error {
+    $observed = [
+        $error.category,
+        $error.message,
+        $error.source.name,
+        $error.frames[0].callee,
+        $error.cause,
+        $error.status,
+    ]
+}
+$observed";
+    assert_eq!(
+        run(source).1.expect("runtime error should be caught"),
+        Value::list(vec![
+            Value::string("name"),
+            Value::string("unknown binding \"missing\""),
+            Value::string("test.fsh"),
+            Value::string("boom"),
+            Value::Null,
+            Value::Null,
+        ])
+    );
+}
+
+#[test]
+fn catch_preserves_nested_closure_and_function_frames() {
+    let source = "\
+mut observed = []
+let fail = {|| $missing}
+def outer(callable) {
+    $callable()
+}
+try {
+    outer($fail)
+} catch error {
+    $observed = [$error.frames[0].callee, $error.frames[1].callee]
+}
+$observed";
+    assert_eq!(
+        run(source)
+            .1
+            .expect("nested callable error should be caught"),
+        Value::list(vec![Value::string("<closure>"), Value::string("outer")])
+    );
+}
+
+#[test]
+fn catch_rolls_back_language_state_to_the_pre_try_checkpoint() {
+    let source = "\
+mut value = 1
+mut observed = []
+export SAMPLE = \"before\"
+try {
+    $value = 2
+    export SAMPLE = \"inside\"
+    throw \"stop\"
+} catch error {
+    $observed = [$value, env(\"SAMPLE\"), $error.message]
+}
+$observed";
+    assert_eq!(
+        run(source).1.expect("thrown string should be caught"),
+        Value::list(vec![
+            Value::Int(1),
+            Value::string("before"),
+            Value::string("stop"),
+        ])
+    );
+}
+
+#[test]
+fn rethrow_preserves_the_original_structured_error_and_source() {
+    let source = "\
+mut observed = []
+try {
+    try {
+        throw \"preserved\"
+    } catch inner {
+        throw $inner
+    }
+} catch outer {
+    $observed = [$outer.category, $outer.message, $outer.source.name, $outer == $outer]
+}
+$observed";
+    assert_eq!(
+        run(source).1.expect("rethrow should reach outer catch"),
+        Value::list(vec![
+            Value::string("user"),
+            Value::string("preserved"),
+            Value::string("test.fsh"),
+            Value::Bool(true),
+        ])
+    );
+}
+
+#[test]
+fn catch_binding_is_immutable_and_does_not_escape_its_block() {
+    let (_file, immutable) = error("try { throw \"x\" } catch error { $error = null }");
+    assert!(matches!(
+        immutable.kind(),
+        RuntimeErrorKind::Scope(ScopeError::ImmutableBinding(name)) if name == "error"
+    ));
+
+    let (_file, missing) = error("try { throw \"x\" } catch error { null }\n$error");
+    assert!(matches!(
+        missing.kind(),
+        RuntimeErrorKind::Scope(ScopeError::UnknownBinding(name)) if name == "error"
+    ));
+}
+
+#[test]
+fn throw_rejects_non_string_non_error_values() {
+    let (_file, error) = error("throw 42");
+    assert!(matches!(
+        error.kind(),
+        RuntimeErrorKind::ThrowValueNotErrorOrString { actual: "int" }
+    ));
+}
+
+#[test]
+fn error_values_preserve_labels_causes_status_equality_and_rendering() {
+    let (file, outer) = error("throw \"outer\"");
+    let (_, cause) = error("throw \"cause\"");
+    let label_source = Arc::new(SourceFile::new(
+        SourceId::new(2),
+        "library.fsh",
+        "secondary",
+    ));
+    let label_span = label_source.span(0..9).expect("valid label span");
+    let enriched = outer
+        .with_label(ErrorLabel::new(
+            Arc::clone(&label_source),
+            label_span,
+            "related source",
+        ))
+        .with_cause(Arc::new(cause));
+    let value = Value::Error(Arc::new(enriched.clone()));
+
+    assert_eq!(value, Value::Error(Arc::new(enriched)));
+    assert_eq!(format!("{value}"), "outer");
+    assert_eq!(format!("{value:?}"), "error(user: \"outer\")");
+    assert_eq!(
+        operation::field(&value, "source").expect("source field"),
+        Value::Record(
+            Record::new(vec![
+                ("name".to_owned(), Value::string("test.fsh")),
+                ("start".to_owned(), Value::Int(6)),
+                ("end".to_owned(), Value::Int(13)),
+            ])
+            .expect("distinct source fields"),
+        )
+    );
+    assert_eq!(
+        operation::field(&value, "labels").expect("labels field"),
+        Value::list(vec![Value::Record(
+            Record::new(vec![
+                ("name".to_owned(), Value::string("library.fsh")),
+                ("start".to_owned(), Value::Int(0)),
+                ("end".to_owned(), Value::Int(9)),
+                ("message".to_owned(), Value::string("related source")),
+            ])
+            .expect("distinct label fields"),
+        )])
+    );
+    assert_eq!(
+        operation::field(&value, "cause")
+            .expect("nested cause field")
+            .family_name(),
+        "error"
+    );
+
+    let status = Status::exit(7, Duration::from_nanos(3)).expect("valid status");
+    let status_error = Value::Error(Arc::new(RuntimeError::new(
+        RuntimeErrorKind::UnsuccessfulStatus {
+            status: Box::new(status.clone()),
+        },
+        file.span(0..1).expect("valid status error span"),
+    )));
+    assert_eq!(
+        operation::field(&status_error, "status").expect("status field"),
+        Value::Status(status)
+    );
 }

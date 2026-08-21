@@ -4,7 +4,7 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::Path;
 
-const REQUIRED_FAMILIES: [&str; 17] = [
+const REQUIRED_FAMILIES: [&str; 18] = [
     "background",
     "bindings",
     "calls-and-grouping",
@@ -21,6 +21,7 @@ const REQUIRED_FAMILIES: [&str; 17] = [
     "pipelines",
     "redirections",
     "script-separators",
+    "structured-errors",
     "substitution",
 ];
 

@@ -5,6 +5,7 @@ complete	environment	complete/environment.fsh	export and unset statements
 complete	functions	complete/functions.fsh	typed parameters return type block and expression call
 complete	control-flow	complete/control-flow.fsh	if else-if while for and match statements
 complete	control-transfer	complete/control-transfer.fsh	break continue and return in their structural contexts
+complete	structured-errors	complete/structured-errors.fsh	try catch binding and throw statement forms
 complete	commands	complete/commands.fsh	bare forced-external and path command heads
 complete	calls-and-grouping	complete/calls-and-grouping.fsh	call lookahead postfix access and grouped jobs
 complete	pipelines	complete/pipelines.fsh	stdout and stdout-plus-stderr pipelines
