@@ -344,6 +344,11 @@ fn render_detail(output: &mut String, entry: &HelpEntry) {
                     CommandOutput::SameAsInput => "same as input",
                 }
             ));
+            let arguments = signature.arguments();
+            output.push_str(&format!(
+                "  positionals: {}\n",
+                positional_range(arguments.minimum(), arguments.maximum())
+            ));
             let flags = signature.flags().collect::<Vec<_>>();
             if !flags.is_empty() {
                 output.push_str(&format!("  flags: {}\n", flags.join(", ")));
@@ -370,6 +375,14 @@ fn render_detail(output: &mut String, entry: &HelpEntry) {
             output.push_str(line);
             output.push('\n');
         }
+    }
+}
+
+fn positional_range(minimum: usize, maximum: Option<usize>) -> String {
+    match maximum {
+        Some(maximum) if minimum == maximum => minimum.to_string(),
+        Some(maximum) => format!("{minimum}..={maximum}"),
+        None => format!("{minimum}.."),
     }
 }
 

@@ -31,7 +31,8 @@ use crate::carrier::{
     CarrierBridge, PipelineCarrierFault, StageCarrierContract, analyze_pipeline_carriers,
 };
 use crate::command::{
-    Carrier, CommandClassification, CommandLifecycle, CommandOutput, CommandRegistry,
+    Carrier, CommandArgumentFault, CommandArgumentFaultKind, CommandArgumentInput,
+    CommandClassification, CommandLifecycle, CommandOutput, CommandRegistry, CommandSignature,
 };
 use crate::documentation::Documentation;
 use crate::intrinsic::{DynamicBinding, ExpressionIntrinsic};
@@ -1844,7 +1845,7 @@ impl<'a> SignatureValidator<'a> {
             StatementKind::Declaration(declaration) => {
                 self.expression(&declaration.value).map(|_| ())
             }
-            StatementKind::Assignment(assignment) => self.expression(&assignment.value).map(|_| ()),
+            StatementKind::Assignment(assignment) => self.assignment(assignment),
             StatementKind::Environment(environment) => match environment {
                 flash_syntax::EnvironmentStatement::Export { value, .. } => {
                     self.expression(value).map(|_| ())
@@ -1928,6 +1929,54 @@ impl<'a> SignatureValidator<'a> {
             Some(ElseBranch::If(nested)) => self.if_statement(nested.kind()),
             None => Ok(()),
         }
+    }
+
+    fn assignment(
+        &self,
+        assignment: &flash_syntax::Assignment,
+    ) -> Result<(), Box<ModuleTypeError>> {
+        let actual = self.expression(&assignment.value)?;
+        let Some(actual) = actual else {
+            return Ok(());
+        };
+        if actual == ValueType::Any {
+            return Ok(());
+        }
+        let reference = self
+            .names
+            .reference(self.entry.module(), assignment.target.span)
+            .expect("clean name analysis resolves every assignment target");
+        let (target_module, declaration_span) = match reference.target() {
+            ModuleReferenceTarget::Local {
+                module,
+                declaration_span,
+            } => (module, *declaration_span),
+            ModuleReferenceTarget::Imported {
+                target_module,
+                declaration_span,
+                ..
+            } => (target_module, *declaration_span),
+            ModuleReferenceTarget::DynamicStatus | ModuleReferenceTarget::ScriptArguments => {
+                return Ok(());
+            }
+        };
+        let Some(expected) = self.types.binding_type(target_module, declaration_span) else {
+            return Ok(());
+        };
+        if expected.accepts_type(&actual) {
+            return Ok(());
+        }
+        self.errors
+            .borrow_mut()
+            .push(ModuleTypeError::AssignmentMismatch {
+                module: self.entry.module().clone(),
+                name: reference.name().to_owned(),
+                assignment_span: assignment.value.span(),
+                expected: expected.clone(),
+                actual,
+                declaration_span,
+            });
+        Ok(())
     }
 
     fn chain(&self, chain: &ConditionalChain) -> Result<(), Box<ModuleTypeError>> {
@@ -2385,6 +2434,7 @@ impl<'a> SignatureValidator<'a> {
 struct ReferenceResolver<'a> {
     entry: &'a RegisteredModuleSource,
     scopes: Vec<ReferenceScope>,
+    callable_depth: usize,
     references: Vec<ModuleNameReference>,
     visible: Vec<ModuleVisibleBinding>,
     errors: Vec<ModuleNameError>,
@@ -2392,8 +2442,15 @@ struct ReferenceResolver<'a> {
 }
 
 struct ReferenceScope {
-    bindings: BTreeMap<String, Option<ModuleReferenceTarget>>,
+    bindings: BTreeMap<String, Option<ReferenceBinding>>,
     span: Span,
+}
+
+#[derive(Clone)]
+struct ReferenceBinding {
+    target: ModuleReferenceTarget,
+    mutable: bool,
+    callable_depth: usize,
 }
 
 impl<'a> ReferenceResolver<'a> {
@@ -2411,7 +2468,11 @@ impl<'a> ReferenceResolver<'a> {
         scopes.push(ReferenceScope {
             bindings: BTreeMap::from([(
                 DynamicBinding::CurrentStatus.name().to_owned(),
-                Some(dynamic_target.clone()),
+                Some(ReferenceBinding {
+                    target: dynamic_target.clone(),
+                    mutable: false,
+                    callable_depth: 0,
+                }),
             )]),
             span: source_span,
         });
@@ -2425,7 +2486,14 @@ impl<'a> ReferenceResolver<'a> {
         if is_root {
             let target = ModuleReferenceTarget::ScriptArguments;
             scopes.push(ReferenceScope {
-                bindings: BTreeMap::from([("args".to_owned(), Some(target.clone()))]),
+                bindings: BTreeMap::from([(
+                    "args".to_owned(),
+                    Some(ReferenceBinding {
+                        target: target.clone(),
+                        mutable: false,
+                        callable_depth: 0,
+                    }),
+                )]),
                 span: source_span,
             });
             visible.push(ModuleVisibleBinding {
@@ -2447,7 +2515,14 @@ impl<'a> ReferenceResolver<'a> {
                 declaration_span: export.declaration_span(),
                 export_span: export.export_span(),
             };
-            root.insert(import.name().to_owned(), Some(target.clone()));
+            root.insert(
+                import.name().to_owned(),
+                Some(ReferenceBinding {
+                    target: target.clone(),
+                    mutable: false,
+                    callable_depth: 0,
+                }),
+            );
             visible.push(ModuleVisibleBinding {
                 name: import.name().to_owned(),
                 target,
@@ -2475,6 +2550,7 @@ impl<'a> ReferenceResolver<'a> {
         Self {
             entry,
             scopes,
+            callable_depth: 0,
             references: Vec::new(),
             visible,
             errors: Vec::new(),
@@ -2512,10 +2588,14 @@ impl<'a> ReferenceResolver<'a> {
             StatementKind::Import(_) | StatementKind::ModuleExport(_) => Ok(()),
             StatementKind::Declaration(declaration) => {
                 self.expression(&declaration.value)?;
-                self.declare(declaration.name.span(), statement.span().end())
+                self.declare(
+                    declaration.name.span(),
+                    statement.span().end(),
+                    declaration.mutable,
+                )
             }
             StatementKind::Assignment(assignment) => {
-                self.variable(assignment.target.name.span(), assignment.target.span)?;
+                self.assignment_target(assignment.target.name.span(), assignment.target.span)?;
                 self.expression(&assignment.value)
             }
             StatementKind::Environment(environment) => match environment {
@@ -2525,19 +2605,21 @@ impl<'a> ReferenceResolver<'a> {
             StatementKind::Function(function) => {
                 let available = self.ensure_available(function.name.span());
                 self.push_scope(function.body.span);
-                self.insert_local(function.name.span(), function.body.span.start());
+                self.callable_depth += 1;
+                self.insert_local(function.name.span(), function.body.span.start(), false);
                 self.push_scope(function.body.span);
                 let result = (|| {
                     for parameter in &function.parameters {
-                        self.declare(parameter.name.span(), function.body.span.start())?;
+                        self.declare(parameter.name.span(), function.body.span.start(), false)?;
                     }
                     self.block(&function.body)
                 })();
+                self.callable_depth -= 1;
                 self.pop_scope();
                 self.pop_scope();
                 result?;
                 if available {
-                    self.insert_local(function.name.span(), statement.span().end());
+                    self.insert_local(function.name.span(), statement.span().end(), false);
                 }
                 Ok(())
             }
@@ -2550,7 +2632,7 @@ impl<'a> ReferenceResolver<'a> {
                 self.expression(&statement.iterable)?;
                 self.push_scope(statement.body.span);
                 let result = (|| {
-                    self.declare(statement.binding.span(), statement.body.span.start())?;
+                    self.declare(statement.binding.span(), statement.body.span.start(), false)?;
                     self.statements(&statement.body.statements)
                 })();
                 self.pop_scope();
@@ -2570,6 +2652,7 @@ impl<'a> ReferenceResolver<'a> {
                     self.declare(
                         statement.catch_binding.span(),
                         statement.catch_block.span.start(),
+                        false,
                     )?;
                     self.statements(&statement.catch_block.statements)
                 })();
@@ -2611,7 +2694,7 @@ impl<'a> ReferenceResolver<'a> {
         let result = (|| {
             match &arm.pattern {
                 Pattern::Binding(identifier) => {
-                    self.declare(identifier.span(), identifier.span().end())?
+                    self.declare(identifier.span(), identifier.span().end(), false)?
                 }
                 Pattern::Literal(literal) => self.literal(literal)?,
                 Pattern::Wildcard(_) => {}
@@ -2736,12 +2819,14 @@ impl<'a> ReferenceResolver<'a> {
             return Ok(());
         }
         self.push_scope(closure.span);
+        self.callable_depth += 1;
         let result = (|| {
             for parameter in &closure.parameters {
-                self.declare(parameter.name.span(), closure.body.span().start())?;
+                self.declare(parameter.name.span(), closure.body.span().start(), false)?;
             }
             self.chain(&closure.body)
         })();
+        self.callable_depth -= 1;
         self.pop_scope();
         result
     }
@@ -2815,18 +2900,83 @@ impl<'a> ReferenceResolver<'a> {
             });
             return Ok(());
         };
-        let Some(target) = target else {
+        let Some(binding) = target else {
             return Ok(());
         };
         self.references.push(ModuleNameReference {
             name,
             reference_span,
-            target,
+            target: binding.target,
         });
         Ok(())
     }
 
-    fn visible_target(&self, name: &str) -> Option<Option<ModuleReferenceTarget>> {
+    fn assignment_target(
+        &mut self,
+        name_span: Span,
+        reference_span: Span,
+    ) -> Result<(), Box<ModuleNameError>> {
+        let name = self.text(name_span).to_owned();
+        let Some(binding) = self.visible_target(&name) else {
+            self.errors.push(ModuleNameError::UnknownReference {
+                module: self.entry.module().clone(),
+                name,
+                reference_span,
+            });
+            return Ok(());
+        };
+        let Some(binding) = binding else {
+            return Ok(());
+        };
+        self.references.push(ModuleNameReference {
+            name: name.clone(),
+            reference_span,
+            target: binding.target.clone(),
+        });
+        let failure = match &binding.target {
+            ModuleReferenceTarget::DynamicStatus | ModuleReferenceTarget::ScriptArguments => {
+                Some(ModuleNameError::ImmutableAssignment {
+                    module: self.entry.module().clone(),
+                    name,
+                    assignment_span: reference_span,
+                    declaration_span: None,
+                })
+            }
+            ModuleReferenceTarget::Imported { import_span, .. } => {
+                Some(ModuleNameError::ImportedAssignment {
+                    module: self.entry.module().clone(),
+                    name,
+                    assignment_span: reference_span,
+                    import_span: *import_span,
+                })
+            }
+            ModuleReferenceTarget::Local {
+                declaration_span, ..
+            } if binding.callable_depth < self.callable_depth => {
+                Some(ModuleNameError::CapturedAssignment {
+                    module: self.entry.module().clone(),
+                    name,
+                    assignment_span: reference_span,
+                    declaration_span: *declaration_span,
+                })
+            }
+            ModuleReferenceTarget::Local {
+                declaration_span, ..
+            } if !binding.mutable => Some(ModuleNameError::ImmutableAssignment {
+                module: self.entry.module().clone(),
+                name,
+                assignment_span: reference_span,
+                declaration_span: Some(*declaration_span),
+            }),
+            ModuleReferenceTarget::Local { .. } => None,
+        };
+        if let Some(failure) = failure {
+            self.errors.push(failure);
+        }
+        Ok(())
+    }
+
+    fn visible_target(&self, name: &str) -> Option<Option<ReferenceBinding>> {
         self.scopes
             .iter()
             .rev()
@@ -2852,7 +3002,7 @@ impl<'a> ReferenceResolver<'a> {
             self.errors.push(ModuleNameError::DuplicateBinding {
                 module: self.entry.module().clone(),
                 name,
-                first_span: binding_span(first),
+                first_span: binding_span(&first.target),
                 duplicate_span: declaration_span,
             });
             return false;
@@ -2864,14 +3014,15 @@ impl<'a> ReferenceResolver<'a> {
         &mut self,
         declaration_span: Span,
         visible_from: usize,
+        mutable: bool,
     ) -> Result<(), Box<ModuleNameError>> {
         if self.ensure_available(declaration_span) {
-            self.insert_local(declaration_span, visible_from);
+            self.insert_local(declaration_span, visible_from, mutable);
         }
         Ok(())
     }
 
-    fn insert_local(&mut self, declaration_span: Span, visible_from: usize) {
+    fn insert_local(&mut self, declaration_span: Span, visible_from: usize, mutable: bool) {
         let name = self.text(declaration_span).to_owned();
         let target = ModuleReferenceTarget::Local {
             module: self.entry.module().clone(),
@@ -2882,7 +3033,14 @@ impl<'a> ReferenceResolver<'a> {
             .scopes
             .last_mut()
             .expect("reference resolution always retains a root scope");
-        scope.bindings.insert(name.clone(), Some(target.clone()));
+        scope.bindings.insert(
+            name.clone(),
+            Some(ReferenceBinding {
+                target: target.clone(),
+                mutable,
+                callable_depth: self.callable_depth,
+            }),
+        );
         self.visible.push(ModuleVisibleBinding {
             name,
             target,
@@ -3633,7 +3791,7 @@ impl ModulePipelineError {
         &self.module
     }
 
-    /// The structured `CMD001`-`CMD002` or `PIP001`-`PIP004` diagnostic.
+    /// The structured `CMD001`-`CMD006` or `PIP001`-`PIP004` diagnostic.
     #[must_use]
     pub const fn diagnostic(&self) -> &Diagnostic {
         &self.diagnostic
@@ -3778,7 +3936,7 @@ impl<'a> StaticPipelineAnalyzer<'a> {
             .stages()
             .iter()
             .map(|stage| match stage.kind() {
-                StageKind::Command(command) => self.command_contract(command),
+                StageKind::Command(command) => self.command_contract(command, stage.span()),
                 StageKind::Expression(_) => StageCarrierContract::unknown(),
             })
             .collect::<Vec<_>>();
@@ -3826,7 +3984,11 @@ impl<'a> StaticPipelineAnalyzer<'a> {
         }
     }
 
-    fn command_contract(&mut self, command: &flash_syntax::CommandStage) -> StageCarrierContract {
+    fn command_contract(
+        &mut self,
+        command: &flash_syntax::CommandStage,
+        stage_span: Span,
+    ) -> StageCarrierContract {
         if self.control.is_cancelled() {
             return StageCarrierContract::unknown();
         }
@@ -3852,6 +4014,7 @@ impl<'a> StaticPipelineAnalyzer<'a> {
                 lifecycle,
                 ..
             } => {
+                self.command_arguments(command, stage_span, signature);
                 if lifecycle.deprecated_since_release().is_some() {
                     self.errors.push(self.deprecated_command_diagnostic(
                         command.head.word().span(),
@@ -3879,6 +4042,127 @@ impl<'a> StaticPipelineAnalyzer<'a> {
                 [Carrier::ByteStream],
                 CommandOutput::Fixed(Carrier::ByteStream),
             ),
+        }
+    }
+
+    fn command_arguments(
+        &mut self,
+        command: &flash_syntax::CommandStage,
+        stage_span: Span,
+        signature: &CommandSignature,
+    ) {
+        let shaped = command
+            .items
+            .iter()
+            .filter_map(|item| match item.kind() {
+                CommandItemKind::Word(word) => Some((
+                    static_word_text(word, self.source)
+                        .map(|text| CommandArgumentInput::Word(Some(text.into_bytes())))
+                        .unwrap_or(CommandArgumentInput::Word(None)),
+                    item.span(),
+                )),
+                CommandItemKind::Closure(_) => Some((CommandArgumentInput::Closure, item.span())),
+                CommandItemKind::Spread(_) => {
+                    Some((CommandArgumentInput::DynamicTail, item.span()))
+                }
+                CommandItemKind::Redirection(_) => None,
+            })
+            .collect::<Vec<_>>();
+        let inputs = shaped
+            .iter()
+            .map(|(input, _)| input.clone())
+            .collect::<Vec<_>>();
+        for fault in signature.arguments().validate(&inputs) {
+            let span = fault
+                .argument_index()
+                .and_then(|index| shaped.get(index))
+                .map_or(stage_span, |(_, span)| *span);
+            self.errors.push(ModulePipelineError {
+                module: self.module.clone(),
+                diagnostic: self.command_argument_diagnostic(signature.name(), span, &fault),
+            });
+        }
+    }
+
+    fn command_argument_diagnostic(
+        &self,
+        command: &str,
+        span: Span,
+        fault: &CommandArgumentFault,
+    ) -> Diagnostic {
+        match fault.kind() {
+            CommandArgumentFaultKind::Arity {
+                minimum,
+                maximum,
+                actual,
+            } => {
+                let expected = match maximum {
+                    Some(maximum) if minimum == maximum => minimum.to_string(),
+                    Some(maximum) => format!("{minimum}..={maximum}"),
+                    None => format!("at least {minimum}"),
+                };
+                Diagnostic::new(
+                    Severity::Error,
+                    "CMD003",
+                    format!(
+                        "`{command}` expects {expected} positional argument(s), found {actual}"
+                    ),
+                )
+                .with_primary(span, "this invocation has the wrong positional arity")
+            }
+            CommandArgumentFaultKind::UnknownOption { option } => Diagnostic::new(
+                Severity::Error,
+                "CMD004",
+                format!("`{command}` does not define option `{option}`"),
+            )
+            .with_primary(span, "unknown built-in option"),
+            CommandArgumentFaultKind::MissingOptionValues {
+                option,
+                expected,
+                actual,
+            } => Diagnostic::new(
+                Severity::Error,
+                "CMD004",
+                format!("option `{option}` expects {expected} value(s), found {actual}"),
+            )
+            .with_primary(span, "this option is missing a required value"),
+            CommandArgumentFaultKind::RepeatedOption { option } => Diagnostic::new(
+                Severity::Error,
+                "CMD004",
+                format!("option `{option}` cannot be repeated for `{command}`"),
+            )
+            .with_primary(span, "this option is repeated"),
+            CommandArgumentFaultKind::ConflictingOptions { option, conflict } => Diagnostic::new(
+                Severity::Error,
+                "CMD004",
+                format!("options `{option}` and `{conflict}` conflict for `{command}`"),
+            )
+            .with_primary(span, "this option conflicts with an earlier option"),
+            CommandArgumentFaultKind::OptionAfterPositional { option } => Diagnostic::new(
+                Severity::Error,
+                "CMD004",
+                format!("option `{option}` must precede `{command}` job arguments"),
+            )
+            .with_primary(span, "move this option before every positional argument"),
+            CommandArgumentFaultKind::UnexpectedKind {
+                position,
+                expected,
+                actual,
+            } => Diagnostic::new(
+                Severity::Error,
+                "CMD005",
+                format!(
+                    "`{command}` argument {} expects {expected:?}, found {actual:?}",
+                    position + 1
+                ),
+            )
+            .with_primary(span, "this argument has the wrong source form"),
+            CommandArgumentFaultKind::DynamicTail => Diagnostic::new(
+                Severity::Error,
+                "CMD006",
+                format!("`{command}` does not accept a dynamic argument tail"),
+            )
+            .with_primary(span, "this spread has runtime-dependent arity"),
         }
     }
 
@@ -4859,6 +5143,27 @@ pub enum ModuleNameError {
         first_span: Span,
         duplicate_span: Span,
     },
+    /// An assignment targets a read-only lexical or dynamic binding.
+    ImmutableAssignment {
+        module: ModuleId,
+        name: String,
+        assignment_span: Span,
+        declaration_span: Option<Span>,
+    },
+    /// An assignment targets an imported snapshot binding.
+    ImportedAssignment {
+        module: ModuleId,
+        name: String,
+        assignment_span: Span,
+        import_span: Span,
+    },
+    /// An assignment crosses a callable's immutable by-value capture boundary.
+    CapturedAssignment {
+        module: ModuleId,
+        name: String,
+        assignment_span: Span,
+        declaration_span: Span,
+    },
 }
 
 impl ModuleNameError {
@@ -4871,7 +5176,10 @@ impl ModuleNameError {
             | Self::DuplicateExport { module, .. }
             | Self::ImportConflict { module, .. }
             | Self::UnknownReference { module, .. }
-            | Self::DuplicateBinding { module, .. } => module,
+            | Self::DuplicateBinding { module, .. }
+            | Self::ImmutableAssignment { module, .. }
+            | Self::ImportedAssignment { module, .. }
+            | Self::CapturedAssignment { module, .. } => module,
             Self::UnavailableImport { importer, .. } => importer,
         }
     }
@@ -4939,6 +5247,41 @@ impl ModuleNameError {
             } => Diagnostic::new(Severity::Error, "MOD010", self.to_string())
                 .with_primary(*duplicate_span, "this binding is declared again")
                 .with_secondary(*first_span, "the binding was first declared here"),
+            Self::ImmutableAssignment {
+                assignment_span,
+                declaration_span,
+                ..
+            } => match declaration_span {
+                Some(declaration_span) => {
+                    Diagnostic::new(Severity::Error, "BND001", self.to_string())
+                        .with_primary(
+                            *assignment_span,
+                            "this assignment targets a read-only binding",
+                        )
+                        .with_secondary(*declaration_span, "the immutable binding is declared here")
+                }
+                None => Diagnostic::new(Severity::Error, "BND001", self.to_string()).with_primary(
+                    *assignment_span,
+                    "this assignment targets a read-only binding",
+                ),
+            },
+            Self::ImportedAssignment {
+                assignment_span,
+                import_span,
+                ..
+            } => Diagnostic::new(Severity::Error, "BND002", self.to_string())
+                .with_primary(*assignment_span, "an imported snapshot cannot be assigned")
+                .with_secondary(*import_span, "the snapshot is imported here"),
+            Self::CapturedAssignment {
+                assignment_span,
+                declaration_span,
+                ..
+            } => Diagnostic::new(Severity::Error, "BND003", self.to_string())
+                .with_primary(
+                    *assignment_span,
+                    "callables capture outer bindings as immutable values",
+                )
+                .with_secondary(*declaration_span, "the captured binding is declared here"),
         }
     }
 }
@@ -4979,6 +5322,21 @@ impl fmt::Display for ModuleNameError {
             Self::DuplicateBinding { module, name, .. } => write!(
                 formatter,
                 "module `{}` declares binding `{name}` more than once in one scope",
+                module.path().display()
+            ),
+            Self::ImmutableAssignment { module, name, .. } => write!(
+                formatter,
+                "module `{}` assigns to immutable binding `{name}`",
+                module.path().display()
+            ),
+            Self::ImportedAssignment { module, name, .. } => write!(
+                formatter,
+                "module `{}` assigns to imported snapshot `{name}`",
+                module.path().display()
+            ),
+            Self::CapturedAssignment { module, name, .. } => write!(
+                formatter,
+                "module `{}` assigns to captured binding `{name}`",
                 module.path().display()
             ),
         }
@@ -5050,6 +5408,14 @@ pub enum ModuleTypeError {
         span: Span,
         actual: ValueType,
     },
+    AssignmentMismatch {
+        module: ModuleId,
+        name: String,
+        assignment_span: Span,
+        expected: ValueType,
+        actual: ValueType,
+        declaration_span: Span,
+    },
 }
 
 impl ModuleTypeError {
@@ -5064,7 +5430,8 @@ impl ModuleTypeError {
             | Self::IntrinsicArgumentMismatch { module, .. }
             | Self::ResultMismatch { module, .. }
             | Self::ByteCaptureInWord { module, .. }
-            | Self::ThrowMismatch { module, .. } => module,
+            | Self::ThrowMismatch { module, .. }
+            | Self::AssignmentMismatch { module, .. } => module,
         }
     }
 
@@ -5078,6 +5445,9 @@ impl ModuleTypeError {
             | Self::IntrinsicArgumentMismatch { argument_span, .. } => *argument_span,
             Self::ResultMismatch { result_span, .. } => *result_span,
             Self::ByteCaptureInWord { span, .. } | Self::ThrowMismatch { span, .. } => *span,
+            Self::AssignmentMismatch {
+                assignment_span, ..
+            } => *assignment_span,
         }
     }
 
@@ -5163,6 +5533,18 @@ impl ModuleTypeError {
                     format!("this value is `{actual}`; throw requires `String` or `Error`"),
                 )
             }
+            Self::AssignmentMismatch {
+                assignment_span,
+                expected,
+                actual,
+                declaration_span,
+                ..
+            } => Diagnostic::new(Severity::Error, "SIG008", self.to_string())
+                .with_primary(
+                    *assignment_span,
+                    format!("this value is `{actual}`, expected `{expected}`"),
+                )
+                .with_secondary(*declaration_span, "binding type declared here"),
         }
     }
 }
@@ -5250,6 +5632,17 @@ impl fmt::Display for ModuleTypeError {
             Self::ThrowMismatch { module, actual, .. } => write!(
                 formatter,
                 "module `{}` throws `{actual}`; expected `String` or `Error`",
+                module.path().display()
+            ),
+            Self::AssignmentMismatch {
+                module,
+                name,
+                expected,
+                actual,
+                ..
+            } => write!(
+                formatter,
+                "module `{}` assigns `{actual}` to `{name}`; expected `{expected}`",
                 module.path().display()
             ),
         }

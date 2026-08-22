@@ -26,7 +26,10 @@ use flash_syntax::{
 };
 
 use crate::carrier::{PipelineCarrierFault, StageCarrierContract, analyze_pipeline_carriers};
-use crate::command::{Carrier, CommandOutput, CommandRegistry};
+use crate::command::{
+    Carrier, CommandArgumentFault, CommandArgumentFaultKind, CommandArgumentInput,
+    CommandOptionTerminator, CommandOutput, CommandRegistry, CommandSignature,
+};
 use crate::eval::{
     ExpandedWord, ReservedCommandDetails, RuntimeError, RuntimeErrorKind,
     evaluate_closure_argument_with_binding_types, expand_spread, expand_word,
@@ -1054,6 +1057,22 @@ fn plan_stage(
         }
     }
 
+    if let PlannedResolution::Internal { canonical_name, .. } = &resolution {
+        let signature = context
+            .registry
+            .lookup(canonical_name)
+            .expect("an internal resolution retains its registered signature");
+        validate_planned_arguments(signature, &arguments, span)?;
+        if signature.arguments().terminator() == CommandOptionTerminator::Accepted {
+            remove_option_terminator(&mut arguments);
+            argv.truncate(1);
+            argv.extend(arguments.iter().filter_map(|argument| match argument {
+                PlannedArgument::Word(word) => Some(word.clone()),
+                PlannedArgument::Value { .. } => None,
+            }));
+        }
+    }
+
     if lower_command {
         let Some(path) = command_path else {
             return Err(RuntimeError::new(
@@ -1083,6 +1102,139 @@ fn plan_stage(
         help: None,
         span,
     })
+}
+
+fn validate_planned_arguments(
+    signature: &CommandSignature,
+    arguments: &[PlannedArgument],
+    stage_span: Span,
+) -> Result<(), RuntimeError> {
+    let inputs = arguments
+        .iter()
+        .map(|argument| match argument {
+            PlannedArgument::Word(word) => {
+                CommandArgumentInput::Word(Some(word.value().as_bytes().to_vec()))
+            }
+            PlannedArgument::Value { .. } => CommandArgumentInput::Closure,
+        })
+        .collect::<Vec<_>>();
+    let Some(fault) = signature.arguments().validate(&inputs).into_iter().next() else {
+        return Ok(());
+    };
+    let span = fault
+        .argument_index()
+        .and_then(|index| arguments.get(index))
+        .map_or(stage_span, PlannedArgument::span);
+    Err(RuntimeError::new(
+        runtime_argument_fault(standard_command_name(signature.name()), &fault),
+        span,
+    ))
+}
+
+fn runtime_argument_fault(command: &'static str, fault: &CommandArgumentFault) -> RuntimeErrorKind {
+    match fault.kind() {
+        CommandArgumentFaultKind::Arity {
+            minimum,
+            maximum,
+            actual,
+        } => RuntimeErrorKind::BuiltinArity {
+            command,
+            minimum: *minimum,
+            maximum: *maximum,
+            actual: *actual,
+        },
+        CommandArgumentFaultKind::UnknownOption { option } => RuntimeErrorKind::BuiltinArgument {
+            command,
+            message: format!("unknown option `{option}`"),
+        },
+        CommandArgumentFaultKind::MissingOptionValues {
+            option,
+            expected,
+            actual,
+        } => RuntimeErrorKind::BuiltinArgument {
+            command,
+            message: format!("option `{option}` expects {expected} value(s), found {actual}"),
+        },
+        CommandArgumentFaultKind::RepeatedOption { option } => RuntimeErrorKind::BuiltinArgument {
+            command,
+            message: format!("option `{option}` cannot be repeated"),
+        },
+        CommandArgumentFaultKind::ConflictingOptions { option, conflict } => {
+            RuntimeErrorKind::BuiltinArgument {
+                command,
+                message: format!("options `{option}` and `{conflict}` conflict"),
+            }
+        }
+        CommandArgumentFaultKind::OptionAfterPositional { option } => {
+            RuntimeErrorKind::BuiltinArgument {
+                command,
+                message: format!("option `{option}` must precede positional arguments"),
+            }
+        }
+        CommandArgumentFaultKind::UnexpectedKind {
+            position,
+            expected,
+            actual,
+        } => RuntimeErrorKind::BuiltinArgument {
+            command,
+            message: format!(
+                "argument {} expects {expected:?}, found {actual:?}",
+                position + 1
+            ),
+        },
+        CommandArgumentFaultKind::DynamicTail => RuntimeErrorKind::BuiltinArgument {
+            command,
+            message: "a dynamic argument tail is not accepted".to_owned(),
+        },
+    }
+}
+
+fn remove_option_terminator(arguments: &mut Vec<PlannedArgument>) {
+    let Some(index) = arguments.iter().position(|argument| {
+        matches!(
+            argument,
+            PlannedArgument::Word(word) if word.value().as_bytes() == b"--"
+        )
+    }) else {
+        return;
+    };
+    arguments.remove(index);
+}
+
+fn standard_command_name(name: &str) -> &'static str {
+    match name {
+        "cd" => "cd",
+        "pwd" => "pwd",
+        "which" => "which",
+        "command" => "command",
+        "exit" => "exit",
+        "check" => "check",
+        "decode" => "decode",
+        "from" => "from",
+        "encode" => "encode",
+        "to" => "to",
+        "first" => "first",
+        "last" => "last",
+        "collect" => "collect",
+        "length" => "length",
+        "lines" => "lines",
+        "each" => "each",
+        "where" => "where",
+        "select" => "select",
+        "get" => "get",
+        "update" => "update",
+        "sort" => "sort",
+        "ls" => "ls",
+        "open" => "open",
+        "save" => "save",
+        "jobs" => "jobs",
+        "fg" => "fg",
+        "bg" => "bg",
+        "wait" => "wait",
+        "kill" => "kill",
+        "help" => "help",
+        _ => "internal",
+    }
 }
 
 fn resolve_dynamic_external(

@@ -222,22 +222,27 @@ finite regular files containing UTF-8 source; directories and special files
 are rejected.
 
 Checking reports syntax and module-graph failures, name and export/import
-failures, named-function annotation and known-call signature failures, and
-statically knowable pipeline-carrier failures. Diagnostics use retained source
-spans and deterministic phase order: discovery and graph issues, then name
-issues, then signature issues, then `PIP001`-`PIP004` carrier issues. Within a
-phase, sources follow canonical first-visit depth-first order and constructs
-follow source order. A broken discovery graph suppresses name and signature
-analysis; name failures suppress signature analysis. Pipeline analysis still
-visits every successfully parsed source because it does not depend on those
-phases.
+failures, assignment mutability and known-type failures, named-function
+annotation and known-call signature failures, shared built-in argument-schema
+failures, and statically knowable pipeline-carrier failures. Diagnostics use
+retained source spans and deterministic phase order: discovery and graph
+issues, then name issues, then signature issues, then command and carrier
+issues. Within a phase, sources follow canonical first-visit depth-first order
+and constructs follow source order. A broken discovery graph suppresses name
+and signature analysis; name failures suppress signature analysis. Command and
+pipeline analysis still visit every successfully parsed source because they do
+not depend on those phases.
 
 Bare command names absent from the built-in registry and explicitly forced
 external commands are classified as byte-stream stages without checking
-`PATH`. An exact built-in uses its shared runtime carrier contract. A dynamic
-command head remains unknown, so the checker suppresses only carrier answers
-that depend on guessing its runtime command. Pipeline diagnostics therefore
-describe language-level carrier incompatibility, not executable availability.
+`PATH`. An exact built-in uses its shared runtime carrier and argument contract,
+including positional arity and kinds, option arity and conflicts, `--` policy,
+and dynamic-tail policy. Help, completion, hover, signature help, planning, and
+runtime validation consume the same registry metadata. A dynamic command head
+remains unknown, so the checker suppresses only answers that depend on guessing
+its runtime command or an interpolation-dependent argument. Diagnostics
+therefore describe language-level contract incompatibility, not executable
+availability.
 
 A successful check is silent and exits with status 0. Any analysis or source
 error is written only to stderr and exits with status 1. Invocation misuse
@@ -249,11 +254,10 @@ module, evaluate declarations or substitutions, expand words, probe an
 executable, apply redirections, change the working directory, mutate the
 environment, access a terminal, or start a process. It does not format source,
 predict runtime output or status, validate external-command availability,
-perform general option or built-in arity checking, infer all value types, check
-assignment mutability, discover a multi-root project, or start a language
-server. Success means only that the supported non-executing analyses completed
-without error diagnostics; target capabilities and runtime-only data remain
-separate concerns.
+infer types that depend on runtime values, discover a multi-root project, or
+start a language server. Success means only that the supported non-executing
+analyses completed without error diagnostics; target capabilities and
+runtime-only data remain separate concerns.
 
 ### Execution-plan inspection
 

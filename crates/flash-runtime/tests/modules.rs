@@ -2076,22 +2076,10 @@ fn script_arguments_are_exact_root_only_immutable_data_with_ordinary_shadowing()
 
     let immutable_sources =
         FakeSourceLoader::default().contains("/project/main.fsh", "$args = []\n");
-    let immutable_program = ModuleProgramLoader::new(&paths, &immutable_sources)
+    let error = ModuleProgramLoader::new(&paths, &immutable_sources)
         .load(Path::new("/project/main.fsh"))
-        .expect("assignment target resolution succeeds before runtime mutability checking");
-    let error = execute_module_program(
-        &immutable_program,
-        &[],
-        Path::new("/project"),
-        &mut Environment::new(),
-        &standard_registry(),
-        &NoExecutables,
-        &SessionOptions::default(),
-        &FakePlatform::none(),
-        Arc::new(FakeClock::new()),
-    )
-    .expect_err("the script-argument input cannot be assigned");
-    assert!(error.render().contains("binding \"args\" is immutable"));
+        .expect_err("the script-argument input is rejected without execution");
+    assert_eq!(error.diagnostics()[0].code(), "BND001");
 }
 
 #[test]
@@ -2234,23 +2222,10 @@ fn imported_mut_values_materialize_after_initialization_as_immutable_snapshots()
             "import { answer } from './lib.fsh'\n$answer = 7\n",
         )
         .contains("/project/lib.fsh", "mut answer = 42\nexport { answer }\n");
-    let immutable_program = ModuleProgramLoader::new(&paths, &immutable_root)
+    let error = ModuleProgramLoader::new(&paths, &immutable_root)
         .load(Path::new("/project/main.fsh"))
-        .expect("the immutable-import program loads");
-    let error = execute_module_program(
-        &immutable_program,
-        &[],
-        Path::new("/project"),
-        &mut Environment::new(),
-        &standard_registry(),
-        &NoExecutables,
-        &SessionOptions::default(),
-        &FakePlatform::none(),
-        Arc::new(FakeClock::new()),
-    )
-    .expect_err("an importer cannot assign through the snapshot");
-
-    assert!(error.render().contains("binding \"answer\" is immutable"));
+        .expect_err("an importer cannot assign through the snapshot");
+    assert_eq!(error.diagnostics()[0].code(), "BND002");
 }
 
 #[test]
@@ -2292,32 +2267,37 @@ fn annotated_declarations_and_assignments_reject_dynamic_runtime_mismatches() {
         "/project/main.fsh",
         "mut count: Int = 1\n$count = $args[0]\nexport AFTER = $count\n",
     );
-    let assignment_program = ModuleProgramLoader::new(&paths, &assignment_sources)
+    let assignment_error = ModuleProgramLoader::new(&paths, &assignment_sources)
         .load(Path::new("/project/main.fsh"))
-        .expect("the dynamic assignment cannot be rejected before execution");
-    let mut assignment_environment = Environment::new();
-    let assignment_error = execute_module_program(
-        &assignment_program,
-        &["still-not-an-int".to_owned()],
-        Path::new("/project"),
-        &mut assignment_environment,
-        &standard_registry(),
-        &NoExecutables,
-        &SessionOptions::default(),
-        &FakePlatform::none(),
-        Arc::new(FakeClock::new()),
-    )
-    .expect_err("a later assignment must preserve the binding's declared type");
-    let assignment_rendered = assignment_error.render();
-    assert!(
-        assignment_rendered.contains("binding expects Int, found string"),
-        "{assignment_rendered}"
-    );
-    assert!(
-        assignment_rendered.contains(" --> /project/main.fsh:2:10"),
-        "{assignment_rendered}"
-    );
-    assert!(!assignment_environment.contains("AFTER"));
+        .expect_err("the known assignment mismatch is rejected without execution");
+    let diagnostic = &assignment_error.diagnostics()[0];
+    assert_eq!(diagnostic.code(), "SIG008");
+    assert_eq!(diagnostic.labels().len(), 2);
+}
+
+#[test]
+fn assignment_analysis_distinguishes_mutable_immutable_captured_and_unknown_targets() {
+    let paths = FakeCanonicalizer::default().resolves("/project/main.fsh", "/project/main.fsh");
+    for (source, code, labels) in [
+        ("let value = 1\n$value = 2\n", "BND001", 2),
+        ("mut value = 1\ndef change() { $value = 2 }\n", "BND003", 2),
+        ("def change(value) { $value = 2 }\n", "BND001", 2),
+        ("$missing = 1\n", "MOD009", 1),
+    ] {
+        let sources = FakeSourceLoader::default().contains("/project/main.fsh", source);
+        let error = ModuleProgramLoader::new(&paths, &sources)
+            .load(Path::new("/project/main.fsh"))
+            .expect_err("the invalid assignment is rejected statically");
+        let diagnostic = &error.diagnostics()[0];
+        assert_eq!(diagnostic.code(), code, "{source}");
+        assert_eq!(diagnostic.labels().len(), labels, "{source}");
+    }
+
+    let mutable = FakeSourceLoader::default()
+        .contains("/project/main.fsh", "mut value: Int = 1\n$value = 2\n");
+    ModuleProgramLoader::new(&paths, &mutable)
+        .load(Path::new("/project/main.fsh"))
+        .expect("a same-frame mutable assignment with a matching type is valid");
 }
 
 #[test]
@@ -3814,16 +3794,18 @@ fn static_pipeline_analysis_reports_all_four_fault_families_in_source_order() {
 
     assert_eq!(
         analysis_codes(&report),
-        ["PIP001", "PIP002", "PIP003", "PIP004"]
+        ["CMD003", "PIP001", "PIP002", "CMD003", "PIP003", "PIP004"]
     );
     assert!(report.program().is_none());
     let diagnostics = analysis_diagnostics(&report);
     assert_eq!(diagnostics[0].labels()[0].span().start(), 0);
-    assert_eq!(diagnostics[1].labels()[0].span().start(), 8);
-    assert_eq!(diagnostics[2].labels()[0].span().start(), 19);
-    assert_eq!(diagnostics[3].labels()[0].span().start(), 33);
+    assert_eq!(diagnostics[1].labels()[0].span().start(), 0);
+    assert_eq!(diagnostics[2].labels()[0].span().start(), 8);
+    assert_eq!(diagnostics[3].labels()[0].span().start(), 11);
+    assert_eq!(diagnostics[4].labels()[0].span().start(), 19);
+    assert_eq!(diagnostics[5].labels()[0].span().start(), 33);
     assert!(
-        diagnostics[2]
+        diagnostics[4]
             .notes()
             .iter()
             .any(|note| note.contains("encode") && note.contains("to")),
@@ -3851,11 +3833,14 @@ fn forced_assumed_and_dynamic_heads_need_no_probe_or_expansion() {
     let report = ModuleProgramLoader::new(&paths, &sources)
         .analyze_with_commands(Path::new("/project/main.fsh"), &standard_registry());
 
-    assert_eq!(analysis_codes(&report), ["PIP003", "PIP003", "PIP003"]);
+    assert_eq!(
+        analysis_codes(&report),
+        ["PIP003", "PIP003", "CMD003", "PIP003"]
+    );
     let diagnostics = analysis_diagnostics(&report);
     assert!(diagnostics[0].notes()[0].contains("encode"));
     assert!(diagnostics[1].notes()[0].contains("decode"));
-    assert!(diagnostics[2].notes()[0].contains("encode"));
+    assert!(diagnostics[3].notes()[0].contains("encode"));
 }
 
 fn namespace_checker_registry() -> CommandRegistry {
@@ -3995,6 +3980,46 @@ fn reserved_static_heads_error_in_order_while_forced_and_dynamic_heads_are_suppr
 }
 
 #[test]
+fn static_builtin_schemas_check_arity_options_kinds_and_only_known_facts() {
+    let paths = FakeCanonicalizer::default().resolves("/project/main.fsh", "/project/main.fsh");
+    let sources = FakeSourceLoader::default().contains(
+        "/project/main.fsh",
+        concat!(
+            "pwd extra\n",
+            "kill --bogus %1\n",
+            "kill --stop --kill %1\n",
+            "kill %1 --stop\n",
+            "each value\n",
+            "which -- --literal\n",
+            "let arguments = ['one', 'two']\n",
+            "pwd ...$arguments\n",
+        ),
+    );
+
+    let report = ModuleProgramLoader::new(&paths, &sources)
+        .analyze_with_commands(Path::new("/project/main.fsh"), &standard_registry());
+
+    assert_eq!(
+        analysis_codes(&report),
+        ["CMD003", "CMD004", "CMD004", "CMD004", "PIP001", "CMD005"]
+    );
+}
+
+#[test]
+fn builtin_arity_after_an_option_terminator_marks_the_extra_positional() {
+    let paths = FakeCanonicalizer::default().resolves("/project/main.fsh", "/project/main.fsh");
+    let sources = FakeSourceLoader::default().contains("/project/main.fsh", "pwd -- extra\n");
+
+    let report = ModuleProgramLoader::new(&paths, &sources)
+        .analyze_with_commands(Path::new("/project/main.fsh"), &standard_registry());
+    let diagnostic = &analysis_diagnostics(&report)[0];
+
+    assert_eq!(diagnostic.code(), "CMD003");
+    assert_eq!(diagnostic.labels()[0].span().start(), 7);
+    assert_eq!(diagnostic.labels()[0].span().end(), 12);
+}
+
+#[test]
 fn a_reserved_stage_has_unknown_carriers_and_suppresses_dependent_cascades() {
     let paths = FakeCanonicalizer::default().resolves("/project/main.fsh", "/project/main.fsh");
     let sources = FakeSourceLoader::default().contains("/project/main.fsh", "ls | future | each\n");
@@ -4022,7 +4047,10 @@ fn pipeline_walk_visits_functions_closures_and_command_substitutions() {
     let report = ModuleProgramLoader::new(&paths, &sources)
         .analyze_with_commands(Path::new("/project/main.fsh"), &standard_registry());
 
-    assert_eq!(analysis_codes(&report), ["PIP001", "PIP003", "PIP002"]);
+    assert_eq!(
+        analysis_codes(&report),
+        ["CMD003", "PIP001", "PIP003", "PIP002", "CMD003"]
+    );
 }
 
 #[test]
@@ -4040,7 +4068,7 @@ fn an_unknown_dynamic_head_suppresses_only_its_dependent_edges() {
     let report = ModuleProgramLoader::new(&paths, &sources)
         .analyze_with_commands(Path::new("/project/main.fsh"), &standard_registry());
 
-    assert_eq!(analysis_codes(&report), ["PIP003"]);
+    assert_eq!(analysis_codes(&report), ["CMD003", "PIP003"]);
 }
 
 #[test]
@@ -4054,7 +4082,7 @@ fn pipeline_issues_remain_available_beside_an_earlier_graph_phase() {
     let report = ModuleProgramLoader::new(&paths, &sources)
         .analyze_with_commands(Path::new("/project/main.fsh"), &standard_registry());
 
-    assert_eq!(analysis_codes(&report), ["MOD001", "PIP001"]);
+    assert_eq!(analysis_codes(&report), ["MOD001", "CMD003", "PIP001"]);
     assert!(report.program().is_none());
 }
 
@@ -4071,13 +4099,17 @@ fn pipeline_issues_follow_first_visit_source_order_across_imports() {
         .analyze_with_commands(Path::new("/project/main.fsh"), &standard_registry());
     let diagnostics = analysis_diagnostics(&report);
 
-    assert_eq!(analysis_codes(&report), ["PIP001", "PIP003"]);
+    assert_eq!(analysis_codes(&report), ["CMD003", "PIP001", "PIP003"]);
     assert_eq!(
         diagnostics
             .iter()
             .map(diagnostics_source_ids)
             .collect::<Vec<_>>(),
-        [vec![SourceId::new(0)], vec![SourceId::new(1)]]
+        [
+            vec![SourceId::new(0)],
+            vec![SourceId::new(0)],
+            vec![SourceId::new(1)],
+        ]
     );
 }
 
@@ -4584,6 +4616,28 @@ fn semantic_queries_expose_signatures_commands_and_named_import_effects() {
     assert_eq!(
         command.signature().documentation().invocation(),
         "cd [PATH]"
+    );
+    let command_argument = library_text.rfind("'/tmp'").unwrap() + 2;
+    let command_signature = queries
+        .command_signature_at(library, command_argument)
+        .expect("a standard command argument exposes registry-owned signature data");
+    assert_eq!(command_signature.command().canonical_name(), "cd");
+    assert_eq!(command_signature.active_parameter(), 0);
+    assert_eq!(
+        command_signature
+            .command()
+            .signature()
+            .arguments()
+            .minimum(),
+        0
+    );
+    assert_eq!(
+        command_signature
+            .command()
+            .signature()
+            .arguments()
+            .maximum(),
+        Some(1)
     );
 
     assert_eq!(

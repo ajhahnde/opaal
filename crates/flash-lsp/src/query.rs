@@ -5,7 +5,10 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use flash_runtime::builtin::standard_registry;
-use flash_runtime::command::NamespaceClass;
+use flash_runtime::command::{
+    CommandArgumentKind, CommandArgumentSchema, CommandDynamicTail, CommandOptionTerminator,
+    NamespaceClass,
+};
 use flash_runtime::module::{
     AnalysisControl, FunctionSignature, ModuleAnalysisOutcome, ModuleEffect, ModuleProgram,
     ModuleProgramLoader,
@@ -365,6 +368,7 @@ fn hover(
             Some(SemanticHover::Command(command)) => {
                 let documentation = command.signature().documentation();
                 let mut markdown = format!("```flash\n{}\n```", documentation.invocation());
+                append_command_schema(&mut markdown, command.signature().arguments());
                 append_documentation(&mut markdown, Some(documentation.documentation().text()));
                 markdown
             }
@@ -394,10 +398,31 @@ fn signature_help(
         return Ok(Value::Null);
     };
     let queries = program.semantic_queries(&commands);
-    let Some(signature) = queries.signature_at(module, cursor) else {
-        let Some(signature) = queries.intrinsic_signature_at(module, cursor) else {
-            return Ok(Value::Null);
-        };
+    if let Some(signature) = queries.signature_at(module, cursor) {
+        let parameters = signature
+            .signature()
+            .parameters()
+            .iter()
+            .map(|parameter| {
+                json!({"label": format!("{}: {}", parameter.name(), parameter.value_type())})
+            })
+            .collect::<Vec<_>>();
+        let documentation = signature
+            .signature()
+            .documentation()
+            .filter(|documentation| !documentation.is_empty())
+            .map(|documentation| json!({"kind": "markdown", "value": documentation.text()}));
+        return Ok(json!({
+            "signatures": [{
+                "label": function_label(signature.signature()),
+                "documentation": documentation,
+                "parameters": parameters
+            }],
+            "activeSignature": 0,
+            "activeParameter": signature.active_parameter()
+        }));
+    }
+    if let Some(signature) = queries.intrinsic_signature_at(module, cursor) {
         let intrinsic = signature.intrinsic();
         return Ok(json!({
             "signatures": [{
@@ -423,26 +448,30 @@ fn signature_help(
             "activeSignature": 0,
             "activeParameter": signature.active_parameter(),
         }));
+    }
+    let Some(signature) = queries.command_signature_at(module, cursor) else {
+        return Ok(Value::Null);
     };
-    let parameters = signature
-        .signature()
-        .parameters()
-        .iter()
-        .map(|parameter| json!({"label": format!("{}: {}", parameter.name(), parameter.value_type())}))
-        .collect::<Vec<_>>();
-    let documentation = signature
-        .signature()
-        .documentation()
-        .filter(|documentation| !documentation.is_empty())
-        .map(|documentation| json!({"kind": "markdown", "value": documentation.text()}));
+    let command = signature.command();
+    let schema = command.signature().arguments();
+    let parameters = command_parameters(schema);
+    let active_parameter = signature
+        .active_parameter()
+        .min(parameters.len().saturating_sub(1));
+    let mut documentation = String::new();
+    append_command_schema(&mut documentation, schema);
+    append_documentation(
+        &mut documentation,
+        Some(command.signature().documentation().documentation().text()),
+    );
     Ok(json!({
         "signatures": [{
-            "label": function_label(signature.signature()),
-            "documentation": documentation,
+            "label": command.signature().documentation().invocation(),
+            "documentation": {"kind": "markdown", "value": documentation},
             "parameters": parameters
         }],
         "activeSignature": 0,
-        "activeParameter": signature.active_parameter()
+        "activeParameter": active_parameter
     }))
 }
 
@@ -732,6 +761,76 @@ fn function_label(signature: &FunctionSignature) -> String {
         signature.name(),
         signature.result()
     )
+}
+
+fn command_parameters(schema: &CommandArgumentSchema) -> Vec<Value> {
+    let count = schema.maximum().unwrap_or_else(|| schema.minimum().max(1));
+    (0..count)
+        .map(|position| {
+            let variadic = schema.maximum().is_none() && position + 1 == count;
+            let suffix = if variadic { "..." } else { "" };
+            json!({
+                "label": format!(
+                    "argument {}{}: {}",
+                    position + 1,
+                    suffix,
+                    command_argument_kind_label(schema.positional_kind(position)),
+                )
+            })
+        })
+        .collect()
+}
+
+fn append_command_schema(markdown: &mut String, schema: &CommandArgumentSchema) {
+    if !markdown.is_empty() {
+        markdown.push_str("\n\n");
+    }
+    let maximum = schema
+        .maximum()
+        .map_or_else(|| "unbounded".to_owned(), |maximum| maximum.to_string());
+    markdown.push_str(&format!("Positionals: {}..={maximum}", schema.minimum()));
+
+    let options = schema
+        .options()
+        .map(|option| {
+            let mut label = format!("`{}`", option.name());
+            for _ in 0..option.value_arity() {
+                label.push_str(" VALUE");
+            }
+            if option.is_repeatable() {
+                label.push_str(" (repeatable)");
+            }
+            let conflicts = option.conflicts().collect::<Vec<_>>();
+            if !conflicts.is_empty() {
+                label.push_str(&format!(" (conflicts with {})", conflicts.join(", ")));
+            }
+            label
+        })
+        .collect::<Vec<_>>();
+    if !options.is_empty() {
+        markdown.push_str("  \nOptions: ");
+        markdown.push_str(&options.join(", "));
+    }
+
+    let terminator = match schema.terminator() {
+        CommandOptionTerminator::Accepted => "accepted",
+        CommandOptionTerminator::Literal => "literal",
+    };
+    let dynamic_tail = match schema.dynamic_tail() {
+        CommandDynamicTail::DeferredToRuntime => "deferred until expansion",
+        CommandDynamicTail::Rejected => "rejected",
+    };
+    markdown.push_str(&format!(
+        "  \n`--`: {terminator}; unresolved spread: {dynamic_tail}."
+    ));
+}
+
+const fn command_argument_kind_label(kind: CommandArgumentKind) -> &'static str {
+    match kind {
+        CommandArgumentKind::Word => "word",
+        CommandArgumentKind::Closure => "closure",
+        CommandArgumentKind::Any => "word or closure",
+    }
 }
 
 fn append_documentation(markdown: &mut String, documentation: Option<&str>) {

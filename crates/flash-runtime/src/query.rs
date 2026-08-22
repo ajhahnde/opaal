@@ -4,8 +4,9 @@ use std::collections::BTreeMap;
 
 use flash_syntax::{
     Block, CommandItemKind, CompletionContext, ConditionalChain, ControlTransfer, ElseBranch,
-    Expression, ExpressionKind, LiteralKind, MatchArm, Pattern, RecordKey, RedirectionKind, Span,
-    StageKind, Statement, StatementKind, Word, WordPart, WordPartKind, completion_target,
+    Expression, ExpressionKind, LiteralKind, MatchArm, Pattern, RecordKey, RedirectionKind,
+    SourceFile, Span, StageKind, Statement, StatementKind, Word, WordPart, WordPartKind,
+    completion_target,
 };
 
 use crate::command::{CommandClassification, CommandRegistry, CommandSignature, NamespaceClass};
@@ -110,6 +111,25 @@ pub struct CommandMetadata {
     canonical_name: String,
     class: NamespaceClass,
     signature: CommandSignature,
+}
+
+/// Shared built-in signature metadata and active source argument at one cursor.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CommandSignatureContext {
+    command: CommandMetadata,
+    active_parameter: usize,
+}
+
+impl CommandSignatureContext {
+    #[must_use]
+    pub const fn command(&self) -> &CommandMetadata {
+        &self.command
+    }
+
+    #[must_use]
+    pub const fn active_parameter(&self) -> usize {
+        self.active_parameter
+    }
 }
 
 impl CommandMetadata {
@@ -481,6 +501,39 @@ impl SemanticQueries<'_> {
         })
     }
 
+    /// Finds the smallest enclosing statically named built-in command stage.
+    #[must_use]
+    pub fn command_signature_at(
+        &self,
+        module: &ModuleId,
+        offset: usize,
+    ) -> Option<CommandSignatureContext> {
+        let script = self.program.sources().script(module)?;
+        let (command, _) = CallFinder::new(offset).find_command(script.statements())?;
+        if command.head.kind() != flash_syntax::CommandHeadKind::Bare {
+            return None;
+        }
+        let source = self.program.sources().source(module)?;
+        let name = static_command_word(command.head.word(), source)?;
+        let command_metadata = self.command_metadata(&name)?;
+        let active_parameter = command
+            .items
+            .iter()
+            .filter(|item| !matches!(item.kind(), CommandItemKind::Redirection(_)))
+            .position(|item| offset <= item.span().end())
+            .unwrap_or_else(|| {
+                command
+                    .items
+                    .iter()
+                    .filter(|item| !matches!(item.kind(), CommandItemKind::Redirection(_)))
+                    .count()
+            });
+        Some(CommandSignatureContext {
+            command: command_metadata,
+            active_parameter,
+        })
+    }
+
     /// Returns shared effects for a named import identifier.
     #[must_use]
     pub fn import_effects_at(
@@ -672,11 +725,16 @@ fn contains(span: Span, offset: usize) -> bool {
 struct CallFinder<'a> {
     offset: usize,
     best: Option<(&'a flash_syntax::CallExpression, Span)>,
+    best_command: Option<(&'a flash_syntax::CommandStage, Span)>,
 }
 
 impl<'a> CallFinder<'a> {
     const fn new(offset: usize) -> Self {
-        Self { offset, best: None }
+        Self {
+            offset,
+            best: None,
+            best_command: None,
+        }
     }
 
     fn find(
@@ -685,6 +743,14 @@ impl<'a> CallFinder<'a> {
     ) -> Option<(&'a flash_syntax::CallExpression, Span)> {
         self.statements(statements);
         self.best
+    }
+
+    fn find_command(
+        mut self,
+        statements: &'a [Statement],
+    ) -> Option<(&'a flash_syntax::CommandStage, Span)> {
+        self.statements(statements);
+        self.best_command
     }
 
     fn statements(&mut self, statements: &'a [Statement]) {
@@ -783,6 +849,12 @@ impl<'a> CallFinder<'a> {
                     match stage.kind() {
                         StageKind::Expression(expression) => self.expression(expression),
                         StageKind::Command(command) => {
+                            if self
+                                .best_command
+                                .is_none_or(|(_, best)| stage.span().len() < best.len())
+                            {
+                                self.best_command = Some((command, stage.span()));
+                            }
                             self.word(command.head.word());
                             for item in &command.items {
                                 match item.kind() {
@@ -889,5 +961,15 @@ impl<'a> CallFinder<'a> {
             RedirectionKind::File(file) => self.word(&file.target),
             RedirectionKind::Duplicate { .. } | RedirectionKind::Close { .. } => {}
         }
+    }
+}
+
+fn static_command_word(word: &Word, source: &SourceFile) -> Option<String> {
+    let [part] = word.parts() else {
+        return None;
+    };
+    match part.kind() {
+        WordPartKind::Bare => source.slice(part.span()).ok().map(str::to_owned),
+        _ => None,
     }
 }

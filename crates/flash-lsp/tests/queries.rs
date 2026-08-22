@@ -279,12 +279,9 @@ fn semantic_completion_hover_and_signature_help_use_shared_program_data() {
         positional(&root_uri, root, command, PositionEncoding::Utf16),
     )
     .unwrap();
-    assert!(
-        command_hover["contents"]["value"]
-            .as_str()
-            .unwrap()
-            .contains("pwd")
-    );
+    let command_hover = command_hover["contents"]["value"].as_str().unwrap();
+    assert!(command_hover.contains("pwd"));
+    assert!(command_hover.contains("Positionals: 0..=0"));
 
     let dynamic_command = root.find("command tool").unwrap() + 2;
     let dynamic_command_hover = request(
@@ -304,6 +301,38 @@ fn semantic_completion_hover_and_signature_help_use_shared_program_data() {
         dynamic_command_hover.contains("explicit external resolution"),
         "{dynamic_command_hover}"
     );
+    assert!(
+        dynamic_command_hover.contains("Positionals: 1..=unbounded"),
+        "{dynamic_command_hover}"
+    );
+    assert!(
+        dynamic_command_hover.contains("`--`: literal"),
+        "{dynamic_command_hover}"
+    );
+
+    let kill_argument = root.find("--kill 1").unwrap() + "--kill ".len();
+    let command_signature = request(
+        &workspace,
+        PositionEncoding::Utf16,
+        &control,
+        "textDocument/signatureHelp",
+        positional(&root_uri, root, kill_argument, PositionEncoding::Utf16),
+    )
+    .unwrap();
+    assert_eq!(
+        command_signature["signatures"][0]["label"],
+        "kill [SIGNAL] %JOB"
+    );
+    assert_eq!(
+        command_signature["signatures"][0]["parameters"][0]["label"],
+        "argument 1...: word"
+    );
+    let signature_documentation = command_signature["signatures"][0]["documentation"]["value"]
+        .as_str()
+        .unwrap();
+    assert!(signature_documentation.contains("Options: `--continue`"));
+    assert!(signature_documentation.contains("conflicts with"));
+    assert_eq!(command_signature["activeParameter"], 0);
 
     let flag_cursor = root.find("--kill").unwrap() + 4;
     let flags = request(

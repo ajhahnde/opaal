@@ -673,17 +673,17 @@ fn check_forwards_success_and_converts_only_unsuccessful_status() {
 fn builtins_reject_invalid_arity_and_exit_codes() {
     let probe = Probe::default();
     let mut session = state();
-    let pwd = build("pwd extra", session.environment(), &probe);
-    let error = execute_builtin(
-        &pwd.stages()[0],
-        Carrier::Empty,
-        None,
-        &mut session,
+    let file = source("pwd extra");
+    let error = plan_pipeline(
+        &pipeline(&file),
+        "/work",
+        &file,
+        &mut ScopeStack::new(),
+        session.environment(),
         &standard_registry(),
         &probe,
-        &FakePlatform::none(),
     )
-    .expect_err("pwd takes no arguments");
+    .expect_err("pwd arity is rejected during shared planning");
     assert!(matches!(
         error.kind(),
         RuntimeErrorKind::BuiltinArity { .. }

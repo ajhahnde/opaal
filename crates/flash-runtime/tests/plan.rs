@@ -197,6 +197,93 @@ fn command_requires_a_target_during_planning() {
     ));
 }
 
+#[test]
+fn command_treats_a_double_dash_target_as_a_literal_external_name() {
+    let plan = plan_with(
+        "command -- tool",
+        "/work",
+        &mut ScopeStack::new(),
+        &Environment::from_snapshot([("PATH", "/bin")]),
+        &standard_registry(),
+        &FakeProbe::with(&["/bin/--"]),
+    )
+    .expect("command owns a literal double-dash policy");
+
+    assert_eq!(
+        plan.stages()[0].resolution(),
+        &PlannedResolution::External {
+            path: PathBuf::from("/bin/--"),
+        }
+    );
+    assert_eq!(
+        argv_values(&plan, 0),
+        [OsString::from("--"), OsString::from("tool")]
+    );
+}
+
+#[test]
+fn builtin_planning_normalizes_terminators_and_validates_expanded_dynamic_tails() {
+    let registry = standard_registry();
+    let environment = Environment::new();
+    let probe = FakeProbe::with(&[]);
+    let plan = plan_with(
+        "which -- --literal",
+        "/work",
+        &mut ScopeStack::new(),
+        &environment,
+        &registry,
+        &probe,
+    )
+    .expect("the option terminator protects a dash-leading positional");
+    assert_eq!(
+        argv_values(&plan, 0),
+        [OsString::from("which"), OsString::from("--literal")]
+    );
+    assert_eq!(plan.stages()[0].arguments().len(), 1);
+
+    let mut scope = ScopeStack::new();
+    scope
+        .declare(
+            "arguments",
+            BindingMutability::Immutable,
+            Value::list(vec![Value::string("one"), Value::string("two")]),
+        )
+        .expect("declare spread");
+    let error = plan_with(
+        "pwd ...$arguments",
+        "/work",
+        &mut scope,
+        &environment,
+        &registry,
+        &probe,
+    )
+    .expect_err("expanded spreads receive exact runtime schema validation");
+    assert!(matches!(
+        error,
+        RuntimeErrorKind::BuiltinArity {
+            command: "pwd",
+            minimum: 0,
+            maximum: Some(0),
+            actual: 2,
+        }
+    ));
+
+    let error = plan_with(
+        "kill --stop --kill %1",
+        "/work",
+        &mut ScopeStack::new(),
+        &environment,
+        &registry,
+        &probe,
+    )
+    .expect_err("conflicting options are rejected from the shared schema");
+    assert!(matches!(
+        error,
+        RuntimeErrorKind::BuiltinArgument { command: "kill", message }
+            if message.contains("conflict")
+    ));
+}
+
 #[cfg(unix)]
 #[test]
 fn command_preserves_a_native_non_utf8_target_as_argv_zero() {

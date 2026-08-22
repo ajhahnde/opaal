@@ -496,12 +496,14 @@ cascades, and no partial `ModuleProgram` escapes after any error. Static
 pipeline analysis walks every retained parsed source even when an earlier phase
 fails.
 
-Runtime preflight and static analysis share source-independent carrier
-contracts and fault classification. The checker maps those faults to
-`PIP001`-`PIP004` without word expansion: exact built-ins use the standard
-registry, forced and assumed externals use byte-stream contracts, and dynamic
-heads remain unknown. It must not probe `PATH` or invent generic command
-argument and option schemas that `CommandSignature` does not own.
+Runtime planning, static analysis, help, completion, and editor queries share
+source-independent carrier and argument contracts from `CommandSignature`.
+The checker maps exact built-in argument faults to `CMD003`-`CMD006` and carrier
+faults to `PIP001`-`PIP004` without word expansion. Forced and assumed
+externals use byte-stream carrier contracts, while dynamic heads and
+interpolation-dependent argument facts remain unknown. The checker must not
+probe `PATH` or infer facts that the shared schema and static source do not
+establish.
 
 Successful module analysis also owns source-spanned direct and transitive
 initializer-effect summaries. The shared vocabulary distinguishes working
@@ -523,6 +525,10 @@ Checker development must cover:
 - canonical module resolution;
 - import-cycle diagnostics;
 - local, imported, exported, private, and missing names;
+- mutable, immutable, imported-snapshot, captured, and unknown assignment
+  targets, plus statically known assignment-type mismatches;
+- exact built-in positional and option schemas with conservative dynamic-word
+  and spread handling;
 - function and command signatures;
 - pipeline carrier compatibility;
 - direct and named-dependency-folded initializer effects;

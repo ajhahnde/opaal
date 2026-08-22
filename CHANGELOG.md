@@ -24,6 +24,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- Complete non-executing assignment checks and shared built-in argument
+  contracts. `fsh check`, planning, runtime validation, help, completion, hover,
+  and signature help now agree on positional arity and kinds, option arity and
+  conflicts, `--`, and dynamic-tail handling for every standard built-in.
 - Add `fsh plan [--] SOURCE` for deterministic inspection of one exact command
   pipeline through shared parsing, analysis, planning, PATH resolution, and
   structural preflight. Inspection renders escaped native plan data and source

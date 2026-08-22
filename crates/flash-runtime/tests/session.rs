@@ -883,32 +883,32 @@ fn job_command_arity_and_kill_selectors_are_source_anchored() {
     for (source, message, location) in [
         (
             "jobs %1",
-            "jobs accepts no job arguments",
+            "jobs expects 0 argument(s), found 1",
             "<interactive>:1:6",
         ),
         (
             "fg %1 %2",
-            "fg accepts at most one job argument",
+            "fg expects 0..=1 arguments, found 2",
             "<interactive>:1:7",
         ),
         (
             "kill --bogus %1",
-            "unknown signal selector `--bogus`",
+            "unknown option `--bogus`",
             "<interactive>:1:6",
         ),
         (
             "kill --stop --kill %1",
-            "kill accepts only one signal selector",
+            "options `--kill` and `--stop` conflict",
             "<interactive>:1:13",
         ),
         (
             "kill %1 --stop",
-            "a signal selector must precede every job argument",
+            "option `--stop` must precede positional arguments",
             "<interactive>:1:9",
         ),
         (
             "kill --stop",
-            "kill requires at least one explicit `%n` target",
+            "kill expects at least 1 argument(s), found 0",
             "<interactive>:1:1",
         ),
     ] {
@@ -3006,6 +3006,7 @@ fn help_keeps_builtin_and_function_namespaces_and_orders_list_output() {
             "  invocation: help [NAME]\n",
             "  input: Empty\n",
             "  output: ByteStream\n",
+            "  positionals: 0..=1\n",
             "  summary: Inspect built-in and visible function metadata without execution.\n",
             "  details:\n",
             "    Inspect built-in and visible function metadata without execution.\n",
@@ -5747,7 +5748,11 @@ fn a_typed_argument_to_a_word_only_builtin_is_rejected() {
         )
         .expect_err("cd must not reinterpret a callable as a native path");
 
-    assert!(error.render().contains("expected a word argument"));
+    assert!(
+        error
+            .render()
+            .contains("argument 1 expects Word, found Closure")
+    );
     assert_eq!(session.cwd(), original);
     assert!(sink.is_empty());
 }

@@ -12,8 +12,9 @@ use std::path::Path;
 use flash_runtime::Environment;
 use flash_runtime::builtin::standard_registry;
 use flash_runtime::command::{
-    Carrier, CommandClassification, CommandLifecycle, CommandNamespaceEntry, CommandOutput,
-    CommandRegistry, CommandRegistryError, CommandSignature, NamespaceClass,
+    Carrier, CommandArgumentFaultKind, CommandArgumentInput, CommandClassification,
+    CommandLifecycle, CommandNamespaceEntry, CommandOutput, CommandRegistry, CommandRegistryError,
+    CommandSignature, NamespaceClass,
 };
 use flash_runtime::resolve::{ExecutableProbe, Resolution, ResolutionError, resolve_command};
 
@@ -158,6 +159,74 @@ fn the_standard_manifest_is_the_exact_v1_core_with_no_aliases_or_reservations() 
             .map(|name| (name, NamespaceClass::Core))
             .collect::<Vec<_>>()
     );
+}
+
+#[test]
+fn every_standard_builtin_owns_one_exact_positional_and_option_schema() {
+    let registry = standard_registry();
+    let expected = [
+        ("bg", 0, Some(1)),
+        ("cd", 0, Some(1)),
+        ("check", 0, Some(0)),
+        ("collect", 0, Some(0)),
+        ("command", 1, None),
+        ("decode", 1, Some(1)),
+        ("each", 1, Some(1)),
+        ("encode", 1, Some(1)),
+        ("exit", 0, Some(1)),
+        ("fg", 0, Some(1)),
+        ("first", 0, Some(1)),
+        ("from", 1, Some(2)),
+        ("get", 1, Some(1)),
+        ("help", 0, Some(1)),
+        ("jobs", 0, Some(0)),
+        ("kill", 1, None),
+        ("last", 0, Some(1)),
+        ("length", 0, Some(0)),
+        ("lines", 0, Some(0)),
+        ("ls", 0, Some(1)),
+        ("open", 1, Some(1)),
+        ("pwd", 0, Some(0)),
+        ("save", 1, Some(1)),
+        ("select", 1, None),
+        ("sort", 0, Some(1)),
+        ("to", 1, Some(1)),
+        ("update", 2, Some(2)),
+        ("wait", 0, None),
+        ("where", 1, Some(1)),
+        ("which", 1, None),
+    ];
+
+    for (name, minimum, maximum) in expected {
+        let schema = registry
+            .lookup(name)
+            .expect("standard signature")
+            .arguments();
+        assert_eq!(schema.minimum(), minimum, "{name}");
+        assert_eq!(schema.maximum(), maximum, "{name}");
+    }
+
+    let kill = registry.lookup("kill").expect("kill signature");
+    assert_eq!(
+        kill.flags().collect::<Vec<_>>(),
+        [
+            "--continue",
+            "--hangup",
+            "--interrupt",
+            "--kill",
+            "--stop",
+            "--terminate",
+        ]
+    );
+    let faults = kill.arguments().validate(&[
+        CommandArgumentInput::Word(Some(b"--stop".to_vec())),
+        CommandArgumentInput::Word(Some(b"--kill".to_vec())),
+        CommandArgumentInput::Word(Some(b"%1".to_vec())),
+    ]);
+    assert!(matches!(
+        faults[0].kind(),
+        CommandArgumentFaultKind::ConflictingOptions { .. }
+    ));
 }
 
 #[test]

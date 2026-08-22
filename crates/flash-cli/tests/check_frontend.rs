@@ -93,7 +93,7 @@ fn renders_ordered_multi_source_diagnostics_with_the_standard_registry() {
 
     assert!(run.has_errors());
     assert!(!run.is_success());
-    assert_eq!(run.rendered_issues().len(), 3);
+    assert_eq!(run.rendered_issues().len(), 4);
     assert!(run.rendered_issues()[0].starts_with("error[MOD007]"));
     assert!(
         run.rendered_issues()[0].contains(" --> /project/main.fsh:1:10"),
@@ -103,10 +103,12 @@ fn renders_ordered_multi_source_diagnostics_with_the_standard_registry() {
         run.rendered_issues()[0].contains(" ::: /project/lib.fsh:1:5"),
         "the private declaration keeps its cross-source label"
     );
-    assert!(run.rendered_issues()[1].starts_with("error[PIP001]"));
+    assert!(run.rendered_issues()[1].starts_with("error[CMD003]"));
     assert!(run.rendered_issues()[1].contains("/project/main.fsh"));
-    assert!(run.rendered_issues()[2].starts_with("error[PIP003]"));
-    assert!(run.rendered_issues()[2].contains("/project/lib.fsh"));
+    assert!(run.rendered_issues()[2].starts_with("error[PIP001]"));
+    assert!(run.rendered_issues()[2].contains("/project/main.fsh"));
+    assert!(run.rendered_issues()[3].starts_with("error[PIP003]"));
+    assert!(run.rendered_issues()[3].contains("/project/lib.fsh"));
     assert_eq!(
         filesystem.calls(),
         vec![

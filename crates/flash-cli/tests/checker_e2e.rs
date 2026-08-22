@@ -120,11 +120,12 @@ fn diagnostics_are_stderr_only_and_keep_analysis_and_source_order() {
     assert!(output.stdout.is_empty());
     let stderr = String::from_utf8(output.stderr).unwrap();
     let name = stderr.find("error[MOD007]").unwrap();
+    let command = stderr.find("error[CMD003]").unwrap();
     let root_pipeline = stderr.find("error[PIP001]").unwrap();
     let imported_pipeline = stderr.find("error[PIP003]").unwrap();
-    assert!(name < root_pipeline && root_pipeline < imported_pipeline);
+    assert!(name < command && command < root_pipeline && root_pipeline < imported_pipeline);
     assert!(stderr.contains(" ::: "));
-    assert_eq!(stderr.matches("error[").count(), 3);
+    assert_eq!(stderr.matches("error[").count(), 4);
 }
 
 #[test]
