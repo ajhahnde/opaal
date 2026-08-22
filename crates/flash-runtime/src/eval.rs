@@ -21,11 +21,12 @@ use flash_platform::{
     WorkingDirectoryError,
 };
 use flash_syntax::{
-    AndChain, Assignment, BinaryOperator, Block, CallExpression, Closure, ConditionalChain,
-    ControlTransfer, Declaration, ElseBranch, EnvironmentStatement, Expression, ExpressionKind,
-    ForStatement, FunctionDefinition, IfStatement, Literal, LiteralKind, MatchArm, MatchStatement,
-    Parameter, Pattern, Pipeline, RecordKey, SourceFile, Span, StageKind, Statement, StatementKind,
-    TryStatement, UnaryOperator, VariableReference, WhileStatement, Word, WordPart, WordPartKind,
+    AndChain, Assignment, BinaryOperator, Block, CallExpression, Closure, CommandItemKind,
+    ConditionalChain, ControlTransfer, Declaration, ElseBranch, EnvironmentStatement, Expression,
+    ExpressionKind, ForStatement, FunctionDefinition, IfStatement, Literal, LiteralKind, MatchArm,
+    MatchStatement, Parameter, Pattern, Pipeline, RecordKey, RedirectionKind, Script, SourceFile,
+    Span, StageKind, Statement, StatementKind, TryStatement, UnaryOperator, VariableReference,
+    WhileStatement, Word, WordPart, WordPartKind,
 };
 
 use crate::glob::{DEFAULT_GLOB_ENTRY_LIMIT, GlobPattern};
@@ -114,6 +115,7 @@ impl RuntimeError {
     pub fn status(&self) -> Option<&Status> {
         match self.kind() {
             RuntimeErrorKind::UnsuccessfulStatus { status } => Some(status),
+            RuntimeErrorKind::Transported { status, .. } => status.as_deref(),
             _ => None,
         }
     }
@@ -243,6 +245,14 @@ impl CallFrame {
         }
     }
 
+    pub(crate) fn restored(callee: FrameCallee, call_site: Span, source: Arc<SourceFile>) -> Self {
+        Self {
+            callee,
+            call_site,
+            source,
+        }
+    }
+
     /// The identity of the called function or closure.
     #[must_use]
     pub const fn callee(&self) -> &FrameCallee {
@@ -301,6 +311,52 @@ impl fmt::Display for RuntimeError {
 }
 
 impl Error for RuntimeError {}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct RuntimeErrorSnapshot {
+    pub(crate) category: ErrorCategory,
+    pub(crate) message: String,
+    pub(crate) span: Span,
+    pub(crate) labels: Vec<ErrorLabel>,
+    pub(crate) frames: Vec<CallFrame>,
+    pub(crate) source: Option<SourceFile>,
+    pub(crate) cause: Option<Box<RuntimeErrorSnapshot>>,
+    pub(crate) status: Option<Status>,
+}
+
+pub(crate) fn snapshot_runtime_error(error: &RuntimeError) -> RuntimeErrorSnapshot {
+    RuntimeErrorSnapshot {
+        category: error.category(),
+        message: error.to_string(),
+        span: error.span,
+        labels: error.labels.clone(),
+        frames: error.frames.clone(),
+        source: error.source.as_deref().cloned(),
+        cause: error
+            .cause
+            .as_deref()
+            .map(snapshot_runtime_error)
+            .map(Box::new),
+        status: error.status().cloned(),
+    }
+}
+
+pub(crate) fn restore_runtime_error(snapshot: RuntimeErrorSnapshot) -> RuntimeError {
+    RuntimeError {
+        kind: Box::new(RuntimeErrorKind::Transported {
+            category: snapshot.category,
+            message: snapshot.message,
+            status: snapshot.status.map(Box::new),
+        }),
+        span: snapshot.span,
+        labels: snapshot.labels,
+        frames: snapshot.frames,
+        source: snapshot.source.map(Arc::new),
+        cause: snapshot
+            .cause
+            .map(|cause| Arc::new(restore_runtime_error(*cause))),
+    }
+}
 
 pub use crate::carrier::{CarrierBridge, CarrierMismatch};
 
@@ -463,6 +519,14 @@ pub enum RuntimeErrorKind {
     /// The platform could not identify the running shell executable needed for
     /// an isolated background chain.
     ShellExecutable(PlatformError),
+    /// The private typed supervisor snapshot could not be encoded or decoded.
+    ExecutionCapsule { message: String },
+    /// A structured error restored from a private execution capsule.
+    Transported {
+        category: ErrorCategory,
+        message: String,
+        status: Option<Box<Status>>,
+    },
     /// The platform rejected or failed creation of an anonymous pipeline edge.
     PipeCreate(PipeError),
     /// The platform rejected or failed creation of the stdout capture pipe.
@@ -551,6 +615,7 @@ pub enum RuntimeErrorKind {
 impl RuntimeErrorKind {
     fn category(&self) -> ErrorCategory {
         match self {
+            Self::Transported { category, .. } => *category,
             Self::UserThrown { .. } => ErrorCategory::User,
             Self::Scope(_) => ErrorCategory::Name,
             Self::Operation(_) => ErrorCategory::Operation,
@@ -628,6 +693,7 @@ impl RuntimeErrorKind {
             | Self::RestrictedStartup { .. }
             | Self::ExecutionUnsupported
             | Self::Unsupported { .. }
+            | Self::ExecutionCapsule { .. }
             | Self::DuplicateParameter { .. }
             | Self::RedirectionDescriptorOverflow => ErrorCategory::Internal,
         }
@@ -875,6 +941,10 @@ impl fmt::Display for RuntimeErrorKind {
             Self::ShellExecutable(error) => {
                 write!(formatter, "shell re-execution is unavailable: {error}")
             }
+            Self::ExecutionCapsule { message } => {
+                write!(formatter, "execution capsule is unavailable: {message}")
+            }
+            Self::Transported { message, .. } => formatter.write_str(message),
             Self::PipeCreate(error) => error.fmt(formatter),
             Self::CapturePipe(error) => error.fmt(formatter),
             Self::CaptureRead(error) => error.fmt(formatter),
@@ -1386,6 +1456,13 @@ pub(crate) trait EvaluationHost {
     fn current_status(&self) -> Option<&Status>;
     fn policy(&self) -> EvaluationPolicy;
 
+    /// Whether this host can retain a complete submitted job as one managed
+    /// foreground process group. Other hosts keep evaluating conditional
+    /// chains operand by operand through the ordinary recursive evaluator.
+    fn manages_foreground_jobs(&self) -> bool {
+        false
+    }
+
     /// Snapshots language-owned host state before a catchable transaction.
     fn language_state_checkpoint(&mut self) -> Box<dyn Any> {
         Box::new(self.environment().clone())
@@ -1830,9 +1907,17 @@ pub fn expand_word(
     source: &SourceFile,
     scope: &mut ScopeStack,
 ) -> Result<ExpandedWord, RuntimeError> {
+    expand_word_with_environment(word, source, scope, &Environment::new())
+}
+
+pub(crate) fn expand_word_with_environment(
+    word: &Word,
+    source: &SourceFile,
+    scope: &mut ScopeStack,
+    environment: &Environment,
+) -> Result<ExpandedWord, RuntimeError> {
     let limits = EvalLimits::default();
-    // Word expansion never touches the environment; a throwaway is sufficient.
-    let mut env = Environment::new();
+    let mut env = environment.clone();
     let mut host = PureEvaluationHost {
         environment: &mut env,
         policy: limits.policy,
@@ -2002,7 +2087,13 @@ impl Evaluator<'_> {
                 if job.background_span.is_some() {
                     return Err(self.error(RuntimeErrorKind::ExecutionUnsupported, span));
                 }
-                let value = self.eval_chain(&job.chain, scope)?;
+                let value = if self.host.manages_foreground_jobs()
+                    && chain_contains_command_stage(&job.chain)
+                {
+                    Value::Status(self.execute_chain(&job.chain, scope, true)?)
+                } else {
+                    self.eval_chain(&job.chain, scope)?
+                };
                 Ok(Flow::Fallthrough(Some(FlowValue {
                     value,
                     span: job.chain.span(),
@@ -2948,6 +3039,7 @@ impl Evaluator<'_> {
             ),
             location: self.location(definition.name.span()),
             inspection,
+            origin_span: definition.name.span(),
         };
         let value = Value::Callable(Arc::new(callable));
         scope
@@ -2967,6 +3059,7 @@ impl Evaluator<'_> {
             result_type: None,
             location: self.location(closure.span),
             inspection: None,
+            origin_span: closure.span,
         };
         Ok(Value::Callable(Arc::new(callable)))
     }
@@ -3331,6 +3424,17 @@ impl Evaluator<'_> {
     }
 }
 
+fn chain_contains_command_stage(chain: &ConditionalChain) -> bool {
+    chain.or_terms().iter().any(|and_chain| {
+        and_chain.and_terms().iter().any(|pipeline| {
+            pipeline
+                .stages()
+                .iter()
+                .any(|stage| matches!(stage.kind(), StageKind::Command(_)))
+        })
+    })
+}
+
 /// The single runtime callable: a named function or an anonymous closure.
 #[derive(Clone)]
 struct CallableValue {
@@ -3345,6 +3449,299 @@ struct CallableValue {
     result_type: Option<ValueType>,
     location: String,
     inspection: Option<crate::help::FunctionInspection>,
+    origin_span: Span,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct CallableSnapshot {
+    pub(crate) name: Option<String>,
+    pub(crate) parameters: Vec<(String, ValueType)>,
+    pub(crate) captured: ScopeStack,
+    pub(crate) source: SourceFile,
+    pub(crate) result_type: Option<ValueType>,
+    pub(crate) location: String,
+    pub(crate) origin_span: Span,
+}
+
+pub(crate) fn snapshot_callable(callable: &Arc<dyn Callable>) -> Option<CallableSnapshot> {
+    let callable = callable.as_any().downcast_ref::<CallableValue>()?;
+    Some(CallableSnapshot {
+        name: callable.name.as_deref().map(str::to_owned),
+        parameters: callable
+            .parameters
+            .iter()
+            .map(|parameter| (parameter.name.to_string(), parameter.value_type.clone()))
+            .collect(),
+        captured: callable.captured.clone(),
+        source: callable.source.as_ref().clone(),
+        result_type: callable.result_type.clone(),
+        location: callable.location.clone(),
+        origin_span: callable.origin_span,
+    })
+}
+
+pub(crate) fn restore_callable(snapshot: CallableSnapshot) -> Result<Arc<dyn Callable>, String> {
+    let parsed = match flash_syntax::parse(&snapshot.source) {
+        flash_syntax::ParseOutcome::Complete(script) => script,
+        flash_syntax::ParseOutcome::Incomplete(_) => {
+            return Err("callable source is incomplete".to_owned());
+        }
+        flash_syntax::ParseOutcome::Invalid(_) => {
+            return Err("callable source is invalid".to_owned());
+        }
+    };
+    let body = find_callable_body(&parsed, &snapshot)
+        .ok_or_else(|| "callable definition is absent from its source".to_owned())?;
+    let binding_types = RuntimeBindingTypes::analyze_source(&snapshot.source, &parsed)
+        .map_err(|_| "callable source types cannot be restored".to_owned())?;
+    let source = Arc::new(snapshot.source);
+    let inspection = snapshot.name.as_deref().and_then(|_| {
+        binding_types
+            .function_signature(source.id(), snapshot.origin_span)
+            .cloned()
+            .map(|signature| crate::help::FunctionInspection::new(signature, &source))
+    });
+    let callable = CallableValue {
+        name: snapshot.name.map(Arc::from),
+        parameters: snapshot
+            .parameters
+            .into_iter()
+            .map(|(name, value_type)| CallableParameter {
+                name: Arc::from(name),
+                value_type,
+            })
+            .collect(),
+        body,
+        captured: snapshot.captured,
+        source,
+        binding_types: Arc::new(binding_types),
+        result_type: snapshot.result_type,
+        location: snapshot.location,
+        inspection,
+        origin_span: snapshot.origin_span,
+    };
+    Ok(Arc::new(callable))
+}
+
+fn find_callable_body(script: &Script, snapshot: &CallableSnapshot) -> Option<CallableBody> {
+    script
+        .statements()
+        .iter()
+        .find_map(|statement| find_callable_in_statement(statement, snapshot))
+}
+
+fn find_callable_in_statement(
+    statement: &Statement,
+    snapshot: &CallableSnapshot,
+) -> Option<CallableBody> {
+    match statement.kind() {
+        StatementKind::Import(_) | StatementKind::ModuleExport(_) => None,
+        StatementKind::Declaration(declaration) => {
+            find_callable_in_expression(&declaration.value, snapshot)
+        }
+        StatementKind::Assignment(assignment) => {
+            find_callable_in_expression(&assignment.value, snapshot)
+        }
+        StatementKind::Environment(EnvironmentStatement::Export { value, .. }) => {
+            find_callable_in_expression(value, snapshot)
+        }
+        StatementKind::Environment(EnvironmentStatement::Unset { .. }) => None,
+        StatementKind::Function(definition) => {
+            let matches = snapshot.name.as_deref().is_some_and(|name| {
+                definition.name.span() == snapshot.origin_span
+                    && snapshot
+                        .source
+                        .slice(definition.name.span())
+                        .is_ok_and(|candidate| candidate == name)
+            });
+            matches
+                .then(|| CallableBody::Block(definition.body.clone()))
+                .or_else(|| find_callable_in_block(&definition.body, snapshot))
+        }
+        StatementKind::If(statement) => find_callable_in_chain(&statement.condition, snapshot)
+            .or_else(|| find_callable_in_block(&statement.then_block, snapshot))
+            .or_else(|| {
+                statement
+                    .else_branch
+                    .as_ref()
+                    .and_then(|branch| match branch {
+                        ElseBranch::Block(block) => find_callable_in_block(block, snapshot),
+                        ElseBranch::If(statement) => {
+                            find_callable_in_if(statement.kind(), snapshot)
+                        }
+                    })
+            }),
+        StatementKind::While(statement) => find_callable_in_chain(&statement.condition, snapshot)
+            .or_else(|| find_callable_in_block(&statement.body, snapshot)),
+        StatementKind::For(statement) => find_callable_in_expression(&statement.iterable, snapshot)
+            .or_else(|| find_callable_in_block(&statement.body, snapshot)),
+        StatementKind::Match(statement) => find_callable_in_expression(&statement.value, snapshot)
+            .or_else(|| {
+                statement.arms.iter().find_map(|arm| {
+                    arm.guard
+                        .as_ref()
+                        .and_then(|guard| find_callable_in_expression(guard, snapshot))
+                        .or_else(|| find_callable_in_block(&arm.body, snapshot))
+                })
+            }),
+        StatementKind::Try(statement) => find_callable_in_block(&statement.try_block, snapshot)
+            .or_else(|| find_callable_in_block(&statement.catch_block, snapshot)),
+        StatementKind::Throw(expression) => find_callable_in_expression(expression, snapshot),
+        StatementKind::Control(ControlTransfer::Return(Some(expression))) => {
+            find_callable_in_expression(expression, snapshot)
+        }
+        StatementKind::Control(
+            ControlTransfer::Break | ControlTransfer::Continue | ControlTransfer::Return(None),
+        ) => None,
+        StatementKind::Job(job) => find_callable_in_chain(&job.chain, snapshot),
+    }
+}
+
+fn find_callable_in_if(
+    statement: &IfStatement,
+    snapshot: &CallableSnapshot,
+) -> Option<CallableBody> {
+    find_callable_in_chain(&statement.condition, snapshot)
+        .or_else(|| find_callable_in_block(&statement.then_block, snapshot))
+        .or_else(|| {
+            statement
+                .else_branch
+                .as_ref()
+                .and_then(|branch| match branch {
+                    ElseBranch::Block(block) => find_callable_in_block(block, snapshot),
+                    ElseBranch::If(statement) => find_callable_in_if(statement.kind(), snapshot),
+                })
+        })
+}
+
+fn find_callable_in_block(block: &Block, snapshot: &CallableSnapshot) -> Option<CallableBody> {
+    block
+        .statements
+        .iter()
+        .find_map(|statement| find_callable_in_statement(statement, snapshot))
+}
+
+fn find_callable_in_chain(
+    chain: &ConditionalChain,
+    snapshot: &CallableSnapshot,
+) -> Option<CallableBody> {
+    chain.or_terms().iter().find_map(|and_chain| {
+        and_chain.and_terms().iter().find_map(|pipeline| {
+            pipeline
+                .stages()
+                .iter()
+                .find_map(|stage| match stage.kind() {
+                    StageKind::Expression(expression) => {
+                        find_callable_in_expression(expression, snapshot)
+                    }
+                    StageKind::Command(command) => {
+                        find_callable_in_word(command.head.word(), snapshot).or_else(|| {
+                            command.items.iter().find_map(|item| match item.kind() {
+                                CommandItemKind::Word(word) => {
+                                    find_callable_in_word(word, snapshot)
+                                }
+                                CommandItemKind::Closure(closure) => {
+                                    find_callable_in_closure(closure, snapshot)
+                                }
+                                CommandItemKind::Redirection(redirection) => {
+                                    match redirection.kind() {
+                                        RedirectionKind::Input { target, .. }
+                                        | RedirectionKind::File(flash_syntax::FileRedirection {
+                                            target,
+                                            ..
+                                        }) => find_callable_in_word(target, snapshot),
+                                        RedirectionKind::Duplicate { .. }
+                                        | RedirectionKind::Close { .. } => None,
+                                    }
+                                }
+                                CommandItemKind::Spread(_) => None,
+                            })
+                        })
+                    }
+                })
+        })
+    })
+}
+
+fn find_callable_in_closure(
+    closure: &Closure,
+    snapshot: &CallableSnapshot,
+) -> Option<CallableBody> {
+    (snapshot.name.is_none() && closure.span == snapshot.origin_span)
+        .then(|| CallableBody::Expression(closure.body.clone()))
+        .or_else(|| find_callable_in_chain(&closure.body, snapshot))
+}
+
+fn find_callable_in_expression(
+    expression: &Expression,
+    snapshot: &CallableSnapshot,
+) -> Option<CallableBody> {
+    match expression.kind() {
+        ExpressionKind::Literal(literal) => match literal.kind() {
+            LiteralKind::DoubleQuoted(parts) => parts
+                .iter()
+                .find_map(|part| find_callable_in_word_part(part, snapshot)),
+            _ => None,
+        },
+        ExpressionKind::Variable(_) | ExpressionKind::Symbol(_) => None,
+        ExpressionKind::List(elements) => elements
+            .iter()
+            .find_map(|element| find_callable_in_expression(element, snapshot)),
+        ExpressionKind::Record(entries) => entries.iter().find_map(|entry| {
+            let key = match &entry.key {
+                RecordKey::DoubleQuoted(part) => find_callable_in_word_part(part, snapshot),
+                RecordKey::Identifier(_) | RecordKey::SingleQuoted(_) => None,
+            };
+            key.or_else(|| find_callable_in_expression(&entry.value, snapshot))
+        }),
+        ExpressionKind::Closure(closure) => find_callable_in_closure(closure, snapshot),
+        ExpressionKind::CommandSubstitution(substitution) => {
+            find_callable_in_chain(substitution.chain(), snapshot)
+        }
+        ExpressionKind::GroupedJob(chain) => find_callable_in_chain(chain, snapshot),
+        ExpressionKind::Call(call) => {
+            find_callable_in_expression(&call.callee, snapshot).or_else(|| {
+                call.arguments
+                    .iter()
+                    .find_map(|argument| find_callable_in_expression(argument, snapshot))
+            })
+        }
+        ExpressionKind::Index(index) => find_callable_in_expression(&index.target, snapshot)
+            .or_else(|| find_callable_in_expression(&index.index, snapshot)),
+        ExpressionKind::Member(member) => find_callable_in_expression(&member.target, snapshot),
+        ExpressionKind::Unary(unary) => find_callable_in_expression(&unary.operand, snapshot),
+        ExpressionKind::Binary(binary) => find_callable_in_expression(&binary.left, snapshot)
+            .or_else(|| find_callable_in_expression(&binary.right, snapshot)),
+    }
+}
+
+fn find_callable_in_word(word: &Word, snapshot: &CallableSnapshot) -> Option<CallableBody> {
+    word.parts()
+        .iter()
+        .find_map(|part| find_callable_in_word_part(part, snapshot))
+}
+
+fn find_callable_in_word_part(
+    part: &WordPart,
+    snapshot: &CallableSnapshot,
+) -> Option<CallableBody> {
+    match part.kind() {
+        WordPartKind::DoubleQuoted(parts) => parts
+            .iter()
+            .find_map(|part| find_callable_in_word_part(part, snapshot)),
+        WordPartKind::BracedInterpolation(expression) => {
+            find_callable_in_expression(expression, snapshot)
+        }
+        WordPartKind::CommandSubstitution(substitution) => {
+            find_callable_in_chain(substitution.chain(), snapshot)
+        }
+        WordPartKind::Bare
+        | WordPartKind::BareEscape
+        | WordPartKind::SingleQuoted
+        | WordPartKind::DoubleText
+        | WordPartKind::DoubleEscape
+        | WordPartKind::Variable(_) => None,
+    }
 }
 
 #[derive(Clone)]

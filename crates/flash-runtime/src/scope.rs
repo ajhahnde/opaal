@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt;
 use std::sync::Arc;
@@ -18,6 +18,14 @@ struct Binding {
     mutability: BindingMutability,
     value_type: Option<ValueType>,
     value: Value,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct CapsuleBinding {
+    pub(crate) name: String,
+    pub(crate) mutability: BindingMutability,
+    pub(crate) value_type: Option<ValueType>,
+    pub(crate) value: Value,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -210,6 +218,79 @@ impl ScopeStack {
             }
         }
         visible.into_iter().collect()
+    }
+
+    pub(crate) fn capsule_bindings(&self) -> Vec<CapsuleBinding> {
+        let mut visible = BTreeMap::new();
+        for frame in &self.frames {
+            for (name, binding) in &frame.bindings {
+                visible.insert(name.as_ref(), binding);
+            }
+        }
+        visible
+            .into_iter()
+            .map(|(name, binding)| CapsuleBinding {
+                name: name.to_owned(),
+                mutability: binding.mutability,
+                value_type: binding.value_type.clone(),
+                value: binding.value.clone(),
+            })
+            .collect()
+    }
+
+    pub(crate) fn from_capsule_bindings(bindings: Vec<CapsuleBinding>) -> Result<Self, ScopeError> {
+        let mut scope = Self::new();
+        for binding in bindings {
+            scope.declare_typed(
+                binding.name,
+                binding.mutability,
+                binding.value,
+                binding.value_type,
+            )?;
+        }
+        Ok(scope)
+    }
+
+    pub(crate) fn apply_capsule_delta(
+        &mut self,
+        base: &Self,
+        updated: &Self,
+    ) -> Result<(), ScopeError> {
+        let base: BTreeMap<_, _> = base
+            .capsule_bindings()
+            .into_iter()
+            .map(|binding| (binding.name.clone(), binding))
+            .collect();
+        let updated: BTreeMap<_, _> = updated
+            .capsule_bindings()
+            .into_iter()
+            .map(|binding| (binding.name.clone(), binding))
+            .collect();
+        let changed_names: BTreeSet<_> = base.keys().chain(updated.keys()).cloned().collect();
+        for name in changed_names {
+            let base_binding = base.get(&name);
+            let updated_binding = updated.get(&name);
+            if base_binding == updated_binding {
+                continue;
+            }
+            if let (Some(base_binding), Some(updated_binding)) = (base_binding, updated_binding)
+                && base_binding.mutability == updated_binding.mutability
+                && base_binding.value_type == updated_binding.value_type
+            {
+                self.assign(&name, updated_binding.value.clone())?;
+                continue;
+            }
+            self.remove(&name);
+            if let Some(binding) = updated_binding {
+                self.declare_typed(
+                    binding.name.clone(),
+                    binding.mutability,
+                    binding.value.clone(),
+                    binding.value_type.clone(),
+                )?;
+            }
+        }
+        Ok(())
     }
 
     fn find(&self, name: &str) -> Option<&Binding> {

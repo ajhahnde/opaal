@@ -577,6 +577,7 @@ impl PipelineGroup {
 struct StartedPipeline {
     children: Vec<StartedChild>,
     group: Option<ProcessGroupId>,
+    supervisor_completion: Option<Box<dyn DescriptorEndpoint>>,
 }
 
 /// One uniquely owned member of a started background pipeline.
@@ -614,6 +615,7 @@ pub struct BackgroundPipeline {
     members: Vec<BackgroundMember>,
     group: ProcessGroupId,
     started_at: Instant,
+    supervisor_completion: Option<Box<dyn DescriptorEndpoint>>,
 }
 
 impl BackgroundPipeline {
@@ -639,6 +641,12 @@ impl BackgroundPipeline {
     #[must_use]
     pub fn into_members(self) -> Vec<BackgroundMember> {
         self.members
+    }
+
+    /// Consume the pipeline into its members and optional supervisor reply reader.
+    #[must_use]
+    pub fn into_parts(self) -> (Vec<BackgroundMember>, Option<Box<dyn DescriptorEndpoint>>) {
+        (self.members, self.supervisor_completion)
     }
 }
 
@@ -700,6 +708,7 @@ pub fn start_background_pipeline(
         members,
         group,
         started_at: pipeline_started,
+        supervisor_completion: started.supervisor_completion,
     })
 }
 
@@ -794,6 +803,26 @@ fn start_preflighted_pipeline(
 ) -> Result<StartedPipeline, RuntimeError> {
     validate_preflighted_external_plan(plan)?;
 
+    let (mut supervisor_reader, mut supervisor_writer) = if plan.supervisor_input().is_some() {
+        let endpoints = platform
+            .pipe()
+            .map_err(|error| RuntimeError::new(RuntimeErrorKind::PipeCreate(error), plan.span()))?;
+        let (reader, writer) = endpoints.into_parts();
+        (Some(reader), Some(writer))
+    } else {
+        (None, None)
+    };
+    let (supervisor_completion_reader, mut supervisor_completion_writer) =
+        if plan.expects_supervisor_completion() {
+            let endpoints = platform.pipe().map_err(|error| {
+                RuntimeError::new(RuntimeErrorKind::PipeCreate(error), plan.span())
+            })?;
+            let (reader, writer) = endpoints.into_parts();
+            (Some(reader), Some(writer))
+        } else {
+            (None, None)
+        };
+
     let mut pipes = Vec::with_capacity(plan.edges().len());
     for edge in plan.edges() {
         let endpoints = platform.pipe().map_err(|error| {
@@ -822,6 +851,16 @@ fn start_preflighted_pipeline(
                 .flatten()
         });
         let mut descriptor_map = StageDescriptorMap::new(input, output, merge_output);
+        if index == 0
+            && let Some(reader) = supervisor_reader.take()
+        {
+            descriptor_map.assign_owned(crate::capsule::CAPSULE_DESCRIPTOR, reader);
+        }
+        if index == 0
+            && let Some(writer) = supervisor_completion_writer.take()
+        {
+            descriptor_map.assign_owned(crate::capsule::COMPLETION_DESCRIPTOR, writer);
+        }
         if let Err(error) =
             descriptor_map.apply_redirections(stage.redirections(), plan.cwd(), platform)
         {
@@ -888,9 +927,37 @@ fn start_preflighted_pipeline(
     }
 
     drop(pipes);
+    if let (Some(bytes), Some(mut writer)) = (plan.supervisor_input(), supervisor_writer.take()) {
+        let mut written = 0;
+        while written < bytes.len() {
+            match writer.write(&bytes[written..]) {
+                Ok(0) => {
+                    terminate_and_reap(&mut children);
+                    return Err(RuntimeError::new(
+                        RuntimeErrorKind::PipelineWrite(
+                            flash_platform::DescriptorWriteError::Operation {
+                                kind: std::io::ErrorKind::WriteZero,
+                                message: "execution capsule pipe accepted zero bytes".to_owned(),
+                            },
+                        ),
+                        plan.span(),
+                    ));
+                }
+                Ok(count) => written += count,
+                Err(error) => {
+                    terminate_and_reap(&mut children);
+                    return Err(RuntimeError::new(
+                        RuntimeErrorKind::PipelineWrite(error),
+                        plan.span(),
+                    ));
+                }
+            }
+        }
+    }
     Ok(StartedPipeline {
         children,
         group: group.established(),
+        supervisor_completion: supervisor_completion_reader,
     })
 }
 

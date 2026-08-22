@@ -55,18 +55,6 @@ fn run_script(path: &Path, cwd: &Path, fixture_path: &Path) -> Output {
         .expect("fsh should start")
 }
 
-fn run_async_chain(source: &str, pipefail: bool) -> Output {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_fsh"));
-    command.args(["--async-chain", source, "--async-capture-limit", "4096"]);
-    if pipefail {
-        command.arg("--async-pipefail");
-    }
-    command
-        .env("PATH", fixture_directory())
-        .output()
-        .expect("fsh should start")
-}
-
 fn fixture_directory() -> &'static Path {
     Path::new(env!("CARGO_BIN_EXE_flash-e2e-status-fixture"))
         .parent()
@@ -105,32 +93,28 @@ fn help_describes_the_script_cli() {
 }
 
 #[test]
-fn the_help_text_does_not_advertise_the_reserved_chain_mode() {
+fn the_help_text_does_not_advertise_the_reserved_capsule_mode() {
     let output = fsh(&["--help"]);
 
     assert!(output.status.success());
     let rendered = String::from_utf8(output.stdout).expect("help output should be UTF-8");
-    assert!(!rendered.contains("async-chain"));
+    assert!(!rendered.contains("async-capsule"));
+    assert!(!rendered.contains("async-completion"));
 }
 
 #[test]
-fn the_reserved_chain_mode_uses_the_environment_and_short_circuits() {
-    let temp = TempDir::new("reserved-chain");
+fn scripts_use_the_environment_and_short_circuit_at_the_host_boundary() {
+    let temp = TempDir::new("environment-short-circuit");
     let marker = temp.path().join("unreached.txt");
     let source = format!(
-        "^{} exit $FLASH_OK || ^{} late 0 {} 9",
+        "^{} exit ${{env('FLASH_OK')}} || ^{} late 0 {} 9",
         status_fixture(),
         status_fixture(),
         marker.display()
     );
+    let script = temp.script("short-circuit.fsh", &source);
     let output = Command::new(env!("CARGO_BIN_EXE_fsh"))
-        .args([
-            "--async-chain",
-            source.as_str(),
-            "--async-pipefail",
-            "--async-capture-limit",
-            "4096",
-        ])
+        .arg(script)
         .current_dir(temp.path())
         .env("PATH", fixture_directory())
         .env("FLASH_OK", "0")
@@ -486,18 +470,15 @@ fn explicit_exit_codes_are_exact_and_silent() {
 }
 
 #[test]
-fn default_and_pipefail_pipeline_selection_reach_the_host_boundary_exactly() {
+fn default_pipeline_selection_reaches_the_host_boundary_exactly() {
+    let temp = TempDir::new("default-pipeline-selection");
     let source = format!("^{0} exit 7 | ^{0} exit 0", status_fixture(),);
+    let script = temp.script("pipeline.fsh", &source);
 
-    let default = run_async_chain(&source, false);
+    let default = run_script(&script, temp.path(), fixture_directory());
     assert_eq!(default.status.code(), Some(0), "{default:?}");
     assert!(default.stdout.is_empty());
     assert!(default.stderr.is_empty());
-
-    let pipefail = run_async_chain(&source, true);
-    assert_eq!(pipefail.status.code(), Some(7), "{pipefail:?}");
-    assert!(pipefail.stdout.is_empty());
-    assert!(pipefail.stderr.is_empty());
 }
 
 #[test]
@@ -662,6 +643,40 @@ fn a_background_supervisor_executes_a_multi_island_pipeline() {
     assert!(
         marker.exists(),
         "the background child shell should complete every mixed segment"
+    );
+}
+
+#[test]
+fn a_background_supervisor_executes_snapshotted_values_and_functions() {
+    let temp = TempDir::new("background-capsule");
+    let marker = temp.path().join("reached.txt");
+    let script = temp.script(
+        "background-capsule.fsh",
+        &format!(
+            concat!(
+                "let marker = \"{}\"\n",
+                "let write = {{|code: Int| ^{} late $code $marker 0}}\n",
+                "def finish(code: Int) {{\n",
+                "    $write($code)\n",
+                "}}\n",
+                "^{} exit 7 || finish(0) &\n",
+                "^{} exit 0\n",
+            ),
+            marker.display(),
+            status_fixture(),
+            status_fixture(),
+            status_fixture(),
+        ),
+    );
+
+    let output = run_script(&script, temp.path(), fixture_directory());
+
+    assert!(output.status.success(), "{output:?}");
+    assert!(output.stdout.is_empty());
+    assert!(output.stderr.is_empty());
+    assert!(
+        marker.exists(),
+        "the supervisor should execute the function and its captured marker"
     );
 }
 

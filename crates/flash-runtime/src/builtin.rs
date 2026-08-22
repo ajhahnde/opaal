@@ -62,6 +62,17 @@ impl SessionState {
     pub fn set_current_status(&mut self, status: Option<Status>) {
         self.current_status = status;
     }
+
+    pub(crate) fn apply_delta(&mut self, base: &Self, updated: &Self) {
+        if base.cwd != updated.cwd {
+            self.cwd = updated.cwd.clone();
+        }
+        self.environment
+            .apply_delta(&base.environment, &updated.environment);
+        if base.current_status != updated.current_status {
+            self.current_status = updated.current_status.clone();
+        }
+    }
 }
 
 /// Data produced by a completed standard built-in.

@@ -32,7 +32,7 @@ use crate::command::{
 };
 use crate::eval::{
     ExpandedWord, ReservedCommandDetails, RuntimeError, RuntimeErrorKind,
-    evaluate_closure_argument_with_binding_types, expand_spread, expand_word,
+    evaluate_closure_argument_with_binding_types, expand_spread, expand_word_with_environment,
 };
 use crate::help::{HelpCatalog, HelpSnapshot, render_help};
 use crate::module::RuntimeBindingTypes;
@@ -56,6 +56,8 @@ pub struct ExecutionPlan {
     pipefail: bool,
     capture_limit: usize,
     process_group_policy: ProcessGroupPolicy,
+    supervisor_input: Option<Arc<[u8]>>,
+    supervisor_completion: bool,
     span: Span,
 }
 
@@ -254,8 +256,21 @@ impl ExecutionPlan {
             pipefail,
             capture_limit,
             process_group_policy: ProcessGroupPolicy::Isolate,
+            supervisor_input: None,
+            supervisor_completion: false,
             span,
         }
+    }
+
+    pub(crate) fn with_supervisor_input(mut self, bytes: Vec<u8>) -> Self {
+        debug_assert_eq!(self.stages.len(), 1);
+        self.supervisor_input = Some(Arc::from(bytes));
+        self
+    }
+
+    pub(crate) const fn with_supervisor_completion(mut self) -> Self {
+        self.supervisor_completion = true;
+        self
     }
 
     /// The working directory every stage would run in.
@@ -303,6 +318,14 @@ impl ExecutionPlan {
 
     pub(crate) const fn process_group_policy(&self) -> ProcessGroupPolicy {
         self.process_group_policy
+    }
+
+    pub(crate) fn supervisor_input(&self) -> Option<&[u8]> {
+        self.supervisor_input.as_deref()
+    }
+
+    pub(crate) const fn expects_supervisor_completion(&self) -> bool {
+        self.supervisor_completion
     }
 
     /// The whole-pipeline source span.
@@ -945,6 +968,8 @@ pub(crate) fn plan_pipeline_with_options_and_binding_types(
         pipefail: options.pipefail(),
         capture_limit: options.capture_limit(),
         process_group_policy: options.process_group_policy,
+        supervisor_input: None,
+        supervisor_completion: false,
         span: pipeline.span(),
     })
 }
@@ -973,7 +998,12 @@ fn plan_stage(
 
     // argv[0] is the expanded command word; the head marker only steers
     // resolution and is never part of the name.
-    let head = expand_word(command.head.word(), context.source, scope)?;
+    let head = expand_word_with_environment(
+        command.head.word(),
+        context.source,
+        scope,
+        context.environment,
+    )?;
     let force_external = command.head.kind() == flash_syntax::CommandHeadKind::ForcedExternal;
     let (mut resolution, mut input_carriers, mut output_carrier) =
         resolve(head.value(), force_external, command.head.span(), context)?;
@@ -1001,7 +1031,8 @@ fn plan_stage(
     for item in &command.items {
         match item.kind() {
             CommandItemKind::Word(word) => {
-                let word = expand_word(word, context.source, scope)?;
+                let word =
+                    expand_word_with_environment(word, context.source, scope, context.environment)?;
                 if lower_command && command_path.is_none() {
                     command_path = Some(resolve_dynamic_external(&word, context)?);
                 }
@@ -1048,7 +1079,12 @@ fn plan_stage(
                 });
             }
             CommandItemKind::Redirection(redirection) => {
-                let action = plan_redirection(redirection.kind(), context.source, scope)?;
+                let action = plan_redirection(
+                    redirection.kind(),
+                    context.source,
+                    scope,
+                    context.environment,
+                )?;
                 redirections.push(PlannedRedirection {
                     action,
                     span: redirection.span(),
@@ -1262,7 +1298,12 @@ fn plan_help_stage(
         .lookup("help")
         .expect("the standard help command is registered");
     let mut head_scope = scope.clone();
-    let head = expand_word(command.head.word(), context.source, &mut head_scope)?;
+    let head = expand_word_with_environment(
+        command.head.word(),
+        context.source,
+        &mut head_scope,
+        context.environment,
+    )?;
     let mut argv = vec![head];
     let mut arguments = Vec::new();
     let mut redirections = Vec::new();
@@ -1299,7 +1340,12 @@ fn plan_help_stage(
                 }
                 query_span = item.span();
                 let mut query_scope = scope.clone();
-                let expanded = expand_word(word, context.source, &mut query_scope)?;
+                let expanded = expand_word_with_environment(
+                    word,
+                    context.source,
+                    &mut query_scope,
+                    context.environment,
+                )?;
                 let name = expanded.value().to_str().ok_or_else(|| {
                     RuntimeError::new(
                         RuntimeErrorKind::BuiltinArgument {
@@ -1324,8 +1370,12 @@ fn plan_help_stage(
             }
             CommandItemKind::Redirection(redirection) => {
                 let mut redirection_scope = scope.clone();
-                let action =
-                    plan_redirection(redirection.kind(), context.source, &mut redirection_scope)?;
+                let action = plan_redirection(
+                    redirection.kind(),
+                    context.source,
+                    &mut redirection_scope,
+                    context.environment,
+                )?;
                 redirections.push(PlannedRedirection {
                     action,
                     span: redirection.span(),
@@ -1451,6 +1501,7 @@ fn plan_redirection(
     kind: &RedirectionKind,
     source: &SourceFile,
     scope: &mut ScopeStack,
+    environment: &Environment,
 ) -> Result<RedirectionAction, RuntimeError> {
     match kind {
         RedirectionKind::Input {
@@ -1460,7 +1511,7 @@ fn plan_redirection(
         } => Ok(RedirectionAction::Input {
             descriptor: descriptor_or(descriptor.as_ref(), 0, source)?,
             operator_span: *operator_span,
-            target: expand_word(target, source, scope)?,
+            target: expand_word_with_environment(target, source, scope, environment)?,
         }),
         RedirectionKind::File(FileRedirection {
             descriptor,
@@ -1471,7 +1522,7 @@ fn plan_redirection(
             descriptor: descriptor_or(descriptor.as_ref(), 1, source)?,
             mode: *mode,
             operator_span: *operator_span,
-            target: expand_word(target, source, scope)?,
+            target: expand_word_with_environment(target, source, scope, environment)?,
         }),
         RedirectionKind::Duplicate {
             descriptor,
@@ -1754,6 +1805,8 @@ mod tests {
             pipefail: false,
             capture_limit: SessionOptions::DEFAULT_CAPTURE_LIMIT,
             process_group_policy: ProcessGroupPolicy::Isolate,
+            supervisor_input: None,
+            supervisor_completion: false,
             span: source
                 .span(0..kinds.len())
                 .expect("a topology plan has a valid span"),

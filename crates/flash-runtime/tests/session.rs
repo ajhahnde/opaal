@@ -23,18 +23,22 @@ use std::sync::{Arc, Barrier, Mutex, mpsc};
 use flash_platform::{
     Capabilities, Capability, ChildProcess, DescriptorEndpoint, DescriptorReadError, FakePlatform,
     FileActionError, FileIoEndpoint, FileOpenRequest, ForegroundTerminalGuard, JobSignal,
-    PipeEndpoints, PipeError, Platform, PlatformError, ProcessGroup, ProcessGroupId, ProcessStatus,
-    ProcessTransition, RecordingPlatform, SignalError, SpawnError, SpawnRequest, TerminalSize,
-    TerminateError, WaitError, WorkingDirectoryError, WorkingDirectoryRequest,
+    NoopTerminalModeToken, PipeEndpoints, PipeError, Platform, PlatformError, ProcessGroup,
+    ProcessGroupId, ProcessStatus, ProcessTransition, RecordingPlatform, SignalError, SpawnError,
+    SpawnRequest, TerminalModeToken, TerminalSize, TerminateError, WaitError,
+    WorkingDirectoryError, WorkingDirectoryRequest,
 };
 use flash_platform_posix::PosixPlatform;
 use flash_runtime::builtin::standard_registry;
+use flash_runtime::capsule::{
+    decode_background_capsule, encode_background_capsule, encode_supervisor_completion,
+};
 use flash_runtime::command::{CommandLifecycle, CommandNamespaceEntry, CommandRegistry};
 use flash_runtime::eval::{Clock, FakeClock, Instant};
 use flash_runtime::job::{JobMemberState, JobPlacement, JobState, ProcessId};
 use flash_runtime::plan::SessionOptions;
 use flash_runtime::resolve::ExecutableProbe;
-use flash_runtime::script::execute_script;
+use flash_runtime::script::{execute_background_capsule, execute_script};
 use flash_runtime::session::{
     BackgroundFailureReason, JobNoticeKind, LiveJobState, Session, SubmitOutcome,
 };
@@ -74,6 +78,31 @@ fn session() -> Session {
 
 fn terminal_platform() -> FakePlatform {
     FakePlatform::with_terminal(Capabilities::full(), true, TerminalSize::new(80, 24))
+}
+
+fn supervisor_reply(source: &str) -> Vec<u8> {
+    let wire = encode_background_capsule(
+        "<supervisor-reply>",
+        source,
+        Path::new("/work"),
+        &environment(),
+        None,
+        &ScopeStack::new(),
+        SessionOptions::default(),
+    )
+    .expect("the controlled launch capsule should encode");
+    let capsule = decode_background_capsule(&wire).expect("the controlled capsule should decode");
+    let mut output = Vec::new();
+    let (_, completion) = execute_background_capsule(
+        capsule,
+        &standard_registry(),
+        &Probe::default(),
+        &terminal_platform(),
+        Arc::new(FakeClock::new()),
+        &mut output,
+    )
+    .expect("the controlled supervisor reply should execute");
+    encode_supervisor_completion(&completion).expect("the controlled completion should encode")
 }
 
 #[derive(Debug, Default)]
@@ -297,6 +326,8 @@ struct ControlledBackgroundPlatform {
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum ForegroundOperation {
     Handover(u64),
+    SnapshotMode,
+    ApplyMode,
     Signal(u64, JobSignal),
     Restore,
 }
@@ -722,6 +753,22 @@ impl Platform for ControlledBackgroundPlatform {
                 .clone(),
             released: false,
         }))
+    }
+
+    fn snapshot_terminal_mode(&self) -> Result<Box<dyn TerminalModeToken>, PlatformError> {
+        self.operations
+            .lock()
+            .expect("foreground operation lock")
+            .push(ForegroundOperation::SnapshotMode);
+        Ok(Box::new(NoopTerminalModeToken))
+    }
+
+    fn apply_terminal_mode(&self, _token: &dyn TerminalModeToken) -> Result<(), PlatformError> {
+        self.operations
+            .lock()
+            .expect("foreground operation lock")
+            .push(ForegroundOperation::ApplyMode);
+        Ok(())
     }
 
     fn spawn(&self, request: &SpawnRequest<'_>) -> Result<Box<dyn ChildProcess>, SpawnError> {
@@ -1719,10 +1766,8 @@ fn a_background_conditional_chain_launches_exactly_one_shell_member() {
         records[0].argv(),
         [
             OsString::from("/fake/fsh"),
-            OsString::from("--async-chain"),
-            OsString::from("^tool && ^other"),
-            OsString::from("--async-capture-limit"),
-            OsString::from(SessionOptions::DEFAULT_CAPTURE_LIMIT.to_string()),
+            OsString::from("--async-capsule"),
+            OsString::from("3"),
         ]
     );
     assert_eq!(records[0].requested(), ProcessGroup::New);
@@ -1774,10 +1819,8 @@ fn a_reserved_background_head_is_not_classified_as_an_external_pipeline() {
         records[0].argv(),
         [
             OsString::from("/fake/fsh"),
-            OsString::from("--async-chain"),
-            OsString::from("future"),
-            OsString::from("--async-capture-limit"),
-            OsString::from(SessionOptions::DEFAULT_CAPTURE_LIMIT.to_string()),
+            OsString::from("--async-capsule"),
+            OsString::from("3"),
         ]
     );
 }
@@ -1824,7 +1867,7 @@ fn a_single_external_background_pipeline_still_spawns_directly() {
 }
 
 #[test]
-fn a_direct_background_pipeline_expands_environment_backed_names() {
+fn a_direct_background_pipeline_uses_the_explicit_environment_accessor() {
     let clock = Arc::new(FakeClock::at(100));
     let mut session = session();
     session.enable_interactive_job_control(clock.clone());
@@ -1835,7 +1878,7 @@ fn a_direct_background_pipeline_expands_environment_backed_names() {
     session
         .submit(
             "<interactive>",
-            "^tool $HOME &",
+            "^tool ${env('HOME')} &",
             &probe,
             &platform,
             clock.as_ref(),
@@ -1853,7 +1896,7 @@ fn a_direct_background_pipeline_expands_environment_backed_names() {
 }
 
 #[test]
-fn a_background_shell_launch_forwards_session_options() {
+fn a_background_shell_launch_uses_the_typed_capsule_descriptor() {
     let clock = Arc::new(FakeClock::at(100));
     let mut session = Session::new(
         "/work",
@@ -1884,11 +1927,8 @@ fn a_background_shell_launch_forwards_session_options() {
         records[0].argv(),
         [
             OsString::from("/fake/fsh"),
-            OsString::from("--async-chain"),
-            OsString::from("^tool || ^other"),
-            OsString::from("--async-pipefail"),
-            OsString::from("--async-capture-limit"),
-            OsString::from("4096"),
+            OsString::from("--async-capsule"),
+            OsString::from("3"),
         ]
     );
 }
@@ -1924,7 +1964,7 @@ fn an_unavailable_shell_executable_rejects_the_chain_before_launch() {
 }
 
 #[test]
-fn a_background_chain_reading_a_shell_local_binding_is_rejected_before_launch() {
+fn a_background_chain_snapshots_a_shell_local_binding_before_launch() {
     let clock = Arc::new(FakeClock::at(100));
     let mut session = session();
     session.enable_interactive_job_control(clock.clone());
@@ -1943,22 +1983,20 @@ fn a_background_chain_reading_a_shell_local_binding_is_rejected_before_launch() 
         )
         .expect("the declaration should succeed");
 
-    let error = session
-        .submit(
-            "<interactive>",
-            "^tool $n &",
-            &probe,
-            &platform,
-            clock.as_ref(),
-            &mut sink,
-        )
-        .expect_err("a shell-local read cannot cross into the subshell");
-
-    assert!(error.render().contains("$n"));
-    assert!(
-        platform.spawn_log().records().is_empty(),
-        "the rejection must happen before any process exists"
+    assert_eq!(
+        session
+            .submit(
+                "<interactive>",
+                "^tool $n &",
+                &probe,
+                &platform,
+                clock.as_ref(),
+                &mut sink,
+            )
+            .expect("the launch snapshot should carry a shell-local value"),
+        SubmitOutcome::Continued
     );
+    assert_eq!(platform.spawn_log().records().len(), 1);
 }
 
 #[test]
@@ -1997,11 +2035,11 @@ fn a_background_chain_reading_an_environment_backed_binding_is_accepted() {
 }
 
 #[test]
-fn background_chain_validation_reaches_spreads_redirections_and_braced_words() {
-    for (declaration, background, reference) in [
-        ("let args = ['one']", "^tool ...$args &", "$args"),
-        ("let file = 'output'", "^tool > $file &", "$file"),
-        ("let n = 5", "^tool pre${$n}post &", "$n"),
+fn background_launch_snapshots_spreads_redirections_and_braced_words() {
+    for (declaration, background) in [
+        ("let args = ['one']", "^tool ...$args &"),
+        ("let file = 'output'", "^tool > $file &"),
+        ("let n = 5", "^tool pre${$n}post &"),
     ] {
         let clock = Arc::new(FakeClock::at(100));
         let mut session = session();
@@ -2021,27 +2059,25 @@ fn background_chain_validation_reaches_spreads_redirections_and_braced_words() {
             )
             .expect("the shell-local binding should be established");
 
-        let error = session
-            .submit(
-                "<interactive>",
-                background,
-                &probe,
-                &platform,
-                clock.as_ref(),
-                &mut sink,
-            )
-            .expect_err("every parent-only read should be rejected before launch");
-
-        assert!(error.render().contains(reference));
-        assert!(
-            platform.spawn_log().records().is_empty(),
-            "{background:?} must fail before spawning"
+        assert_eq!(
+            session
+                .submit(
+                    "<interactive>",
+                    background,
+                    &probe,
+                    &platform,
+                    clock.as_ref(),
+                    &mut sink,
+                )
+                .expect("every finite lexical value should cross in the launch snapshot"),
+            SubmitOutcome::Continued
         );
+        assert_eq!(platform.spawn_log().records().len(), 1);
     }
 }
 
 #[test]
-fn a_background_command_shadowed_by_a_shell_function_is_rejected_before_launch() {
+fn a_background_command_uses_a_snapshotted_shell_function() {
     let clock = Arc::new(FakeClock::at(100));
     let mut session = session();
     session.enable_interactive_job_control(clock.clone());
@@ -2060,20 +2096,22 @@ fn a_background_command_shadowed_by_a_shell_function_is_rejected_before_launch()
         )
         .expect("the function definition should succeed");
 
-    let error = session
-        .submit(
-            "<interactive>",
-            "mark &",
-            &probe,
-            &platform,
-            clock.as_ref(),
-            &mut sink,
-        )
-        .expect_err("a shell function cannot cross into the subshell");
-
-    assert!(error.render().contains("shell function"));
-    assert!(error.render().contains("mark"));
-    assert!(platform.spawn_log().records().is_empty());
+    assert_eq!(
+        session
+            .submit(
+                "<interactive>",
+                "mark &",
+                &probe,
+                &platform,
+                clock.as_ref(),
+                &mut sink,
+            )
+            .expect("the shell function should cross in the launch snapshot"),
+        SubmitOutcome::Continued
+    );
+    let records = platform.spawn_log().records();
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].executable(), Path::new("/fake/fsh"));
 }
 
 #[test]
@@ -2112,7 +2150,7 @@ fn a_forced_external_background_command_bypasses_a_same_named_shell_function() {
 }
 
 #[test]
-fn a_background_function_call_is_rejected_as_parent_only_state() {
+fn a_background_function_call_uses_a_snapshotted_shell_function() {
     let clock = Arc::new(FakeClock::at(100));
     let mut session = session();
     session.enable_interactive_job_control(clock.clone());
@@ -2130,20 +2168,22 @@ fn a_background_function_call_is_rejected_as_parent_only_state() {
         )
         .expect("the function definition should succeed");
 
-    let error = session
-        .submit(
-            "<interactive>",
-            "mark() &",
-            &Probe::default(),
-            &platform,
-            clock.as_ref(),
-            &mut sink,
-        )
-        .expect_err("a shell function call cannot cross into the subshell");
-
-    assert!(error.render().contains("shell function"));
-    assert!(error.render().contains("mark()"));
-    assert!(platform.spawn_log().records().is_empty());
+    assert_eq!(
+        session
+            .submit(
+                "<interactive>",
+                "mark() &",
+                &Probe::default(),
+                &platform,
+                clock.as_ref(),
+                &mut sink,
+            )
+            .expect("the shell function should cross in the launch snapshot"),
+        SubmitOutcome::Continued
+    );
+    let records = platform.spawn_log().records();
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].executable(), Path::new("/fake/fsh"));
 }
 
 #[test]
@@ -2205,9 +2245,13 @@ fn a_background_internal_pipeline_launches_through_the_shell() {
     let records = platform.spawn_log().records();
     assert_eq!(records.len(), 1);
     assert_eq!(records[0].executable(), Path::new("/fake/fsh"));
-    assert!(
-        records[0].argv().iter().any(|argument| argument == "pwd"),
-        "the child shell receives the internal pipeline source"
+    assert_eq!(
+        records[0].argv(),
+        [
+            OsString::from("/fake/fsh"),
+            OsString::from("--async-capsule"),
+            OsString::from("3"),
+        ]
     );
 }
 
@@ -2234,11 +2278,13 @@ fn a_mixed_background_pipeline_launches_through_the_shell() {
     let records = platform.spawn_log().records();
     assert_eq!(records.len(), 1);
     assert_eq!(records[0].executable(), Path::new("/fake/fsh"));
-    assert!(
-        records[0]
-            .argv()
-            .iter()
-            .any(|argument| argument == "which pwd | ^tool")
+    assert_eq!(
+        records[0].argv(),
+        [
+            OsString::from("/fake/fsh"),
+            OsString::from("--async-capsule"),
+            OsString::from("3"),
+        ]
     );
 }
 
@@ -4550,6 +4596,15 @@ fn an_aggregate_foreground_stop_retains_one_complete_addressable_job() {
     assert_eq!(stopped.kind(), &JobNoticeKind::Stopped);
     assert_eq!(platform.foreground_handovers(), vec![611]);
     assert_eq!(platform.foreground_releases(), 1);
+    assert_eq!(
+        platform.foreground_operations(),
+        vec![
+            ForegroundOperation::Handover(611),
+            ForegroundOperation::SnapshotMode,
+            ForegroundOperation::Restore,
+        ],
+        "the job's modes are captured before the shell takes the terminal back"
+    );
 
     for control in &controls {
         control
@@ -4950,8 +5005,22 @@ fn fg_restop_retains_one_foreground_record_and_does_not_overwrite_status() {
 
     platform.complete_on_continue(681, &controls[0], ProcessStatus::Exited(0));
     assert_eq!(
-        rendered(&mut session, "wait %1", &probe, &platform, clock.as_ref()),
+        rendered(&mut session, "fg %1", &probe, &platform, clock.as_ref()),
         ""
+    );
+    assert_eq!(
+        platform.foreground_operations(),
+        vec![
+            ForegroundOperation::Handover(681),
+            ForegroundOperation::Signal(681, JobSignal::Continue),
+            ForegroundOperation::SnapshotMode,
+            ForegroundOperation::Restore,
+            ForegroundOperation::Handover(681),
+            ForegroundOperation::ApplyMode,
+            ForegroundOperation::Signal(681, JobSignal::Continue),
+            ForegroundOperation::Restore,
+        ],
+        "each re-stop refreshes the token and fg reapplies it before continuing"
     );
 }
 
@@ -5077,10 +5146,10 @@ fn fg_requires_a_real_foreground_terminal() {
 }
 
 #[test]
-fn a_conditional_chain_keeps_the_legacy_resume_in_place_path() {
+fn an_unmanaged_conditional_chain_keeps_operand_execution_in_place() {
     let clock = Arc::new(FakeClock::new());
     let mut session = session();
-    session.enable_interactive_job_control(clock.clone());
+    session.enable_script_job_control(clock.clone());
     let (platform, controls) =
         ControlledBackgroundPlatform::in_groups_for_session(&[&[641], &[642]]);
     let probe = Probe::new(["/bin/tool", "/bin/other"]);
@@ -5117,63 +5186,185 @@ fn a_conditional_chain_keeps_the_legacy_resume_in_place_path() {
 }
 
 #[test]
-fn a_source_ordered_foreground_wait_cleans_up_after_the_seventeenth_stop() {
+fn a_complex_foreground_stop_retains_one_supervisor_and_applies_completion_after_fg() {
     let clock = Arc::new(FakeClock::new());
     let mut session = session();
     session.enable_interactive_job_control(clock.clone());
     let (platform, controls) = ControlledBackgroundPlatform::in_groups_for_session(&[&[646]]);
-    let probe = Probe::new(["/bin/tool", "/bin/other"]);
-    for signal in 60..=76 {
-        controls[0]
-            .steps
-            .send(Ok(ProcessTransition::Stopped { signal }))
-            .expect("queue the next stop");
-        if signal < 76 {
-            controls[0]
-                .steps
-                .send(Ok(ProcessTransition::Continued))
-                .expect("queue the observed continuation");
-        }
-    }
+    platform.feed_pipe_read(
+        1,
+        supervisor_reply("let transported = 9\nexport TRANSPORTED = 'yes'\ncd /transported\npwd"),
+    );
+    let probe = Probe::new(["/bin/tool"]);
+    controls[0]
+        .steps
+        .send(Ok(ProcessTransition::Stopped { signal: 19 }))
+        .expect("stop the foreground supervisor");
+    let mut sink = Vec::new();
+
+    assert_eq!(
+        session
+            .submit(
+                "<interactive>",
+                "^tool | decode bytes | length",
+                &probe,
+                &platform,
+                clock.as_ref(),
+                &mut sink,
+            )
+            .expect("the complex foreground stop should return to the prompt"),
+        SubmitOutcome::Continued
+    );
+    assert!(session.scope().get("transported").is_none());
+    assert_eq!(session.cwd(), Path::new("/work"));
+    assert!(session.background_job(job_id(1)).is_some());
+
+    platform.complete_on_continue(646, &controls[0], ProcessStatus::Exited(0));
+    assert_eq!(
+        rendered(&mut session, "fg %1", &probe, &platform, clock.as_ref()),
+        ""
+    );
+    assert_eq!(session.scope().get("transported"), Some(&Value::Int(9)));
+    assert_eq!(session.cwd(), Path::new("/transported"));
+    assert_eq!(
+        session.environment().get("TRANSPORTED"),
+        Some(OsStr::new("yes"))
+    );
+    assert!(session.background_job(job_id(1)).is_none());
+    assert_eq!(platform.foreground_handovers(), vec![646, 646]);
+    assert!(sink.is_empty());
+}
+
+#[test]
+fn a_complex_foreground_completion_commits_state_and_translates_exit_control() {
+    let clock = Arc::new(FakeClock::new());
+    let mut session = session();
+    session.enable_interactive_job_control(clock.clone());
+    let (platform, controls) = ControlledBackgroundPlatform::in_groups_for_session(&[&[647]]);
+    platform.feed_pipe_read(1, supervisor_reply("cd /exit-state\nexit 37"));
+    controls[0]
+        .steps
+        .send(Ok(ProcessTransition::Completed(ProcessStatus::Exited(37))))
+        .expect("complete the foreground supervisor");
+    let probe = Probe::new(["/bin/tool"]);
+    let mut sink = Vec::new();
+
+    assert_eq!(
+        session
+            .submit(
+                "<interactive>",
+                "^tool | decode bytes | length",
+                &probe,
+                &platform,
+                clock.as_ref(),
+                &mut sink,
+            )
+            .expect("the typed supervisor exit should reach the parent"),
+        SubmitOutcome::Exit(37)
+    );
+    assert_eq!(session.cwd(), Path::new("/exit-state"));
+    assert!(session.background_job(job_id(1)).is_none());
+    assert_eq!(platform.foreground_handovers(), vec![647]);
+    assert!(sink.is_empty());
+}
+
+#[test]
+fn malformed_complex_foreground_completion_discards_the_parent_transaction() {
+    let clock = Arc::new(FakeClock::new());
+    let mut session = session();
+    session.enable_interactive_job_control(clock.clone());
+    session
+        .submit(
+            "<interactive>",
+            "let retained = 5\ncd /retained",
+            &Probe::default(),
+            &terminal_platform(),
+            clock.as_ref(),
+            &mut Vec::new(),
+        )
+        .expect("establish the parent baseline");
+    let status_before = session.current_status().cloned();
+    let (platform, controls) = ControlledBackgroundPlatform::in_groups_for_session(&[&[648]]);
+    platform.feed_pipe_read(1, b"not-a-completion".to_vec());
     controls[0]
         .steps
         .send(Ok(ProcessTransition::Completed(ProcessStatus::Exited(0))))
-        .expect("let failure cleanup reap the child");
+        .expect("complete the malformed supervisor");
+    let probe = Probe::new(["/bin/tool"]);
     let mut sink = Vec::new();
 
     let error = session
         .submit(
             "<interactive>",
-            "^tool && ^other",
+            "^tool | decode bytes | length",
             &probe,
             &platform,
             clock.as_ref(),
             &mut sink,
         )
-        .expect_err("the source-ordered wait must reject the seventeenth stop");
+        .expect_err("a malformed completion must reject the foreground transaction");
 
-    assert!(
-        error
-            .render()
-            .contains("the job stopped repeatedly (latest signal 76)"),
-        "{}",
-        error.render()
-    );
-    assert_eq!(delivered(&platform), vec![(646, JobSignal::Continue); 16]);
-    assert_eq!(controls[0].terminate_calls.load(Ordering::SeqCst), 1);
-    assert_eq!(
-        controls[0].wait_entries.try_iter().count(),
-        34,
-        "the bounded wait terminates and performs one final cleanup wait"
-    );
+    assert!(error.render().contains("invalid supervisor completion"));
+    assert_eq!(session.scope().get("retained"), Some(&Value::Int(5)));
+    assert_eq!(session.cwd(), Path::new("/retained"));
+    assert_eq!(session.current_status(), status_before.as_ref());
+    assert!(session.background_job(job_id(1)).is_none());
     assert!(sink.is_empty());
 }
 
 #[test]
-fn a_mixed_foreground_pipeline_keeps_the_legacy_session_executor() {
+fn missing_complex_foreground_completion_discards_the_parent_transaction() {
     let clock = Arc::new(FakeClock::new());
     let mut session = session();
     session.enable_interactive_job_control(clock.clone());
+    session
+        .submit(
+            "<interactive>",
+            "let retained = 6\ncd /retained",
+            &Probe::default(),
+            &terminal_platform(),
+            clock.as_ref(),
+            &mut Vec::new(),
+        )
+        .expect("establish the parent baseline");
+    let status_before = session.current_status().cloned();
+    let (platform, controls) = ControlledBackgroundPlatform::in_groups_for_session(&[&[649]]);
+    platform.feed_pipe_read(1, Vec::new());
+    controls[0]
+        .steps
+        .send(Ok(ProcessTransition::Completed(ProcessStatus::Exited(1))))
+        .expect("complete the crashed supervisor");
+    let probe = Probe::new(["/bin/tool"]);
+    let mut sink = Vec::new();
+
+    let error = session
+        .submit(
+            "<interactive>",
+            "^tool | decode bytes | length",
+            &probe,
+            &platform,
+            clock.as_ref(),
+            &mut sink,
+        )
+        .expect_err("a missing completion must reject the foreground transaction");
+
+    let rendered = error.render();
+    assert!(
+        rendered.contains("foreground supervisor returned no completion"),
+        "{rendered}"
+    );
+    assert_eq!(session.scope().get("retained"), Some(&Value::Int(6)));
+    assert_eq!(session.cwd(), Path::new("/retained"));
+    assert_eq!(session.current_status(), status_before.as_ref());
+    assert!(session.background_job(job_id(1)).is_none());
+    assert!(sink.is_empty());
+}
+
+#[test]
+fn an_unmanaged_mixed_pipeline_keeps_the_in_process_session_executor() {
+    let clock = Arc::new(FakeClock::new());
+    let mut session = session();
+    session.enable_script_job_control(clock.clone());
     let (platform, controls) = ControlledBackgroundPlatform::in_groups_for_session(&[&[651]]);
     let probe = Probe::new(["/bin/tool"]);
     controls[0]
@@ -5202,10 +5393,10 @@ fn a_mixed_foreground_pipeline_keeps_the_legacy_session_executor() {
 }
 
 #[test]
-fn a_mixed_foreground_wait_cleans_up_after_the_seventeenth_stop() {
+fn an_unmanaged_mixed_wait_cleans_up_after_the_seventeenth_stop() {
     let clock = Arc::new(FakeClock::new());
     let mut session = session();
-    session.enable_interactive_job_control(clock.clone());
+    session.enable_script_job_control(clock.clone());
     let (platform, controls) = ControlledBackgroundPlatform::in_groups_for_session(&[&[656]]);
     let probe = Probe::new(["/bin/tool"]);
     for signal in 40..=56 {
@@ -5302,7 +5493,7 @@ fn a_mixed_foreground_handoff_failure_terminates_and_reaps_every_child() {
 fn a_mixed_wait_failure_terminates_and_reaps_the_failed_child() {
     let clock = Arc::new(FakeClock::new());
     let mut session = session();
-    session.enable_interactive_job_control(clock.clone());
+    session.enable_script_job_control(clock.clone());
     let (platform, controls) = ControlledBackgroundPlatform::in_groups_for_session(&[&[658]]);
     let probe = Probe::new(["/bin/tool"]);
     controls[0]
@@ -5351,7 +5542,7 @@ fn a_mixed_wait_failure_terminates_and_reaps_the_failed_child() {
 fn a_mixed_pipe_read_failure_cancels_children_and_releases_endpoints() {
     let clock = Arc::new(FakeClock::new());
     let mut session = session();
-    session.enable_interactive_job_control(clock.clone());
+    session.enable_script_job_control(clock.clone());
     let (platform, controls) = ControlledBackgroundPlatform::in_groups_for_session(&[&[659]]);
     platform.fail_pipe_read(0);
     let probe = Probe::new(["/bin/tool"]);
@@ -5394,7 +5585,7 @@ fn a_mixed_pipe_read_failure_cancels_children_and_releases_endpoints() {
 fn a_mixed_pipe_write_failure_cancels_children_and_releases_endpoints() {
     let clock = Arc::new(FakeClock::new());
     let mut session = session();
-    session.enable_interactive_job_control(clock.clone());
+    session.enable_script_job_control(clock.clone());
     let (platform, controls) = ControlledBackgroundPlatform::in_groups_for_session(&[&[660]]);
     platform.fail_pipe_write(0);
     let probe = Probe::new(["/bin/tool"]);
@@ -5437,7 +5628,7 @@ fn a_mixed_pipe_write_failure_cancels_children_and_releases_endpoints() {
 fn simultaneous_mixed_failures_select_the_earliest_source_stage() {
     let clock = Arc::new(FakeClock::new());
     let mut session = session();
-    session.enable_interactive_job_control(clock.clone());
+    session.enable_script_job_control(clock.clone());
     let (platform, controls) = ControlledBackgroundPlatform::in_groups_for_session(&[&[665, 666]]);
     platform.fail_pipe_write(0);
     platform.fail_pipe_write(2);
@@ -5485,7 +5676,7 @@ fn simultaneous_mixed_failures_select_the_earliest_source_stage() {
 fn a_mixed_output_failure_cancels_children_before_returning() {
     let clock = Arc::new(FakeClock::new());
     let mut session = session();
-    session.enable_interactive_job_control(clock.clone());
+    session.enable_script_job_control(clock.clone());
     let (platform, controls) = ControlledBackgroundPlatform::in_groups_for_session(&[&[661, 662]]);
     let probe = Probe::new(["/bin/tool", "/bin/other"]);
     for control in &controls {
@@ -5528,7 +5719,7 @@ fn a_mixed_output_failure_cancels_children_before_returning() {
 fn a_mixed_spawn_failure_cleans_every_earlier_child_and_endpoint() {
     let clock = Arc::new(FakeClock::new());
     let mut session = session();
-    session.enable_interactive_job_control(clock.clone());
+    session.enable_script_job_control(clock.clone());
     let (platform, controls) = ControlledBackgroundPlatform::in_groups_for_session(&[&[663, 664]]);
     platform.fail_spawn(1);
     let probe = Probe::new(["/bin/tool", "/bin/other"]);

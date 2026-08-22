@@ -10,6 +10,7 @@
 use std::any::Any;
 use std::collections::BTreeSet;
 use std::ffi::OsStr;
+use std::fmt;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd};
@@ -24,8 +25,8 @@ use flash_platform::{
     FileOpenRequest, ForegroundTerminalGuard, JobControlSignalGuard, JobSignal, PipeEndpoints,
     PipeError, Platform, PlatformError, ProcessGroupId, ProcessStatus, ProcessTransition,
     SignalError, SpawnError, SpawnRequest, StandardDirectories, StandardDirectoryEnvironment,
-    TerminalModeGuard, TerminalSize, TerminateError, WaitError, WorkingDirectoryError,
-    WorkingDirectoryRequest,
+    TerminalModeGuard, TerminalModeToken, TerminalSize, TerminateError, WaitError,
+    WorkingDirectoryError, WorkingDirectoryRequest,
 };
 
 /// A uniquely owned POSIX descriptor with close-on-exec discipline.
@@ -243,6 +244,42 @@ impl Platform for PosixPlatform {
         }))
     }
 
+    fn snapshot_terminal_mode(&self) -> Result<Box<dyn TerminalModeToken>, PlatformError> {
+        self.require(Capability::TerminalInfo)?;
+        let stdin = io::stdin();
+        if !terminal_mode::is_terminal(stdin.as_fd()) {
+            return Err(PlatformError::Unavailable {
+                capability: Capability::TerminalInfo,
+                reason: "standard input is not a terminal".to_owned(),
+            });
+        }
+        terminal_mode::current_attributes(stdin.as_fd())
+            .map(|attributes| {
+                Box::new(PosixTerminalModeToken { attributes }) as Box<dyn TerminalModeToken>
+            })
+            .map_err(|error| PlatformError::Unavailable {
+                capability: Capability::TerminalInfo,
+                reason: format!("reading terminal attributes failed: {error}"),
+            })
+    }
+
+    fn apply_terminal_mode(&self, token: &dyn TerminalModeToken) -> Result<(), PlatformError> {
+        self.require(Capability::TerminalInfo)?;
+        let token = token
+            .as_any()
+            .downcast_ref::<PosixTerminalModeToken>()
+            .ok_or_else(|| PlatformError::Unavailable {
+                capability: Capability::TerminalInfo,
+                reason: "terminal mode token belongs to another adapter".to_owned(),
+            })?;
+        terminal_mode::apply(io::stdin().as_fd(), &token.attributes).map_err(|error| {
+            PlatformError::Unavailable {
+                capability: Capability::TerminalInfo,
+                reason: format!("applying terminal attributes failed: {error}"),
+            }
+        })
+    }
+
     fn foreground_process_group(&self) -> Result<Option<ProcessGroupId>, PlatformError> {
         self.require(Capability::ForegroundTerminal)?;
         let stdin = io::stdin();
@@ -372,20 +409,7 @@ impl Platform for PosixPlatform {
         descriptor: u32,
     ) -> Result<Box<dyn DescriptorEndpoint>, FileActionError> {
         self.require(Capability::FileActions)?;
-        let descriptor = match descriptor {
-            0 => io::stdin().as_fd().try_clone_to_owned(),
-            1 => io::stdout().as_fd().try_clone_to_owned(),
-            2 => io::stderr().as_fd().try_clone_to_owned(),
-            _ => {
-                return Err(FileActionError::Operation {
-                    kind: io::ErrorKind::Unsupported,
-                    message: format!(
-                        "inherited child descriptor {descriptor} is not part of the session map"
-                    ),
-                });
-            }
-        }
-        .map_err(file_action_error)?;
+        let descriptor = inherited_descriptor::duplicate(descriptor).map_err(file_action_error)?;
         Ok(Box::new(OwnedDescriptor {
             descriptor: File::from(descriptor),
         }))
@@ -527,6 +551,32 @@ impl Platform for PosixPlatform {
                 }) as Box<dyn ChildProcess>
             })
             .map_err(spawn_error)
+    }
+}
+
+#[allow(unsafe_code)]
+mod inherited_descriptor {
+    use std::io;
+    use std::os::fd::{FromRawFd, OwnedFd};
+
+    pub(super) fn duplicate(descriptor: u32) -> io::Result<OwnedFd> {
+        let descriptor = libc::c_int::try_from(descriptor).map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "inherited descriptor exceeds the POSIX descriptor range",
+            )
+        })?;
+        // SAFETY: fcntl validates the caller-supplied descriptor before
+        // returning a new descriptor. A nonnegative result is a fresh owned
+        // descriptor with close-on-exec set; no borrowed Rust descriptor is
+        // constructed from an untrusted raw value.
+        let duplicated = unsafe { libc::fcntl(descriptor, libc::F_DUPFD_CLOEXEC, 0) };
+        if duplicated == -1 {
+            return Err(io::Error::last_os_error());
+        }
+        // SAFETY: a successful F_DUPFD_CLOEXEC result is a fresh descriptor
+        // whose ownership has not been transferred elsewhere.
+        Ok(unsafe { OwnedFd::from_raw_fd(duplicated) })
     }
 }
 
@@ -1485,6 +1535,22 @@ mod terminal_mode {
 struct PosixTerminalModeGuard {
     saved: libc::termios,
     restored: bool,
+}
+
+struct PosixTerminalModeToken {
+    attributes: libc::termios,
+}
+
+impl fmt::Debug for PosixTerminalModeToken {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("PosixTerminalModeToken(..)")
+    }
+}
+
+impl TerminalModeToken for PosixTerminalModeToken {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
 }
 
 impl TerminalModeGuard for PosixTerminalModeGuard {

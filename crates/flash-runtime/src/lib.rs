@@ -4,6 +4,7 @@
 
 pub mod background;
 pub mod builtin;
+pub mod capsule;
 pub mod carrier;
 pub mod closure;
 pub mod command;

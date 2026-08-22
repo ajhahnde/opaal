@@ -1159,6 +1159,12 @@ pub trait TerminalModeGuard: fmt::Debug {
     fn restore(&mut self) -> Result<(), PlatformError>;
 }
 
+/// Opaque portable snapshot of terminal attributes retained with a stopped job.
+pub trait TerminalModeToken: Send + fmt::Debug {
+    /// Adapter-private concrete token access.
+    fn as_any(&self) -> &dyn Any;
+}
+
 /// An active handover of the terminal to a foreground job.
 ///
 /// The shell must get the terminal back whatever happens to the job, so
@@ -1220,6 +1226,17 @@ pub trait Platform: Send + Sync {
     fn enter_raw_mode(&self) -> Result<Box<dyn TerminalModeGuard>, PlatformError> {
         self.require(Capability::TerminalInfo)?;
         Ok(Box::new(NoopTerminalModeGuard))
+    }
+
+    /// Snapshot the terminal attributes currently established by its owner.
+    fn snapshot_terminal_mode(&self) -> Result<Box<dyn TerminalModeToken>, PlatformError> {
+        self.require(Capability::TerminalInfo)?;
+        Ok(Box::new(NoopTerminalModeToken))
+    }
+
+    /// Reapply a terminal-attribute token previously returned by this adapter.
+    fn apply_terminal_mode(&self, _token: &dyn TerminalModeToken) -> Result<(), PlatformError> {
+        self.require(Capability::TerminalInfo)
     }
 
     /// The process group that currently owns the terminal, if there is one.
@@ -1582,6 +1599,8 @@ pub struct TerminalCallLog {
     terminal_size_queries: Arc<AtomicUsize>,
     foreground_handovers: Arc<Mutex<Vec<ProcessGroupId>>>,
     foreground_releases: Arc<AtomicUsize>,
+    terminal_mode_snapshots: Arc<AtomicUsize>,
+    terminal_mode_applications: Arc<AtomicUsize>,
 }
 
 impl TerminalCallLog {
@@ -1614,6 +1633,18 @@ impl TerminalCallLog {
     #[must_use]
     pub fn foreground_releases(&self) -> usize {
         self.foreground_releases.load(Ordering::Relaxed)
+    }
+
+    /// How often a foreground job's terminal attributes were captured.
+    #[must_use]
+    pub fn terminal_mode_snapshots(&self) -> usize {
+        self.terminal_mode_snapshots.load(Ordering::Relaxed)
+    }
+
+    /// How often retained job terminal attributes were reapplied.
+    #[must_use]
+    pub fn terminal_mode_applications(&self) -> usize {
+        self.terminal_mode_applications.load(Ordering::Relaxed)
     }
 }
 
@@ -1830,6 +1861,22 @@ impl Platform for RecordingPlatform {
         self.inner.enter_raw_mode()
     }
 
+    fn snapshot_terminal_mode(&self) -> Result<Box<dyn TerminalModeToken>, PlatformError> {
+        let token = self.inner.snapshot_terminal_mode()?;
+        self.log
+            .terminal_mode_snapshots
+            .fetch_add(1, Ordering::Relaxed);
+        Ok(token)
+    }
+
+    fn apply_terminal_mode(&self, token: &dyn TerminalModeToken) -> Result<(), PlatformError> {
+        self.inner.apply_terminal_mode(token)?;
+        self.log
+            .terminal_mode_applications
+            .fetch_add(1, Ordering::Relaxed);
+        Ok(())
+    }
+
     fn foreground_process_group(&self) -> Result<Option<ProcessGroupId>, PlatformError> {
         self.inner.foreground_process_group()
     }
@@ -1961,6 +2008,10 @@ pub struct FakeDescriptorEndpoint;
 impl DescriptorEndpoint for FakeDescriptorEndpoint {
     fn as_any(&self) -> &dyn Any {
         self
+    }
+
+    fn write(&mut self, buffer: &[u8]) -> Result<usize, DescriptorWriteError> {
+        Ok(buffer.len())
     }
 }
 
@@ -2100,5 +2151,15 @@ pub struct NoopTerminalModeGuard;
 impl TerminalModeGuard for NoopTerminalModeGuard {
     fn restore(&mut self) -> Result<(), PlatformError> {
         Ok(())
+    }
+}
+
+/// Opaque terminal-mode token used by capability-only adapters and tests.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct NoopTerminalModeToken;
+
+impl TerminalModeToken for NoopTerminalModeToken {
+    fn as_any(&self) -> &dyn Any {
+        self
     }
 }

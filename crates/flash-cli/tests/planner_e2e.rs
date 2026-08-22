@@ -69,7 +69,7 @@ fn planner_help_and_misuse_have_exact_channels_and_statuses() {
     assert!(stdout.starts_with("Inspect one Flash execution plan without executing it\n"));
     assert!(stdout.contains("read-only PATH metadata checks"));
     assert!(stdout.contains("does not load\nconfiguration or history"));
-    assert!(!stdout.contains("async-chain"));
+    assert!(!stdout.contains("async-capsule"));
 
     let misuse = fsh(["plan"]);
     assert_eq!(misuse.status.code(), Some(2), "{misuse:?}");

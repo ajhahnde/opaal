@@ -37,6 +37,9 @@ use flash_cli::plan::{PlanRequest, inspect_source};
 use flash_cli::report::{HostReport, write_report};
 use flash_platform::{Platform, PlatformError};
 use flash_platform_posix::PosixPlatform;
+use flash_runtime::capsule::{
+    MAX_CAPSULE_BYTES, decode_background_capsule, encode_supervisor_completion,
+};
 use flash_runtime::eval::{Clock, SystemClock};
 use flash_runtime::module::{
     ModuleCanonicalizer, ModulePathError, ModuleProgramLoader, ModuleSourceError,
@@ -45,7 +48,7 @@ use flash_runtime::module::{
 use flash_runtime::plan::SessionOptions;
 use flash_runtime::resolve::ExecutableProbe;
 use flash_runtime::script::{
-    ScriptCompletion, ScriptError, execute_chain_subshell, execute_module_program,
+    ScriptCompletion, ScriptError, execute_background_capsule, execute_module_program,
 };
 use flash_runtime::session::{BackgroundFailure, JobNoticeId, Session, SubmitError, SubmitOutcome};
 use flash_runtime::{Environment, ScopeStack};
@@ -162,11 +165,10 @@ fn main() -> ExitCode {
         Mode::FormatHelp => emit_report(HostReport::success(FORMAT_HELP.as_bytes())),
         Mode::Format { operation, paths } => run_formatter(operation, paths),
         Mode::Script { path, arguments } => run_script(&path, &arguments),
-        Mode::AsyncChain {
-            text,
-            pipefail,
-            capture_limit,
-        } => run_async_chain(text, pipefail, capture_limit),
+        Mode::AsyncCapsule {
+            descriptor,
+            completion_descriptor,
+        } => run_async_capsule(descriptor, completion_descriptor),
         Mode::Interactive => run_interactive(invocation.no_config, invocation.no_history),
     }
 }
@@ -601,7 +603,7 @@ impl ModuleSourceLoader for HostModuleFilesystem {
     }
 }
 
-fn run_async_chain(text: String, pipefail: bool, capture_limit: usize) -> ExitCode {
+fn run_async_capsule(descriptor: u32, completion_descriptor: Option<u32>) -> ExitCode {
     match PosixPlatform.ignore_hangup() {
         Ok(()) | Err(PlatformError::Unsupported { .. }) => {}
         Err(error) => {
@@ -610,35 +612,90 @@ fn run_async_chain(text: String, pipefail: bool, capture_limit: usize) -> ExitCo
         }
     }
 
-    let cwd = match env::current_dir() {
-        Ok(cwd) => cwd,
+    let mut endpoint = match PosixPlatform.inherit_descriptor(descriptor) {
+        Ok(endpoint) => endpoint,
         Err(error) => {
-            eprintln!("fsh: cannot read the current directory: {error}");
+            eprintln!("fsh: cannot inherit execution capsule descriptor: {error}");
             return ExitCode::FAILURE;
         }
     };
-    let mut environment = process_environment();
+    let mut bytes = Vec::new();
+    let mut buffer = [0_u8; 8192];
+    loop {
+        match endpoint.read(&mut buffer) {
+            Ok(0) => break,
+            Ok(count) => {
+                if bytes.len().saturating_add(count) > MAX_CAPSULE_BYTES + 18 {
+                    eprintln!("fsh: execution capsule exceeds its byte limit");
+                    return ExitCode::FAILURE;
+                }
+                bytes.extend_from_slice(&buffer[..count]);
+            }
+            Err(error) => {
+                eprintln!("fsh: cannot read execution capsule: {error}");
+                return ExitCode::FAILURE;
+            }
+        }
+    }
+    drop(endpoint);
+
+    let capsule = match decode_background_capsule(&bytes) {
+        Ok(capsule) => capsule,
+        Err(error) => {
+            eprintln!("fsh: invalid execution capsule: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
     let registry = flash_runtime::builtin::standard_registry();
-    let options = SessionOptions::default()
-        .with_pipefail(pipefail)
-        .with_capture_limit(capture_limit);
     let stdout = io::stdout();
     let mut output = stdout.lock();
-    let result = execute_chain_subshell(
-        "<background-chain>",
-        text,
-        &cwd,
-        &mut environment,
+    let result = execute_background_capsule(
+        capsule,
         &registry,
         &NativeExecutableProbe,
-        &options,
         &PosixPlatform,
         Arc::new(SystemClock::new()) as Arc<dyn Clock>,
         &mut output,
     );
     let flush = output.flush();
     drop(output);
-
+    let result = match (result, &flush) {
+        (Ok((completion, envelope)), Ok(())) => {
+            if let Some(descriptor) = completion_descriptor {
+                let bytes = match encode_supervisor_completion(&envelope) {
+                    Ok(bytes) => bytes,
+                    Err(error) => {
+                        eprintln!("fsh: cannot encode supervisor completion: {error}");
+                        return ExitCode::FAILURE;
+                    }
+                };
+                let mut endpoint = match PosixPlatform.inherit_descriptor(descriptor) {
+                    Ok(endpoint) => endpoint,
+                    Err(error) => {
+                        eprintln!("fsh: cannot inherit completion descriptor: {error}");
+                        return ExitCode::FAILURE;
+                    }
+                };
+                let mut written = 0;
+                while written < bytes.len() {
+                    match endpoint.write(&bytes[written..]) {
+                        Ok(0) => {
+                            eprintln!("fsh: completion descriptor accepted zero bytes");
+                            return ExitCode::FAILURE;
+                        }
+                        Ok(count) => written += count,
+                        Err(error) => {
+                            eprintln!("fsh: cannot write supervisor completion: {error}");
+                            return ExitCode::FAILURE;
+                        }
+                    }
+                }
+            }
+            Ok(completion)
+        }
+        (Ok((completion, _)), Err(_)) => Ok(completion),
+        (Err(error), _) => Err(error),
+    };
     finish_script_report(result, flush)
 }
 

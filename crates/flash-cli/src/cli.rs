@@ -8,6 +8,8 @@
 use std::ffi::OsString;
 use std::path::PathBuf;
 
+use flash_runtime::capsule::{CAPSULE_DESCRIPTOR, COMPLETION_DESCRIPTOR};
+
 /// The explicit formatter action selected by the launcher.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FormatOperation {
@@ -45,11 +47,10 @@ pub enum Mode {
         path: PathBuf,
         arguments: Vec<String>,
     },
-    /// Run one isolated chain supplied by the parent shell.
-    AsyncChain {
-        text: String,
-        pipefail: bool,
-        capture_limit: usize,
+    /// Run one isolated chain from a private inherited typed capsule.
+    AsyncCapsule {
+        descriptor: u32,
+        completion_descriptor: Option<u32>,
     },
     /// Start an interactive session.
     Interactive,
@@ -159,9 +160,8 @@ where
     let mut no_history = false;
     let mut script: Option<PathBuf> = None;
     let mut script_arguments = Vec::new();
-    let mut async_chain: Option<String> = None;
-    let mut async_pipefail = false;
-    let mut async_capture_limit: Option<usize> = None;
+    let mut async_capsule: Option<u32> = None;
+    let mut async_completion: Option<u32> = None;
     let mut options_ended = false;
     let mut arguments = arguments.into_iter();
 
@@ -176,7 +176,7 @@ where
         }
 
         if options_ended {
-            if async_chain.is_some() || async_pipefail || async_capture_limit.is_some() {
+            if async_capsule.is_some() || async_completion.is_some() {
                 return Err(CliError::UnexpectedArgument(
                     argument.to_string_lossy().into_owned(),
                 ));
@@ -190,40 +190,48 @@ where
             Some("--version" | "-V") => version = true,
             Some("--no-config") => no_config = true,
             Some("--no-history") => no_history = true,
-            Some("--async-chain") => {
+            Some("--async-capsule") => {
                 let value = arguments
                     .next()
-                    .ok_or(CliError::MissingOptionValue("--async-chain"))?;
-                let text = value
-                    .into_string()
-                    .map_err(|value| CliError::InvalidOptionValue {
-                        option: "--async-chain",
-                        value: value.to_string_lossy().into_owned(),
-                    })?;
-                if async_chain.replace(text).is_some() {
-                    return Err(CliError::DuplicateOption("--async-chain"));
-                }
-            }
-            Some("--async-pipefail") => {
-                if async_pipefail {
-                    return Err(CliError::DuplicateOption("--async-pipefail"));
-                }
-                async_pipefail = true;
-            }
-            Some("--async-capture-limit") => {
-                let value = arguments
-                    .next()
-                    .ok_or(CliError::MissingOptionValue("--async-capture-limit"))?;
+                    .ok_or(CliError::MissingOptionValue("--async-capsule"))?;
                 let rendered = value.to_string_lossy().into_owned();
-                let limit =
+                let descriptor =
                     rendered
-                        .parse::<usize>()
+                        .parse::<u32>()
                         .map_err(|_| CliError::InvalidOptionValue {
-                            option: "--async-capture-limit",
+                            option: "--async-capsule",
                             value: rendered,
                         })?;
-                if async_capture_limit.replace(limit).is_some() {
-                    return Err(CliError::DuplicateOption("--async-capture-limit"));
+                if descriptor != CAPSULE_DESCRIPTOR {
+                    return Err(CliError::InvalidOptionValue {
+                        option: "--async-capsule",
+                        value: descriptor.to_string(),
+                    });
+                }
+                if async_capsule.replace(descriptor).is_some() {
+                    return Err(CliError::DuplicateOption("--async-capsule"));
+                }
+            }
+            Some("--async-completion") => {
+                let value = arguments
+                    .next()
+                    .ok_or(CliError::MissingOptionValue("--async-completion"))?;
+                let rendered = value.to_string_lossy().into_owned();
+                let descriptor =
+                    rendered
+                        .parse::<u32>()
+                        .map_err(|_| CliError::InvalidOptionValue {
+                            option: "--async-completion",
+                            value: rendered,
+                        })?;
+                if descriptor != COMPLETION_DESCRIPTOR {
+                    return Err(CliError::InvalidOptionValue {
+                        option: "--async-completion",
+                        value: descriptor.to_string(),
+                    });
+                }
+                if async_completion.replace(descriptor).is_some() {
+                    return Err(CliError::DuplicateOption("--async-completion"));
                 }
             }
             Some("--") => options_ended = true,
@@ -248,7 +256,7 @@ where
                 if no_history {
                     return Err(CliError::UnknownOption("--no-history".to_owned()));
                 }
-                if async_chain.is_some() || async_pipefail || async_capture_limit.is_some() {
+                if async_capsule.is_some() || async_completion.is_some() {
                     return Err(CliError::UnexpectedArgument("format".to_owned()));
                 }
                 return parse_format_args(arguments);
@@ -274,7 +282,7 @@ where
                 if no_history {
                     return Err(CliError::UnknownOption("--no-history".to_owned()));
                 }
-                if async_chain.is_some() || async_pipefail || async_capture_limit.is_some() {
+                if async_capsule.is_some() || async_completion.is_some() {
                     return Err(CliError::UnexpectedArgument("check".to_owned()));
                 }
                 return parse_check_args(arguments);
@@ -300,7 +308,7 @@ where
                 if no_history {
                     return Err(CliError::UnknownOption("--no-history".to_owned()));
                 }
-                if async_chain.is_some() || async_pipefail || async_capture_limit.is_some() {
+                if async_capsule.is_some() || async_completion.is_some() {
                     return Err(CliError::UnexpectedArgument("plan".to_owned()));
                 }
                 return parse_plan_args(arguments);
@@ -316,20 +324,16 @@ where
         Mode::Help
     } else if version {
         Mode::Version
-    } else if let Some(text) = async_chain {
-        if let Some(path) = script {
-            return Err(CliError::UnexpectedArgument(
-                path.to_string_lossy().into_owned(),
-            ));
+    } else if let Some(descriptor) = async_capsule {
+        if script.is_some() {
+            return Err(CliError::UnexpectedArgument("--async-capsule".to_owned()));
         }
-        Mode::AsyncChain {
-            text,
-            pipefail: async_pipefail,
-            capture_limit: async_capture_limit
-                .ok_or(CliError::MissingRequiredOption("--async-capture-limit"))?,
+        Mode::AsyncCapsule {
+            descriptor,
+            completion_descriptor: async_completion,
         }
-    } else if async_pipefail || async_capture_limit.is_some() {
-        return Err(CliError::MissingRequiredOption("--async-chain"));
+    } else if async_completion.is_some() {
+        return Err(CliError::MissingRequiredOption("--async-capsule"));
     } else if let Some(path) = script {
         Mode::Script {
             path,
@@ -770,31 +774,9 @@ mod tests {
     }
 
     #[test]
-    fn formatter_cannot_combine_with_the_reserved_chain_mode() {
-        assert!(
-            parse(&[
-                "--async-chain",
-                "^tool",
-                "--async-capture-limit",
-                "4096",
-                "format",
-                "--check",
-                "one.fsh",
-            ])
-            .is_err()
-        );
-        assert!(
-            parse(&[
-                "format",
-                "--check",
-                "one.fsh",
-                "--async-chain",
-                "^tool",
-                "--async-capture-limit",
-                "4096",
-            ])
-            .is_err()
-        );
+    fn formatter_cannot_combine_with_the_reserved_capsule_mode() {
+        assert!(parse(&["--async-capsule", "3", "format", "--check", "one.fsh",]).is_err());
+        assert!(parse(&["format", "--check", "one.fsh", "--async-capsule", "3",]).is_err());
     }
 
     #[test]
@@ -903,29 +885,9 @@ mod tests {
     }
 
     #[test]
-    fn checker_cannot_combine_with_the_reserved_chain_mode() {
-        assert!(
-            parse(&[
-                "--async-chain",
-                "^tool",
-                "--async-capture-limit",
-                "4096",
-                "check",
-                "one.fsh",
-            ])
-            .is_err()
-        );
-        assert!(
-            parse(&[
-                "check",
-                "one.fsh",
-                "--async-chain",
-                "^tool",
-                "--async-capture-limit",
-                "4096",
-            ])
-            .is_err()
-        );
+    fn checker_cannot_combine_with_the_reserved_capsule_mode() {
+        assert!(parse(&["--async-capsule", "3", "check", "one.fsh",]).is_err());
+        assert!(parse(&["check", "one.fsh", "--async-capsule", "3",]).is_err());
     }
 
     #[test]
@@ -1016,29 +978,9 @@ mod tests {
     }
 
     #[test]
-    fn planner_cannot_combine_with_the_reserved_chain_mode() {
-        assert!(
-            parse(&[
-                "--async-chain",
-                "^tool",
-                "--async-capture-limit",
-                "4096",
-                "plan",
-                "one.fsh",
-            ])
-            .is_err()
-        );
-        assert!(
-            parse(&[
-                "plan",
-                "one.fsh",
-                "--async-chain",
-                "^tool",
-                "--async-capture-limit",
-                "4096",
-            ])
-            .is_err()
-        );
+    fn planner_cannot_combine_with_the_reserved_capsule_mode() {
+        assert!(parse(&["--async-capsule", "3", "plan", "one.fsh",]).is_err());
+        assert!(parse(&["plan", "one.fsh", "--async-capsule", "3",]).is_err());
     }
 
     #[test]
@@ -1088,56 +1030,52 @@ mod tests {
     }
 
     #[test]
-    fn the_reserved_chain_mode_carries_its_text_and_options() {
-        let invocation = parse(&[
-            "--async-chain",
-            "^tool && ^other",
-            "--async-pipefail",
-            "--async-capture-limit",
-            "4096",
-        ])
-        .expect("the reserved invocation is valid");
+    fn the_reserved_capsule_mode_uses_only_its_fixed_owned_descriptors() {
+        let invocation = parse(&["--async-capsule", "3", "--async-completion", "4"])
+            .expect("the reserved invocation is valid");
         assert_eq!(
             invocation.mode,
-            Mode::AsyncChain {
-                text: "^tool && ^other".to_owned(),
-                pipefail: true,
-                capture_limit: 4096,
+            Mode::AsyncCapsule {
+                descriptor: 3,
+                completion_descriptor: Some(4),
             }
         );
     }
 
     #[test]
-    fn reserved_chain_values_are_required_and_validated() {
+    fn reserved_capsule_descriptors_are_required_fixed_and_non_legacy() {
         assert_eq!(
-            parse(&["--async-chain"]),
-            Err(CliError::MissingOptionValue("--async-chain"))
+            parse(&["--async-capsule"]),
+            Err(CliError::MissingOptionValue("--async-capsule"))
         );
         assert_eq!(
-            parse(&["--async-chain", "^tool"]),
-            Err(CliError::MissingRequiredOption("--async-capture-limit"))
-        );
-        assert_eq!(
-            parse(&["--async-chain", "^tool", "--async-capture-limit", "many"]),
+            parse(&["--async-capsule", "many"]),
             Err(CliError::InvalidOptionValue {
-                option: "--async-capture-limit",
+                option: "--async-capsule",
                 value: "many".to_owned(),
             })
         );
         assert_eq!(
-            parse(&["--async-pipefail"]),
-            Err(CliError::MissingRequiredOption("--async-chain"))
+            parse(&["--async-capsule", "5"]),
+            Err(CliError::InvalidOptionValue {
+                option: "--async-capsule",
+                value: "5".to_owned(),
+            })
         );
         assert_eq!(
-            parse(&[
-                "--async-chain",
-                "^tool",
-                "--async-pipefail",
-                "--async-pipefail",
-                "--async-capture-limit",
-                "4096",
-            ]),
-            Err(CliError::DuplicateOption("--async-pipefail"))
+            parse(&["--async-completion", "4"]),
+            Err(CliError::MissingRequiredOption("--async-capsule"))
         );
+        assert_eq!(
+            parse(&["--async-capsule", "3", "--async-completion", "5"]),
+            Err(CliError::InvalidOptionValue {
+                option: "--async-completion",
+                value: "5".to_owned(),
+            })
+        );
+        assert!(matches!(
+            parse(&["--async-chain", "^tool"]),
+            Err(CliError::UnknownOption(option)) if option == "--async-chain"
+        ));
     }
 }

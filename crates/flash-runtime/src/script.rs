@@ -6,6 +6,10 @@ use std::io::Write;
 use std::path::Path;
 use std::sync::Arc;
 
+use crate::builtin::SessionState;
+use crate::capsule::{
+    BackgroundCapsule, SupervisorCompletion, SupervisorOutcome, supervisor_completion,
+};
 use crate::command::CommandRegistry;
 use crate::eval::Clock;
 use crate::module::{ModuleId, ModuleProgram, ModuleSourceRegistry};
@@ -306,6 +310,51 @@ pub fn execute_chain_subshell(
         false,
         output,
     )
+}
+
+/// Execute one decoded private job-supervisor capsule.
+#[doc(hidden)]
+#[allow(clippy::too_many_arguments)]
+pub fn execute_background_capsule(
+    capsule: BackgroundCapsule,
+    registry: &CommandRegistry,
+    probe: &dyn ExecutableProbe,
+    platform: &dyn Platform,
+    clock: Arc<dyn Clock>,
+    output: &mut dyn Write,
+) -> Result<(ScriptCompletion, SupervisorCompletion), ScriptError> {
+    let (name, text, cwd, mut environment, current_status, scope, options) = capsule.into_parts();
+    let options = options.inherit_process_group();
+    let base_scope = scope.clone();
+    let mut base_state = SessionState::new(&cwd, environment.clone());
+    base_state.set_current_status(current_status.clone());
+    let mut session = Session::with_scope_and_registry(
+        scope,
+        &cwd,
+        environment.clone(),
+        options,
+        registry.clone(),
+    );
+    session.seed_current_status(current_status);
+    let outcome = session
+        .submit(name, text, probe, platform, clock.as_ref(), output)
+        .map_err(ScriptError::submit)?;
+    let supervisor_outcome = match outcome {
+        SubmitOutcome::Continued => SupervisorOutcome::Continued,
+        SubmitOutcome::Exit(code) => SupervisorOutcome::Exit(code),
+    };
+    let completion = finish_script_session(&mut session, &mut environment, platform, Ok(outcome))?;
+    let mut updated_state = SessionState::new(session.cwd(), session.environment().clone());
+    updated_state.set_current_status(session.current_status().cloned());
+    let envelope = supervisor_completion(
+        supervisor_outcome,
+        completion.status().cloned(),
+        base_scope,
+        session.scope().clone(),
+        base_state,
+        updated_state,
+    );
+    Ok((completion, envelope))
 }
 
 #[allow(clippy::too_many_arguments)]

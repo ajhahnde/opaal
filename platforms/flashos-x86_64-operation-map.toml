@@ -449,6 +449,26 @@ mapping_observation = "The adapter reads attributes with tcgetattr, transforms t
 classification = "deferred"
 
 [[operation]]
+id = "terminal-snapshot-job-mode"
+capability = "terminal-info"
+requirement = "snapshot foreground job terminal attributes"
+source_evidence = ["runtime-foreground-terminal", "adapter-terminal-info"]
+abi_seams = ["relibc-terminal-mode"]
+boundary = "libc-abi"
+mapping_observation = "When a foreground aggregate stops, the coordinator asks the adapter to retain an opaque token populated by tcgetattr before shell terminal restoration."
+classification = "deferred"
+
+[[operation]]
+id = "terminal-reapply-job-mode"
+capability = "terminal-info"
+requirement = "reapply stopped-job terminal attributes"
+source_evidence = ["runtime-foreground-terminal", "adapter-terminal-info"]
+abi_seams = ["relibc-terminal-mode"]
+boundary = "libc-abi"
+mapping_observation = "Before continuing a stopped foreground group, the coordinator passes its adapter-owned token back to tcsetattr and refreshes the token on every later stop."
+classification = "deferred"
+
+[[operation]]
 id = "clock-read-monotonic"
 capability = "monotonic-clock"
 requirement = "read a nondecreasing monotonic instant"

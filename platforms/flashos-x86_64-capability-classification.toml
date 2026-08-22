@@ -219,6 +219,20 @@ basis = "existing-libc-abi-route"
 rationale = "Configured relibc already exposes terminal attribute reads and writes for guarded raw mode."
 
 [[operation]]
+id = "terminal-snapshot-job-mode"
+capability = "terminal-info"
+classification = "native"
+basis = "existing-libc-abi-route"
+rationale = "Configured relibc already exposes terminal attribute reads for an adapter-owned stopped-job snapshot."
+
+[[operation]]
+id = "terminal-reapply-job-mode"
+capability = "terminal-info"
+classification = "native"
+basis = "existing-libc-abi-route"
+rationale = "Configured relibc already exposes terminal attribute writes for restoring a stopped job's retained modes."
+
+[[operation]]
 id = "clock-read-monotonic"
 capability = "monotonic-clock"
 classification = "native"
@@ -376,10 +390,10 @@ rationale = "Configured relibc signal and wait operations cover the complete por
 [[capability]]
 name = "terminal-info"
 rust_variant = "TerminalInfo"
-operation_ids = ["terminal-detect-ends", "terminal-read-size", "terminal-raw-mode"]
+operation_ids = ["terminal-detect-ends", "terminal-read-size", "terminal-raw-mode", "terminal-snapshot-job-mode", "terminal-reapply-job-mode"]
 classification = "native"
 target_qualification = "pending"
-rationale = "Configured relibc terminal queries and attribute operations cover the complete terminal-information group."
+rationale = "Configured relibc terminal queries and attribute operations cover terminal inspection, raw-mode guards, and stopped-job mode preservation."
 
 [[capability]]
 name = "monotonic-clock"

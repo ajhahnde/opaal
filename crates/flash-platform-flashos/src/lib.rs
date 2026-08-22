@@ -14,8 +14,8 @@ use flash_platform::{
     DirectoryReadError, DirectoryReadRequest, DirectoryStream, FileActionError, FileIoEndpoint,
     FileOpenRequest, ForegroundTerminalGuard, JobControlSignalGuard, JobSignal, PipeEndpoints,
     PipeError, Platform, PlatformError, ProcessGroupId, SignalError, SpawnError, SpawnRequest,
-    StandardDirectories, StandardDirectoryEnvironment, TerminalModeGuard, TerminalSize,
-    WorkingDirectoryError, WorkingDirectoryRequest,
+    StandardDirectories, StandardDirectoryEnvironment, TerminalModeGuard, TerminalModeToken,
+    TerminalSize, WorkingDirectoryError, WorkingDirectoryRequest,
 };
 use flash_platform_posix::PosixPlatform;
 
@@ -98,6 +98,16 @@ impl Platform for FlashOsPlatform {
     fn enter_raw_mode(&self) -> Result<Box<dyn TerminalModeGuard>, PlatformError> {
         self.require(Capability::TerminalInfo)?;
         PosixPlatform.enter_raw_mode()
+    }
+
+    fn snapshot_terminal_mode(&self) -> Result<Box<dyn TerminalModeToken>, PlatformError> {
+        self.require(Capability::TerminalInfo)?;
+        PosixPlatform.snapshot_terminal_mode()
+    }
+
+    fn apply_terminal_mode(&self, token: &dyn TerminalModeToken) -> Result<(), PlatformError> {
+        self.require(Capability::TerminalInfo)?;
+        PosixPlatform.apply_terminal_mode(token)
     }
 
     fn foreground_process_group(&self) -> Result<Option<ProcessGroupId>, PlatformError> {

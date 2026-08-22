@@ -12,8 +12,8 @@ use std::sync::{Arc, mpsc};
 use std::thread;
 
 use flash_platform::{
-    Capability, ChildProcess, JobSignal, Platform, PlatformError, ProcessGroupId, ProcessStatus,
-    ProcessTransition, WaitError,
+    Capability, ChildProcess, DescriptorEndpoint, JobSignal, Platform, PlatformError,
+    ProcessGroupId, ProcessStatus, ProcessTransition, TerminalModeToken, WaitError,
 };
 
 use crate::eval::{AUTOMATIC_RESUME_LIMIT, Clock, Instant, RuntimeError, RuntimeErrorKind};
@@ -26,6 +26,9 @@ use crate::job::{
 };
 use crate::plan::ExecutionPlan;
 use crate::{Duration, Status};
+
+/// Maximum external members that may allocate observer state for one job.
+pub const MAX_OBSERVED_JOB_MEMBERS: usize = 256;
 
 /// One immutable transition produced by a background child observer.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -125,6 +128,8 @@ impl ObserverAssignment {
 /// Failure while preparing idle observer workers.
 #[derive(Debug)]
 pub enum ObserverPrepareError {
+    /// The job would require more observer state than the runtime permits.
+    MemberLimit { limit: usize, actual: usize },
     /// The host refused to create one planned observer thread.
     ThreadSpawn(io::Error),
     /// A created observer exited before confirming readiness.
@@ -134,6 +139,12 @@ pub enum ObserverPrepareError {
 impl fmt::Display for ObserverPrepareError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::MemberLimit { limit, actual } => {
+                write!(
+                    formatter,
+                    "job has {actual} members; observer limit is {limit}"
+                )
+            }
             Self::ThreadSpawn(error) => write!(formatter, "cannot start child observer: {error}"),
             Self::WorkerUnavailable => {
                 formatter.write_str("a child observer exited before becoming ready")
@@ -146,7 +157,7 @@ impl Error for ObserverPrepareError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::ThreadSpawn(error) => Some(error),
-            Self::WorkerUnavailable => None,
+            Self::MemberLimit { .. } | Self::WorkerUnavailable => None,
         }
     }
 }
@@ -188,6 +199,7 @@ impl ObserverSlots {
         clock: Arc<dyn Clock>,
         events: mpsc::Sender<ChildObservation>,
     ) -> Result<Self, ObserverPrepareError> {
+        validate_observer_count(count)?;
         #[cfg(target_os = "redox")]
         {
             Self::prepare_serialized(count, clock, events)
@@ -265,6 +277,7 @@ impl ObserverSlots {
         clock: Arc<dyn Clock>,
         events: mpsc::Sender<ChildObservation>,
     ) -> Result<Self, ObserverPrepareError> {
+        validate_observer_count(count)?;
         let (assignment_sender, assignment_receiver) = mpsc::channel();
         let (ready_sender, ready_receiver) = mpsc::sync_channel(0);
         let worker = thread::Builder::new()
@@ -352,6 +365,17 @@ impl ObserverSlots {
         } else {
             Ok(())
         }
+    }
+}
+
+fn validate_observer_count(count: usize) -> Result<(), ObserverPrepareError> {
+    if count > MAX_OBSERVED_JOB_MEMBERS {
+        Err(ObserverPrepareError::MemberLimit {
+            limit: MAX_OBSERVED_JOB_MEMBERS,
+            actual: count,
+        })
+    } else {
+        Ok(())
     }
 }
 
@@ -482,6 +506,8 @@ struct JobRecord {
     /// repeated resume pass inside a wait would signal the same stopped group
     /// once per loop turn.
     resume_requested: bool,
+    terminal_mode: Option<Box<dyn TerminalModeToken>>,
+    supervisor_completion: Option<SupervisorCompletionReader>,
     observers: Option<ObserverSlots>,
 }
 
@@ -543,9 +569,53 @@ pub enum JobSnapshotState {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum ForegroundJobOutcome {
     /// Every member reached a terminal aggregate.
-    Completed(Status),
+    Completed {
+        status: Status,
+        supervisor_completion: Option<Vec<u8>>,
+    },
     /// The complete aggregate stopped and remains addressable.
     Stopped(JobId),
+}
+
+struct SupervisorCompletionReader {
+    worker: thread::JoinHandle<Result<Vec<u8>, String>>,
+}
+
+impl SupervisorCompletionReader {
+    fn start(mut endpoint: Box<dyn DescriptorEndpoint>) -> Result<Self, io::Error> {
+        let worker = thread::Builder::new()
+            .name("flash-supervisor-completion".to_owned())
+            .spawn(move || {
+                let mut bytes = Vec::new();
+                let mut buffer = [0_u8; 8192];
+                loop {
+                    match endpoint.read(&mut buffer) {
+                        Ok(0) => return Ok(bytes),
+                        Ok(count)
+                            if bytes.len().saturating_add(count)
+                                <= crate::capsule::MAX_CAPSULE_BYTES + 18 =>
+                        {
+                            bytes.extend_from_slice(&buffer[..count]);
+                        }
+                        Ok(_) => {
+                            return Err("supervisor completion exceeds its byte limit".to_owned());
+                        }
+                        Err(error) => return Err(error.to_string()),
+                    }
+                }
+            })?;
+        Ok(Self { worker })
+    }
+
+    fn finish(self, job: JobId) -> Result<Vec<u8>, JobCommandError> {
+        self.worker
+            .join()
+            .map_err(|_| JobCommandError::Observation {
+                job,
+                message: "the supervisor completion reader panicked".to_owned(),
+            })?
+            .map_err(|message| JobCommandError::Observation { job, message })
+    }
 }
 
 impl JobSnapshotState {
@@ -831,7 +901,25 @@ impl BackgroundJobs {
         };
         let group = started.group();
         let pipeline_started = started.started_at();
-        let mut members: VecDeque<_> = started.into_members().into();
+        let (members, supervisor_completion) = started.into_parts();
+        let supervisor_completion = match supervisor_completion
+            .map(SupervisorCompletionReader::start)
+            .transpose()
+        {
+            Ok(reader) => reader,
+            Err(error) => {
+                let _ = platform.signal_process_group(group, JobSignal::Kill);
+                cleanup_members(members.into());
+                let _ = observers.shutdown();
+                return Err(RuntimeError::new(
+                    RuntimeErrorKind::ExecutionCapsule {
+                        message: format!("cannot start supervisor completion reader: {error}"),
+                    },
+                    plan.span(),
+                ));
+            }
+        };
+        let mut members: VecDeque<_> = members.into();
         let mut source_order = Vec::with_capacity(members.len());
         let mut member_started = BTreeMap::new();
 
@@ -876,6 +964,8 @@ impl BackgroundJobs {
                 observation_failed: false,
                 observation_message: None,
                 resume_requested: false,
+                terminal_mode: None,
+                supervisor_completion,
                 observers: Some(observers),
             },
         );
@@ -942,7 +1032,27 @@ impl BackgroundJobs {
         };
         let group = started.group();
         let pipeline_started = started.started_at();
-        let mut members: VecDeque<_> = started.into_members().into();
+        let (members, supervisor_completion) = started.into_parts();
+        let supervisor_completion = match supervisor_completion
+            .map(SupervisorCompletionReader::start)
+            .transpose()
+        {
+            Ok(reader) => reader,
+            Err(error) => {
+                let _ = platform.signal_process_group(group, JobSignal::Kill);
+                cleanup_members(members.into());
+                if let Some(observers) = observers.take() {
+                    let _ = observers.shutdown();
+                }
+                return Err(RuntimeError::new(
+                    RuntimeErrorKind::ExecutionCapsule {
+                        message: format!("cannot start supervisor completion reader: {error}"),
+                    },
+                    plan.span(),
+                ));
+            }
+        };
+        let mut members: VecDeque<_> = members.into();
         let foreground = match take_foreground(plan, platform, Some(group)) {
             Ok(foreground) => foreground,
             Err(error) => {
@@ -1025,6 +1135,8 @@ impl BackgroundJobs {
                 observation_failed: false,
                 observation_message: None,
                 resume_requested: false,
+                terminal_mode: None,
+                supervisor_completion,
                 observers,
             },
         );
@@ -1042,10 +1154,31 @@ impl BackgroundJobs {
                 plan.span(),
             )
         });
+        let terminal_capture_error =
+            if matches!(outcome, Ok(ForegroundJobOutcome::Stopped(_))) && foreground.is_some() {
+                match platform.snapshot_terminal_mode() {
+                    Ok(terminal_mode) => {
+                        self.records
+                            .get_mut(&job_id)
+                            .expect("a stopped foreground job remains retained")
+                            .terminal_mode = Some(terminal_mode);
+                        None
+                    }
+                    Err(error) => Some(RuntimeError::new(
+                        RuntimeErrorKind::ForegroundTerminal(error),
+                        plan.span(),
+                    )),
+                }
+            } else {
+                None
+            };
         let released = release_foreground(foreground, plan);
         match outcome {
             Err(error) => Err(error),
             Ok(outcome) => {
+                if let Some(error) = terminal_capture_error {
+                    return Err(error);
+                }
                 released?;
                 Ok(outcome)
             }
@@ -1082,8 +1215,11 @@ impl BackgroundJobs {
                 });
             }
             if let Some(status) = record.completion.clone() {
-                self.consume_waited_completion(job)?;
-                return Ok(ForegroundJobOutcome::Completed(status));
+                let supervisor_completion = self.consume_waited_completion(job)?;
+                return Ok(ForegroundJobOutcome::Completed {
+                    status,
+                    supervisor_completion,
+                });
             }
             if matches!(record.job.state(), JobState::Stopped { .. }) {
                 return Ok(ForegroundJobOutcome::Stopped(job));
@@ -1150,8 +1286,11 @@ impl BackgroundJobs {
             }
             if let Some(status) = record.completion.clone() {
                 debug_assert!(assignments.is_empty());
-                self.consume_waited_completion(job)?;
-                return Ok(ForegroundJobOutcome::Completed(status));
+                let supervisor_completion = self.consume_waited_completion(job)?;
+                return Ok(ForegroundJobOutcome::Completed {
+                    status,
+                    supervisor_completion,
+                });
             }
             if matches!(record.job.state(), JobState::Stopped { .. }) {
                 let group = record.group;
@@ -1365,6 +1504,15 @@ impl BackgroundJobs {
 
         let outcome = (|| {
             if stopped {
+                if let Some(token) = self
+                    .records
+                    .get(&job)
+                    .and_then(|record| record.terminal_mode.as_deref())
+                {
+                    platform
+                        .apply_terminal_mode(token)
+                        .map_err(|error| JobCommandError::ForegroundTerminal { error })?;
+                }
                 deliver(platform, group, JobSignal::Continue, job)?;
                 let record = self
                     .records
@@ -1385,7 +1533,17 @@ impl BackgroundJobs {
                     .move_to(JobPlacement::Foreground)
                     .expect("a running background job accepts foreground placement");
             }
-            self.wait_for_foreground(job)
+            let outcome = self.wait_for_foreground(job)?;
+            if matches!(outcome, ForegroundJobOutcome::Stopped(_)) {
+                let terminal_mode = platform
+                    .snapshot_terminal_mode()
+                    .map_err(|error| JobCommandError::ForegroundTerminal { error })?;
+                self.records
+                    .get_mut(&job)
+                    .expect("a stopped foreground job remains retained")
+                    .terminal_mode = Some(terminal_mode);
+            }
+            Ok(outcome)
         })();
         let restored = foreground
             .restore()
@@ -1530,7 +1688,7 @@ impl BackgroundJobs {
             });
 
         for job in selected {
-            self.consume_waited_completion(job)?;
+            let _ = self.consume_waited_completion(job)?;
         }
         Ok(selected_status)
     }
@@ -1699,7 +1857,10 @@ impl BackgroundJobs {
     }
 
     /// Consume one selected completion without leaving a duplicate notice.
-    fn consume_waited_completion(&mut self, job: JobId) -> Result<(), JobCommandError> {
+    fn consume_waited_completion(
+        &mut self,
+        job: JobId,
+    ) -> Result<Option<Vec<u8>>, JobCommandError> {
         self.notices.retain(|notice| notice.job != job);
         let mut record = self
             .records
@@ -1718,7 +1879,11 @@ impl BackgroundJobs {
                 .shutdown()
                 .map_err(|_| JobCommandError::ObserverPanicked { job })?;
         }
-        Ok(())
+        record
+            .supervisor_completion
+            .take()
+            .map(|reader| reader.finish(job))
+            .transpose()
     }
 
     fn has_live_jobs(&self) -> bool {

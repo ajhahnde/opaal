@@ -76,7 +76,7 @@ fn formatter_help_and_usage_statuses_are_distinct() {
     assert!(stdout.contains("fsh format --check [--] PATH..."));
     assert!(stdout.contains("fsh format --write [--] PATH..."));
     assert!(stdout.contains("permission bits"));
-    assert!(!stdout.contains("async-chain"));
+    assert!(!stdout.contains("async-capsule"));
 
     let misuse = fsh(["format", "--check"]);
     assert_eq!(misuse.status.code(), Some(2), "{misuse:?}");

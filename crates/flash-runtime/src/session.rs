@@ -30,10 +30,8 @@ use flash_platform::{
     DirectoryStream, FileOpenMode, FileOpenRequest, JobSignal, Platform, ProcessGroupId,
 };
 use flash_syntax::{
-    Closure, CommandHeadKind, CommandItemKind, ConditionalChain, Diagnostic, Expression,
-    ExpressionKind, LiteralKind, OutputMode, ParseOutcome, RecordKey, RedirectionKind, Script,
-    Severity, SourceFile, SourceId, Span, StageKind, StatementKind, Word, WordPart, WordPartKind,
-    parse, render_diagnostic,
+    CommandHeadKind, ConditionalChain, Diagnostic, OutputMode, ParseOutcome, Script, Severity,
+    SourceFile, SourceId, Span, StageKind, StatementKind, parse, render_diagnostic,
 };
 
 use crate::background::{BackgroundJobs, ForegroundJobOutcome, QuarantinePolicy, escape_job_label};
@@ -44,7 +42,7 @@ use crate::eval::{
     Abort, CancellationToken, CapturePosition, CapturedChain, Clock, EvalLimits, EvaluationContext,
     EvaluationHost, EvaluationPolicy, ExpandedWord, HostedEvaluationFailure,
     HostedEvaluationOutcome, ResourceBudget, RuntimeError, RuntimeErrorKind, evaluate_with_host,
-    expand_word,
+    expand_word_with_environment,
 };
 use crate::execute::{
     BoundedCapture, CommandCapture, MixedPipelineControl, MixedSegment, aggregate_statuses,
@@ -199,6 +197,10 @@ impl Session {
     #[must_use]
     pub const fn current_status(&self) -> Option<&Status> {
         self.state.current_status()
+    }
+
+    pub(crate) fn seed_current_status(&mut self, status: Option<Status>) {
+        self.state.set_current_status(status);
     }
 
     /// Enable the interactive background-job coordinator with one owned clock.
@@ -415,17 +417,15 @@ impl Session {
                         );
                         return Err(runtime(source_file, &error));
                     };
-                    if let Err(error) = validate_background_chain(
-                        &job.chain,
-                        source_file,
-                        scope,
-                        state.environment(),
-                    ) {
-                        return Err(runtime(source_file, &error));
-                    }
-                    let mut child_scope = ScopeStack::from_environment(state.environment());
+                    let mut child_scope = scope.clone();
                     let direct_pipeline = one_background_pipeline(&job.chain).filter(|pipeline| {
-                        pipeline_is_all_external(pipeline, source_file, &mut child_scope, registry)
+                        pipeline_is_all_external(
+                            pipeline,
+                            source_file,
+                            &mut child_scope,
+                            state.environment(),
+                            registry,
+                        )
                     });
                     let plan = if let Some(pipeline) = direct_pipeline {
                         plan_pipeline_with_options_and_binding_types(
@@ -446,6 +446,8 @@ impl Session {
                             source_file,
                             state.cwd(),
                             state.environment(),
+                            state.current_status(),
+                            scope,
                             options,
                             platform,
                         )
@@ -601,6 +603,12 @@ impl EvaluationHost for SessionEvaluationHost<'_> {
         EvaluationPolicy::General
     }
 
+    fn manages_foreground_jobs(&self) -> bool {
+        self.jobs
+            .as_ref()
+            .is_some_and(BackgroundJobs::manages_foreground)
+    }
+
     fn language_state_checkpoint(&mut self) -> Box<dyn std::any::Any> {
         Box::new(self.state.clone())
     }
@@ -629,6 +637,53 @@ impl EvaluationHost for SessionEvaluationHost<'_> {
         let inspection_only = chain_is_standalone_help(chain, &context.source);
         let error_source = Arc::clone(&context.source);
         let _ = &context.cancel;
+        if context.manage_foreground
+            && self
+                .jobs
+                .as_ref()
+                .is_some_and(BackgroundJobs::manages_foreground)
+            && foreground_chain_requires_supervisor(
+                chain,
+                &context.source,
+                scope,
+                self.state,
+                self.options,
+                self.registry,
+                self.probe,
+                &context.binding_types,
+            )
+        {
+            let plan = supervisor_plan(
+                chain,
+                &context.source,
+                self.state.cwd(),
+                self.state.environment(),
+                self.state.current_status(),
+                scope,
+                self.options,
+                self.platform,
+                true,
+            )
+            .map_err(|error| Abort::Error(error.with_source(Arc::clone(&error_source))))?;
+            let command = context
+                .source
+                .slice(chain.span())
+                .map(escape_job_label)
+                .expect("a parsed chain span belongs to its source");
+            let outcome = self
+                .jobs
+                .as_mut()
+                .expect("managed foreground execution retains a coordinator")
+                .start_foreground(&plan, self.platform, command)
+                .map_err(|error| Abort::Error(error.with_source(Arc::clone(&error_source))))?;
+            let step = apply_foreground_completion(outcome, scope, self.state, chain.span(), true)
+                .map_err(|error| Abort::Error(error.with_source(Arc::clone(&error_source))))?;
+            return match step {
+                ChainStep::Status(status) => Ok(status),
+                ChainStep::Exit(code) => Err(Abort::Exit(code)),
+                ChainStep::Stopped(job) => Err(Abort::Stopped(job)),
+            };
+        }
         let mut output = ChainOutput::Session(self.output);
         let step = run_chain(
             chain,
@@ -758,233 +813,6 @@ pub(crate) fn capture_command_substitution_compat(
     collector.finish(status, chain.span())
 }
 
-fn validate_background_chain(
-    chain: &ConditionalChain,
-    source: &SourceFile,
-    scope: &ScopeStack,
-    environment: &Environment,
-) -> Result<(), RuntimeError> {
-    BackgroundChainValidator {
-        source,
-        scope,
-        environment,
-        local_bindings: Vec::new(),
-    }
-    .chain(chain)
-}
-
-struct BackgroundChainValidator<'a> {
-    source: &'a SourceFile,
-    scope: &'a ScopeStack,
-    environment: &'a Environment,
-    local_bindings: Vec<String>,
-}
-
-impl BackgroundChainValidator<'_> {
-    fn chain(&mut self, chain: &ConditionalChain) -> Result<(), RuntimeError> {
-        for and_chain in chain.or_terms() {
-            for pipeline in and_chain.and_terms() {
-                for stage in pipeline.stages() {
-                    match stage.kind() {
-                        StageKind::Command(command) => {
-                            self.word(command.head.word())?;
-                            if command.head.kind() != CommandHeadKind::ForcedExternal {
-                                self.command_head_function(command.head.word())?;
-                            }
-                            for item in &command.items {
-                                match item.kind() {
-                                    CommandItemKind::Word(word) => self.word(word)?,
-                                    CommandItemKind::Spread(variable) => {
-                                        self.variable(variable.name.span(), variable.span)?;
-                                    }
-                                    CommandItemKind::Closure(closure) => {
-                                        self.closure(closure)?;
-                                    }
-                                    CommandItemKind::Redirection(redirection) => {
-                                        self.redirection(redirection.kind())?;
-                                    }
-                                }
-                            }
-                        }
-                        StageKind::Expression(expression) => self.expression(expression)?,
-                    }
-                }
-            }
-        }
-        Ok(())
-    }
-
-    fn command_head_function(&self, word: &Word) -> Result<(), RuntimeError> {
-        let mut scope = self.scope.clone();
-        let Ok(expanded) = crate::eval::expand_word(word, self.source, &mut scope) else {
-            return Ok(());
-        };
-        let Some(name) = expanded.value().to_str() else {
-            return Ok(());
-        };
-        if self.is_shell_function(name) {
-            return Err(self.shell_function(word.span()));
-        }
-        Ok(())
-    }
-
-    fn word(&mut self, word: &Word) -> Result<(), RuntimeError> {
-        for part in word.parts() {
-            self.word_part(part)?;
-        }
-        Ok(())
-    }
-
-    fn word_part(&mut self, part: &WordPart) -> Result<(), RuntimeError> {
-        match part.kind() {
-            WordPartKind::Variable(identifier) => self.variable(identifier.span(), part.span()),
-            WordPartKind::DoubleQuoted(parts) => {
-                for part in parts {
-                    self.word_part(part)?;
-                }
-                Ok(())
-            }
-            WordPartKind::BracedInterpolation(expression) => self.expression(expression),
-            WordPartKind::CommandSubstitution(substitution) => self.chain(substitution.chain()),
-            WordPartKind::Bare
-            | WordPartKind::BareEscape
-            | WordPartKind::SingleQuoted
-            | WordPartKind::DoubleText
-            | WordPartKind::DoubleEscape => Ok(()),
-        }
-    }
-
-    fn redirection(&mut self, redirection: &RedirectionKind) -> Result<(), RuntimeError> {
-        match redirection {
-            RedirectionKind::Input { target, .. } => self.word(target),
-            RedirectionKind::File(file) => self.word(&file.target),
-            RedirectionKind::Duplicate { .. } | RedirectionKind::Close { .. } => Ok(()),
-        }
-    }
-
-    fn expression(&mut self, expression: &Expression) -> Result<(), RuntimeError> {
-        match expression.kind() {
-            ExpressionKind::Literal(literal) => {
-                if let LiteralKind::DoubleQuoted(parts) = literal.kind() {
-                    for part in parts {
-                        self.word_part(part)?;
-                    }
-                }
-                Ok(())
-            }
-            ExpressionKind::Variable(variable) => {
-                self.variable(variable.name.span(), variable.span)
-            }
-            ExpressionKind::Symbol(_) => Ok(()),
-            ExpressionKind::List(elements) => {
-                for element in elements {
-                    self.expression(element)?;
-                }
-                Ok(())
-            }
-            ExpressionKind::Record(entries) => {
-                for entry in entries {
-                    if let RecordKey::DoubleQuoted(part) = &entry.key {
-                        self.word_part(part)?;
-                    }
-                    self.expression(&entry.value)?;
-                }
-                Ok(())
-            }
-            ExpressionKind::Closure(closure) => self.closure(closure),
-            ExpressionKind::CommandSubstitution(substitution) => self.chain(substitution.chain()),
-            ExpressionKind::GroupedJob(chain) => self.chain(chain),
-            ExpressionKind::Call(call) => {
-                if let ExpressionKind::Symbol(identifier) = call.callee.kind() {
-                    let name = self.text(identifier.span());
-                    if !self.is_local(name) && self.is_shell_function(name) {
-                        return Err(self.shell_function(call.callee.span()));
-                    }
-                }
-                self.expression(&call.callee)?;
-                for argument in &call.arguments {
-                    self.expression(argument)?;
-                }
-                Ok(())
-            }
-            ExpressionKind::Index(index) => {
-                self.expression(&index.target)?;
-                self.expression(&index.index)
-            }
-            ExpressionKind::Member(member) => self.expression(&member.target),
-            ExpressionKind::Unary(unary) => self.expression(&unary.operand),
-            ExpressionKind::Binary(binary) => {
-                self.expression(&binary.left)?;
-                self.expression(&binary.right)
-            }
-        }
-    }
-
-    fn closure(&mut self, closure: &Closure) -> Result<(), RuntimeError> {
-        let outer_count = self.local_bindings.len();
-        for parameter in &closure.parameters {
-            self.local_bindings
-                .push(self.text(parameter.name.span()).to_owned());
-        }
-        let result = self.chain(&closure.body);
-        self.local_bindings.truncate(outer_count);
-        result
-    }
-
-    fn variable(&self, name_span: Span, reference_span: Span) -> Result<(), RuntimeError> {
-        let name = self.text(name_span);
-        if self.is_local(name) {
-            return Ok(());
-        }
-        if let Some(Value::Callable(callable)) = self.scope.get(name) {
-            return Err(if callable.family() == "function" {
-                self.shell_function(reference_span)
-            } else {
-                self.unavailable_binding(reference_span)
-            });
-        }
-        if self.environment.contains(name) {
-            return Ok(());
-        }
-        Err(self.unavailable_binding(reference_span))
-    }
-
-    fn is_local(&self, name: &str) -> bool {
-        self.local_bindings.iter().rev().any(|local| local == name)
-    }
-
-    fn is_shell_function(&self, name: &str) -> bool {
-        matches!(
-            self.scope.get(name),
-            Some(Value::Callable(callable)) if callable.family() == "function"
-        )
-    }
-
-    fn unavailable_binding(&self, span: Span) -> RuntimeError {
-        RuntimeError::new(
-            RuntimeErrorKind::Unsupported {
-                feature: "a binding unavailable in the background subshell environment",
-            },
-            span,
-        )
-    }
-
-    fn shell_function(&self, span: Span) -> RuntimeError {
-        RuntimeError::new(
-            RuntimeErrorKind::Unsupported {
-                feature: "a shell function in a background subshell",
-            },
-            span,
-        )
-    }
-
-    fn text(&self, span: Span) -> &str {
-        self.source
-            .slice(span)
-            .expect("a parsed syntax span belongs to its source")
-    }
-}
-
 fn one_background_pipeline(
     chain: &flash_syntax::ConditionalChain,
 ) -> Option<&flash_syntax::Pipeline> {
@@ -1010,6 +838,7 @@ fn pipeline_is_all_external(
     pipeline: &flash_syntax::Pipeline,
     source: &SourceFile,
     scope: &mut ScopeStack,
+    environment: &Environment,
     registry: &CommandRegistry,
 ) -> bool {
     pipeline.stages().iter().all(|stage| {
@@ -1019,12 +848,20 @@ fn pipeline_is_all_external(
         if command.head.kind() == CommandHeadKind::ForcedExternal {
             return true;
         }
-        let Ok(head) = expand_word(command.head.word(), source, scope) else {
+        let Ok(head) =
+            expand_word_with_environment(command.head.word(), source, scope, environment)
+        else {
             return false;
         };
         let Some(name) = head.value().to_str() else {
             return true;
         };
+        if matches!(
+            scope.get(name),
+            Some(Value::Callable(callable)) if callable.family() == "function"
+        ) {
+            return false;
+        }
         matches!(
             registry.classify(name),
             crate::command::CommandClassification::Unknown
@@ -1032,13 +869,111 @@ fn pipeline_is_all_external(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
+fn foreground_chain_requires_supervisor(
+    chain: &ConditionalChain,
+    source: &SourceFile,
+    scope: &ScopeStack,
+    state: &SessionState,
+    options: &SessionOptions,
+    registry: &CommandRegistry,
+    probe: &dyn ExecutableProbe,
+    binding_types: &Arc<RuntimeBindingTypes>,
+) -> bool {
+    if chain_contains_static_job_command(chain, source) {
+        return false;
+    }
+
+    let mut planned_scope = scope.clone();
+    let pipeline_total = chain
+        .or_terms()
+        .iter()
+        .map(|and_chain| and_chain.and_terms().len())
+        .sum::<usize>();
+    let mut pipeline_count = 0_usize;
+    let mut has_internal = false;
+    let mut has_external = false;
+    for and_chain in chain.or_terms() {
+        for pipeline in and_chain.and_terms() {
+            pipeline_count += 1;
+            let Ok(plan) = plan_pipeline_with_options_and_binding_types(
+                pipeline,
+                state.cwd(),
+                source,
+                &mut planned_scope,
+                state.environment(),
+                registry,
+                probe,
+                options,
+                Arc::clone(binding_types),
+            ) else {
+                return pipeline_total > 1;
+            };
+            for stage in plan.stages() {
+                match stage.resolution() {
+                    PlannedResolution::Internal { .. } => has_internal = true,
+                    PlannedResolution::External { .. } => has_external = true,
+                }
+            }
+        }
+    }
+
+    has_external && (has_internal || pipeline_count > 1)
+}
+
+fn chain_contains_static_job_command(chain: &ConditionalChain, source: &SourceFile) -> bool {
+    chain.or_terms().iter().any(|and_chain| {
+        and_chain.and_terms().iter().any(|pipeline| {
+            pipeline.stages().iter().any(|stage| {
+                let StageKind::Command(command) = stage.kind() else {
+                    return false;
+                };
+                command.head.kind() == CommandHeadKind::Bare
+                    && source
+                        .slice(command.head.word().span())
+                        .ok()
+                        .and_then(job_command_name)
+                        .is_some()
+            })
+        })
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
 fn background_shell_plan(
     chain: &ConditionalChain,
     source: &SourceFile,
     cwd: &Path,
     environment: &Environment,
+    current_status: Option<&Status>,
+    scope: &ScopeStack,
     options: &SessionOptions,
     platform: &dyn Platform,
+) -> Result<ExecutionPlan, RuntimeError> {
+    supervisor_plan(
+        chain,
+        source,
+        cwd,
+        environment,
+        current_status,
+        scope,
+        options,
+        platform,
+        false,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn supervisor_plan(
+    chain: &ConditionalChain,
+    source: &SourceFile,
+    cwd: &Path,
+    environment: &Environment,
+    current_status: Option<&Status>,
+    scope: &ScopeStack,
+    options: &SessionOptions,
+    platform: &dyn Platform,
+    completion: bool,
 ) -> Result<ExecutionPlan, RuntimeError> {
     let span = chain.span();
     let executable = platform
@@ -1048,23 +983,48 @@ fn background_shell_plan(
         .slice(span)
         .expect("a parsed chain span belongs to its source");
 
+    let capsule = crate::capsule::encode_background_capsule(
+        if completion {
+            "<foreground-chain>"
+        } else {
+            "<background-chain>"
+        },
+        text,
+        cwd,
+        environment,
+        current_status,
+        scope,
+        *options,
+    )
+    .map_err(|error| {
+        RuntimeError::new(
+            RuntimeErrorKind::ExecutionCapsule {
+                message: error.to_string(),
+            },
+            span,
+        )
+    })?;
+
     let mut argv = vec![
         ExpandedWord::synthetic(executable.as_os_str().to_os_string(), span),
-        ExpandedWord::synthetic(OsString::from("--async-chain"), span),
-        ExpandedWord::synthetic(OsString::from(text), span),
+        ExpandedWord::synthetic(OsString::from("--async-capsule"), span),
+        ExpandedWord::synthetic(
+            OsString::from(crate::capsule::CAPSULE_DESCRIPTOR.to_string()),
+            span,
+        ),
     ];
-    if options.pipefail() {
+    if completion {
         argv.push(ExpandedWord::synthetic(
-            OsString::from("--async-pipefail"),
+            OsString::from("--async-completion"),
+            span,
+        ));
+        argv.push(ExpandedWord::synthetic(
+            OsString::from(crate::capsule::COMPLETION_DESCRIPTOR.to_string()),
             span,
         ));
     }
-    argv.extend([
-        ExpandedWord::synthetic(OsString::from("--async-capture-limit"), span),
-        ExpandedWord::synthetic(OsString::from(options.capture_limit().to_string()), span),
-    ]);
 
-    Ok(ExecutionPlan::single_external(
+    let plan = ExecutionPlan::single_external(
         executable,
         argv,
         cwd.to_owned(),
@@ -1072,7 +1032,13 @@ fn background_shell_plan(
         options.pipefail(),
         options.capture_limit(),
         span,
-    ))
+    )
+    .with_supervisor_input(capsule);
+    Ok(if completion {
+        plan.with_supervisor_completion()
+    } else {
+        plan
+    })
 }
 
 impl Interrupt {
@@ -1305,7 +1271,8 @@ fn run_pipeline(
     validate_job_builtin_arguments(&plan)?;
 
     if let Some((command, stage)) = sole_job_command(&plan) {
-        return execute_job_builtin(command, stage, jobs, platform).map_err(Interrupt::from);
+        return execute_job_builtin(command, stage, scope, state, jobs, platform)
+            .map_err(Interrupt::from);
     }
 
     if plan
@@ -1398,10 +1365,8 @@ fn run_pipeline(
             .as_mut()
             .expect("foreground management requires a coordinator")
             .start_foreground(&plan, platform, command)?;
-        return Ok(match outcome {
-            ForegroundJobOutcome::Completed(status) => ChainStep::Status(status),
-            ForegroundJobOutcome::Stopped(job) => ChainStep::Stopped(job),
-        });
+        return apply_foreground_completion(outcome, scope, state, plan.span(), false)
+            .map_err(Interrupt::from);
     }
 
     let status = match output {
@@ -1494,6 +1459,8 @@ fn sole_job_command(plan: &ExecutionPlan) -> Option<(&'static str, &PlannedStage
 fn execute_job_builtin(
     command: &'static str,
     stage: &PlannedStage,
+    scope: &mut ScopeStack,
+    state: &mut SessionState,
     jobs: &mut Option<BackgroundJobs>,
     platform: &dyn Platform,
 ) -> Result<ChainStep, RuntimeError> {
@@ -1517,13 +1484,10 @@ fn execute_job_builtin(
                     operation("no stopped or running background job to foreground".to_owned())
                 })?,
             };
-            return coordinator
+            let outcome = coordinator
                 .foreground_job(target, platform)
-                .map(|outcome| match outcome {
-                    ForegroundJobOutcome::Completed(status) => ChainStep::Status(status),
-                    ForegroundJobOutcome::Stopped(job) => ChainStep::Stopped(job),
-                })
-                .map_err(|error| operation(error.to_string()));
+                .map_err(|error| operation(error.to_string()))?;
+            return apply_foreground_completion(outcome, scope, state, stage.span(), false);
         }
         "bg" => {
             let target = match parse_optional_job_target(stage, command)? {
@@ -1570,6 +1534,75 @@ fn execute_job_builtin(
     Ok(ChainStep::Status(
         Status::exit(0, Duration::ZERO).expect("zero is a valid job-command status"),
     ))
+}
+
+fn apply_foreground_completion(
+    outcome: ForegroundJobOutcome,
+    scope: &mut ScopeStack,
+    state: &mut SessionState,
+    span: Span,
+    completion_required: bool,
+) -> Result<ChainStep, RuntimeError> {
+    let ForegroundJobOutcome::Completed {
+        status,
+        supervisor_completion,
+    } = outcome
+    else {
+        let ForegroundJobOutcome::Stopped(job) = outcome else {
+            unreachable!("foreground outcomes are completed or stopped")
+        };
+        return Ok(ChainStep::Stopped(job));
+    };
+    let Some(bytes) = supervisor_completion.filter(|bytes| !bytes.is_empty()) else {
+        if completion_required {
+            return Err(RuntimeError::new(
+                RuntimeErrorKind::ExecutionCapsule {
+                    message: "the foreground supervisor returned no completion".to_owned(),
+                },
+                span,
+            ));
+        }
+        return Ok(ChainStep::Status(status));
+    };
+    let completion = crate::capsule::decode_supervisor_completion(&bytes).map_err(|error| {
+        RuntimeError::new(
+            RuntimeErrorKind::ExecutionCapsule {
+                message: format!("invalid supervisor completion: {error}"),
+            },
+            span,
+        )
+    })?;
+    let outcome = completion.outcome();
+    let returned_status = completion.status().cloned();
+    if matches!(outcome, crate::capsule::SupervisorOutcome::Continued) && returned_status.is_none()
+    {
+        return Err(RuntimeError::new(
+            RuntimeErrorKind::ExecutionCapsule {
+                message: "the foreground supervisor completion has no status".to_owned(),
+            },
+            span,
+        ));
+    }
+    let mut pending_scope = scope.clone();
+    let mut pending_state = state.clone();
+    completion
+        .apply(&mut pending_scope, &mut pending_state)
+        .map_err(|error| {
+            RuntimeError::new(
+                RuntimeErrorKind::ExecutionCapsule {
+                    message: error.to_string(),
+                },
+                span,
+            )
+        })?;
+    *scope = pending_scope;
+    *state = pending_state;
+    match outcome {
+        crate::capsule::SupervisorOutcome::Continued => Ok(ChainStep::Status(
+            returned_status.expect("continued completion status was validated"),
+        )),
+        crate::capsule::SupervisorOutcome::Exit(code) => Ok(ChainStep::Exit(code)),
+    }
 }
 
 /// Whether this all-internal plan begins with the read-only job table.

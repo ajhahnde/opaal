@@ -117,13 +117,14 @@ observation = "The selected adapter performs requested child group placement and
 
 [[source_evidence]]
 id = "runtime-foreground-terminal"
-path = "components/flash/crates/flash-runtime/src/execute.rs"
+path = "components/flash/crates/flash-runtime/src/background.rs"
 markers = [
-  "pub(crate) fn take_foreground",
-  "platform.enter_foreground(group)",
-  "pub(crate) fn release_foreground",
+  "pub(crate) fn start_foreground(",
+  "platform.snapshot_terminal_mode()",
+  "apply_terminal_mode(token)",
+  ".restore()",
 ]
-observation = "The runtime conditionally hands a terminal to the established group and explicitly restores it after waiting."
+observation = "The job coordinator hands the terminal to the established group, snapshots job-specific modes on every stop, reapplies them before continuation, and explicitly restores shell ownership after waiting."
 
 [[source_evidence]]
 id = "adapter-foreground-terminal"
@@ -154,8 +155,10 @@ markers = [
   "fn is_output_terminal(&self) -> bool",
   "fn terminal_size(&self)",
   "fn enter_raw_mode(&self)",
+  "fn snapshot_terminal_mode(&self)",
+  "fn apply_terminal_mode(&self, token: &dyn TerminalModeToken)",
 ]
-observation = "The selected adapter detects both terminal ends, reads size, and owns raw-mode entry and restoration."
+observation = "The selected adapter detects both terminal ends, reads size, owns raw-mode entry and restoration, and snapshots or reapplies opaque terminal attributes for stopped jobs."
 
 [[source_evidence]]
 id = "runtime-monotonic-clock"
@@ -359,11 +362,11 @@ classification = "deferred"
 [[capability]]
 name = "terminal-info"
 rust_variant = "TerminalInfo"
-requirements = ["detect terminal input and output independently", "read terminal dimensions", "enter and restore raw input mode"]
-source_evidence = ["redox-selects-posix", "adapter-terminal-info", "adapter-declares-full"]
+requirements = ["detect terminal input and output independently", "read terminal dimensions", "enter and restore raw input mode", "snapshot foreground job terminal attributes", "reapply stopped-job terminal attributes"]
+source_evidence = ["redox-selects-posix", "runtime-foreground-terminal", "adapter-terminal-info", "adapter-declares-full"]
 runtime_evidence = ["qemu-terminal-editor"]
-source_observation = "The selected target path and adapter contain terminal detection, sizing, raw-mode entry, and restoration."
-runtime_observation = "The current image proves target-only raw editing, recall, multiline input, Ctrl-C abandonment, and prompt recovery; it does not assert a non-default terminal size."
+source_observation = "The selected target path, job coordinator, and adapter contain terminal detection, sizing, raw-mode entry/restoration, and opaque stopped-job mode preservation."
+runtime_observation = "The current image proves target-only raw editing, recall, multiline input, Ctrl-C abandonment, and prompt recovery; it does not assert a non-default terminal size or directly observe stopped-job mode restoration."
 classification = "deferred"
 
 [[capability]]

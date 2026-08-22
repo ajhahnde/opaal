@@ -29,6 +29,7 @@ use rustix::termios::{Winsize, tcgetpgrp, tcsetwinsize};
 const FSH: &str = env!("CARGO_BIN_EXE_fsh");
 const HANGUP_OBSERVER: &str = env!("CARGO_BIN_EXE_flash-e2e-hangup-observer-fixture");
 const PROCESS_OBSERVER: &str = env!("CARGO_BIN_EXE_flash-e2e-process-observer-fixture");
+const STATUS_FIXTURE: &str = env!("CARGO_BIN_EXE_flash-e2e-status-fixture");
 const ENTER: &[u8] = b"\r";
 const CTRL_C: &[u8] = b"\x03";
 const CTRL_D: &[u8] = b"\x04";
@@ -969,6 +970,34 @@ fn a_terminal_stop_retains_an_addressable_job_and_returns_the_prompt() {
     session.send(ENTER);
     session.expect_from(refusal_mark, "fsh: 1 live background job");
     session.await_prompt(refusal_mark);
+
+    session.send(b"exit 0");
+    session.send(ENTER);
+    assert_eq!(session.wait_code(), 0);
+}
+
+#[test]
+fn a_complex_foreground_chain_commits_its_supervisor_state_after_completion() {
+    let cwd = unique_dir("foreground-chain-completion");
+    let destination = cwd.join("transported");
+    fs::create_dir(&destination).expect("create the transported directory");
+    let destination_text = destination
+        .to_str()
+        .expect("the test directory path is UTF-8");
+    let mut session = interactive(&cwd);
+    session.await_prompt(0);
+
+    let completion_mark = session.mark();
+    let command = format!("^{STATUS_FIXTURE} exit 0 && cd {destination_text}");
+    session.send(command.as_bytes());
+    session.send(ENTER);
+    session.await_prompt(completion_mark);
+
+    let state_mark = session.mark();
+    session.send(b"pwd");
+    session.send(ENTER);
+    session.expect_from(state_mark, destination_text);
+    session.await_prompt(state_mark);
 
     session.send(b"exit 0");
     session.send(ENTER);

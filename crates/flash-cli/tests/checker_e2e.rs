@@ -71,7 +71,7 @@ fn checker_help_and_usage_have_exact_output_channels_and_statuses() {
     assert!(stdout.contains("fsh check [--] SOURCE"));
     assert!(stdout.contains("canonical import closure"));
     assert!(stdout.contains("Successful checking is silent"));
-    assert!(!stdout.contains("async-chain"));
+    assert!(!stdout.contains("async-capsule"));
 
     let misuse = fsh(["check"]);
     assert_eq!(misuse.status.code(), Some(2), "{misuse:?}");

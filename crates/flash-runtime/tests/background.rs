@@ -9,12 +9,34 @@ use std::sync::{Arc, mpsc};
 
 use flash_platform::{ChildProcess, ProcessStatus, ProcessTransition, TerminateError, WaitError};
 use flash_runtime::background::{
-    ChildObservation, ObserverAssignment, ObserverSlots, escape_job_label,
+    ChildObservation, MAX_OBSERVED_JOB_MEMBERS, ObserverAssignment, ObserverPrepareError,
+    ObserverSlots, escape_job_label,
 };
 use flash_runtime::eval::{FakeClock, Instant};
 use flash_runtime::job::{JobId, ProcessId};
 
 type ScriptedTransition = Result<ProcessTransition, WaitError>;
+
+#[test]
+fn observer_preparation_refuses_an_unbounded_member_count_before_spawning() {
+    let (event_sender, _event_receiver) = mpsc::channel();
+    let error = match ObserverSlots::prepare(
+        MAX_OBSERVED_JOB_MEMBERS + 1,
+        Arc::new(FakeClock::new()),
+        event_sender,
+    ) {
+        Ok(_) => panic!("an oversized job must fail before observer allocation"),
+        Err(error) => error,
+    };
+
+    assert!(matches!(
+        error,
+        ObserverPrepareError::MemberLimit {
+            limit: MAX_OBSERVED_JOB_MEMBERS,
+            actual
+        } if actual == MAX_OBSERVED_JOB_MEMBERS + 1
+    ));
+}
 
 struct ControlledChild {
     id: u64,
