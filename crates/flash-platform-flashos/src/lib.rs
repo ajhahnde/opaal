@@ -8,6 +8,7 @@
 
 use std::ffi::{OsStr, OsString};
 use std::path::{Component, Path, PathBuf};
+use std::time::Duration;
 
 use flash_platform::{
     Capabilities, Capability, ChildProcess, DescriptorEndpoint, DescriptorReadError,
@@ -98,6 +99,15 @@ impl Platform for FlashOsPlatform {
     fn enter_raw_mode(&self) -> Result<Box<dyn TerminalModeGuard>, PlatformError> {
         self.require(Capability::TerminalInfo)?;
         PosixPlatform.enter_raw_mode()
+    }
+
+    fn read_terminal_input(
+        &self,
+        buffer: &mut [u8],
+        timeout: Duration,
+    ) -> Result<Option<usize>, PlatformError> {
+        self.require(Capability::TerminalInfo)?;
+        PosixPlatform.read_terminal_input(buffer, timeout)
     }
 
     fn snapshot_terminal_mode(&self) -> Result<Box<dyn TerminalModeToken>, PlatformError> {

@@ -7,13 +7,17 @@ use std::fmt;
 use std::fs::{self, DirBuilder, File, OpenOptions};
 use std::io::{self, BufRead, BufReader, BufWriter, Seek, Write};
 use std::ops::{Deref, DerefMut};
-use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt};
+use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 use fd_lock::RwLock;
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 use reedline::{
     FileBackedHistory, History, HistoryItem, HistoryItemId, HistorySessionId, SearchQuery,
 };
+
+use crate::editor::EditorError;
+use crate::terminal_editor::history::HistoryPersistence;
 
 /// Maximum number of entries retained by the built-in history policy.
 pub const DEFAULT_HISTORY_CAPACITY: usize = 1_000;
@@ -26,6 +30,7 @@ const HISTORY_FILE_MODE: u32 = 0o600;
 pub enum HistoryPlatform {
     Linux,
     MacOs,
+    FlashOs,
 }
 
 impl HistoryPlatform {
@@ -39,6 +44,10 @@ impl HistoryPlatform {
         #[cfg(target_os = "macos")]
         {
             Self::MacOs
+        }
+        #[cfg(target_os = "redox")]
+        {
+            Self::FlashOs
         }
     }
 }
@@ -122,7 +131,7 @@ pub fn select_history(
                 .filter(|value| !value.is_empty() && Path::new(value).is_absolute())
                 .map(PathBuf::from)
                 .map(|home| match platform {
-                    HistoryPlatform::Linux => home.join(".local/state"),
+                    HistoryPlatform::Linux | HistoryPlatform::FlashOs => home.join(".local/state"),
                     HistoryPlatform::MacOs => home.join("Library/Application Support"),
                 })
         })
@@ -139,8 +148,10 @@ pub fn select_history(
 /// History backend exposed without leaking Reedline types through its API.
 #[derive(Debug)]
 pub struct EditorHistory {
-    backend: PrivateHistory,
+    entries: VecDeque<String>,
+    pending: VecDeque<String>,
     capacity: usize,
+    file: Option<PathBuf>,
 }
 
 impl EditorHistory {
@@ -148,8 +159,10 @@ impl EditorHistory {
     pub fn open(selection: HistorySelection) -> Result<Self, HistoryError> {
         match selection {
             HistorySelection::Disabled => Ok(Self {
-                backend: PrivateHistory::memory(0)?,
+                entries: VecDeque::new(),
+                pending: VecDeque::new(),
                 capacity: 0,
+                file: None,
             }),
             HistorySelection::Persistent { primary, legacy } => {
                 let path = match fs::symlink_metadata(&primary) {
@@ -185,50 +198,49 @@ impl EditorHistory {
                         error,
                     )
                 })?;
-                let mut backend = PrivateHistory::persistent(DEFAULT_HISTORY_CAPACITY, path)
-                    .map_err(|error| {
-                        HistoryError::with_source("cannot load persistent history", error)
-                    })?;
-                backend.sync().map_err(|error| {
+                let mut history = Self {
+                    entries: VecDeque::new(),
+                    pending: VecDeque::new(),
+                    capacity: DEFAULT_HISTORY_CAPACITY,
+                    file: Some(path),
+                };
+                history.sync().map_err(|error| {
                     HistoryError::with_source("cannot load persistent history", error)
                 })?;
-                Ok(Self {
-                    backend,
-                    capacity: DEFAULT_HISTORY_CAPACITY,
-                })
+                Ok(history)
             }
         }
     }
 
     /// Records one submitted source buffer and synchronizes persistent state.
     pub fn record(&mut self, source: &str) -> Result<bool, HistoryError> {
-        let saved = self
-            .backend
-            .save(HistoryItem::from_command_line(source))
-            .map_err(|error| HistoryError::with_source("cannot record history entry", error))?;
-        self.backend.sync().map_err(|error| {
+        if self.capacity == 0
+            || source.is_empty()
+            || self.entries.back().is_some_and(|entry| entry == source)
+        {
+            return Ok(false);
+        }
+        self.pending.push_back(source.to_owned());
+        self.sync().map_err(|error| {
             HistoryError::with_source("cannot synchronize persistent history", error)
         })?;
-        Ok(saved.id.is_some())
+        Ok(true)
     }
 
     /// Returns all retained source buffers from oldest to newest.
     pub fn entries(&self) -> Result<Vec<String>, HistoryError> {
-        self.backend
-            .search(SearchQuery::everything(
-                reedline::SearchDirection::Forward,
-                None,
-            ))
-            .map(|items| items.into_iter().map(|item| item.command_line).collect())
-            .map_err(|error| HistoryError::with_source("cannot read history entries", error))
+        Ok(self.entries.iter().cloned().collect())
     }
 
     /// Returns newest-first entries containing the exact substring.
     pub fn search_substring(&self, needle: &str) -> Result<Vec<String>, HistoryError> {
-        self.backend
-            .search(SearchQuery::all_that_contain_rev(needle.to_owned()))
-            .map(|items| items.into_iter().map(|item| item.command_line).collect())
-            .map_err(|error| HistoryError::with_source("cannot search history entries", error))
+        Ok(self
+            .entries
+            .iter()
+            .rev()
+            .filter(|entry| entry.contains(needle))
+            .cloned()
+            .collect())
     }
 
     #[must_use]
@@ -236,112 +248,23 @@ impl EditorHistory {
         self.capacity
     }
 
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     pub(crate) fn into_backend(self) -> Box<dyn History> {
-        Box::new(self.backend)
+        Box::new(ReedlineHistory::new(self))
     }
-}
-
-#[derive(Debug)]
-struct PrivateHistory {
-    memory: FileBackedHistory,
-    entries: VecDeque<String>,
-    pending: VecDeque<String>,
-    capacity: usize,
-    file: Option<PathBuf>,
-}
-
-impl PrivateHistory {
-    fn memory(capacity: usize) -> Result<Self, HistoryError> {
-        let memory = FileBackedHistory::new(capacity)
-            .map_err(|error| HistoryError::with_source("cannot initialize history", error))?;
-        Ok(Self {
-            memory,
-            entries: VecDeque::new(),
-            pending: VecDeque::new(),
-            capacity,
-            file: None,
-        })
-    }
-
-    fn persistent(capacity: usize, file: PathBuf) -> Result<Self, HistoryError> {
-        let mut history = Self::memory(capacity)?;
-        history.file = Some(file);
-        Ok(history)
-    }
-
-    fn replace_entries(&mut self, entries: VecDeque<String>) -> io::Result<()> {
-        let mut memory = FileBackedHistory::new(self.capacity)
-            .map_err(|error| io::Error::other(error.to_string()))?;
-        for entry in &entries {
-            memory
-                .save(HistoryItem::from_command_line(entry))
-                .map_err(|error| io::Error::other(error.to_string()))?;
-        }
-        self.memory = memory;
-        self.entries = entries;
-        self.pending.clear();
-        Ok(())
-    }
-}
-
-impl History for PrivateHistory {
-    fn save(&mut self, item: HistoryItem) -> reedline::Result<HistoryItem> {
-        let command_line = item.command_line.clone();
-        let saved = self.memory.save(item)?;
-        if saved.id.is_some() {
-            if self.entries.len() == self.capacity {
-                self.entries.pop_front();
-            }
-            self.entries.push_back(command_line.clone());
-            self.pending.push_back(command_line);
-        }
-        Ok(saved)
-    }
-
-    fn load(&self, id: HistoryItemId) -> reedline::Result<HistoryItem> {
-        self.memory.load(id)
-    }
-
-    fn count(&self, query: SearchQuery) -> reedline::Result<i64> {
-        self.memory.count(query)
-    }
-
-    fn search(&self, query: SearchQuery) -> reedline::Result<Vec<HistoryItem>> {
-        self.memory.search(query)
-    }
-
-    fn update(
-        &mut self,
-        id: HistoryItemId,
-        updater: &dyn Fn(HistoryItem) -> HistoryItem,
-    ) -> reedline::Result<()> {
-        self.memory.update(id, updater)
-    }
-
-    fn clear(&mut self) -> reedline::Result<()> {
-        self.memory.clear()?;
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    fn clear(&mut self) -> io::Result<()> {
         self.entries.clear();
         self.pending.clear();
         let Some(path) = &self.file else {
             return Ok(());
         };
-        validate_history_path(path).map_err(reedline::ReedlineError::from)?;
-        let file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(path)
-            .map_err(reedline::ReedlineError::from)?;
-        validate_file(&file, path).map_err(reedline::ReedlineError::from)?;
+        validate_history_path(path)?;
+        let file = OpenOptions::new().read(true).write(true).open(path)?;
+        validate_file(&file, path)?;
         let mut lock = RwLock::new(file);
-        let mut guard = lock.write().map_err(reedline::ReedlineError::from)?;
-        guard
-            .rewind()
-            .and_then(|()| guard.set_len(0))
-            .map_err(reedline::ReedlineError::from)
-    }
-
-    fn delete(&mut self, id: HistoryItemId) -> reedline::Result<()> {
-        self.memory.delete(id)
+        let mut guard = lock.write()?;
+        guard.rewind().and_then(|()| guard.set_len(0))
     }
 
     fn sync(&mut self) -> io::Result<()> {
@@ -385,7 +308,104 @@ impl History for PrivateHistory {
         guard.set_len(position)?;
         drop(guard);
 
-        self.replace_entries(merged)
+        self.entries = merged;
+        self.pending.clear();
+        Ok(())
+    }
+}
+
+impl HistoryPersistence for EditorHistory {
+    fn entries(&mut self) -> Result<Vec<String>, EditorError> {
+        EditorHistory::entries(self)
+            .map_err(|error| EditorError::with_source("cannot load interactive history", error))
+    }
+
+    fn record(&mut self, source: &str) -> Result<(), EditorError> {
+        EditorHistory::record(self, source)
+            .map(|_| ())
+            .map_err(|error| {
+                EditorError::with_source("cannot synchronize interactive history", error)
+            })
+    }
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[derive(Debug)]
+struct ReedlineHistory {
+    memory: FileBackedHistory,
+    storage: EditorHistory,
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+impl ReedlineHistory {
+    fn new(storage: EditorHistory) -> Self {
+        let mut history = Self {
+            memory: FileBackedHistory::new(storage.capacity)
+                .expect("validated history capacity initializes Reedline memory"),
+            storage,
+        };
+        history.rebuild().expect("loaded history entries are valid");
+        history
+    }
+
+    fn rebuild(&mut self) -> reedline::Result<()> {
+        let mut memory = FileBackedHistory::new(self.storage.capacity)?;
+        for entry in &self.storage.entries {
+            memory.save(HistoryItem::from_command_line(entry))?;
+        }
+        self.memory = memory;
+        Ok(())
+    }
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+impl History for ReedlineHistory {
+    fn save(&mut self, item: HistoryItem) -> reedline::Result<HistoryItem> {
+        let saved = self.memory.save(item.clone())?;
+        if saved.id.is_some() {
+            self.storage.record(&item.command_line).map_err(|error| {
+                reedline::ReedlineError::from(io::Error::other(error.to_string()))
+            })?;
+            self.rebuild()?;
+        }
+        Ok(saved)
+    }
+
+    fn load(&self, id: HistoryItemId) -> reedline::Result<HistoryItem> {
+        self.memory.load(id)
+    }
+
+    fn count(&self, query: SearchQuery) -> reedline::Result<i64> {
+        self.memory.count(query)
+    }
+
+    fn search(&self, query: SearchQuery) -> reedline::Result<Vec<HistoryItem>> {
+        self.memory.search(query)
+    }
+
+    fn update(
+        &mut self,
+        id: HistoryItemId,
+        updater: &dyn Fn(HistoryItem) -> HistoryItem,
+    ) -> reedline::Result<()> {
+        self.memory.update(id, updater)
+    }
+
+    fn clear(&mut self) -> reedline::Result<()> {
+        self.storage
+            .clear()
+            .map_err(reedline::ReedlineError::from)?;
+        self.rebuild()
+    }
+
+    fn delete(&mut self, id: HistoryItemId) -> reedline::Result<()> {
+        self.memory.delete(id)
+    }
+
+    fn sync(&mut self) -> io::Result<()> {
+        self.storage.sync()?;
+        self.rebuild()
+            .map_err(|error| io::Error::other(error.to_string()))
     }
 
     fn session(&self) -> Option<HistorySessionId> {
@@ -447,6 +467,11 @@ fn prepare_history_path(path: &Path) -> io::Result<()> {
             let mut builder = DirBuilder::new();
             builder.recursive(true).mode(HISTORY_DIRECTORY_MODE);
             builder.create(parent)?;
+            // Redox currently does not preserve the requested DirBuilder mode
+            // for recursively created directories. Finalize the private leaf
+            // before creating the history file; existing directories still go
+            // through validation above and are never silently repaired.
+            fs::set_permissions(parent, fs::Permissions::from_mode(HISTORY_DIRECTORY_MODE))?;
             validate_directory(parent)?;
         }
         Err(error) => return Err(error),

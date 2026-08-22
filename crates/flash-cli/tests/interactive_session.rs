@@ -10,12 +10,13 @@ use flash_cli::editor::{EditorError, EditorEvent, EditorPrompt, LineEditor};
 use flash_cli::interactive::{
     EvaluationControl, ExitDecision, InteractiveDiagnostic, InteractiveEvaluationError,
     InteractiveEvaluator, InteractiveExit, InteractiveNotice, InteractiveNoticeError,
-    InteractiveNoticeId, InteractiveSessionError, format_job_notice, run_interactive_driver,
-    run_interactive_session,
+    InteractiveNoticeId, InteractiveSessionError, format_job_notice, format_live_jobs,
+    run_interactive_driver, run_interactive_session,
 };
 use flash_cli::report::HostExit;
 use flash_platform::ProcessGroupId;
 use flash_runtime::background::JobNoticeKind;
+use flash_runtime::background::{LiveJob, LiveJobState};
 use flash_runtime::builtin::standard_registry;
 use flash_runtime::job::JobId;
 use flash_runtime::{BindingMutability, ScopeStack, Value};
@@ -709,6 +710,28 @@ fn structured_job_notices_have_stable_prompt_safe_formatting() {
         ),
         "[1] Failed   command: wait failed\n"
     );
+}
+
+#[test]
+fn live_job_refusal_names_the_explicit_force_command_for_every_job() {
+    let jobs = [
+        LiveJob::new(
+            JobId::new(2).unwrap(),
+            LiveJobState::Running,
+            "sleep 10".to_owned(),
+        ),
+        LiveJob::new(
+            JobId::new(7).unwrap(),
+            LiveJobState::Stopped,
+            "worker".to_owned(),
+        ),
+    ];
+
+    let rendered = format_live_jobs(&jobs);
+
+    assert!(rendered.contains("kill --kill %2"));
+    assert!(rendered.contains("kill --kill %7"));
+    assert!(rendered.ends_with("fsh: exit again to hang up\n"));
 }
 
 #[test]

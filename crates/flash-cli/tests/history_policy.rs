@@ -217,8 +217,19 @@ fn history_objects_are_private_and_unsafe_existing_files_are_rejected() {
 
     fs::set_permissions(&path, fs::Permissions::from_mode(0o644))
         .expect("test can make file unsafe");
-    let error = EditorHistory::open(selection).expect_err("public history must be rejected");
+    let error =
+        EditorHistory::open(selection.clone()).expect_err("public history must be rejected");
     assert!(error.to_string().contains("mode 0600"), "{error}");
+
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o600))
+        .expect("test can restore private file mode");
+    fs::set_permissions(
+        path.parent().expect("history has parent"),
+        fs::Permissions::from_mode(0o755),
+    )
+    .expect("test can make directory unsafe");
+    let error = EditorHistory::open(selection).expect_err("public directory must be rejected");
+    assert!(error.to_string().contains("mode 0700"), "{error}");
 }
 
 #[test]

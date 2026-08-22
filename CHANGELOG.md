@@ -35,10 +35,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   history, or terminal access.
 - Connect interactive startup configuration to live session state. Config can
   transactionally set `pipefail`, the command-capture byte limit, completion,
-  and history through config-only typed bindings; safe mode and CLI bypasses
-  retain clean defaults. Completion now refreshes at every prompt from live
-  scope, cwd, child `PATH`, and bounded UTF-8 host snapshots without filesystem
-  work in the keypress callback.
+  history, and both prompt strings through config-only typed bindings; safe
+  mode keeps its fixed marker and CLI bypasses retain clean defaults.
+  Completion now refreshes at every prompt from live scope, cwd, child `PATH`,
+  and bounded UTF-8 host snapshots without filesystem work in the keypress
+  callback.
+- Complete the portable interactive editor contract with grapheme-aware and
+  display-cell-correct editing, whole-submission multiline movement, live
+  resize, completion, highlighting, hints, persistent history, configurable
+  prompts, and editor-owned background notices that preserve an active buffer.
+  Host Reedline and forced-portable PTY coverage now exercise the shared
+  behavior while FlashOS runtime qualification remains separate.
 - Add explicit `glob(String | Path) -> List[Path]` filesystem matching through
   the portable directory-read capability. Component wildcards, character
   classes, and recursive `**` preserve native paths, sort deterministically,

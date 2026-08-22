@@ -155,10 +155,11 @@ markers = [
   "fn is_output_terminal(&self) -> bool",
   "fn terminal_size(&self)",
   "fn enter_raw_mode(&self)",
+  "fn read_terminal_input(",
   "fn snapshot_terminal_mode(&self)",
   "fn apply_terminal_mode(&self, token: &dyn TerminalModeToken)",
 ]
-observation = "The selected adapter detects both terminal ends, reads size, owns raw-mode entry and restoration, and snapshots or reapplies opaque terminal attributes for stopped jobs."
+observation = "The selected adapter detects both terminal ends, reads size, performs bounded terminal reads, owns raw-mode entry and restoration, and snapshots or reapplies opaque terminal attributes for stopped jobs."
 
 [[source_evidence]]
 id = "runtime-monotonic-clock"
@@ -172,14 +173,14 @@ markers = [
 observation = "Flash currently obtains monotonic readings from a runtime clock seam rather than a Platform method."
 
 [[source_evidence]]
-id = "redox-standard-directories-gap"
+id = "flashos-standard-directories"
 path = "components/flash/crates/flash-cli/src/main.rs"
 markers = [
-  "fn run_interactive(_no_config: bool, _no_history: bool)",
+  "fn run_interactive(no_config: bool, no_history: bool)",
   "ConfigPlatform::current()",
   "HistoryPlatform::current()",
 ]
-observation = "The Redox interactive path accepts but ignores config/history switches, while standard-directory selectors are used only by the macOS/Linux path."
+observation = "The Redox interactive path selects the FlashOS configuration and state conventions and honors both discovery-disabling switches before opening either file."
 
 [[source_evidence]]
 id = "adapter-directory-read"
@@ -231,53 +232,14 @@ markers = [
 observation = "The selected adapter installs an ignored hang-up disposition for a background chain supervisor."
 
 [[runtime_evidence]]
-id = "qemu-pipeline"
-path = "ci/qemu_smoke.py"
-markers = [
-  "send(b\"printf 'hallo\\\\nwelt\\\\n' | head -n 1\\r\")",
-  'collect_until(b"hallo", shell_start)',
-]
-observation = "The current image streams bytes through an external pipeline and returns to the prompt."
-
-[[runtime_evidence]]
 id = "qemu-terminal-editor"
 path = "ci/qemu_smoke.py"
 markers = [
   "# Interactive editing. This is the only place the raw-mode editor is proven",
-  'edit_mark = submit_line(b"echo hallo\x7f\x7fx", b">> echo halx")',
-  'send(b"\x03")',
+  'edit_mark = submit_line(b"pwz\x7fd", b">> pwd")',
+  'collect_until(b"\r\n/home/user", edit_mark)',
 ]
-observation = "The current image enters the target-only raw editor, handles byte editing and recall, and restores an empty prompt after Ctrl-C abandons input."
-
-[[runtime_evidence]]
-id = "qemu-process-status"
-path = "ci/qemu_smoke.py"
-markers = [
-  "# Exit status reaches the || branch.",
-  'b"^false || echo fellback"',
-  'collect_until(b"fellback", status_mark)',
-]
-observation = "The current image directly spawns an external command, observes its nonzero completion, and evaluates the fallback branch."
-
-[[runtime_evidence]]
-id = "qemu-file-actions"
-path = "ci/qemu_smoke.py"
-markers = [
-  'b"echo persisted > /home/user/smoke.txt"',
-  'b"cat /home/user/smoke.txt"',
-  'b"echo nope > /etc/smoke.txt"',
-]
-observation = "The current image performs a successful redirection and readback and observes a denied redirection outside the user boundary."
-
-[[runtime_evidence]]
-id = "qemu-foreground-return"
-path = "ci/qemu_smoke.py"
-markers = [
-  "# A direct non-zero external completion must return through the managed",
-  'b"cat /home/user/definitely-missing"',
-  'collect_until(EMPTY_PROMPT_ROW, missing_mark)',
-]
-observation = "The current interactive image returns from a direct foreground child failure to a usable prompt through the managed foreground path."
+observation = "The current image enters the target-only raw editor, applies byte editing, submits the corrected row, and produces the expected internal-command value. History recall, multiline input, Ctrl-C cancellation, and prompt recovery remain covered by host pseudoterminal acceptance, not claimed by this bounded target observation."
 
 [[capability]]
 name = "environment"
@@ -304,9 +266,9 @@ name = "file-actions"
 rust_variant = "FileActions"
 requirements = ["open redirection targets", "duplicate and inherit owned descriptors", "close unused child descriptors", "stream files in-process"]
 source_evidence = ["redox-selects-posix", "adapter-file-actions", "adapter-declares-full"]
-runtime_evidence = ["qemu-file-actions"]
+runtime_evidence = []
 source_observation = "The selected adapter contains the required owned redirection and descriptor operations."
-runtime_observation = "The current image proves ordinary output redirection, readback, removal, and a denied write; it does not exhaust descriptor duplication or append/input modes."
+runtime_observation = "No current FlashOS target-runtime evidence qualifies file redirection, descriptor duplication, or in-process file streaming."
 classification = "deferred"
 
 [[capability]]
@@ -314,9 +276,9 @@ name = "pipes"
 rust_variant = "Pipes"
 requirements = ["create one anonymous byte pipe", "own and close both endpoints", "read and write bounded chunks"]
 source_evidence = ["redox-selects-posix", "adapter-pipes", "adapter-declares-full"]
-runtime_evidence = ["qemu-pipeline"]
+runtime_evidence = []
 source_observation = "The selected adapter creates and operates on owned anonymous pipe endpoints."
-runtime_observation = "The current image proves one external byte pipeline; it does not independently qualify closure, backpressure, or cancellation behavior."
+runtime_observation = "No current FlashOS target-runtime evidence qualifies anonymous pipe creation, closure, backpressure, or cancellation behavior."
 classification = "deferred"
 
 [[capability]]
@@ -324,9 +286,9 @@ name = "process-spawn"
 rust_variant = "ProcessSpawn"
 requirements = ["spawn a resolved executable with exact argv", "wait for completion and transitions", "terminate and reap on cleanup"]
 source_evidence = ["redox-selects-posix", "adapter-process-request", "adapter-process-lifecycle", "adapter-declares-full"]
-runtime_evidence = ["qemu-pipeline", "qemu-process-status", "qemu-file-actions", "qemu-foreground-return"]
+runtime_evidence = []
 source_observation = "The selected adapter implements direct requests and owned child lifecycle operations."
-runtime_observation = "The current image proves several direct child spawns and completion statuses; it does not qualify every argv byte case, transition, or cleanup failure."
+runtime_observation = "No current FlashOS target-runtime evidence qualifies direct child spawn, completion transitions, termination, or reaping."
 classification = "deferred"
 
 [[capability]]
@@ -334,9 +296,9 @@ name = "process-groups"
 rust_variant = "ProcessGroups"
 requirements = ["make the first pipeline child a group leader", "join later children to that group", "report the established group"]
 source_evidence = ["redox-selects-posix", "runtime-process-groups", "adapter-process-groups", "adapter-declares-full"]
-runtime_evidence = ["qemu-foreground-return"]
+runtime_evidence = []
 source_observation = "The runtime requests group isolation and the selected adapter contains placement/reporting operations."
-runtime_observation = "The foreground-return smoke path exercises the grouped interactive path indirectly; it does not observe group identity or multi-member membership."
+runtime_observation = "No current FlashOS target-runtime evidence observes process-group creation, identity, or multi-member membership."
 classification = "deferred"
 
 [[capability]]
@@ -344,9 +306,9 @@ name = "foreground-terminal"
 rust_variant = "ForegroundTerminal"
 requirements = ["query the current terminal owner", "hand the terminal to a process group", "restore the previous owner"]
 source_evidence = ["redox-selects-posix", "runtime-foreground-terminal", "adapter-foreground-terminal", "adapter-declares-full"]
-runtime_evidence = ["qemu-foreground-return"]
+runtime_evidence = []
 source_observation = "The runtime and selected adapter contain guarded terminal handoff and explicit restoration."
-runtime_observation = "The current image returns from a managed direct foreground child to the prompt; it does not directly observe the owner before, during, and after handoff."
+runtime_observation = "No current FlashOS target-runtime evidence observes terminal ownership before, during, and after a foreground process handoff."
 classification = "deferred"
 
 [[capability]]
@@ -362,11 +324,11 @@ classification = "deferred"
 [[capability]]
 name = "terminal-info"
 rust_variant = "TerminalInfo"
-requirements = ["detect terminal input and output independently", "read terminal dimensions", "enter and restore raw input mode", "snapshot foreground job terminal attributes", "reapply stopped-job terminal attributes"]
+requirements = ["detect terminal input and output independently", "read terminal dimensions", "enter and restore raw input mode", "read terminal input with a bounded wait", "snapshot foreground job terminal attributes", "reapply stopped-job terminal attributes"]
 source_evidence = ["redox-selects-posix", "runtime-foreground-terminal", "adapter-terminal-info", "adapter-declares-full"]
 runtime_evidence = ["qemu-terminal-editor"]
-source_observation = "The selected target path, job coordinator, and adapter contain terminal detection, sizing, raw-mode entry/restoration, and opaque stopped-job mode preservation."
-runtime_observation = "The current image proves target-only raw editing, recall, multiline input, Ctrl-C abandonment, and prompt recovery; it does not assert a non-default terminal size or directly observe stopped-job mode restoration."
+source_observation = "The selected target path, job coordinator, and adapter contain terminal detection, sizing, bounded input, raw-mode entry/restoration, and opaque stopped-job mode preservation."
+runtime_observation = "The current image proves target-only raw byte editing and internal-command submission; it does not assert target history recall, multiline input, Ctrl-C abandonment, prompt recovery, a non-default terminal size, or stopped-job mode restoration."
 classification = "deferred"
 
 [[capability]]
@@ -383,9 +345,9 @@ classification = "deferred"
 name = "standard-directories"
 rust_variant = "StandardDirectories"
 requirements = ["discover home, configuration, cache, and state locations", "preserve native path values", "define target-specific fallback conventions"]
-source_evidence = ["redox-standard-directories-gap", "redox-selects-posix", "adapter-declares-full"]
+source_evidence = ["flashos-standard-directories", "redox-selects-posix", "adapter-declares-full"]
 runtime_evidence = []
-source_observation = "The Redox path currently disables config/history integration and has no Redox directory convention despite the adapter's full declaration."
+source_observation = "The Redox path selects the FlashOS configuration and state conventions, preserves absolute native roots, and honors the no-config and no-history discovery gates."
 runtime_observation = "No current FlashOS target-runtime evidence loads configuration, persists history, or discovers cache/state paths."
 classification = "deferred"
 

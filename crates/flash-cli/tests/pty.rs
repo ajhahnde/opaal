@@ -1406,20 +1406,23 @@ fn a_background_command_returns_a_prompt_and_completes_after_foreground_work() {
     );
 
     let blocked_editor_mark = session.mark();
-    thread::sleep(Duration::from_millis(1200).saturating_sub(launched_at.elapsed()));
+    session.send(b"echo preserved-after-background");
+    let completion = session.expect_from(blocked_editor_mark, "[1] Done     sleep 1");
+    let after_notice = completion
+        .split("[1] Done     sleep 1")
+        .nth(1)
+        .expect("the completion notice is present");
     assert!(
-        !session
-            .rendered_from(blocked_editor_mark)
-            .contains("[1] Done"),
-        "completion must remain queued while the editor owns the prompt"
+        after_notice.contains(">> echo preserved-after-background"),
+        "the active edit must be redrawn after completion:\n{completion}"
     );
-    let completion_mark = session.mark();
-    session.send(CTRL_C);
-    session.expect_from(completion_mark, "[1] Done     sleep 1");
-    session.expect_from(completion_mark, ">> ");
-    let completion = session.rendered_from(completion_mark);
     assert_notice_precedes_prompt(&completion, "[1] Done     sleep 1");
     assert_eq!(completion.matches("[1] Done").count(), 1);
+
+    let submission_mark = session.mark();
+    session.send(ENTER);
+    session.expect_from(submission_mark, "preserved-after-background");
+    session.await_prompt(submission_mark);
 
     session.send(b"exit 0");
     session.send(ENTER);
@@ -1510,8 +1513,7 @@ fn a_background_and_chain_reaches_an_internal_command_before_completion() {
     let component = cwd.file_name().unwrap().to_string_lossy().into_owned();
     session.expect_from(result_mark, &component);
 
-    let completion_mark = session.mark();
-    let completion = await_completion_notice(&mut session, completion_mark, "[1] Done");
+    let completion = await_completion_notice(&mut session, result_mark, "[1] Done");
     assert_notice_precedes_prompt(&completion, "[1] Done");
 
     session.send(b"exit 0");
@@ -1683,11 +1685,10 @@ fn an_external_grandchild_restores_the_default_hangup_disposition() {
     );
     let mut cleanup = ProcessGroupCleanup::new(group);
 
+    session.expect_from(launch_mark, "[1] Done");
     thread::sleep(SETTLE);
-    let completion_mark = session.mark();
-    session.send(CTRL_C);
-    session.expect_from(completion_mark, "[1] Done");
-    session.expect_from(completion_mark, ">> ");
+    let completion = session.rendered_from(launch_mark);
+    assert_notice_precedes_prompt(&completion, "[1] Done");
     let survived = cwd.join(format!("{}.survived", grandchild.as_raw_nonzero()));
     assert!(
         !survived.exists(),
@@ -1702,7 +1703,7 @@ fn an_external_grandchild_restores_the_default_hangup_disposition() {
 }
 
 #[test]
-fn a_completion_notice_never_appears_inside_an_active_edit_buffer() {
+fn a_completion_notice_redraws_and_preserves_an_active_edit_buffer() {
     let cwd = unique_dir("background-buffer");
     let report = cwd.join("report.bin");
     let release = cwd.join("release");
@@ -1730,20 +1731,27 @@ fn a_completion_notice_never_appears_inside_an_active_edit_buffer() {
     session.send(b"echo distinctive-active-buffer");
     session.expect_from(buffer_mark, "distinctive-active-buffer");
     fs::write(&release, b"complete").expect("release the background child");
-    thread::sleep(SETTLE);
-    let while_editing = session.rendered_from(buffer_mark);
+    let while_editing = session.expect_from(buffer_mark, "[1] Done");
+    let after_notice = while_editing
+        .split("[1] Done")
+        .nth(1)
+        .expect("the completion notice is present");
     assert!(
-        !while_editing.contains("[1] Done"),
-        "a shell notice must not corrupt the active edit buffer:\n{while_editing}"
+        after_notice.contains(">> echo distinctive-active-buffer"),
+        "a shell notice must redraw the active edit buffer:\n{while_editing}"
     );
 
-    let completion_mark = session.mark();
-    session.send(CTRL_C);
-    session.expect_from(completion_mark, "[1] Done");
-    session.expect_from(completion_mark, ">> ");
-    let completion = session.rendered_from(completion_mark);
-    assert_notice_precedes_prompt(&completion, "[1] Done");
-    assert_eq!(completion.matches("[1] Done").count(), 1);
+    let submission_mark = session.mark();
+    session.send(ENTER);
+    session.expect_from(submission_mark, "distinctive-active-buffer");
+    session.await_prompt(submission_mark);
+    assert_eq!(
+        session
+            .rendered_from(buffer_mark)
+            .matches("[1] Done")
+            .count(),
+        1
+    );
 
     session.send(b"exit 0");
     session.send(ENTER);
@@ -1839,7 +1847,7 @@ fn end_of_input_is_gated_exactly_like_the_exit_builtin() {
 }
 
 #[test]
-fn an_unacknowledged_completion_is_rendered_before_exit() {
+fn a_completion_is_rendered_once_before_exit() {
     let cwd = unique_dir("exit-completion");
     let mut session = interactive(&cwd);
     session.await_prompt(0);
@@ -1850,12 +1858,21 @@ fn an_unacknowledged_completion_is_rendered_before_exit() {
     session.expect_from(launch_mark, "[1] ");
     session.await_prompt(launch_mark);
 
-    thread::sleep(Duration::from_millis(1400));
+    let completion_mark = session.mark();
+    session.expect_from(completion_mark, "[1] Done     sleep 1");
     let exit_mark = session.mark();
     session.send(b"exit 0");
     session.send(ENTER);
-    session.expect_from(exit_mark, "[1] Done     sleep 1");
     assert_eq!(session.wait_code(), 0);
+    assert_eq!(
+        session
+            .rendered_from(completion_mark)
+            .matches("[1] Done     sleep 1")
+            .count(),
+        1,
+        "exit must not republish an acknowledged completion:\n{}",
+        session.rendered_from(exit_mark)
+    );
 }
 
 #[test]
@@ -1956,14 +1973,8 @@ fn stress_replayable_job_control_cycles_restore_the_terminal_and_reap_the_child(
                     process,
                     &format!("background completion for seed {seed:#018x}"),
                 );
-                assert!(
-                    !session.rendered_from(completion_mark).contains("[1] Done"),
-                    "a completion notice entered the active prompt for seed {seed:#018x}:\n{}",
-                    session.rendered_from(completion_mark)
-                );
-                session.send(CTRL_C);
                 session.expect_from(completion_mark, "[1] Done");
-                session.await_prompt(completion_mark);
+                session.expect_from(completion_mark, ">> ");
                 let completion = session.rendered_from(completion_mark);
                 assert_eq!(
                     completion.matches("[1] Done").count(),
@@ -2111,18 +2122,9 @@ fn stress_concurrent_completions_remain_prompt_safe_and_exactly_once() {
             );
         }
 
-        assert!(
-            !session.rendered_from(buffer_mark).contains("Done"),
-            "a concurrent completion entered the active buffer for seed {seed:#018x}:\n{}",
-            session.rendered_from(buffer_mark)
-        );
-
-        let completion_mark = session.mark();
-        session.send(CTRL_C);
-        session.await_prompt(completion_mark);
         let deadline = Instant::now() + TIMEOUT;
         loop {
-            let completion = session.rendered_from(completion_mark);
+            let completion = session.rendered_from(buffer_mark);
             if (1..=3).all(|job| completion.contains(&format!("[{job}] Done"))) {
                 break;
             }
@@ -2130,13 +2132,17 @@ fn stress_concurrent_completions_remain_prompt_safe_and_exactly_once() {
                 Instant::now() < deadline,
                 "concurrent completion notices did not converge for seed {seed:#018x}:\n{completion}"
             );
-            let refresh_mark = session.mark();
-            session.send(b"jobs");
-            session.send(ENTER);
-            session.await_prompt(refresh_mark);
+            thread::sleep(Duration::from_millis(10));
         }
 
-        let completion = session.rendered_from(completion_mark);
+        let completion = session.rendered_from(buffer_mark);
+        assert!(
+            completion
+                .rsplit("Done")
+                .next()
+                .is_some_and(|tail| tail.contains(">> echo concurrent-completion-buffer")),
+            "the final concurrent notice must redraw the active buffer for seed {seed:#018x}:\n{completion}"
+        );
         for job in 1..=3 {
             let notice = format!("[{job}] Done");
             assert_eq!(
@@ -2146,6 +2152,10 @@ fn stress_concurrent_completions_remain_prompt_safe_and_exactly_once() {
             );
             assert_notice_precedes_prompt(&completion, &notice);
         }
+        let submission_mark = session.mark();
+        session.send(ENTER);
+        session.expect_from(submission_mark, "concurrent-completion-buffer");
+        session.await_prompt(submission_mark);
         session.await_terminal_owner(
             session.shell_group(),
             &format!("concurrent completion delivery for seed {seed:#018x}"),

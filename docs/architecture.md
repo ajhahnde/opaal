@@ -843,21 +843,26 @@ macOS and Linux builds use the Reedline-backed adapter for parser-driven multili
 The Redox path uses the Flash terminal editor when both input and output are terminals. A canonical line reader remains available as a fallback when raw terminal editing is unavailable or output is redirected.
 
 These adapters share the same session evaluator, syntax implementation, and
-editor-neutral completion catalog. The current Redox raw editor accepts catalog
-refreshes but does not yet expose a completion key; FlashOS runtime
-qualification must activate that presentation path or retain the limitation
-explicitly before completion is claimed for the target. Differences in editor
-facilities do not create different script semantics.
+editor-neutral completion, highlighting, hint, history, external-print, and
+resize contracts. The portable editor implements Tab completion, parser-owned
+styles, history hints, persistent recall, grapheme-aware editing, display-cell
+rendering, whole-submission multiline movement, in-flight resize, and safe
+redraw around background notices. This source parity is host-tested; FlashOS
+runtime qualification remains required before the behavior is claimed for an
+assembled target image. Differences in editor facilities do not create
+different script semantics.
 
 ### Configuration and history
 
-Host configuration and history selection occur before the interactive
+Configuration and history selection occur before the interactive
 `Session` is created. A successfully initialized configuration seeds the
 session scope and environment plus typed `pipefail` and capture-limit options
-and completion/history policy. Four config-only mutable bindings carry those
-settings through the isolated transaction and are removed before the live
-lexical scope is installed. Safe mode and config bypass retain clean defaults;
-the CLI `--no-history` policy remains an unconditional override.
+and completion/history policy. Six config-only mutable bindings carry those
+settings plus primary and continuation prompt strings through the isolated
+transaction and are removed before the live lexical scope is installed. Safe
+mode restores clean settings and its fixed `[SAFE] >> ` prompt; config bypass
+retains ordinary defaults. The CLI `--no-history` policy remains an
+unconditional override.
 
 At each prompt boundary the interactive evaluator snapshots the live registry
 and lexical scope, then collects executable names from the child `PATH` and
@@ -877,18 +882,24 @@ explicit `glob(...)` runtime, while rendering produces reversible bare or
 quoted Flash source. Completion therefore observes filesystem candidates
 without expanding an argument or evaluating the edit buffer.
 
-The config-file and history backends are compile-time separated from the Redox
-editor path. The completion catalog interface is shared, but the current Redox
-wiring supplies an empty catalog because its raw editor cannot present
-completion yet. Development-host behavior is therefore not evidence that
-identical startup storage and editor integration are available inside a
-FlashOS image.
+The host and Redox executables select their native configuration and state-path
+conventions at compile time. The Redox source path now wires transactional
+configuration, completion policy, portable persistent history, prompts, and
+both opt-out flags into the portable editor. Development-host and forced-editor
+tests establish source parity, not availability inside a FlashOS image; target
+runtime qualification remains separate.
 
 ### Prompt-safe notices
 
-Background-job notices are transferred from the runtime as structured records with stable identities. The editor writes a complete notice before drawing the next prompt, and the runtime acknowledges it only after that write succeeds.
+Background-job notices are transferred from the runtime as structured records
+with stable identities. An active editor clears its presentation, writes the
+complete notice, and redraws the same prompt, buffer, cursor, and completion
+state. Notices already pending at a prompt boundary use the same editor-owned
+write path. The runtime acknowledges a notice only after successful
+presentation.
 
-This avoids asynchronous output corrupting the current edit buffer or losing a completion that was observed while the editor owned the terminal.
+This prevents asynchronous output from corrupting an active edit or losing a
+completion observed while the editor owns the terminal.
 
 ## Jobs and process lifecycle
 

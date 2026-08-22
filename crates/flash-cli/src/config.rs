@@ -1,4 +1,4 @@
-//! Secure, transactional startup configuration for the host interactive client.
+//! Secure, transactional startup configuration for the interactive client.
 
 use std::ffi::{OsStr, OsString};
 use std::fs::File;
@@ -30,6 +30,8 @@ const PIPEFAIL_SETTING: &str = "pipefail";
 const CAPTURE_LIMIT_SETTING: &str = "capture_limit";
 const COMPLETION_SETTING: &str = "completion";
 const HISTORY_SETTING: &str = "history";
+const PROMPT_SETTING: &str = "prompt";
+const CONTINUATION_PROMPT_SETTING: &str = "continuation_prompt";
 
 /// Invocation families considered before any config discovery.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -49,6 +51,7 @@ pub enum ConfigInvocation {
 pub enum ConfigPlatform {
     Linux,
     MacOs,
+    FlashOs,
 }
 
 impl ConfigPlatform {
@@ -62,6 +65,10 @@ impl ConfigPlatform {
         #[cfg(target_os = "macos")]
         {
             Self::MacOs
+        }
+        #[cfg(target_os = "redox")]
+        {
+            Self::FlashOs
         }
     }
 }
@@ -176,7 +183,7 @@ pub trait ConfigSource {
     fn load(&self, path: &Path, source_limit: usize) -> Result<ConfigFile, ConfigFileError>;
 }
 
-/// Same-handle macOS/Linux config loader.
+/// Same-handle Unix config loader.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct HostConfigSource;
 
@@ -610,7 +617,7 @@ pub fn initialize_config(
         &eval_limits,
     ) {
         Ok(Completion::Value(_)) => match extract_config_settings(&mut scope) {
-            Ok((session_options, interactive_settings)) => Ok(ConfigStartup {
+            Ok((session_options, interactive_settings, prompt)) => Ok(ConfigStartup {
                 scope,
                 environment: startup_environment,
                 session_options,
@@ -620,7 +627,7 @@ pub fn initialize_config(
                     selected_path: Some(path),
                     failure: None,
                 },
-                prompt: EditorPrompt::default(),
+                prompt,
                 diagnostic: None,
             }),
             Err(detail) => Ok(safe_startup(
@@ -681,7 +688,7 @@ fn config_paths(
                 .filter(|value| !value.is_empty() && Path::new(value).is_absolute())
                 .map(PathBuf::from)
                 .map(|home| match platform {
-                    ConfigPlatform::Linux => home.join(".config"),
+                    ConfigPlatform::Linux | ConfigPlatform::FlashOs => home.join(".config"),
                     ConfigPlatform::MacOs => home.join("Library/Application Support"),
                 })
         })?;
@@ -727,6 +734,14 @@ fn install_config_settings(scope: &mut ScopeStack) -> Result<(), String> {
             HISTORY_SETTING,
             Value::Bool(InteractiveSettings::default().history()),
         ),
+        (
+            PROMPT_SETTING,
+            Value::string(EditorPrompt::default().primary()),
+        ),
+        (
+            CONTINUATION_PROMPT_SETTING,
+            Value::string(EditorPrompt::default().continuation()),
+        ),
     ] {
         scope
             .declare(name, BindingMutability::Mutable, value)
@@ -737,7 +752,7 @@ fn install_config_settings(scope: &mut ScopeStack) -> Result<(), String> {
 
 fn extract_config_settings(
     scope: &mut ScopeStack,
-) -> Result<(SessionOptions, InteractiveSettings), String> {
+) -> Result<(SessionOptions, InteractiveSettings, EditorPrompt), String> {
     let pipefail = take_bool_setting(scope, PIPEFAIL_SETTING)?;
     let capture_limit = match take_setting(scope, CAPTURE_LIMIT_SETTING)? {
         Value::Int(value) => usize::try_from(value).map_err(|_| {
@@ -749,6 +764,8 @@ fn extract_config_settings(
     };
     let completion = take_bool_setting(scope, COMPLETION_SETTING)?;
     let history = take_bool_setting(scope, HISTORY_SETTING)?;
+    let prompt = take_prompt_setting(scope, PROMPT_SETTING)?;
+    let continuation_prompt = take_prompt_setting(scope, CONTINUATION_PROMPT_SETTING)?;
     Ok((
         SessionOptions::default()
             .with_pipefail(pipefail)
@@ -757,7 +774,21 @@ fn extract_config_settings(
             completion,
             history,
         },
+        EditorPrompt::new(prompt, continuation_prompt),
     ))
+}
+
+fn take_prompt_setting(scope: &mut ScopeStack, name: &str) -> Result<String, String> {
+    let value = match take_setting(scope, name)? {
+        Value::String(value) => value,
+        value => return Err(setting_type_error(name, "String", &value)),
+    };
+    if value.chars().any(char::is_control) {
+        return Err(format!(
+            "config setting `${name}` may not contain control characters"
+        ));
+    }
+    Ok(value.to_string())
 }
 
 fn take_bool_setting(scope: &mut ScopeStack, name: &str) -> Result<bool, String> {
@@ -824,7 +855,7 @@ fn safe_startup(
             selected_path,
             failure: Some(failure),
         },
-        prompt: EditorPrompt::new("[SAFE] >> ", "...> "),
+        prompt: EditorPrompt::safe_mode(),
         diagnostic: Some(diagnostic),
     }
 }

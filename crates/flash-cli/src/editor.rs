@@ -5,6 +5,7 @@ use crate::completion::CompletionCatalog;
 
 pub const DEFAULT_PRIMARY_PROMPT: &str = ">> ";
 pub const DEFAULT_CONTINUATION_PROMPT: &str = "...> ";
+pub const SAFE_PRIMARY_PROMPT: &str = "[SAFE] >> ";
 
 /// Text rendered around one interactive edit buffer.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -37,6 +38,12 @@ impl EditorPrompt {
     pub fn continuation(&self) -> &str {
         &self.continuation
     }
+
+    /// The fixed prompt used after startup configuration enters safe mode.
+    #[must_use]
+    pub fn safe_mode() -> Self {
+        Self::new(SAFE_PRIMARY_PROMPT, DEFAULT_CONTINUATION_PROMPT)
+    }
 }
 
 /// One editor result, independent of the terminal-editing implementation.
@@ -54,6 +61,52 @@ pub enum EditorEvent {
     /// An external interruption delegated to a future host integration.
     ExternalBreak(String),
 }
+
+/// One editor-owned external print that may arrive during an active read.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EditorExternalPrint {
+    id: u64,
+    rendered: String,
+}
+
+impl EditorExternalPrint {
+    #[must_use]
+    pub fn new(id: u64, rendered: impl Into<String>) -> Self {
+        Self {
+            id,
+            rendered: rendered.into(),
+        }
+    }
+
+    #[must_use]
+    pub const fn id(&self) -> u64 {
+        self.id
+    }
+
+    #[must_use]
+    pub fn rendered(&self) -> &str {
+        &self.rendered
+    }
+}
+
+/// Pull boundary used by an editor while it owns the active input buffer.
+pub trait EditorEventSource {
+    fn next_external_print(&mut self) -> Option<EditorExternalPrint> {
+        None
+    }
+
+    fn acknowledge_external_print(
+        &mut self,
+        _event: &EditorExternalPrint,
+    ) -> Result<(), EditorError> {
+        Ok(())
+    }
+}
+
+/// Event source for editors used without an interactive evaluator.
+pub struct NoEditorEvents;
+
+impl EditorEventSource for NoEditorEvents {}
 
 /// Failure reported by the selected terminal editor.
 #[derive(Debug)]
@@ -105,4 +158,13 @@ pub trait LineEditor {
     fn set_completion_catalog(&mut self, _catalog: CompletionCatalog) {}
 
     fn read_line(&mut self, prompt: &EditorPrompt) -> Result<EditorEvent, EditorError>;
+
+    /// Read while allowing the editor to present asynchronous external output.
+    fn read_line_with_events(
+        &mut self,
+        prompt: &EditorPrompt,
+        _events: &mut dyn EditorEventSource,
+    ) -> Result<EditorEvent, EditorError> {
+        self.read_line(prompt)
+    }
 }

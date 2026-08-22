@@ -9,6 +9,7 @@ use flash_cli::config::{
     ConfigFile, ConfigFileError, ConfigInvocation, ConfigLimits, ConfigPlatform, ConfigRequest,
     ConfigSource, ConfigStatus, initialize_config,
 };
+use flash_cli::editor::EditorPrompt;
 use flash_runtime::eval::{CancellationToken, FakeClock, Instant, ResourceBudget};
 use flash_runtime::{BindingMutability, Environment, ScopeStack, Value};
 
@@ -82,7 +83,7 @@ fn successful_config_commits_bindings_functions_and_exports_atomically() {
 #[test]
 fn successful_config_commits_typed_session_and_editor_settings_without_leaking_bindings() {
     let source = Source::text(
-        "$pipefail = true\n$capture_limit = 0\n$completion = false\n$history = false\n",
+        "$pipefail = true\n$capture_limit = 0\n$completion = false\n$history = false\n$prompt = 'flash> '\n$continuation_prompt = 'more> '\n",
     );
     let startup = initialize_config(
         request(),
@@ -98,7 +99,16 @@ fn successful_config_commits_typed_session_and_editor_settings_without_leaking_b
     assert_eq!(startup.session_options().capture_limit(), 0);
     assert!(!startup.interactive_settings().completion());
     assert!(!startup.interactive_settings().history());
-    for name in ["pipefail", "capture_limit", "completion", "history"] {
+    assert_eq!(startup.prompt().primary(), "flash> ");
+    assert_eq!(startup.prompt().continuation(), "more> ");
+    for name in [
+        "pipefail",
+        "capture_limit",
+        "completion",
+        "history",
+        "prompt",
+        "continuation_prompt",
+    ] {
         assert!(
             startup.scope().get(name).is_none(),
             "config-only binding {name:?} must not enter the live scope"
@@ -132,6 +142,8 @@ fn invalid_settings_roll_back_scope_environment_options_and_editor_state() {
         "$capture_limit = -1\n",
         "$completion = 'yes'\n",
         "$history = null\n",
+        "$prompt = false\n",
+        "$continuation_prompt = 1\n",
     ] {
         let startup = initialize_config(
             request(),
@@ -158,7 +170,15 @@ fn invalid_settings_roll_back_scope_environment_options_and_editor_state() {
         );
         assert!(startup.interactive_settings().completion());
         assert!(startup.interactive_settings().history());
-        for name in ["pipefail", "capture_limit", "completion", "history"] {
+        assert_eq!(startup.prompt(), &EditorPrompt::safe_mode());
+        for name in [
+            "pipefail",
+            "capture_limit",
+            "completion",
+            "history",
+            "prompt",
+            "continuation_prompt",
+        ] {
             assert!(startup.scope().get(name).is_none());
         }
     }

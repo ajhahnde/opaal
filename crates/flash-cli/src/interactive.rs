@@ -6,7 +6,9 @@ use flash_runtime::background::{JobNoticeKind, LiveJob, LiveJobState};
 use flash_runtime::job::JobId;
 
 use crate::completion::CompletionCatalog;
-use crate::editor::{EditorError, EditorEvent, EditorPrompt, LineEditor};
+use crate::editor::{
+    EditorError, EditorEvent, EditorEventSource, EditorExternalPrint, EditorPrompt, LineEditor,
+};
 use crate::report::HostExit;
 
 /// Control flow requested after evaluating one submitted edit buffer.
@@ -174,6 +176,7 @@ pub fn format_live_jobs(jobs: &[LiveJob]) -> String {
             live.job().get(),
             live.command()
         );
+        let _ = writeln!(rendered, "    force: kill --kill %{}", live.job().get());
     }
     rendered.push_str("fsh: exit again to hang up\n");
     rendered
@@ -310,6 +313,40 @@ fn render_pending_notices(
     Ok(())
 }
 
+struct EvaluatorEditorEvents<'evaluator> {
+    evaluator: &'evaluator mut dyn InteractiveEvaluator,
+    pending: Option<InteractiveNotice>,
+}
+
+impl EditorEventSource for EvaluatorEditorEvents<'_> {
+    fn next_external_print(&mut self) -> Option<EditorExternalPrint> {
+        let notice = self.evaluator.next_notice()?;
+        let event = EditorExternalPrint::new(notice.id().get(), notice.rendered());
+        self.pending = Some(notice);
+        Some(event)
+    }
+
+    fn acknowledge_external_print(
+        &mut self,
+        event: &EditorExternalPrint,
+    ) -> Result<(), EditorError> {
+        let notice = self
+            .pending
+            .take()
+            .ok_or_else(|| EditorError::new("external print is not pending"))?;
+        if notice.id().get() != event.id() {
+            return Err(EditorError::new(format!(
+                "external print {} does not match pending notice {}",
+                event.id(),
+                notice.id().get()
+            )));
+        }
+        self.evaluator
+            .acknowledge_notice(&notice)
+            .map_err(|error| EditorError::with_source("cannot acknowledge external print", error))
+    }
+}
+
 /// Runs one synchronous interactive session with persistent editor and evaluator state.
 pub fn run_interactive_session(
     editor: &mut dyn LineEditor,
@@ -325,9 +362,15 @@ pub fn run_interactive_session(
             editor.set_completion_catalog(catalog);
         }
 
-        let event = editor
-            .read_line(prompt)
-            .map_err(InteractiveSessionError::Editor)?;
+        let event = {
+            let mut events = EvaluatorEditorEvents {
+                evaluator,
+                pending: None,
+            };
+            editor
+                .read_line_with_events(prompt, &mut events)
+                .map_err(InteractiveSessionError::Editor)?
+        };
 
         match event {
             EditorEvent::Submitted(source) => {

@@ -152,22 +152,26 @@ starts an interactive session without loading its startup configuration. The `--
 ### Interactive startup settings
 
 The interactive config is ordinary Flash source. During its isolated startup
-transaction, four mutable settings are available:
+transaction, six mutable settings are available:
 
 ```text
 $pipefail = true
 $capture_limit = 1048576
 $completion = true
 $history = false
+$prompt = 'flash> '
+$continuation_prompt = 'more> '
 ```
 
 `$pipefail`, `$completion`, and `$history` require `Bool` values.
 `$capture_limit` requires a nonnegative `Int` that fits the host byte-count
-range; zero is valid. These bindings exist only while config is evaluated and
-are not visible to scripts or at the interactive prompt. A successful config
-commits the resulting session options and editor settings together with its
-ordinary bindings and staged environment. A parse, evaluation, setting, or
-startup-policy failure discards all of them and enters visible safe mode with
+range; zero is valid. `$prompt` and `$continuation_prompt` require `String`
+values without terminal control characters. These six bindings exist only
+while config is evaluated and are not visible to scripts or at the interactive
+prompt. A successful config commits the resulting session options, prompts,
+and editor settings together with its ordinary bindings and staged environment.
+A parse, evaluation, setting, or startup-policy failure discards all of them
+and enters visible safe mode with the fixed `[SAFE] >> ` primary prompt and
 clean defaults.
 
 `--no-config` wins before config discovery, and `--no-history` wins over a

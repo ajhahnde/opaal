@@ -20,6 +20,7 @@ use std::io;
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
+use std::time::Duration;
 
 /// One platform capability group an adapter either supports or does not.
 ///
@@ -1228,6 +1229,22 @@ pub trait Platform: Send + Sync {
         Ok(Box::new(NoopTerminalModeGuard))
     }
 
+    /// Read standard-terminal input, waiting at most `timeout` for bytes.
+    ///
+    /// `None` means the timeout elapsed, while `Some(0)` is end of input.
+    /// The default keeps synthetic and non-terminal adapters on their supplied
+    /// reader by reporting that this direct terminal route is unsupported.
+    fn read_terminal_input(
+        &self,
+        _buffer: &mut [u8],
+        _timeout: Duration,
+    ) -> Result<Option<usize>, PlatformError> {
+        self.require(Capability::TerminalInfo)?;
+        Err(PlatformError::Unsupported {
+            capability: Capability::TerminalInfo,
+        })
+    }
+
     /// Snapshot the terminal attributes currently established by its owner.
     fn snapshot_terminal_mode(&self) -> Result<Box<dyn TerminalModeToken>, PlatformError> {
         self.require(Capability::TerminalInfo)?;
@@ -1859,6 +1876,14 @@ impl Platform for RecordingPlatform {
     fn enter_raw_mode(&self) -> Result<Box<dyn TerminalModeGuard>, PlatformError> {
         self.log.raw_mode_entries.fetch_add(1, Ordering::Relaxed);
         self.inner.enter_raw_mode()
+    }
+
+    fn read_terminal_input(
+        &self,
+        buffer: &mut [u8],
+        timeout: Duration,
+    ) -> Result<Option<usize>, PlatformError> {
+        self.inner.read_terminal_input(buffer, timeout)
     }
 
     fn snapshot_terminal_mode(&self) -> Result<Box<dyn TerminalModeToken>, PlatformError> {

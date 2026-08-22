@@ -63,13 +63,14 @@ fn home_and_end_decode_from_both_spellings() {
 #[test]
 fn control_bytes_decode_to_their_editing_keys() {
     assert_eq!(
-        decode(b"\x7f\x08\x0b\x15\x17\x03\x04\x0d\x0a"),
+        decode(b"\x7f\x08\x0b\x15\x17\x09\x03\x04\x0d\x0a"),
         vec![
             Key::Backspace,
             Key::Backspace,
             Key::KillToEnd,
             Key::KillToStart,
             Key::KillWordBack,
+            Key::Complete,
             Key::Cancel,
             Key::EndOfFileOrDelete,
             Key::Enter,
@@ -157,6 +158,18 @@ fn movement_steps_whole_characters() {
     // 'ä' occupies two bytes, so one character step moves the byte cursor by two.
     assert_eq!(buffer.cursor(), 2);
     assert_eq!(buffer.cursor_chars(), 1);
+}
+
+#[test]
+fn movement_and_deletion_step_whole_grapheme_clusters() {
+    let mut buffer = EditBuffer::from_text("a\u{301}界");
+
+    assert!(buffer.move_left());
+    assert_eq!(buffer.cursor(), "a\u{301}".len());
+    assert!(buffer.move_left());
+    assert_eq!(buffer.cursor(), 0);
+    assert!(buffer.delete());
+    assert_eq!(buffer.text(), "界");
 }
 
 #[test]
@@ -372,6 +385,13 @@ fn the_cursor_column_follows_the_cursor_position() {
 }
 
 #[test]
+fn combining_and_wide_graphemes_use_terminal_display_cells() {
+    let rendered = render_line(">> ", "a\u{301}界x", "a\u{301}界".len(), 80);
+
+    assert_eq!(rendered, "\r\x1b[K>> a\u{301}界x\r\x1b[7G");
+}
+
+#[test]
 fn a_wide_line_scrolls_horizontally_and_keeps_the_cursor_visible() {
     // Prompt 3 + 20 characters of text does not fit 15 columns. The prompt
     // takes columns 1..=3, leaving twelve cells; the cursor sits past the last
@@ -427,13 +447,16 @@ fn a_control_character_never_reaches_the_drawn_row() {
     // The guard is deliberately wider than the newline that motivated it: the
     // decoder emits Key::Char for the C1 range, so pasting one lands it in the
     // buffer just like any other character.
-    let pasted = render_line(">> ", "a\u{85}b", 3, 80);
+    let pasted = render_line(">> ", "a\u{85}b", "a\u{85}b".len(), 80);
 
     assert_eq!(pasted, "\r\x1b[K>> a b\r\x1b[7G");
 }
 
-use flash_cli::editor::{EditorEvent, EditorPrompt, LineEditor};
+use flash_cli::editor::{
+    EditorError, EditorEvent, EditorEventSource, EditorExternalPrint, EditorPrompt, LineEditor,
+};
 use flash_cli::terminal_editor::TerminalEditor;
+use flash_cli::terminal_editor::history::HistoryPersistence;
 use flash_platform::{
     Capabilities, FakePlatform, RecordingPlatform, TerminalCallLog, TerminalSize,
 };
@@ -443,6 +466,23 @@ fn editor(input: &'static [u8]) -> TerminalEditor<FakePlatform, &'static [u8], V
     let platform =
         FakePlatform::with_terminal(Capabilities::full(), true, TerminalSize::new(80, 24));
     TerminalEditor::new(platform, input, Vec::new())
+}
+
+#[derive(Debug)]
+struct ScriptedPersistence {
+    entries: Vec<String>,
+    recorded: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+}
+
+impl HistoryPersistence for ScriptedPersistence {
+    fn entries(&mut self) -> Result<Vec<String>, EditorError> {
+        Ok(self.entries.clone())
+    }
+
+    fn record(&mut self, source: &str) -> Result<(), EditorError> {
+        self.recorded.lock().unwrap().push(source.to_owned());
+        Ok(())
+    }
 }
 
 /// The same editor over a platform that records what the editor asked it for.
@@ -471,6 +511,126 @@ fn a_typed_line_submits_its_text() {
 }
 
 #[test]
+fn one_terminal_read_drains_a_batched_submission_through_enter() {
+    use std::cell::Cell;
+    use std::io::{self, Read};
+    use std::rc::Rc;
+
+    struct OneBurst {
+        bytes: Option<&'static [u8]>,
+        reads: Rc<Cell<usize>>,
+    }
+
+    impl Read for OneBurst {
+        fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+            self.reads.set(self.reads.get() + 1);
+            let Some(bytes) = self.bytes.take() else {
+                return Ok(0);
+            };
+            buffer[..bytes.len()].copy_from_slice(bytes);
+            Ok(bytes.len())
+        }
+    }
+
+    let reads = Rc::new(Cell::new(0));
+    let input = OneBurst {
+        bytes: Some(b"echo batched\r"),
+        reads: Rc::clone(&reads),
+    };
+    let platform =
+        FakePlatform::with_terminal(Capabilities::full(), true, TerminalSize::new(80, 24));
+    let mut editor = TerminalEditor::new(platform, input, Vec::new());
+
+    let event = editor.read_line(&EditorPrompt::default()).unwrap();
+
+    assert_eq!(event, EditorEvent::Submitted("echo batched".to_owned()));
+    assert_eq!(
+        reads.get(),
+        1,
+        "the complete ready chunk must be drained once"
+    );
+}
+
+#[test]
+fn tab_applies_a_unique_editor_neutral_completion() {
+    use flash_cli::completion::CompletionCatalog;
+    use flash_runtime::ScopeStack;
+    use flash_runtime::builtin::standard_registry;
+
+    let mut editor = editor(b"pw\t\r");
+    editor.set_completion_catalog(CompletionCatalog::from_runtime(
+        &standard_registry(),
+        &ScopeStack::new(),
+    ));
+
+    let event = editor.read_line(&EditorPrompt::default()).unwrap();
+
+    assert_eq!(event, EditorEvent::Submitted("pwd ".to_owned()));
+}
+
+#[test]
+fn ambiguous_completion_clears_multiline_rows_and_redraws_the_submission() {
+    use flash_cli::completion::CompletionCatalog;
+    use flash_runtime::ScopeStack;
+    use flash_runtime::builtin::standard_registry;
+
+    let mut editor = editor(b"if true {\re\t\r}\r");
+    editor.set_completion_catalog(CompletionCatalog::from_runtime(
+        &standard_registry(),
+        &ScopeStack::new(),
+    ));
+
+    let event = editor.read_line(&EditorPrompt::default()).unwrap();
+    let drawn = String::from_utf8_lossy(editor.drawn());
+
+    assert_eq!(event, EditorEvent::Submitted("if true {\ne\n}".to_owned()));
+    let candidates = drawn
+        .find("each")
+        .expect("an ambiguous command prefix presents its candidates");
+    assert!(
+        drawn[..candidates].ends_with("\r\x1b[1A\x1b[J"),
+        "the candidate list clears every drawn submission row first: {drawn:?}"
+    );
+    assert!(
+        drawn[candidates..].contains("\r\n\r\x1b[J>> ")
+            && drawn[candidates..].contains("\r\n...> e"),
+        "the complete multiline submission is redrawn below the candidates: {drawn:?}"
+    );
+}
+
+#[test]
+fn a_history_hint_is_rendered_and_right_accepts_its_exact_suffix() {
+    let mut editor = editor(b"echo world\recho \x1b[C\r");
+
+    let first = editor.read_line(&EditorPrompt::default()).unwrap();
+    let accepted = editor.read_line(&EditorPrompt::default()).unwrap();
+
+    assert_eq!(first, EditorEvent::Submitted("echo world".to_owned()));
+    assert_eq!(accepted, EditorEvent::Submitted("echo world".to_owned()));
+    assert!(
+        String::from_utf8_lossy(editor.drawn()).contains(">> echo world"),
+        "the portable editor presents the shared history hint"
+    );
+    assert!(
+        String::from_utf8_lossy(editor.drawn()).contains("\x1b[2mworld\x1b[0m"),
+        "history hints use a distinct portable presentation style"
+    );
+}
+
+#[test]
+fn the_portable_editor_renders_parser_owned_highlighting() {
+    let mut editor = editor(b"let value = 1\r");
+
+    let event = editor.read_line(&EditorPrompt::default()).unwrap();
+
+    assert_eq!(event, EditorEvent::Submitted("let value = 1".to_owned()));
+    assert!(
+        String::from_utf8_lossy(editor.drawn()).contains("\x1b[35;1mlet\x1b[0m"),
+        "keywords use the portable syntax-highlighting style"
+    );
+}
+
+#[test]
 fn a_notice_is_written_through_the_editors_retained_output() {
     let mut editor = editor(b"");
 
@@ -479,6 +639,46 @@ fn a_notice_is_written_through_the_editors_retained_output() {
         .expect("notice output should be writable");
 
     assert_eq!(editor.drawn(), b"[1] Done     command\n");
+}
+
+struct DuringEditNotice {
+    polls: usize,
+    acknowledged: bool,
+}
+
+impl EditorEventSource for DuringEditNotice {
+    fn next_external_print(&mut self) -> Option<EditorExternalPrint> {
+        self.polls += 1;
+        (self.polls == 2).then(|| EditorExternalPrint::new(7, "[1] Done     worker\n"))
+    }
+
+    fn acknowledge_external_print(
+        &mut self,
+        event: &EditorExternalPrint,
+    ) -> Result<(), EditorError> {
+        assert_eq!(event.id(), 7);
+        self.acknowledged = true;
+        Ok(())
+    }
+}
+
+#[test]
+fn external_output_during_an_edit_preserves_and_redraws_the_buffer() {
+    let mut editor = editor(b"abc\r");
+    let mut events = DuringEditNotice {
+        polls: 0,
+        acknowledged: false,
+    };
+
+    let event = editor
+        .read_line_with_events(&EditorPrompt::default(), &mut events)
+        .unwrap();
+
+    assert_eq!(event, EditorEvent::Submitted("abc".to_owned()));
+    assert!(events.acknowledged);
+    let drawn = String::from_utf8_lossy(editor.drawn());
+    let notice = drawn.find("[1] Done     worker\n").unwrap();
+    assert!(drawn[notice..].contains(">> abc"));
 }
 
 #[test]
@@ -512,6 +712,18 @@ fn incomplete_source_keeps_reading_under_the_continuation_prompt() {
     assert!(
         String::from_utf8_lossy(editor.drawn()).contains("...> "),
         "the continuation prompt is drawn"
+    );
+}
+
+#[test]
+fn an_incomplete_submission_can_be_edited_across_lines() {
+    let mut editor = editor(b"if true {\recho no\x1b[A\x05 # yes\x1b[B\r}\r");
+
+    let event = editor.read_line(&EditorPrompt::default()).unwrap();
+
+    assert_eq!(
+        event,
+        EditorEvent::Submitted("if true { # yes\necho no\n}".to_owned())
     );
 }
 
@@ -551,6 +763,34 @@ fn the_up_arrow_recalls_the_previous_submission() {
 
     assert_eq!(first, EditorEvent::Submitted("echo one".to_owned()));
     assert_eq!(second, EditorEvent::Submitted("echo one".to_owned()));
+}
+
+#[test]
+fn persistent_history_is_loaded_and_records_each_submission() {
+    let platform =
+        FakePlatform::with_terminal(Capabilities::full(), true, TerminalSize::new(80, 24));
+    let recorded = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let persistence = ScriptedPersistence {
+        entries: vec!["from disk".to_owned()],
+        recorded: std::sync::Arc::clone(&recorded),
+    };
+    let mut editor = TerminalEditor::with_history(
+        platform,
+        &b"\x1b[A\rnew entry\r"[..],
+        Vec::new(),
+        Box::new(persistence),
+    )
+    .unwrap();
+
+    let recalled = editor.read_line(&EditorPrompt::default()).unwrap();
+    let submitted = editor.read_line(&EditorPrompt::default()).unwrap();
+
+    assert_eq!(recalled, EditorEvent::Submitted("from disk".to_owned()));
+    assert_eq!(submitted, EditorEvent::Submitted("new entry".to_owned()));
+    assert_eq!(
+        recorded.lock().unwrap().as_slice(),
+        ["from disk", "new entry"]
+    );
 }
 
 #[test]
@@ -717,7 +957,7 @@ fn a_cancelled_recall_does_not_strand_the_next_one() {
 }
 
 #[test]
-fn every_read_line_acquires_raw_mode_and_re_reads_the_terminal_size() {
+fn every_active_edit_rechecks_the_terminal_size() {
     // Both halves are invisible in the returned event: an editor that never
     // asked for raw mode submits exactly the same text, and a size read once
     // and cached looks identical until the window is resized mid-session.
@@ -731,10 +971,9 @@ fn every_read_line_acquires_raw_mode_and_re_reads_the_terminal_size() {
     assert_eq!(first, EditorEvent::Submitted("one".to_owned()));
     assert_eq!(second, EditorEvent::Submitted("two".to_owned()));
     assert_eq!(log.raw_mode_entries(), 2, "raw mode is acquired per call");
-    assert_eq!(
-        log.terminal_size_queries(),
-        2,
-        "the size is re-read per call, so a resize between lines is seen"
+    assert!(
+        log.terminal_size_queries() >= 4,
+        "the size is re-read during each active edit, so an in-flight resize is seen"
     );
 }
 
@@ -764,8 +1003,12 @@ fn an_unreadable_terminal_size_falls_back_to_eighty_columns() {
     let event = editor.read_line(&EditorPrompt::default()).unwrap();
 
     assert_eq!(event, EditorEvent::Submitted("a".repeat(100)));
-    assert_eq!(log.terminal_size_queries(), 1);
-    let expected = format!("\r\x1b[K>> {}\r\x1b[80G", "a".repeat(76));
+    assert_eq!(
+        log.terminal_size_queries(),
+        101,
+        "the initial draw and every typed byte recheck the active size"
+    );
+    let expected = format!("\r\x1b[J>> {}\r\x1b[80G", "a".repeat(76));
     assert!(
         String::from_utf8_lossy(editor.drawn()).contains(&expected),
         "the final row is drawn for an 80-column terminal"

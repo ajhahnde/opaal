@@ -20,15 +20,13 @@ use flash_cli::cli::{Mode, parse_args};
 use flash_cli::completion::{
     CompletionCandidateProvider, CompletionCatalog, CompletionSnapshotLimits,
 };
-#[cfg(any(target_os = "macos", target_os = "linux"))]
 use flash_cli::config::{
     ConfigDefaults, ConfigFatalError, ConfigInvocation, ConfigLimits, ConfigPlatform,
     ConfigRequest, HostConfigSource, ProcessConfigEnvironment, initialize_config,
 };
-#[cfg(target_os = "redox")]
-use flash_cli::editor::EditorPrompt;
 use flash_cli::format::{FormatRequest, HostFormatFilesystem, format_files};
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[cfg(target_os = "redox")]
+use flash_cli::history::EditorHistory;
 use flash_cli::history::{HistoryPlatform, ProcessHistoryEnvironment, select_history};
 use flash_cli::interactive::{
     EvaluationControl, ExitDecision, InteractiveDiagnostic, InteractiveEvaluationError,
@@ -339,7 +337,7 @@ fn run_interactive(no_config: bool, no_history: bool) -> ExitCode {
 }
 
 #[cfg(target_os = "redox")]
-fn run_interactive(_no_config: bool, _no_history: bool) -> ExitCode {
+fn run_interactive(no_config: bool, no_history: bool) -> ExitCode {
     let cwd = match env::current_dir() {
         Ok(cwd) => cwd,
         Err(error) => {
@@ -369,13 +367,40 @@ fn run_interactive(_no_config: bool, _no_history: bool) -> ExitCode {
         None
     };
 
-    let session = Session::with_scope(
-        ScopeStack::new(),
-        cwd,
-        process_environment(),
-        SessionOptions::default(),
+    let defaults = ConfigDefaults::new(ScopeStack::new(), process_environment());
+    let request = ConfigRequest::new(
+        ConfigInvocation::Interactive,
+        no_config,
+        ConfigPlatform::current(),
     );
-    let mut evaluator = SessionEvaluator::new(session, false);
+    let startup = match initialize_config(
+        request,
+        &ProcessConfigEnvironment,
+        &HostConfigSource,
+        &defaults,
+        &ConfigLimits::default(),
+    ) {
+        Ok(startup) => startup,
+        Err(ConfigFatalError::Cancelled(_)) => {
+            eprintln!("fsh: startup configuration was cancelled");
+            return ExitCode::FAILURE;
+        }
+        Err(ConfigFatalError::InvalidDefaults(detail)) => {
+            eprintln!("fsh: cannot initialize startup defaults: {detail}");
+            return ExitCode::FAILURE;
+        }
+    };
+    if let Some(diagnostic) = startup.diagnostic() {
+        eprint!("{diagnostic}");
+    }
+
+    let session = Session::with_scope(
+        startup.scope().clone(),
+        cwd,
+        startup.environment().clone(),
+        startup.session_options(),
+    );
+    let mut evaluator = SessionEvaluator::new(session, startup.interactive_settings().completion());
     let mut output = io::stdout();
     let mut diagnostics = io::stderr();
 
@@ -385,11 +410,40 @@ fn run_interactive(_no_config: bool, _no_history: bool) -> ExitCode {
     // a keyboard but redirected to a file must not have them written into it.
     let platform = PosixPlatform;
     let outcome = if platform.is_terminal() && platform.is_output_terminal() {
-        let mut editor = TerminalEditor::new(platform, io::stdin(), io::stdout());
+        let selection = match select_history(
+            no_history || !startup.interactive_settings().history(),
+            HistoryPlatform::current(),
+            &ProcessHistoryEnvironment,
+        ) {
+            Ok(selection) => selection,
+            Err(error) => {
+                eprintln!("fsh: {error}");
+                return ExitCode::FAILURE;
+            }
+        };
+        let history = match EditorHistory::open(selection) {
+            Ok(history) => history,
+            Err(error) => {
+                eprintln!("fsh: {error}");
+                return ExitCode::FAILURE;
+            }
+        };
+        let mut editor = match TerminalEditor::with_history(
+            platform,
+            io::stdin(),
+            io::stdout(),
+            Box::new(history),
+        ) {
+            Ok(editor) => editor,
+            Err(error) => {
+                eprintln!("fsh: {error}");
+                return ExitCode::FAILURE;
+            }
+        };
         run_interactive_driver(
             &mut editor,
             &mut evaluator,
-            &EditorPrompt::default(),
+            startup.prompt(),
             &mut output,
             &mut diagnostics,
         )
@@ -398,7 +452,7 @@ fn run_interactive(_no_config: bool, _no_history: bool) -> ExitCode {
         run_interactive_driver(
             &mut editor,
             &mut evaluator,
-            &EditorPrompt::default(),
+            startup.prompt(),
             &mut output,
             &mut diagnostics,
         )

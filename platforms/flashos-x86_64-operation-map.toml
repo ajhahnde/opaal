@@ -168,6 +168,17 @@ interfaces = ["isatty", "ioctl", "tcgetattr", "tcsetattr", "cfmakeraw"]
 symbols = ["isatty", "ioctl", "tcgetattr", "tcsetattr", "cfmakeraw"]
 observation = "Terminal detection, dimensions, attributes, and raw-mode conversion call configured relibc interfaces; the Redox ioctl adapter owns terminal descriptor requests."
 
+[[abi_seam]]
+id = "relibc-terminal-input"
+provider = "relibc"
+revision = "5f6afb52692e62dae79154f4dbec2d0e79a07602"
+tracked_path = "components/flash/crates/flash-platform-posix/src/lib.rs"
+tracked_markers = ["libc::poll(&raw mut descriptor", "libc::read("]
+paths = ["src/header/poll/mod.rs", "src/header/unistd/mod.rs", "src/platform/redox/mod.rs"]
+interfaces = ["poll", "read"]
+symbols = ["poll", "read"]
+observation = "Bounded raw-editor input polls standard input and reads ready bytes through the configured relibc C ABI; the timeout and byte count remain explicit at the adapter boundary."
+
 [[operation]]
 id = "environment-snapshot"
 capability = "environment"
@@ -449,6 +460,16 @@ mapping_observation = "The adapter reads attributes with tcgetattr, transforms t
 classification = "deferred"
 
 [[operation]]
+id = "terminal-read-input"
+capability = "terminal-info"
+requirement = "read terminal input with a bounded wait"
+source_evidence = ["adapter-terminal-info"]
+abi_seams = ["relibc-terminal-input"]
+boundary = "libc-abi"
+mapping_observation = "The adapter polls standard input for the requested duration, then reads at most the caller's buffer length directly from the same descriptor."
+classification = "deferred"
+
+[[operation]]
 id = "terminal-snapshot-job-mode"
 capability = "terminal-info"
 requirement = "snapshot foreground job terminal attributes"
@@ -502,30 +523,30 @@ classification = "deferred"
 id = "directories-discover"
 capability = "standard-directories"
 requirement = "discover home, configuration, cache, and state locations"
-source_evidence = ["redox-standard-directories-gap"]
+source_evidence = ["flashos-standard-directories"]
 abi_seams = []
-boundary = "unrouted"
-mapping_observation = "The Redox interactive path does not call the standard-directory selectors and no FlashOS convention is currently selected."
+boundary = "flash-internal"
+mapping_observation = "The Redox interactive path selects FlashOS configuration and state roots before constructing either persistent subsystem."
 classification = "deferred"
 
 [[operation]]
 id = "directories-preserve-paths"
 capability = "standard-directories"
 requirement = "preserve native path values"
-source_evidence = ["redox-standard-directories-gap"]
+source_evidence = ["flashos-standard-directories"]
 abi_seams = []
-boundary = "unrouted"
-mapping_observation = "No Redox configuration, cache, or state path currently enters Flash, so there is no target path-value seam to map."
+boundary = "flash-internal"
+mapping_observation = "Flash's target selectors retain absolute XDG and HOME path values as native OsString-backed paths while appending only product-relative components."
 classification = "deferred"
 
 [[operation]]
 id = "directories-target-fallback"
 capability = "standard-directories"
 requirement = "define target-specific fallback conventions"
-source_evidence = ["redox-standard-directories-gap"]
+source_evidence = ["flashos-standard-directories"]
 abi_seams = []
-boundary = "unrouted"
-mapping_observation = "Flash has no selected FlashOS fallback convention; defining one remains a later design and classification input."
+boundary = "flash-internal"
+mapping_observation = "FlashOS selects .config below an absolute home for configuration and .local/state for history, matching its dedicated platform policy."
 classification = "deferred"
 
 [[operation]]

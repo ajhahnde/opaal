@@ -529,6 +529,16 @@ pub struct LiveJob {
 }
 
 impl LiveJob {
+    /// Build one display-safe live-job snapshot for an interactive consumer.
+    #[must_use]
+    pub fn new(job: JobId, state: LiveJobState, command: impl Into<String>) -> Self {
+        Self {
+            job,
+            state,
+            command: command.into(),
+        }
+    }
+
     /// The job identity.
     #[must_use]
     pub const fn job(&self) -> JobId {

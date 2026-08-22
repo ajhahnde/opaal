@@ -17,6 +17,7 @@ use std::os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::time::Duration;
 
 use flash_platform::{
     Capabilities, Capability, ChildProcess, DescriptorEndpoint, DescriptorReadError,
@@ -242,6 +243,18 @@ impl Platform for PosixPlatform {
             saved,
             restored: false,
         }))
+    }
+
+    fn read_terminal_input(
+        &self,
+        buffer: &mut [u8],
+        timeout: Duration,
+    ) -> Result<Option<usize>, PlatformError> {
+        self.require(Capability::TerminalInfo)?;
+        terminal_input::read(buffer, timeout).map_err(|error| PlatformError::Unavailable {
+            capability: Capability::TerminalInfo,
+            reason: format!("reading terminal input failed: {error}"),
+        })
     }
 
     fn snapshot_terminal_mode(&self) -> Result<Box<dyn TerminalModeToken>, PlatformError> {
@@ -1468,6 +1481,38 @@ mod child_wait {
 /// by hand. `tcgetattr`/`tcsetattr` take `*mut termios`, whose layout differs
 /// across macOS, Linux and Redox, so the layouts come from `libc` rather than
 /// being restated here where a wrong field would corrupt memory silently.
+#[allow(unsafe_code)]
+mod terminal_input {
+    use std::io;
+    use std::time::Duration;
+
+    pub(super) fn read(buffer: &mut [u8], timeout: Duration) -> io::Result<Option<usize>> {
+        let milliseconds = timeout.as_millis().min(i32::MAX as u128) as i32;
+        let mut descriptor = libc::pollfd {
+            fd: libc::STDIN_FILENO,
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        // SAFETY: `descriptor` points to one initialized pollfd for the whole
+        // call and the descriptor count exactly matches that allocation.
+        let result = unsafe { libc::poll(&raw mut descriptor, 1, milliseconds) };
+        if result < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        if result == 0 || descriptor.revents & (libc::POLLIN | libc::POLLHUP) == 0 {
+            return Ok(None);
+        }
+        // SAFETY: `buffer` is valid for writes of its length and standard
+        // input remains owned by the process for the duration of the call.
+        let read =
+            unsafe { libc::read(libc::STDIN_FILENO, buffer.as_mut_ptr().cast(), buffer.len()) };
+        if read < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(Some(read as usize))
+    }
+}
+
 #[allow(unsafe_code)]
 mod terminal_mode {
     use std::io;

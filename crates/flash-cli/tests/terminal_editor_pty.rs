@@ -12,10 +12,11 @@
 //! break the other. The copy drops reedline's cursor-position responder, which
 //! this editor never provokes.
 
-use std::fs::File;
+use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::os::unix::process::CommandExt;
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -27,6 +28,7 @@ use rustix::termios::{Winsize, tcsetwinsize};
 
 const FIXTURE: &str = env!("CARGO_BIN_EXE_flash-terminal-editor-fixture");
 const TIMEOUT: Duration = Duration::from_secs(10);
+static UNIQUE: AtomicU32 = AtomicU32::new(0);
 
 /// A live fixture session attached to a pseudoterminal.
 struct Pty {
@@ -41,6 +43,10 @@ struct Pty {
 
 impl Pty {
     fn spawn(binary: &str) -> Self {
+        Self::spawn_with_env(binary, &[])
+    }
+
+    fn spawn_with_env(binary: &str, environment: &[(&str, &str)]) -> Self {
         let controller = openpt(OpenptFlags::RDWR | OpenptFlags::NOCTTY).expect("open controller");
         grantpt(&controller).expect("grant");
         unlockpt(&controller).expect("unlock");
@@ -62,6 +68,9 @@ impl Pty {
             .stdin(Stdio::from(control_user.try_clone().expect("clone stdin")))
             .stdout(Stdio::from(control_user.try_clone().expect("clone stdout")))
             .stderr(Stdio::from(control_user.try_clone().expect("clone stderr")));
+        for (name, value) in environment {
+            command.env(name, value);
+        }
         // Give the child its own session with the pty as controlling terminal,
         // so terminal raw mode and key events reach it. setsid and TIOCSCTTY
         // are async-signal-safe, as pre_exec requires.
@@ -104,6 +113,14 @@ impl Pty {
         self.writer.flush().expect("flush the pty");
     }
 
+    fn resize(&self, rows: u16, columns: u16) {
+        tcsetwinsize(
+            self.control_user.as_ref().expect("pty user side is open"),
+            winsize(rows, columns),
+        )
+        .expect("resize pty");
+    }
+
     /// The current raw output length, used as a synchronization point so a
     /// later wait matches output produced *after* this call rather than
     /// something already on screen.
@@ -127,6 +144,26 @@ impl Pty {
             assert!(
                 Instant::now() < deadline,
                 "timed out waiting for {needle:?}; rendered since mark:\n{text}"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    /// Block until `needle` appears after `anchor` in output produced after
+    /// `start`. Waiting for both in one captured snapshot matters when the pty
+    /// reader receives an external notice and its redraw in separate reads.
+    fn wait_for_after_from(&self, start: usize, anchor: &str, needle: &str) -> String {
+        let deadline = Instant::now() + TIMEOUT;
+        loop {
+            let text = self.rendered_from(start);
+            if let Some(index) = text.rfind(anchor)
+                && text[index + anchor.len()..].contains(needle)
+            {
+                return text;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "timed out waiting for {needle:?} after {anchor:?}; rendered since mark:\n{text}"
             );
             thread::sleep(Duration::from_millis(10));
         }
@@ -164,17 +201,21 @@ impl Pty {
     /// and the one following an evaluation is identified by its position
     /// relative to that evaluation's output, not by when the test looked.
     fn await_prompt_after(&self, needle: &str) -> String {
+        self.await_prompt_text_after(needle, ">> ")
+    }
+
+    fn await_prompt_text_after(&self, needle: &str, prompt: &str) -> String {
         let deadline = Instant::now() + TIMEOUT;
         loop {
             let text = self.rendered_from(0);
             if let Some(index) = text.rfind(needle)
-                && text[index + needle.len()..].contains(">> ")
+                && text[index + needle.len()..].contains(prompt)
             {
                 return text;
             }
             assert!(
                 Instant::now() < deadline,
-                "timed out waiting for a prompt after {needle:?}; rendered:\n{text}"
+                "timed out waiting for {prompt:?} after {needle:?}; rendered:\n{text}"
             );
             thread::sleep(Duration::from_millis(10));
         }
@@ -333,6 +374,16 @@ fn exit_cleanly(pty: &mut Pty) {
     assert_eq!(pty.wait_exit(), 0);
 }
 
+fn unique_dir(tag: &str) -> std::path::PathBuf {
+    let id = UNIQUE.fetch_add(1, Ordering::SeqCst);
+    let path = std::env::temp_dir().join(format!(
+        "flash-terminal-editor-{tag}-{}-{id}",
+        std::process::id()
+    ));
+    fs::create_dir_all(&path).expect("create terminal-editor test directory");
+    path
+}
+
 #[test]
 fn backspace_edits_the_line_before_submission() {
     let mut pty = Pty::spawn(FIXTURE);
@@ -437,4 +488,130 @@ fn incomplete_source_draws_the_continuation_prompt() {
     pty.wait_for("submitted: if true {\r\n}");
     pty.await_prompt_after("submitted: if true {");
     exit_cleanly(&mut pty);
+}
+
+#[test]
+fn unicode_graphemes_and_multiline_movement_reach_the_real_portable_editor() {
+    let mut pty = Pty::spawn(FIXTURE);
+    pty.wait_for(">> ");
+
+    pty.send("a\u{301}界".as_bytes());
+    pty.send(b"\x1b[D\x7fx\r");
+    pty.wait_for("submitted: x界");
+    pty.await_prompt_after("submitted: x界");
+
+    pty.send(b"if true {\recho no\x1b[A\x05 # yes\x1b[B\r}\r");
+    pty.wait_for("submitted: if true { # yes\r\necho no\r\n}");
+    pty.await_prompt_after("submitted: if true {");
+    exit_cleanly(&mut pty);
+}
+
+#[test]
+fn completion_highlighting_hints_and_resize_are_live_in_the_portable_editor() {
+    let mut pty = Pty::spawn(FIXTURE);
+    pty.wait_for(">> ");
+
+    pty.send(b"pw\t");
+    pty.wait_for(">> pwd ");
+    pty.send(b"\r");
+    pty.await_prompt_after("submitted: pwd ");
+
+    pty.send(b"echo history-value\r");
+    pty.await_prompt_after("submitted: echo history-value");
+    let hint_mark = pty.mark();
+    pty.send(b"echo ");
+    pty.wait_for_from(hint_mark, ">> echo history-value");
+    pty.send(b"\x1b[C\r");
+    pty.await_prompt_after("submitted: echo history-value");
+
+    let resize_mark = pty.mark();
+    pty.send(b"abcdefghijklmnopqrstuvwxyz");
+    pty.wait_for_from(resize_mark, ">> abcdefghijklmnopqrstuvwxyz");
+    let redraw_mark = pty.mark();
+    pty.resize(40, 12);
+    pty.wait_for_from(redraw_mark, ">> stuvwxyz");
+    pty.send(b"\x03");
+    pty.await_prompt(redraw_mark);
+    exit_cleanly(&mut pty);
+}
+
+#[test]
+fn external_output_redraws_a_live_portable_edit_buffer() {
+    let mut pty = Pty::spawn_with_env(FIXTURE, &[("FLASH_TEST_EXTERNAL_NOTICE", "1")]);
+    pty.wait_for(">> ");
+    let mark = pty.mark();
+    pty.send(b"preserved-buffer");
+
+    pty.wait_for_after_from(mark, "[1] Done     external worker", ">> preserved-buffer");
+
+    pty.send(b"\r");
+    pty.wait_for("submitted: preserved-buffer");
+    pty.await_prompt_after("submitted: preserved-buffer");
+    exit_cleanly(&mut pty);
+}
+
+#[test]
+fn persistent_history_survives_portable_editor_processes() {
+    let state = unique_dir("history");
+    let state = state.to_str().expect("history state path is UTF-8");
+    let environment = [
+        ("FLASH_TEST_PERSISTENT_HISTORY", "1"),
+        ("XDG_STATE_HOME", state),
+    ];
+
+    {
+        let mut first = Pty::spawn_with_env(FIXTURE, &environment);
+        first.wait_for(">> ");
+        first.send(b"persisted-portable-entry\r");
+        first.await_prompt_after("submitted: persisted-portable-entry");
+    }
+
+    let mut second = Pty::spawn_with_env(FIXTURE, &environment);
+    second.wait_for(">> ");
+    let mark = second.mark();
+    second.send(b"\x1b[A");
+    second.wait_for_from(mark, ">> persisted-portable-entry");
+    second.send(b"\x03");
+    second.await_prompt(mark);
+    exit_cleanly(&mut second);
+}
+
+#[test]
+fn configured_and_safe_prompts_reach_the_portable_editor() {
+    let mut configured = Pty::spawn_with_env(
+        FIXTURE,
+        &[
+            ("FLASH_TEST_PROMPT", "flash> "),
+            ("FLASH_TEST_CONTINUATION_PROMPT", "more> "),
+        ],
+    );
+    configured.wait_for("flash> ");
+    configured.send(b"if true {\r");
+    configured.wait_for("more> ");
+    configured.send(b"}\r");
+    configured.await_prompt_text_after("submitted: if true {", "flash> ");
+    configured.send(b"exit\r");
+    assert_eq!(configured.wait_exit(), 0);
+
+    let mut safe = Pty::spawn_with_env(
+        FIXTURE,
+        &[
+            ("FLASH_TEST_SAFE_MODE", "1"),
+            ("FLASH_TEST_PROMPT", "must-not-render> "),
+            ("FLASH_TEST_CONTINUATION_PROMPT", "must-not-render> "),
+        ],
+    );
+    safe.wait_for("[SAFE] >> ");
+    assert!(!safe.rendered_from(0).contains("must-not-render> "));
+    safe.send(b"exit\r");
+    assert_eq!(safe.wait_exit(), 0);
+}
+
+#[test]
+fn portable_editor_restores_terminal_mode_after_each_read() {
+    let mut pty = Pty::spawn_with_env(FIXTURE, &[("FLASH_TEST_TERMINAL_RESTORE", "1")]);
+    pty.wait_for(">> ");
+    pty.send(b"one edit\r");
+    pty.wait_for("terminal-restored=true");
+    assert_eq!(pty.wait_exit(), 0);
 }

@@ -51,15 +51,17 @@ flash-platform = { path = "../flash-platform" }
 flash-platform-posix = { path = "../flash-platform-posix" }
 flash-runtime = { path = "../flash-runtime" }
 flash-syntax = { path = "../flash-syntax" }
+fd-lock = "=4.0.4"
+rustix = { version = "=1.1.4", features = ["fs", "process"] }
+unicode-segmentation = "=1.13.3"
+unicode-width = "=0.2.2"
 
 [target.'cfg(target_os = "redox")'.dependencies]
 flash-platform-flashos = { path = "../flash-platform-flashos" }
 
 [target.'cfg(any(target_os = "macos", target_os = "linux"))'.dependencies]
-fd-lock = "=4.0.4"
 nu-ansi-term = "=0.50.3"
-reedline = { version = "=0.49.0", default-features = false }
-rustix = { version = "=1.1.4", features = ["fs", "process"] }
+reedline = { version = "=0.49.0", default-features = false, features = ["external_printer", "idle_callback"] }
 
 # The PTY acceptance harness composes a pseudoterminal from rustix directly
 # rather than pulling a new crate; these features stay out of the shipped binary.

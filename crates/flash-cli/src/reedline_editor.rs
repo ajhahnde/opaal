@@ -1,18 +1,24 @@
 use std::borrow::Cow;
 use std::io::{self, Write};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, Receiver};
 use std::sync::{Arc, RwLock};
+use std::thread;
+use std::time::Duration;
 
 use flash_syntax::{ParseOutcome, SourceFile, SourceId, parse};
 use nu_ansi_term::{Color, Style};
 use reedline::{
-    ColumnarMenu, Completer, Emacs, Highlighter, Hinter, History, KeyCode, KeyModifiers,
-    MenuBuilder, Prompt, PromptEditMode, PromptHistorySearch, Reedline, ReedlineEvent,
-    ReedlineMenu, SearchQuery, Signal, Span, StyledText, Suggestion, ValidationResult, Validator,
-    default_emacs_keybindings,
+    ColumnarMenu, Completer, Emacs, ExternalPrinter, Highlighter, Hinter, History, KeyCode,
+    KeyModifiers, MenuBuilder, Prompt, PromptEditMode, PromptHistorySearch, Reedline,
+    ReedlineEvent, ReedlineMenu, SearchQuery, Signal, Span, StyledText, Suggestion,
+    ValidationResult, Validator, default_emacs_keybindings,
 };
 
 use crate::completion::{CompletionCatalog, CompletionEngine};
-use crate::editor::{EditorError, EditorEvent, EditorPrompt, LineEditor};
+use crate::editor::{
+    EditorError, EditorEvent, EditorEventSource, EditorExternalPrint, EditorPrompt, LineEditor,
+};
 use crate::highlight::{HighlightKind, SyntaxHighlighter};
 use crate::hint::{HintCatalog, HintEngine, MAX_HINT_HISTORY_ENTRIES};
 use crate::history::{EditorHistory, HistoryError, HistorySelection};
@@ -21,15 +27,23 @@ use crate::history::{EditorHistory, HistoryError, HistorySelection};
 pub struct ReedlineEditor {
     inner: Reedline,
     completion: Arc<RwLock<CompletionEngine>>,
+    external_printer: ExternalPrinter<String>,
+    idle_ticks: Receiver<()>,
+    break_signal: Arc<AtomicBool>,
 }
 
 impl ReedlineEditor {
     #[must_use]
     pub fn new() -> Self {
         let completion = default_completion();
+        let (inner, external_printer, idle_ticks, break_signal) =
+            editor_engine(Arc::clone(&completion));
         Self {
-            inner: editor_engine(Arc::clone(&completion)),
+            inner,
             completion,
+            external_printer,
+            idle_ticks,
+            break_signal,
         }
     }
 
@@ -37,9 +51,14 @@ impl ReedlineEditor {
     pub fn with_history(selection: HistorySelection) -> Result<Self, HistoryError> {
         let history = EditorHistory::open(selection)?;
         let completion = default_completion();
+        let (inner, external_printer, idle_ticks, break_signal) =
+            editor_engine(Arc::clone(&completion));
         Ok(Self {
-            inner: editor_engine(Arc::clone(&completion)).with_history(history.into_backend()),
+            inner: inner.with_history(history.into_backend()),
             completion,
+            external_printer,
+            idle_ticks,
+            break_signal,
         })
     }
 }
@@ -52,7 +71,14 @@ fn default_completion() -> Arc<RwLock<CompletionEngine>> {
     )))
 }
 
-fn editor_engine(completion: Arc<RwLock<CompletionEngine>>) -> Reedline {
+fn editor_engine(
+    completion: Arc<RwLock<CompletionEngine>>,
+) -> (
+    Reedline,
+    ExternalPrinter<String>,
+    Receiver<()>,
+    Arc<AtomicBool>,
+) {
     // Bind Tab to the completion menu so the installed completer is reachable.
     let mut keybindings = default_emacs_keybindings();
     keybindings.add_binding(
@@ -63,7 +89,10 @@ fn editor_engine(completion: Arc<RwLock<CompletionEngine>>) -> Reedline {
             ReedlineEvent::MenuNext,
         ]),
     );
-    Reedline::create()
+    let external_printer = ExternalPrinter::default();
+    let (idle_sender, idle_ticks) = mpsc::sync_channel(1);
+    let break_signal = Arc::new(AtomicBool::new(false));
+    let inner = Reedline::create()
         .with_cwd(Some(String::new()))
         .with_validator(Box::new(FlashValidator))
         .with_highlighter(Box::new(ReedlineSyntaxHighlighter))
@@ -73,6 +102,13 @@ fn editor_engine(completion: Arc<RwLock<CompletionEngine>>) -> Reedline {
         )))
         .with_edit_mode(Box::new(Emacs::new(keybindings)))
         .with_hinter(Box::new(ReedlineHinter::new()))
+        .with_external_printer(external_printer.clone())
+        .with_break_signal(Arc::clone(&break_signal))
+        .with_poll_interval(Duration::from_millis(25))
+        .with_idle_callback(Box::new(move || {
+            let _ = idle_sender.try_send(());
+        }));
+    (inner, external_printer, idle_ticks, break_signal)
 }
 
 const COMPLETION_MENU: &str = "completion_menu";
@@ -103,10 +139,98 @@ impl LineEditor for ReedlineEditor {
 
     fn read_line(&mut self, prompt: &EditorPrompt) -> Result<EditorEvent, EditorError> {
         let prompt = ReedlinePrompt { prompt };
-        let signal = self
-            .inner
-            .read_line(&prompt)
-            .map_err(|error| EditorError::with_source("line editor failed", error))?;
+        let signal = self.read_reedline(&prompt)?;
+        self.finish_signal(signal)
+    }
+
+    fn read_line_with_events(
+        &mut self,
+        prompt: &EditorPrompt,
+        events: &mut dyn EditorEventSource,
+    ) -> Result<EditorEvent, EditorError> {
+        while self.idle_ticks.try_recv().is_ok() {}
+        self.break_signal.store(false, Ordering::Relaxed);
+        let prompt = ReedlinePrompt { prompt };
+        let signal = thread::scope(|scope| {
+            let (result_sender, result_receiver) = mpsc::sync_channel(1);
+            let inner = &mut self.inner;
+            scope.spawn(move || {
+                let _ = result_sender.send(inner.read_line(&prompt));
+            });
+
+            let mut pending: Option<EditorExternalPrint> = None;
+            let mut bridge_error: Option<EditorError> = None;
+            loop {
+                if bridge_error.is_none()
+                    && pending.is_none()
+                    && let Some(event) = events.next_external_print()
+                {
+                    if self
+                        .external_printer
+                        .print(event.rendered().to_owned())
+                        .is_err()
+                    {
+                        bridge_error = Some(EditorError::new("external print channel closed"));
+                        self.break_signal.store(true, Ordering::Relaxed);
+                    } else {
+                        pending = Some(event);
+                    }
+                }
+
+                while self.idle_ticks.try_recv().is_ok() {
+                    if self.external_printer.receiver().is_empty()
+                        && let Some(event) = pending.take()
+                        && let Err(error) = events.acknowledge_external_print(&event)
+                    {
+                        bridge_error = Some(error);
+                        self.break_signal.store(true, Ordering::Relaxed);
+                    }
+                }
+
+                match result_receiver.recv_timeout(Duration::from_millis(10)) {
+                    Ok(result) => {
+                        if pending.is_some() && self.external_printer.get_line().is_some() {
+                            // Reedline returned before consuming this notice. Leave it
+                            // unacknowledged so the prompt-boundary path renders it once,
+                            // and keep it out of the next editor read.
+                            pending = None;
+                        }
+                        if bridge_error.is_none()
+                            && result.is_ok()
+                            && self.external_printer.receiver().is_empty()
+                            && let Some(event) = pending.take()
+                        {
+                            events.acknowledge_external_print(&event)?;
+                        }
+                        if let Some(error) = bridge_error {
+                            return Err(error);
+                        }
+                        return result.map_err(|error| {
+                            EditorError::with_source("line editor failed", error)
+                        });
+                    }
+                    Err(mpsc::RecvTimeoutError::Timeout) => {}
+                    Err(mpsc::RecvTimeoutError::Disconnected) => {
+                        if pending.is_some() {
+                            let _ = self.external_printer.get_line();
+                        }
+                        return Err(EditorError::new("line editor worker stopped"));
+                    }
+                }
+            }
+        })?;
+        self.finish_signal(signal)
+    }
+}
+
+impl ReedlineEditor {
+    fn read_reedline(&mut self, prompt: &dyn Prompt) -> Result<Signal, EditorError> {
+        self.inner
+            .read_line(prompt)
+            .map_err(|error| EditorError::with_source("line editor failed", error))
+    }
+
+    fn finish_signal(&mut self, signal: Signal) -> Result<EditorEvent, EditorError> {
         if matches!(signal, Signal::Success(_)) {
             self.inner.sync_history().map_err(|error| {
                 EditorError::with_source("cannot synchronize interactive history", error)

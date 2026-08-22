@@ -1,10 +1,21 @@
 //! In-session command recall.
 //!
-//! History lives only as long as the session: persistent history is a host
-//! feature with its own on-disk permission rules and is not part of this
-//! editor.
+//! Storage is injected separately; this ring owns deterministic recall and the
+//! immutable snapshot used for portable inline hints.
 
 use std::collections::VecDeque;
+
+use crate::editor::EditorError;
+
+/// Persistent storage consumed by the portable editor without exposing a
+/// frontend-specific history implementation.
+pub trait HistoryPersistence {
+    /// Load the retained oldest-to-newest submission snapshot.
+    fn entries(&mut self) -> Result<Vec<String>, EditorError>;
+
+    /// Merge and durably record one accepted submission.
+    fn record(&mut self, source: &str) -> Result<(), EditorError>;
+}
 
 /// Recall over the submissions of one session.
 #[derive(Debug)]
@@ -87,6 +98,21 @@ impl HistoryRing {
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
+    }
+
+    /// Retained entries from newest to oldest for bounded hint matching.
+    pub fn newest_entries(&self) -> impl Iterator<Item = &str> {
+        self.entries.iter().rev().map(String::as_str)
+    }
+
+    /// Load an oldest-to-newest persistent snapshot through normal retention
+    /// and duplicate rules.
+    pub fn load(&mut self, entries: impl IntoIterator<Item = impl AsRef<str>>) {
+        self.entries.clear();
+        for entry in entries {
+            self.record(entry.as_ref());
+        }
+        self.reset_position();
     }
 
     fn entry_at_position(&self) -> Option<String> {

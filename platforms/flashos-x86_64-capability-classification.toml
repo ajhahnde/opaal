@@ -219,6 +219,13 @@ basis = "existing-libc-abi-route"
 rationale = "Configured relibc already exposes terminal attribute reads and writes for guarded raw mode."
 
 [[operation]]
+id = "terminal-read-input"
+capability = "terminal-info"
+classification = "native"
+basis = "existing-libc-abi-route"
+rationale = "Configured relibc already exposes the poll and read operations used for bounded raw-editor input."
+
+[[operation]]
 id = "terminal-snapshot-job-mode"
 capability = "terminal-info"
 classification = "native"
@@ -258,21 +265,21 @@ id = "directories-discover"
 capability = "standard-directories"
 classification = "shimmed"
 basis = "flashos-policy-shim"
-rationale = "FlashOS must select home, configuration, cache, and state locations because the Redox executable currently has no route."
+rationale = "FlashOS selects configuration and state locations through explicit target conventions wired into the Redox executable."
 
 [[operation]]
 id = "directories-preserve-paths"
 capability = "standard-directories"
 classification = "shimmed"
 basis = "flashos-policy-shim"
-rationale = "The FlashOS directory selector must preserve native path values while applying the target policy."
+rationale = "The FlashOS selectors preserve absolute native roots while applying only product-relative suffixes."
 
 [[operation]]
 id = "directories-target-fallback"
 capability = "standard-directories"
 classification = "shimmed"
 basis = "flashos-policy-shim"
-rationale = "FlashOS must define deterministic fallback conventions without inventing weaker runtime behavior."
+rationale = "FlashOS defines deterministic .config and .local/state fallbacks below an absolute home."
 
 [[operation]]
 id = "directory-open-relative"
@@ -390,10 +397,10 @@ rationale = "Configured relibc signal and wait operations cover the complete por
 [[capability]]
 name = "terminal-info"
 rust_variant = "TerminalInfo"
-operation_ids = ["terminal-detect-ends", "terminal-read-size", "terminal-raw-mode", "terminal-snapshot-job-mode", "terminal-reapply-job-mode"]
+operation_ids = ["terminal-detect-ends", "terminal-read-size", "terminal-raw-mode", "terminal-read-input", "terminal-snapshot-job-mode", "terminal-reapply-job-mode"]
 classification = "native"
 target_qualification = "pending"
-rationale = "Configured relibc terminal queries and attribute operations cover terminal inspection, raw-mode guards, and stopped-job mode preservation."
+rationale = "Configured relibc terminal queries, bounded input, and attribute operations cover terminal inspection, raw-mode guards, and stopped-job mode preservation."
 
 [[capability]]
 name = "monotonic-clock"
@@ -409,7 +416,7 @@ rust_variant = "StandardDirectories"
 operation_ids = ["directories-discover", "directories-preserve-paths", "directories-target-fallback"]
 classification = "shimmed"
 target_qualification = "pending"
-rationale = "Existing filesystem primitives are sufficient, but FlashOS must add an explicit target directory convention and wire it into the executable."
+rationale = "The explicit FlashOS configuration and state conventions are wired into the target executable; target-runtime qualification remains pending."
 
 [[capability]]
 name = "directory-read"
