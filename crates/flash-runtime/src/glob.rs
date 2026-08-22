@@ -14,6 +14,15 @@ use flash_platform::{DirectoryEntry, DirectoryEntryKind};
 /// Maximum directory entries one explicit glob may inspect before completing.
 pub(crate) const DEFAULT_GLOB_ENTRY_LIMIT: usize = 1_000_000;
 
+/// Matches one complete native path with the same component semantics as `glob`.
+///
+/// This performs no filesystem access. Callers that supply path candidates are
+/// responsible for ensuring recursive components represent traversable,
+/// non-symlink directory structure.
+pub fn glob_pattern_matches(pattern: &OsStr, candidate: &OsStr) -> Result<bool, GlobPatternError> {
+    Ok(GlobPattern::parse(pattern)?.matches(candidate))
+}
+
 /// One validated glob pattern ready for deterministic traversal.
 pub(crate) struct GlobPattern {
     initial: PathBuf,
@@ -117,6 +126,45 @@ impl GlobPattern {
         paths.sort();
         paths.dedup();
         Ok(paths)
+    }
+
+    fn matches(&self, candidate: &OsStr) -> bool {
+        if self.empty {
+            return candidate.is_empty();
+        }
+        let candidate_path = Path::new(candidate);
+        if self.initial.is_absolute() != candidate_path.is_absolute() {
+            return false;
+        }
+        let candidate_segments: Vec<_> = candidate_path
+            .components()
+            .filter_map(|component| match component {
+                Component::Normal(value) => Some(value),
+                Component::ParentDir => Some(OsStr::new("..")),
+                Component::CurDir | Component::RootDir | Component::Prefix(_) => None,
+            })
+            .collect();
+        match_segments(&self.segments, &candidate_segments)
+    }
+}
+
+fn match_segments(pattern: &[PatternSegment], candidate: &[&OsStr]) -> bool {
+    let Some((head, rest)) = pattern.split_first() else {
+        return candidate.is_empty();
+    };
+    match head {
+        PatternSegment::Parent => {
+            candidate.first() == Some(&OsStr::new("..")) && match_segments(rest, &candidate[1..])
+        }
+        PatternSegment::Recursive => {
+            match_segments(rest, candidate)
+                || candidate.first().is_some_and(|name| {
+                    !starts_with_dot(name) && match_segments(pattern, &candidate[1..])
+                })
+        }
+        PatternSegment::Component(component) => candidate
+            .first()
+            .is_some_and(|name| component.matches(name) && match_segments(rest, &candidate[1..])),
     }
 }
 
@@ -394,7 +442,7 @@ fn native_chars(value: &OsStr) -> Vec<NativeChar> {
 
 /// A deterministic validation error raised before directory access.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct GlobPatternError {
+pub struct GlobPatternError {
     message: String,
 }
 
@@ -405,7 +453,7 @@ impl GlobPatternError {
         }
     }
 
-    pub(crate) fn message(&self) -> &str {
+    pub fn message(&self) -> &str {
         &self.message
     }
 }

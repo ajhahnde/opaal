@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use flash_syntax::{CompletionContext, completion_target};
+use flash_syntax::{CompletionContext, PathCompletionStyle, completion_target};
 
 #[test]
 fn command_variable_flag_and_path_contexts_are_source_spanned() {
@@ -25,7 +25,10 @@ fn command_variable_flag_and_path_contexts_are_source_spanned() {
     assert_eq!(forced.prefix(), "gi");
 
     let variable = completion_target("echo $na", 8).expect("a variable is classifiable");
-    assert_eq!(variable.context(), &CompletionContext::Variable);
+    assert_eq!(
+        variable.context(),
+        &CompletionContext::Variable { braced: false }
+    );
     assert_eq!(variable.replacement(), 5..8);
     assert_eq!(variable.prefix(), "$na");
 
@@ -40,7 +43,14 @@ fn command_variable_flag_and_path_contexts_are_source_spanned() {
 
     let redirect =
         completion_target("echo value > ./ou", 17).expect("a redirect operand is a path context");
-    assert_eq!(redirect.context(), &CompletionContext::Path);
+    assert_eq!(
+        redirect.context(),
+        &CompletionContext::Path {
+            style: PathCompletionStyle::Bare,
+            glob_pattern: false,
+            interpolated: false,
+        }
+    );
     assert_eq!(redirect.prefix(), "./ou");
 
     let expression = completion_target("let value = int(3.9)", 15)
@@ -51,12 +61,106 @@ fn command_variable_flag_and_path_contexts_are_source_spanned() {
 }
 
 #[test]
+fn quoted_and_glob_paths_retain_decoded_prefixes_and_source_styles() {
+    let single = completion_target("echo 'two wo", 12).expect("an open quote is classifiable");
+    assert_eq!(
+        single.context(),
+        &CompletionContext::Path {
+            style: PathCompletionStyle::SingleQuoted,
+            glob_pattern: false,
+            interpolated: false,
+        }
+    );
+    assert_eq!(single.replacement(), 5..12);
+    assert_eq!(single.prefix(), "two wo");
+
+    let double = completion_target("echo \"quo\\\"", 11).expect("a quoted escape is decoded");
+    assert_eq!(
+        double.context(),
+        &CompletionContext::Path {
+            style: PathCompletionStyle::DoubleQuoted,
+            glob_pattern: false,
+            interpolated: false,
+        }
+    );
+    assert_eq!(double.prefix(), "quo\"");
+
+    let glob_source = "let files = glob('scripts/**/*.fs')";
+    let glob_cursor = glob_source.find("')").unwrap();
+    let glob =
+        completion_target(glob_source, glob_cursor).expect("a glob literal has a path context");
+    assert_eq!(
+        glob.context(),
+        &CompletionContext::Path {
+            style: PathCompletionStyle::SingleQuoted,
+            glob_pattern: true,
+            interpolated: false,
+        }
+    );
+    assert_eq!(glob.prefix(), "scripts/**/*.fs");
+}
+
+#[test]
+fn executable_and_interpolated_paths_keep_their_grammar_boundaries() {
+    let executable = completion_target("^./to", 5).unwrap();
+    assert_eq!(
+        executable.context(),
+        &CompletionContext::Path {
+            style: PathCompletionStyle::Bare,
+            glob_pattern: false,
+            interpolated: false,
+        }
+    );
+    assert_eq!(executable.replacement(), 1..5);
+
+    let interpolated = completion_target("cat $dir/fi", 11).unwrap();
+    assert_eq!(
+        interpolated.context(),
+        &CompletionContext::Path {
+            style: PathCompletionStyle::Bare,
+            glob_pattern: false,
+            interpolated: true,
+        }
+    );
+    assert_eq!(interpolated.replacement(), 8..11);
+    assert_eq!(interpolated.prefix(), "/fi");
+
+    let braced = completion_target("cat ${na}", 8).unwrap();
+    assert_eq!(
+        braced.context(),
+        &CompletionContext::Variable { braced: true }
+    );
+    assert_eq!(braced.replacement(), 6..8);
+    assert_eq!(braced.prefix(), "na");
+
+    let quoted_source = "cat \"${dir}/fi\"";
+    let quoted_cursor = quoted_source.rfind('"').unwrap();
+    let quoted = completion_target(quoted_source, quoted_cursor).unwrap();
+    assert_eq!(
+        quoted.context(),
+        &CompletionContext::Path {
+            style: PathCompletionStyle::DoubleQuotedFragment,
+            glob_pattern: false,
+            interpolated: true,
+        }
+    );
+    assert_eq!(quoted.prefix(), "/fi");
+}
+
+#[test]
 fn classification_is_checked_but_does_not_require_a_complete_ast() {
     assert!(
         completion_target("é", 1).is_none(),
         "cursor splits a UTF-8 scalar"
     );
-    assert!(completion_target("echo 'quoted'", 8).is_none());
+    assert_eq!(
+        completion_target("echo 'quoted'", 8).unwrap().context(),
+        &CompletionContext::Path {
+            style: PathCompletionStyle::SingleQuoted,
+            glob_pattern: false,
+            interpolated: false,
+        }
+    );
     assert_eq!(
         completion_target("echo value", 5).unwrap().context(),
         &CompletionContext::None

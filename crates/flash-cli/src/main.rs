@@ -17,7 +17,9 @@ use flash_cli::ReedlineEditor;
 use flash_cli::TerminalEditor;
 use flash_cli::check::{CheckRequest, HostCheckFilesystem, check_source};
 use flash_cli::cli::{Mode, parse_args};
-use flash_cli::completion::{CompletionCatalog, CompletionSnapshotLimits, live_completion_catalog};
+use flash_cli::completion::{
+    CompletionCandidateProvider, CompletionCatalog, CompletionSnapshotLimits,
+};
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 use flash_cli::config::{
     ConfigDefaults, ConfigFatalError, ConfigInvocation, ConfigLimits, ConfigPlatform,
@@ -415,6 +417,7 @@ struct SessionEvaluator {
     /// Whether the immediately preceding submission was a refused exit.
     exit_refused: bool,
     completion_enabled: bool,
+    completion_provider: CompletionCandidateProvider,
 }
 
 impl SessionEvaluator {
@@ -429,6 +432,9 @@ impl SessionEvaluator {
             pending_notice: None,
             exit_refused: false,
             completion_enabled,
+            completion_provider: CompletionCandidateProvider::new(
+                CompletionSnapshotLimits::default(),
+            ),
         }
     }
 }
@@ -436,13 +442,13 @@ impl SessionEvaluator {
 impl InteractiveEvaluator for SessionEvaluator {
     fn completion_catalog(&mut self) -> Option<CompletionCatalog> {
         Some(if self.completion_enabled {
-            live_completion_catalog(
+            self.completion_provider.snapshot(
                 self.session.registry(),
                 self.session.scope(),
                 self.session.cwd(),
                 self.session.environment(),
-                CompletionSnapshotLimits::default(),
-            )
+                &|| false,
+            )?
         } else {
             CompletionCatalog::new()
         })

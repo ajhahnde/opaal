@@ -893,6 +893,31 @@ fn live_completion_refreshes_config_repl_path_and_cwd_candidates() {
 }
 
 #[test]
+fn grammar_aware_path_completion_reaches_the_real_editor_without_submission() {
+    let cwd = unique_dir("grammar-path-completion");
+    fs::write(cwd.join("space name"), b"").unwrap();
+    fs::create_dir_all(cwd.join("scripts/nested")).unwrap();
+    fs::write(cwd.join("scripts/nested/result.fsh"), b"").unwrap();
+    let mut session = interactive(&cwd);
+    session.await_prompt(0);
+
+    for (source, candidate) in [
+        ("pwd > './spa", "space name"),
+        ("let files = glob('scripts/**/*.fs", "scripts/**/*.fsh"),
+    ] {
+        session.send(source.as_bytes());
+        let mark = session.mark();
+        session.send(TAB);
+        session.expect_from(mark, candidate);
+        let prompt_mark = session.mark();
+        session.send(CTRL_C);
+        session.await_prompt(prompt_mark);
+    }
+
+    assert!(cwd.join("space name").is_file());
+}
+
+#[test]
 fn config_can_disable_completion_before_the_first_prompt() {
     let cwd = unique_dir("completion-disabled");
     let mut session = configured(&cwd, "$completion = false\n$history = false\n", &[]);

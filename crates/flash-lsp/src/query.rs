@@ -222,8 +222,8 @@ fn completion(
             forced_external: true,
         }
         | CompletionContext::Expression
-        | CompletionContext::Variable
-        | CompletionContext::Path
+        | CompletionContext::Variable { .. }
+        | CompletionContext::Path { .. }
         | CompletionContext::None => {}
     }
 
@@ -232,7 +232,7 @@ fn completion(
         CompletionContext::Command {
             forced_external: false
         } | CompletionContext::Expression
-            | CompletionContext::Variable
+            | CompletionContext::Variable { .. }
     ) && let Some(report) = analyze(snapshot, document, &commands, control)?
         && let Some(program) = report.program()
         && let Some(module) = module_for_document(program, document)
@@ -262,9 +262,13 @@ fn completion(
                 {
                     candidates.push(CompletionCandidate::new(name.name(), name.name(), 1, 3));
                 }
-                CompletionContext::Variable if name.kind() != NameKind::Intrinsic => {
+                CompletionContext::Variable { braced } if name.kind() != NameKind::Intrinsic => {
                     candidates.push(CompletionCandidate::new(
-                        format!("${}", name.name()),
+                        if *braced {
+                            name.name().to_owned()
+                        } else {
+                            format!("${}", name.name())
+                        },
                         name.name(),
                         1,
                         if matches!(name.kind(), NameKind::Function | NameKind::ImportedFunction) {

@@ -98,7 +98,7 @@ impl LineEditor for ReedlineEditor {
             .completion
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        *completion = CompletionEngine::new(catalog);
+        completion.install_catalog(catalog);
     }
 
     fn read_line(&mut self, prompt: &EditorPrompt) -> Result<EditorEvent, EditorError> {

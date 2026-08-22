@@ -16,6 +16,7 @@ use flash_platform::{
 use flash_platform_posix::PosixPlatform;
 use flash_runtime::Environment;
 use flash_runtime::eval::FakeClock;
+use flash_runtime::glob::glob_pattern_matches;
 use flash_runtime::plan::SessionOptions;
 use flash_runtime::resolve::ExecutableProbe;
 use flash_runtime::session::{Session, SubmitError};
@@ -77,6 +78,26 @@ fn submit(session: &mut Session, source: &str) -> Result<(), SubmitError> {
             &mut Vec::new(),
         )
         .map(|_| ())
+}
+
+#[test]
+fn candidate_matching_reuses_complete_native_glob_semantics_without_io() {
+    for (pattern, candidate, expected) in [
+        ("scripts/**/*.fsh", "scripts/a.fsh", true),
+        ("scripts/**/*.fsh", "scripts/nested/a.fsh", true),
+        ("scripts/**/*.fsh", "scripts/.hidden/a.fsh", false),
+        ("scripts/[a-c]?.fsh", "scripts/b1.fsh", true),
+        ("scripts/[!a]?.fsh", "scripts/b1.fsh", true),
+        ("scripts/\\*.fsh", "scripts/*.fsh", true),
+        ("scripts/*.fsh", "scripts/.secret.fsh", false),
+    ] {
+        assert_eq!(
+            glob_pattern_matches(OsStr::new(pattern), OsStr::new(candidate)).unwrap(),
+            expected,
+            "{pattern} against {candidate}"
+        );
+    }
+    assert!(glob_pattern_matches(OsStr::new("[z-a]"), OsStr::new("z")).is_err());
 }
 
 #[test]

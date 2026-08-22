@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 #![cfg(any(target_os = "macos", target_os = "linux"))]
 
+use std::cell::Cell;
 #[cfg(target_os = "linux")]
 use std::ffi::OsString;
 use std::fs;
@@ -11,7 +12,8 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use flash_cli::completion::{
-    CompletionEngine, CompletionKind, CompletionSnapshotLimits, live_completion_catalog,
+    CompletionCandidateProvider, CompletionEngine, CompletionKind, CompletionSnapshotLimits,
+    live_completion_catalog,
 };
 use flash_runtime::builtin::standard_registry;
 use flash_runtime::{BindingMutability, Environment, ScopeStack, Value};
@@ -152,4 +154,94 @@ fn crossing_a_snapshot_ceiling_discards_the_host_family() {
         CompletionSnapshotLimits::new(1, 100),
     ));
     assert!(directory_capped.complete("^alpha", 6).is_empty());
+}
+
+#[test]
+fn recursive_snapshots_are_bounded_exact_and_do_not_follow_symlinks() {
+    let fixture = Fixture::new("recursive");
+    let cwd = fixture.path().join("work");
+    fs::create_dir_all(cwd.join("scripts/nested/deep")).unwrap();
+    fs::create_dir_all(cwd.join(".hidden-dir")).unwrap();
+    fs::write(cwd.join("scripts/a.fsh"), b"").unwrap();
+    fs::write(cwd.join("scripts/nested/b.fsh"), b"").unwrap();
+    fs::write(cwd.join("scripts/nested/deep/c.fsh"), b"").unwrap();
+    fs::write(cwd.join("space name"), b"").unwrap();
+    fs::write(cwd.join("quote'name"), b"").unwrap();
+    fs::write(cwd.join("🚀.fsh"), b"").unwrap();
+    fs::write(cwd.join(".secret"), b"").unwrap();
+    #[cfg(unix)]
+    std::os::unix::fs::symlink("scripts", cwd.join("linked")).unwrap();
+
+    let catalog = live_completion_catalog(
+        &standard_registry(),
+        &ScopeStack::new(),
+        &cwd,
+        &Environment::new(),
+        CompletionSnapshotLimits::default(),
+    );
+    let engine = CompletionEngine::new(catalog);
+
+    assert_eq!(engine.complete("cat 'space", 10)[0].value(), "'space name'");
+    assert_eq!(
+        engine.complete("cat 'quote", 10)[0].value(),
+        "'quote'\\''name'"
+    );
+    let unicode = "cat './🚀";
+    assert_eq!(
+        engine.complete(unicode, unicode.len())[0].value(),
+        "'./🚀.fsh'"
+    );
+    assert_eq!(
+        engine.complete("cat scripts/nested/d", 20)[0].value(),
+        "scripts/nested/deep/"
+    );
+    assert_eq!(engine.complete("cat './.se", 10)[0].value(), "'./.secret'");
+    assert!(engine.complete("cat linked/a", 12).is_empty());
+}
+
+#[test]
+fn provider_generations_reject_stale_results_and_collection_can_cancel() {
+    let fixture = Fixture::new("generation");
+    let cwd = fixture.path().join("work");
+    fs::create_dir_all(&cwd).unwrap();
+    fs::write(cwd.join("first"), b"").unwrap();
+    let registry = standard_registry();
+    let scope = ScopeStack::new();
+    let environment = Environment::new();
+    let mut provider = CompletionCandidateProvider::default();
+
+    let first = provider
+        .snapshot(&registry, &scope, &cwd, &environment, &|| false)
+        .unwrap();
+    fs::write(cwd.join("second"), b"").unwrap();
+    let second = provider
+        .snapshot(&registry, &scope, &cwd, &environment, &|| false)
+        .unwrap();
+    assert!(second.generation() > first.generation());
+
+    let mut engine = CompletionEngine::new(second);
+    assert!(!engine.install_catalog(first));
+    assert_eq!(engine.complete("cat ./se", 8)[0].value(), "./second");
+
+    let checks = Cell::new(0_u8);
+    assert!(
+        provider
+            .snapshot(&registry, &scope, &cwd, &environment, &|| {
+                checks.set(checks.get().saturating_add(1));
+                checks.get() > 2
+            })
+            .is_none()
+    );
+
+    let vanished = fixture.path().join("vanished");
+    fs::create_dir(&vanished).unwrap();
+    fs::remove_dir(&vanished).unwrap();
+    let empty = provider
+        .snapshot(&registry, &scope, &vanished, &environment, &|| false)
+        .unwrap();
+    assert!(
+        CompletionEngine::new(empty)
+            .complete("cat ./", 6)
+            .is_empty()
+    );
 }

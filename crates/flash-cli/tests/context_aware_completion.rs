@@ -309,3 +309,133 @@ fn external_forcing_and_path_contexts_use_only_their_host_snapshots() {
         ["./docs/", "./downloads/"]
     );
 }
+
+#[test]
+fn path_completion_renders_reversible_bare_and_quoted_source() {
+    let catalog = CompletionCatalog::new().with_paths([
+        "./two words",
+        "quote'name",
+        "double\"name",
+        "unicode/🚀.fsh",
+        "line\nbreak",
+    ]);
+    let engine = CompletionEngine::new(catalog);
+
+    assert_eq!(
+        engine
+            .complete("cat ./two", 9)
+            .iter()
+            .map(|completion| completion.value())
+            .collect::<Vec<_>>(),
+        ["./two\\ words"]
+    );
+    assert_eq!(
+        engine.complete("cat 'quote", 10)[0].value(),
+        "'quote'\\''name'"
+    );
+    assert_eq!(
+        engine.complete("cat \"double", 11)[0].value(),
+        "\"double\\\"name\""
+    );
+    assert_eq!(
+        engine.complete("cat unicode/", 12)[0].value(),
+        "unicode/🚀.fsh"
+    );
+    assert_eq!(
+        engine.complete("cat 'line", 9)[0].value(),
+        "\"line\\nbreak\""
+    );
+}
+
+#[test]
+fn wildcard_completion_preserves_the_edited_pattern() {
+    let catalog = CompletionCatalog::new().with_paths([
+        "scripts/a.fsh",
+        "scripts/nested/b.fsh",
+        "scripts/nested/deep/c.txt",
+        "scripts/.hidden.fsh",
+        "scripts/*.fsh",
+        "scripts/alpha.fsh",
+        "scripts/quo'te.fsh",
+    ]);
+    let engine = CompletionEngine::new(catalog);
+    let source = "let files = glob('scripts/**/*.fs')";
+    let cursor = source.find("')").unwrap();
+    let completed = engine.complete(source, cursor);
+
+    assert_eq!(completed.len(), 1);
+    assert_eq!(completed[0].value(), "'scripts/**/*.fsh'");
+    assert_eq!(completed[0].replacement(), 17..34);
+    assert!(engine.complete("cat scripts/**/.h", 18).is_empty());
+
+    let escaped_source = "let files = glob('scripts/\\*.fs')";
+    let escaped_cursor = escaped_source.find("')").unwrap();
+    assert_eq!(
+        engine.complete(escaped_source, escaped_cursor)[0].value(),
+        "'scripts/\\*.fsh'"
+    );
+
+    for (source, expected) in [
+        (
+            "let files = glob('scripts/[a-c]lpha.fs')",
+            "'scripts/[a-c]lpha.fsh'",
+        ),
+        ("let files = glob('scripts/?.fs')", "'scripts/?.fsh'"),
+        (
+            "let files = glob('scripts/.hidden.fs')",
+            "'scripts/.hidden.fsh'",
+        ),
+        ("let files = glob('scripts/quo')", "\"scripts/quo'te.fsh\""),
+    ] {
+        let cursor = source.find("')").unwrap();
+        assert!(
+            engine
+                .complete(source, cursor)
+                .iter()
+                .any(|completion| completion.value() == expected),
+            "missing {expected} for {source}"
+        );
+    }
+}
+
+#[test]
+fn braced_variables_and_interpolated_path_tails_complete_without_evaluation() {
+    let registry = CommandRegistry::new();
+    let mut scope = ScopeStack::new();
+    scope
+        .declare("native", BindingMutability::Immutable, Value::Null)
+        .unwrap();
+    let catalog = CompletionCatalog::from_runtime(&registry, &scope).with_paths([
+        "first",
+        "nested/file",
+        "other/file",
+    ]);
+    let engine = CompletionEngine::new(catalog);
+
+    assert_eq!(engine.complete("cat ${na}", 8)[0].value(), "native");
+    assert_eq!(
+        engine
+            .complete("cat $dir/fi", 11)
+            .iter()
+            .map(|completion| completion.value())
+            .collect::<Vec<_>>(),
+        ["/file", "/first"]
+    );
+    assert_eq!(
+        engine
+            .complete("cat $dir/nested/fi", 18)
+            .iter()
+            .map(|completion| completion.value())
+            .collect::<Vec<_>>(),
+        ["/nested/file"]
+    );
+
+    let quoted = "cat \"${dir}/fi\"";
+    let cursor = quoted.rfind('"').unwrap();
+    assert!(
+        engine
+            .complete(quoted, cursor)
+            .iter()
+            .any(|completion| completion.value() == "/first\"")
+    );
+}

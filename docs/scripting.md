@@ -176,11 +176,15 @@ script, command, checker, formatter, help, or version modes.
 
 Completion candidates refresh before every prompt from the committed command
 registry, visible lexical scope, logical working directory, child `PATH`, and
-the executable and directory entries visible in bounded host snapshots. This
-makes config functions, later definitions, cwd changes, exports, and `PATH`
-changes visible without performing environment or filesystem I/O during a Tab
-keypress. Native names that are not UTF-8 and path spellings that would require
-quoted completion are omitted.
+the executable and recursively discovered path entries visible in bounded host
+snapshots. This makes config functions, later definitions, cwd changes,
+exports, and `PATH` changes visible without performing environment or
+filesystem I/O during a Tab keypress. Path completion uses Flash token spans
+for bare, single-quoted, double-quoted, interpolated, argument, redirection,
+executable, and `glob(...)` positions. It inserts reversible escapes, preserves
+wildcard pattern spelling, and never expands or executes the submitted source.
+Native names that cannot be represented exactly in the UTF-8 source buffer are
+omitted rather than converted lossily.
 
 ## Checking and formatting without execution
 

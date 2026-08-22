@@ -861,12 +861,21 @@ the CLI `--no-history` policy remains an unconditional override.
 
 At each prompt boundary the interactive evaluator snapshots the live registry
 and lexical scope, then collects executable names from the child `PATH` and
-immediate path candidates from the logical cwd. Collection is outside the
-keypress callback and is bounded to 256 `PATH` directories and 4,096 entries
-per host candidate family. Crossing a ceiling discards that family for the
-prompt, preserving deterministic results instead of retaining a host-ordered
-prefix. Reedline swaps the resulting immutable engine before it starts reading
-the next edit.
+recursive path candidates from the logical cwd. The cancellable collector is
+outside the keypress callback and is bounded to 256 directories and 4,096
+entries per host candidate family. It does not follow directory symlinks and
+omits native paths that have no exact UTF-8 source representation. Crossing a
+ceiling discards that family for the prompt, preserving deterministic results
+instead of retaining a host-ordered prefix. Each completed snapshot has a
+monotonic generation, and the editor rejects a stale generation before it can
+replace the current immutable engine.
+
+Path replacement remains syntax-owned. The ordinary lossless token stream
+provides quote mode, interpolation boundary, grammar role, and exact UTF-8 byte
+span. Semantic matching consumes the same wildcard component rules as the
+explicit `glob(...)` runtime, while rendering produces reversible bare or
+quoted Flash source. Completion therefore observes filesystem candidates
+without expanding an argument or evaluating the edit buffer.
 
 The config-file and history backends are compile-time separated from the Redox
 editor path. The completion catalog interface is shared, but the current Redox

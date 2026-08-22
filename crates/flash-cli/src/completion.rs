@@ -1,18 +1,19 @@
 //! Editor-neutral, parser-aware completion over immutable candidate snapshots.
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::ops::Range;
 use std::os::unix::fs::PermissionsExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use flash_runtime::command::{CommandClassification, CommandRegistry};
+use flash_runtime::glob::glob_pattern_matches;
 use flash_runtime::intrinsic::{DynamicBinding, ExpressionIntrinsic};
 use flash_runtime::{Environment, ScopeStack};
 use flash_syntax::{
-    CompletionContext, CompletionTarget, ParseOutcome, SourceFile, SourceId, completion_target,
-    parse,
+    CompletionContext, CompletionTarget, ParseOutcome, PathCompletionStyle, SourceFile, SourceId,
+    completion_target, parse,
 };
 
 /// The semantic source of one completion candidate.
@@ -103,6 +104,7 @@ impl Completion {
 /// Immutable candidates used by [`CompletionEngine`].
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct CompletionCatalog {
+    generation: Option<u64>,
     intrinsics: BTreeSet<String>,
     internal: BTreeMap<String, BTreeSet<String>>,
     functions: BTreeSet<String>,
@@ -157,6 +159,7 @@ impl CompletionCatalog {
             .map(str::to_owned)
             .collect();
         Self {
+            generation: None,
             intrinsics,
             internal,
             functions,
@@ -182,6 +185,65 @@ impl CompletionCatalog {
         self.paths = paths.into_iter().map(Into::into).collect();
         self
     }
+
+    /// Host-snapshot generation, absent for manually assembled catalogs.
+    #[must_use]
+    pub const fn generation(&self) -> Option<u64> {
+        self.generation
+    }
+}
+
+/// Prompt-boundary host collector with monotonic snapshot identity.
+#[derive(Clone, Debug)]
+pub struct CompletionCandidateProvider {
+    generation: u64,
+    limits: CompletionSnapshotLimits,
+}
+
+impl CompletionCandidateProvider {
+    #[must_use]
+    pub const fn new(limits: CompletionSnapshotLimits) -> Self {
+        Self {
+            generation: 0,
+            limits,
+        }
+    }
+
+    /// Collects one bounded snapshot, or returns `None` when cancelled.
+    pub fn snapshot(
+        &mut self,
+        registry: &CommandRegistry,
+        scope: &ScopeStack,
+        cwd: &Path,
+        environment: &Environment,
+        is_cancelled: &dyn Fn() -> bool,
+    ) -> Option<CompletionCatalog> {
+        if is_cancelled() {
+            return None;
+        }
+        self.generation = self.generation.checked_add(1)?;
+        let external = match external_commands(environment, self.limits, is_cancelled) {
+            Collection::Cancelled => return None,
+            Collection::Exceeded => BTreeSet::new(),
+            Collection::Values(values) => values,
+        };
+        let paths = match cwd_paths(cwd, self.limits, is_cancelled) {
+            Collection::Cancelled => return None,
+            Collection::Exceeded => BTreeSet::new(),
+            Collection::Values(values) => values,
+        };
+        let mut catalog = CompletionCatalog::from_runtime(registry, scope)
+            .with_external_commands(external)
+            .with_paths(paths);
+        catalog.generation = Some(self.generation);
+        Some(catalog)
+    }
+}
+
+impl Default for CompletionCandidateProvider {
+    fn default() -> Self {
+        Self::new(CompletionSnapshotLimits::default())
+    }
 }
 
 /// Builds one immutable prompt-boundary catalog from live session and host state.
@@ -196,38 +258,51 @@ pub fn live_completion_catalog(
     environment: &Environment,
     limits: CompletionSnapshotLimits,
 ) -> CompletionCatalog {
-    CompletionCatalog::from_runtime(registry, scope)
-        .with_external_commands(external_commands(environment, limits))
-        .with_paths(cwd_paths(cwd, limits))
+    CompletionCandidateProvider::new(limits)
+        .snapshot(registry, scope, cwd, environment, &|| false)
+        .expect("the default completion snapshot is never cancelled")
+}
+
+enum Collection<T> {
+    Cancelled,
+    Exceeded,
+    Values(T),
 }
 
 fn external_commands(
     environment: &Environment,
     limits: CompletionSnapshotLimits,
-) -> BTreeSet<String> {
+    is_cancelled: &dyn Fn() -> bool,
+) -> Collection<BTreeSet<String>> {
     let Some(path) = environment.get("PATH") else {
-        return BTreeSet::new();
+        return Collection::Values(BTreeSet::new());
     };
     let directories: Vec<_> = std::env::split_paths(path)
         .take(limits.max_path_directories.saturating_add(1))
         .collect();
     if directories.len() > limits.max_path_directories {
-        return BTreeSet::new();
+        return Collection::Exceeded;
     }
 
     let mut observed = 0_usize;
     let mut commands = BTreeSet::new();
     for directory in directories {
+        if is_cancelled() {
+            return Collection::Cancelled;
+        }
         let Ok(entries) = fs::read_dir(directory) else {
             continue;
         };
         for entry in entries {
+            if is_cancelled() {
+                return Collection::Cancelled;
+            }
             let Ok(entry) = entry else {
                 continue;
             };
             observed = observed.saturating_add(1);
             if observed > limits.max_entries {
-                return BTreeSet::new();
+                return Collection::Exceeded;
             }
             let Some(name) = insertable_native_name(entry.file_name()) else {
                 continue;
@@ -239,33 +314,71 @@ fn external_commands(
             }
         }
     }
-    commands
+    Collection::Values(commands)
 }
 
-fn cwd_paths(cwd: &Path, limits: CompletionSnapshotLimits) -> BTreeSet<String> {
-    let Ok(entries) = fs::read_dir(cwd) else {
-        return BTreeSet::new();
-    };
+fn cwd_paths(
+    cwd: &Path,
+    limits: CompletionSnapshotLimits,
+    is_cancelled: &dyn Fn() -> bool,
+) -> Collection<BTreeSet<String>> {
     let mut observed = 0_usize;
+    let mut opened = 0_usize;
     let mut paths = BTreeSet::new();
-    for entry in entries {
-        let Ok(entry) = entry else {
+    let mut pending = vec![PathBuf::new()];
+    while let Some(relative_directory) = pending.pop() {
+        if is_cancelled() {
+            return Collection::Cancelled;
+        }
+        opened = opened.saturating_add(1);
+        if opened > limits.max_path_directories {
+            return Collection::Exceeded;
+        }
+        let Ok(entries) = fs::read_dir(cwd.join(&relative_directory)) else {
             continue;
         };
-        observed = observed.saturating_add(1);
-        if observed > limits.max_entries {
-            return BTreeSet::new();
+        let mut children = Vec::new();
+        for entry in entries {
+            if is_cancelled() {
+                return Collection::Cancelled;
+            }
+            let Ok(entry) = entry else {
+                continue;
+            };
+            observed = observed.saturating_add(1);
+            if observed > limits.max_entries {
+                return Collection::Exceeded;
+            }
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            let mut relative = relative_directory.clone();
+            relative.push(entry.file_name());
+            if file_type.is_dir() {
+                children.push(relative.clone());
+            }
+            let Some(mut spelling) = relative.into_os_string().into_string().ok() else {
+                continue;
+            };
+            if file_type.is_dir() {
+                spelling.push('/');
+            }
+            paths.insert(spelling.clone());
+            paths.insert(format!("./{spelling}"));
+            if cwd.is_absolute() {
+                let absolute = cwd.join(spelling.trim_end_matches('/'));
+                if let Ok(mut absolute) = absolute.into_os_string().into_string() {
+                    if file_type.is_dir() {
+                        absolute.push('/');
+                    }
+                    paths.insert(absolute);
+                }
+            }
         }
-        let Some(mut name) = insertable_native_name(entry.file_name()) else {
-            continue;
-        };
-        if fs::metadata(entry.path()).is_ok_and(|metadata| metadata.is_dir()) {
-            name.push('/');
-        }
-        paths.insert(name.clone());
-        paths.insert(format!("./{name}"));
+        children.sort();
+        pending.extend(children.into_iter().rev());
     }
-    paths
+    Collection::Values(paths)
 }
 
 fn insertable_native_name(value: OsString) -> Option<String> {
@@ -332,6 +445,18 @@ impl CompletionEngine {
     #[must_use]
     pub const fn new(catalog: CompletionCatalog) -> Self {
         Self { catalog }
+    }
+
+    /// Installs an unversioned catalog or a strictly newer host snapshot.
+    pub fn install_catalog(&mut self, catalog: CompletionCatalog) -> bool {
+        if matches!(
+            (self.catalog.generation(), catalog.generation()),
+            (Some(current), Some(next)) if next <= current
+        ) {
+            return false;
+        }
+        self.catalog = catalog;
+        true
     }
 
     /// Completes the source at one UTF-8 byte cursor.
@@ -430,11 +555,11 @@ impl CompletionEngine {
                     false,
                 );
             }
-            CompletionContext::Variable => add(
+            CompletionContext::Variable { braced } => add(
                 &self.catalog.variables,
                 CompletionKind::Variable,
                 target.prefix().strip_prefix('$').unwrap_or(target.prefix()),
-                true,
+                !*braced,
                 false,
             ),
             CompletionContext::Flag { command } => {
@@ -442,15 +567,229 @@ impl CompletionEngine {
                     add(flags, CompletionKind::Flag, target.prefix(), false, true);
                 }
             }
-            CompletionContext::Path => add(
-                &self.catalog.paths,
-                CompletionKind::Path,
-                target.prefix(),
-                false,
-                false,
-            ),
+            CompletionContext::Path {
+                style,
+                glob_pattern,
+                interpolated,
+            } => {
+                for value in path_completions(
+                    &self.catalog.paths,
+                    target.prefix(),
+                    *glob_pattern,
+                    *interpolated,
+                ) {
+                    let replacement_value = render_path(&value, *style, *glob_pattern);
+                    if seen.insert(replacement_value.clone()) {
+                        completions.push(Completion {
+                            value: replacement_value,
+                            replacement: replacement.clone(),
+                            kind: CompletionKind::Path,
+                            append_whitespace: false,
+                        });
+                    }
+                }
+            }
             CompletionContext::None => {}
         }
         completions
     }
+}
+
+fn path_completions(
+    paths: &BTreeSet<String>,
+    prefix: &str,
+    glob_pattern: bool,
+    interpolated: bool,
+) -> BTreeSet<String> {
+    if interpolated {
+        let (separator, needle) = prefix
+            .strip_prefix('/')
+            .map_or(("", prefix), |needle| ("/", needle));
+        return paths
+            .iter()
+            .flat_map(|path| {
+                let path = path.strip_prefix("./").unwrap_or(path);
+                std::iter::once(path).chain(
+                    path.match_indices('/')
+                        .map(|(offset, _)| &path[offset + 1..]),
+                )
+            })
+            .filter(|path| path.starts_with(needle))
+            .map(|path| format!("{separator}{path}"))
+            .collect();
+    }
+    let wildcard = contains_unescaped_pattern(prefix);
+    if !wildcard {
+        if glob_pattern && prefix.contains('\\') {
+            let literal = unescape_pattern_literal(prefix);
+            return paths
+                .iter()
+                .filter(|path| path.starts_with(&literal))
+                .map(|path| format!("{prefix}{}", &path[literal.len()..]))
+                .collect();
+        }
+        return paths
+            .iter()
+            .filter(|path| path.starts_with(prefix))
+            .cloned()
+            .collect();
+    }
+
+    let (directory, component) = prefix.rsplit_once('/').map_or(("", prefix), |(dir, leaf)| {
+        let boundary = dir.len() + 1;
+        (&prefix[..boundary], leaf)
+    });
+    let tail = literal_pattern_tail(component);
+    let query = format!("{prefix}*");
+    paths
+        .iter()
+        .filter(|path| {
+            glob_pattern_matches(OsStr::new(&query), OsStr::new(path.trim_end_matches('/')))
+                .unwrap_or(false)
+        })
+        .filter_map(|path| {
+            let name = path.trim_end_matches('/').rsplit('/').next()?;
+            let consumed = if tail.is_empty() {
+                name.len()
+            } else {
+                name.rfind(&tail)? + tail.len()
+            };
+            let suffix = &name[consumed..];
+            let directory_suffix = if path.ends_with('/') { "/" } else { "" };
+            let value = format!("{directory}{component}{suffix}{directory_suffix}");
+            (value != prefix || glob_pattern).then_some(value)
+        })
+        .collect()
+}
+
+fn unescape_pattern_literal(pattern: &str) -> String {
+    let mut literal = String::new();
+    let mut characters = pattern.chars();
+    while let Some(character) = characters.next() {
+        if character == '\\' {
+            if let Some(escaped) = characters.next() {
+                literal.push(escaped);
+            }
+        } else {
+            literal.push(character);
+        }
+    }
+    literal
+}
+
+fn contains_unescaped_pattern(value: &str) -> bool {
+    let mut escaped = false;
+    for character in value.chars() {
+        if escaped {
+            escaped = false;
+        } else if character == '\\' {
+            escaped = true;
+        } else if matches!(character, '*' | '?' | '[') {
+            return true;
+        }
+    }
+    false
+}
+
+fn literal_pattern_tail(component: &str) -> String {
+    let mut tail = String::new();
+    let mut escaped = false;
+    let mut in_class = false;
+    for character in component.chars() {
+        if escaped {
+            tail.push(character);
+            escaped = false;
+        } else {
+            match character {
+                '\\' => escaped = true,
+                '[' => {
+                    in_class = true;
+                    tail.clear();
+                }
+                ']' if in_class => {
+                    in_class = false;
+                    tail.clear();
+                }
+                '*' | '?' if !in_class => tail.clear(),
+                _ if !in_class => tail.push(character),
+                _ => {}
+            }
+        }
+    }
+    tail
+}
+
+fn render_path(value: &str, style: PathCompletionStyle, expression_literal: bool) -> String {
+    if (value.chars().any(char::is_control)
+        || (expression_literal
+            && style == PathCompletionStyle::SingleQuoted
+            && value.contains('\'')))
+        && !matches!(
+            style,
+            PathCompletionStyle::DoubleQuoted | PathCompletionStyle::DoubleQuotedFragment
+        )
+    {
+        return format!("\"{}\"", render_double_path(value));
+    }
+    match style {
+        PathCompletionStyle::Bare => render_bare_path(value),
+        PathCompletionStyle::SingleQuoted => {
+            format!("'{}'", value.replace('\'', "'\\''"))
+        }
+        PathCompletionStyle::DoubleQuoted => format!("\"{}\"", render_double_path(value)),
+        PathCompletionStyle::DoubleQuotedFragment => {
+            format!("{}\"", render_double_path(value))
+        }
+    }
+}
+
+fn render_bare_path(value: &str) -> String {
+    let mut rendered = String::new();
+    for character in value.chars() {
+        if character.is_whitespace()
+            || character.is_control()
+            || matches!(
+                character,
+                '|' | '&'
+                    | ';'
+                    | '<'
+                    | '>'
+                    | '('
+                    | ')'
+                    | '{'
+                    | '}'
+                    | '['
+                    | ']'
+                    | '$'
+                    | '\''
+                    | '"'
+                    | '\\'
+                    | '#'
+            )
+        {
+            rendered.push('\\');
+        }
+        rendered.push(character);
+    }
+    rendered
+}
+
+fn render_double_path(value: &str) -> String {
+    let mut rendered = String::new();
+    for character in value.chars() {
+        match character {
+            '\\' => rendered.push_str("\\\\"),
+            '"' => rendered.push_str("\\\""),
+            '$' => rendered.push_str("\\$"),
+            '\n' => rendered.push_str("\\n"),
+            '\r' => rendered.push_str("\\r"),
+            '\t' => rendered.push_str("\\t"),
+            character if character.is_control() => {
+                use std::fmt::Write;
+                let _ = write!(rendered, "\\u{{{:X}}}", u32::from(character));
+            }
+            character => rendered.push(character),
+        }
+    }
+    rendered
 }
