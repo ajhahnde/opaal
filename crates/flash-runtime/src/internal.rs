@@ -140,6 +140,7 @@ pub fn execute_internal_suffix(
     for stage in plan.stages().iter().skip(start) {
         let PlannedResolution::Internal { canonical_name, .. } = stage.resolution() else {
             return Err(RuntimeError::new(
+                // flash-v1-boundary(executor-invariant): Segmentation keeps external stages outside internal suffixes.
                 RuntimeErrorKind::Unsupported {
                     feature: "an external stage in the internal pipeline executor",
                 },
@@ -231,6 +232,7 @@ pub(crate) fn execute_stage(
         "save" => execute_save(stage, input, platform, cwd),
         "help" => execute_help(stage, input),
         _ => Err(RuntimeError::new(
+            // flash-v1-boundary(executor-invariant): Registry planning admits only the complete standard command set.
             RuntimeErrorKind::Unsupported {
                 feature: "this internal command in the live structured executor",
             },

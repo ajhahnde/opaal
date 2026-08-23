@@ -715,7 +715,7 @@ A concrete adapter implements the abstract platform capability contract for one 
 
 [`flash-platform-posix`](../crates/flash-platform-posix/src/lib.rs) provides the Unix-like process, descriptor, filesystem, signal, and terminal routes used by the current executable. Its behavior on Linux or macOS is host evidence, not automatic FlashOS qualification.
 
-[`flash-platform-flashos`](../crates/flash-platform-flashos/src/lib.rs) is the dedicated FlashOS adapter. It composes the 38 classified existing Rust and `relibc` routes behind the portable contract and owns the shimmed standard-directory policy: absolute native `HOME` and XDG roots are preserved, while missing or relative values receive deterministic FlashOS home, configuration, cache, and state fallbacks. These target details do not enter `flash-runtime`.
+[`flash-platform-flashos`](../crates/flash-platform-flashos/src/lib.rs) is the dedicated FlashOS adapter. It composes the 41 classified existing Rust and `relibc` routes behind the portable contract and owns the shimmed standard-directory policy: absolute native `HOME` and XDG roots are preserved, while missing or relative values receive deterministic FlashOS home, configuration, cache, and state fallbacks. These target details do not enter `flash-runtime`.
 
 The Redox-target `fsh` dependency graph compiles the FlashOS adapter, but the executable does not select it yet. Its public capability set remains empty until later target-runtime qualification enables individual groups. This keeps implementation, selection, and behavioral support claims as separate reviewable steps.
 

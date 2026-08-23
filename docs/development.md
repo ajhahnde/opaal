@@ -189,7 +189,7 @@ qualification boundary from the repository root:
 python3 ci/check_flashos_capability_classification.py
 ```
 
-The current classification records 38 native operations and one
+The current classification records 41 native operations and one
 three-operation FlashOS policy shim for standard-directory selection. No
 operation is deliberately unsupported or requires kernel work. These verdicts
 select implementation routes; every capability remains pending target-runtime
@@ -244,10 +244,19 @@ cargo test -p flash-lsp --locked
 Before completing the change, run the full host gate:
 
 ```bash
+python3 ../../ci/check_flash_conformance.py
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace --locked
 ```
+
+The machine-readable
+[`conformance/v1.toml`](../conformance/v1.toml) inventory maps each frozen
+host-v1 semantic family to enabled workspace tests. The checker also verifies
+CI wiring, the complete platform-contract list, and the classification of
+intentional runtime refusals and executor invariants. The locked workspace test
+run executes every listed owner; neither command substitutes for target
+compilation or FlashOS runtime qualification.
 
 The repository helper exposes the same complete host gate from the FlashOS root:
 

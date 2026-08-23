@@ -70,6 +70,7 @@ pub fn execute_foreground(
 
     if plan.stages().len() != 1 {
         return Err(RuntimeError::new(
+            // flash-v1-boundary(embedding-refusal): This narrow API accepts one stage; the pipeline API owns multiple stages.
             RuntimeErrorKind::Unsupported {
                 feature: "a foreground pipeline with more than one stage",
             },
@@ -1149,6 +1150,7 @@ pub(crate) fn start_mixed_pipeline(
     preflight(plan)?;
     let topology = plan.mixed_topology().ok_or_else(|| {
         RuntimeError::new(
+            // flash-v1-boundary(executor-invariant): Only a classified mixed topology enters the mixed executor.
             RuntimeErrorKind::Unsupported {
                 feature: "a non-mixed plan in the mixed pipeline executor",
             },
@@ -1343,6 +1345,7 @@ pub(crate) fn start_mixed_pipeline(
 fn validate_preflighted_external_plan(plan: &ExecutionPlan) -> Result<(), RuntimeError> {
     if plan.stages().is_empty() {
         return Err(RuntimeError::new(
+            // flash-v1-boundary(executor-invariant): Parsed pipelines always contain at least one stage.
             RuntimeErrorKind::Unsupported {
                 feature: "an empty foreground pipeline",
             },
@@ -1358,6 +1361,7 @@ fn validate_preflighted_external_plan(plan: &ExecutionPlan) -> Result<(), Runtim
 fn validate_external_stage(stage: &crate::plan::PlannedStage) -> Result<(), RuntimeError> {
     if !matches!(stage.resolution(), PlannedResolution::External { .. }) {
         return Err(RuntimeError::new(
+            // flash-v1-boundary(executor-invariant): Internal stages use the structured or mixed executor.
             RuntimeErrorKind::Unsupported {
                 feature: "foreground internal-command execution",
             },

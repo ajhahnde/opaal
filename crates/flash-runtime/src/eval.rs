@@ -414,7 +414,7 @@ pub enum RuntimeErrorKind {
     RestrictedStartup { capability: RestrictedCapability },
     /// Evaluation charged more steps than its resource budget allowed.
     ResourceBudgetExceeded,
-    /// A language form deferred to a later evaluation slice.
+    /// An operation deliberately unavailable through the selected boundary.
     Unsupported { feature: &'static str },
     /// An integer literal outside the signed 64-bit range.
     IntegerLiteralOverflow,
@@ -789,7 +789,9 @@ impl fmt::Display for RuntimeErrorKind {
             Self::ResourceBudgetExceeded => {
                 formatter.write_str("evaluation exceeded its resource budget")
             }
-            Self::Unsupported { feature } => write!(formatter, "{feature} is not yet supported"),
+            Self::Unsupported { feature } => {
+                write!(formatter, "{feature} is not supported by this boundary")
+            }
             Self::IntegerLiteralOverflow => formatter.write_str("integer literal is out of range"),
             Self::FloatLiteralOverflow => formatter.write_str("float literal is not finite"),
             Self::DuplicateRecordKey { key } => {
@@ -1518,6 +1520,7 @@ impl EvaluationHost for PureEvaluationHost<'_> {
         &mut self,
         _path: &Path,
     ) -> Result<Box<dyn DirectoryStream>, RuntimeErrorKind> {
+        // flash-v1-boundary(embedding-refusal): Pure evaluator entry points have no filesystem host.
         Err(RuntimeErrorKind::ExecutionUnsupported)
     }
 
@@ -1529,6 +1532,7 @@ impl EvaluationHost for PureEvaluationHost<'_> {
     ) -> Result<Status, Abort> {
         let _ = (&context.binding_types, &context.cancel);
         Err(Abort::Error(
+            // flash-v1-boundary(embedding-refusal): Pure evaluator entry points cannot execute jobs.
             RuntimeError::new(RuntimeErrorKind::ExecutionUnsupported, chain.span())
                 .with_source(context.source),
         ))
@@ -1544,10 +1548,16 @@ impl EvaluationHost for PureEvaluationHost<'_> {
     ) -> Result<CapturedChain, Abort> {
         let _ = (&context.binding_types, &context.cancel);
         let kind = match position {
-            CapturePosition::Expression => RuntimeErrorKind::ExecutionUnsupported,
-            CapturePosition::Word => RuntimeErrorKind::Unsupported {
-                feature: "command substitution in a word",
-            },
+            CapturePosition::Expression => {
+                // flash-v1-boundary(embedding-refusal): Pure evaluator entry points cannot capture jobs.
+                RuntimeErrorKind::ExecutionUnsupported
+            }
+            CapturePosition::Word => {
+                // flash-v1-boundary(embedding-refusal): Pure word expansion has no session capture host.
+                RuntimeErrorKind::Unsupported {
+                    feature: "command substitution in a word",
+                }
+            }
         };
         Err(Abort::Error(
             RuntimeError::new(kind, span).with_source(context.source),
@@ -2050,6 +2060,7 @@ impl Evaluator<'_> {
         self.charge(span)?;
         match statement.kind() {
             StatementKind::Import(_) | StatementKind::ModuleExport(_) => {
+                // flash-v1-boundary(embedding-refusal): The module-program loader owns import and export execution.
                 Err(self.error(RuntimeErrorKind::ExecutionUnsupported, span))
             }
             StatementKind::Declaration(declaration) => {
@@ -2085,6 +2096,7 @@ impl Evaluator<'_> {
                     ));
                 }
                 if job.background_span.is_some() {
+                    // flash-v1-boundary(embedding-refusal): The session job coordinator owns background launch.
                     return Err(self.error(RuntimeErrorKind::ExecutionUnsupported, span));
                 }
                 let value = if self.host.manages_foreground_jobs()
@@ -2610,7 +2622,10 @@ impl Evaluator<'_> {
                 let name = self.text(variable.name.span());
                 self.binding_value(name, scope, span)
             }
-            ExpressionKind::Symbol(_) => Err(self.unsupported("bare symbol", span)),
+            ExpressionKind::Symbol(_) => {
+                // flash-v1-boundary(carrier-refusal): Bare symbols are patterns and names rather than runtime values.
+                Err(self.unsupported("bare symbol", span))
+            }
             ExpressionKind::List(elements) => {
                 let mut values = Vec::with_capacity(elements.len());
                 for element in elements {
@@ -2974,6 +2989,7 @@ impl Evaluator<'_> {
     }
 
     fn unsupported(&self, feature: &'static str, span: Span) -> Abort {
+        // flash-v1-boundary(carrier-refusal): Callers use this for explicit value and carrier refusals.
         self.error(RuntimeErrorKind::Unsupported { feature }, span)
     }
 

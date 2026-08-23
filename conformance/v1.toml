@@ -1,0 +1,153 @@
+schema_version = 1
+language_major = 1
+workspace_test_command = "cargo test --workspace --locked"
+ci_workflow = ".github/workflows/ci.yml"
+platform_contracts = [
+  "ci/check_flashos_platform.py",
+  "ci/check_flashos_capabilities.py",
+  "ci/check_flashos_operation_map.py",
+  "ci/check_flashos_capability_classification.py",
+]
+config_settings = [
+  "pipefail",
+  "capture_limit",
+  "completion",
+  "history",
+  "prompt",
+  "continuation_prompt",
+]
+
+# This inventory identifies the executable owners of Flash's host v1 contract.
+# The complete locked workspace suite runs every owner; target compilation,
+# image integration, and FlashOS runtime qualification remain separate gates.
+# Config settings are intentionally a small, closed personalization and policy
+# surface; ordinary startup bindings, functions, and exports are not settings.
+
+[[family]]
+id = "syntax-values-and-expressions"
+summary = "Grammar, values, interpolation, intrinsics, and structured error syntax share one source model."
+layers = ["syntax", "runtime"]
+tests = [
+  "crates/flash-syntax/tests/parser.rs::structured_error_statements_retain_blocks_bindings_and_operands",
+  "crates/flash-runtime/tests/evaluation.rs::double_quoted_values_interpolate_scalars_and_record_keys",
+]
+
+[[family]]
+id = "effectful-language-composition"
+summary = "Commands, capture, conditions, loops, match, callables, and modules compose through the live session."
+layers = ["runtime", "cli"]
+tests = [
+  "crates/flash-runtime/tests/session.rs::nested_commands_compose_through_conditions_loops_match_and_grouping",
+  "crates/flash-cli/tests/e2e.rs::recursive_command_composition_reaches_the_fsh_host_boundary",
+]
+
+[[family]]
+id = "dynamic-status-environment-and-glob"
+summary = "Live status, explicit environment reads, and deterministic glob results reach assembled scripts."
+layers = ["runtime", "cli", "platform"]
+tests = [
+  "crates/flash-cli/tests/e2e.rs::explicit_environment_and_live_status_reads_reach_the_fsh_host_boundary",
+  "crates/flash-cli/tests/e2e.rs::explicit_glob_reaches_module_initialization_and_real_argv",
+]
+
+[[family]]
+id = "interactive-session-state"
+summary = "Config options and live completion snapshots feed the real interactive session."
+layers = ["runtime", "repl"]
+tests = [
+  "crates/flash-cli/tests/config_startup.rs::successful_config_commits_typed_session_and_editor_settings_without_leaking_bindings",
+  "crates/flash-cli/tests/pty.rs::config_commits_pipefail_and_capture_limit_into_the_real_session",
+  "crates/flash-cli/tests/pty.rs::live_completion_refreshes_config_repl_path_and_cwd_candidates",
+]
+
+[[family]]
+id = "execution-plan-inspection"
+summary = "Plan inspection is deterministic and refuses effectful or broader source shapes without execution."
+layers = ["checker", "cli"]
+tests = [
+  "crates/flash-cli/tests/planner_e2e.rs::one_pipeline_prints_the_resolved_plan_without_running_or_opening_it",
+  "crates/flash-cli/tests/planner_e2e.rs::substitution_and_broader_script_shapes_fail_without_side_effects",
+]
+
+[[family]]
+id = "dynamic-external-execution"
+summary = "Dynamically selected commands use the ordinary native argv, pipeline, redirection, and job contracts."
+layers = ["runtime", "cli"]
+tests = [
+  "crates/flash-cli/tests/e2e.rs::dynamically_selected_external_preserves_argv_through_real_fsh",
+  "crates/flash-cli/tests/e2e.rs::dynamic_external_preserves_redirection_and_background_execution",
+]
+
+[[family]]
+id = "typed-command-capture"
+summary = "Text and byte capture preserve their distinct types while sharing status, limits, and cleanup."
+layers = ["runtime", "cli", "lsp"]
+tests = [
+  "crates/flash-cli/tests/e2e.rs::typed_byte_capture_preserves_real_process_output_and_nested_status",
+  "crates/flash-lsp/tests/queries.rs::typed_command_capture_is_shared_by_completion_hover_and_signature_help",
+]
+
+[[family]]
+id = "structured-language-errors"
+summary = "Catch, throw, rethrow, frames, and rollback remain distinct from status, exit, and cancellation."
+layers = ["runtime", "cli", "repl", "lsp"]
+tests = [
+  "crates/flash-cli/tests/e2e.rs::structured_errors_catch_host_failures_and_preserve_cross_file_frames",
+  "crates/flash-cli/tests/pty.rs::structured_errors_are_caught_in_the_real_interactive_session",
+  "crates/flash-lsp/tests/queries.rs::structured_error_catch_binding_is_shared_by_completion_and_hover",
+]
+
+[[family]]
+id = "static-contract-analysis"
+summary = "Assignment ownership and the shared built-in schema agree across analysis and runtime metadata."
+layers = ["runtime", "checker", "lsp"]
+tests = [
+  "crates/flash-runtime/tests/modules.rs::assignment_analysis_distinguishes_mutable_immutable_captured_and_unknown_targets",
+  "crates/flash-runtime/tests/modules.rs::static_builtin_schemas_check_arity_options_kinds_and_only_known_facts",
+]
+
+[[family]]
+id = "complete-job-semantics"
+summary = "Supervisor-backed background and complex foreground jobs preserve state, identity, and terminal ownership."
+layers = ["runtime", "cli", "repl", "platform"]
+tests = [
+  "crates/flash-cli/tests/e2e.rs::a_background_supervisor_executes_a_multi_island_pipeline",
+  "crates/flash-cli/tests/pty.rs::a_complex_foreground_chain_commits_its_supervisor_state_after_completion",
+]
+
+[[family]]
+id = "grammar-aware-path-completion"
+summary = "Parser-derived completion preserves reversible quoting, wildcard spelling, and no-execution behavior."
+layers = ["syntax", "repl", "platform"]
+tests = [
+  "crates/flash-cli/tests/context_aware_completion.rs::path_completion_renders_reversible_bare_and_quoted_source",
+  "crates/flash-cli/tests/pty.rs::grammar_aware_path_completion_reaches_the_real_editor_without_submission",
+]
+
+[[family]]
+id = "portable-interactive-behavior"
+summary = "The portable editor provides Unicode, multiline, completion, highlighting, hints, resize, and redraw behavior."
+layers = ["syntax", "repl", "platform"]
+tests = [
+  "crates/flash-cli/tests/terminal_editor_pty.rs::unicode_graphemes_and_multiline_movement_reach_the_real_portable_editor",
+  "crates/flash-cli/tests/terminal_editor_pty.rs::completion_highlighting_hints_and_resize_are_live_in_the_portable_editor",
+]
+
+[[family]]
+id = "shared-developer-frontends"
+summary = "The checker, formatter, and language server project the same non-executing language contract."
+layers = ["checker", "formatter", "lsp"]
+tests = [
+  "crates/flash-cli/tests/checker_e2e.rs::checking_never_runs_initializers_redirections_or_external_commands",
+  "crates/flash-cli/tests/formatter_e2e.rs::check_is_silent_for_canonical_and_empty_sources_and_never_writes",
+  "crates/flash-lsp/tests/server_e2e.rs::analysis_never_executes_effectful_source",
+]
+
+[[family]]
+id = "flashos-platform-routes"
+summary = "Every recovered platform route remains classified while target capability advertisement stays qualification-gated."
+layers = ["platform"]
+tests = [
+  "crates/flash-platform-flashos/tests/flashos.rs::the_adapter_advertises_nothing_before_target_qualification",
+  "crates/flash-platform-flashos/tests/flashos.rs::flashos_standard_directories_preserve_non_utf8_path_bytes",
+]

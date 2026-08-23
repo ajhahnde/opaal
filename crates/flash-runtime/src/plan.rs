@@ -933,6 +933,7 @@ pub(crate) fn plan_pipeline_with_options_and_binding_types(
         let span = stage.span();
         let StageKind::Command(command) = stage.kind() else {
             return Err(RuntimeError::new(
+                // flash-v1-boundary(carrier-refusal): Expression stages do not have native command-plan argv.
                 RuntimeErrorKind::Unsupported {
                     feature: "an expression stage in a command plan",
                 },
@@ -1062,6 +1063,7 @@ fn plan_stage(
                 }
                 if matches!(resolution, PlannedResolution::External { .. }) {
                     return Err(RuntimeError::new(
+                        // flash-v1-boundary(carrier-refusal): Closures are typed values and never native argv.
                         RuntimeErrorKind::Unsupported {
                             feature: "a closure argument to an external command",
                         },
@@ -1617,6 +1619,7 @@ fn check_internal_stdout_route(
         InternalStdoutRoute::Unsupported
     ) {
         return Err(RuntimeError::new(
+            // flash-v1-boundary(carrier-refusal): Structured stdout requires an explicit byte conversion.
             RuntimeErrorKind::Unsupported {
                 feature: "this resolved stdout route on an internal byte stream",
             },

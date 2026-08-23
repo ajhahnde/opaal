@@ -410,6 +410,7 @@ impl Session {
                         .expect("the guarded background statement has a marker");
                     let Some(jobs) = jobs.as_mut() else {
                         let error = RuntimeError::new(
+                            // flash-v1-boundary(embedding-refusal): Background launch requires an opted-in job coordinator.
                             RuntimeErrorKind::Unsupported {
                                 feature: "background execution in a session without job control",
                             },
@@ -1524,6 +1525,7 @@ fn execute_job_builtin(
         }
         _ => {
             return Err(RuntimeError::new(
+                // flash-v1-boundary(executor-invariant): Only registered job-control commands reach this dispatcher.
                 RuntimeErrorKind::Unsupported {
                     feature: "this job-control command in the live session",
                 },
@@ -2600,6 +2602,7 @@ fn drain_payload_to_pipe(
         InternalPayload::ByteStream(bytes) => bytes,
         InternalPayload::Value(_) | InternalPayload::ValueStream(_) => {
             return Err(Interrupt::Runtime(RuntimeError::new(
+                // flash-v1-boundary(carrier-refusal): Structured values require an explicit encoding before external bytes.
                 RuntimeErrorKind::Unsupported {
                     feature: "an implicit structured-to-external conversion",
                 },
@@ -2786,6 +2789,7 @@ fn route_final_payload(
                 drain_payload_to_redirected_file(payload, target, mode, stage, cwd, platform)
             }
             InternalStdoutRoute::Unsupported => Err(Interrupt::Runtime(RuntimeError::new(
+                // flash-v1-boundary(carrier-refusal): Structured stdout requires an explicit byte conversion.
                 RuntimeErrorKind::Unsupported {
                     feature: "this resolved stdout route on an internal byte stream",
                 },
@@ -2857,6 +2861,7 @@ fn render_payload_with_redirection(
             drain_payload_to_redirected_file(payload, target, mode, stage, cwd, platform)
         }
         InternalStdoutRoute::Unsupported => Err(Interrupt::Runtime(RuntimeError::new(
+            // flash-v1-boundary(carrier-refusal): Structured stdout requires an explicit byte conversion.
             RuntimeErrorKind::Unsupported {
                 feature: "this resolved stdout route on an internal byte stream",
             },

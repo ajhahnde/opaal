@@ -512,6 +512,7 @@ pub fn execute_builtin(
 ) -> Result<BuiltinOutcome, RuntimeError> {
     let PlannedResolution::Internal { canonical_name, .. } = stage.resolution() else {
         return Err(RuntimeError::new(
+            // flash-v1-boundary(executor-invariant): External stages never enter the built-in executor after planning.
             RuntimeErrorKind::Unsupported {
                 feature: "executing an external stage as a built-in",
             },
@@ -520,6 +521,7 @@ pub fn execute_builtin(
     };
     let signature = registry.lookup(canonical_name).ok_or_else(|| {
         RuntimeError::new(
+            // flash-v1-boundary(executor-invariant): Every planned internal stage retains its registry entry.
             RuntimeErrorKind::Unsupported {
                 feature: "an unregistered internal command",
             },
@@ -528,6 +530,7 @@ pub fn execute_builtin(
     })?;
     let command = standard_name(canonical_name).ok_or_else(|| {
         RuntimeError::new(
+            // flash-v1-boundary(executor-invariant): Only standard commands enter this executor after resolution.
             RuntimeErrorKind::Unsupported {
                 feature: "a non-standard internal command",
             },

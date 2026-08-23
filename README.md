@@ -138,6 +138,7 @@ Run workspace checks from the Flash component directory:
 
 ```sh
 cd components/flash
+python3 ../../ci/check_flash_conformance.py
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 ```
@@ -150,7 +151,10 @@ redoxer build -p flash-cli --bin fsh
 
 These checks establish different properties:
 
-- Host tests exercise portable syntax, runtime, and CLI behavior on the development system.
+- The conformance inventory binds every frozen host-v1 semantic family to
+  enabled executable owners and audits explicit runtime refusal boundaries.
+- Host tests execute those owners across syntax, runtime, CLI, REPL, checker,
+  formatter, language-server, and portable platform layers.
 - A `redoxer` build verifies that the selected binary compiles for the Redox target environment.
 - FlashOS image construction and QEMU execution verify package integration, installation, login-shell configuration, and behavior inside the assembled system.
 

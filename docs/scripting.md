@@ -163,6 +163,13 @@ $prompt = 'flash> '
 $continuation_prompt = 'more> '
 ```
 
+This is the complete v1 settings surface. Flash deliberately keeps terminal
+themes and colors, editor key bindings, history location and capacity,
+completion ranking, and editor-backend tuning out of config. Ordinary Flash
+bindings, function definitions, and staged environment exports can initialize
+the interactive namespace and child environment, but they do not create
+additional settings.
+
 `$pipefail`, `$completion`, and `$history` require `Bool` values.
 `$capture_limit` requires a nonnegative `Int` that fits the host byte-count
 range; zero is valid. `$prompt` and `$continuation_prompt` require `String`
