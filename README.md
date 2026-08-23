@@ -156,7 +156,7 @@ These checks establish different properties:
 - Host tests execute those owners across syntax, runtime, CLI, REPL, checker,
   formatter, language-server, and portable platform layers.
 - A `redoxer` build verifies that the selected binary compiles for the Redox target environment.
-- FlashOS image construction and QEMU execution verify package integration, installation, login-shell configuration, and behavior inside the assembled system.
+- FlashOS image construction and QEMU execution verify package integration, installation, login-shell configuration, the bounded smoke fixtures, and the exhaustive advertised-capability target matrix inside the assembled system.
 
 For the component-specific workflow, test layout, and maintenance guidance, see [Flash Development](docs/development.md). For the repository-wide distinction between host checks, target checks, image validation, and runtime evidence, see [FlashOS Verification](../../docs/verification.md).
 

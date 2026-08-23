@@ -1,0 +1,396 @@
+# Versioned exhaustive target-runtime matrix for the capability groups
+# advertised by Flash on x86_64 FlashOS. The matrix is consumed in order by
+# QEMU and can be rendered as the identical operator-observed target checklist.
+# It is not physical-hardware or release qualification, and it does not claim
+# the withheld Signals capability.
+
+schema_version = 1
+matrix_version = 1
+scope = "advertised-capabilities"
+platform = "flashos"
+architecture = "x86_64"
+target = "x86_64-unknown-redox"
+capability_report = "flashos-x86_64-capability-report-v1.toml"
+capability_classification = "flashos-x86_64-capability-classification.toml"
+runtime_fixtures = "flashos-x86_64-runtime-fixtures-v1.toml"
+consumers = ["qemu", "operator-observed-target"]
+primary_prompt = ">> "
+continuation_prompt = "...> "
+configured_prompt = "C> "
+terminator_hex = "0d"
+max_interaction_bytes = 16
+script_transport_chunk_bytes = 16
+required_surfaces = [
+  "startup",
+  "config-options",
+  "script-execution",
+  "builtins",
+  "argv-environment",
+  "working-directory",
+  "pipelines",
+  "redirections",
+  "cancellation",
+  "history",
+  "completion",
+  "structured-data",
+  "typed-capture",
+  "structured-errors",
+  "dynamic-external",
+  "status-conditions",
+  "glob",
+  "unicode-multiline-editing",
+  "job-semantics",
+  "clean-exit",
+]
+withheld_capabilities = ["signals"]
+
+[[case]]
+id = "startup-and-working-directory"
+summary = "The selected target editor starts in the user home and commits logical directory changes to child execution."
+surfaces = ["startup", "working-directory"]
+capabilities = ["environment", "working-directory", "process-spawn", "foreground-terminal", "terminal-info", "standard-directories"]
+operation_ids = [
+  "environment-snapshot",
+  "cwd-startup-read",
+  "cwd-resolve-validate",
+  "cwd-child-select",
+  "process-wait-transitions",
+  "foreground-query",
+  "foreground-hand-over",
+  "foreground-restore",
+  "terminal-detect-ends",
+  "terminal-read-size",
+  "terminal-raw-mode",
+  "terminal-read-input",
+  "directories-discover",
+  "directories-preserve-paths",
+  "directories-target-fallback",
+]
+reject = ["error[RUN001]"]
+
+[[case.step]]
+input = "cd /home/user"
+send = "line"
+rendered = ">> cd /home/user"
+expect = [">> "]
+manual = "The command submits without a diagnostic and the primary prompt returns."
+
+[[case.step]]
+input = "^pwd"
+send = "line"
+rendered = ">> ^pwd"
+expect = ["\r\n/home/user", ">> "]
+manual = "The external child prints `/home/user`, proving the selected child directory."
+
+[[case]]
+id = "config-options-and-capture-cleanup"
+summary = "A newly started target shell loads FlashOS prompt and capture options, enforces the zero-byte limit, and reaps the overflowed child."
+surfaces = ["config-options", "typed-capture"]
+capabilities = ["environment", "file-actions", "process-spawn", "monotonic-clock", "standard-directories"]
+operation_ids = [
+  "file-open-target",
+  "process-terminate-reap",
+  "clock-read-monotonic",
+  "clock-timestamp-events",
+  "clock-cancellation-deadlines",
+]
+reject = []
+
+[[case.step]]
+input = """
+cd /home/user
+^mkdir .config
+cd .config
+^mkdir flash
+^echo '$prompt = "C> "' > flash/config.fsh
+^echo '$capture_limit = 0' >> flash/config.fsh
+echo config-created
+"""
+send = "script"
+expect = ["config-created", ">> "]
+manual = "Run the exact setup script; it creates a user-owned config with a distinctive prompt and zero-byte capture limit."
+
+[[case.step]]
+input = "^fsh"
+send = "line"
+rendered = ">> ^fsh"
+expect = ["C> "]
+manual = "A nested target shell starts with the configured `C> ` prompt."
+
+[[case.step]]
+input = "let x=$(^echo)"
+send = "line"
+rendered = "C> let x=$(^echo)"
+expect = ["capture limit", "C> "]
+manual = "The configured zero-byte capture limit rejects the newline from `echo` and returns a usable configured prompt."
+
+[[case.step]]
+input = "exit 0"
+send = "line"
+rendered = "C> exit 0"
+expect = [">> "]
+manual = "The configured nested shell exits cleanly to its parent session."
+
+[[case]]
+id = "script-builtins-and-structured-data"
+summary = "A target-created script and a mixed byte/structured pipeline reach the assembled Flash executable and built-in registry."
+surfaces = ["script-execution", "builtins", "structured-data"]
+capabilities = ["file-actions", "pipes", "process-spawn", "process-groups", "directory-read"]
+operation_ids = [
+  "file-stream-in-process",
+  "pipe-create",
+  "pipe-own-close",
+  "pipe-read-write",
+  "process-group-create",
+  "process-group-join",
+  "process-group-report",
+  "directory-open-relative",
+  "directory-advance-lazy",
+  "directory-preserve-name-kind",
+]
+reject = ["error[RUN001]"]
+
+[[case.step]]
+input = """
+^echo 'echo nested-script-ok' > nested.fsh
+^fsh nested.fsh
+^printf '[1,2]' | from json | length
+"""
+send = "script"
+expect = ["nested-script-ok", "\r\n1", ">> "]
+manual = "Run the exact script; a nested assembled script prints `nested-script-ok` and a byte/JSON/structured pipeline reports its one top-level value."
+
+[[case]]
+id = "argv-environment-pipelines-and-redirections"
+summary = "Native argv, session environment, descriptor actions, and an external byte pipeline preserve exact target data."
+surfaces = ["argv-environment", "pipelines", "redirections"]
+capabilities = ["environment", "file-actions", "pipes", "process-spawn", "process-groups", "foreground-terminal"]
+operation_ids = [
+  "environment-session-mutation",
+  "environment-child-install",
+  "file-duplicate-inherit",
+  "file-close-child",
+  "process-spawn-argv",
+]
+reject = ["error[RUN001]"]
+
+[[case.step]]
+input = """
+export FLASH_MATRIX = 'env-ok'
+^env
+^printf '<%s>' 'argv ok'
+^printf one > matrix.txt
+^printf two >> matrix.txt
+^cat < matrix.txt | ^cat
+"""
+send = "script"
+expect = ["FLASH_MATRIX=env-ok", "<argv ok>", "onetwo", ">> "]
+manual = "Run the exact script; the child environment, one spaced argv value, truncate/append/input redirections, and two-child pipe preserve their markers."
+
+[[case]]
+id = "dynamic-capture-error-and-status-language"
+summary = "Dynamic external execution, exact byte capture, structured errors, and status conditions compose in the target session."
+surfaces = ["dynamic-external", "typed-capture", "structured-errors", "status-conditions"]
+capabilities = ["environment", "file-actions", "pipes", "process-spawn", "process-groups", "foreground-terminal", "monotonic-clock"]
+operation_ids = []
+reject = ["error[RUN001]"]
+
+[[case.step]]
+input = """
+let cmd = '/usr/bin/printf'
+command $cmd dynamic-ok
+let a = $(bytes: ^printf x)
+let b = $(bytes: ^printf x)
+if $a == $b { echo bytes-ok }
+try { throw 'caught-ok' } catch error { echo ${$error.message} }
+^false || echo status-ok
+"""
+send = "script"
+expect = ["dynamic-ok", "bytes-ok", "caught-ok", "status-ok", ">> "]
+manual = "Run the exact script and observe the dynamic command, equal exact byte captures, caught structured error, and unsuccessful-status fallback markers."
+
+[[case]]
+id = "directory-glob-and-grammar-completion"
+summary = "Target directory enumeration, deterministic globbing, and grammar-aware path completion share native paths without implicit execution."
+surfaces = ["glob", "completion"]
+capabilities = ["file-actions", "directory-read", "terminal-info"]
+operation_ids = []
+reject = ["error[RUN001]"]
+
+[[case.step]]
+input = """
+^touch a.fsh b.fsh 'space name'
+let matches = glob('*.fsh')
+^printf '%s,' ...$matches
+"""
+send = "script"
+expect = ["a.fsh,b.fsh,", ">> "]
+manual = "Run the exact setup script; explicit glob and spread print the sorted paths and retain a space-containing completion candidate."
+
+[[case.step]]
+input = "pwd > './spa"
+send = "keys"
+rendered = ">> pwd > './spa"
+expect = [">> pwd > './spa"]
+manual = "The editor holds an incomplete quoted redirection target without submitting it."
+
+[[case.step]]
+input_hex = "09"
+send = "keys"
+expect = ["space name"]
+manual = "Tab exposes the grammar-aware completion for the quoted space-containing path."
+
+[[case.step]]
+input_hex = "03"
+send = "keys"
+expect = [">> "]
+manual = "Cancellation abandons the incomplete completion buffer and returns a clean prompt."
+
+[[case]]
+id = "history-completion-cancellation-and-unicode"
+summary = "The target editor recalls history, completes commands, cancels edits, preserves graphemes, and submits multiline source."
+surfaces = ["cancellation", "history", "completion", "unicode-multiline-editing"]
+capabilities = ["terminal-info", "standard-directories"]
+operation_ids = ["terminal-snapshot-job-mode", "terminal-reapply-job-mode"]
+reject = ["error[RUN001]"]
+
+[[case.step]]
+input = "echo history-ok"
+send = "line"
+rendered = ">> echo history-ok"
+expect = ["\r\nhistory-ok", ">> "]
+manual = "The target records one distinctive interactive history row."
+
+[[case.step]]
+input_hex = "1b5b41"
+send = "keys"
+expect = [">> echo history-ok"]
+manual = "Up Arrow recalls the exact preceding submission into the live editor."
+
+[[case.step]]
+input_hex = "03"
+send = "keys"
+expect = [">> "]
+manual = "Cancellation clears the recalled row."
+
+[[case.step]]
+input = "pw"
+send = "keys"
+rendered = ">> pw"
+expect = [">> pw"]
+manual = "The target editor retains the incomplete built-in name."
+
+[[case.step]]
+input_hex = "09"
+send = "keys"
+expect = [">> pwd "]
+manual = "Tab completes the standard built-in name to `pwd `."
+
+[[case.step]]
+input_hex = "0d"
+send = "keys"
+expect = ["\r\n/home/user", ">> "]
+manual = "The completed command submits and prints the current directory."
+
+[[case.step]]
+input = "á界"
+send = "keys"
+rendered = ">> á界"
+expect = [">> á界"]
+manual = "The editor renders a combining grapheme followed by a wide glyph."
+
+[[case.step]]
+input_hex = "1b5b447f78"
+send = "keys"
+expect = [">> x界"]
+manual = "Left, Backspace, and `x` delete the complete combining grapheme without corrupting the wide glyph."
+
+[[case.step]]
+input_hex = "03"
+send = "keys"
+expect = [">> "]
+manual = "Cancellation abandons the Unicode edit buffer."
+
+[[case.step]]
+input = "if true {"
+send = "line"
+rendered = ">> if true {"
+expect = ["...> "]
+manual = "Incomplete source switches the live target editor to the continuation prompt."
+
+[[case.step]]
+input = "echo multi"
+send = "line"
+rendered = "...> echo multi"
+expect = ["...> "]
+manual = "The editor retains the second physical line in one submission."
+
+[[case.step]]
+input = "}"
+send = "line"
+rendered = "...> }"
+expect = ["\r\nmulti", ">> "]
+manual = "Closing the block submits the complete multiline source and executes its selected branch."
+
+[[case]]
+id = "supported-job-semantics"
+summary = "A target supervisor snapshots language state for background work, reaps it, and commits a complex foreground directory change."
+surfaces = ["job-semantics"]
+capabilities = ["working-directory", "process-spawn", "process-groups", "foreground-terminal", "monotonic-clock", "shell-executable", "hangup-disposition"]
+operation_ids = [
+  "shell-executable-resolve",
+  "shell-executable-native-path",
+  "hangup-ignore-supervisor",
+  "hangup-reap-child",
+]
+reject = ["error[RUN001]"]
+
+[[case.step]]
+input = """
+let delay = '1'
+^sleep $delay && echo bg-ok &
+wait
+"""
+send = "script"
+expect = ["bg-ok", ">> "]
+manual = "Run the exact script; a background supervisor snapshots `delay`, runs its internal stage, and is reaped by `wait`."
+
+[[case.step]]
+input = "^true&&cd /tmp"
+send = "line"
+rendered = ">> ^true&&cd /tmp"
+expect = [">> "]
+manual = "A complex foreground supervisor completes and returns the prompt."
+
+[[case.step]]
+input = "pwd"
+send = "line"
+rendered = ">> pwd"
+expect = ["\r\n/tmp", ">> "]
+manual = "The foreground supervisor commits its returned working-directory state."
+
+[[case.step]]
+input = "cd /home/user"
+send = "line"
+rendered = ">> cd /home/user"
+expect = [">> "]
+manual = "The matrix restores the user home before clean-exit validation."
+
+[[case]]
+id = "nested-shell-exit-statuses"
+summary = "Nested target shells propagate explicit unsuccessful and successful exit statuses cleanly."
+surfaces = ["clean-exit"]
+capabilities = ["process-spawn", "process-groups", "foreground-terminal"]
+operation_ids = []
+reject = ["error[RUN001]"]
+
+[[case.step]]
+input = """
+^echo 'exit 7' > child.fsh
+^fsh child.fsh || echo nested-exit-ok
+^echo 'exit 0' > clean-child.fsh
+^fsh clean-child.fsh && echo clean-exit-ok
+"""
+send = "script"
+expect = ["nested-exit-ok", "clean-exit-ok", ">> "]
+manual = "Run the exact script; nested non-interactive shells propagate status 7 to the fallback and status 0 to the success branch."

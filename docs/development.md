@@ -887,23 +887,28 @@ A platform change should retain the distinction between:
 This distinction is required for useful diagnostics and target-specific degradation.
 
 Validate the checked FlashOS route classification, reusable runtime fixtures,
-and versioned advertised-capability report from the repository root:
+versioned advertised-capability report, and exhaustive target matrix from the
+repository root:
 
 ```bash
 python3 ci/check_flashos_capability_classification.py
 python3 ci/check_flashos_capability_report.py
+python3 ci/check_flashos_target_matrix.py
 ```
 
-Render the same ordered smoke inputs and expected observations for an
-manually observed real system with:
+Render the ordered smoke inputs and exhaustive matrix observations for a
+manually observed target with:
 
 ```bash
 python3 ci/flashos_runtime_fixtures.py
+python3 ci/flashos_target_matrix.py
 ```
 
-The report is bounded evidence. A fixture reference does not turn one observed
-path into exhaustive capability validation, physical-hardware evidence, or
-release qualification.
+The report and reusable smoke fixtures remain bounded evidence. The separate
+target matrix covers every advertised operation and the required target
+surfaces through exact ordered cases. Neither rendered checklist is evidence
+that an operator ran it, and neither contract establishes physical-hardware or
+release qualification. The withheld `Signals` group remains outside both.
 
 ## Develop the CLI and interactive session
 

@@ -19,11 +19,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ## [Unreleased]
 
 ### Changed
+- Make portable raw-terminal reads nonblocking and bypass lossy Redox PTY
+  readiness notifications with bounded direct reads, so independent editor
+  actions cannot remain indefinitely unread on the target console.
 - Renamed FlashShell to Flash across the source tree while preserving the
   `fsh` executable, `/usr/bin/fsh`, `.fsh` scripts, and prompt protocol.
 
 ### Added
 
+- Add a versioned FlashOS target-capability matrix that assigns every
+  advertised classified operation to an owning target case and exercises the
+  required startup, language, session, editor, supported-job, and clean-exit
+  surfaces through QEMU. The identical ordered contract renders for
+  operator-observed targets while keeping `Signals`, physical hardware, and
+  release qualification out of scope.
 - Add a versioned FlashOS capability report and reusable target-runtime smoke
   fixtures. The report matches the selected adapter's bounded advertised set,
   keeps `Signals` withheld, records explicit limitations, and shares exact QEMU

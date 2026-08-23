@@ -801,6 +801,17 @@ language/session/editor behavior, physical-hardware success, release
 qualification, or the complete stopped/continued/signaled transition
 vocabulary.
 
+The report links the separate versioned
+[`flashos-x86_64-target-matrix-v1.toml`](../platforms/flashos-x86_64-target-matrix-v1.toml)
+contract. That matrix gives every advertised classified operation one owning
+target case and covers the required startup, configuration, script, built-in,
+argv/environment, directory, pipeline, redirection, cancellation, history,
+completion, structured-data, capture, error, dynamic-command, status, glob,
+Unicode/multiline editor, supported-job, and clean-exit surfaces. QEMU executes
+the cases in order, and the same record renders an operator-observed target
+checklist. `Signals`, physical hardware, and release qualification remain
+outside this matrix.
+
 ### Test adapters
 
 The platform crate also provides deterministic fake and recording adapters.

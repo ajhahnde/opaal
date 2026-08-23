@@ -250,8 +250,25 @@ impl Platform for PosixPlatform {
             capability: Capability::TerminalInfo,
             reason: format!("entering raw mode failed: {error}"),
         })?;
+        let saved_status = terminal_mode::status_flags(stdin.as_fd()).map_err(|error| {
+            let _ = terminal_mode::apply(stdin.as_fd(), &saved);
+            PlatformError::Unavailable {
+                capability: Capability::TerminalInfo,
+                reason: format!("reading terminal status flags failed: {error}"),
+            }
+        })?;
+        terminal_mode::apply_status_flags(stdin.as_fd(), saved_status | libc::O_NONBLOCK).map_err(
+            |error| {
+                let _ = terminal_mode::apply(stdin.as_fd(), &saved);
+                PlatformError::Unavailable {
+                    capability: Capability::TerminalInfo,
+                    reason: format!("entering nonblocking terminal mode failed: {error}"),
+                }
+            },
+        )?;
         Ok(Box::new(PosixTerminalModeGuard {
             saved,
+            saved_status,
             restored: false,
         }))
     }
@@ -1520,6 +1537,30 @@ mod terminal_input {
     use std::io;
     use std::time::Duration;
 
+    #[cfg(target_os = "redox")]
+    pub(super) fn read(buffer: &mut [u8], timeout: Duration) -> io::Result<Option<usize>> {
+        // Redox PTYs can retain a queued byte without delivering a matching
+        // readiness notification. Avoid that lossy seam entirely: raw mode
+        // makes the descriptor nonblocking, and this bounded retry preserves
+        // the caller's timeout without spinning.
+        // SAFETY: F_GETFL only inspects the status flags of standard input.
+        let flags = unsafe { libc::fcntl(libc::STDIN_FILENO, libc::F_GETFL) };
+        if flags == -1 {
+            return Err(io::Error::last_os_error());
+        }
+        if flags & libc::O_NONBLOCK == 0 {
+            return Err(io::Error::other(
+                "Redox terminal input descriptor is not nonblocking",
+            ));
+        }
+        if let Some(read) = read_nonblocking(buffer)? {
+            return Ok(Some(read));
+        }
+        std::thread::sleep(timeout);
+        read_nonblocking(buffer)
+    }
+
+    #[cfg(not(target_os = "redox"))]
     pub(super) fn read(buffer: &mut [u8], timeout: Duration) -> io::Result<Option<usize>> {
         let milliseconds = timeout.as_millis().min(i32::MAX as u128) as i32;
         let mut descriptor = libc::pollfd {
@@ -1536,12 +1577,20 @@ mod terminal_input {
         if result == 0 || descriptor.revents & (libc::POLLIN | libc::POLLHUP) == 0 {
             return Ok(None);
         }
+        read_nonblocking(buffer)
+    }
+
+    fn read_nonblocking(buffer: &mut [u8]) -> io::Result<Option<usize>> {
         // SAFETY: `buffer` is valid for writes of its length and standard
         // input remains owned by the process for the duration of the call.
         let read =
             unsafe { libc::read(libc::STDIN_FILENO, buffer.as_mut_ptr().cast(), buffer.len()) };
         if read < 0 {
-            return Err(io::Error::last_os_error());
+            let error = io::Error::last_os_error();
+            if error.kind() == io::ErrorKind::WouldBlock {
+                return Ok(None);
+            }
+            return Err(error);
         }
         Ok(Some(read as usize))
     }
@@ -1597,6 +1646,24 @@ mod terminal_mode {
         Ok(())
     }
 
+    pub(super) fn status_flags(fd: BorrowedFd<'_>) -> io::Result<libc::c_int> {
+        // SAFETY: F_GETFL only inspects the status flags of a live descriptor.
+        let flags = unsafe { libc::fcntl(fd.as_raw_fd(), libc::F_GETFL) };
+        if flags == -1 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(flags)
+    }
+
+    pub(super) fn apply_status_flags(fd: BorrowedFd<'_>, flags: libc::c_int) -> io::Result<()> {
+        // SAFETY: F_SETFL updates only the status flags of a live descriptor.
+        let result = unsafe { libc::fcntl(fd.as_raw_fd(), libc::F_SETFL, flags) };
+        if result == -1 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(())
+    }
+
     pub(super) fn raw_from(saved: &libc::termios) -> libc::termios {
         let mut raw = *saved;
         // SAFETY: cfmakeraw only writes the flag fields of a live struct.
@@ -1613,6 +1680,7 @@ mod terminal_mode {
 #[derive(Debug)]
 struct PosixTerminalModeGuard {
     saved: libc::termios,
+    saved_status: libc::c_int,
     restored: bool,
 }
 
@@ -1638,12 +1706,14 @@ impl TerminalModeGuard for PosixTerminalModeGuard {
             return Ok(());
         }
         let stdin = io::stdin();
-        terminal_mode::apply(stdin.as_fd(), &self.saved).map_err(|error| {
-            PlatformError::Unavailable {
+        let status_result = terminal_mode::apply_status_flags(stdin.as_fd(), self.saved_status);
+        let attributes_result = terminal_mode::apply(stdin.as_fd(), &self.saved);
+        if let Err(error) = status_result.and(attributes_result) {
+            return Err(PlatformError::Unavailable {
                 capability: Capability::TerminalInfo,
-                reason: format!("restoring terminal attributes failed: {error}"),
-            }
-        })?;
+                reason: format!("restoring terminal mode failed: {error}"),
+            });
+        }
         self.restored = true;
         Ok(())
     }
