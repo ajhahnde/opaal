@@ -1070,7 +1070,13 @@ The crates containing language semantics and frontend orchestration prohibit uns
 - `flash-platform`;
 - `flash-cli`.
 
-The POSIX adapter denies unsafe code by default and permits it only in explicitly scoped implementation areas that require low-level system interfaces, including descriptor installation, process-group operations, terminal control, signal disposition, and child-status observation.
+The POSIX adapter denies unsafe code by default and permits it only in
+explicitly scoped implementation areas that require low-level system
+interfaces, including descriptor installation, process-group operations,
+terminal control, signal disposition, and child-status observation. Every
+unsafe block carries a local safety invariant, and workspace lints enforce that
+documentation across production, tests, and process fixtures while also
+requiring explicit blocks inside any unsafe function.
 
 This arrangement creates a review boundary; it does not by itself establish the absence of defects.
 

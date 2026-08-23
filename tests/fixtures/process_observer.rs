@@ -76,6 +76,7 @@ fn write_field(output: &mut Vec<u8>, value: &OsStr) {
 mod process_group {
     use std::ffi::c_int;
 
+    // SAFETY: this declaration matches the argument-free POSIX C signature.
     unsafe extern "C" {
         fn getpgrp() -> c_int;
     }
@@ -92,6 +93,7 @@ mod process_group {
 mod signal_probe {
     use std::ffi::c_int;
 
+    // SAFETY: this declaration matches the scalar POSIX C signature.
     unsafe extern "C" {
         fn raise(signal: c_int) -> c_int;
     }
@@ -110,6 +112,8 @@ mod signal_probe {
 mod descriptor_probe {
     use std::ffi::{c_int, c_void};
 
+    // SAFETY: this declaration matches the POSIX C signature; the call below
+    // supplies a live byte and its exact one-byte extent.
     unsafe extern "C" {
         fn write(descriptor: c_int, buffer: *const c_void, count: usize) -> isize;
     }

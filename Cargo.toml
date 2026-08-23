@@ -19,7 +19,10 @@ repository = "https://github.com/ajhahnde/FlashOS"
 
 [workspace.lints.rust]
 rust_2018_idioms = "deny"
+unsafe_op_in_unsafe_fn = "deny"
 unused_lifetimes = "deny"
 
 [workspace.lints.clippy]
 all = "deny"
+missing_safety_doc = "deny"
+undocumented_unsafe_blocks = "deny"

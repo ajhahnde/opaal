@@ -19,6 +19,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ## [Unreleased]
 
 ### Changed
+- Audit every unsafe block and C ABI declaration, document its local pointer,
+  lifetime, ownership, signal, and pre-exec invariants as applicable, and make
+  undocumented or implicit future unsafe operations fail workspace linting.
 - Harden security-sensitive boundaries: NUL-bearing exports and inherited
   environment snapshots now fail before spawn, complex background jobs retain
   the complete host-representable capture limit, startup module operations are

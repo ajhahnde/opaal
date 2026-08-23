@@ -82,7 +82,11 @@ semantics independent from target-specific terminal and process handling. The
 language server depends only on shared syntax and analysis services; it does not
 depend on the CLI or a platform adapter.
 
-Flash is implemented in Rust. The CLI prohibits unsafe code, while the low-level platform adapter permits explicitly scoped unsafe sections for operations such as process-group, signal, and file-descriptor setup.
+Flash is implemented in Rust. The CLI prohibits unsafe code, while the
+low-level platform adapter permits explicitly scoped unsafe sections for
+operations such as process-group, signal, and file-descriptor setup. Workspace
+lints require a local safety invariant for every unsafe block in production,
+tests, and fixtures.
 
 ## Using `fsh`
 

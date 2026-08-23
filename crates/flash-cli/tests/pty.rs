@@ -83,8 +83,11 @@ impl Pty {
             command.env(key, value);
         }
         // Give the child its own session with the pty as controlling terminal,
-        // so terminal raw mode, key events, and SIGWINCH all reach it. setsid
-        // and TIOCSCTTY are async-signal-safe, as pre_exec requires.
+        // so terminal raw mode, key events, and SIGWINCH all reach it.
+        // SAFETY: the closure captures nothing and invokes only the
+        // allocation-free `setsid` and `TIOCSCTTY` syscall wrappers required
+        // between fork and exec. `Command` has installed the open pty user side
+        // as fd 0, and the temporary borrow does not outlive the ioctl call.
         unsafe {
             command.pre_exec(|| {
                 rustix::process::setsid().map_err(std::io::Error::from)?;

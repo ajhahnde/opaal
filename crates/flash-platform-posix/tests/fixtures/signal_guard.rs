@@ -69,6 +69,7 @@ fn spawn_raising_child(observer: &Path, workspace: &Path) -> ProcessStatus {
 mod raise_probe {
     use std::ffi::c_int;
 
+    // SAFETY: this declaration matches the scalar POSIX C signature.
     unsafe extern "C" {
         fn raise(signal: c_int) -> c_int;
     }

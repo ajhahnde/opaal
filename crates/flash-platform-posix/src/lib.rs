@@ -110,6 +110,8 @@ fn openat_owned(
     mode: u32,
 ) -> io::Result<OwnedFd> {
     #[cfg(target_os = "redox")]
+    // SAFETY: this declaration matches relibc's POSIX `openat` symbol and ABI;
+    // the call below supplies the pointer and variadic-mode invariants.
     unsafe extern "C" {
         #[link_name = "openat"]
         fn redox_openat(
@@ -1022,6 +1024,8 @@ mod child_descriptors {
     use std::os::unix::process::CommandExt;
     use std::process::Command;
 
+    // SAFETY: these declarations match the POSIX C signatures. Calls remain
+    // inside the pre-exec hook below, which supplies only scalar descriptors.
     unsafe extern "C" {
         fn dup2(source: c_int, target: c_int) -> c_int;
         fn close(descriptor: c_int) -> c_int;

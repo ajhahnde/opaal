@@ -861,12 +861,19 @@ The concrete adapter tests exercise behavior such as:
 
 ### Keep unsafe code contained
 
-Low-level operating-system calls may require explicitly scoped unsafe code in the concrete adapter. Do not move such code into the syntax, runtime, abstract platform, or CLI crates to avoid an adapter boundary.
+Low-level operating-system calls may require explicitly scoped unsafe code in
+the concrete adapter. Do not move such code into the syntax, runtime, abstract
+platform, or CLI crates to avoid an adapter boundary. Workspace lints reject
+undocumented unsafe blocks, undocumented public unsafe functions, and implicit
+unsafe operations inside unsafe functions across every target, including tests
+and process fixtures.
 
 For every new unsafe block:
 
 - keep the block as small as practical;
-- document the safety conditions;
+- place a local `SAFETY:` comment at the block and document its pointer,
+  initialization, lifetime, ownership, concurrency, signal, and FFI conditions
+  as applicable;
 - establish ownership of every raw descriptor or process resource;
 - define cleanup behavior for all early returns;
 - test both normal completion and failure;
