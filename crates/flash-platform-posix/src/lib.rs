@@ -158,6 +158,17 @@ impl ChildProcess for PosixChild {
         Ok(transition)
     }
 
+    fn try_wait_for_transition(&mut self) -> Result<Option<ProcessTransition>, WaitError> {
+        if let Some(status) = self.completed {
+            return Ok(Some(ProcessTransition::Completed(status)));
+        }
+        let transition = child_wait::try_observe(self.pid()?, libc::WUNTRACED | libc::WCONTINUED)?;
+        if let Some(ProcessTransition::Completed(status)) = transition {
+            self.completed = Some(status);
+        }
+        Ok(transition)
+    }
+
     fn terminate(&mut self) -> Result<(), TerminateError> {
         // Once the adapter has reaped, std does not know the child is gone, so
         // `Child::kill` would signal a pid the host may have already reused.
@@ -1321,6 +1332,29 @@ mod child_wait {
             return Err(WaitError::new(error.kind(), error.to_string()));
         }
         decode(status)
+    }
+
+    pub(super) fn try_observe(
+        pid: c_int,
+        flags: c_int,
+    ) -> Result<Option<ProcessTransition>, WaitError> {
+        let mut status: c_int = 0;
+        loop {
+            // SAFETY: waitpid writes only through the status pointer, which
+            // points at a live local for the whole call.
+            let result = unsafe { libc::waitpid(pid, &raw mut status, flags | libc::WNOHANG) };
+            if result == pid {
+                return decode(status).map(Some);
+            }
+            if result == 0 {
+                return Ok(None);
+            }
+            let error = io::Error::last_os_error();
+            if error.kind() == io::ErrorKind::Interrupted {
+                continue;
+            }
+            return Err(WaitError::new(error.kind(), error.to_string()));
+        }
     }
 
     #[cfg(target_os = "macos")]

@@ -158,7 +158,7 @@ python3 ci/check_flashos_capabilities.py
 ```
 
 This inventory is deliberately not a support matrix. A source method or a
-full-capability declaration does not establish target behavior, and a missing
+capability declaration does not establish target behavior, and a missing
 runtime observation does not establish that the target is incapable of the
 operation.
 
@@ -192,11 +192,11 @@ python3 ci/check_flashos_capability_classification.py
 The current classification records 41 native operations and one
 three-operation FlashOS policy shim for standard-directory selection. No
 operation is deliberately unsupported or requires kernel work. These verdicts
-select implementation routes; every capability remains pending target-runtime
-qualification, so the classification does not make a support claim. The
-`flash-platform-flashos` crate implements the classified routes and directory
-policy, but its capability set remains empty and the executable does not select
-it until later bring-up and target qualification.
+select implementation routes; the classification artifact does not itself make
+a runtime-support claim. Redox-target executables select the
+`flash-platform-flashos` crate. Its image-qualified declaration enables every
+capability group except signals, whose complete stop/continue/termination
+transition vocabulary remains unqualified and therefore unavailable.
 
 ## Workspace layout
 

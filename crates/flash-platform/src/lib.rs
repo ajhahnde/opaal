@@ -119,7 +119,7 @@ impl Capabilities {
     /// The full set minus `capability`.
     ///
     /// A host that provides everything except one capability is the shape worth
-    /// naming directly: spelling it as a list of the other eleven would drift
+    /// naming directly: spelling it as a list of every other group would drift
     /// silently the next time a capability is added.
     #[must_use]
     pub const fn full_without(capability: Capability) -> Self {
@@ -1120,6 +1120,19 @@ pub trait ChildProcess: Send + fmt::Debug {
     /// cannot deliver one, so the default is correct rather than lossy.
     fn wait_for_transition(&mut self) -> Result<ProcessTransition, WaitError> {
         self.wait().map(ProcessTransition::Completed)
+    }
+
+    /// Observe one available child transition without blocking.
+    ///
+    /// `None` means the child remains live and no transition is currently
+    /// available. Adapters that support interactive background jobs override
+    /// this method; the default reports the operation as unavailable rather
+    /// than turning a blocking wait into implicit polling.
+    fn try_wait_for_transition(&mut self) -> Result<Option<ProcessTransition>, WaitError> {
+        Err(WaitError::new(
+            io::ErrorKind::Unsupported,
+            "nonblocking child observation is not supported",
+        ))
     }
 
     /// Request immediate termination during failure cleanup.

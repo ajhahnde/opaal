@@ -20,14 +20,22 @@ use flash_cli::cli::{Mode, parse_args};
 use flash_cli::completion::{
     CompletionCandidateProvider, CompletionCatalog, CompletionSnapshotLimits,
 };
+#[cfg(target_os = "redox")]
+use flash_cli::config::ConfigEnvironment;
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+use flash_cli::config::ProcessConfigEnvironment;
 use flash_cli::config::{
     ConfigDefaults, ConfigFatalError, ConfigInvocation, ConfigLimits, ConfigPlatform,
-    ConfigRequest, HostConfigSource, ProcessConfigEnvironment, initialize_config,
+    ConfigRequest, HostConfigSource, initialize_config,
 };
 use flash_cli::format::{FormatRequest, HostFormatFilesystem, format_files};
 #[cfg(target_os = "redox")]
 use flash_cli::history::EditorHistory;
-use flash_cli::history::{HistoryPlatform, ProcessHistoryEnvironment, select_history};
+#[cfg(target_os = "redox")]
+use flash_cli::history::HistoryEnvironment;
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+use flash_cli::history::ProcessHistoryEnvironment;
+use flash_cli::history::{HistoryPlatform, select_history};
 use flash_cli::interactive::{
     EvaluationControl, ExitDecision, InteractiveDiagnostic, InteractiveEvaluationError,
     InteractiveEvaluator, InteractiveNotice, InteractiveNoticeError, InteractiveNoticeId,
@@ -36,6 +44,11 @@ use flash_cli::interactive::{
 use flash_cli::plan::{PlanRequest, inspect_source};
 use flash_cli::report::{HostReport, write_report};
 use flash_platform::{Platform, PlatformError};
+#[cfg(target_os = "redox")]
+use flash_platform::{StandardDirectories, StandardDirectoryEnvironment};
+#[cfg(target_os = "redox")]
+use flash_platform_flashos::FlashOsPlatform;
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 use flash_platform_posix::PosixPlatform;
 use flash_runtime::capsule::{
     MAX_CAPSULE_BYTES, decode_background_capsule, encode_supervisor_completion,
@@ -52,6 +65,21 @@ use flash_runtime::script::{
 };
 use flash_runtime::session::{BackgroundFailure, JobNoticeId, Session, SubmitError, SubmitOutcome};
 use flash_runtime::{Environment, ScopeStack};
+
+#[cfg(target_os = "redox")]
+type NativePlatform = FlashOsPlatform;
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+type NativePlatform = PosixPlatform;
+
+#[cfg(target_os = "redox")]
+const fn native_platform() -> NativePlatform {
+    FlashOsPlatform::new()
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+const fn native_platform() -> NativePlatform {
+    PosixPlatform
+}
 
 const HELP: &str = "Flash command shell
 
@@ -234,6 +262,56 @@ fn process_environment() -> Environment {
     )
 }
 
+#[cfg(target_os = "redox")]
+struct ProcessDirectoryEnvironment;
+
+#[cfg(target_os = "redox")]
+impl StandardDirectoryEnvironment for ProcessDirectoryEnvironment {
+    fn value(&self, name: &OsStr) -> Option<std::ffi::OsString> {
+        env::var_os(name)
+    }
+}
+
+#[cfg(target_os = "redox")]
+struct FlashOsDirectoryEnvironment {
+    directories: StandardDirectories,
+}
+
+#[cfg(target_os = "redox")]
+impl FlashOsDirectoryEnvironment {
+    const fn new(directories: StandardDirectories) -> Self {
+        Self { directories }
+    }
+
+    fn value(&self, name: &OsStr) -> Option<std::ffi::OsString> {
+        if name == OsStr::new("HOME") {
+            Some(self.directories.home().as_os_str().to_owned())
+        } else if name == OsStr::new("XDG_CONFIG_HOME") {
+            Some(self.directories.config().as_os_str().to_owned())
+        } else if name == OsStr::new("XDG_CACHE_HOME") {
+            Some(self.directories.cache().as_os_str().to_owned())
+        } else if name == OsStr::new("XDG_STATE_HOME") {
+            Some(self.directories.state().as_os_str().to_owned())
+        } else {
+            env::var_os(name)
+        }
+    }
+}
+
+#[cfg(target_os = "redox")]
+impl ConfigEnvironment for FlashOsDirectoryEnvironment {
+    fn value(&self, name: &OsStr) -> Option<std::ffi::OsString> {
+        self.value(name)
+    }
+}
+
+#[cfg(target_os = "redox")]
+impl HistoryEnvironment for FlashOsDirectoryEnvironment {
+    fn value(&self, name: &OsStr) -> Option<std::ffi::OsString> {
+        self.value(name)
+    }
+}
+
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 fn run_interactive(no_config: bool, no_history: bool) -> ExitCode {
     let cwd = match env::current_dir() {
@@ -252,8 +330,9 @@ fn run_interactive(no_config: bool, no_history: bool) -> ExitCode {
     // the previous handling back on every exit path including a panic. A
     // platform without the capability delivers no terminal signals either, so an
     // unsupported result is not a startup failure.
-    let _signals = if PosixPlatform.is_terminal() {
-        match PosixPlatform.install_job_control_signals() {
+    let platform = native_platform();
+    let _signals = if platform.is_terminal() {
+        match platform.install_job_control_signals() {
             Ok(guard) => Some(guard),
             Err(PlatformError::Unsupported { .. }) => None,
             Err(error) => {
@@ -354,8 +433,9 @@ fn run_interactive(no_config: bool, no_history: bool) -> ExitCode {
     // the previous handling back on every exit path including a panic. A
     // platform without the capability delivers no terminal signals either, so an
     // unsupported result is not a startup failure.
-    let _signals = if PosixPlatform.is_terminal() {
-        match PosixPlatform.install_job_control_signals() {
+    let platform = native_platform();
+    let _signals = if platform.is_terminal() {
+        match platform.install_job_control_signals() {
             Ok(guard) => Some(guard),
             Err(PlatformError::Unsupported { .. }) => None,
             Err(error) => {
@@ -367,6 +447,14 @@ fn run_interactive(no_config: bool, no_history: bool) -> ExitCode {
         None
     };
 
+    let standard_directories = match platform.standard_directories(&ProcessDirectoryEnvironment) {
+        Ok(directories) => directories,
+        Err(error) => {
+            eprintln!("fsh: cannot select standard directories: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let directory_environment = FlashOsDirectoryEnvironment::new(standard_directories);
     let defaults = ConfigDefaults::new(ScopeStack::new(), process_environment());
     let request = ConfigRequest::new(
         ConfigInvocation::Interactive,
@@ -375,7 +463,7 @@ fn run_interactive(no_config: bool, no_history: bool) -> ExitCode {
     );
     let startup = match initialize_config(
         request,
-        &ProcessConfigEnvironment,
+        &directory_environment,
         &HostConfigSource,
         &defaults,
         &ConfigLimits::default(),
@@ -408,12 +496,11 @@ fn run_interactive(no_config: bool, no_history: bool) -> ExitCode {
     // console falls back to canonical line reading. Both ends are checked: the
     // editor redraws its row with cursor escapes, and a session typed at from
     // a keyboard but redirected to a file must not have them written into it.
-    let platform = PosixPlatform;
     let outcome = if platform.is_terminal() && platform.is_output_terminal() {
         let selection = match select_history(
             no_history || !startup.interactive_settings().history(),
             HistoryPlatform::current(),
-            &ProcessHistoryEnvironment,
+            &directory_environment,
         ) {
             Ok(selection) => selection,
             Err(error) => {
@@ -465,7 +552,7 @@ fn run_interactive(no_config: bool, no_history: bool) -> ExitCode {
 struct SessionEvaluator {
     session: Session,
     probe: NativeExecutableProbe,
-    platform: PosixPlatform,
+    platform: NativePlatform,
     clock: Arc<SystemClock>,
     pending_notice: Option<JobNoticeId>,
     /// Whether the immediately preceding submission was a refused exit.
@@ -481,7 +568,7 @@ impl SessionEvaluator {
         Self {
             session,
             probe: NativeExecutableProbe,
-            platform: PosixPlatform,
+            platform: native_platform(),
             clock,
             pending_notice: None,
             exit_refused: false,
@@ -631,6 +718,7 @@ fn run_script(path: &Path, arguments: &[String]) -> ExitCode {
     let registry = flash_runtime::builtin::standard_registry();
     let stdout = io::stdout();
     let mut output = stdout.lock();
+    let platform = native_platform();
     let result = execute_module_program(
         &program,
         arguments,
@@ -639,7 +727,7 @@ fn run_script(path: &Path, arguments: &[String]) -> ExitCode {
         &registry,
         &NativeExecutableProbe,
         &SessionOptions::default(),
-        &PosixPlatform,
+        &platform,
         Arc::new(SystemClock::new()) as Arc<dyn Clock>,
         &mut output,
     );
@@ -664,7 +752,8 @@ impl ModuleSourceLoader for HostModuleFilesystem {
 }
 
 fn run_async_capsule(descriptor: u32, completion_descriptor: Option<u32>) -> ExitCode {
-    match PosixPlatform.ignore_hangup() {
+    let platform = native_platform();
+    match platform.ignore_hangup() {
         Ok(()) | Err(PlatformError::Unsupported { .. }) => {}
         Err(error) => {
             eprintln!("fsh: cannot ignore hang-up in the background child: {error}");
@@ -672,7 +761,7 @@ fn run_async_capsule(descriptor: u32, completion_descriptor: Option<u32>) -> Exi
         }
     }
 
-    let mut endpoint = match PosixPlatform.inherit_descriptor(descriptor) {
+    let mut endpoint = match platform.inherit_descriptor(descriptor) {
         Ok(endpoint) => endpoint,
         Err(error) => {
             eprintln!("fsh: cannot inherit execution capsule descriptor: {error}");
@@ -713,7 +802,7 @@ fn run_async_capsule(descriptor: u32, completion_descriptor: Option<u32>) -> Exi
         capsule,
         &registry,
         &NativeExecutableProbe,
-        &PosixPlatform,
+        &platform,
         Arc::new(SystemClock::new()) as Arc<dyn Clock>,
         &mut output,
     );
@@ -729,7 +818,7 @@ fn run_async_capsule(descriptor: u32, completion_descriptor: Option<u32>) -> Exi
                         return ExitCode::FAILURE;
                     }
                 };
-                let mut endpoint = match PosixPlatform.inherit_descriptor(descriptor) {
+                let mut endpoint = match platform.inherit_descriptor(descriptor) {
                     Ok(endpoint) => endpoint,
                     Err(error) => {
                         eprintln!("fsh: cannot inherit completion descriptor: {error}");

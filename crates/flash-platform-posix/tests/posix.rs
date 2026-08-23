@@ -10,6 +10,7 @@ use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, Instant};
 
 use flash_platform::{
     Capability, ChildDescriptor, DirectoryEntry, DirectoryEntryKind, DirectoryReadError,
@@ -403,6 +404,42 @@ fn posix_spawn_preserves_native_argv_and_never_invokes_a_shell() {
         false,
     );
     assert_eq!(bytes, expected);
+}
+
+#[test]
+fn posix_nonblocking_wait_preserves_a_live_child_and_caches_completion() {
+    let temp = TempDir::new("nonblocking-wait");
+    let fixture = Path::new(env!("CARGO_BIN_EXE_flash-process-observer-fixture"));
+    let release = temp.path().join("release");
+    let argv = [OsString::from("holder")];
+    let mut environment = probe_environment(temp.path(), "holder");
+    environment.push((
+        OsString::from("FLASH_PROBE_HOLD_UNTIL"),
+        release.clone().into_os_string(),
+    ));
+    let request = SpawnRequest::new(fixture, &argv, &environment, temp.path())
+        .expect("the spawn request is valid");
+    let mut child = PosixPlatform.spawn(&request).expect("the fixture spawns");
+
+    assert_eq!(child.try_wait_for_transition(), Ok(None));
+    fs::write(release, b"go").expect("the release marker is writable");
+
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let status = loop {
+        if let Some(transition) = child
+            .try_wait_for_transition()
+            .expect("nonblocking observation should succeed")
+        {
+            break transition;
+        }
+        assert!(Instant::now() < deadline, "the released child should exit");
+        std::thread::yield_now();
+    };
+    assert_eq!(
+        status,
+        ProcessTransition::Completed(ProcessStatus::Exited(0))
+    );
+    assert_eq!(child.wait(), Ok(ProcessStatus::Exited(0)));
 }
 
 #[test]

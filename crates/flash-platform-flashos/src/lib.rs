@@ -22,10 +22,15 @@ use flash_platform_posix::PosixPlatform;
 
 /// The capabilities whose complete target behavior has been qualified.
 ///
-/// Classification selected implementation routes but did not establish target
-/// behavior. Later FlashOS runtime qualification enables individual groups;
-/// until then the adapter refuses every capability through the portable error.
-const QUALIFIED_CAPABILITIES: Capabilities = Capabilities::empty();
+/// Target runtime bring-up qualifies every classified group except signals.
+///
+/// FlashOS has not produced a stopped-child transition through the configured
+/// target wait route, so the indivisible signals group remains absent rather
+/// than advertising group delivery without its required transition vocabulary.
+/// The durable capability report and exhaustive target matrix remain separate
+/// gates. New groups likewise default to absent until their complete behavior
+/// is explicitly brought up and added here.
+const QUALIFIED_CAPABILITIES: Capabilities = Capabilities::full_without(Capability::Signals);
 
 /// The concrete FlashOS platform adapter.
 #[derive(Clone, Copy, Debug)]

@@ -5,9 +5,7 @@ use std::ffi::{OsStr, OsString};
 use std::os::unix::ffi::OsStringExt;
 use std::path::Path;
 
-use flash_platform::{
-    Capabilities, Capability, Platform, PlatformError, StandardDirectoryEnvironment,
-};
+use flash_platform::{Capabilities, Capability, Platform, StandardDirectoryEnvironment};
 use flash_platform_flashos::{FlashOsDirectoryPolicy, FlashOsPlatform};
 
 struct DirectoryEnvironment(Vec<(OsString, OsString)>);
@@ -21,14 +19,17 @@ impl StandardDirectoryEnvironment for DirectoryEnvironment {
 }
 
 #[test]
-fn the_adapter_advertises_nothing_before_target_qualification() {
+fn the_adapter_advertises_only_qualified_runtime_groups() {
     let platform = FlashOsPlatform::new();
 
-    assert_eq!(platform.capabilities(), Capabilities::empty());
+    assert_eq!(
+        platform.capabilities(),
+        Capabilities::full_without(Capability::Signals)
+    );
     for capability in Capability::ALL {
         assert_eq!(
-            platform.require(capability),
-            Err(PlatformError::Unsupported { capability }),
+            platform.capabilities().supports(capability),
+            capability != Capability::Signals
         );
     }
 }

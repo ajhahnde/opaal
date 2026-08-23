@@ -145,9 +145,9 @@ tests = [
 
 [[family]]
 id = "flashos-platform-routes"
-summary = "Every recovered platform route remains classified while target capability advertisement stays qualification-gated."
+summary = "Every recovered platform route remains classified and the FlashOS executable selects the qualification-gated adapter."
 layers = ["platform"]
 tests = [
-  "crates/flash-platform-flashos/tests/flashos.rs::the_adapter_advertises_nothing_before_target_qualification",
+  "crates/flash-platform-flashos/tests/flashos.rs::the_adapter_advertises_only_qualified_runtime_groups",
   "crates/flash-platform-flashos/tests/flashos.rs::flashos_standard_directories_preserve_non_utf8_path_bytes",
 ]

@@ -10,7 +10,7 @@ target = "x86_64-unknown-redox"
 platform_baseline = "flashos-x86_64.toml"
 capability_evidence = "flashos-x86_64-capability-evidence.toml"
 contract_source = "components/flash/crates/flash-platform/src/lib.rs"
-selected_adapter = "flash-platform-posix::PosixPlatform"
+selected_adapter = "flash-platform-flashos::FlashOsPlatform"
 classification = "deferred"
 
 [compiler_source]
@@ -118,11 +118,11 @@ id = "relibc-child-wait"
 provider = "relibc"
 revision = "5f6afb52692e62dae79154f4dbec2d0e79a07602"
 tracked_path = "components/flash/crates/flash-platform-posix/src/lib.rs"
-tracked_markers = ["libc::waitpid(pid, &raw mut status, flags)", "libc::WUNTRACED | libc::WCONTINUED"]
+tracked_markers = ["libc::waitpid(pid, &raw mut status, flags)", "flags | libc::WNOHANG", "libc::WUNTRACED | libc::WCONTINUED"]
 paths = ["src/header/sys_wait/mod.rs", "src/platform/redox/mod.rs", "redox-rt/src/sys.rs"]
 interfaces = ["waitpid"]
 symbols = ["waitpid"]
-observation = "Flash calls waitpid directly for completion and transition observation; configured relibc maps it into the Redox process-wait runtime seam."
+observation = "Flash calls waitpid directly for blocking and nonblocking transition observation; configured relibc maps it into the Redox process-wait runtime seam."
 
 [[abi_seam]]
 id = "relibc-process-groups"
@@ -213,7 +213,7 @@ classification = "deferred"
 id = "cwd-startup-read"
 capability = "working-directory"
 requirement = "read the startup directory"
-source_evidence = ["redox-selects-posix"]
+source_evidence = ["redox-selects-flashos"]
 abi_seams = ["rust-filesystem"]
 boundary = "rust-std"
 mapping_observation = "The Redox client obtains the startup cwd through std::env::current_dir."
@@ -323,10 +323,10 @@ classification = "deferred"
 id = "process-wait-transitions"
 capability = "process-spawn"
 requirement = "wait for completion and transitions"
-source_evidence = ["adapter-process-lifecycle"]
+source_evidence = ["adapter-process-lifecycle", "runtime-redox-session-observation"]
 abi_seams = ["relibc-child-wait"]
 boundary = "libc-abi"
-mapping_observation = "The owned child calls relibc waitpid directly, with WUNTRACED and WCONTINUED for transition observation."
+mapping_observation = "The owned child calls relibc waitpid directly, adding WNOHANG for session-thread background observation and WUNTRACED/WCONTINUED for transition classes."
 classification = "deferred"
 
 [[operation]]

@@ -713,11 +713,11 @@ Restoration is also performed when a guard is dropped, providing a cleanup bound
 
 A concrete adapter implements the abstract platform capability contract for one operating-system environment.
 
-[`flash-platform-posix`](../crates/flash-platform-posix/src/lib.rs) provides the Unix-like process, descriptor, filesystem, signal, and terminal routes used by the current executable. Its behavior on Linux or macOS is host evidence, not automatic FlashOS qualification.
+[`flash-platform-posix`](../crates/flash-platform-posix/src/lib.rs) provides the Unix-like process, descriptor, filesystem, signal, and terminal routes composed by concrete adapters. Its behavior on Linux or macOS is host evidence, not automatic FlashOS qualification.
 
 [`flash-platform-flashos`](../crates/flash-platform-flashos/src/lib.rs) is the dedicated FlashOS adapter. It composes the 41 classified existing Rust and `relibc` routes behind the portable contract and owns the shimmed standard-directory policy: absolute native `HOME` and XDG roots are preserved, while missing or relative values receive deterministic FlashOS home, configuration, cache, and state fallbacks. These target details do not enter `flash-runtime`.
 
-The Redox-target `fsh` dependency graph compiles the FlashOS adapter, but the executable does not select it yet. Its public capability set remains empty until later target-runtime qualification enables individual groups. This keeps implementation, selection, and behavioral support claims as separate reviewable steps.
+Redox-target `fsh` selects the FlashOS adapter in interactive, script, and background-supervisor modes. The adapter advertises the image-qualified groups used by foreground execution, scripts, structured commands, pipelines, redirections, directories, and background waits. Signals remain absent because the target has not qualified the complete stopped/continued/signaled transition vocabulary; Flash reports that missing capability instead of silently weakening job control.
 
 The runtime depends only on the abstract capability contract. It must not silently emulate a missing target capability with weaker POSIX behavior. Release and target evidence determine which adapter capabilities may be claimed publicly.
 
@@ -756,7 +756,7 @@ inventory compares every current `Capability` variant with the source path
 selected by the Redox executable and with observations already made by the
 FlashOS QEMU contract. It records requirements, source observations, runtime
 observations, and explicit evidence gaps without turning them into support
-classifications. In particular, the selected adapter's full-capability
+classifications. In particular, the selected adapter's capability
 declaration remains a claim under comparison; it is not accepted as target
 qualification merely because the same code passes on Linux or macOS.
 
@@ -767,9 +767,10 @@ operations remain entirely inside Flash, direct job-control and terminal calls
 reach configured `relibc` ABI and Redox userland paths, and higher-level
 environment, process, filesystem, directory, executable, and time calls stop at
 public Rust standard-library APIs because the target compiler source commit is
-unknown. Configuration-directory operations are recorded as currently
-unrouted. These are mapping facts, not native, adapted, unsupported, or
-kernel-work classifications, and they do not replace target behavior evidence.
+unknown. Configuration-directory operations route through the dedicated
+FlashOS policy shim. These are mapping facts, not native, adapted, unsupported,
+or kernel-work classifications, and they do not replace target behavior
+evidence.
 
 The separate
 [`flashos-x86_64-capability-classification.toml`](../platforms/flashos-x86_64-capability-classification.toml)
@@ -779,10 +780,9 @@ and configured-`relibc` routes are native. Standard-directory discovery,
 native-path preservation, and fallback policy are shimmed because FlashOS must
 define and wire an explicit target convention over existing filesystem
 primitives. No current operation is deliberately unsupported or requires
-kernel work. All target-runtime qualification remains pending; an architectural
-route verdict is not a behavioral support claim. The dedicated adapter now
-implements those routes without enabling any capability or changing the
-executable's selected adapter.
+kernel work. An architectural route verdict is not a behavioral support claim.
+The selected dedicated adapter enables the separately image-qualified groups;
+the classification record remains distinct from those runtime observations.
 
 ### Test adapters
 
