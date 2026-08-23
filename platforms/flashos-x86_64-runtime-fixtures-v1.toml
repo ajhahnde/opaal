@@ -85,10 +85,10 @@ capabilities = ["process-spawn", "process-groups", "monotonic-clock"]
 reject = ["error[RUN001]"]
 
 [[fixture.step]]
-input = "^sleep 1&"
-rendered = ">> ^sleep 1&"
+input = "^sleep 9&"
+rendered = ">> ^sleep 9&"
 expect = "[4] "
-manual = "The visible row is `>> ^sleep 1&`, followed by job `[4]`."
+manual = "The visible row is `>> ^sleep 9&`, followed by job `[4]`; enter the following wait before the nine-second child completes."
 
 [[fixture.step]]
 input = "wait %4"
@@ -102,10 +102,10 @@ capabilities = ["process-spawn", "process-groups", "shell-executable", "hangup-d
 reject = ["error[RUN001]"]
 
 [[fixture.step]]
-input = "^sleep 1&&true&"
-rendered = ">> ^sleep 1&&true&"
+input = "^sleep 9&&true&"
+rendered = ">> ^sleep 9&&true&"
 expect = "[5] "
-manual = "The visible row is `>> ^sleep 1&&true&`, followed by job `[5]`."
+manual = "The visible row is `>> ^sleep 9&&true&`, followed by job `[5]`; enter the following wait before the nine-second supervisor completes."
 
 [[fixture.step]]
 input = "wait %5"

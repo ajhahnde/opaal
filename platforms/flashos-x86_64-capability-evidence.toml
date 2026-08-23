@@ -261,7 +261,7 @@ markers = [
   'input = "^echo p|^cat"',
   'input = "ls|length"',
   'input = "wait %4"',
-  'input = "^sleep 1&&true&"',
+  'input = "^sleep 9&&true&"',
   'reject = ["error[RUN001]"]',
 ]
 observation = "The QEMU runner consumes the reusable suite and checks logical cwd, script creation and execution, a two-member external byte pipeline, structured directory data, a waited background child, and a waited conditional-chain supervisor without a runtime diagnostic. The same ordered steps and expectations are available to manually observed real systems."
