@@ -60,7 +60,7 @@ Development evidence is layered:
 | -------------------------- | ------------------------------------------------------------------------ |
 | Formatting and Clippy      | Source-format and lint compliance for the host build                     |
 | Host tests                 | Portable behavior and supported host-platform integration                |
-| Fuzzing                    | Resilience of selected syntax entry points against generated inputs      |
+| Fuzzing                    | Resilience of syntax and ordinary-word expansion against generated inputs |
 | `redoxer` builds           | Compilation of the shipped Flash executables for the Redox target environment |
 | Package build              | Construction of the checkout-bound Flash workspace through the FlashOS recipe |
 | Image build                | Inclusion of that package in an assembled FlashOS image                  |
@@ -326,7 +326,7 @@ The workspace combines unit tests, crate integration tests, declarative golden c
 | Concrete adapter   | Process creation, descriptors, waits, signals, process groups, and terminal guards                                                                     |
 | CLI                | Argument handling, host-status mapping, report streams, startup configuration, editor services, interactive recovery, history, completion, and highlighting |
 | Black-box and PTY  | Executable statuses and channels, prompts, control characters, terminal ownership, signals, recovery, and job control                                      |
-| Fuzzing            | Public lexer and parser entry points with arbitrary bytes                                                                                              |
+| Fuzzing            | Public lexer, parser, and ordinary-word expansion entry points with arbitrary bytes                                                                    |
 
 Run a named integration test with Cargo's `--test` selector:
 
@@ -1029,13 +1029,17 @@ A fixture is test infrastructure, not part of the installed Flash package.
 
 ## Fuzzing
 
-The separate [`fuzz/`](../fuzz/) workspace contains libFuzzer targets for the public lexer and parser entry points.
+The separate [`fuzz/`](../fuzz/) workspace contains libFuzzer targets for the public lexer, parser, and ordinary-word expansion entry points.
 
-Both targets accept arbitrary bytes:
+All targets accept arbitrary bytes:
 
 - valid UTF-8 is passed through the syntax APIs;
 - invalid UTF-8 exercises source loading and normal rejection;
 - golden `.fsh` files seed the mutation corpus.
+
+The expander target evaluates parsed command words against a fixed in-memory
+scope. Its public pure-evaluation boundary does not launch processes or perform
+platform I/O.
 
 From the component workspace, run the bounded smoke campaign:
 
@@ -1052,13 +1056,35 @@ The default campaign runs a bounded number of executions for each target. Supply
 
 The runner:
 
-- invokes the `lexer` and `parser` targets;
+- invokes the `lexer`, `parser`, and `expander` targets;
 - uses the grammar and lexical golden files as read-only seeds;
 - creates writable corpora in a temporary directory;
-- limits generated input length;
+- limits generated input length, per-input execution time, and resident memory;
 - removes the temporary corpus when the run ends.
 
 The smoke runner is a fast regression check. It is not equivalent to a long-running fuzz campaign.
+
+For a sustained campaign, use the time-bounded runner. Its default is ten minutes
+per target:
+
+```bash
+./fuzz/run-campaign.sh
+```
+
+Supply a positive duration in seconds and, optionally, a new result directory:
+
+```bash
+./fuzz/run-campaign.sh 3600 /path/to/results
+```
+
+The selected result directory must not already exist, preventing one campaign
+from silently mixing its evidence with an earlier run.
+
+The default result path is a unique ignored directory under
+`fuzz/campaigns/`. Unlike the smoke runner, the sustained runner preserves each
+target's writable corpus and failure artifacts for review. Both runners limit
+inputs to 4,096 bytes, ten seconds of execution, and 2,048 MiB of resident
+memory.
 
 When a campaign finds a failure:
 

@@ -1,5 +1,6 @@
 /target/
 /fuzz/artifacts/
+/fuzz/campaigns/
 /fuzz/coverage/
 /fuzz/target/
 *.swp

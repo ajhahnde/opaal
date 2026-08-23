@@ -27,6 +27,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- Add bounded lexer, parser, and ordinary-word expander fuzz campaigns
+  with a fast smoke runner, retained sustained-campaign corpora and artifacts,
+  and a documented failure-to-regression workflow.
 - Add a versioned FlashOS target-capability matrix that assigns every
   advertised classified operation to an owning target case and exercises the
   required startup, language, session, editor, supported-job, and clean-exit

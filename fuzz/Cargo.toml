@@ -8,6 +8,7 @@ edition = "2024"
 cargo-fuzz = true
 
 [dependencies]
+flash-runtime = { path = "../crates/flash-runtime" }
 flash-syntax = { path = "../crates/flash-syntax" }
 libfuzzer-sys = "0.4"
 
@@ -21,6 +22,13 @@ bench = false
 [[bin]]
 name = "parser"
 path = "fuzz_targets/parser.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "expander"
+path = "fuzz_targets/expander.rs"
 test = false
 doc = false
 bench = false

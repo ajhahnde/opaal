@@ -47,7 +47,7 @@ Focused implementation and verification areas maintain narrower README files bes
 
 - [Cargo workspace manifest](../Cargo.toml) — Workspace membership and shared package metadata.
 - [`flash-lsp` crate](../crates/flash-lsp/) — Stdio transport, versioned document workspace, protocol projection, and language-server executable.
-- [Fuzz targets](../fuzz/README.md) — Lexer and parser fuzz inputs, smoke campaigns, and corpus handling.
+- [Fuzz targets](../fuzz/README.md) — Lexer, parser, and ordinary-word expander fuzz inputs, campaigns, and corpus handling.
 - [End-to-end tests](../tests/e2e/README.md) — Location of black-box and pseudoterminal test fixtures.
 - [Test fixtures](../tests/fixtures/README.md) — Rust child programs used to observe process, descriptor, status, and stream behavior.
 - [Grammar golden corpus](../tests/golden/grammar/README.md) — Parser fixture inventory and expected classifications.
