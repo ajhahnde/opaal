@@ -784,6 +784,23 @@ kernel work. An architectural route verdict is not a behavioral support claim.
 The selected dedicated adapter enables the separately image-qualified groups;
 the classification record remains distinct from those runtime observations.
 
+The versioned
+[`flashos-x86_64-capability-report-v1.toml`](../platforms/flashos-x86_64-capability-report-v1.toml)
+records the adapter's advertised set against the current Flash workspace and
+FlashOS release versions. Every advertised group names at least one owning
+fixture from
+[`flashos-x86_64-runtime-fixtures-v1.toml`](../platforms/flashos-x86_64-runtime-fixtures-v1.toml),
+while `Signals` remains withheld with no fixture claim. The fixture suite is
+consumed by the QEMU runner and can be rendered as the same ordered checklist
+for a manually observed real system.
+
+The report's qualification level is deliberately `bounded`. It establishes a
+durable relationship among the selected adapter, classified routes, reusable
+smoke interactions, and known limitations. It does not claim exhaustive Flash
+language/session/editor behavior, physical-hardware success, release
+qualification, or the complete stopped/continued/signaled transition
+vocabulary.
+
 ### Test adapters
 
 The platform crate also provides deterministic fake and recording adapters.

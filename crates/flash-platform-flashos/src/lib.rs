@@ -27,9 +27,10 @@ use flash_platform_posix::PosixPlatform;
 /// FlashOS has not produced a stopped-child transition through the configured
 /// target wait route, so the indivisible signals group remains absent rather
 /// than advertising group delivery without its required transition vocabulary.
-/// The durable capability report and exhaustive target matrix remain separate
-/// gates. New groups likewise default to absent until their complete behavior
-/// is explicitly brought up and added here.
+/// The versioned capability report records this bounded advertised set. The
+/// exhaustive target matrix remains a separate gate. New groups likewise
+/// default to absent until their complete behavior is explicitly brought up,
+/// reported, and added here.
 const QUALIFIED_CAPABILITIES: Capabilities = Capabilities::full_without(Capability::Signals);
 
 /// The concrete FlashOS platform adapter.

@@ -886,6 +886,25 @@ A platform change should retain the distinction between:
 
 This distinction is required for useful diagnostics and target-specific degradation.
 
+Validate the checked FlashOS route classification, reusable runtime fixtures,
+and versioned advertised-capability report from the repository root:
+
+```bash
+python3 ci/check_flashos_capability_classification.py
+python3 ci/check_flashos_capability_report.py
+```
+
+Render the same ordered smoke inputs and expected observations for an
+manually observed real system with:
+
+```bash
+python3 ci/flashos_runtime_fixtures.py
+```
+
+The report is bounded evidence. A fixture reference does not turn one observed
+path into exhaustive capability validation, physical-hardware evidence, or
+release qualification.
+
 ## Develop the CLI and interactive session
 
 Changes to command-line parsing, startup modes, configuration, prompts, completion, highlighting, history, line editing, interactive recovery, or top-level session control belong in `flash-cli`.

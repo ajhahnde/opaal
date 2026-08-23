@@ -1,0 +1,164 @@
+# Versioned report for the capabilities advertised by Flash on x86_64 FlashOS.
+# "bounded" records the current reusable smoke evidence; it does not claim the
+# exhaustive language/session/editor qualification owned by the later matrix.
+
+schema_version = 1
+report_version = 1
+platform = "flashos"
+architecture = "x86_64"
+target = "x86_64-unknown-redox"
+flash_language_major = 1
+flash_workspace_version = "0.1.0"
+flashos_release = "0.1.0"
+platform_baseline = "flashos-x86_64.toml"
+capability_evidence = "flashos-x86_64-capability-evidence.toml"
+capability_classification = "flashos-x86_64-capability-classification.toml"
+runtime_fixtures = "flashos-x86_64-runtime-fixtures-v1.toml"
+contract_source = "components/flash/crates/flash-platform/src/lib.rs"
+selected_adapter = "flash-platform-flashos::FlashOsPlatform"
+qualification = "bounded"
+
+[semantics]
+advertised = "The selected adapter exposes the complete capability group and the bounded target suite reaches at least one owning runtime path."
+withheld = "The selected adapter does not expose the capability because its complete target behavior is not qualified."
+scope = "The report records reusable smoke evidence and adapter availability, not exhaustive behavior, physical hardware, or release qualification."
+
+[[capability]]
+name = "environment"
+rust_variant = "Environment"
+classification = "native"
+advertised = true
+qualification = "bounded"
+fixture_ids = ["working-directory-script", "external-pipeline"]
+summary = "Target child paths install the explicit session environment."
+limitations = ["Environment mutation, removal, and native non-UTF-8 preservation are not asserted by the bounded suite."]
+
+[[capability]]
+name = "working-directory"
+rust_variant = "WorkingDirectory"
+classification = "native"
+advertised = true
+qualification = "bounded"
+fixture_ids = ["working-directory-script"]
+summary = "The target session selects `/tmp` and a child fsh observes it."
+limitations = ["Failure, symlink, and native non-UTF-8 directory cases are not asserted by the bounded suite."]
+
+[[capability]]
+name = "file-actions"
+rust_variant = "FileActions"
+classification = "native"
+advertised = true
+qualification = "bounded"
+fixture_ids = ["working-directory-script", "external-pipeline"]
+summary = "The target opens a redirection and owns pipeline descriptors through completion."
+limitations = ["The bounded suite does not exhaust descriptor duplication, close, append, or in-process streaming permutations."]
+
+[[capability]]
+name = "pipes"
+rust_variant = "Pipes"
+classification = "native"
+advertised = true
+qualification = "bounded"
+fixture_ids = ["external-pipeline"]
+summary = "A two-member external byte pipeline preserves and renders its payload."
+limitations = ["Backpressure, cancellation, and wider mixed pipelines remain outside this bounded report."]
+
+[[capability]]
+name = "process-spawn"
+rust_variant = "ProcessSpawn"
+classification = "native"
+advertised = true
+qualification = "bounded"
+fixture_ids = ["working-directory-script", "external-pipeline", "background-child", "background-supervisor"]
+summary = "Foreground children, a direct background child, and a re-executed supervisor complete."
+limitations = ["Forced termination, cancellation, and every child-transition result are not asserted by the bounded suite."]
+
+[[capability]]
+name = "process-groups"
+rust_variant = "ProcessGroups"
+classification = "native"
+advertised = true
+qualification = "bounded"
+fixture_ids = ["external-pipeline", "background-child", "background-supervisor"]
+summary = "Grouped foreground and background process paths complete through the target runtime."
+limitations = ["The serial transcript does not expose process-group identifiers or membership directly."]
+
+[[capability]]
+name = "foreground-terminal"
+rust_variant = "ForegroundTerminal"
+classification = "native"
+advertised = true
+qualification = "bounded"
+fixture_ids = ["external-pipeline"]
+summary = "A foreground external pipeline returns to a usable Flash prompt."
+limitations = ["Stopped-job terminal-mode snapshots and repeated foreground handoffs are not asserted by the bounded suite."]
+
+[[capability]]
+name = "signals"
+rust_variant = "Signals"
+classification = "native"
+advertised = false
+qualification = "withheld"
+fixture_ids = []
+summary = "The selected adapter withholds the indivisible signal capability."
+limitations = ["FlashOS has not produced the stopped-child transition required to qualify the complete group."]
+
+[[capability]]
+name = "terminal-info"
+rust_variant = "TerminalInfo"
+classification = "native"
+advertised = true
+qualification = "bounded"
+fixture_ids = ["interactive-editing"]
+summary = "The target-only raw editor corrects a byte and submits the resulting row."
+limitations = ["Resize, Unicode, multiline input, history, cancellation, and stopped-job modes are not asserted by the bounded suite."]
+
+[[capability]]
+name = "monotonic-clock"
+rust_variant = "MonotonicClock"
+classification = "native"
+advertised = true
+qualification = "bounded"
+fixture_ids = ["background-child"]
+summary = "Background launch and transition recording traverse the runtime clock seam."
+limitations = ["The bounded transcript does not expose timestamps, elapsed durations, or deadline values directly."]
+
+[[capability]]
+name = "standard-directories"
+rust_variant = "StandardDirectories"
+classification = "shimmed"
+advertised = true
+qualification = "bounded"
+fixture_ids = ["interactive-editing"]
+summary = "Interactive startup reaches the target editor after FlashOS config and history discovery."
+limitations = ["Alternate roots, persisted history, and cache/state consumers are not asserted by the bounded suite."]
+
+[[capability]]
+name = "directory-read"
+rust_variant = "DirectoryRead"
+classification = "native"
+advertised = true
+qualification = "bounded"
+fixture_ids = ["structured-directory"]
+summary = "Structured directory enumeration observes the controlled fixture directory."
+limitations = ["Explicit glob patterns, lazy failure, native names, and metadata variants are not asserted by the bounded suite."]
+
+[[capability]]
+name = "shell-executable"
+rust_variant = "ShellExecutable"
+classification = "native"
+advertised = true
+qualification = "bounded"
+fixture_ids = ["background-supervisor"]
+summary = "A background conditional chain re-executes the current Flash binary."
+limitations = ["Alternate executable paths and native non-UTF-8 identity are not asserted by the bounded suite."]
+
+[[capability]]
+name = "hangup-disposition"
+rust_variant = "HangupDisposition"
+classification = "native"
+advertised = true
+qualification = "bounded"
+fixture_ids = ["background-supervisor"]
+summary = "The re-executed supervisor installs its hang-up disposition and reaps normally."
+limitations = ["Explicit hang-up delivery and failure paths are not asserted by the bounded suite."]

@@ -245,26 +245,26 @@ observation = "The selected adapter installs an ignored hang-up disposition for 
 
 [[runtime_evidence]]
 id = "qemu-terminal-editor"
-path = "ci/qemu_smoke.py"
+path = "components/flash/platforms/flashos-x86_64-runtime-fixtures-v1.toml"
 markers = [
-  "# Interactive editing. This is the only place the raw-mode editor is proven",
-  'edit_mark = submit_line(b"pwz\x7fd", b">> pwd")',
-  'collect_until(b"\r\n/home/user", edit_mark)',
+  'id = "interactive-editing"',
+  'input_hex = "70777a7f64"',
+  'expect = "\r\n/home/user"',
 ]
-observation = "The current image enters the target-only raw editor, applies byte editing, submits the corrected row, and produces the expected internal-command value. History recall, multiline input, Ctrl-C cancellation, and prompt recovery remain covered by host pseudoterminal acceptance, not claimed by this bounded target observation."
+observation = "The QEMU runner consumes the reusable suite, enters the target-only raw editor, applies byte editing, submits the corrected row, and produces the expected internal-command value. The same steps are rendered for manually observed real systems. History recall, multiline input, Ctrl-C cancellation, and prompt recovery remain outside this bounded observation."
 
 [[runtime_evidence]]
 id = "qemu-runtime-bringup"
-path = "ci/qemu_smoke.py"
+path = "components/flash/platforms/flashos-x86_64-runtime-fixtures-v1.toml"
 markers = [
-  'submit_line(b"^echo pwd>x", b">> ^echo pwd>x")',
-  'pipeline_mark = submit_line(b"^echo p|^cat", b">> ^echo p|^cat")',
-  'structured_mark = submit_line(b"ls|length", b">> ls|length")',
-  'submit_line(b"wait %4", b">> wait %4")',
-  'submit_line(b"^sleep 1&&true&", b">> ^sleep 1&&true&")',
-  'if b"error[RUN001]" in job_transcript:',
+  'input = "^echo pwd>x"',
+  'input = "^echo p|^cat"',
+  'input = "ls|length"',
+  'input = "wait %4"',
+  'input = "^sleep 1&&true&"',
+  'reject = ["error[RUN001]"]',
 ]
-observation = "The current image changes its logical directory, creates and executes a script, runs a two-member external byte pipeline, enumerates structured directory data, waits for a background child, and waits for a background conditional-chain supervisor without a runtime diagnostic."
+observation = "The QEMU runner consumes the reusable suite and checks logical cwd, script creation and execution, a two-member external byte pipeline, structured directory data, a waited background child, and a waited conditional-chain supervisor without a runtime diagnostic. The same ordered steps and expectations are available to manually observed real systems."
 
 [[capability]]
 name = "environment"

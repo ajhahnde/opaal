@@ -1,0 +1,119 @@
+# Versioned target-runtime smoke inputs shared by the automated QEMU runner and
+# manually observed real systems. This bounded suite is not the exhaustive
+# Flash language and capability matrix.
+
+schema_version = 1
+suite_version = 1
+scope = "bounded"
+platform = "flashos"
+architecture = "x86_64"
+target = "x86_64-unknown-redox"
+capability_report = "flashos-x86_64-capability-report-v1.toml"
+consumers = ["qemu", "real-system"]
+prompt = ">> "
+terminator_hex = "0d"
+max_interaction_bytes = 16
+
+[[fixture]]
+id = "interactive-editing"
+summary = "The target editor corrects one byte and executes an internal command."
+capabilities = ["terminal-info", "standard-directories"]
+reject = []
+
+[[fixture.step]]
+input_hex = "70777a7f64"
+rendered = ">> pwd"
+expect = "\r\n/home/user"
+manual = "The corrected visible row is `>> pwd`, followed by `/home/user`."
+
+[[fixture]]
+id = "working-directory-script"
+summary = "The session changes directory, creates a script, and runs it through fsh."
+capabilities = ["environment", "working-directory", "file-actions", "process-spawn"]
+reject = ["error[RUN001]"]
+
+[[fixture.step]]
+input = "cd /tmp"
+rendered = ">> cd /tmp"
+manual = "The visible row is `>> cd /tmp`."
+
+[[fixture.step]]
+input = "pwd"
+rendered = ">> pwd"
+expect = "\r\n/tmp"
+manual = "The visible row is `>> pwd`, followed by `/tmp`."
+
+[[fixture.step]]
+input = "^echo pwd>x"
+rendered = ">> ^echo pwd>x"
+manual = "The visible row is `>> ^echo pwd>x`; no diagnostic is emitted."
+
+[[fixture.step]]
+input = "^fsh x"
+rendered = ">> ^fsh x"
+expect = "\r\n/tmp"
+manual = "The visible row is `>> ^fsh x`, followed by `/tmp`."
+
+[[fixture]]
+id = "external-pipeline"
+summary = "A two-member external byte pipeline returns to the interactive shell."
+capabilities = ["environment", "file-actions", "pipes", "process-spawn", "process-groups", "foreground-terminal"]
+reject = ["error[RUN001]"]
+
+[[fixture.step]]
+input = "^echo p|^cat"
+rendered = ">> ^echo p|^cat"
+expect = "\r\np"
+manual = "The visible row is `>> ^echo p|^cat`, followed by `p`."
+
+[[fixture]]
+id = "structured-directory"
+summary = "Structured directory enumeration observes the controlled fixture directory."
+capabilities = ["directory-read"]
+reject = ["error[RUN001]"]
+
+[[fixture.step]]
+input = "ls|length"
+rendered = ">> ls|length"
+expect = "\r\n1"
+manual = "The visible row is `>> ls|length`, followed by `1`."
+
+[[fixture]]
+id = "background-child"
+summary = "An addressable background child completes through an explicit wait."
+capabilities = ["process-spawn", "process-groups", "monotonic-clock"]
+reject = ["error[RUN001]"]
+
+[[fixture.step]]
+input = "^sleep 1&"
+rendered = ">> ^sleep 1&"
+expect = "[4] "
+manual = "The visible row is `>> ^sleep 1&`, followed by job `[4]`."
+
+[[fixture.step]]
+input = "wait %4"
+rendered = ">> wait %4"
+manual = "The visible row is `>> wait %4`; the prompt returns without a diagnostic."
+
+[[fixture]]
+id = "background-supervisor"
+summary = "A conditional background supervisor re-executes Flash and completes."
+capabilities = ["process-spawn", "process-groups", "shell-executable", "hangup-disposition"]
+reject = ["error[RUN001]"]
+
+[[fixture.step]]
+input = "^sleep 1&&true&"
+rendered = ">> ^sleep 1&&true&"
+expect = "[5] "
+manual = "The visible row is `>> ^sleep 1&&true&`, followed by job `[5]`."
+
+[[fixture.step]]
+input = "wait %5"
+rendered = ">> wait %5"
+manual = "The visible row is `>> wait %5`; the prompt returns without a diagnostic."
+
+[[fixture.step]]
+input = "pwd"
+rendered = ">> pwd"
+expect = "\r\n/tmp"
+manual = "The visible row is `>> pwd`, followed by `/tmp`, proving recovery after both waits."

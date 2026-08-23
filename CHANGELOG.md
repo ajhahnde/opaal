@@ -24,6 +24,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- Add a versioned FlashOS capability report and reusable target-runtime smoke
+  fixtures. The report matches the selected adapter's bounded advertised set,
+  keeps `Signals` withheld, records explicit limitations, and shares exact QEMU
+  and manually run real-system interactions without claiming exhaustive or
+  physical qualification.
 - Complete non-executing assignment checks and shared built-in argument
   contracts. `fsh check`, planning, runtime validation, help, completion, hover,
   and signature help now agree on positional arity and kinds, option arity and
