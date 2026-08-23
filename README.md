@@ -175,6 +175,8 @@ The Flash documentation is organized as follows:
 - [Development](docs/development.md) — workspace setup, tests, formatter,
   checker, and language-server integration and gates, target builds, and
   maintenance workflow
+- [Scheduling stress](scheduling/README.md) — seeded host pipeline-cancellation
+  and job-control campaigns, retained results, and exact replay
 
 For building and booting FlashOS as a complete system, begin with the [FlashOS Getting Started Guide](../../docs/getting-started.md).
 

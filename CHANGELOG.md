@@ -35,6 +35,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- Add bounded, replayable host scheduling campaigns for multi-member pipeline
+  cancellation, terminal restoration, concurrent completion notices, and live-
+  job exit cleanup, with retained manifests and complete failure output.
 - Add bounded lexer, parser, and ordinary-word expander fuzz campaigns
   with a fast smoke runner, retained sustained-campaign corpora and artifacts,
   and a documented failure-to-regression workflow.

@@ -13,7 +13,7 @@ This page is the central index for the public Flash documentation. It directs us
 | Learn the Flash language  | [Language Guide](language-guide.md) | Source structure, values, bindings, expressions, functions, modules, imports, exports, name resolution, commands, and typed pipelines        |
 | Create and verify `.fsh` files | [Scripting](scripting.md)           | Script execution, script arguments, non-executing checks, canonical formatting, external processes, redirections, statuses, jobs, and limits |
 | Understand the implementation  | [Architecture](architecture.md)     | Dependency direction, source and module analysis, language-server protocol boundary, runtime planning, platform capabilities, and lifecycle |
-| Modify and qualify Flash  | [Development](development.md)       | Toolchains, formatter and checker gates, language-server integration and gates, tests, fuzzing, target builds, and documentation validation   |
+| Modify and qualify Flash  | [Development](development.md)       | Toolchains, formatter and checker gates, language-server integration and gates, tests, scheduling stress, fuzzing, target builds, and documentation validation |
 
 Readers who are new to Flash should begin with the [component overview](../README.md), continue with the [Language Guide](language-guide.md), and then use the [Scripting Guide](scripting.md) for practical program execution. Developers changing the implementation should also read the [Architecture](architecture.md) and [Development](development.md) guides.
 
@@ -47,6 +47,7 @@ Focused implementation and verification areas maintain narrower README files bes
 
 - [Cargo workspace manifest](../Cargo.toml) — Workspace membership and shared package metadata.
 - [`flash-lsp` crate](../crates/flash-lsp/) — Stdio transport, versioned document workspace, protocol projection, and language-server executable.
+- [Scheduling stress](../scheduling/README.md) — Seeded host pipeline-cancellation and job-control campaigns, retained results, and exact replay.
 - [Fuzz targets](../fuzz/README.md) — Lexer, parser, and ordinary-word expander fuzz inputs, campaigns, and corpus handling.
 - [End-to-end tests](../tests/e2e/README.md) — Location of black-box and pseudoterminal test fixtures.
 - [Test fixtures](../tests/fixtures/README.md) — Rust child programs used to observe process, descriptor, status, and stream behavior.

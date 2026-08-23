@@ -3,5 +3,6 @@
 /fuzz/campaigns/
 /fuzz/coverage/
 /fuzz/target/
+/scheduling/campaigns/
 *.swp
 .DS_Store

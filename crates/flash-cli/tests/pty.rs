@@ -36,7 +36,11 @@ const CTRL_D: &[u8] = b"\x04";
 const CTRL_Z: &[u8] = b"\x1a";
 const UP_ARROW: &[u8] = b"\x1b[A";
 const TAB: &[u8] = b"\t";
-const TIMEOUT: Duration = Duration::from_secs(10);
+// PTY campaigns create hundreds of process groups and terminal handoffs in one
+// test process. Keep every observation bounded while allowing a loaded host to
+// deliver child transitions without turning scheduling delay into a semantic
+// failure. Latency budgets belong to the separate benchmark contract.
+const TIMEOUT: Duration = Duration::from_secs(30);
 /// A brief pause after a prompt is drawn, letting reedline finish its cursor
 /// handshake before input is injected, so keystrokes are not swallowed.
 const SETTLE: Duration = Duration::from_millis(150);
@@ -456,37 +460,80 @@ const DEFAULT_STRESS_SEEDS: &[u64] = &[
     0x5eed_fade_cafe_beef,
     0xfedc_ba98_7654_3210,
 ];
+const DEFAULT_STRESS_CASES: usize = 64;
+const MAX_STRESS_CASES: usize = 4_096;
+
+fn parse_stress_seed(token: &str, context: &str) -> u64 {
+    let parsed = token.strip_prefix("0x").map_or_else(
+        || token.parse::<u64>(),
+        |digits| u64::from_str_radix(digits, 16),
+    );
+    let seed = parsed.unwrap_or_else(|error| panic!("invalid {context} seed {token:?}: {error}"));
+    assert_ne!(seed, 0, "{context} seeds must be nonzero");
+    seed
+}
 
 fn stress_seeds() -> Vec<u64> {
-    let Some(configured) = std::env::var_os("FLASH_PTY_STRESS_SEEDS") else {
-        return DEFAULT_STRESS_SEEDS.to_vec();
-    };
-    let configured = configured
-        .into_string()
-        .expect("FLASH_PTY_STRESS_SEEDS must be UTF-8");
+    let exact = std::env::var_os("FLASH_PTY_STRESS_SEEDS");
+    let campaign = std::env::var_os("FLASH_PTY_STRESS_CAMPAIGN_SEED");
+    let cases = std::env::var_os("FLASH_PTY_STRESS_CASES");
     assert!(
-        !configured.trim().is_empty(),
-        "FLASH_PTY_STRESS_SEEDS must name at least one nonzero seed"
+        exact.is_none() || campaign.is_none(),
+        "FLASH_PTY_STRESS_SEEDS and FLASH_PTY_STRESS_CAMPAIGN_SEED are mutually exclusive"
     );
 
-    configured
-        .split(',')
-        .map(|raw| {
-            let token = raw.trim();
-            assert!(
-                !token.is_empty(),
-                "FLASH_PTY_STRESS_SEEDS contains an empty seed"
-            );
-            let parsed = token.strip_prefix("0x").map_or_else(
-                || token.parse::<u64>(),
-                |digits| u64::from_str_radix(digits, 16),
-            );
-            let seed =
-                parsed.unwrap_or_else(|error| panic!("invalid PTY stress seed {token:?}: {error}"));
-            assert_ne!(seed, 0, "PTY stress seeds must be nonzero");
-            seed
-        })
-        .collect()
+    if let Some(configured) = exact {
+        assert!(
+            cases.is_none(),
+            "FLASH_PTY_STRESS_CASES requires FLASH_PTY_STRESS_CAMPAIGN_SEED"
+        );
+        let configured = configured
+            .into_string()
+            .expect("FLASH_PTY_STRESS_SEEDS must be UTF-8");
+        assert!(
+            !configured.trim().is_empty(),
+            "FLASH_PTY_STRESS_SEEDS must name at least one nonzero seed"
+        );
+        return configured
+            .split(',')
+            .map(|raw| {
+                let token = raw.trim();
+                assert!(
+                    !token.is_empty(),
+                    "FLASH_PTY_STRESS_SEEDS contains an empty seed"
+                );
+                parse_stress_seed(token, "PTY stress")
+            })
+            .collect();
+    }
+
+    let Some(campaign) = campaign else {
+        assert!(
+            cases.is_none(),
+            "FLASH_PTY_STRESS_CASES requires FLASH_PTY_STRESS_CAMPAIGN_SEED"
+        );
+        return DEFAULT_STRESS_SEEDS.to_vec();
+    };
+    let campaign = campaign
+        .into_string()
+        .expect("FLASH_PTY_STRESS_CAMPAIGN_SEED must be UTF-8");
+    let campaign = parse_stress_seed(campaign.trim(), "PTY stress campaign");
+    let cases = cases.map_or(DEFAULT_STRESS_CASES, |configured| {
+        let configured = configured
+            .into_string()
+            .expect("FLASH_PTY_STRESS_CASES must be UTF-8");
+        configured
+            .parse::<usize>()
+            .unwrap_or_else(|error| panic!("invalid PTY stress case count {configured:?}: {error}"))
+    });
+    assert!(cases > 0, "PTY stress campaigns require at least one case");
+    assert!(
+        cases <= MAX_STRESS_CASES,
+        "PTY stress campaigns are bounded to {MAX_STRESS_CASES} cases"
+    );
+
+    let mut schedule = SeededSchedule::new(campaign);
+    (0..cases).map(|_| schedule.next()).collect()
 }
 
 struct SeededSchedule(u64);
@@ -1876,6 +1923,166 @@ fn a_completion_is_rendered_once_before_exit() {
         "exit must not republish an acknowledged completion:\n{}",
         session.rendered_from(exit_mark)
     );
+}
+
+#[test]
+fn stress_replayable_pipeline_cancellation_restores_the_terminal_and_reaps_every_member() {
+    for seed in stress_seeds() {
+        eprintln!("PTY pipeline-cancellation stress seed {seed:#018x}");
+        let cwd = unique_dir(&format!("stress-pipeline-cancel-{seed:016x}"));
+        let report = cwd.join("report.bin");
+        let release = cwd.join("release");
+        let report_text = report.to_str().expect("test report path is UTF-8");
+        let release_text = release.to_str().expect("test release path is UTF-8");
+        let cwd_text = cwd.to_str().expect("test directory path is UTF-8");
+        let environment = [
+            ("FLASH_PROBE_REPORT", report_text),
+            ("FLASH_PROBE_GROUP_REPORT", cwd_text),
+            ("FLASH_PROBE_HOLD_UNTIL", release_text),
+        ];
+        let mut schedule = SeededSchedule::new(seed);
+        let mut session = Pty::spawn(&["--no-config", "--no-history"], &environment, &cwd);
+        let _release_on_drop = ReleaseOnDrop(release);
+        session.await_prompt(0);
+        session.await_terminal_owner(
+            session.shell_group(),
+            &format!("the initial cancellation prompt for seed {seed:#018x}"),
+        );
+
+        let member_count = 2 + schedule.choose(3);
+        let stage = format!("^{PROCESS_OBSERVER}");
+        let command = std::iter::repeat_n(stage, member_count)
+            .collect::<Vec<_>>()
+            .join(" | ");
+        session.send(command.as_bytes());
+        session.send(ENTER);
+        let reports = await_process_group_reports(&cwd, member_count);
+        let group = reports[0].1;
+        assert!(
+            reports.iter().all(|(_, observed)| *observed == group),
+            "all {member_count} pipeline members must share one group for seed {seed:#018x}: \
+             {reports:?}"
+        );
+        let mut cleanup = ProcessGroupCleanup::new(group);
+        session.await_terminal_owner(
+            group,
+            &format!("the initial pipeline foreground for seed {seed:#018x}"),
+        );
+
+        for cycle in 0..schedule.choose(3) {
+            let stop_mark = session.mark();
+            session.send(CTRL_Z);
+            session.expect_from(stop_mark, "[1] Stopped");
+            session.await_prompt(stop_mark);
+            session.await_terminal_owner(
+                session.shell_group(),
+                &format!("the pipeline stop {} for seed {seed:#018x}", cycle + 1),
+            );
+
+            if schedule.coin() {
+                let jobs_mark = session.mark();
+                session.send(b"jobs");
+                session.send(ENTER);
+                session.expect_from(jobs_mark, "%1  | stopped | foreground");
+                session.await_prompt(jobs_mark);
+            }
+            if schedule.coin() {
+                let bg_mark = session.mark();
+                session.send(b"bg %1");
+                session.send(ENTER);
+                session.await_prompt(bg_mark);
+                session.await_terminal_owner(
+                    session.shell_group(),
+                    &format!("the pipeline bg detour for seed {seed:#018x}"),
+                );
+            }
+
+            let fg_mark = session.mark();
+            session.send(b"fg %1");
+            session.send(ENTER);
+            session.await_terminal_owner(
+                group,
+                &format!("the pipeline foreground resume for seed {seed:#018x}"),
+            );
+            assert!(
+                !session.rendered_from(fg_mark).contains("unknown job"),
+                "the retained pipeline disappeared before fg for seed {seed:#018x}"
+            );
+        }
+
+        let cancellation_mark = session.mark();
+        let background_notice = match schedule.choose(3) {
+            0 => {
+                session.send(CTRL_C);
+                false
+            }
+            placement => {
+                session.send(CTRL_Z);
+                session.expect_from(cancellation_mark, "[1] Stopped");
+                session.await_prompt(cancellation_mark);
+                session.await_terminal_owner(
+                    session.shell_group(),
+                    &format!("the final pipeline stop for seed {seed:#018x}"),
+                );
+                if placement == 1 {
+                    let bg_mark = session.mark();
+                    session.send(b"bg %1");
+                    session.send(ENTER);
+                    session.await_prompt(bg_mark);
+                }
+                let kill_mark = session.mark();
+                session.send(b"kill --interrupt %1");
+                session.send(ENTER);
+                session.await_prompt(kill_mark);
+                true
+            }
+        };
+
+        for (process, _) in &reports {
+            await_process_exit_during(
+                *process,
+                &format!("pipeline cancellation for seed {seed:#018x}"),
+            );
+        }
+        cleanup.disarm();
+        if background_notice {
+            session.expect_from(cancellation_mark, "[1] Done");
+        } else {
+            session.await_prompt(cancellation_mark);
+        }
+        session.await_terminal_owner(
+            session.shell_group(),
+            &format!("the post-cancellation prompt for seed {seed:#018x}"),
+        );
+
+        let jobs_mark = session.mark();
+        session.send(b"jobs");
+        session.send(ENTER);
+        session.await_prompt(jobs_mark);
+        assert!(
+            !session.rendered_from(jobs_mark).contains("%1"),
+            "the cancelled pipeline remained addressable for seed {seed:#018x}:\n{}",
+            session.rendered_from(jobs_mark)
+        );
+
+        let recovery_mark = session.mark();
+        session.send(b"echo pipeline-cancellation-alive");
+        session.send(ENTER);
+        session.expect_from(recovery_mark, "pipeline-cancellation-alive");
+        session.await_prompt(recovery_mark);
+        session.await_terminal_owner(
+            session.shell_group(),
+            &format!("the recovered cancellation prompt for seed {seed:#018x}"),
+        );
+
+        session.send(b"exit 0");
+        session.send(ENTER);
+        assert_eq!(
+            session.wait_code(),
+            0,
+            "the pipeline-cancellation shell failed for seed {seed:#018x}"
+        );
+    }
 }
 
 #[test]

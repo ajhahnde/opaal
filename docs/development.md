@@ -24,6 +24,7 @@ verification policy remain documented under the main FlashOS documentation.
 - [Develop platform integration](#develop-platform-integration)
 - [Develop the CLI and interactive session](#develop-the-cli-and-interactive-session)
 - [Test fixtures](#test-fixtures)
+- [Scheduling stress](#scheduling-stress)
 - [Fuzzing](#fuzzing)
 - [Target compilation](#target-compilation)
 - [FlashOS image integration](#flashos-image-integration)
@@ -60,7 +61,8 @@ Development evidence is layered:
 | -------------------------- | ------------------------------------------------------------------------ |
 | Formatting and Clippy      | Source-format and lint compliance for the host build                     |
 | Host tests                 | Portable behavior and supported host-platform integration                |
-| Fuzzing                    | Resilience of syntax and ordinary-word expansion against generated inputs |
+| Scheduling stress          | Replayable host process, pipeline-cancellation, and job-control schedules   |
+| Fuzzing                    | Resilience of syntax and ordinary-word expansion against generated inputs  |
 | `redoxer` builds           | Compilation of the shipped Flash executables for the Redox target environment |
 | Package build              | Construction of the checkout-bound Flash workspace through the FlashOS recipe |
 | Image build                | Inclusion of that package in an assembled FlashOS image                  |
@@ -1033,6 +1035,40 @@ When adding a fixture:
 - document a shared fixture in [`tests/fixtures/README.md`](../tests/fixtures/README.md).
 
 A fixture is test infrastructure, not part of the installed Flash package.
+
+## Scheduling stress
+
+The [`scheduling/`](../scheduling/) runner exercises the real `fsh` executable
+over a host pseudoterminal. Fixed seeds remain part of the ordinary workspace
+test gate. A separate bounded campaign derives more exact seeds from one
+recorded campaign seed and retains a manifest plus complete output:
+
+```bash
+cd components/flash
+./scheduling/run-campaign.sh
+```
+
+Pass a case count, a new result directory, and an optional nonzero campaign
+seed when longer or independently replayable evidence is needed:
+
+```bash
+./scheduling/run-campaign.sh 256 /path/to/new-results 0x4f3c2b1a098765ef
+```
+
+The randomized choices cover multi-member pipeline size, stop/resume cycles,
+job-table observations, concurrent completion release order, exit cleanup, and
+foreground, background, or stopped cancellation placement. Every child must be
+reaped, terminal ownership must return to `fsh`, notices must remain prompt
+safe, and the session must accept another command.
+
+This is Linux/macOS host evidence. The same seed preserves the generated
+actions and assertions, but the host kernel still controls exact process and
+thread timing. Redox target compilation and FlashOS image/QEMU qualification
+remain separate evidence layers and do not inherit host signal or job-control
+claims from this campaign.
+
+See the [scheduling stress README](../scheduling/README.md) for bounds, retained
+files, exact-seed replay, and the failure-to-regression workflow.
 
 ## Fuzzing
 
