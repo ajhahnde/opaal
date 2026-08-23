@@ -219,6 +219,8 @@ fn reached_commands_and_substitutions_name_the_restricted_capability() {
     for (source, capability) in [
         ("^echo no\n", "process execution"),
         ("let value = $(^echo no)\n", "command substitution"),
+        ("import './dependency.fsh'\n", "module loading"),
+        ("let value = 1\nexport { value }\n", "module loading"),
         (
             "def reached() {\n    ^echo no\n}\nlet value = reached()\n",
             "process execution",

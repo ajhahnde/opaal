@@ -4,10 +4,11 @@ use std::collections::VecDeque;
 use std::error::Error;
 use std::ffi::{OsStr, OsString};
 use std::fmt;
-use std::fs::{self, DirBuilder, File, OpenOptions};
+use std::fs::{self, DirBuilder, File};
 use std::io::{self, BufRead, BufReader, BufWriter, Seek, Write};
 use std::ops::{Deref, DerefMut};
-use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
+use std::os::fd::AsFd;
+use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 use fd_lock::RwLock;
@@ -259,9 +260,7 @@ impl EditorHistory {
         let Some(path) = &self.file else {
             return Ok(());
         };
-        validate_history_path(path)?;
-        let file = OpenOptions::new().read(true).write(true).open(path)?;
-        validate_file(&file, path)?;
+        let file = open_history_file(path, false)?;
         let mut lock = RwLock::new(file);
         let mut guard = lock.write()?;
         guard.rewind().and_then(|()| guard.set_len(0))
@@ -271,9 +270,7 @@ impl EditorHistory {
         let Some(path) = self.file.clone() else {
             return Ok(());
         };
-        validate_history_path(&path)?;
-        let file = OpenOptions::new().read(true).write(true).open(&path)?;
-        validate_file(&file, &path)?;
+        let file = open_history_file(&path, false)?;
         let mut lock = RwLock::new(file);
         let mut guard = lock.write()?;
         let mut merged = {
@@ -461,52 +458,76 @@ fn prepare_history_path(path: &Path) -> io::Result<()> {
     let parent = path
         .parent()
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "history path has no parent"))?;
-    match fs::symlink_metadata(parent) {
-        Ok(_) => validate_directory(parent)?,
+    let created = match fs::symlink_metadata(parent) {
+        Ok(_) => false,
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
             let mut builder = DirBuilder::new();
             builder.recursive(true).mode(HISTORY_DIRECTORY_MODE);
             builder.create(parent)?;
-            // Redox currently does not preserve the requested DirBuilder mode
-            // for recursively created directories. Finalize the private leaf
-            // before creating the history file; existing directories still go
-            // through validation above and are never silently repaired.
-            fs::set_permissions(parent, fs::Permissions::from_mode(HISTORY_DIRECTORY_MODE))?;
-            validate_directory(parent)?;
+            true
         }
         Err(error) => return Err(error),
+    };
+    if created {
+        // Redox currently does not preserve the requested DirBuilder mode for
+        // recursively created directories. Finalize only the newly created
+        // private leaf through its no-follow handle; existing directories are
+        // validated below and are never silently repaired.
+        let directory = open_history_directory(parent)?;
+        directory.set_permissions(fs::Permissions::from_mode(HISTORY_DIRECTORY_MODE))?;
+        validate_directory(&directory, parent)?;
     }
 
-    match fs::symlink_metadata(path) {
-        Ok(_) => validate_history_path(path),
+    match open_history_file(path, false) {
+        Ok(_) => Ok(()),
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
-            let file = OpenOptions::new()
-                .read(true)
-                .write(true)
-                .create_new(true)
-                .mode(HISTORY_FILE_MODE)
-                .open(path)?;
-            validate_file(&file, path)
+            open_history_file(path, true).map(drop)
         }
         Err(error) => Err(error),
     }
 }
 
-fn validate_history_path(path: &Path) -> io::Result<()> {
-    let metadata = fs::symlink_metadata(path)?;
-    if metadata.file_type().is_symlink() {
-        return Err(io::Error::new(
-            io::ErrorKind::PermissionDenied,
-            format!("{} must not be a symlink", path.display()),
-        ));
-    }
-    let file = OpenOptions::new().read(true).write(true).open(path)?;
-    validate_file(&file, path)
+/// Open the final history directory and file through the same checked handles.
+///
+/// `NOFOLLOW` closes the pathname-check/open race for both final components,
+/// while `openat` binds the file lookup to the validated directory even if its
+/// parent path changes concurrently. Every descriptor is close-on-exec.
+fn open_history_file(path: &Path, create_new: bool) -> io::Result<File> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "history path has no parent"))?;
+    let name = path.file_name().ok_or_else(|| {
+        io::Error::new(io::ErrorKind::InvalidInput, "history path has no file name")
+    })?;
+    let directory = open_history_directory(parent)?;
+    validate_directory(&directory, parent)?;
+
+    let descriptor = flash_platform_posix::open_private_file_at(
+        directory.as_fd(),
+        name,
+        create_new,
+        HISTORY_FILE_MODE,
+    )?;
+    let file = File::from(descriptor);
+    validate_file(&file, path)?;
+    Ok(file)
 }
 
-fn validate_directory(path: &Path) -> io::Result<()> {
-    let metadata = fs::symlink_metadata(path)?;
-    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+fn open_history_directory(path: &Path) -> io::Result<File> {
+    let directory = rustix::fs::open(
+        path,
+        rustix::fs::OFlags::RDONLY
+            | rustix::fs::OFlags::DIRECTORY
+            | rustix::fs::OFlags::NOFOLLOW
+            | rustix::fs::OFlags::CLOEXEC,
+        rustix::fs::Mode::empty(),
+    )?;
+    Ok(File::from(directory))
+}
+
+fn validate_directory(directory: &File, path: &Path) -> io::Result<()> {
+    let metadata = directory.metadata()?;
+    if !metadata.is_dir() {
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
             format!("{} must be a nonsymlink directory", path.display()),

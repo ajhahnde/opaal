@@ -208,6 +208,40 @@ fn exporting_an_ineligible_value_is_an_error() {
 }
 
 #[test]
+fn exporting_nul_is_source_anchored_and_does_not_mutate_the_environment() {
+    let text = "export POISONED = \"before\\0after\"";
+    let file = source(text);
+    let script = match parse(&file) {
+        ParseOutcome::Complete(script) => script,
+        other => panic!("source did not parse: {other:?}"),
+    };
+    let mut environment = Environment::from_snapshot([("UNCHANGED", os("yes"))]);
+    let error = evaluate_in_environment(
+        &script,
+        &file,
+        &mut ScopeStack::new(),
+        &mut environment,
+        &EvalLimits::default(),
+    )
+    .expect_err("NUL cannot cross into a child environment");
+
+    assert_eq!(
+        error.kind(),
+        &RuntimeErrorKind::EnvironmentValueContainsNul {
+            name: "POISONED".to_owned(),
+        }
+    );
+    let value_start = text.find("\"before").expect("value starts in source");
+    assert_eq!(
+        error.span(),
+        file.span(value_start..text.len())
+            .expect("the value span is valid")
+    );
+    assert_eq!(environment.get("POISONED"), None);
+    assert_eq!(environment.get("UNCHANGED"), Some(OsStr::new("yes")));
+}
+
+#[test]
 fn the_environment_iterates_in_sorted_name_order() {
     let env = run("export C = '3'\nexport A = '1'\nexport B = '2'");
     let names: Vec<&str> = env.names().collect();

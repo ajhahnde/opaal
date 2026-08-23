@@ -9,13 +9,14 @@
 
 use std::any::Any;
 use std::collections::BTreeSet;
-use std::ffi::OsStr;
+use std::ffi::{CString, OsStr};
 use std::fmt;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
-use std::os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd};
+use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd};
+use std::os::unix::ffi::OsStrExt;
 use std::os::unix::process::CommandExt;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::Duration;
 
@@ -67,6 +68,87 @@ impl OwnedDescriptor {
     pub fn into_owned_fd(self) -> OwnedFd {
         self.descriptor.into()
     }
+}
+
+/// Open one private file relative to a trusted directory descriptor.
+///
+/// The final component is never followed through a symlink, the returned
+/// descriptor is close-on-exec, and creation is exclusive when requested.
+/// Keeping this primitive in the POSIX adapter also supplies Redox's `openat`
+/// declaration, which is implemented by relibc but not exposed by `rustix`.
+pub fn open_private_file_at(
+    directory: BorrowedFd<'_>,
+    name: &OsStr,
+    create_new: bool,
+    mode: u32,
+) -> io::Result<OwnedFd> {
+    let mut components = Path::new(name).components();
+    if !matches!(components.next(), Some(Component::Normal(_))) || components.next().is_some() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "relative file name must contain exactly one normal component",
+        ));
+    }
+    let name = CString::new(name.as_bytes()).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "relative file name contains a NUL byte",
+        )
+    })?;
+    let mut flags = libc::O_RDWR | libc::O_NOFOLLOW | libc::O_CLOEXEC;
+    if create_new {
+        flags |= libc::O_CREAT | libc::O_EXCL;
+    }
+    openat_owned(directory, &name, flags, mode)
+}
+
+#[allow(unsafe_code)]
+fn openat_owned(
+    directory: BorrowedFd<'_>,
+    name: &std::ffi::CStr,
+    flags: libc::c_int,
+    mode: u32,
+) -> io::Result<OwnedFd> {
+    #[cfg(target_os = "redox")]
+    unsafe extern "C" {
+        #[link_name = "openat"]
+        fn redox_openat(
+            directory: libc::c_int,
+            path: *const libc::c_char,
+            flags: libc::c_int,
+            mode: libc::mode_t,
+        ) -> libc::c_int;
+    }
+
+    // SAFETY: `directory` remains borrowed for the call, `name` is a live
+    // NUL-terminated C string, and the variadic openat mode is supplied because
+    // `O_CREAT` may be present. A nonnegative result transfers one owned fd.
+    let descriptor = unsafe {
+        #[cfg(target_os = "redox")]
+        {
+            redox_openat(
+                directory.as_raw_fd(),
+                name.as_ptr(),
+                flags,
+                mode as libc::mode_t,
+            )
+        }
+        #[cfg(not(target_os = "redox"))]
+        {
+            libc::openat(
+                directory.as_raw_fd(),
+                name.as_ptr(),
+                flags,
+                mode as libc::c_uint,
+            )
+        }
+    };
+    if descriptor < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: successful `openat` returned a new descriptor whose ownership is
+    // transferred exactly once to `OwnedFd`.
+    Ok(unsafe { OwnedFd::from_raw_fd(descriptor) })
 }
 
 impl DescriptorEndpoint for OwnedDescriptor {

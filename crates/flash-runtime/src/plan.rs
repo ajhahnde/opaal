@@ -1588,12 +1588,34 @@ fn descriptor_value(number: IoNumber, source: &SourceFile) -> Result<u32, Runtim
 /// capability validation occurs at execution time so this pass remains
 /// platform-independent.
 pub fn preflight(plan: &ExecutionPlan) -> Result<(), RuntimeError> {
+    check_environment_nul(plan)?;
     for (index, stage) in plan.stages().iter().enumerate() {
         check_nul(stage)?;
         check_descriptor_ownership(stage)?;
         check_internal_stdout_route(plan, index, stage)?;
     }
     check_carriers(plan)?;
+    Ok(())
+}
+
+/// Rejects a NUL byte in an inherited or embedding-supplied environment value.
+///
+/// Source `export` rejects this earlier at the value expression. This plan-level
+/// backstop covers native snapshots and decoded supervisor state before any
+/// stage can reach a platform adapter.
+fn check_environment_nul(plan: &ExecutionPlan) -> Result<(), RuntimeError> {
+    if let Some((name, _)) = plan
+        .environment()
+        .iter()
+        .find(|(_, value)| value.as_encoded_bytes().contains(&0))
+    {
+        return Err(RuntimeError::new(
+            RuntimeErrorKind::EnvironmentValueContainsNul {
+                name: name.to_owned(),
+            },
+            plan.span(),
+        ));
+    }
     Ok(())
 }
 

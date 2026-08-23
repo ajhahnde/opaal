@@ -50,16 +50,29 @@ impl ExecutableProbe for FakeProbe {
 
 /// Builds a plan over a `/bin` `PATH` with the given registry and probe.
 fn build(text: &str, registry: &CommandRegistry, probe: &dyn ExecutableProbe) -> ExecutionPlan {
+    build_with_environment(
+        text,
+        registry,
+        probe,
+        &Environment::from_snapshot([("PATH", "/bin")]),
+    )
+}
+
+fn build_with_environment(
+    text: &str,
+    registry: &CommandRegistry,
+    probe: &dyn ExecutableProbe,
+    environment: &Environment,
+) -> ExecutionPlan {
     let file = source(text);
     let pipeline = pipeline(&file);
     let mut scope = ScopeStack::new();
-    let environment = Environment::from_snapshot([("PATH", "/bin")]);
     plan_pipeline(
         &pipeline,
         "/work",
         &file,
         &mut scope,
-        &environment,
+        environment,
         registry,
         probe,
     )
@@ -103,6 +116,36 @@ fn a_nul_byte_in_a_redirection_target_is_rejected() {
         error.kind(),
         RuntimeErrorKind::ArgumentContainsNul
     ));
+}
+
+#[test]
+fn a_nul_byte_in_a_snapshot_environment_is_rejected_before_spawn() {
+    let probe = FakeProbe::with(&["/bin/echo"]);
+    let environment = Environment::from_snapshot([
+        ("PATH", OsString::from("/bin")),
+        ("POISONED", OsString::from("before\0after")),
+    ]);
+    let plan = build_with_environment("^echo clean", &empty(), &probe, &environment);
+    let error = preflight(&plan).expect_err("NUL environment value");
+
+    assert_eq!(
+        error.kind(),
+        &RuntimeErrorKind::EnvironmentValueContainsNul {
+            name: "POISONED".to_owned(),
+        }
+    );
+    assert_eq!(error.span(), plan.span());
+}
+
+#[cfg(unix)]
+#[test]
+fn native_command_diagnostics_escape_controls_and_invalid_bytes() {
+    use std::os::unix::ffi::OsStringExt;
+
+    let error = RuntimeErrorKind::CommandNotFound {
+        name: OsString::from_vec(b"bad\x1b\xff".to_vec()),
+    };
+    assert_eq!(error.to_string(), "command not found: bad\\u{1B}\\xFF");
 }
 
 #[test]

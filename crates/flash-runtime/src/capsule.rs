@@ -26,7 +26,7 @@ use crate::{
 
 const MAGIC: &[u8; 8] = b"FSHCAP\0\0";
 const COMPLETION_MAGIC: &[u8; 8] = b"FSHDONE\0";
-const VERSION: u16 = 1;
+const VERSION: u16 = 2;
 const MAX_CAPSULE_DEPTH: usize = 64;
 const MAX_CAPSULE_ITEMS: usize = 1_000_000;
 pub const MAX_CAPSULE_BYTES: usize = 16 * 1024 * 1024;
@@ -203,7 +203,10 @@ pub fn encode_background_capsule(
         encode_status(&mut payload, status)?;
     }
     payload.bool(options.pipefail());
-    payload.usize(options.capture_limit())?;
+    payload.u64(
+        u64::try_from(options.capture_limit())
+            .map_err(|_| CapsuleError::new("capture limit exceeds the capsule integer range"))?,
+    );
     payload.usize(callables.snapshots.len())?;
     for snapshot in &callables.snapshots {
         encode_callable(&mut payload, snapshot, &callables.ids)?;
@@ -260,7 +263,10 @@ pub fn decode_background_capsule(bytes: &[u8]) -> Result<BackgroundCapsule, Caps
         .transpose()?;
     let options = SessionOptions::default()
         .with_pipefail(wire.bool()?)
-        .with_capture_limit(wire.usize()?);
+        .with_capture_limit(
+            usize::try_from(wire.u64()?)
+                .map_err(|_| CapsuleError::new("capture limit exceeds this platform"))?,
+        );
     let callable_count = wire.collection_len()?;
     let mut callables = Vec::with_capacity(callable_count);
     for _ in 0..callable_count {
@@ -1416,6 +1422,26 @@ mod tests {
         );
     }
 
+    #[cfg(target_pointer_width = "64")]
+    #[test]
+    fn capsule_preserves_capture_limits_above_the_u32_range() {
+        let capture_limit = usize::try_from(u64::from(u32::MAX) + 1)
+            .expect("the test runs only on a 64-bit target");
+        let wire = encode_background_capsule(
+            "capsule.fsh",
+            "^tool\n",
+            Path::new("/work"),
+            &Environment::new(),
+            None,
+            &ScopeStack::new(),
+            SessionOptions::default().with_capture_limit(capture_limit),
+        )
+        .expect("a host-representable capture limit should encode");
+
+        let decoded = decode_background_capsule(&wire).expect("the capsule should decode");
+        assert_eq!(decoded.options().capture_limit(), capture_limit);
+    }
+
     #[test]
     fn capsule_refuses_truncation_versions_lengths_and_allocation_bombs() {
         let wire = encode_background_capsule(
@@ -1432,7 +1458,7 @@ mod tests {
         assert!(decode_background_capsule(&wire[..wire.len() - 1]).is_err());
 
         let mut wrong_version = wire.clone();
-        wrong_version[MAGIC.len()..MAGIC.len() + 2].copy_from_slice(&2u16.to_le_bytes());
+        wrong_version[MAGIC.len()..MAGIC.len() + 2].copy_from_slice(&1u16.to_le_bytes());
         assert!(decode_background_capsule(&wrong_version).is_err());
 
         let mut wrong_length = wire.clone();
@@ -1449,7 +1475,7 @@ mod tests {
             let has_status = payload.bool().expect("current-status marker");
             assert!(!has_status);
             let _ = payload.bool().expect("pipefail");
-            let _ = payload.usize().expect("capture limit");
+            let _ = payload.u64().expect("capture limit");
             18 + payload.offset
         };
         bomb[callable_count_offset..callable_count_offset + 4]
@@ -1552,7 +1578,7 @@ mod tests {
         assert!(decode_supervisor_completion(&wire[..wire.len() - 1]).is_err());
         let mut wrong_version = wire;
         wrong_version[COMPLETION_MAGIC.len()..COMPLETION_MAGIC.len() + 2]
-            .copy_from_slice(&2u16.to_le_bytes());
+            .copy_from_slice(&1u16.to_le_bytes());
         assert!(decode_supervisor_completion(&wrong_version).is_err());
     }
 }

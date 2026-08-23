@@ -290,6 +290,8 @@ pub enum RestrictedCapability {
     CommandSubstitution,
     /// Reading directories for explicit filesystem matching.
     FilesystemRead,
+    /// Loading or exporting a source module during automatic configuration.
+    ModuleLoad,
 }
 
 impl RestrictedCapability {
@@ -300,6 +302,7 @@ impl RestrictedCapability {
             Self::ProcessExecution => "process execution",
             Self::CommandSubstitution => "command substitution",
             Self::FilesystemRead => "filesystem reads",
+            Self::ModuleLoad => "module loading",
         }
     }
 }
@@ -443,6 +446,9 @@ pub enum RuntimeErrorKind {
     /// An `export` whose value cannot become a native environment string.
     /// `actual` names the offending value family.
     ExportValueNotEligible { actual: &'static str },
+    /// An `export` produced a native environment value containing NUL, which
+    /// no child-process environment can represent.
+    EnvironmentValueContainsNul { name: String },
     /// A command name that resolved to neither an internal command nor an
     /// executable on `PATH`. `name` is the searched native command name.
     CommandNotFound { name: OsString },
@@ -638,6 +644,7 @@ impl RuntimeErrorKind {
             | Self::SpreadValueNotList { .. }
             | Self::SpreadElementNotWordEligible { .. }
             | Self::ExportValueNotEligible { .. }
+            | Self::EnvironmentValueContainsNul { .. }
             | Self::ArgumentContainsNul
             | Self::CarrierMismatch(_)
             | Self::MergedEdgeNotByteStream { .. }
@@ -825,8 +832,15 @@ impl fmt::Display for RuntimeErrorKind {
                 "cannot export a {actual}; expected bool, int, float, string, path, \
                  duration, or byte size"
             ),
+            Self::EnvironmentValueContainsNul { name } => {
+                write!(formatter, "environment entry {name:?} contains a NUL byte")
+            }
             Self::CommandNotFound { name } => {
-                write!(formatter, "command not found: {}", name.to_string_lossy())
+                write!(
+                    formatter,
+                    "command not found: {}",
+                    NativePath::new(name.clone())
+                )
             }
             Self::ReservedCommand(details) => {
                 write!(
@@ -2059,6 +2073,16 @@ impl Evaluator<'_> {
         let span = statement.span();
         self.charge(span)?;
         match statement.kind() {
+            StatementKind::Import(_) | StatementKind::ModuleExport(_)
+                if self.host.policy() == EvaluationPolicy::Startup =>
+            {
+                Err(self.error(
+                    RuntimeErrorKind::RestrictedStartup {
+                        capability: RestrictedCapability::ModuleLoad,
+                    },
+                    span,
+                ))
+            }
             StatementKind::Import(_) | StatementKind::ModuleExport(_) => {
                 // flash-v1-boundary(embedding-refusal): The module-program loader owns import and export execution.
                 Err(self.error(RuntimeErrorKind::ExecutionUnsupported, span))
@@ -2178,6 +2202,12 @@ impl Evaluator<'_> {
                     )
                 })?;
                 let name = self.text(name.span()).to_owned();
+                if encoded.as_encoded_bytes().contains(&0) {
+                    return Err(self.error(
+                        RuntimeErrorKind::EnvironmentValueContainsNul { name },
+                        value.span(),
+                    ));
+                }
                 self.host.environment().set(name, encoded);
             }
             EnvironmentStatement::Unset { name } => {

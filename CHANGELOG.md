@@ -19,6 +19,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ## [Unreleased]
 
 ### Changed
+- Harden security-sensitive boundaries: NUL-bearing exports and inherited
+  environment snapshots now fail before spawn, complex background jobs retain
+  the complete host-representable capture limit, startup module operations are
+  explicit restricted-config failures, and persistent history uses validated
+  no-follow, close-on-exec directory-relative opens.
 - Make portable raw-terminal reads nonblocking and bypass lossy Redox PTY
   readiness notifications with bounded direct reads, so independent editor
   actions cannot remain indefinitely unread on the target console.

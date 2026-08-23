@@ -413,6 +413,13 @@ Environment
 
 The runtime may copy an environment entry into a lexical seed for an isolated child-shell execution path, but ordinary lexical declarations are not automatically exported.
 
+Environment mutation is session-local until a child is planned. `export`
+encodes exactly one eligible scalar and rejects NUL at the value's source span;
+plan preflight applies the same rejection to inherited or embedding-supplied
+snapshots. External spawn clears the host environment and installs only that
+validated complete snapshot, so host-only variables cannot leak around the
+session boundary.
+
 The logical working directory also belongs to the Flash session. External stages and platform-backed internal commands receive the session's directory explicitly rather than depending on process-global directory mutation throughout the runtime.
 
 ### Pure evaluation and command execution
@@ -570,6 +577,11 @@ All required stages are started before the executor waits for completion. This p
 Parent-owned pipe endpoints are released as soon as their ownership has been transferred or is no longer needed. Waiting produces source-ordered process results, which the runtime converts into leaf and aggregate `Status` values.
 
 Command substitution and other capture paths drain output concurrently with child execution. When a capture limit is exceeded, the executor stops retaining further bytes but continues draining and reaping the pipeline before returning the error.
+
+The same host-representable capture limit crosses the typed supervisor
+transport for complex background jobs. Transport framing has its own finite
+size and collection ceilings, but does not silently narrow the configured byte
+limit.
 
 ### Mixed pipelines
 
@@ -891,6 +903,14 @@ transaction and are removed before the live lexical scope is installed. Safe
 mode restores clean settings and its fixed `[SAFE] >> ` prompt; config bypass
 retains ordinary defaults. The CLI `--no-history` policy remains an
 unconditional override.
+
+The config loader opens one read-only close-on-exec handle and verifies the
+type, effective-user ownership, and write permissions of that same object
+before bounded UTF-8 decoding. Persistent history opens its final directory
+with no-follow and close-on-exec, validates that directory handle, and opens
+the history file relative to it with no-follow and close-on-exec. Each history
+sync revalidates ownership and exact `0700`/`0600` modes on the handles it
+actually uses, avoiding a pathname-check/open gap.
 
 At each prompt boundary the interactive evaluator snapshots the live registry
 and lexical scope, then collects executable names from the child `PATH` and

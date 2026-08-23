@@ -913,6 +913,7 @@ fn runtime_failure(source: &SourceFile, error: &RuntimeError) -> ConfigFailure {
                 RestrictedCapability::ProcessExecution => "process execution",
                 RestrictedCapability::CommandSubstitution => "command substitution",
                 RestrictedCapability::FilesystemRead => "filesystem reads",
+                RestrictedCapability::ModuleLoad => "module loading",
             }),
         ),
         RuntimeErrorKind::ResourceBudgetExceeded => (ConfigFailureKind::ConfigBudget, None),
