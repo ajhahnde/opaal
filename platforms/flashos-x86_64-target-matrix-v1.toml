@@ -178,14 +178,14 @@ reject = ["error[RUN001]"]
 input = """
 export FLASH_MATRIX = 'env-ok'
 ^env
-^printf '<%s>' 'argv ok'
+^printf '<%s>\\n' 'argv ok'
 ^printf one > matrix.txt
-^printf two >> matrix.txt
+^printf 'two\\n' >> matrix.txt
 ^cat < matrix.txt | ^cat
 """
 send = "script"
-expect = ["FLASH_MATRIX=env-ok", "<argv ok>", "onetwo", ">> "]
-manual = "Run the exact script; the child environment, one spaced argv value, truncate/append/input redirections, and two-child pipe preserve their markers."
+expect = ["FLASH_MATRIX=env-ok", "<argv ok>\r\r\n", "onetwo\r\r\n", ">> "]
+manual = "Run the exact script; the child environment, one spaced argv value, truncate/append/input redirections, and two-child pipe preserve line-terminated markers after the prompt returns."
 
 [[case]]
 id = "dynamic-capture-error-and-status-language"
@@ -222,10 +222,11 @@ input = """
 ^touch a.fsh b.fsh 'space name'
 let matches = glob('*.fsh')
 ^printf '%s,' ...$matches
+^echo glob-done
 """
 send = "script"
-expect = ["a.fsh,b.fsh,", ">> "]
-manual = "Run the exact setup script; explicit glob and spread print the sorted paths and retain a space-containing completion candidate."
+expect = ["a.fsh,b.fsh,", "glob-done\r\r\n", ">> "]
+manual = "Run the exact setup script; explicit glob and spread print the sorted paths, the line-ending sentinel keeps them visible after prompt redraw, and the directory retains a space-containing completion candidate."
 
 [[case.step]]
 input = "pwd > './spa"
