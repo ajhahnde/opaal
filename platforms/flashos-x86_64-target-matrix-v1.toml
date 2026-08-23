@@ -198,7 +198,7 @@ reject = ["error[RUN001]"]
 [[case.step]]
 input = """
 let cmd = '/usr/bin/printf'
-command $cmd dynamic-ok
+command $cmd 'dynamic-ok\\n'
 let a = $(bytes: ^printf x)
 let b = $(bytes: ^printf x)
 if $a == $b { echo bytes-ok }
@@ -206,8 +206,8 @@ try { throw 'caught-ok' } catch error { echo ${$error.message} }
 ^false || echo status-ok
 """
 send = "script"
-expect = ["dynamic-ok", "bytes-ok", "caught-ok", "status-ok", ">> "]
-manual = "Run the exact script and observe the dynamic command, equal exact byte captures, caught structured error, and unsuccessful-status fallback markers."
+expect = ["dynamic-ok\r\r\n", "bytes-ok", "caught-ok", "status-ok", ">> "]
+manual = "Run the exact script and observe the line-terminated dynamic-command marker, equal exact byte captures, caught structured error, and unsuccessful-status fallback markers."
 
 [[case]]
 id = "directory-glob-and-grammar-completion"
@@ -221,12 +221,11 @@ reject = ["error[RUN001]"]
 input = """
 ^touch a.fsh b.fsh 'space name'
 let matches = glob('*.fsh')
-^printf '%s,' ...$matches
-^echo glob-done
+^printf '%s,\\n' ...$matches
 """
 send = "script"
-expect = ["a.fsh,b.fsh,", "glob-done\r\r\n", ">> "]
-manual = "Run the exact setup script; explicit glob and spread print the sorted paths, the line-ending sentinel keeps them visible after prompt redraw, and the directory retains a space-containing completion candidate."
+expect = ["a.fsh,\r\r\n", "b.fsh,\r\r\n", ">> "]
+manual = "Run the exact setup script; explicit glob and spread print the sorted paths as line-terminated markers that remain visible after prompt redraw, and the directory retains a space-containing completion candidate."
 
 [[case.step]]
 input = "pwd > './spa"
