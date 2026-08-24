@@ -35,6 +35,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- Add a machine-validated exhaustive Flash v1 exercise inventory, assembled
+  host runner with retained exact-source evidence, documentation-example and
+  pre-v1 compatibility ownership, and expanded exact-image QEMU cases for the
+  language, modules, intrinsics, frontends, and language server.
 - Add bounded, replayable host scheduling campaigns for multi-member pipeline
   cancellation, terminal restoration, concurrent completion notices, and live-
   job exit cleanup, with retained manifests and complete failure output.

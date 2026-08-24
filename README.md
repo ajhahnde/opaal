@@ -155,6 +155,10 @@ redoxer build -p flash-cli --bin fsh
 
 These checks establish different properties:
 
+- The [Flash v1 exercise contract](exercises/README.md) inventories every
+  user-reachable v1 surface, binds it to assembled host and applicable FlashOS
+  execution, retains exact host observations, and records intentional refusals
+  and unavailable or approval-gated boundaries.
 - The conformance inventory binds every frozen host-v1 semantic family to
   enabled executable owners and audits explicit runtime refusal boundaries.
 - Host tests execute those owners across syntax, runtime, CLI, REPL, checker,
@@ -179,6 +183,8 @@ The Flash documentation is organized as follows:
   and job-control campaigns, retained results, and exact replay
 - [Performance benchmarks](benchmarks/README.md) — reproducible host and
   exact-image target measurements with retained evidence and derived budgets
+- [Flash v1 exercises](exercises/README.md) — exhaustive user-path inventory,
+  exact host evidence, target owners, and qualification limits
 
 For building and booting FlashOS as a complete system, begin with the [FlashOS Getting Started Guide](../../docs/getting-started.md).
 

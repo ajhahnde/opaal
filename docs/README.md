@@ -49,6 +49,8 @@ Focused implementation and verification areas maintain narrower README files bes
 - [`flash-lsp` crate](../crates/flash-lsp/) — Stdio transport, versioned document workspace, protocol projection, and language-server executable.
 - [Scheduling stress](../scheduling/README.md) — Seeded host pipeline-cancellation and job-control campaigns, retained results, and exact replay.
 - [Performance benchmarks](../benchmarks/README.md) — Versioned startup, prompt, command, pipeline, structured-stream-memory, and completion measurements with evidence-derived budgets.
+- [Flash v1 exercises](../exercises/README.md) — Exhaustive user-path inventory,
+  retained host evidence, exact FlashOS owners, and qualification boundaries.
 - [Fuzz targets](../fuzz/README.md) — Lexer, parser, and ordinary-word expander fuzz inputs, campaigns, and corpus handling.
 - [End-to-end tests](../tests/e2e/README.md) — Location of black-box and pseudoterminal test fixtures.
 - [Test fixtures](../tests/fixtures/README.md) — Rust child programs used to observe process, descriptor, status, and stream behavior.

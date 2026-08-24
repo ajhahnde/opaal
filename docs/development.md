@@ -921,6 +921,11 @@ surfaces through exact ordered cases. Neither rendered checklist is evidence
 that an operator ran it, and neither contract establishes physical-hardware or
 release qualification. The withheld `Signals` group remains outside both.
 
+The [Flash v1 exercise contract](../exercises/README.md) adds the exhaustive
+user-path inventory above these focused layers. Its retained host report and
+assembled-image matrix record exact actions and observations while keeping host,
+QEMU, withheld-capability, and approval-gated physical evidence distinct.
+
 ## Develop the CLI and interactive session
 
 Changes to command-line parsing, startup modes, configuration, prompts, completion, highlighting, history, line editing, interactive recovery, or top-level session control belong in `flash-cli`.

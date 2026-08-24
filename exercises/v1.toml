@@ -1,0 +1,304 @@
+# Exhaustive user-path exercise contract for Flash v1. Each surface is bound to
+# an assembled-product exercise or an explicit environment classification. The
+# validator derives closed namespaces and documentation blocks from their live
+# sources so new public behavior cannot appear without an exercise owner.
+
+schema_version = 1
+suite_version = 1
+language_major = 1
+host_runner = "exercises/run.py"
+host_evidence = "exercises/evidence/host-v1.json"
+target_matrix = "platforms/flashos-x86_64-target-matrix-v1.toml"
+target_fixtures = "platforms/flashos-x86_64-runtime-fixtures-v1.toml"
+compatibility_decision = "Flash v1.0 is the first supported compatibility baseline."
+documentation_roots = [
+  "README.md",
+  "docs/architecture.md",
+  "docs/development.md",
+  "docs/language-guide.md",
+  "docs/scripting.md",
+]
+
+[[environment]]
+id = "host-posix"
+availability = "available"
+evidence_owner = "exercises/run.py"
+limitations = "Qualifies the assembled host binaries on supported macOS or Linux; it does not establish FlashOS behavior."
+
+[[environment]]
+id = "flashos-qemu-x86_64"
+availability = "available-in-candidate-ci"
+evidence_owner = "ci/qemu_smoke.py"
+limitations = "Qualifies the exact assembled image under one-vCPU QEMU; it is not physical-hardware evidence."
+
+[[environment]]
+id = "physical-flashos-x86_64"
+availability = "approval-gated"
+evidence_owner = "docs/hardware.md"
+limitations = "A physical-device write requires read-only device identification and explicit operator approval."
+
+# Language and value forms. A case may cover several inseparable source forms,
+# but every named surface receives an exact user action and result in evidence.
+
+[[surface]]
+id = "source-and-literals"
+category = "language"
+members = ["utf8-source", "line-endings", "comments", "documentation-comments", "null", "bool", "int", "float", "single-quoted-string", "double-quoted-string", "escapes", "interpolation"]
+exercise_case = "language-values"
+negative_case = "invalid-source-and-literals"
+flashos_owner = "target-matrix:v1-language-values-and-control"
+
+[[surface]]
+id = "collections-and-access"
+category = "language"
+members = ["list", "record", "range-exclusive", "range-inclusive", "index", "member", "membership", "equality", "ordering"]
+exercise_case = "language-values"
+negative_case = "invalid-collection-access"
+flashos_owner = "target-matrix:v1-language-values-and-control"
+
+[[surface]]
+id = "bindings-scope-and-environment"
+category = "language"
+members = ["immutable-binding", "mutable-binding", "assignment", "type-annotation", "lexical-scope", "variable-read", "dynamic-status", "export", "unset"]
+exercise_case = "language-composition"
+negative_case = "invalid-binding-ownership"
+flashos_owner = "target-matrix:v1-language-values-and-control"
+
+[[surface]]
+id = "operators-and-conditions"
+category = "language"
+members = ["grouping", "unary-not", "unary-positive", "unary-negative", "multiply", "divide", "remainder", "add", "subtract", "comparison", "logical-and", "logical-or", "status-condition"]
+exercise_case = "language-composition"
+negative_case = "invalid-operators"
+flashos_owner = "target-matrix:v1-language-values-and-control"
+
+[[surface]]
+id = "control-flow"
+category = "language"
+members = ["if", "else-if", "else", "while", "for-list", "for-range", "break", "continue", "match-literal", "match-binding", "match-wildcard", "match-guard"]
+exercise_case = "language-composition"
+negative_case = "invalid-control-flow"
+flashos_owner = "target-matrix:v1-language-values-and-control"
+
+[[surface]]
+id = "functions-and-closures"
+category = "language"
+members = ["function", "recursion", "return", "typed-parameter", "typed-result", "closure", "closure-capture", "dynamic-call", "help-metadata"]
+exercise_case = "functions-and-modules"
+negative_case = "invalid-call-contract"
+flashos_owner = "target-matrix:v1-functions-modules-and-intrinsics"
+
+[[surface]]
+id = "modules"
+category = "language"
+members = ["load-only-import", "named-import", "module-export", "canonical-module-identity", "initializer-effects", "import-cycle", "private-name", "duplicate-declaration"]
+exercise_case = "functions-and-modules"
+negative_case = "invalid-module-contract"
+flashos_owner = "target-matrix:v1-functions-modules-and-intrinsics"
+
+[[surface]]
+id = "commands-and-expansion"
+category = "language"
+members = ["bare-internal", "bare-external", "forced-external", "dynamic-external", "ordinary-word", "explicit-spread", "explicit-glob", "text-capture", "byte-capture", "no-source-reparse"]
+exercise_case = "commands-and-capture"
+negative_case = "invalid-command-boundary"
+flashos_owner = "target-matrix:dynamic-capture-error-and-status-language"
+
+[[surface]]
+id = "pipelines-redirections-and-status"
+category = "language"
+members = ["stdout-pipe", "stdout-stderr-pipe", "structured-pipe", "mixed-pipe", "decode-encode", "from-to", "stdin-redirection", "truncate-redirection", "append-redirection", "stderr-redirection", "descriptor-duplication", "descriptor-close", "status-value", "pipeline-status", "pipefail"]
+exercise_case = "pipelines-and-files"
+negative_case = "invalid-carrier-and-redirection"
+flashos_owner = "target-matrix:argv-environment-pipelines-and-redirections"
+
+[[surface]]
+id = "structured-errors"
+category = "language"
+members = ["try", "catch-binding", "throw", "rethrow", "runtime-frame", "error-rollback", "check-conversion", "explicit-exit"]
+exercise_case = "structured-errors"
+negative_case = "uncaught-error"
+flashos_owner = "target-matrix:dynamic-capture-error-and-status-language"
+
+# Closed product namespaces are expanded and compared with the implementation
+# by ci/check_flash_v1_exercises.py.
+
+[[surface]]
+id = "expression-intrinsics"
+category = "intrinsic"
+members = ["env", "float", "glob", "int"]
+exercise_case = "intrinsics"
+negative_case = "invalid-intrinsics"
+flashos_owner = "target-matrix:v1-functions-modules-and-intrinsics"
+
+[[surface]]
+id = "standard-builtins"
+category = "builtin"
+members = ["bg", "cd", "check", "collect", "command", "decode", "each", "encode", "exit", "fg", "first", "from", "get", "help", "jobs", "kill", "last", "length", "lines", "ls", "open", "pwd", "save", "select", "sort", "to", "update", "wait", "where", "which"]
+exercise_case = "standard-builtins"
+negative_case = "invalid-builtin-contracts"
+flashos_owner = "target-matrix:v1-builtins-and-frontends"
+
+[[surface]]
+id = "builtin-options"
+category = "builtin"
+members = ["kill--hangup", "kill--interrupt", "kill--terminate", "kill--kill", "kill--stop", "kill--continue"]
+exercise_case = "job-control"
+negative_case = "invalid-job-options"
+flashos_owner = "target-matrix:supported-job-semantics"
+
+[[surface]]
+id = "launcher-and-frontends"
+category = "frontend"
+members = ["help", "version", "script", "stdin-refusal", "repl", "no-config", "no-history", "check", "check-help", "plan", "plan-help", "format-check", "format-write", "format-help", "double-dash", "script-arguments"]
+exercise_case = "launcher-frontends"
+negative_case = "invalid-launcher-options"
+flashos_owner = "target-matrix:v1-builtins-and-frontends"
+
+[[surface]]
+id = "configuration"
+category = "config"
+members = ["pipefail", "capture_limit", "completion", "history", "prompt", "continuation_prompt"]
+exercise_case = "configuration"
+negative_case = "invalid-configuration"
+flashos_owner = "target-matrix:config-options-and-capture-cleanup"
+
+[[surface]]
+id = "language-server"
+category = "lsp"
+members = ["initialize", "initialized", "did-open", "did-change", "did-close", "diagnostics", "completion", "hover", "signature-help", "definition", "references", "formatting", "shutdown", "exit", "utf8", "utf16"]
+exercise_case = "language-server"
+negative_case = "invalid-language-server-lifecycle"
+flashos_owner = "target-matrix:v1-language-server"
+
+[[surface]]
+id = "interactive-editor"
+category = "editor"
+members = ["unicode-graphemes", "multiline", "history", "history-hints", "completion", "highlighting", "resize", "redraw", "interrupt", "eof", "terminal-restoration"]
+exercise_case = "interactive-editor"
+negative_case = "interactive-cancellation"
+flashos_owner = "target-matrix:history-completion-cancellation-and-unicode"
+
+[[surface]]
+id = "processes-pipelines-and-jobs"
+category = "process"
+members = ["argv", "environment", "working-directory", "foreground-process", "external-pipeline", "mixed-pipeline", "background-child", "background-supervisor", "jobs", "wait", "fg", "bg", "kill", "cancellation", "hangup-cleanup", "clean-exit"]
+exercise_case = "processes-and-jobs"
+negative_case = "process-failures-and-limits"
+flashos_owner = "target-matrix:supported-job-semantics"
+
+[[surface]]
+id = "platform-capabilities"
+category = "platform"
+members = ["environment", "working-directory", "file-actions", "pipes", "process-spawn", "process-groups", "foreground-terminal", "signals", "terminal-info", "monotonic-clock", "standard-directories", "directory-read", "shell-executable", "hangup-disposition"]
+exercise_case = "platform-user-paths"
+negative_case = "withheld-signals"
+flashos_owner = "capability-report:bounded"
+
+[[surface]]
+id = "documentation-examples"
+category = "documentation"
+members = ["component-overview", "architecture-guide", "development-guide", "language-guide", "scripting-guide"]
+exercise_case = "documentation-examples"
+flashos_owner = "target-matrix:v1-language-values-and-control"
+
+# Documentation blocks are discovered from documentation_roots. The ordered
+# rules cover every block and distinguish runnable user input from output,
+# protocol/config text, architecture diagrams, and operational commands whose
+# stronger owner is an existing CI, target, long-running, or approval gate.
+
+[[documentation_rule]]
+path = "README.md"
+first_block = 1
+last_block = 4
+classification = "executed-or-gated"
+evidence_owner = "launcher-frontends,language-server,standard-ci,target-build"
+
+[[documentation_rule]]
+path = "docs/architecture.md"
+first_block = 1
+last_block = 11
+classification = "explanatory-model"
+evidence_owner = "ci/check_flash_v1_exercises.py"
+
+[[documentation_rule]]
+path = "docs/development.md"
+first_block = 1
+last_block = 63
+classification = "development-command-or-reference"
+evidence_owner = "standard-ci-and-specialized-gates"
+
+[[documentation_rule]]
+path = "docs/language-guide.md"
+first_block = 1
+last_block = 65
+classification = "executed-language-example"
+evidence_owner = "documentation-language-examples"
+
+[[documentation_rule]]
+path = "docs/scripting.md"
+first_block = 1
+last_block = 66
+classification = "executed-script-or-interaction-example"
+evidence_owner = "documentation-scripting-examples"
+
+# Every production compatibility marker is either pre-v1-only and scheduled
+# for removal before the release candidate, or retained by a current v1+
+# contract. Tests and historical records are evidence rather than executable
+# compatibility paths and are not scanned here.
+
+[[compatibility]]
+id = "legacy-config-location"
+path = "crates/flash-cli/src/config.rs"
+marker = "flashshell/config.fsh"
+classification = "pre-v1-only"
+owner = "remove-before-v1-release-candidate"
+
+[[compatibility]]
+id = "legacy-config-selector"
+path = "crates/flash-cli/src/config.rs"
+marker = "legacy"
+classification = "pre-v1-only"
+owner = "remove-before-v1-release-candidate"
+
+[[compatibility]]
+id = "legacy-history-location"
+path = "crates/flash-cli/src/history.rs"
+marker = "flashshell/history"
+classification = "pre-v1-only"
+owner = "remove-before-v1-release-candidate"
+
+[[compatibility]]
+id = "legacy-history-selector"
+path = "crates/flash-cli/src/history.rs"
+marker = "legacy"
+classification = "pre-v1-only"
+owner = "remove-before-v1-release-candidate"
+
+[[compatibility]]
+id = "capture-entry-functions"
+path = "crates/flash-runtime/src/session.rs"
+marker = "Compatibility entry for the legacy free capture helpers."
+classification = "pre-v1-internal-api"
+owner = "remove-or-promote-before-v1-release-candidate"
+
+[[compatibility]]
+id = "analysis-control"
+path = "crates/flash-runtime/src/module.rs"
+marker = "preserves legacy checker and execution analysis behavior"
+classification = "current-v1-internal-owner"
+owner = "shared-checker-planner-lsp-analysis"
+
+[[compatibility]]
+id = "execution-loaders"
+path = "crates/flash-runtime/src/module.rs"
+marker = "legacy execution loaders continue to use"
+classification = "current-v1-internal-owner"
+owner = "assembled-script-and-module-frontends"
+
+[[compatibility]]
+id = "namespace-evolution-machinery"
+path = "crates/flash-runtime/src/command.rs"
+marker = "Compatibility lifecycle metadata"
+classification = "current-v1-and-later-owner"
+owner = "language-major-built-in-namespace-policy"

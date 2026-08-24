@@ -41,6 +41,14 @@ required_surfaces = [
   "unicode-multiline-editing",
   "job-semantics",
   "clean-exit",
+  "language-values",
+  "language-control",
+  "functions-modules",
+  "intrinsics",
+  "launcher-frontends",
+  "language-server",
+  "documentation-examples",
+  "intentional-refusals",
 ]
 withheld_capabilities = ["signals"]
 
@@ -394,3 +402,128 @@ input = """
 send = "script"
 expect = ["nested-exit-ok", "clean-exit-ok", ">> "]
 manual = "Run the exact script; nested non-interactive shells propagate status 7 to the fallback and status 0 to the success branch."
+
+[[case]]
+id = "v1-language-values-and-control"
+summary = "The assembled target executes the complete value, expression, binding, control-flow, closure, and intentional syntax-refusal families."
+surfaces = ["language-values", "language-control", "documentation-examples", "intentional-refusals"]
+capabilities = ["process-spawn", "process-groups", "foreground-terminal"]
+operation_ids = []
+reject = ["error[RUN001]"]
+
+[[case.step]]
+input = """
+let project = 'Flash'
+let values = [1, 2, 3]
+let record = {name: "${$project}", count: 3}
+mut total = 0
+for value in $values { $total = $total + $value }
+mut chosen = 'bad'
+match $total {
+    6 if $record.name == 'Flash' => { $chosen = 'ok' }
+    _ => { $chosen = 'bad' }
+}
+let offset = 3
+let advance = {|value| $value + $offset}
+if $chosen == 'ok' && $advance(2) == 5 && 3 in 1..=3 {
+    echo v1-language-ok
+} else {
+    exit 91
+}
+"""
+send = "script"
+expect = ["v1-language-ok", ">> "]
+manual = "Run the exact script and observe `v1-language-ok`, proving the value, interpolation, collection, range, loop, match, closure-capture, call, comparison, and condition paths."
+
+[[case.step]]
+input = """
+^echo 'let invalid = 1 < 2 < 3' > invalid.fsh
+^fsh invalid.fsh
+"""
+send = "script"
+expect = ["comparison operators are non-associative", ">> "]
+manual = "Create the exact intentional-negative syntax fixture; the assembled target rejects the chained comparison with the contractual parser diagnostic and returns a usable prompt."
+
+[[case]]
+id = "v1-functions-modules-and-intrinsics"
+summary = "The target creates and imports a module, calls typed functions, and executes all four expression intrinsics."
+surfaces = ["functions-modules", "intrinsics"]
+capabilities = ["environment", "file-actions", "process-spawn", "process-groups", "foreground-terminal", "directory-read"]
+operation_ids = []
+reject = ["error[RUN001]"]
+
+[[case.step]]
+input = """
+^printf 'let answer: Int = 42\ndef add(left: Int, right: Int) -> Int { return $left + $right }\nexport { answer, add }\n' > lib.fsh
+echo module-created
+"""
+send = "script"
+expect = ["module-created", ">> "]
+manual = "Create one exact typed module through the assembled target filesystem path."
+
+[[case.step]]
+input = """
+import { answer, add } from './lib.fsh'
+let from_env = env('USER')
+let as_int = int(3.75)
+let as_float = float(3)
+let matches = glob('*.fsh')
+if $answer == 42 && add(2, 3) == 5 && $from_env != null && $as_int == 3 && $as_float == 3.0 && $matches[0] == glob('*.fsh')[0] {
+    echo v1-module-intrinsics-ok
+} else {
+    exit 92
+}
+"""
+send = "script"
+expect = ["v1-module-intrinsics-ok", ">> "]
+manual = "Run the exact root module and observe `v1-module-intrinsics-ok`, proving named import/export, typed calls, env, int, float, and glob through the target executable."
+
+[[case]]
+id = "v1-builtins-and-frontends"
+summary = "The exact built-in namespace and every public non-interactive launcher frontend execute on the assembled target."
+surfaces = ["builtins", "launcher-frontends", "intentional-refusals"]
+capabilities = ["environment", "file-actions", "process-spawn", "process-groups", "foreground-terminal", "directory-read"]
+operation_ids = []
+reject = ["error[RUN001]"]
+
+[[case.step]]
+input = """
+let names = [
+    'bg', 'cd', 'check', 'collect', 'command', 'decode', 'each', 'encode',
+    'exit', 'fg', 'first', 'from', 'get', 'help', 'jobs', 'kill', 'last',
+    'length', 'lines', 'ls', 'open', 'pwd', 'save', 'select', 'sort', 'to',
+    'update', 'wait', 'where', 'which'
+]
+which ...$names | where {|entry| $entry.kind == 'internal'} | length | to json
+^printf 'pwd\n' > front.fsh
+^fsh --version
+^fsh --help > help.txt
+^fsh check front.fsh && echo check-ok
+^fsh plan front.fsh > plan.txt && echo plan-ok
+^fsh format --check front.fsh && echo format-ok
+^fsh check - || echo stdin-refusal-ok
+"""
+send = "script"
+expect = ["30", "fsh 0.1.0", "check-ok", "plan-ok", "format-ok", "stdin-refusal-ok", ">> "]
+manual = "Run the exact script and observe all 30 built-ins, version/help, checker, planner, formatter, and intentional stdin-refusal markers."
+
+[[case]]
+id = "v1-language-server"
+summary = "The installed target language server executes initialization, document synchronization, every v1 query, formatting, shutdown, and clean exit over stdio."
+surfaces = ["language-server"]
+capabilities = ["environment", "file-actions", "pipes", "process-spawn", "process-groups", "foreground-terminal"]
+operation_ids = []
+reject = []
+
+[[case.step]]
+input = '''
+let feeder = '^printf "Content-Length: 58\\r\\n\\r\\n{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}Content-Length: 52\\r\\n\\r\\n{\"jsonrpc\":\"2.0\",\"method\":\"initialized\",\"params\":{}}Content-Length: 165\\r\\n\\r\\n{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{\"textDocument\":{\"uri\":\"file:///tmp/v1.fsh\",\"languageId\":\"flash\",\"version\":1,\"text\":\"let value = int(1)\"}}}Content-Length: 150\\r\\n\\r\\n{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"textDocument/completion\",\"params\":{\"textDocument\":{\"uri\":\"file:///tmp/v1.fsh\"},\"position\":{\"line\":0,\"character\":2}}}Content-Length: 146\\r\\n\\r\\n{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"textDocument/hover\",\"params\":{\"textDocument\":{\"uri\":\"file:///tmp/v1.fsh\"},\"position\":{\"line\":0,\"character\":14}}}Content-Length: 154\\r\\n\\r\\n{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"textDocument/signatureHelp\",\"params\":{\"textDocument\":{\"uri\":\"file:///tmp/v1.fsh\"},\"position\":{\"line\":0,\"character\":16}}}Content-Length: 150\\r\\n\\r\\n{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"textDocument/definition\",\"params\":{\"textDocument\":{\"uri\":\"file:///tmp/v1.fsh\"},\"position\":{\"line\":0,\"character\":5}}}Content-Length: 188\\r\\n\\r\\n{\"jsonrpc\":\"2.0\",\"id\":6,\"method\":\"textDocument/references\",\"params\":{\"textDocument\":{\"uri\":\"file:///tmp/v1.fsh\"},\"position\":{\"line\":0,\"character\":5},\"context\":{\"includeDeclaration\":true}}}Content-Length: 158\\r\\n\\r\\n{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"textDocument/formatting\",\"params\":{\"textDocument\":{\"uri\":\"file:///tmp/v1.fsh\"},\"options\":{\"tabSize\":4,\"insertSpaces\":true}}}"
+^sleep 5
+^printf "Content-Length: 44\\r\\n\\r\\n{\"jsonrpc\":\"2.0\",\"id\":8,\"method\":\"shutdown\"}Content-Length: 33\\r\\n\\r\\n{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}"
+'
+^printf '%s' $feeder > feed.fsh
+^fsh feed.fsh | ^flash-language-server
+'''
+send = "script"
+expect = ["documentFormattingProvider", "\"id\":2", "\"id\":3", "\"id\":4", "\"id\":5", "\"id\":6", "\"id\":7", "\"id\":8", ">> "]
+manual = "Create a staged protocol feeder, send the exact framed session, allow the target worker to complete, and observe initialization capability data, responses for all six query/formatting requests, shutdown response 8, and return to the Flash prompt after exit."
