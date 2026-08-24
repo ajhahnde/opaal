@@ -4,7 +4,11 @@
 
 This guide documents the Flash 1.0 language: source text, runtime values, bindings, expressions, commands, expansion, control flow, functions, function metadata, modules, name resolution, and typed pipelines. Practical script invocation, process execution, redirection, static checking, formatting, status handling, and job control are covered in the [Scripting Guide](scripting.md).
 
-> **Project status:** FlashOS as a complete operating system remains pre-alpha software. However, this Flash Language Guide defines the intended stable Flash v1.0 contract. Note that not every v1 feature is automatically available in every current FlashOS image or on every target platform, and successful execution on a Linux or macOS development host is not automatic proof of FlashOS target support.
+> **Project status:** FlashOS as a complete operating system remains pre-alpha
+> software, and Flash v1.0 has not yet been released. This guide defines the
+> implemented v1 language contract in the current source. Availability in a
+> particular FlashOS image or on another target is qualified separately;
+> execution on a Linux or macOS host is not proof of FlashOS target support.
 
 ## On this page
 
@@ -1045,7 +1049,15 @@ crossed an external boundary.
 
 Canonical program construction resolves lexical reads in every loaded module without executing source, including a module reached only through a load-only import. Resolution follows source-order declaration visibility and the evaluator's block, loop, match-arm, function, parameter, closure-capture, recursion, and shadowing scopes. Unknown reads and duplicate bindings in one scope stop construction with source-anchored diagnostics; a child scope may shadow an outer binding.
 
-The program-owned reference table retains each complete read span and its local declaration. A reference to an imported binding also retains the local import identifier and the target module's declaration and explicit export spans. Record and member keys, process-environment names, literal command text, and type references remain distinct namespaces rather than lexical reads. Resolved type annotations and named-function signatures occupy a separate program-owned registry; assignment-mutability analysis remains separate work.
+The program-owned reference table retains each complete read and assignment
+span and its local declaration. A reference to an imported binding also
+retains the local import identifier and the target module's declaration and
+explicit export spans. Record and member keys, process-environment names,
+literal command text, and type references remain distinct namespaces rather
+than lexical reads. Resolved type annotations and named-function signatures
+occupy a separate program-owned registry. Static assignment analysis rejects
+read-only, imported-snapshot, captured, unknown, and conservatively known
+type-incompatible targets before execution.
 
 The module graph, exported names, imported names, and cross-file lexical references are therefore available to non-executing shared analysis. Canonical programs also expose source-spanned direct and named-dependency-folded initializer summaries using the shared vocabulary `WorkingDirectory`, `ChildEnvironment`, `Status`, `Output`, `FilesystemRead`, `FilesystemWrite`, `Process`, `Job`, `ProgramExit`, and `OpaqueExternal`. Transitive summaries follow once-only initialization order and exclude load-only dependencies; direct summaries remain available for every analyzed source. Known Flash callables fold their bodies, while indirect calls and external execution remain conservative without execution or host probing.
 

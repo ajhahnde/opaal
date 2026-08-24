@@ -19,6 +19,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ## [Unreleased]
 
 ### Changed
+- Align the public guides with the implemented Flash v1 contract, document the
+  first-supported-baseline migration policy, config and history locations,
+  embedding and startup-recovery boundaries, and both shipped target binaries,
+  and remove stale analysis and protocol claims.
 - Audit every unsafe block and C ABI declaration, document its local pointer,
   lifetime, ownership, signal, and pre-exec invariants as applicable, and make
   undocumented or implicit future unsafe operations fail workspace linting.

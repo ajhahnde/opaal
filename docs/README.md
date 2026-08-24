@@ -4,7 +4,11 @@
 
 This page is the central index for the public Flash documentation. It directs users, script authors, and component developers to the appropriate guide; system-wide FlashOS build, image, verification, and hardware documentation remains under the main [FlashOS documentation](../../../docs/README.md).
 
-> **Project status:** FlashOS as a complete operating system remains pre-alpha software. However, these Flash component guides describe the intended stable Flash v1.0 contract. Note that not every v1 feature is automatically available in every current FlashOS image or on every target platform, and successful execution on a Linux or macOS development host is not automatic proof of FlashOS target support.
+> **Project status:** FlashOS as a complete operating system remains pre-alpha
+> software, and Flash v1.0 has not yet been released. These guides describe the
+> implemented v1 contract in the current source. Availability in a particular
+> FlashOS image or on another target is qualified separately; execution on a
+> Linux or macOS host is not proof of FlashOS target support.
 
 ## Guides
 
@@ -37,7 +41,10 @@ When documentation and implementation appear to disagree, inspect the current so
 
 ## Contract and release availability
 
-These guides describe the intended Flash v1 contract. They do not imply that every current binary, FlashOS image, or target exposes every part of that contract.
+These guides describe the implemented Flash v1 contract in the current source.
+They do not imply that every earlier binary, FlashOS image, or other target
+exposes every part of that contract, and they are not a claim that v1.0 has
+already been released.
 
 Language and tooling responsibilities remain stable at the documentation level, while release notes, target evidence, and capability qualification determine which functions are available in a particular build. Host execution, target compilation, image integration, and runtime qualification are separate forms of evidence.
 

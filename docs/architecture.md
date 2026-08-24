@@ -4,7 +4,12 @@
 
 This document describes the internal architecture of Flash: crate boundaries, source processing, runtime state, command planning, pipeline execution, platform capabilities, interactive front ends, and process lifecycle management. It is intended for maintainers and developers extending the implementation; language usage belongs in the [Language Guide](language-guide.md), while build and test procedures belong in [Development](development.md).
 
-> **Project status:** FlashOS as a complete operating system remains pre-alpha software. However, this Flash Architecture Guide describes the intended stable Flash v1.0 architecture and component contracts. Note that not every v1 feature or platform capability is automatically available in every current FlashOS image or on every target platform, and successful execution on a Linux or macOS development host is not automatic proof of FlashOS target support.
+> **Project status:** FlashOS as a complete operating system remains pre-alpha
+> software, and Flash v1.0 has not yet been released. This guide describes the
+> implemented v1 architecture and component contracts in the current source.
+> Availability in a particular FlashOS image or on another target is qualified
+> separately; execution on a Linux or macOS host is not proof of FlashOS target
+> support.
 
 ## On this page
 
@@ -242,12 +247,23 @@ this boundary and reports grouped excerpts for diagnostics that span multiple
 registered sources. The runtime derives deterministic source-edge depth-first
 postorder from the analyzed named-import tables, initializes each canonical
 dependency once, and executes the root last. A source reached only through
-load-only imports remains dormant. The legacy execution loader selects the
+load-only imports remains dormant. The execution loader selects the
 first deterministic analysis error, while the checker frontend retains all
 independent issues allowed by the phase barriers; both consume the same
 successful program representation.
 
-Each activated module executes through the existing session driver with an isolated lexical root. Completed exports are cloned into importer roots as immutable snapshots; private bindings never become ambient names. Working directory, child-process environment, status, output, process activity, and background jobs remain shared across the whole program. Runtime binding cells and callables receive the resolved annotations owned by the program. Named callables also retain their signature-derived inspection metadata and defining source; imported callables therefore keep both correct help ownership and correct cross-file body diagnostics. Initializers, assignments, callable arguments, and named-function results use exact value-family checks. Assignment-mutability analysis remains separate.
+Each activated module executes through the existing session driver with an
+isolated lexical root. Completed exports are cloned into importer roots as
+immutable snapshots; private bindings never become ambient names. Working
+directory, child-process environment, status, output, process activity, and
+background jobs remain shared across the whole program. Runtime binding cells
+and callables receive the resolved annotations owned by the program. Named
+callables also retain their signature-derived inspection metadata and defining
+source; imported callables therefore keep both correct help ownership and
+correct cross-file body diagnostics. Initializers, assignments, callable
+arguments, and named-function results use exact value-family checks. Static
+assignment analysis rejects read-only, imported-snapshot, captured, unknown,
+and conservatively known type-incompatible targets before execution.
 
 The session driver commits successful statement-local cwd, environment, and
 status changes before the next statement. Normal completion and explicit
@@ -309,8 +325,8 @@ merely to obtain analysis results.
 2.0 over stdin and stdout using LSP `Content-Length` framing. Stdout is reserved
 exclusively for framed protocol messages; the process does not inherit the
 shell launcher, prompt, configuration, history, terminal, or process-reporting
-paths. The first protocol surface is the stable LSP 3.17 core and remains
-compatible with 3.18 clients through capability negotiation.
+paths. The protocol surface implements the stable LSP 3.17 core and exposes
+only the capabilities it advertises during initialization.
 
 The implemented surface is:
 
@@ -370,6 +386,24 @@ A long-lived [`Session`](../crates/flash-runtime/src/session.rs) retains:
 - background-job state when job control is enabled.
 
 Interactive submissions and complete script files both use this session driver. Script execution creates a session, submits the source, joins the jobs started by that script, and returns its structured completion or failure to the CLI.
+
+### Embedding boundary
+
+Embedders can use `flash-syntax` for parsing and formatting and the shared
+runtime analysis services without constructing the CLI. The pure evaluator
+entry points deliberately have no filesystem, process, command-capture,
+module-loading, or background-job host; they reject source that reaches those
+effects instead of acquiring ambient operating-system access.
+
+Full Flash programs use the runtime's `ModuleProgramLoader` plus
+`execute_module_program`, or `execute_script` for one source without imported
+modules. The embedding caller supplies module canonicalization and loading,
+the command registry, executable probe, platform, clock, output sink, working
+directory, and environment. A persistent interactive integration uses
+`Session` and explicitly opts into job control. CLI configuration, history,
+terminal editing, status-to-process-code mapping, and language-server transport
+remain adapter responsibilities and are not installed implicitly by the
+runtime APIs.
 
 ### Runtime and CLI reporting boundary
 
@@ -1094,14 +1128,15 @@ Additional portability boundaries include:
 
 Flash is integrated into the FlashOS system through the package recipe at [`recipes/terminal/flash/recipe.toml`](../../../recipes/terminal/flash/recipe.toml).
 
-The recipe selects the `flash-cli` package, builds the `fsh` binary for the active target, and installs it into the image package. The active x86_64 product profiles include the package and configure `/usr/bin/fsh` as the login shell.
+The recipe builds `fsh` from `flash-cli` and `flash-language-server` from
+`flash-lsp` for the active target, then installs both into the image package.
+The active x86_64 product profiles include that package and configure
+`/usr/bin/fsh` as the login shell.
 
 ```text
 Flash workspace
-    ↓
-flash-cli package
-    ↓
-fsh target binary
+    ├─ flash-cli → fsh
+    └─ flash-lsp → flash-language-server
     ↓
 Flash package recipe
     ↓

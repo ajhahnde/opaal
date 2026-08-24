@@ -4,7 +4,12 @@
 
 This guide explains how to run and inspect `.fsh` programs, pass script arguments, use non-executing checks and canonical formatting, invoke external processes, connect pipeline stages, redirect file descriptors, handle command statuses and structured errors, and manage background jobs. Language syntax, values, bindings, expressions, modules, function metadata, and structured-data operations are documented in the [Language Guide](language-guide.md).
 
-> **Project status:** FlashOS as a complete operating system remains pre-alpha software. However, this Flash Scripting Guide defines the intended stable Flash v1.0 contract for scripting and execution. Note that not every v1 feature is automatically available in every current FlashOS image or on every target platform, and successful execution on a Linux or macOS development host is not automatic proof of FlashOS target support.
+> **Project status:** FlashOS as a complete operating system remains pre-alpha
+> software, and Flash v1.0 has not yet been released. This guide defines the
+> implemented v1 scripting and execution contract in the current source.
+> Availability in a particular FlashOS image or on another target is qualified
+> separately; execution on a Linux or macOS host is not proof of FlashOS target
+> support.
 
 ## On this page
 
@@ -180,6 +185,24 @@ and editor settings together with its ordinary bindings and staged environment.
 A parse, evaluation, setting, or startup-policy failure discards all of them
 and enters visible safe mode with the fixed `[SAFE] >> ` primary prompt and
 clean defaults.
+
+Flash reads the v1 config from `flash/config.fsh` below an absolute,
+nonempty `XDG_CONFIG_HOME`. Without that variable, FlashOS and Linux use
+`$HOME/.config/flash/config.fsh`, while macOS uses
+`$HOME/Library/Application Support/flash/config.fsh`. Persistent history uses
+`flash/history` below an absolute, nonempty `XDG_STATE_HOME`; its fallbacks are
+`$HOME/.local/state/flash/history` on FlashOS and Linux and
+`$HOME/Library/Application Support/flash/history` on macOS. History is enabled
+by default and is created only for interactive sessions unless disabled by
+configuration or `--no-history`.
+
+If config discovery, loading, or evaluation enters safe mode, the startup
+diagnostic names the failure and, when discovery selected one, the file.
+Continue with `fsh --no-config` to isolate the problem, then repair the file
+using only the six settings above plus ordinary startup-safe Flash
+declarations, functions, and exports. A history initialization failure is
+fatal rather than a safe-mode fallback; use `--no-history` to confirm that
+boundary before repairing ownership, modes, or the selected state path.
 
 `--no-config` wins before config discovery, and `--no-history` wins over a
 config request to enable history. No interactive config or setting is loaded by
@@ -1270,6 +1293,22 @@ Flash deliberately does not provide:
 - hidden routing through a host default shell.
 
 These boundaries are part of the scripting model rather than optional safety modes.
+
+### V1 compatibility and migration
+
+Flash 1.0 is the first supported compatibility baseline. Pre-v1 Flash source,
+configuration, CLI behavior, editor or session state, and internal serialized
+or protocol data are not promised to remain compatible. Flash v1 therefore
+does not provide an automatic source converter, compatibility mode, migration
+alias, or deprecation period solely for unreleased behavior.
+
+Migrate a pre-v1 program by rewriting it to the current Language and Scripting
+guides, then run `fsh format --check` and `fsh check` before execution. Move
+interactive configuration and history to the `flash/` locations documented
+above; older `flashshell/` fallback locations are not part of the v1 contract.
+Use `--no-config` or `--no-history` to isolate stale startup state. From v1.0
+onward, the documented language-major and built-in-namespace policies govern
+compatibility.
 
 ## Related documentation
 

@@ -4,7 +4,12 @@
 
 Flash (`fsh`) is the primary interactive shell and scripting interface of FlashOS. It is a non-POSIX command language built around structured runtime values, explicit process invocation, and a shared syntax and execution core for interactive input and `.fsh` scripts. This page provides a component overview; detailed language, scripting, architecture, and development documentation is available under [`docs/`](docs/README.md).
 
-> **Project status:** FlashOS as a complete operating system remains pre-alpha software. However, Flash component documentation defines the intended stable Flash v1.0 contract. Note that not every v1 feature is automatically available in every current FlashOS image or on every target platform, and execution on a Linux or macOS development host is not automatic proof of FlashOS target support.
+> **Project status:** FlashOS as a complete operating system remains pre-alpha
+> software, and Flash v1.0 has not yet been released. The Flash component
+> documentation describes the implemented v1 contract in the current source.
+> Availability in a particular FlashOS image or on another target is qualified
+> separately; execution on a Linux or macOS host is not proof of FlashOS target
+> support.
 
 ## On this page
 
@@ -42,7 +47,14 @@ The component follows several implementation boundaries:
 
 ## Flash v1 contract
 
-The public Flash documentation defines the intended v1 language, runtime, and tooling contract. That contract covers the existing value, command, pipeline, status, and job model together with maintainable multi-file scripts, explicit module boundaries and initializer effects, a stable built-in namespace compatibility policy, script arguments, typed function metadata, discoverable help, canonical formatting, non-executing static checks, language-server integration, and explicit platform capabilities.
+The public Flash documentation defines the implemented v1 language, runtime,
+and tooling contract in the current source. That contract covers the existing
+value, command, pipeline, status, and job model together with maintainable
+multi-file scripts, explicit module boundaries and initializer effects, a
+stable built-in namespace compatibility policy, script arguments, typed
+function metadata, discoverable help, canonical formatting, non-executing
+static checks, language-server integration, and explicit platform
+capabilities.
 
 Carrier-compatible pipelines may alternate between external byte stages and
 internal typed segments any number of times. Flash preserves bounded streaming,
@@ -151,6 +163,7 @@ Target compilation is a separate check:
 
 ```sh
 redoxer build -p flash-cli --bin fsh
+redoxer build -p flash-lsp --bin flash-language-server
 ```
 
 These checks establish different properties:
@@ -163,7 +176,8 @@ These checks establish different properties:
   enabled executable owners and audits explicit runtime refusal boundaries.
 - Host tests execute those owners across syntax, runtime, CLI, REPL, checker,
   formatter, language-server, and portable platform layers.
-- A `redoxer` build verifies that the selected binary compiles for the Redox target environment.
+- The `redoxer` builds verify that both shipped binaries compile for the Redox
+  target environment.
 - FlashOS image construction and QEMU execution verify package integration, installation, login-shell configuration, the bounded smoke fixtures, and the exhaustive advertised-capability target matrix inside the assembled system.
 
 For the component-specific workflow, test layout, and maintenance guidance, see [Flash Development](docs/development.md). For the repository-wide distinction between host checks, target checks, image validation, and runtime evidence, see [FlashOS Verification](../../docs/verification.md).

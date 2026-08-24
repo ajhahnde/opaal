@@ -8,7 +8,11 @@ language implementation, runtime, platform adapters, interactive front end,
 `fsh`, or `flash-language-server`; repository-wide image development and
 verification policy remain documented under the main FlashOS documentation.
 
-> **Project status:** FlashOS as a complete operating system remains pre-alpha software. However, this Flash Development Guide supports the intended stable Flash v1.0 contract. Note that not every v1 feature is automatically available in every current FlashOS image or on every target platform, and successful test execution on a Linux or macOS development host is not automatic proof of FlashOS target support.
+> **Project status:** FlashOS as a complete operating system remains pre-alpha
+> software, and Flash v1.0 has not yet been released. This guide supports the
+> implemented v1 contract in the current source. Availability in a particular
+> FlashOS image or on another target is qualified separately; tests on a Linux
+> or macOS host are not proof of FlashOS target support.
 
 ## On this page
 
@@ -1221,7 +1225,8 @@ recipes/terminal/flash/recipe.toml
 ```
 
 The recipe snapshots tracked and non-ignored files from the current
-`components/flash/` workspace and builds the `fsh` binary from `flash-cli`.
+`components/flash/` workspace and builds both shipped executables: `fsh` from
+`flash-cli` and `flash-language-server` from `flash-lsp`.
 
 This has an important consequence:
 
