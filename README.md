@@ -177,6 +177,8 @@ The Flash documentation is organized as follows:
   maintenance workflow
 - [Scheduling stress](scheduling/README.md) — seeded host pipeline-cancellation
   and job-control campaigns, retained results, and exact replay
+- [Performance benchmarks](benchmarks/README.md) — reproducible host and
+  exact-image target measurements with retained evidence and derived budgets
 
 For building and booting FlashOS as a complete system, begin with the [FlashOS Getting Started Guide](../../docs/getting-started.md).
 

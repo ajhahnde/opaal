@@ -46,6 +46,13 @@ test = false
 bench = false
 doc = false
 
+[[bin]]
+name = "flash-benchmark-fixture"
+path = "../../tests/fixtures/benchmark.rs"
+test = false
+bench = false
+doc = false
+
 [dependencies]
 flash-platform = { path = "../flash-platform" }
 flash-platform-posix = { path = "../flash-platform-posix" }

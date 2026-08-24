@@ -1,0 +1,107 @@
+{
+  "schema": "flash-performance-result-v1",
+  "suite_version": 1,
+  "profile": "qualification",
+  "started_utc": "2026-08-23T23:11:30Z",
+  "finished_utc": "2026-08-23T23:12:37Z",
+  "contract_sha256": "4c08c59c0b6289c355db7f428aba7e0909598a97b6705101bdcd84a2e152cdb6",
+  "image_sha256": "d4139ef1b952d61a7330a909b8bd33dda6b913d58981648a2933a688d6ad8c98",
+  "environment": {
+    "kind": "flashos-qemu-tcg",
+    "qemu": "QEMU emulator version 11.1.0",
+    "machine": "q35",
+    "cpu": "core2duo",
+    "vcpus": 1,
+    "memory_mib": 1024,
+    "disk_interface": "nvme"
+  },
+  "noise_controls": {
+    "acceleration": "tcg",
+    "fixed_vcpus": true,
+    "snapshot_disk": true,
+    "measurement_clock": "host monotonic",
+    "uart_settle_excluded": true,
+    "sample_order": "surface-grouped; warmup discarded"
+  },
+  "parameters": {
+    "warmups": 1,
+    "samples": 5,
+    "pipeline_bytes": 1048576
+  },
+  "measurements": [
+    {
+      "case_id": "flashos-first-prompt-cold",
+      "unit": "ns",
+      "warmup_samples": [],
+      "samples": [
+        819268750
+      ],
+      "summary": {
+        "minimum": 819268750,
+        "median": 819268750,
+        "p95": 819268750,
+        "maximum": 819268750
+      }
+    },
+    {
+      "case_id": "flashos-command-latency-warm",
+      "unit": "ns",
+      "warmup_samples": [
+        1945046000
+      ],
+      "samples": [
+        420591834,
+        415397125,
+        424412334,
+        420281750,
+        428130375
+      ],
+      "summary": {
+        "minimum": 415397125,
+        "median": 420591834,
+        "p95": 428130375,
+        "maximum": 428130375
+      }
+    },
+    {
+      "case_id": "flashos-pipeline-throughput-warm",
+      "unit": "bytes/second",
+      "warmup_samples": [
+        1062170
+      ],
+      "samples": [
+        1007439,
+        1026046,
+        1026644,
+        955496,
+        1014725
+      ],
+      "summary": {
+        "minimum": 955496,
+        "median": 1014725,
+        "p95": 1026644,
+        "maximum": 1026644
+      }
+    },
+    {
+      "case_id": "flashos-completion-latency-warm",
+      "unit": "ns",
+      "warmup_samples": [
+        48409875
+      ],
+      "samples": [
+        56840125,
+        51834417,
+        52769958,
+        52970959,
+        52082208
+      ],
+      "summary": {
+        "minimum": 51834417,
+        "median": 52769958,
+        "p95": 56840125,
+        "maximum": 56840125
+      }
+    }
+  ]
+}

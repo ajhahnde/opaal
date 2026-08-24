@@ -25,6 +25,7 @@ verification policy remain documented under the main FlashOS documentation.
 - [Develop the CLI and interactive session](#develop-the-cli-and-interactive-session)
 - [Test fixtures](#test-fixtures)
 - [Scheduling stress](#scheduling-stress)
+- [Performance benchmarks](#performance-benchmarks)
 - [Fuzzing](#fuzzing)
 - [Target compilation](#target-compilation)
 - [FlashOS image integration](#flashos-image-integration)
@@ -62,6 +63,7 @@ Development evidence is layered:
 | Formatting and Clippy      | Source-format and lint compliance for the host build                     |
 | Host tests                 | Portable behavior and supported host-platform integration                |
 | Scheduling stress          | Replayable host process, pipeline-cancellation, and job-control schedules   |
+| Performance benchmarks     | Retained host and exact-image target samples evaluated against evidence-derived, environment-specific budgets |
 | Fuzzing                    | Resilience of syntax and ordinary-word expansion against generated inputs  |
 | `redoxer` builds           | Compilation of the shipped Flash executables for the Redox target environment |
 | Package build              | Construction of the checkout-bound Flash workspace through the FlashOS recipe |
@@ -1069,6 +1071,27 @@ claims from this campaign.
 
 See the [scheduling stress README](../scheduling/README.md) for bounds, retained
 files, exact-seed replay, and the failure-to-regression workflow.
+
+## Performance benchmarks
+
+The versioned [`benchmarks/`](../benchmarks/) suite measures optimized `fsh`
+startup, first-prompt latency, simple command overhead, pipeline throughput,
+structured-stream peak memory, and completion latency. Run its bounded smoke
+profile during ordinary development:
+
+```sh
+python3 benchmarks/run.py --profile smoke
+```
+
+Use the qualification profile only when collecting or comparing retained
+evidence. Absolute budgets are keyed to their environment; do not compare a
+Linux CI runner with the macOS reference or treat TCG/serial observations as
+physical-hardware performance. The exact-image QEMU consumer collects the
+applicable target cases and evaluates them separately.
+
+See the [performance benchmark README](../benchmarks/README.md) for the cold and
+warm definitions, fixtures, repeats, noise controls, raw JSON schema, budget
+derivation, regression policy, target exclusions, and exact commands.
 
 ## Fuzzing
 

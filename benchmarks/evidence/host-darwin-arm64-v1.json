@@ -1,0 +1,280 @@
+{
+  "schema": "flash-performance-result-v1",
+  "suite_version": 1,
+  "profile": "qualification",
+  "started_utc": "2026-08-23T23:38:47Z",
+  "finished_utc": "2026-08-23T23:38:56Z",
+  "contract_sha256": "4c08c59c0b6289c355db7f428aba7e0909598a97b6705101bdcd84a2e152cdb6",
+  "binary_sha256": "fb1655fd26fdada84a9055918b898b62cc7ff84dbbac1809bdf224b21fb679b9",
+  "environment": {
+    "kind": "host",
+    "os": "macos",
+    "os_release": "25.6.0",
+    "architecture": "arm64",
+    "python": "3.14.7",
+    "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14)",
+    "cargo": "cargo 1.97.1 (c980f4866 2026-06-30)",
+    "logical_cpus": 8,
+    "load_average_at_finish": [
+      3.1103515625,
+      3.01123046875,
+      4.20166015625
+    ]
+  },
+  "noise_controls": {
+    "optimized_binary": true,
+    "isolated_home": true,
+    "config_disabled": true,
+    "history_disabled": true,
+    "locale": "C",
+    "completion_path_isolated": true,
+    "manual_cache_flush": false,
+    "sample_order": "surface-grouped; cold first; warmups discarded"
+  },
+  "parameters": {
+    "warmups": 3,
+    "samples": 15,
+    "command_iterations": 200,
+    "pipeline_bytes": 16777216,
+    "stream_items": 5000000,
+    "target_warmups": 1,
+    "target_samples": 5,
+    "target_pipeline_bytes": 1048576
+  },
+  "measurements": [
+    {
+      "case_id": "host-startup-cold",
+      "unit": "ns",
+      "warmup_samples": [],
+      "samples": [
+        5352708
+      ],
+      "summary": {
+        "minimum": 5352708,
+        "median": 5352708,
+        "p95": 5352708,
+        "maximum": 5352708
+      }
+    },
+    {
+      "case_id": "host-startup-warm",
+      "unit": "ns",
+      "warmup_samples": [
+        5226625,
+        4825000,
+        4871291
+      ],
+      "samples": [
+        4899458,
+        4624250,
+        5194208,
+        4852916,
+        5141875,
+        4892458,
+        4697167,
+        4966500,
+        4617875,
+        5157000,
+        4908250,
+        5250541,
+        5060292,
+        4660333,
+        4962417
+      ],
+      "summary": {
+        "minimum": 4617875,
+        "median": 4908250,
+        "p95": 5250541,
+        "maximum": 5250541
+      }
+    },
+    {
+      "case_id": "host-first-prompt-cold",
+      "unit": "ns",
+      "warmup_samples": [],
+      "samples": [
+        18985791
+      ],
+      "summary": {
+        "minimum": 18985791,
+        "median": 18985791,
+        "p95": 18985791,
+        "maximum": 18985791
+      }
+    },
+    {
+      "case_id": "host-first-prompt-warm",
+      "unit": "ns",
+      "warmup_samples": [
+        18912541,
+        18884667,
+        18756583
+      ],
+      "samples": [
+        19203000,
+        18826834,
+        18562125,
+        19054750,
+        18592333,
+        18863958,
+        18930750,
+        18719792,
+        18860416,
+        18812000,
+        19006917,
+        18636125,
+        18924209,
+        18921417,
+        18674709
+      ],
+      "summary": {
+        "minimum": 18562125,
+        "median": 18860416,
+        "p95": 19203000,
+        "maximum": 19203000
+      }
+    },
+    {
+      "case_id": "host-command-overhead-warm",
+      "unit": "ns/command",
+      "warmup_samples": [
+        1656725,
+        1647044,
+        1634547
+      ],
+      "samples": [
+        1633372,
+        1645094,
+        1642743,
+        1635505,
+        1643236,
+        1635134,
+        1640858,
+        1640406,
+        1640730,
+        1646463,
+        1643120,
+        1641667,
+        1648383,
+        1642887,
+        1641014
+      ],
+      "summary": {
+        "minimum": 1633372,
+        "median": 1641667,
+        "p95": 1648383,
+        "maximum": 1648383
+      }
+    },
+    {
+      "case_id": "host-pipeline-throughput-warm",
+      "unit": "bytes/second",
+      "warmup_samples": [
+        1142557339,
+        1308080028,
+        1314206548
+      ],
+      "samples": [
+        1298998567,
+        1347116671,
+        1310059034,
+        1322007881,
+        1333235747,
+        1305882419,
+        1328068727,
+        1308343516,
+        1313310710,
+        1323794226,
+        1300908103,
+        1336195613,
+        1267396620,
+        1286382645,
+        1309696799
+      ],
+      "summary": {
+        "minimum": 1267396620,
+        "median": 1310059034,
+        "p95": 1347116671,
+        "maximum": 1347116671
+      }
+    },
+    {
+      "case_id": "host-structured-stream-memory-warm",
+      "unit": "bytes",
+      "warmup_samples": [
+        6111232,
+        6094848,
+        6111232
+      ],
+      "samples": [
+        6094848,
+        6094848,
+        6094848,
+        6111232,
+        6111232,
+        6094848,
+        6094848,
+        6094848,
+        6111232,
+        6111232,
+        6094848,
+        6094848,
+        6111232,
+        6111232,
+        6094848
+      ],
+      "summary": {
+        "minimum": 6094848,
+        "median": 6094848,
+        "p95": 6111232,
+        "maximum": 6111232
+      }
+    },
+    {
+      "case_id": "host-completion-cold",
+      "unit": "ns",
+      "warmup_samples": [],
+      "samples": [
+        1246292
+      ],
+      "summary": {
+        "minimum": 1246292,
+        "median": 1246292,
+        "p95": 1246292,
+        "maximum": 1246292
+      }
+    },
+    {
+      "case_id": "host-completion-warm",
+      "unit": "ns",
+      "warmup_samples": [
+        995583,
+        970291,
+        985792
+      ],
+      "samples": [
+        949125,
+        961667,
+        965833,
+        940917,
+        946959,
+        966625,
+        958459,
+        955292,
+        953875,
+        941042,
+        970167,
+        951166,
+        943458,
+        941292,
+        962167
+      ],
+      "summary": {
+        "minimum": 940917,
+        "median": 953875,
+        "p95": 970167,
+        "maximum": 970167
+      }
+    }
+  ]
+}

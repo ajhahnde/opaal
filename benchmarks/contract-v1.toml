@@ -1,0 +1,126 @@
+schema_version = 1
+suite_version = 1
+result_schema = "flash-performance-result-v1"
+supported_host_os = ["linux", "macos"]
+statistics = "median and nearest-rank p95 over retained raw samples"
+
+[profiles.smoke]
+warmups = 0
+samples = 1
+command_iterations = 5
+pipeline_bytes = 1048576
+stream_items = 100000
+
+[profiles.qualification]
+warmups = 3
+samples = 15
+command_iterations = 200
+pipeline_bytes = 16777216
+stream_items = 5000000
+target_warmups = 1
+target_samples = 5
+target_pipeline_bytes = 1048576
+
+[[cases]]
+id = "host-startup-cold"
+surface = "startup"
+environment = "host"
+metric = "elapsed_ns"
+direction = "maximum"
+sample_class = "cold"
+
+[[cases]]
+id = "host-startup-warm"
+surface = "startup"
+environment = "host"
+metric = "elapsed_ns"
+direction = "maximum"
+sample_class = "warm"
+
+[[cases]]
+id = "host-first-prompt-cold"
+surface = "first_prompt"
+environment = "host"
+metric = "elapsed_ns"
+direction = "maximum"
+sample_class = "cold"
+
+[[cases]]
+id = "host-first-prompt-warm"
+surface = "first_prompt"
+environment = "host"
+metric = "elapsed_ns"
+direction = "maximum"
+sample_class = "warm"
+
+[[cases]]
+id = "host-command-overhead-warm"
+surface = "command_overhead"
+environment = "host"
+metric = "elapsed_ns_per_command"
+direction = "maximum"
+sample_class = "warm"
+
+[[cases]]
+id = "host-pipeline-throughput-warm"
+surface = "pipeline_throughput"
+environment = "host"
+metric = "bytes_per_second"
+direction = "minimum"
+sample_class = "warm"
+
+[[cases]]
+id = "host-structured-stream-memory-warm"
+surface = "structured_stream_memory"
+environment = "host"
+metric = "peak_rss_bytes"
+direction = "maximum"
+sample_class = "warm"
+
+[[cases]]
+id = "host-completion-cold"
+surface = "completion_latency"
+environment = "host"
+metric = "elapsed_ns"
+direction = "maximum"
+sample_class = "cold"
+
+[[cases]]
+id = "host-completion-warm"
+surface = "completion_latency"
+environment = "host"
+metric = "elapsed_ns"
+direction = "maximum"
+sample_class = "warm"
+
+[[cases]]
+id = "flashos-first-prompt-cold"
+surface = "first_prompt"
+environment = "flashos-qemu-tcg"
+metric = "elapsed_ns"
+direction = "maximum"
+sample_class = "cold"
+
+[[cases]]
+id = "flashos-command-latency-warm"
+surface = "command_overhead"
+environment = "flashos-qemu-tcg"
+metric = "elapsed_ns"
+direction = "maximum"
+sample_class = "warm"
+
+[[cases]]
+id = "flashos-pipeline-throughput-warm"
+surface = "pipeline_throughput"
+environment = "flashos-qemu-tcg"
+metric = "bytes_per_second"
+direction = "minimum"
+sample_class = "warm"
+
+[[cases]]
+id = "flashos-completion-latency-warm"
+surface = "completion_latency"
+environment = "flashos-qemu-tcg"
+metric = "elapsed_ns"
+direction = "maximum"
+sample_class = "warm"
