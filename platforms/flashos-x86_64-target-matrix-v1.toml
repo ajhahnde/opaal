@@ -504,7 +504,7 @@ which ...$names | where {|entry| $entry.kind == 'internal'} | length | to json
 ^fsh check - || echo stdin-refusal-ok
 """
 send = "script"
-expect = ["30", "fsh 0.1.0", "check-ok", "plan-ok", "format-ok", "stdin-refusal-ok", ">> "]
+expect = ["30", "fsh 1.0.0", "check-ok", "plan-ok", "format-ok", "stdin-refusal-ok", ">> "]
 manual = "Run the exact script and observe all 30 built-ins, version/help, checker, planner, formatter, and intentional stdin-refusal markers."
 
 [[case]]

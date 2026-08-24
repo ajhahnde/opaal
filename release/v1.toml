@@ -1,0 +1,38 @@
+# Flash 1.0.0 release record. The referenced contracts close the complete
+# user-path inventory, while candidate CI rebuilds and boots the exact in-tree
+# package source before this released state can reach protected main.
+
+schema_version = 1
+release_version = "1.0.0"
+language_major = 1
+status = "released"
+release_date = "2026-08-24"
+conformance = "conformance/v1.toml"
+exercise_contract = "exercises/v1.toml"
+host_evidence = "exercises/evidence/host-v1.json"
+capability_report = "platforms/flashos-x86_64-capability-report-v1.toml"
+target_matrix = "platforms/flashos-x86_64-target-matrix-v1.toml"
+release_findings = []
+unexamined_inventory_items = []
+qualified_environments = ["host-posix", "flashos-qemu-x86_64"]
+required_checks = [
+  "python3 ci/check_flashos_capability_report.py",
+  "python3 ci/check_flashos_target_matrix.py",
+  "python3 ../../ci/check_flash_conformance.py",
+  "python3 ../../ci/check_flash_v1_exercises.py",
+  "python3 ../../ci/check_flash_release.py",
+  "python3 exercises/run.py --profile ci --no-build",
+]
+claim_documents = [
+  "components/flash/README.md",
+  "components/flash/docs/README.md",
+  "components/flash/docs/architecture.md",
+  "components/flash/docs/development.md",
+  "components/flash/docs/language-guide.md",
+  "components/flash/docs/scripting.md",
+  "docs/roadmap.md",
+]
+limitations = [
+  "FlashOS product versions, images, tags, and publication remain separate release boundaries.",
+  "Physical FlashOS hardware remains outside this component release and requires separately recorded, approval-gated evidence.",
+]

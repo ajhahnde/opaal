@@ -1,6 +1,6 @@
 # Lexical golden corpus
 
-`manifest.tsv` is the normative inventory for the v0.1 lexical contract. Each
+`manifest.tsv` is the normative inventory for the v1 lexical contract. Each
 row contains the expected classification, a relative source path, and the
 expected classification reason.
 

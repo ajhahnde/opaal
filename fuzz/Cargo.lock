@@ -43,11 +43,11 @@ dependencies = [
 
 [[package]]
 name = "flash-platform"
-version = "0.1.0"
+version = "1.0.0"
 
 [[package]]
 name = "flash-runtime"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "flash-platform",
  "flash-syntax",
@@ -58,7 +58,7 @@ dependencies = [
 
 [[package]]
 name = "flash-syntax"
-version = "0.1.0"
+version = "1.0.0"
 
 [[package]]
 name = "getrandom"

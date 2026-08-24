@@ -1,6 +1,6 @@
 # Grammar golden corpus
 
-`manifest.tsv` is the normative inventory for the v0.1 parser grammar. Each
+`manifest.tsv` is the normative inventory for the v1 parser grammar. Each
 non-comment row records a completeness class, grammar family, source path, and
 expected classification reason.
 

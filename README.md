@@ -5,11 +5,9 @@
 Flash (`fsh`) is the primary interactive shell and scripting interface of FlashOS. It is a non-POSIX command language built around structured runtime values, explicit process invocation, and a shared syntax and execution core for interactive input and `.fsh` scripts. This page provides a component overview; detailed language, scripting, architecture, and development documentation is available under [`docs/`](docs/README.md).
 
 > **Project status:** FlashOS as a complete operating system remains pre-alpha
-> software, and Flash v1.0 has not yet been released. The Flash component
-> documentation describes the implemented v1 contract in the current source.
-> Availability in a particular FlashOS image or on another target is qualified
-> separately; execution on a Linux or macOS host is not proof of FlashOS target
-> support.
+> software. Flash 1.0.0 is released as the component contract in the current
+> source. FlashOS versions and images that carry it are qualified separately;
+> execution on a Linux or macOS host is not proof of FlashOS target support.
 
 ## On this page
 
@@ -62,7 +60,7 @@ explicit representation changes, source-ordered status and state semantics,
 transactional in-memory commit, and exact failure cleanup across every repeated
 boundary without making lazy structured streams cross threads.
 
-Flash v1 is the language-completion baseline, not a checkpoint that knowingly leaves foundational semantic or executor-topology restrictions for a later release. Its grammar and public runtime behavior are frozen for the release candidate. Post-v1 development may add compatible capabilities, diagnostics, tooling, and optimizations, while incompatible language redesign belongs to an explicit future major-version decision.
+Flash v1 is the language-completion baseline, not a checkpoint that knowingly leaves foundational semantic or executor-topology restrictions for a later release. Its grammar and public runtime behavior are frozen at Flash 1.0.0. Post-v1 development may add compatible capabilities, diagnostics, tooling, and optimizations, while incompatible language redesign belongs to an explicit future major-version decision.
 
 A particular FlashOS release may expose only the parts of that contract that are implemented and qualified for its target environment. Unsupported or unqualified capabilities must remain visible rather than being silently replaced with weaker host-specific behavior.
 
@@ -155,7 +153,8 @@ Run workspace checks from the Flash component directory:
 ```sh
 cd components/flash
 python3 ../../ci/check_flash_conformance.py
-cargo test --workspace
+python3 ../../ci/check_flash_release.py
+cargo test --workspace --locked
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 
@@ -174,6 +173,8 @@ These checks establish different properties:
   and unavailable or approval-gated boundaries.
 - The conformance inventory binds every frozen host-v1 semantic family to
   enabled executable owners and audits explicit runtime refusal boundaries.
+- The [Flash 1.0.0 release record](release/v1.toml) binds the component version,
+  exhaustive inventory, retained evidence, public claims, and candidate gates.
 - Host tests execute those owners across syntax, runtime, CLI, REPL, checker,
   formatter, language-server, and portable platform layers.
 - The `redoxer` builds verify that both shipped binaries compile for the Redox
@@ -199,6 +200,8 @@ The Flash documentation is organized as follows:
   exact-image target measurements with retained evidence and derived budgets
 - [Flash v1 exercises](exercises/README.md) — exhaustive user-path inventory,
   exact host evidence, target owners, and qualification limits
+- [Flash 1.0.0 release record](release/v1.toml) — released component version,
+  exact qualification owners, and explicit product and hardware boundaries
 
 For building and booting FlashOS as a complete system, begin with the [FlashOS Getting Started Guide](../../docs/getting-started.md).
 

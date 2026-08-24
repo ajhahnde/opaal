@@ -5,8 +5,8 @@
 This guide explains how to run and inspect `.fsh` programs, pass script arguments, use non-executing checks and canonical formatting, invoke external processes, connect pipeline stages, redirect file descriptors, handle command statuses and structured errors, and manage background jobs. Language syntax, values, bindings, expressions, modules, function metadata, and structured-data operations are documented in the [Language Guide](language-guide.md).
 
 > **Project status:** FlashOS as a complete operating system remains pre-alpha
-> software, and Flash v1.0 has not yet been released. This guide defines the
-> implemented v1 scripting and execution contract in the current source.
+> software. Flash 1.0.0 is released as the scripting and execution contract in
+> the current source.
 > Availability in a particular FlashOS image or on another target is qualified
 > separately; execution on a Linux or macOS host is not proof of FlashOS target
 > support.

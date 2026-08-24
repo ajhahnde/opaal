@@ -48,6 +48,11 @@ listed action in each named available environment. It does not promise that
 arbitrary hosts, unlisted platform behavior, physical hardware, or future
 revisions work, and it is not release qualification by itself.
 
+The [Flash 1.0.0 release record](../release/v1.toml) binds this inventory to the
+component version, frozen conformance contract, public claims, and exact
+candidate workflow without expanding the suite's host, target, or hardware
+claims.
+
 ---
 
 [← Previous: Performance benchmarks](../benchmarks/README.md) · [Flash documentation](../docs/README.md) · [Next: Scheduling stress →](../scheduling/README.md)

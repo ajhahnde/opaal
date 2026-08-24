@@ -74,7 +74,7 @@ fn version_reports_binary_name_and_package_version() {
     let output = fsh(&["--version"]);
 
     assert!(output.status.success());
-    assert_eq!(String::from_utf8(output.stdout).unwrap(), "fsh 0.1.0\n");
+    assert_eq!(String::from_utf8(output.stdout).unwrap(), "fsh 1.0.0\n");
     assert!(output.stderr.is_empty());
 }
 

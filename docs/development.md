@@ -9,10 +9,10 @@ language implementation, runtime, platform adapters, interactive front end,
 verification policy remain documented under the main FlashOS documentation.
 
 > **Project status:** FlashOS as a complete operating system remains pre-alpha
-> software, and Flash v1.0 has not yet been released. This guide supports the
-> implemented v1 contract in the current source. Availability in a particular
-> FlashOS image or on another target is qualified separately; tests on a Linux
-> or macOS host are not proof of FlashOS target support.
+> software. Flash 1.0.0 is released as the component contract in the current
+> source. This guide supports its implementation and verification. Availability
+> in a particular FlashOS image or on another target is qualified separately;
+> tests on a Linux or macOS host are not proof of FlashOS target support.
 
 ## On this page
 
@@ -253,6 +253,7 @@ Before completing the change, run the full host gate:
 
 ```bash
 python3 ../../ci/check_flash_conformance.py
+python3 ../../ci/check_flash_release.py
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace --locked
@@ -265,6 +266,13 @@ CI wiring, the complete platform-contract list, and the classification of
 intentional runtime refusals and executor invariants. The locked workspace test
 run executes every listed owner; neither command substitutes for target
 compilation or FlashOS runtime qualification.
+
+The machine-readable [`release/v1.toml`](../release/v1.toml) record binds the
+Flash 1.0.0 package version to that frozen contract, the exhaustive user-path
+inventory, retained host evidence, FlashOS target matrix, current public
+claims, and candidate CI commands. The ready candidate workflow executes those
+owners and boots the exact in-tree package source before the release tree can
+reach protected `main`.
 
 The repository helper exposes the same complete host gate from the FlashOS root:
 

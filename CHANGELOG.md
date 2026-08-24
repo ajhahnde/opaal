@@ -18,7 +18,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-08-24
+
 ### Changed
+
 - Freeze the Flash v1 grammar and public runtime contract, remove pre-v1
   config and history fallback paths, and retain only compatibility machinery
   with an explicit v1-or-later owner.
@@ -99,9 +102,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   `CMD001`/`CMD002` migration diagnostics, help, completion, and `which`; the
   latter reports ordered internal, alias, reserved, external, and missing
   records with canonical target and executable path fields.
-- Ratify the v0.1 grammar, operator precedence, closure and backgrounding
+- Ratify the v1 grammar, operator precedence, closure and backgrounding
   boundaries, and add the normative grammar-family corpus.
-- Ratify the v0.1 lexical surface and add the normative complete, incomplete,
+- Ratify the v1 lexical surface and add the normative complete, incomplete,
   and invalid lexical corpus.
 - Add `fsh script.fsh` execution for foreground external commands, byte
   pipelines, conditional status chains, and source-ordered redirections, with
@@ -137,12 +140,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   JSON documents and unterminated text lines enforce documented byte ceilings,
   while byte streams retain producer failures and cancellation without implicit
   decoding, rendering, or serialization.
-- Stream explicit byte boundaries across external and internal stages without
-  capture, in scripts and interactive sessions. The current mixed executor
-  supports one contiguous internal island; within that implemented boundary it
-  preserves source-ordered stage statuses and `pipefail`, and stops pulling an
-  internal producer when an external consumer closes early. Arbitrarily
-  alternating internal and external segments remain required for Flash v1.
+- Stream explicit byte boundaries across any number of alternating external
+  and internal segments without capture, in scripts and interactive sessions.
+  The mixed executor preserves source-ordered stage statuses and `pipefail`,
+  stops pulling an internal producer when an external consumer closes early,
+  and keeps lazy structured streams session-owned rather than moving them
+  across threads.
 - Add the checked lifecycle foundation for process-backed jobs: stable shell
   job identities, an all-members startup barrier, foreground/background and
   stopped states, per-process completion observations, prompt-safe notice

@@ -66,6 +66,7 @@ CASE_OWNERS = {
     "job-control": "interactive-jobs",
     "invalid-job-options": "interactive-jobs",
     "launcher-frontends": "launcher-frontends",
+    "launcher-version": "launcher-version",
     "invalid-launcher-options": "invalid-launcher-options",
     "configuration": "interactive-config",
     "invalid-configuration": "interactive-config",
@@ -321,6 +322,12 @@ if $discovered == '30' { help pwd > help.txt; exit 0 } else { exit 99 }
             (str(binary), "{script}"),
             Expected(1, stderr=("expects",)),
             source="pwd unexpected\n",
+        ),
+        Exercise(
+            "launcher-version",
+            "The assembled executable reports the exact Flash 1.0.0 package version.",
+            (str(binary), "--version"),
+            Expected(0, stdout=("fsh 1.0.0",)),
         ),
         Exercise(
             "processes-and-jobs",

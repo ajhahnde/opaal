@@ -5,8 +5,8 @@
 This guide documents the Flash 1.0 language: source text, runtime values, bindings, expressions, commands, expansion, control flow, functions, function metadata, modules, name resolution, and typed pipelines. Practical script invocation, process execution, redirection, static checking, formatting, status handling, and job control are covered in the [Scripting Guide](scripting.md).
 
 > **Project status:** FlashOS as a complete operating system remains pre-alpha
-> software, and Flash v1.0 has not yet been released. This guide defines the
-> implemented v1 language contract in the current source. Availability in a
+> software. Flash 1.0.0 is released as the language contract in the current
+> source. Availability in a
 > particular FlashOS image or on another target is qualified separately;
 > execution on a Linux or macOS host is not proof of FlashOS target support.
 

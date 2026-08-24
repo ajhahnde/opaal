@@ -150,9 +150,16 @@ flashos_owner = "target-matrix:supported-job-semantics"
 [[surface]]
 id = "launcher-and-frontends"
 category = "frontend"
-members = ["help", "version", "script", "stdin-refusal", "repl", "no-config", "no-history", "check", "check-help", "plan", "plan-help", "format-check", "format-write", "format-help", "double-dash", "script-arguments"]
+members = ["help", "script", "stdin-refusal", "repl", "no-config", "no-history", "check", "check-help", "plan", "plan-help", "format-check", "format-write", "format-help", "double-dash", "script-arguments"]
 exercise_case = "launcher-frontends"
 negative_case = "invalid-launcher-options"
+flashos_owner = "target-matrix:v1-builtins-and-frontends"
+
+[[surface]]
+id = "launcher-version"
+category = "frontend"
+members = ["version"]
+exercise_case = "launcher-version"
 flashos_owner = "target-matrix:v1-builtins-and-frontends"
 
 [[surface]]

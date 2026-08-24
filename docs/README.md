@@ -5,8 +5,8 @@
 This page is the central index for the public Flash documentation. It directs users, script authors, and component developers to the appropriate guide; system-wide FlashOS build, image, verification, and hardware documentation remains under the main [FlashOS documentation](../../../docs/README.md).
 
 > **Project status:** FlashOS as a complete operating system remains pre-alpha
-> software, and Flash v1.0 has not yet been released. These guides describe the
-> implemented v1 contract in the current source. Availability in a particular
+> software. Flash 1.0.0 is released as the component contract in the current
+> source. Availability in a particular
 > FlashOS image or on another target is qualified separately; execution on a
 > Linux or macOS host is not proof of FlashOS target support.
 
@@ -45,7 +45,7 @@ Flash documentation uses four distinct classes:
 
 | Class | Current material | Contract effect |
 | --- | --- | --- |
-| Frozen v1 contract | The Flash overview's v1 contract section, the Language Guide, and the normative behavior in the Scripting Guide | Defines the grammar, runtime, namespace, tooling, and compatibility baseline entering the v1 release candidate. Changes must preserve v1 compatibility or follow a future language-major decision. |
+| Frozen v1 contract | The Flash overview's v1 contract section, the Language Guide, and the normative behavior in the Scripting Guide | Defines the grammar, runtime, namespace, tooling, and compatibility baseline released as Flash 1.0.0. Changes must preserve v1 compatibility or follow a future language-major decision. |
 | Tutorial and usage guidance | Worked examples and task-oriented instructions in the Language and Scripting guides | Teaches the frozen contract and is exercised where runnable, but does not introduce semantics independently of the contract text. |
 | Implementation and verification reference | The Architecture and Development guides plus focused source-adjacent README files | Describes current internals, maintenance, and evidence. It does not expand the public language contract unless it explicitly identifies a contract surface. |
 | Experimental or future proposal | Any document explicitly labeled experimental or future | Has no current availability or compatibility effect and cannot override the frozen contract. No active guide in this index is in this class. |
@@ -74,6 +74,8 @@ Focused implementation and verification areas maintain narrower README files bes
 - [Performance benchmarks](../benchmarks/README.md) — Versioned startup, prompt, command, pipeline, structured-stream-memory, and completion measurements with evidence-derived budgets.
 - [Flash v1 exercises](../exercises/README.md) — Exhaustive user-path inventory,
   retained host evidence, exact FlashOS owners, and qualification boundaries.
+- [Flash 1.0.0 release record](../release/v1.toml) — Released component version,
+  exact contract owners, candidate gates, and explicit qualification limits.
 - [Fuzz targets](../fuzz/README.md) — Lexer, parser, and ordinary-word expander fuzz inputs, campaigns, and corpus handling.
 - [End-to-end tests](../tests/e2e/README.md) — Location of black-box and pseudoterminal test fixtures.
 - [Test fixtures](../tests/fixtures/README.md) — Rust child programs used to observe process, descriptor, status, and stream behavior.

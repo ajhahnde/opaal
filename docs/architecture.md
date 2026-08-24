@@ -5,8 +5,8 @@
 This document describes the internal architecture of Flash: crate boundaries, source processing, runtime state, command planning, pipeline execution, platform capabilities, interactive front ends, and process lifecycle management. It is intended for maintainers and developers extending the implementation; language usage belongs in the [Language Guide](language-guide.md), while build and test procedures belong in [Development](development.md).
 
 > **Project status:** FlashOS as a complete operating system remains pre-alpha
-> software, and Flash v1.0 has not yet been released. This guide describes the
-> implemented v1 architecture and component contracts in the current source.
+> software. Flash 1.0.0 is released as the component contract in the current
+> source. This guide describes its architecture and implementation boundaries.
 > Availability in a particular FlashOS image or on another target is qualified
 > separately; execution on a Linux or macOS host is not proof of FlashOS target
 > support.
