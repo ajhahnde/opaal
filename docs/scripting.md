@@ -1305,7 +1305,7 @@ alias, or deprecation period solely for unreleased behavior.
 Migrate a pre-v1 program by rewriting it to the current Language and Scripting
 guides, then run `fsh format --check` and `fsh check` before execution. Move
 interactive configuration and history to the `flash/` locations documented
-above; older `flashshell/` fallback locations are not part of the v1 contract.
+above; pre-v1 files under older `flashshell/` locations are not discovered.
 Use `--no-config` or `--no-history` to isolate stale startup state. From v1.0
 onward, the documented language-major and built-in-namespace policies govern
 compatibility.

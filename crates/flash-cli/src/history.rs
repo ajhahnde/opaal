@@ -72,7 +72,7 @@ impl HistoryEnvironment for ProcessHistoryEnvironment {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum HistorySelection {
     Disabled,
-    Persistent { primary: PathBuf, legacy: PathBuf },
+    Persistent { path: PathBuf },
 }
 
 /// History initialization or persistence failure.
@@ -141,8 +141,7 @@ pub fn select_history(
         })?;
 
     Ok(HistorySelection::Persistent {
-        primary: state_root.join("flash/history"),
-        legacy: state_root.join("flashshell/history"),
+        path: state_root.join("flash/history"),
     })
 }
 
@@ -165,34 +164,7 @@ impl EditorHistory {
                 capacity: 0,
                 file: None,
             }),
-            HistorySelection::Persistent { primary, legacy } => {
-                let path = match fs::symlink_metadata(&primary) {
-                    Ok(_) => primary,
-                    Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                        match fs::symlink_metadata(&legacy) {
-                            Ok(_) => legacy,
-                            Err(error) if error.kind() == io::ErrorKind::NotFound => primary,
-                            Err(error) => {
-                                return Err(HistoryError::with_source(
-                                    format!(
-                                        "cannot initialize history at {}: {error}",
-                                        legacy.display()
-                                    ),
-                                    error,
-                                ));
-                            }
-                        }
-                    }
-                    Err(error) => {
-                        return Err(HistoryError::with_source(
-                            format!(
-                                "cannot initialize history at {}: {error}",
-                                primary.display()
-                            ),
-                            error,
-                        ));
-                    }
-                };
+            HistorySelection::Persistent { path } => {
                 prepare_history_path(&path).map_err(|error| {
                     HistoryError::with_source(
                         format!("cannot initialize history at {}: {error}", path.display()),

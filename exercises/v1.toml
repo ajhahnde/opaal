@@ -242,45 +242,9 @@ last_block = 66
 classification = "executed-script-or-interaction-example"
 evidence_owner = "documentation-scripting-examples"
 
-# Every production compatibility marker is either pre-v1-only and scheduled
-# for removal before the release candidate, or retained by a current v1+
-# contract. Tests and historical records are evidence rather than executable
+# Every retained production compatibility marker has a current v1-or-later
+# owner. Tests and historical records are evidence rather than executable
 # compatibility paths and are not scanned here.
-
-[[compatibility]]
-id = "legacy-config-location"
-path = "crates/flash-cli/src/config.rs"
-marker = "flashshell/config.fsh"
-classification = "pre-v1-only"
-owner = "remove-before-v1-release-candidate"
-
-[[compatibility]]
-id = "legacy-config-selector"
-path = "crates/flash-cli/src/config.rs"
-marker = "legacy"
-classification = "pre-v1-only"
-owner = "remove-before-v1-release-candidate"
-
-[[compatibility]]
-id = "legacy-history-location"
-path = "crates/flash-cli/src/history.rs"
-marker = "flashshell/history"
-classification = "pre-v1-only"
-owner = "remove-before-v1-release-candidate"
-
-[[compatibility]]
-id = "legacy-history-selector"
-path = "crates/flash-cli/src/history.rs"
-marker = "legacy"
-classification = "pre-v1-only"
-owner = "remove-before-v1-release-candidate"
-
-[[compatibility]]
-id = "capture-entry-functions"
-path = "crates/flash-runtime/src/session.rs"
-marker = "Compatibility entry for the legacy free capture helpers."
-classification = "pre-v1-internal-api"
-owner = "remove-or-promote-before-v1-release-candidate"
 
 [[compatibility]]
 id = "analysis-control"

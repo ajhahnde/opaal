@@ -47,8 +47,8 @@ The component follows several implementation boundaries:
 
 ## Flash v1 contract
 
-The public Flash documentation defines the implemented v1 language, runtime,
-and tooling contract in the current source. That contract covers the existing
+The public Flash documentation defines the frozen v1 language, runtime, and
+tooling contract in the current source. That contract covers the existing
 value, command, pipeline, status, and job model together with maintainable
 multi-file scripts, explicit module boundaries and initializer effects, a
 stable built-in namespace compatibility policy, script arguments, typed
@@ -62,7 +62,7 @@ explicit representation changes, source-ordered status and state semantics,
 transactional in-memory commit, and exact failure cleanup across every repeated
 boundary without making lazy structured streams cross threads.
 
-Flash v1 is the language-completion baseline, not a checkpoint that knowingly leaves foundational semantic or executor-topology restrictions for a later release. Post-v1 development may add compatible capabilities, diagnostics, tooling, and optimizations, while incompatible language redesign belongs to an explicit future major-version decision.
+Flash v1 is the language-completion baseline, not a checkpoint that knowingly leaves foundational semantic or executor-topology restrictions for a later release. Its grammar and public runtime behavior are frozen for the release candidate. Post-v1 development may add compatible capabilities, diagnostics, tooling, and optimizations, while incompatible language redesign belongs to an explicit future major-version decision.
 
 A particular FlashOS release may expose only the parts of that contract that are implemented and qualified for its target environment. Unsupported or unqualified capabilities must remain visible rather than being silently replaced with weaker host-specific behavior.
 

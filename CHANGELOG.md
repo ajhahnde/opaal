@@ -19,6 +19,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ## [Unreleased]
 
 ### Changed
+- Freeze the Flash v1 grammar and public runtime contract, remove pre-v1
+  config and history fallback paths, and retain only compatibility machinery
+  with an explicit v1-or-later owner.
 - Align the public guides with the implemented Flash v1 contract, document the
   first-supported-baseline migration policy, config and history locations,
   embedding and startup-recovery boundaries, and both shipped target binaries,

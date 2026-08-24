@@ -183,115 +183,41 @@ fn platform_path_selection_is_single_native_and_missing_is_clean() {
 }
 
 #[test]
-fn legacy_config_fallback_policy_and_diagnose_paths() {
+fn config_uses_only_the_canonical_v1_path_and_reports_it() {
     let environment = FakeEnvironment::with([("HOME", "/users/test")]);
     let defaults = ConfigDefaults::default();
     let limits = ConfigLimits::test_default();
     let request = ConfigRequest::new(ConfigInvocation::Interactive, false, ConfigPlatform::Linux);
 
     let primary_path = PathBuf::from("/users/test/.config/flash/config.fsh");
-    let legacy_path = PathBuf::from("/users/test/.config/flashshell/config.fsh");
 
-    // 10: Fehlen beide, ist der Status Absent und selected_path zeigt auf den kanonischen Pfad.
-    // 6: Der kanonische Pfad wird vor dem Legacy-Pfad abgefragt.
-    let source_both_absent = RecordingSource::absent();
-    let startup = initialize_config(
-        request,
-        &environment,
-        &source_both_absent,
-        &defaults,
-        &limits,
-    )
-    .unwrap();
+    let source_absent = RecordingSource::absent();
+    let startup =
+        initialize_config(request, &environment, &source_absent, &defaults, &limits).unwrap();
     assert_eq!(startup.metadata().status(), ConfigStatus::Absent);
     assert_eq!(
         startup.metadata().selected_path(),
         Some(primary_path.as_path())
     );
-    assert_eq!(
-        source_both_absent.call_paths(),
-        vec![primary_path.clone(), legacy_path.clone()]
-    );
+    assert_eq!(source_absent.call_paths(), vec![primary_path.clone()]);
 
-    // 7: Ist die kanonische Datei vorhanden, wird die Legacy-Datei nicht abgefragt.
-    let source_primary_only = RecordingSource::absent().with_response(
+    let source_present = RecordingSource::absent().with_response(
         &primary_path,
         Ok(ConfigFile::Source("let a = 1\n".to_owned())),
     );
-    let startup = initialize_config(
-        request,
-        &environment,
-        &source_primary_only,
-        &defaults,
-        &limits,
-    )
-    .unwrap();
+    let startup =
+        initialize_config(request, &environment, &source_present, &defaults, &limits).unwrap();
     assert_eq!(startup.metadata().status(), ConfigStatus::Loaded);
     assert_eq!(
         startup.metadata().selected_path(),
         Some(primary_path.as_path())
     );
-    assert_eq!(source_primary_only.call_paths(), vec![primary_path.clone()]);
+    assert_eq!(source_present.call_paths(), vec![primary_path.clone()]);
 
-    // 8: Fehlt die kanonische Datei und existiert die Legacy-Datei, wird die Legacy-Datei geladen.
-    // 15: Die tatsächlich geladene Legacy-Datei erscheint in metadata.selected_path().
-    let source_legacy_only = RecordingSource::absent().with_response(
-        &legacy_path,
-        Ok(ConfigFile::Source("let b = 2\n".to_owned())),
+    let source_primary_trust = RecordingSource::absent().with_response(
+        &primary_path,
+        Err(ConfigFileError::trust("untrusted primary")),
     );
-    let startup = initialize_config(
-        request,
-        &environment,
-        &source_legacy_only,
-        &defaults,
-        &limits,
-    )
-    .unwrap();
-    assert_eq!(startup.metadata().status(), ConfigStatus::Loaded);
-    assert_eq!(
-        startup.metadata().selected_path(),
-        Some(legacy_path.as_path())
-    );
-    assert_eq!(
-        source_legacy_only.call_paths(),
-        vec![primary_path.clone(), legacy_path.clone()]
-    );
-
-    // 9: Sind beide vorhanden, gewinnt die kanonische Datei.
-    let source_both_present = RecordingSource::absent()
-        .with_response(
-            &primary_path,
-            Ok(ConfigFile::Source("let val = 'primary'\n".to_owned())),
-        )
-        .with_response(
-            &legacy_path,
-            Ok(ConfigFile::Source("let val = 'legacy'\n".to_owned())),
-        );
-    let startup = initialize_config(
-        request,
-        &environment,
-        &source_both_present,
-        &defaults,
-        &limits,
-    )
-    .unwrap();
-    assert_eq!(startup.metadata().status(), ConfigStatus::Loaded);
-    assert_eq!(
-        startup.metadata().selected_path(),
-        Some(primary_path.as_path())
-    );
-    assert_eq!(source_both_present.call_paths(), vec![primary_path.clone()]);
-
-    // 11: Ein Trust-Fehler am kanonischen Pfad löst Safe Mode aus und darf keinen Legacy-Fallback auslösen.
-    let source_primary_trust = RecordingSource::absent()
-        .with_response(
-            &primary_path,
-            Err(ConfigFileError::trust("untrusted primary")),
-        )
-        .with_response(
-            &legacy_path,
-            Ok(ConfigFile::Source("let c = 3\n".to_owned())),
-        );
     let startup = initialize_config(
         request,
         &environment,
@@ -310,16 +236,10 @@ fn legacy_config_fallback_policy_and_diagnose_paths() {
         vec![primary_path.clone()]
     );
 
-    // 12: Ein Read-Fehler am kanonischen Pfad löst Safe Mode aus und darf keinen Legacy-Fallback auslösen.
-    let source_primary_read = RecordingSource::absent()
-        .with_response(
-            &primary_path,
-            Err(ConfigFileError::read("cannot read primary")),
-        )
-        .with_response(
-            &legacy_path,
-            Ok(ConfigFile::Source("let c = 3\n".to_owned())),
-        );
+    let source_primary_read = RecordingSource::absent().with_response(
+        &primary_path,
+        Err(ConfigFileError::read("cannot read primary")),
+    );
     let startup = initialize_config(
         request,
         &environment,
@@ -335,16 +255,10 @@ fn legacy_config_fallback_policy_and_diagnose_paths() {
     );
     assert_eq!(source_primary_read.call_paths(), vec![primary_path.clone()]);
 
-    // 13: Ein Budget-Fehler am kanonischen Pfad löst Safe Mode aus und darf keinen Legacy-Fallback auslösen.
-    let source_primary_budget = RecordingSource::absent()
-        .with_response(
-            &primary_path,
-            Err(ConfigFileError::budget("budget exceeded")),
-        )
-        .with_response(
-            &legacy_path,
-            Ok(ConfigFile::Source("let c = 3\n".to_owned())),
-        );
+    let source_primary_budget = RecordingSource::absent().with_response(
+        &primary_path,
+        Err(ConfigFileError::budget("budget exceeded")),
+    );
     let startup = initialize_config(
         request,
         &environment,
@@ -363,78 +277,42 @@ fn legacy_config_fallback_policy_and_diagnose_paths() {
         vec![primary_path.clone()]
     );
 
-    // 14: Fehlt der kanonische Pfad und ist die Legacy-Datei unsicher, wird deren Trust-Fehler gemeldet.
-    let source_legacy_untrusted = RecordingSource::absent().with_response(
-        &legacy_path,
-        Err(ConfigFileError::trust("untrusted legacy")),
-    );
-    let startup = initialize_config(
-        request,
-        &environment,
-        &source_legacy_untrusted,
-        &defaults,
-        &limits,
-    )
-    .unwrap();
-    assert_eq!(startup.metadata().status(), ConfigStatus::SafeMode);
-    assert_eq!(
-        startup.metadata().selected_path(),
-        Some(legacy_path.as_path())
-    );
-    assert_eq!(
-        startup.metadata().failure().unwrap().kind(),
-        ConfigFailureKind::ConfigTrust
-    );
-
-    // 16: Parse- und Runtime-Diagnosen verwenden den tatsächlich ausgewählten Dateipfad.
-    let source_legacy_parse = RecordingSource::absent().with_response(
-        &legacy_path,
+    let source_parse = RecordingSource::absent().with_response(
+        &primary_path,
         Ok(ConfigFile::Source("let invalid = \n".to_owned())),
     );
-    let startup_parse = initialize_config(
-        request,
-        &environment,
-        &source_legacy_parse,
-        &defaults,
-        &limits,
-    )
-    .unwrap();
+    let startup_parse =
+        initialize_config(request, &environment, &source_parse, &defaults, &limits).unwrap();
     assert_eq!(startup_parse.metadata().status(), ConfigStatus::SafeMode);
     assert_eq!(
         startup_parse.metadata().selected_path(),
-        Some(legacy_path.as_path())
+        Some(primary_path.as_path())
     );
     assert!(
         startup_parse
             .diagnostic()
             .unwrap()
-            .contains("/users/test/.config/flashshell/config.fsh")
+            .contains("/users/test/.config/flash/config.fsh")
     );
 
-    let source_legacy_runtime = RecordingSource::absent().with_response(
-        &legacy_path,
+    let source_runtime = RecordingSource::absent().with_response(
+        &primary_path,
         Ok(ConfigFile::Source(
             "let error = $nonexistent_var\n".to_owned(),
         )),
     );
-    let startup_runtime = initialize_config(
-        request,
-        &environment,
-        &source_legacy_runtime,
-        &defaults,
-        &limits,
-    )
-    .unwrap();
+    let startup_runtime =
+        initialize_config(request, &environment, &source_runtime, &defaults, &limits).unwrap();
     assert_eq!(startup_runtime.metadata().status(), ConfigStatus::SafeMode);
     assert_eq!(
         startup_runtime.metadata().selected_path(),
-        Some(legacy_path.as_path())
+        Some(primary_path.as_path())
     );
     assert!(
         startup_runtime
             .diagnostic()
             .unwrap()
-            .contains("/users/test/.config/flashshell/config.fsh")
+            .contains("/users/test/.config/flash/config.fsh")
     );
 }
 

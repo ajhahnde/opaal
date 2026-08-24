@@ -39,9 +39,9 @@ stronger validation or qualification gates. Adding or removing a block without
 updating the inventory fails CI.
 
 The compatibility inventory is deliberately separate from the v1 contract.
-Pre-v1-only routes are recorded for removal before the v1 release candidate;
-retained internal machinery has an explicit v1-or-later owner. An unclassified
-production legacy marker fails validation.
+Pre-v1-only executable routes have been removed; retained internal machinery
+has an explicit v1-or-later owner. An unclassified production legacy marker
+fails validation.
 
 This suite supports a bounded claim: the exact recorded candidate passed every
 listed action in each named available environment. It does not promise that

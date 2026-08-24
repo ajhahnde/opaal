@@ -234,7 +234,7 @@ pub fn capture_command_substitution_bytes(
     platform: &dyn Platform,
     clock: &dyn Clock,
 ) -> Result<CommandCapture<Vec<u8>>, RuntimeError> {
-    crate::session::capture_command_substitution_compat(
+    crate::session::capture_command_substitution(
         chain,
         cwd,
         source,

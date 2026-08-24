@@ -760,12 +760,12 @@ impl EvaluationHost for SessionEvaluationHost<'_> {
     }
 }
 
-/// Compatibility entry for the legacy free capture helpers.
+/// Capture a command substitution through the canonical session chain runner.
 ///
-/// It delegates to the same session chain runner used by evaluator-hosted
-/// substitution, so conditional traversal and pipeline topology stay singular.
+/// This entry keeps conditional traversal and pipeline topology singular for
+/// the public capture API and evaluator-hosted substitution.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn capture_command_substitution_compat(
+pub(crate) fn capture_command_substitution(
     chain: &ConditionalChain,
     cwd: &Path,
     source: &SourceFile,

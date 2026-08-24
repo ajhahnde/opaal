@@ -1,5 +1,6 @@
 schema_version = 1
 language_major = 1
+contract_status = "frozen"
 workspace_test_command = "cargo test --workspace --locked"
 ci_workflow = ".github/workflows/ci.yml"
 platform_contracts = [

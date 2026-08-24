@@ -39,12 +39,28 @@ Each guide has a distinct responsibility:
 
 When documentation and implementation appear to disagree, inspect the current source, tests, and configuration before relying on a behavior or changing a public claim.
 
+## Documentation classes
+
+Flash documentation uses four distinct classes:
+
+| Class | Current material | Contract effect |
+| --- | --- | --- |
+| Frozen v1 contract | The Flash overview's v1 contract section, the Language Guide, and the normative behavior in the Scripting Guide | Defines the grammar, runtime, namespace, tooling, and compatibility baseline entering the v1 release candidate. Changes must preserve v1 compatibility or follow a future language-major decision. |
+| Tutorial and usage guidance | Worked examples and task-oriented instructions in the Language and Scripting guides | Teaches the frozen contract and is exercised where runnable, but does not introduce semantics independently of the contract text. |
+| Implementation and verification reference | The Architecture and Development guides plus focused source-adjacent README files | Describes current internals, maintenance, and evidence. It does not expand the public language contract unless it explicitly identifies a contract surface. |
+| Experimental or future proposal | Any document explicitly labeled experimental or future | Has no current availability or compatibility effect and cannot override the frozen contract. No active guide in this index is in this class. |
+
+New experimental or future material must identify that class at the top of the
+document and stay outside the active guide set until its behavior is selected,
+implemented, documented as contract material, and qualified by the applicable
+evidence.
+
 ## Contract and release availability
 
-These guides describe the implemented Flash v1 contract in the current source.
-They do not imply that every earlier binary, FlashOS image, or other target
-exposes every part of that contract, and they are not a claim that v1.0 has
-already been released.
+The v1 grammar and public runtime contract are frozen in the current source.
+This does not imply that every earlier binary, FlashOS image, or other target
+exposes every part of that contract, and it is not a claim that v1.0 has already
+been released.
 
 Language and tooling responsibilities remain stable at the documentation level, while release notes, target evidence, and capability qualification determine which functions are available in a particular build. Host execution, target compilation, image integration, and runtime qualification are separate forms of evidence.
 

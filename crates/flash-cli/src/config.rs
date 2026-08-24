@@ -529,8 +529,8 @@ pub fn initialize_config(
         return Ok(clean_startup(ConfigStatus::Disabled, None, defaults));
     }
 
-    let paths = match config_paths(request.platform, environment) {
-        Some(paths) => paths,
+    let path = match config_path(request.platform, environment) {
+        Some(path) => path,
         None => {
             return Ok(safe_startup(
                 None,
@@ -546,31 +546,13 @@ pub fn initialize_config(
         }
     };
 
-    let (path, text) = match source.load(&paths.primary, limits.source_limit) {
-        Ok(ConfigFile::Absent) => match source.load(&paths.legacy, limits.source_limit) {
-            Ok(ConfigFile::Absent) => {
-                return Ok(clean_startup(
-                    ConfigStatus::Absent,
-                    Some(paths.primary),
-                    defaults,
-                ));
-            }
-            Ok(ConfigFile::Source(text)) => (paths.legacy, text),
-            Err(error) => {
-                return Ok(safe_startup(
-                    Some(paths.legacy),
-                    file_failure(error),
-                    defaults,
-                ));
-            }
-        },
-        Ok(ConfigFile::Source(text)) => (paths.primary, text),
+    let text = match source.load(&path, limits.source_limit) {
+        Ok(ConfigFile::Absent) => {
+            return Ok(clean_startup(ConfigStatus::Absent, Some(path), defaults));
+        }
+        Ok(ConfigFile::Source(text)) => text,
         Err(error) => {
-            return Ok(safe_startup(
-                Some(paths.primary),
-                file_failure(error),
-                defaults,
-            ));
+            return Ok(safe_startup(Some(path), file_failure(error), defaults));
         }
     };
 
@@ -669,15 +651,7 @@ pub fn initialize_config(
     }
 }
 
-struct ConfigPaths {
-    primary: PathBuf,
-    legacy: PathBuf,
-}
-
-fn config_paths(
-    platform: ConfigPlatform,
-    environment: &dyn ConfigEnvironment,
-) -> Option<ConfigPaths> {
+fn config_path(platform: ConfigPlatform, environment: &dyn ConfigEnvironment) -> Option<PathBuf> {
     let root = environment
         .value(OsStr::new("XDG_CONFIG_HOME"))
         .filter(|value| !value.is_empty() && Path::new(value).is_absolute())
@@ -692,10 +666,7 @@ fn config_paths(
                     ConfigPlatform::MacOs => home.join("Library/Application Support"),
                 })
         })?;
-    Some(ConfigPaths {
-        primary: root.join("flash/config.fsh"),
-        legacy: root.join("flashshell/config.fsh"),
-    })
+    Some(root.join("flash/config.fsh"))
 }
 
 fn file_failure(error: ConfigFileError) -> ConfigFailure {
