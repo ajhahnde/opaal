@@ -4,10 +4,10 @@ contract_status = "frozen"
 workspace_test_command = "cargo test --workspace --locked"
 ci_workflow = ".github/workflows/ci.yml"
 platform_contracts = [
-  "ci/check_flashos_platform.py",
-  "ci/check_flashos_capabilities.py",
-  "ci/check_flashos_operation_map.py",
-  "ci/check_flashos_capability_classification.py",
+  "ci/check_flashos_platform.fsh",
+  "ci/check_flashos_capabilities.fsh",
+  "ci/check_flashos_operation_map.fsh",
+  "ci/check_flashos_capability_classification.fsh",
 ]
 config_settings = [
   "pipefail",

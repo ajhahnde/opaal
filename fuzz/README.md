@@ -6,16 +6,17 @@ APIs; invalid UTF-8 inputs exercise source-file loading and are then rejected
 normally. The expander target uses a fixed in-memory scope and never launches
 processes or performs platform I/O.
 
-Run a bounded smoke campaign for all targets from the component root:
+After building Flash, run a bounded smoke campaign for all targets from the
+repository root with the explicitly selected candidate runtime:
 
 ```sh
-./fuzz/run-smoke.sh
+components/flash/target/debug/fsh components/flash/fuzz/run-smoke.fsh
 ```
 
 Pass a run count to change the default 1,000 executions per target:
 
 ```sh
-./fuzz/run-smoke.sh 10000
+components/flash/target/debug/fsh components/flash/fuzz/run-smoke.fsh 10000
 ```
 
 The runner supplies every `.fsh` file below `tests/golden/grammar` and
@@ -27,14 +28,15 @@ MiB of resident memory.
 Run a sustained campaign for ten minutes per target:
 
 ```sh
-./fuzz/run-campaign.sh
+components/flash/target/debug/fsh components/flash/fuzz/run-campaign.fsh
 ```
 
 The first argument changes the duration per target in seconds. The optional
 second argument selects a new result directory:
 
 ```sh
-./fuzz/run-campaign.sh 3600 /path/to/results
+components/flash/target/debug/fsh components/flash/fuzz/run-campaign.fsh \
+  3600 /path/to/results
 ```
 
 The selected result directory must not already exist, preventing separate

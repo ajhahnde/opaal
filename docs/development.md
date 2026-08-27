@@ -139,14 +139,16 @@ contract used by FlashOS integration. Validate its source-owned fields from the
 repository root:
 
 ```bash
-python3 ci/check_flashos_platform.py
+make flash-bootstrap
+make flash-automation-tools
+build/flash-bootstrap/134635a5e1282b5d8455a4b2aeb754be5a3a77c1/fsh ci/check_flashos_platform.fsh
 ```
 
 After an image build has populated the compiler fingerprint and staged package
 trees, validate the observed toolchain, package metadata, and ELF outputs:
 
 ```bash
-python3 ci/check_flashos_platform.py --artifacts
+build/flash-bootstrap/134635a5e1282b5d8455a4b2aeb754be5a3a77c1/fsh ci/check_flashos_platform.fsh --artifacts
 ```
 
 The artifact mode verifies the target that produced the staged `fsh`; it is not
@@ -162,7 +164,7 @@ observations. Validate its source markers and evidence references from the
 repository root:
 
 ```bash
-python3 ci/check_flashos_capabilities.py
+build/flash-bootstrap/134635a5e1282b5d8455a4b2aeb754be5a3a77c1/fsh ci/check_flashos_capabilities.fsh
 ```
 
 This inventory is deliberately not a support matrix. A source method or a
@@ -177,7 +179,7 @@ Rust standard-library, direct `relibc`, or unrouted boundary. Validate its
 ordered coverage and source identities from the repository root:
 
 ```bash
-python3 ci/check_flashos_operation_map.py
+build/flash-bootstrap/134635a5e1282b5d8455a4b2aeb754be5a3a77c1/fsh ci/check_flashos_operation_map.fsh
 ```
 
 The map deliberately stops Rust standard-library routes at public APIs because
@@ -194,7 +196,7 @@ architectural route verdict. Validate its ordered coverage, aggregation, and
 qualification boundary from the repository root:
 
 ```bash
-python3 ci/check_flashos_capability_classification.py
+build/flash-bootstrap/134635a5e1282b5d8455a4b2aeb754be5a3a77c1/fsh ci/check_flashos_capability_classification.fsh
 ```
 
 The current classification records 41 native operations and one
@@ -249,14 +251,16 @@ cargo test -p flash-cli --locked
 cargo test -p flash-lsp --locked
 ```
 
-Before completing the change, run the full host gate:
+Before completing the change, run the full host gate from the repository root:
 
 ```bash
-python3 ../../ci/check_flash_conformance.py
-python3 ../../ci/check_flash_release.py
-cargo fmt --all --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace --locked
+make flash-bootstrap
+make flash-automation-tools
+build/flash-bootstrap/134635a5e1282b5d8455a4b2aeb754be5a3a77c1/fsh ci/check_flash_conformance.fsh
+build/flash-bootstrap/134635a5e1282b5d8455a4b2aeb754be5a3a77c1/fsh ci/check_flash_release.fsh
+cargo fmt --manifest-path components/flash/Cargo.toml --all --check
+cargo clippy --manifest-path components/flash/Cargo.toml --workspace --all-targets -- -D warnings
+cargo test --manifest-path components/flash/Cargo.toml --workspace --locked
 ```
 
 The machine-readable
@@ -914,17 +918,17 @@ versioned advertised-capability report, and exhaustive target matrix from the
 repository root:
 
 ```bash
-python3 ci/check_flashos_capability_classification.py
-python3 ci/check_flashos_capability_report.py
-python3 ci/check_flashos_target_matrix.py
+build/flash-bootstrap/134635a5e1282b5d8455a4b2aeb754be5a3a77c1/fsh ci/check_flashos_capability_classification.fsh
+build/flash-bootstrap/134635a5e1282b5d8455a4b2aeb754be5a3a77c1/fsh ci/check_flashos_capability_report.fsh
+build/flash-bootstrap/134635a5e1282b5d8455a4b2aeb754be5a3a77c1/fsh ci/check_flashos_target_matrix.fsh
 ```
 
 Render the ordered smoke inputs and exhaustive matrix observations for a
 manually observed target with:
 
 ```bash
-python3 ci/flashos_runtime_fixtures.py
-python3 ci/flashos_target_matrix.py
+build/flash-bootstrap/134635a5e1282b5d8455a4b2aeb754be5a3a77c1/fsh ci/flashos_runtime_fixtures.fsh
+build/flash-bootstrap/134635a5e1282b5d8455a4b2aeb754be5a3a77c1/fsh ci/flashos_target_matrix.fsh
 ```
 
 The report and reusable smoke fixtures remain bounded evidence. The separate
@@ -1063,15 +1067,17 @@ test gate. A separate bounded campaign derives more exact seeds from one
 recorded campaign seed and retains a manifest plus complete output:
 
 ```bash
-cd components/flash
-./scheduling/run-campaign.sh
+components/flash/target/debug/fsh \
+  components/flash/scheduling/run-campaign.fsh
 ```
 
 Pass a case count, a new result directory, and an optional nonzero campaign
 seed when longer or independently replayable evidence is needed:
 
 ```bash
-./scheduling/run-campaign.sh 256 /path/to/new-results 0x4f3c2b1a098765ef
+components/flash/target/debug/fsh \
+  components/flash/scheduling/run-campaign.fsh \
+  256 /path/to/new-results 0x4f3c2b1a098765ef
 ```
 
 The randomized choices cover multi-member pipeline size, stop/resume cycles,
@@ -1124,17 +1130,17 @@ The expander target evaluates parsed command words against a fixed in-memory
 scope. Its public pure-evaluation boundary does not launch processes or perform
 platform I/O.
 
-From the component workspace, run the bounded smoke campaign:
+From the repository root, run the bounded smoke campaign through the
+explicitly selected candidate runtime:
 
 ```bash
-cd components/flash
-./fuzz/run-smoke.sh
+components/flash/target/debug/fsh components/flash/fuzz/run-smoke.fsh
 ```
 
 The default campaign runs a bounded number of executions for each target. Supply another nonnegative count when needed:
 
 ```bash
-./fuzz/run-smoke.sh 10000
+components/flash/target/debug/fsh components/flash/fuzz/run-smoke.fsh 10000
 ```
 
 The runner:
@@ -1151,13 +1157,14 @@ For a sustained campaign, use the time-bounded runner. Its default is ten minute
 per target:
 
 ```bash
-./fuzz/run-campaign.sh
+components/flash/target/debug/fsh components/flash/fuzz/run-campaign.fsh
 ```
 
 Supply a positive duration in seconds and, optionally, a new result directory:
 
 ```bash
-./fuzz/run-campaign.sh 3600 /path/to/results
+components/flash/target/debug/fsh components/flash/fuzz/run-campaign.fsh \
+  3600 /path/to/results
 ```
 
 The selected result directory must not already exist, preventing one campaign

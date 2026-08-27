@@ -48,6 +48,23 @@ def digest(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def automation_runtime() -> Path:
+    selected = os.environ.get("FLASH_AUTOMATION_RUNTIME")
+    if not selected:
+        raise SystemExit(
+            "FLASH_AUTOMATION_RUNTIME must select the independent Flash "
+            "automation runtime"
+        )
+    runtime = Path(selected).expanduser()
+    if not runtime.is_absolute():
+        runtime = (Path.cwd() / runtime).resolve()
+    if not runtime.is_file() or not os.access(runtime, os.X_OK):
+        raise SystemExit(
+            f"FLASH_AUTOMATION_RUNTIME is not an executable file: {runtime}"
+        )
+    return runtime
+
+
 def pinned_tool(name: str) -> Path:
     try:
         selected = subprocess.check_output(
@@ -488,14 +505,18 @@ def main() -> int:
         output = ROOT / "benchmarks/results" / f"{timestamp}-{args.profile}-host.json"
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(result, indent=2) + "\n")
-    checker = [sys.executable, ROOT.parents[1] / "ci/flash_benchmarks.py"]
+    repository_root = ROOT.parents[1]
+    checker = [
+        automation_runtime(),
+        repository_root / "ci/flash_benchmarks.fsh",
+    ]
     if args.budget_environment:
         if args.profile != "qualification":
             raise SystemExit("budget evaluation requires the qualification profile")
         checker.extend(["--evaluate", output, "--environment", args.budget_environment])
     else:
         checker.extend(["--result", output])
-    subprocess.run(checker, check=True)
+    subprocess.run(checker, check=True, cwd=repository_root)
     print(f"benchmark result: {output}")
     for measurement in measurements:
         print(f"{measurement['case_id']}: {measurement['summary']}")

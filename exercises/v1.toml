@@ -6,7 +6,8 @@
 schema_version = 1
 suite_version = 1
 language_major = 1
-host_runner = "exercises/run.py"
+host_runner = "exercises/run.fsh"
+host_case_inventory = "exercises/host-cases-v1.json"
 host_evidence = "exercises/evidence/host-v1.json"
 target_matrix = "platforms/flashos-x86_64-target-matrix-v1.toml"
 target_fixtures = "platforms/flashos-x86_64-runtime-fixtures-v1.toml"
@@ -22,7 +23,7 @@ documentation_roots = [
 [[environment]]
 id = "host-posix"
 availability = "available"
-evidence_owner = "exercises/run.py"
+evidence_owner = "exercises/run.fsh"
 limitations = "Qualifies the assembled host binaries on supported macOS or Linux; it does not establish FlashOS behavior."
 
 [[environment]]
@@ -121,7 +122,7 @@ negative_case = "uncaught-error"
 flashos_owner = "target-matrix:dynamic-capture-error-and-status-language"
 
 # Closed product namespaces are expanded and compared with the implementation
-# by ci/check_flash_v1_exercises.py.
+# by ci/check_flash_v1_exercises.fsh.
 
 [[surface]]
 id = "expression-intrinsics"
@@ -226,7 +227,7 @@ path = "docs/architecture.md"
 first_block = 1
 last_block = 11
 classification = "explanatory-model"
-evidence_owner = "ci/check_flash_v1_exercises.py"
+evidence_owner = "ci/check_flash_v1_exercises.fsh"
 
 [[documentation_rule]]
 path = "docs/development.md"

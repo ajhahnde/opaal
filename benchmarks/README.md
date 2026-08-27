@@ -45,11 +45,15 @@ than pretending that repeated first observations are independent.
 
 ## Run the host suite
 
-From the Flash workspace:
+From the repository root, acquire the independent Flash automation runtime and
+the pinned host tools described in
+[Public Automation](../../../docs/automation.md), then select that runtime:
 
 ```sh
-python3 benchmarks/run.py --profile smoke
-python3 benchmarks/run.py --profile qualification
+make flash-bootstrap flash-automation-tools
+export FLASH_AUTOMATION_RUNTIME="$PWD/build/flash-bootstrap/134635a5e1282b5d8455a4b2aeb754be5a3a77c1/fsh"
+python3 components/flash/benchmarks/run.py --profile smoke
+python3 components/flash/benchmarks/run.py --profile qualification
 ```
 
 The runner builds optimized `fsh` and `flash-benchmark-fixture` binaries unless
@@ -62,7 +66,7 @@ discards warmups, and writes a unique ignored JSON result under
 Evaluate a qualification run only against a matching environment budget:
 
 ```sh
-python3 benchmarks/run.py \
+python3 components/flash/benchmarks/run.py \
   --profile qualification \
   --budget-environment host-darwin-arm64
 ```
@@ -94,7 +98,7 @@ candidate runs upload their JSON as short-lived workflow evidence.
 
 Qualification evidence under [`evidence/`](evidence/) is immutable input to
 [`budgets-v1.toml`](budgets-v1.toml). The budget file binds the contract and
-each evidence file by SHA-256. [`ci/flash_benchmarks.py`](../../../ci/flash_benchmarks.py)
+each evidence file by SHA-256. [`ci/flash_benchmarks.fsh`](../../../ci/flash_benchmarks.fsh)
 checks schema versions, exact case coverage, raw summaries, environment
 identity, evidence hashes, derivation arithmetic, and budget coverage.
 
@@ -111,8 +115,8 @@ every absolute limit is mechanically derived from the bound evidence.
 Validate the tracked contract or evaluate another matching result with:
 
 ```sh
-python3 ci/flash_benchmarks.py
-python3 ci/flash_benchmarks.py \
+"$FLASH_AUTOMATION_RUNTIME" ci/flash_benchmarks.fsh
+"$FLASH_AUTOMATION_RUNTIME" ci/flash_benchmarks.fsh \
   --evaluate path/to/result.json \
   --environment flashos-qemu-tcg-core2duo
 ```

@@ -23,10 +23,11 @@ asserted boundaries rather than promising identical wall-clock timing.
 
 ## Run a campaign
 
-From the Flash workspace, run 64 generated seeds per scenario:
+After building Flash, run 64 generated seeds per scenario from the repository
+root with the explicitly selected candidate runtime:
 
 ```sh
-./scheduling/run-campaign.sh
+components/flash/target/debug/fsh components/flash/scheduling/run-campaign.fsh
 ```
 
 The first argument selects a positive case count up to 4,096. The optional
@@ -34,7 +35,8 @@ second argument selects a new result directory, and the optional third argument
 sets a nonzero decimal or `0x`-prefixed campaign seed:
 
 ```sh
-./scheduling/run-campaign.sh 256 /path/to/new-results 0x4f3c2b1a098765ef
+components/flash/target/debug/fsh components/flash/scheduling/run-campaign.fsh \
+  256 /path/to/new-results 0x4f3c2b1a098765ef
 ```
 
 When no seed is supplied, the runner reads one from the host random source. It

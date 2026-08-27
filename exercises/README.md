@@ -9,13 +9,31 @@ editor, process, platform, and active-documentation surface. Each surface has
 an assembled host exercise, an intentional-negative owner where rejection is
 contractual, and an exact FlashOS evidence owner.
 
-[`run.py`](run.py) builds or reuses the product binaries and records each exact
-action, input, expectation, observation, environment, and result. Run
-`python3 exercises/run.py --profile ci` from `components/flash`; add
-`--no-build` only after the workspace binaries and test fixtures have already
-been built. The smoke profile runs the direct assembled-script cases, while the
-CI and full profiles also run executable-boundary acceptance owners for PTY,
-configuration, frontend, language-server, platform, and documentation paths.
+[`run.fsh`](run.fsh) builds or reuses the product binaries and records each
+exact action, input, expectation, observation, environment, and result. Its
+closed case order and ownership map live in
+[`host-cases-v1.json`](host-cases-v1.json). From the repository root, acquire
+the independent bootstrap and run the CI profile through the explicitly
+selected candidate runtime:
+
+```sh
+make flash-bootstrap
+FLASH_V1_BOOTSTRAP_FSH="$PWD/build/flash-bootstrap/134635a5e1282b5d8455a4b2aeb754be5a3a77c1/fsh" \
+  components/flash/target/debug/fsh components/flash/exercises/run.fsh \
+  --profile ci
+```
+
+Add `--no-build` only after the workspace binaries and test fixtures have
+already been built. The smoke profile runs the direct assembled-script cases,
+while the CI and full profiles also run executable-boundary acceptance owners
+for PTY, configuration, frontend, language-server, platform, and documentation
+paths.
+
+The native runner records its driving `fsh 1.0.0` rather than a Python version
+and refuses source paths containing newlines because frozen-v1 Flash cannot
+iterate those paths without ambiguity. Flash 1.0 also lacks guaranteed
+scope-exit cleanup; an interruption or runtime-adapter failure may leave the
+runner's uniquely owned temporary directory for inspection.
 
 [`evidence/host-v1.json`](evidence/host-v1.json) is the retained host execution
 for the source digest recorded in that file. CI validates that the report still

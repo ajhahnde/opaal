@@ -241,12 +241,14 @@ fn native_non_utf8_paths_are_formatted_without_loss() {
     let name = OsString::from_vec(b"source-\xff.fsh".to_vec());
     let path = temp.path().join(PathBuf::from(name));
     if let Err(error) = fs::write(&path, b"echo   native") {
-        if matches!(
+        let unsupported_native_name = matches!(
             error.kind(),
             std::io::ErrorKind::InvalidInput
                 | std::io::ErrorKind::PermissionDenied
                 | std::io::ErrorKind::Unsupported
-        ) {
+        ) || (cfg!(target_os = "macos")
+            && error.raw_os_error() == Some(92));
+        if unsupported_native_name {
             return;
         }
         panic!("native-path fixture should be written: {error}");

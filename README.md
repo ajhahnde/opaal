@@ -148,14 +148,15 @@ for editor setup and verification.
 
 ## Development and verification
 
-Run workspace checks from the Flash component directory:
+Run the complete host checks from the repository root:
 
 ```sh
-cd components/flash
-python3 ../../ci/check_flash_conformance.py
-python3 ../../ci/check_flash_release.py
-cargo test --workspace --locked
-cargo clippy --workspace --all-targets -- -D warnings
+make flash-bootstrap
+make flash-automation-tools
+build/flash-bootstrap/134635a5e1282b5d8455a4b2aeb754be5a3a77c1/fsh ci/check_flash_conformance.fsh
+build/flash-bootstrap/134635a5e1282b5d8455a4b2aeb754be5a3a77c1/fsh ci/check_flash_release.fsh
+cargo test --manifest-path components/flash/Cargo.toml --workspace --locked
+cargo clippy --manifest-path components/flash/Cargo.toml --workspace --all-targets -- -D warnings
 ```
 
 Target compilation is a separate check:

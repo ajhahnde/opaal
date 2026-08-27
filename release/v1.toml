@@ -16,12 +16,12 @@ release_findings = []
 unexamined_inventory_items = []
 qualified_environments = ["host-posix", "flashos-qemu-x86_64"]
 required_checks = [
-  "python3 ci/check_flashos_capability_report.py",
-  "python3 ci/check_flashos_target_matrix.py",
-  "python3 ../../ci/check_flash_conformance.py",
-  "python3 ../../ci/check_flash_v1_exercises.py",
-  "python3 ../../ci/check_flash_release.py",
-  "python3 exercises/run.py --profile ci --no-build",
+  "build/flash-bootstrap/134635a5e1282b5d8455a4b2aeb754be5a3a77c1/fsh ci/check_flashos_capability_report.fsh",
+  "build/flash-bootstrap/134635a5e1282b5d8455a4b2aeb754be5a3a77c1/fsh ci/check_flashos_target_matrix.fsh",
+  "build/flash-bootstrap/134635a5e1282b5d8455a4b2aeb754be5a3a77c1/fsh ci/check_flash_conformance.fsh",
+  "build/flash-bootstrap/134635a5e1282b5d8455a4b2aeb754be5a3a77c1/fsh ci/check_flash_v1_exercises.fsh",
+  "build/flash-bootstrap/134635a5e1282b5d8455a4b2aeb754be5a3a77c1/fsh ci/check_flash_release.fsh",
+  "components/flash/target/debug/fsh components/flash/exercises/run.fsh --profile ci --no-build",
 ]
 claim_documents = [
   "components/flash/README.md",
