@@ -2,7 +2,7 @@
 
 [FlashOS](../../../README.md) › [Flash](../README.md) › [Documentation](README.md) › Scripting
 
-This guide explains how to run and inspect `.fsh` programs, pass script arguments, use non-executing checks and canonical formatting, invoke external processes, connect pipeline stages, redirect file descriptors, handle command statuses and structured errors, and manage background jobs. Language syntax, values, bindings, expressions, modules, function metadata, and structured-data operations are documented in the [Language Guide](language-guide.md).
+Use this guide when writing and running `.fsh` files. It covers script arguments, non-executing checks, formatting, external processes, pipelines, redirections, command statuses, errors, and background jobs. Syntax, values, bindings, expressions, modules, functions, and structured-data operations are in the [Language Guide](language-guide.md).
 
 > **Project status:** FlashOS as a complete operating system remains pre-alpha
 > software. Flash 1.0.0 is released as the scripting and execution contract in

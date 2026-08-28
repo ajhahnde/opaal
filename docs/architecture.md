@@ -2,7 +2,7 @@
 
 [FlashOS](../../../README.md) › [Flash](../README.md) › [Documentation](README.md) › Architecture
 
-This document describes the internal architecture of Flash: crate boundaries, source processing, runtime state, command planning, pipeline execution, platform capabilities, interactive front ends, and process lifecycle management. It is intended for maintainers and developers extending the implementation; language usage belongs in the [Language Guide](language-guide.md), while build and test procedures belong in [Development](development.md).
+This guide is for maintainers working on Flash internals. It follows source code through parsing, analysis, planning, pipeline execution, platform calls, interactive front ends, and process cleanup. For language usage, see the [Language Guide](language-guide.md). Build and test procedures are in [Development](development.md).
 
 > **Project status:** FlashOS as a complete operating system remains pre-alpha
 > software. Flash 1.0.0 is released as the component contract in the current

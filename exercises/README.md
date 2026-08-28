@@ -2,19 +2,19 @@
 
 [FlashOS](../../../README.md) › [Flash](../README.md) › Flash v1 Exercises
 
-This directory owns the executable inventory used to qualify the complete
-Flash v1 user contract. [`v1.toml`](v1.toml) lists every user-reachable
+This directory contains the executable inventory for the complete Flash v1
+user contract. [`v1.toml`](v1.toml) lists every user-reachable
 language, intrinsic, built-in, frontend, configuration, language-server,
-editor, process, platform, and active-documentation surface. Each surface has
-an assembled host exercise, an intentional-negative owner where rejection is
-contractual, and an exact FlashOS evidence owner.
+editor, process, platform, and active-documentation feature. Each entry points
+to a host exercise, an expected rejection case, or the FlashOS test that covers
+it.
 
-[`run.fsh`](run.fsh) builds or reuses the product binaries and records each
-exact action, input, expectation, observation, environment, and result. Its
-closed case order and ownership map live in
-[`host-cases-v1.json`](host-cases-v1.json). From the repository root, acquire
-the independent bootstrap and run the CI profile through the explicitly
-selected candidate runtime:
+[`run.fsh`](run.fsh) builds or reuses the product binaries and records the
+actions, inputs, expectations, observations, environment, and results. The
+case order and coverage map live in
+[`host-cases-v1.json`](host-cases-v1.json). From the repository root, prepare
+the independent bootstrap and run the CI profile with the selected candidate
+runtime:
 
 ```sh
 make flash-bootstrap
@@ -73,4 +73,4 @@ claims.
 
 ---
 
-[← Previous: Performance benchmarks](../benchmarks/README.md) · [Flash documentation](../docs/README.md) · [Next: Scheduling stress →](../scheduling/README.md)
+[← Flash documentation](../docs/README.md)

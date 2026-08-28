@@ -1,5 +1,7 @@
 # Grammar golden corpus
 
+[FlashOS](../../../../../README.md) › [Flash](../../../README.md) › Grammar Golden Corpus
+
 `manifest.tsv` is the normative inventory for the v1 parser grammar. Each
 non-comment row records a completeness class, grammar family, source path, and
 expected classification reason.
@@ -8,3 +10,7 @@ expected classification reason.
 more input at end of file. `invalid` sources are structurally closed but cannot
 participate in any ratified production. Parser tests consume this manifest
 directly.
+
+---
+
+[← Flash documentation](../../../docs/README.md)

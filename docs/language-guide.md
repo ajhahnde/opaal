@@ -2,7 +2,7 @@
 
 [FlashOS](../../../README.md) › [Flash](../README.md) › [Documentation](README.md) › Language Guide
 
-This guide documents the Flash 1.0 language: source text, runtime values, bindings, expressions, commands, expansion, control flow, functions, function metadata, modules, name resolution, and typed pipelines. Practical script invocation, process execution, redirection, static checking, formatting, status handling, and job control are covered in the [Scripting Guide](scripting.md).
+This is the Flash 1.0 language reference. It covers source text, values, bindings, expressions, commands, expansion, control flow, functions, type metadata, modules, name resolution, and typed pipelines. For running scripts, processes, redirections, checks, formatting, statuses, and jobs, use the [Scripting Guide](scripting.md).
 
 > **Project status:** FlashOS as a complete operating system remains pre-alpha
 > software. Flash 1.0.0 is released as the language contract in the current
@@ -1283,4 +1283,4 @@ Diagnostics preserve source locations where available so that syntax and evaluat
 
 ---
 
-[← Previous: Documentation Index](README.md) · [Flash documentation](README.md) · [Next: Scripting →](scripting.md)
+[← Previous: Flash by Example](by-example.md) · [Flash documentation](README.md) · [Next: Scripting →](scripting.md)

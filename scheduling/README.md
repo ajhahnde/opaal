@@ -2,10 +2,9 @@
 
 [FlashOS](../../../README.md) › [Flash](../README.md) › Scheduling Stress
 
-Flash's host scheduling stress cases exercise the real `fsh` executable over a
-pseudoterminal. They use deterministic nonzero seeds to vary process and job
-actions while retaining bounded waits, exact child-reaping checks, and terminal
-ownership assertions.
+These host stress cases run the real `fsh` executable through a pseudoterminal.
+Nonzero seeds vary process and job actions while keeping wait times limited and
+checking child cleanup and terminal ownership.
 
 The ordinary workspace test gate runs four fixed regression seeds across these
 scenarios:
@@ -17,14 +16,14 @@ scenarios:
 - concurrent background completions released in different orders; and
 - interactive exit while running and stopped jobs remain live.
 
-These schedules vary actions and release order. The host kernel still owns
-thread and process scheduling, so replay preserves the generated choices and
-asserted boundaries rather than promising identical wall-clock timing.
+The host kernel still schedules threads and processes. Replaying a seed repeats
+the generated choices and assertions, but not necessarily the same wall-clock
+timing.
 
 ## Run a campaign
 
 After building Flash, run 64 generated seeds per scenario from the repository
-root with the explicitly selected candidate runtime:
+root with the selected candidate runtime:
 
 ```sh
 components/flash/target/debug/fsh components/flash/scheduling/run-campaign.fsh
@@ -77,4 +76,4 @@ defects are absent.
 
 ---
 
-[← Previous: Development](../docs/development.md) · [Flash documentation](../docs/README.md) · [Next: Fuzz targets →](../fuzz/README.md)
+[← Flash documentation](../docs/README.md)

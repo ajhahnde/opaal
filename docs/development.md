@@ -2,11 +2,10 @@
 
 [FlashOS](../../../README.md) › [Flash](../README.md) › [Documentation](README.md) › Development
 
-This guide describes the component-specific workflow for building, testing,
-documenting, and integrating Flash. It is intended for developers changing the
-language implementation, runtime, platform adapters, interactive front end,
-`fsh`, or `flash-language-server`; repository-wide image development and
-verification policy remain documented under the main FlashOS documentation.
+Use this guide when changing the Flash language, runtime, platform adapters,
+interactive front end, `fsh`, or `flash-language-server`. It covers component
+builds, tests, documentation, and FlashOS integration. System image work and
+repository-wide verification are covered in the main FlashOS documentation.
 
 > **Project status:** FlashOS as a complete operating system remains pre-alpha
 > software. Flash 1.0.0 is released as the component contract in the current

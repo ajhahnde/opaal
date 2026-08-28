@@ -2,7 +2,11 @@
 
 [FlashOS](../../README.md) › Flash
 
-Flash (`fsh`) is the primary interactive shell and scripting interface of FlashOS. It is a non-POSIX command language built around structured runtime values, explicit process invocation, and a shared syntax and execution core for interactive input and `.fsh` scripts. This page provides a component overview; detailed language, scripting, architecture, and development documentation is available under [`docs/`](docs/README.md).
+Flash (`fsh`) is the FlashOS shell and a language for structured system
+automation. Code tried at the prompt follows the same non-POSIX syntax and
+runtime rules as code in a `.fsh` file. Start with [Flash by
+Example](docs/by-example.md), or use the [documentation index](docs/README.md)
+for the language reference and implementation guides.
 
 > **Project status:** FlashOS as a complete operating system remains pre-alpha
 > software. Flash 1.0.0 is released as the component contract in the current
@@ -29,53 +33,53 @@ Running `fsh` without a script starts an interactive session. Passing a script p
 
 Flash provides the language and execution environment, but it does not replace the rest of the userspace. External commands remain separate executables supplied by the system image and are launched through the platform integration layer.
 
+FlashOS also uses Flash for project automation wherever `fsh` is already
+available. Bootstrap, recovery, third-party tool integration, and independent
+validation still need a small number of non-Flash scripts.
+
+Later, Flash and higher-level terminal views are intended to share the same
+system actions. Those views and the required stable system API do not exist
+yet. [Flash and FlashOS](../../docs/flash.md) describes both the current setup
+and that longer-term idea.
+
 ## Design boundaries
 
 Flash intentionally does not claim compatibility with POSIX shells such as `sh` or Bash. POSIX shell scripts should not be expected to run as Flash programs, and Flash syntax should not be passed to another shell interpreter.
 
-The component follows several implementation boundaries:
+Several rules shape the implementation:
 
 - Interactive input and script execution use the same syntax and runtime crates, but their front ends are not required to expose identical editing, history, or startup behavior on every target.
 - Structured values belong to the Flash runtime. At an external process boundary, commands still use argument vectors, environment variables, working directories, file descriptors, and byte-oriented standard streams.
-- External executables are launched directly through the platform interface rather than by translating Flash source into another shell language.
+- External executables are launched through the platform interface. Flash source is never translated into another shell language.
 - The `fsh` process preserves representable completed codes and signals while
   keeping program output on stdout, shell diagnostics on stderr, launcher
   misuse distinct from runtime failure, and required report writes checked.
-- Successful behavior on a macOS or Linux development host does not by itself establish equivalent behavior in a FlashOS image. Target compilation and image-level execution require separate verification.
+- A successful macOS or Linux run does not prove the same behavior in a FlashOS image. Target compilation and image execution are tested separately.
 
 ## Flash v1 contract
 
-The public Flash documentation defines the frozen v1 language, runtime, and
-tooling contract in the current source. That contract covers the existing
-value, command, pipeline, status, and job model together with maintainable
-multi-file scripts, explicit module boundaries and initializer effects, a
-stable built-in namespace compatibility policy, script arguments, typed
-function metadata, discoverable help, canonical formatting, non-executing
-static checks, language-server integration, and explicit platform
-capabilities.
+Flash 1.0 sets the compatibility baseline for the language, runtime, and tools: values,
+commands, pipelines, statuses, jobs, modules, script arguments, typed function
+metadata, help, formatting, static checking, language-server behavior, and
+platform capabilities. The 30-command core has no current
+aliases or reserved names; direct external execution remains available
+through `^name` and `command name`.
 
-Carrier-compatible pipelines may alternate between external byte stages and
-internal typed segments any number of times. Flash preserves bounded streaming,
-explicit representation changes, source-ordered status and state semantics,
-transactional in-memory commit, and exact failure cleanup across every repeated
-boundary without making lazy structured streams cross threads.
+Pipelines can alternate between external byte stages and internal typed
+segments while keeping conversions visible and streaming data in limited
+buffers. Post-v1 work may add compatible capabilities,
+diagnostics, tooling, and optimizations. An incompatible language redesign
+requires a future major-version decision.
 
-Flash v1 is the language-completion baseline, not a checkpoint that knowingly leaves foundational semantic or executor-topology restrictions for a later release. Its grammar and public runtime behavior are frozen at Flash 1.0.0. Post-v1 development may add compatible capabilities, diagnostics, tooling, and optimizations, while incompatible language redesign belongs to an explicit future major-version decision.
-
-A particular FlashOS release may expose only the parts of that contract that are implemented and qualified for its target environment. Unsupported or unqualified capabilities must remain visible rather than being silently replaced with weaker host-specific behavior.
-
-The Flash v1 built-in namespace is now ratified as an exact 30-command core
-with no current aliases or reserved names. Its validated manifest drives
-resolution, planning, static diagnostics, help, completion, `which`, background
-classification, and canonical execution identity. Capturing or releasing an
-ordinary external name requires a language-major decision; explicit external
-execution remains available through `^name` and `command name`.
-
-The detailed responsibilities are divided between the [Language Guide](docs/language-guide.md), [Scripting Guide](docs/scripting.md), [Architecture Guide](docs/architecture.md), and [Development Guide](docs/development.md).
+A FlashOS release still tests target availability separately. The
+[Language Guide](docs/language-guide.md) and [Scripting
+Guide](docs/scripting.md) define the public behavior. The [Architecture
+Guide](docs/architecture.md) and [Development Guide](docs/development.md)
+describe the implementation and maintenance work.
 
 ## Current implementation
 
-Flash is maintained as an independent Rust workspace inside the FlashOS repository. The workspace manifest at [`Cargo.toml`](Cargo.toml) is authoritative for current membership; the table below describes the principal implementation responsibilities rather than a permanent crate count.
+Flash is an independent Rust workspace inside the FlashOS repository. [`Cargo.toml`](Cargo.toml) lists the current members; this table is a quick map of the main responsibilities.
 
 | Path                           | Responsibility                                                                          |
 | ------------------------------ | --------------------------------------------------------------------------------------- |
@@ -86,17 +90,10 @@ Flash is maintained as an independent Rust workspace inside the FlashOS reposito
 | `crates/flash-cli/`            | The `fsh` executable and its interactive and script entry points                        |
 | `crates/flash-lsp/`            | The non-executing `flash-language-server` protocol adapter                              |
 
-The separation between syntax, runtime, protocol, platform contracts,
-operating-system integration, and the command-line interface keeps language
-semantics independent from target-specific terminal and process handling. The
-language server depends only on shared syntax and analysis services; it does not
-depend on the CLI or a platform adapter.
-
-Flash is implemented in Rust. The CLI prohibits unsafe code, while the
-low-level platform adapter permits explicitly scoped unsafe sections for
-operations such as process-group, signal, and file-descriptor setup. Workspace
-lints require a local safety invariant for every unsafe block in production,
-tests, and fixtures.
+This split keeps language semantics and non-executing editor services
+independent of target-specific process and terminal handling. Flash is
+implemented in Rust; unsafe code is prohibited in the CLI and locally justified
+where the low-level platform adapter requires it.
 
 ## Using `fsh`
 
@@ -109,13 +106,13 @@ fsh
 # Run a Flash script.
 fsh program.fsh
 
-# Check one root and its canonical import closure without execution.
+# Check one file and everything it imports, without execution.
 fsh check program.fsh
 
-# Inspect one exact command pipeline without executing it.
+# Inspect one command pipeline without executing it.
 fsh plan command.fsh
 
-# Check or atomically rewrite canonical source formatting.
+# Check formatting or rewrite the files atomically.
 fsh format --check program.fsh
 fsh format --write program.fsh
 
@@ -136,15 +133,13 @@ command: ["flash-language-server"]
 transport: stdio
 ```
 
-The executable accepts protocol input on stdin and reserves stdout for framed
-JSON-RPC messages. It uses full-document synchronization for absolute `file:`
-URIs and provides diagnostics, completion, hover, signature help, definition,
-references, and whole-document formatting without executing the open source.
-It does not provide a source-taking command-line mode, TCP transport, workspace
-configuration, or incremental edits. See the [Architecture
+The stdio server provides diagnostics, completion, hover, signature help,
+definition, references, and whole-document formatting without executing open
+source. It does not provide TCP transport, workspace configuration, or
+incremental edits. See the [Architecture
 Guide](docs/architecture.md#language-server-protocol-adapter) for the exact
-protocol surface and [Development](docs/development.md#language-server-contract)
-for editor setup and verification.
+protocol details and [Development](docs/development.md#language-server-contract) for
+editor setup and verification.
 
 ## Development and verification
 
@@ -166,45 +161,20 @@ redoxer build -p flash-cli --bin fsh
 redoxer build -p flash-lsp --bin flash-language-server
 ```
 
-These checks establish different properties:
-
-- The [Flash v1 exercise contract](exercises/README.md) inventories every
-  user-reachable v1 surface, binds it to assembled host and applicable FlashOS
-  execution, retains exact host observations, and records intentional refusals
-  and unavailable or approval-gated boundaries.
-- The conformance inventory binds every frozen host-v1 semantic family to
-  enabled executable owners and audits explicit runtime refusal boundaries.
-- The [Flash 1.0.0 release record](release/v1.toml) binds the component version,
-  exhaustive inventory, retained evidence, public claims, and candidate gates.
-- Host tests execute those owners across syntax, runtime, CLI, REPL, checker,
-  formatter, language-server, and portable platform layers.
-- The `redoxer` builds verify that both shipped binaries compile for the Redox
-  target environment.
-- FlashOS image construction and QEMU execution verify package integration, installation, login-shell configuration, the bounded smoke fixtures, and the exhaustive advertised-capability target matrix inside the assembled system.
-
-For the component-specific workflow, test layout, and maintenance guidance, see [Flash Development](docs/development.md). For the repository-wide distinction between host checks, target checks, image validation, and runtime evidence, see [FlashOS Verification](../../docs/verification.md).
+The [Flash v1 exercises](exercises/README.md) cover the released user-facing
+features. The [1.0.0 release record](release/v1.toml) ties those exercises and
+other required checks to the component release. Host checks, target builds,
+image integration, and QEMU execution answer different questions. See [Flash
+Development](docs/development.md) for the component workflow and [FlashOS
+Verification](../../docs/verification.md) for the evidence model.
 
 ## Documentation
 
-The Flash documentation is organized as follows:
-
-- [Flash documentation index](docs/README.md) — entry point for the component documentation
-- [Language Guide](docs/language-guide.md) — language concepts, modules, name resolution, function metadata, commands, and typed pipelines
-- [Scripting Guide](docs/scripting.md) — `.fsh` execution, script arguments, static checking, formatting, external processes, statuses, and jobs
-- [Architecture](docs/architecture.md) — internal responsibilities, analysis services, platform capabilities, adapters, and lifecycle boundaries
-- [Development](docs/development.md) — workspace setup, tests, formatter,
-  checker, and language-server integration and gates, target builds, and
-  maintenance workflow
-- [Scheduling stress](scheduling/README.md) — seeded host pipeline-cancellation
-  and job-control campaigns, retained results, and exact replay
-- [Performance benchmarks](benchmarks/README.md) — reproducible host and
-  exact-image target measurements with retained evidence and derived budgets
-- [Flash v1 exercises](exercises/README.md) — exhaustive user-path inventory,
-  exact host evidence, target owners, and qualification limits
-- [Flash 1.0.0 release record](release/v1.toml) — released component version,
-  exact qualification owners, and explicit product and hardware boundaries
-
-For building and booting FlashOS as a complete system, begin with the [FlashOS Getting Started Guide](../../docs/getting-started.md).
+Use the [Flash documentation index](docs/README.md) for the complete guide and
+technical-reference inventory. New readers should begin with [Flash by
+Example](docs/by-example.md); system builders should begin with [FlashOS
+Getting Started](../../docs/getting-started.md). Component history lives in the
+[Flash changelog](CHANGELOG.md).
 
 ## License
 
@@ -214,4 +184,4 @@ Other FlashOS components and incorporated third-party materials may be subject t
 
 ---
 
-[← Previous: Upstream References](../../docs/upstream/README.md) · [FlashOS README](../../README.md) · [Next: Flash Documentation →](docs/README.md)
+[← Previous: Upstream References](../../docs/upstream/README.md) · [Product Guide](../../docs/README.md) · [Next: Flash Documentation →](docs/README.md)

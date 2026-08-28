@@ -1,5 +1,7 @@
 # Test fixtures
 
+[FlashOS](../../../../README.md) › [Flash](../../README.md) › Test Fixtures
+
 These small Rust child programs are shared by the POSIX adapter and runtime
 acceptance tests. They invoke no shell or host utility and contain no unsafe
 code.
@@ -15,3 +17,7 @@ code.
 - `benchmark.rs` provides host-only in-process completion and lazy
   structured-stream probes for the versioned performance suite. It is not
   installed in the FlashOS image.
+
+---
+
+[← Flash documentation](../../docs/README.md)

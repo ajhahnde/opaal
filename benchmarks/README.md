@@ -2,11 +2,10 @@
 
 [FlashOS](../../../README.md) › [Flash](../README.md) › Performance Benchmarks
 
-Flash's versioned performance contract measures the real optimized `fsh`
-process where an executable boundary exists and uses a host-only fixture for
-the in-process structured-stream and completion boundaries. It retains raw
-integer samples, derives reviewable budgets from qualification evidence, and
-keeps host and FlashOS target results separate.
+These benchmarks measure an optimized `fsh` process whenever the test crosses
+an executable boundary. Structured-stream and completion tests use a host-only
+in-process fixture. Raw integer samples are retained, and host results stay
+separate from FlashOS target results.
 
 ## Measured surfaces
 
@@ -145,4 +144,4 @@ configuration remain separate evidence.
 
 ---
 
-[← Previous: Development](../docs/development.md) · [Flash documentation](../docs/README.md) · [Next: Scheduling stress →](../scheduling/README.md)
+[← Flash documentation](../docs/README.md)
