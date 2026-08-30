@@ -178,7 +178,10 @@ Getting Started](../../docs/getting-started.md). Component history lives in the
 
 ## License
 
-The Flash workspace is licensed under the [MIT License](LICENSE).
+Copyright 2026 Anton Hahn. Unless a file states otherwise, the Flash workspace
+is licensed under the [Mozilla Public License 2.0](LICENSE). Versions
+distributed before this change remain available under the licenses that
+accompanied those distributions.
 
 Other FlashOS components and incorporated third-party materials may be subject to separate terms. See the repository-level [NOTICE](../../NOTICE) and the applicable license files for attribution and licensing details.
 

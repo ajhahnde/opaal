@@ -14,11 +14,12 @@ ignore = []
 [licenses]
 version = 2
 confidence-threshold = 0.9
-# Flash itself ships under MIT. Dependencies may use this reviewed set of
-# permissive licenses; Unicode-3.0 covers data tables in unicode-ident.
+# Flash itself ships under MPL-2.0. Dependencies may use this reviewed set;
+# Unicode-3.0 covers data tables in unicode-ident.
 allow = [
     "Apache-2.0",
     "MIT",
+    "MPL-2.0",
     "Unicode-3.0",
 ]
 

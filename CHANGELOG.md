@@ -18,6 +18,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Changed
+
+- License Flash under the Mozilla Public License 2.0. Versions distributed
+  before this change retain their then-applicable licenses.
+
 ## [1.0.0] - 2026-08-24
 
 ### Changed
