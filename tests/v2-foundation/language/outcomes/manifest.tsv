@@ -1,0 +1,10 @@
+# class	path	diagnostic-or-value
+complete	complete/reference.fsh	Int(2)
+complete	complete/domain-error.fsh	Result::Err("domain")
+complete	complete/option-none.fsh	Option::None
+complete	complete/status-success.fsh	Status(7)
+refused	refused/process.fsh	unsupported
+invalid	invalid/result-to-status.fsh	SIG004
+invalid	invalid/status-to-result.fsh	SIG005
+invalid	invalid/error-to-result.fsh	SIG005
+invalid	invalid/result-generic-arity.fsh	SIG009

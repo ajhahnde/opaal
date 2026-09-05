@@ -8,9 +8,11 @@ edition = "2024"
 cargo-fuzz = true
 
 [dependencies]
+flash-migrate = { path = "../crates/flash-migrate" }
 flash-runtime = { path = "../crates/flash-runtime" }
 flash-syntax = { path = "../crates/flash-syntax" }
 libfuzzer-sys = "0.4"
+serde_json = { version = "=1.0.151", default-features = false, features = ["std"] }
 
 [[bin]]
 name = "lexer"
@@ -29,6 +31,20 @@ bench = false
 [[bin]]
 name = "expander"
 path = "fuzz_targets/expander.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "migration"
+path = "fuzz_targets/migration.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "resources"
+path = "fuzz_targets/resources.rs"
 test = false
 doc = false
 bench = false

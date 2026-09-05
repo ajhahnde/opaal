@@ -307,6 +307,13 @@ fsh plan -- --maintenance.fsh
 fsh plan --help
 ```
 
+This is the frozen Flash 1 low-level planner. A source beginning with
+`language 2` returns `PLAN004` and an unsupported refusal before the planner
+captures the launcher cwd, inherited environment, `PATH`, or executable
+metadata. Resolving an explicitly supplied relative source still uses the
+launcher's working directory to locate that input. Flash 2 does not expose a
+partial script, operation, action, or workflow plan.
+
 The named regular UTF-8 source must contain exactly one top-level foreground
 job with one pipeline. Declarations, assignments, imports, environment
 statements, control flow, callable definitions, background jobs, and
@@ -314,7 +321,7 @@ status-dependent `&&` or `||` chains are rejected because their exact plan can
 depend on execution or prior state. Stdin, multiple roots, script arguments,
 configuration, and history are not accepted.
 
-Inspection parses and statically analyzes the source with the standard command
+Flash 1 inspection parses and statically analyzes the source with the standard command
 registry, then expands the pipeline against an empty lexical scope, the
 inherited process environment, the launcher's current working directory, and
 default session options. Bare and forced external commands use read-only

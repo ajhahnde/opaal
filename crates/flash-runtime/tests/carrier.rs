@@ -4,9 +4,12 @@
 //! preflight and non-executing static analysis.
 
 use flash_runtime::carrier::{
-    CarrierBridge, PipelineCarrierFault, StageCarrierContract, analyze_pipeline_carriers,
+    CarrierBridge, PipelineCarrierFault, StageCarrierContract, StreamConsumptionPlanner,
+    StreamPlanningFault, analyze_pipeline_carriers,
 };
 use flash_runtime::command::{Carrier, CommandOutput};
+use flash_runtime::module::ValueType;
+use flash_runtime::stream::{StreamCardinality, StreamSchema};
 use flash_syntax::PipeOperator;
 
 fn known(
@@ -118,4 +121,36 @@ fn passthrough_output_becomes_unknown_only_when_its_input_is_unknown() {
     );
 
     assert!(faults.is_empty());
+}
+
+#[test]
+fn typed_stream_planning_rejects_mismatch_and_duplicate_consumption() {
+    let schema = StreamSchema::new(ValueType::Int, StreamCardinality::AtMost(4));
+    let owner = schema.owner();
+    let mut planner = StreamConsumptionPlanner::default();
+    planner
+        .claim("numbers", &schema, "length", &ValueType::Int)
+        .expect("the first compatible consumer claims the owner");
+    assert_eq!(
+        planner.claim("numbers", &schema, "collect", &ValueType::Int),
+        Err(StreamPlanningFault::DuplicateConsumption {
+            owner,
+            first_consumer: "length".to_owned(),
+            duplicate_consumer: "collect".to_owned(),
+        })
+    );
+
+    let strings = StreamSchema::new(ValueType::String, StreamCardinality::Unknown);
+    assert_eq!(
+        planner.claim("words", &strings, "sum", &ValueType::Int),
+        Err(StreamPlanningFault::ElementTypeMismatch {
+            producer: "words".to_owned(),
+            consumer: "sum".to_owned(),
+            produced: ValueType::String,
+            accepted: ValueType::Int,
+        })
+    );
+    planner
+        .claim("words", &strings, "show", &ValueType::Any)
+        .expect("Any explicitly accepts the typed producer");
 }

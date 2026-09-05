@@ -1,0 +1,12 @@
+# context	class	path	code
+module	complete	complete/directive-only.fsh	-
+module	complete	complete/leading-trivia.fsh	-
+module	incomplete	incomplete/declaration-value.fsh	-
+module	incomplete	incomplete/open-block.fsh	-
+module	invalid	invalid/missing.fsh	FS2001
+module	invalid	invalid/late.fsh	FS2001
+module	invalid	invalid/malformed.fsh	FS2002
+module	invalid	invalid/unsupported.fsh	FS2003
+module	invalid	invalid/duplicate.fsh	FS2004
+repl	complete	repl/complete.fsh	-
+repl	invalid	repl/directive.fsh	FS1000

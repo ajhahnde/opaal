@@ -4,8 +4,9 @@ use std::collections::BTreeMap;
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
-use flash_cli::plan::{PlanRequest, inspect_source};
+use flash_cli::plan::{PlanHost, PlanRequest, inspect_host_source, inspect_source};
 use flash_runtime::Environment;
 use flash_runtime::module::{
     ModuleCanonicalizer, ModuleId, ModulePathError, ModuleSourceError, ModuleSourceLoader,
@@ -16,6 +17,8 @@ use flash_runtime::resolve::ExecutableProbe;
 struct FakeFilesystem {
     canonical: BTreeMap<PathBuf, Result<PathBuf, String>>,
     sources: BTreeMap<PathBuf, Result<Vec<u8>, String>>,
+    canonical_calls: AtomicUsize,
+    source_calls: AtomicUsize,
 }
 
 impl FakeFilesystem {
@@ -38,6 +41,7 @@ impl FakeFilesystem {
 
 impl ModuleCanonicalizer for FakeFilesystem {
     fn canonicalize(&self, candidate: &Path) -> Result<PathBuf, ModulePathError> {
+        self.canonical_calls.fetch_add(1, Ordering::SeqCst);
         self.canonical
             .get(candidate)
             .cloned()
@@ -48,6 +52,7 @@ impl ModuleCanonicalizer for FakeFilesystem {
 
 impl ModuleSourceLoader for FakeFilesystem {
     fn load(&self, module: &ModuleId) -> Result<Vec<u8>, ModuleSourceError> {
+        self.source_calls.fetch_add(1, Ordering::SeqCst);
         self.sources
             .get(module.path())
             .cloned()
@@ -56,10 +61,32 @@ impl ModuleSourceLoader for FakeFilesystem {
     }
 }
 
+struct TransientReadFilesystem {
+    source_calls: AtomicUsize,
+}
+
+impl ModuleCanonicalizer for TransientReadFilesystem {
+    fn canonicalize(&self, candidate: &Path) -> Result<PathBuf, ModulePathError> {
+        Ok(candidate.to_path_buf())
+    }
+}
+
+impl ModuleSourceLoader for TransientReadFilesystem {
+    fn load(&self, _module: &ModuleId) -> Result<Vec<u8>, ModuleSourceError> {
+        if self.source_calls.fetch_add(1, Ordering::SeqCst) == 0 {
+            Err(ModuleSourceError::new("transient read failure"))
+        } else {
+            Ok(b"language 2\n".to_vec())
+        }
+    }
+}
+
 #[derive(Default)]
 struct FakeProbe {
     executable: Vec<OsString>,
     calls: Mutex<Vec<OsString>>,
+    cwd_calls: AtomicUsize,
+    environment_calls: AtomicUsize,
 }
 
 impl FakeProbe {
@@ -67,7 +94,21 @@ impl FakeProbe {
         Self {
             executable: paths.iter().map(OsString::from).collect(),
             calls: Mutex::new(Vec::new()),
+            cwd_calls: AtomicUsize::new(0),
+            environment_calls: AtomicUsize::new(0),
         }
+    }
+}
+
+impl PlanHost for FakeProbe {
+    fn current_dir(&self) -> Result<PathBuf, String> {
+        self.cwd_calls.fetch_add(1, Ordering::SeqCst);
+        Ok(PathBuf::from("/work"))
+    }
+
+    fn environment(&self) -> Environment {
+        self.environment_calls.fetch_add(1, Ordering::SeqCst);
+        Environment::from_snapshot([("PATH", "/bin"), ("VALUE", "inherited")])
     }
 }
 
@@ -172,6 +213,7 @@ fn source_and_analysis_failures_are_deterministic_and_emit_no_plan() {
         ["fsh plan: /project/missing.fsh: permission denied\n"]
     );
     assert!(run.rendered_plan().is_none());
+    assert_eq!(unreadable.source_calls.load(Ordering::SeqCst), 1);
 
     let invalid = FakeFilesystem::default().source("/project/invalid.fsh", "^echo |\n");
     let run = inspect_source(
@@ -184,5 +226,75 @@ fn source_and_analysis_failures_are_deterministic_and_emit_no_plan() {
         run.rendered_issues()[0].starts_with("error[SYN002]"),
         "{:?}",
         run.rendered_issues()
+    );
+}
+
+#[test]
+fn root_read_failure_is_terminal_before_v1_host_fallback() {
+    let filesystem = TransientReadFilesystem {
+        source_calls: AtomicUsize::new(0),
+    };
+    let host = FakeProbe::with(&["/bin/language"]);
+
+    let run = inspect_host_source(Path::new("/project/transient.fsh"), &filesystem, &host);
+
+    assert!(!run.is_success());
+    assert!(run.refusal().is_none());
+    assert_eq!(
+        run.rendered_issues(),
+        ["fsh plan: /project/transient.fsh: transient read failure\n"]
+    );
+    assert_eq!(filesystem.source_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(host.cwd_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(host.environment_calls.load(Ordering::SeqCst), 0);
+    assert!(host.calls.lock().unwrap().is_empty());
+}
+
+#[test]
+fn flash_2_planning_refuses_before_any_ambient_host_observation() {
+    let filesystem =
+        FakeFilesystem::default().source("/project/v2.fsh", "language 2\n\n^tool must-not-run\n");
+    let host = FakeProbe::with(&["/bin/tool"]);
+
+    let run = inspect_host_source(Path::new("/project/v2.fsh"), &filesystem, &host);
+
+    assert!(!run.is_success());
+    assert!(run.rendered_plan().is_none());
+    assert_eq!(run.rendered_issues().len(), 1);
+    assert!(run.rendered_issues()[0].starts_with("error[PLAN004]"));
+    assert!(run.rendered_issues()[0].contains("explicit authority and controlled-planning"));
+    let refusal = run
+        .refusal()
+        .expect("Flash 2 planning is a structured refusal");
+    assert_eq!(
+        refusal.reason(),
+        flash_runtime::outcome::RefusalReason::Unsupported
+    );
+    assert_eq!(refusal.operation(), "Flash 2 execution planning");
+    assert_eq!(refusal.span().start(), 0);
+    assert_eq!(refusal.span().end(), "language 2".len());
+    assert_eq!(host.cwd_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(host.environment_calls.load(Ordering::SeqCst), 0);
+    assert!(host.calls.lock().unwrap().is_empty());
+    assert_eq!(filesystem.canonical_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(filesystem.source_calls.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn frozen_flash_1_planning_takes_one_lazy_host_snapshot() {
+    let filesystem = FakeFilesystem::default().source("/project/v1.fsh", "^tool\n");
+    let host = FakeProbe::with(&["/bin/tool"]);
+
+    let run = inspect_host_source(Path::new("/project/v1.fsh"), &filesystem, &host);
+
+    assert!(run.is_success(), "{:?}", run.rendered_issues());
+    assert!(run.refusal().is_none());
+    assert_eq!(host.cwd_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(host.environment_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(filesystem.canonical_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(filesystem.source_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        host.calls.lock().unwrap().as_slice(),
+        [OsString::from("/bin/tool")]
     );
 }

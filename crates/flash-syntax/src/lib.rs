@@ -7,6 +7,7 @@ mod classification;
 mod completion;
 mod diagnostic;
 mod formatter;
+mod language;
 mod lexer;
 mod parser;
 mod source;
@@ -20,11 +21,17 @@ pub use diagnostic::{
     Diagnostic, Label, LabelStyle, RenderError, Severity, render_diagnostic,
     render_diagnostic_sources,
 };
-pub use formatter::{FormatOutcome, format_source};
-pub use lexer::{
-    Delimiter, InvalidTokenKind, Keyword, NumberKind, Operator, Token, TokenKind, lex,
+pub use formatter::{FormatOutcome, format_source, format_source_v2};
+pub use language::{
+    LanguageDetection, LanguageDirective, LanguageMajor, VersionedScript, detect_source_language,
 };
-pub use parser::{ControlledParseOutcome, ParseOutcome, parse, parse_with_control};
+pub use lexer::{
+    Delimiter, InvalidTokenKind, Keyword, NumberKind, Operator, Token, TokenKind, lex, lex_v2,
+};
+pub use parser::{
+    ControlledParseOutcome, ControlledVersionedParseOutcome, ParseOutcome, VersionedParseOutcome,
+    parse, parse_v2, parse_v2_submission, parse_v2_with_control, parse_with_control,
+};
 pub use source::{
     LineColumn, LineIndex, PositionEncoding, PositionError, SourceFile, SourceId, Span, SpanError,
     TextPosition, TextRange,

@@ -3,14 +3,16 @@
 use std::path::{Path, PathBuf};
 
 use flash_runtime::module::{
-    ModuleCanonicalizer, ModuleProgramError, ModuleProgramLoader, ModuleSourceLoader,
+    AnalysisLimitKind, AnalysisLimits, ModuleCanonicalizer, ModuleId, ModulePathError,
+    ModuleProgramError, ModuleProgramLoader, ModuleResolver, ModuleSourceError, ModuleSourceLoader,
 };
+use flash_runtime::outcome::{Refusal, RefusalReason};
 use flash_runtime::plan::{SessionOptions, plan_pipeline_with_options, preflight};
 use flash_runtime::resolve::ExecutableProbe;
 use flash_runtime::{Environment, ScopeStack};
 use flash_syntax::{
-    Diagnostic, Pipeline, Severity, StageKind, StatementKind, render_diagnostic,
-    render_diagnostic_sources,
+    Diagnostic, LanguageDetection, LanguageMajor, Pipeline, Severity, SourceFile, SourceId,
+    StageKind, StatementKind, detect_source_language, render_diagnostic, render_diagnostic_sources,
 };
 
 /// One explicit execution-plan inspection request.
@@ -60,11 +62,25 @@ pub trait PlanFilesystem: ModuleCanonicalizer + ModuleSourceLoader {}
 
 impl<T> PlanFilesystem for T where T: ModuleCanonicalizer + ModuleSourceLoader {}
 
+/// Host observations available only to the frozen Flash 1 planner.
+///
+/// Flash 2 is refused before either method or [`ExecutableProbe`] is called.
+/// Resolving an explicitly supplied relative source path remains an input read,
+/// not a planner cwd snapshot.
+pub trait PlanHost: ExecutableProbe {
+    /// Capture the launcher's current working directory.
+    fn current_dir(&self) -> Result<PathBuf, String>;
+
+    /// Capture the launcher's inherited child environment.
+    fn environment(&self) -> Environment;
+}
+
 /// A completed plan inspection with either one plan or ordered diagnostics.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct PlanRun {
     rendered_plan: Option<String>,
     rendered_issues: Vec<String>,
+    refusal: Option<Refusal>,
 }
 
 impl PlanRun {
@@ -85,6 +101,12 @@ impl PlanRun {
     pub const fn is_success(&self) -> bool {
         self.rendered_plan.is_some()
     }
+
+    /// Structured Flash 2 refusal, when planning was rejected by generation.
+    #[must_use]
+    pub const fn refusal(&self) -> Option<Refusal> {
+        self.refusal
+    }
 }
 
 /// Parses, analyzes, plans, preflights, and renders one exact command pipeline.
@@ -101,14 +123,78 @@ pub fn inspect_source<F>(
 where
     F: PlanFilesystem,
 {
+    inspect_source_with(request.source(), filesystem, probe, || {
+        Ok((request.cwd().to_path_buf(), request.environment().clone()))
+    })
+}
+
+/// Inspect a source while deferring every ambient host observation.
+///
+/// The source and its static imports are the only inputs read before the
+/// language generation is known. Flash 2 returns a structured refusal without
+/// capturing planner cwd, environment, or executable metadata. Flash 1 retains
+/// its exact planner behavior by taking one immutable host snapshot after
+/// analysis.
+#[must_use]
+pub fn inspect_host_source<F, H>(source: &Path, filesystem: &F, host: &H) -> PlanRun
+where
+    F: PlanFilesystem,
+    H: PlanHost,
+{
+    inspect_source_with(source, filesystem, host, || {
+        let cwd = host.current_dir()?;
+        Ok((cwd, host.environment()))
+    })
+}
+
+fn inspect_source_with<F, S>(
+    source_path: &Path,
+    filesystem: &F,
+    probe: &dyn ExecutableProbe,
+    snapshot: S,
+) -> PlanRun
+where
+    F: PlanFilesystem,
+    S: FnOnce() -> Result<(PathBuf, Environment), String>,
+{
+    let detected = match detect_plan_language(source_path, filesystem) {
+        Ok(detected) => detected,
+        Err(rendered_issue) => {
+            return PlanRun {
+                rendered_plan: None,
+                rendered_issues: vec![rendered_issue],
+                refusal: None,
+            };
+        }
+    };
+    if let Some(detected) = detected.flash_2 {
+        return flash_2_refusal(&detected.source, detected.directive_span);
+    }
+
     let commands = flash_runtime::builtin::standard_registry();
-    let report = ModuleProgramLoader::new(filesystem, filesystem)
-        .analyze_with_commands(request.source(), &commands);
+    let report = if let Some(root) = detected.root.as_ref() {
+        let cached = CachedPlanFilesystem {
+            inner: filesystem,
+            root,
+        };
+        ModuleProgramLoader::for_language(&cached, &cached, detected.language)
+            .analyze_with_commands(source_path, &commands)
+    } else {
+        ModuleProgramLoader::for_language(filesystem, filesystem, detected.language)
+            .analyze_with_commands(source_path, &commands)
+    };
     let sources = report
         .sources()
         .iter()
         .map(|entry| entry.source())
         .collect::<Vec<_>>();
+
+    if let Some(source) = sources.first()
+        && let LanguageDetection::Complete(directive) = detect_source_language(source)
+        && directive.major() == LanguageMajor::V2
+    {
+        return flash_2_refusal(source, directive.span());
+    }
 
     if report.has_errors() {
         let rendered_issues = report
@@ -118,7 +204,7 @@ where
             .flat_map(|issue| {
                 let diagnostics = issue.error().diagnostics();
                 if diagnostics.is_empty() {
-                    vec![render_unspanned(request.source(), issue.error())]
+                    vec![render_unspanned(source_path, issue.error())]
                 } else {
                     diagnostics
                         .iter()
@@ -133,6 +219,7 @@ where
         return PlanRun {
             rendered_plan: None,
             rendered_issues,
+            refusal: None,
         };
     }
 
@@ -157,6 +244,18 @@ where
                     render_diagnostic(source, &diagnostic)
                         .expect("the plan-shape diagnostic belongs to the root source"),
                 ],
+                refusal: None,
+            };
+        }
+    };
+
+    let (cwd, environment) = match snapshot() {
+        Ok(snapshot) => snapshot,
+        Err(cause) => {
+            return PlanRun {
+                rendered_plan: None,
+                rendered_issues: vec![format!("fsh: cannot read the current directory: {cause}\n")],
+                refusal: None,
             };
         }
     };
@@ -164,10 +263,10 @@ where
     let mut scope = ScopeStack::new();
     let plan = match plan_pipeline_with_options(
         pipeline,
-        request.cwd(),
+        &cwd,
         source,
         &mut scope,
-        request.environment(),
+        &environment,
         &commands,
         probe,
         &SessionOptions::default(),
@@ -185,6 +284,7 @@ where
                     render_diagnostic(source, &diagnostic)
                         .expect("the planning diagnostic belongs to the root source"),
                 ],
+                refusal: None,
             };
         }
     };
@@ -201,12 +301,164 @@ where
                 render_diagnostic(source, &diagnostic)
                     .expect("the preflight diagnostic belongs to the root source"),
             ],
+            refusal: None,
         };
     }
 
     PlanRun {
         rendered_plan: Some(plan.render()),
         rendered_issues: Vec::new(),
+        refusal: None,
+    }
+}
+
+struct DetectedPlanLanguage {
+    language: LanguageMajor,
+    flash_2: Option<DetectedFlash2Source>,
+    root: Option<CachedPlanRoot>,
+}
+
+struct DetectedFlash2Source {
+    source: SourceFile,
+    directive_span: flash_syntax::Span,
+}
+
+struct CachedPlanRoot {
+    requested: PathBuf,
+    canonical: PathBuf,
+    bytes: Vec<u8>,
+}
+
+struct CachedPlanFilesystem<'a, F> {
+    inner: &'a F,
+    root: &'a CachedPlanRoot,
+}
+
+impl<F> ModuleCanonicalizer for CachedPlanFilesystem<'_, F>
+where
+    F: PlanFilesystem,
+{
+    fn canonicalize(&self, candidate: &Path) -> Result<PathBuf, ModulePathError> {
+        if candidate == self.root.requested {
+            Ok(self.root.canonical.clone())
+        } else {
+            self.inner.canonicalize(candidate)
+        }
+    }
+}
+
+impl<F> ModuleSourceLoader for CachedPlanFilesystem<'_, F>
+where
+    F: PlanFilesystem,
+{
+    fn load(&self, module: &ModuleId) -> Result<Vec<u8>, ModuleSourceError> {
+        if module.path() == self.root.canonical {
+            Ok(self.root.bytes.clone())
+        } else {
+            self.inner.load(module)
+        }
+    }
+
+    fn load_bounded(
+        &self,
+        module: &ModuleId,
+        maximum: usize,
+    ) -> Result<Vec<u8>, ModuleSourceError> {
+        if module.path() == self.root.canonical {
+            Ok(self.root.bytes[..self.root.bytes.len().min(maximum)].to_vec())
+        } else {
+            self.inner.load_bounded(module, maximum)
+        }
+    }
+}
+
+fn detect_plan_language<F>(
+    source_path: &Path,
+    filesystem: &F,
+) -> Result<DetectedPlanLanguage, String>
+where
+    F: PlanFilesystem,
+{
+    let module = ModuleResolver::new(filesystem)
+        .resolve_root(source_path)
+        .map_err(|error| {
+            format!(
+                "fsh plan: {}: {}\n",
+                error.requested().display(),
+                error.cause()
+            )
+        })?;
+    let detection_limit = AnalysisLimits::V2
+        .limit(AnalysisLimitKind::SourceBytes)
+        .and_then(|limit| usize::try_from(limit).ok())
+        .unwrap_or(usize::MAX);
+    let bytes = filesystem
+        .load_bounded(&module, detection_limit.saturating_add(1))
+        .map_err(|error| format!("fsh plan: {}: {error}\n", module.path().display()))?;
+    let root = (bytes.len() <= detection_limit).then(|| CachedPlanRoot {
+        requested: source_path.to_path_buf(),
+        canonical: module.path().to_path_buf(),
+        bytes: bytes.clone(),
+    });
+    let source = SourceFile::from_bytes(
+        SourceId::new(u32::MAX),
+        module.path().to_string_lossy(),
+        bytes,
+    );
+    let Some(source) = source.ok() else {
+        return Ok(DetectedPlanLanguage {
+            language: LanguageMajor::V1,
+            flash_2: None,
+            root,
+        });
+    };
+    let (language, flash_2) = match detect_source_language(&source) {
+        LanguageDetection::Complete(directive) if directive.major() == LanguageMajor::V2 => (
+            LanguageMajor::V2,
+            Some(DetectedFlash2Source {
+                source,
+                directive_span: directive.span(),
+            }),
+        ),
+        LanguageDetection::Complete(_) => (LanguageMajor::V1, None),
+        LanguageDetection::Invalid(diagnostics)
+            if diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code() != "FS2001") =>
+        {
+            (LanguageMajor::V2, None)
+        }
+        LanguageDetection::Invalid(_) => (LanguageMajor::V1, None),
+    };
+    Ok(DetectedPlanLanguage {
+        language,
+        flash_2,
+        root,
+    })
+}
+
+fn flash_2_refusal(source: &SourceFile, span: flash_syntax::Span) -> PlanRun {
+    let refusal = Refusal::new(
+        RefusalReason::Unsupported,
+        "Flash 2 execution planning",
+        span,
+    );
+    let diagnostic = Diagnostic::new(
+        Severity::Error,
+        "PLAN004",
+        "Flash 2 execution planning requires explicit authority and controlled-planning contracts",
+    )
+    .with_primary(
+        span,
+        "planning was refused before the planner captured cwd, environment, or executable state",
+    );
+    PlanRun {
+        rendered_plan: None,
+        rendered_issues: vec![
+            render_diagnostic(source, &diagnostic)
+                .expect("the planning refusal belongs to the detected root source"),
+        ],
+        refusal: Some(refusal),
     }
 }
 

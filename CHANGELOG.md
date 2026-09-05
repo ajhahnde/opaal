@@ -18,6 +18,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- Add an explicitly versioned, pure Flash 2 language foundation with qualified
+  modules and compiled operations, nominal records and variants, bounded
+  generics and patterns, structured outcomes, typed owned streams, shared
+  formatter/checker/help/editor semantics, deterministic analysis and execution
+  budgets, and a standalone read-only Flash 1 source migration analyzer. Later
+  effects, authority grants, projects, actions, tasks, controlled planning, and
+  FlashOS runtime qualification remain explicitly unavailable boundaries.
+
 ### Changed
 
 - License Flash under the Mozilla Public License 2.0. Versions distributed

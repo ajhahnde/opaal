@@ -1,0 +1,27 @@
+# spelling	v1-kind	v2-kind
+action	identifier	keyword
+break	keyword	keyword
+catch	keyword	keyword
+continue	keyword	keyword
+def	keyword	keyword
+else	keyword	keyword
+enum	identifier	keyword
+export	keyword	keyword
+false	keyword	keyword
+for	keyword	keyword
+if	keyword	keyword
+import	keyword	keyword
+in	keyword	keyword
+language	identifier	keyword
+let	keyword	keyword
+match	keyword	keyword
+mut	keyword	keyword
+null	keyword	keyword
+return	keyword	keyword
+task	identifier	keyword
+throw	keyword	keyword
+true	keyword	keyword
+try	keyword	keyword
+type	identifier	keyword
+unset	keyword	keyword
+while	keyword	keyword

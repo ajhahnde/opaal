@@ -62,7 +62,7 @@ if !$status.ok {
     exit
 }
 
-for target in ['lexer', 'parser', 'expander'] {
+for target in ['lexer', 'parser', 'expander', 'migration', 'resources'] {
     let corpus = "$work/$target"
     ^mkdir $corpus
     if !$status.ok {
@@ -79,6 +79,22 @@ for target in ['lexer', 'parser', 'expander'] {
     "$root/tests/golden/lexical/complete" \
     "$root/tests/golden/lexical/incomplete" \
     "$root/tests/golden/lexical/invalid" \
+    "$root/tests/v2-foundation/language/grammar/complete" \
+    "$root/tests/v2-foundation/language/grammar/incomplete" \
+    "$root/tests/v2-foundation/language/grammar/invalid" \
+    "$root/tests/v2-foundation/language/grammar/repl" \
+    "$root/tests/v2-foundation/language/lexical" \
+    "$root/tests/v2-foundation/language/modules/complete" \
+    "$root/tests/v2-foundation/language/modules/invalid" \
+    "$root/tests/v2-foundation/language/outcomes/complete" \
+    "$root/tests/v2-foundation/language/outcomes/invalid" \
+    "$root/tests/v2-foundation/language/outcomes/refused" \
+    "$root/tests/v2-foundation/language/operations/complete" \
+    "$root/tests/v2-foundation/language/operations/invalid" \
+    "$root/tests/v2-foundation/language/rest-spread/complete" \
+    "$root/tests/v2-foundation/language/rest-spread/invalid" \
+    "$root/tests/v2-foundation/language/types/complete" \
+    "$root/tests/v2-foundation/language/types/invalid" \
     -- \
     "-runs=$runs" \
     -max_len=4096 \

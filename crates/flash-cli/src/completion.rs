@@ -12,8 +12,8 @@ use flash_runtime::glob::glob_pattern_matches;
 use flash_runtime::intrinsic::{DynamicBinding, ExpressionIntrinsic};
 use flash_runtime::{Environment, ScopeStack};
 use flash_syntax::{
-    CompletionContext, CompletionTarget, ParseOutcome, PathCompletionStyle, SourceFile, SourceId,
-    completion_target, parse,
+    CompletionContext, CompletionTarget, LanguageMajor, ParseOutcome, PathCompletionStyle,
+    SourceFile, SourceId, completion_target, parse, parse_v2_submission,
 };
 
 /// The semantic source of one completion candidate.
@@ -27,6 +27,8 @@ pub enum CompletionKind {
     InternalCommand,
     /// A named callable visible in the lexical scope.
     Function,
+    /// A qualified compiled operation visible through a module alias.
+    Operation,
     /// An executable supplied by a host snapshot.
     ExternalCommand,
     /// A visible lexical binding.
@@ -105,9 +107,11 @@ impl Completion {
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct CompletionCatalog {
     generation: Option<u64>,
+    v2: bool,
     intrinsics: BTreeSet<String>,
     internal: BTreeMap<String, BTreeSet<String>>,
     functions: BTreeSet<String>,
+    operations: BTreeSet<String>,
     variables: BTreeSet<String>,
     external: BTreeSet<String>,
     paths: BTreeSet<String>,
@@ -160,9 +164,11 @@ impl CompletionCatalog {
             .collect();
         Self {
             generation: None,
+            v2: false,
             intrinsics,
             internal,
             functions,
+            operations: BTreeSet::new(),
             variables,
             external: BTreeSet::new(),
             paths: BTreeSet::new(),
@@ -183,6 +189,23 @@ impl CompletionCatalog {
     #[must_use]
     pub fn with_paths(mut self, paths: impl IntoIterator<Item = impl Into<String>>) -> Self {
         self.paths = paths.into_iter().map(Into::into).collect();
+        self
+    }
+
+    /// Selects the grammar used to validate incomplete editor buffers.
+    #[must_use]
+    pub const fn with_language(mut self, language: LanguageMajor) -> Self {
+        self.v2 = matches!(language, LanguageMajor::V2);
+        self
+    }
+
+    /// Replaces qualified operation candidates from the retained session aliases.
+    #[must_use]
+    pub fn with_operations(
+        mut self,
+        operations: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Self {
+        self.operations = operations.into_iter().map(Into::into).collect();
         self
     }
 
@@ -467,7 +490,12 @@ impl CompletionEngine {
         }
 
         let source_file = SourceFile::new(SourceId::new(0), "<interactive>", source);
-        if matches!(parse(&source_file), ParseOutcome::Invalid(_)) {
+        let parsed = if self.catalog.v2 {
+            parse_v2_submission(&source_file)
+        } else {
+            parse(&source_file)
+        };
+        if matches!(parsed, ParseOutcome::Invalid(_)) {
             return Vec::new();
         }
         let Some(target) = completion_target(source, cursor) else {
@@ -530,6 +558,13 @@ impl CompletionEngine {
                         false,
                         true,
                     );
+                    add(
+                        &self.catalog.operations,
+                        CompletionKind::Operation,
+                        target.prefix(),
+                        false,
+                        false,
+                    );
                 }
                 add(
                     &self.catalog.external,
@@ -550,6 +585,13 @@ impl CompletionEngine {
                 add(
                     &self.catalog.intrinsics,
                     CompletionKind::Intrinsic,
+                    target.prefix(),
+                    false,
+                    false,
+                );
+                add(
+                    &self.catalog.operations,
+                    CompletionKind::Operation,
                     target.prefix(),
                     false,
                     false,

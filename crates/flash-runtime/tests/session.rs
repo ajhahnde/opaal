@@ -43,6 +43,7 @@ use flash_runtime::session::{
     BackgroundFailureReason, JobNoticeKind, LiveJobState, Session, SubmitOutcome,
 };
 use flash_runtime::{Duration, Environment, ScopeStack, Status, Value};
+use flash_syntax::LanguageMajor;
 
 #[derive(Default)]
 struct Probe {
@@ -74,6 +75,163 @@ fn environment() -> Environment {
 
 fn session() -> Session {
     Session::new("/work", environment(), SessionOptions::default())
+}
+
+#[test]
+fn a_v2_session_preselects_its_submission_grammar_without_a_directive() {
+    let mut session = Session::for_language(
+        LanguageMajor::V2,
+        "/work",
+        Environment::new(),
+        SessionOptions::default(),
+    );
+    assert_eq!(session.language(), LanguageMajor::V2);
+
+    assert_eq!(
+        submit(&mut session, "let answer = 42", &Probe::default()),
+        SubmitOutcome::Continued
+    );
+    assert_eq!(session.scope().get("answer"), Some(&Value::Int(42)));
+
+    let mut sink = Vec::new();
+    let error = session
+        .submit(
+            "<interactive>",
+            "let language = 2",
+            &Probe::default(),
+            &terminal_platform(),
+            &FakeClock::new(),
+            &mut sink,
+        )
+        .expect_err("a v2 reserved word must be rejected by the selected grammar");
+    assert!(error.render().starts_with("error[FS1000]"));
+    assert_eq!(session.scope().get("answer"), Some(&Value::Int(42)));
+}
+
+#[test]
+fn a_v2_session_retains_standard_operation_identity_across_submissions() {
+    let mut session = Session::for_language(
+        LanguageMajor::V2,
+        "/work",
+        Environment::new(),
+        SessionOptions::default(),
+    );
+    let platform = terminal_platform();
+    let clock = FakeClock::new();
+    let probe = Probe::default();
+    let mut output = Vec::new();
+
+    session
+        .submit(
+            "<cell-1>",
+            "import std::value as value",
+            &probe,
+            &platform,
+            &clock,
+            &mut output,
+        )
+        .expect("the compiled standard module alias should load");
+    assert_eq!(session.visible_operation_names(), ["value::length"]);
+
+    let (outcome, value) = session
+        .submit_with_value(
+            "<cell-2>",
+            "value::length([\"one\", \"two\"])",
+            &probe,
+            &platform,
+            &clock,
+            &mut output,
+        )
+        .expect("the retained operation alias should execute");
+    assert_eq!(outcome, SubmitOutcome::Continued);
+    assert_eq!(value, Value::Int(2));
+    assert!(
+        output.is_empty(),
+        "evaluation does not perform presentation"
+    );
+
+    session
+        .submit(
+            "<cell-3>",
+            "help value::length",
+            &probe,
+            &platform,
+            &clock,
+            &mut output,
+        )
+        .expect("help should resolve the retained canonical descriptor");
+    let help = String::from_utf8(output).unwrap();
+    assert!(help.starts_with("operation std::value::length\n"), "{help}");
+    assert!(
+        help.contains("std::value::length[T](input: List[T]) -> Int"),
+        "{help}"
+    );
+    assert!(help.contains("ValueStream[T]"), "{help}");
+}
+
+#[test]
+fn a_v2_session_commits_operation_aliases_only_when_source_order_reaches_them() {
+    let mut session = Session::for_language(
+        LanguageMajor::V2,
+        "/work",
+        Environment::new(),
+        SessionOptions::default(),
+    );
+    let platform = terminal_platform();
+    let clock = FakeClock::new();
+    let probe = Probe::default();
+    let mut output = Vec::new();
+
+    let (outcome, _) = session
+        .submit_with_value(
+            "<interactive>",
+            "^unavailable &\nimport std::value as late",
+            &probe,
+            &platform,
+            &clock,
+            &mut output,
+        )
+        .expect("pure v2 should return a structured refusal");
+    assert!(matches!(outcome, SubmitOutcome::Refused(_)));
+    assert!(session.visible_operation_names().is_empty());
+
+    let (outcome, _) = session
+        .submit_with_value(
+            "<interactive>",
+            "import std::value as early\n^unavailable &",
+            &probe,
+            &platform,
+            &clock,
+            &mut output,
+        )
+        .expect("the later effect should still return a structured refusal");
+    assert!(matches!(outcome, SubmitOutcome::Refused(_)));
+    assert_eq!(session.visible_operation_names(), ["early::length"]);
+}
+
+#[test]
+fn a_v2_session_refuses_local_module_loading_without_a_host_reader() {
+    let mut session = Session::for_language(
+        LanguageMajor::V2,
+        "/work",
+        Environment::new(),
+        SessionOptions::default(),
+    );
+    let mut output = Vec::new();
+    let error = session
+        .submit(
+            "<interactive>",
+            "import './dependency.fsh' as dependency",
+            &Probe::default(),
+            &terminal_platform(),
+            &FakeClock::new(),
+            &mut output,
+        )
+        .expect_err("a session without a source loader cannot import a local module");
+
+    assert!(error.render().starts_with("error[MOD013]"));
+    assert!(output.is_empty());
+    assert!(session.visible_operation_names().is_empty());
 }
 
 fn terminal_platform() -> FakePlatform {

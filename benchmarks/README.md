@@ -20,6 +20,7 @@ truth. The suite owns these measurements:
 | Pipeline throughput | A fixed file through two `cat` stages and `wc` | One MiB through `yes`, `head`, `wc`, and a marker-transforming `tr` stage |
 | Structured-stream memory | Peak RSS of five million lazily pulled `Value::Int` items | Not measured: the current target exposes no qualified per-process peak-RSS telemetry |
 | Completion latency | Prompt-boundary host snapshot plus grammar-aware query over fixed command/path fixtures | Tab-to-accepted-completion latency through the portable editor and emulated UART |
+| Flash 2 resource contract | Combined host-free module analysis and pure evaluation over a generated adversarial statement corpus | Not measured: this is foundation host evidence, not a FlashOS integration claim |
 
 The target pipeline's bounded `yes` producer reaches an expected broken pipe
 after `head` has consumed the requested byte count. The transformed count
@@ -73,6 +74,19 @@ python3 components/flash/benchmarks/run.py \
 The ordinary CI job runs and schema-validates the smoke profile to catch broken
 probes and missing coverage. It does not compare an Ubuntu hosted runner with
 the tracked macOS baseline. Cross-environment absolute comparisons are invalid.
+
+The Flash 2 resource probe is deliberately outside semantic evaluation clocks.
+It emits raw cold/warmup/sample nanoseconds while executable counters own
+semantic refusal. After building the release fixture, run:
+
+```sh
+components/flash/target/release/flash-benchmark-fixture \
+  v2-resources 3 15 1000
+```
+
+Compare only like-for-like host and corpus observations. This command supplies
+benchmark evidence; exact at-limit and first-excess behavior remains owned by
+the deterministic resource tests.
 
 ## Run the FlashOS target suite
 

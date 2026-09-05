@@ -8,7 +8,118 @@ use crate::command::{
     CommandSignature,
 };
 pub use crate::documentation::{CommandDocumentation, Documentation};
-use crate::module::FunctionSignature;
+use crate::module::{FunctionSignature, ModuleId, ModuleProgram, NominalType};
+use crate::operation::OperationDescriptor;
+
+/// The semantic class returned by qualified v2 module/type/operation help.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ModuleHelpKind {
+    Module,
+    NominalType,
+    Operation,
+}
+
+/// One immutable v2 module/type/operation help result backed by canonical data.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ModuleHelpEntry {
+    kind: ModuleHelpKind,
+    module: Option<ModuleId>,
+    nominal_type: Option<NominalType>,
+    operation: Option<OperationDescriptor>,
+}
+
+impl ModuleHelpEntry {
+    #[must_use]
+    pub const fn kind(&self) -> ModuleHelpKind {
+        self.kind
+    }
+
+    #[must_use]
+    pub const fn module(&self) -> Option<&ModuleId> {
+        self.module.as_ref()
+    }
+
+    #[must_use]
+    pub const fn nominal_type(&self) -> Option<&NominalType> {
+        self.nominal_type.as_ref()
+    }
+
+    /// The compiled operation descriptor, when this is operation help.
+    #[must_use]
+    pub const fn operation(&self) -> Option<&OperationDescriptor> {
+        self.operation.as_ref()
+    }
+}
+
+/// Host-free semantic help over one immutable module-program snapshot.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ModuleHelpCatalog {
+    program: ModuleProgram,
+}
+
+/// Renders one compiled operation's canonical identity, overloads, and docs.
+#[must_use]
+pub fn render_module_operation_help(operation: &OperationDescriptor) -> Vec<u8> {
+    let mut output = format!("operation {}\n", operation.id().qualified_name());
+    for signature in operation.signature_labels() {
+        output.push_str(&format!("  signature: {signature}\n"));
+    }
+    output.push_str(&format!("  documentation: {}\n", operation.documentation()));
+    output.into_bytes()
+}
+
+impl ModuleHelpCatalog {
+    #[must_use]
+    pub fn snapshot(program: &ModuleProgram) -> Self {
+        Self {
+            program: program.clone(),
+        }
+    }
+
+    /// Resolves one exact case-sensitive alias or qualified nominal type.
+    #[must_use]
+    pub fn query(&self, module: &ModuleId, qualified: &str) -> Option<ModuleHelpEntry> {
+        let segments = qualified.split("::").collect::<Vec<_>>();
+        if segments.iter().any(|segment| segment.is_empty()) {
+            return None;
+        }
+        if segments.len() == 1 {
+            if let Some(target) = self.program.aliases().resolve(module, &segments) {
+                return Some(ModuleHelpEntry {
+                    kind: ModuleHelpKind::Module,
+                    module: Some(target.clone()),
+                    nominal_type: None,
+                    operation: None,
+                });
+            }
+            let nominal = self.program.types().nominal(module, segments[0])?.clone();
+            return Some(ModuleHelpEntry {
+                kind: ModuleHelpKind::NominalType,
+                module: None,
+                nominal_type: Some(nominal),
+                operation: None,
+            });
+        }
+        if let Some(operation) = self.program.resolve_operation(module, &segments) {
+            return Some(ModuleHelpEntry {
+                kind: ModuleHelpKind::Operation,
+                module: None,
+                nominal_type: None,
+                operation: Some(operation),
+            });
+        }
+        let nominal = self
+            .program
+            .resolve_nominal_type(module, &segments)?
+            .clone();
+        Some(ModuleHelpEntry {
+            kind: ModuleHelpKind::NominalType,
+            module: None,
+            nominal_type: Some(nominal),
+            operation: None,
+        })
+    }
+}
 
 /// A named callable's immutable defining metadata.
 #[derive(Clone, Debug, Eq, PartialEq)]

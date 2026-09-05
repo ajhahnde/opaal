@@ -1,0 +1,10 @@
+# class	path	diagnostic
+complete	complete/reference.fsh	-
+invalid	invalid/wrong-value.fsh	SIG004
+invalid	invalid/repeated-length.fsh	SIG004
+invalid	invalid/non-operation-stage.fsh	OPR001
+invalid	invalid/unknown-operation.fsh	OPR002
+invalid	invalid/ambiguous-empty-length.fsh	SIG010
+invalid	invalid/ambiguous-empty-pipeline.fsh	SIG010
+invalid	invalid/explicit-generic-arity.fsh	SIG009
+invalid	invalid/explicit-element-mismatch.fsh	SIG004

@@ -36,9 +36,19 @@ checksum = "5baebc0774151f905a1a2cc41989300b1e6fbb29aff0ceffa1064fdd3088d582"
 name = "flash-fuzz"
 version = "0.0.0"
 dependencies = [
+ "flash-migrate",
  "flash-runtime",
  "flash-syntax",
  "libfuzzer-sys",
+ "serde_json",
+]
+
+[[package]]
+name = "flash-migrate"
+version = "1.0.0"
+dependencies = [
+ "flash-syntax",
+ "serde_json",
 ]
 
 [[package]]

@@ -109,6 +109,60 @@ A missing capability produces a specific diagnostic. It is not silently emulated
 
 Streams remain lazy wherever the operation permits it. Operations that must retain command output, collect a stream, parse a complete document, or format buffered data enforce explicit resource limits rather than treating available memory as an unbounded contract.
 
+### Flash 2 resource contract
+
+Flash 2 module analysis uses deterministic counters for retained source bytes,
+canonical modules and import depth, structural syntax nodes, type depth, generic
+instantiations, operation-overload candidates, diagnostics, and cooperative
+work units. Host source adapters receive the remaining byte ceiling and read at
+most one byte beyond it, so a refusal does not require allocating the complete
+hostile file. The executable defaults and measurement names live in
+`AnalysisLimits`; callers may supply stricter ceilings for an isolated analysis.
+
+Reaching a ceiling exactly succeeds. The first charge beyond it returns a
+structured budget refusal and exposes neither a partial program nor a truncated
+successful report. Explicit cancellation remains a distinct outcome. Editor
+diagnostics publish `ANL001` for budget exhaustion, while individual semantic
+requests return a visible analysis-limit error instead of stale or partial
+semantic data.
+
+Pure Flash 2 execution shares one `ResourceBudget` across every statement,
+callable invocation, and module initializer in a requested run. It counts
+evaluation steps, nested call depth, retained collection elements, and newly
+retained string/collection bytes; stream, capture, formatting, and migration
+owners retain their more specific item/byte ceilings. Runtime exhaustion is a
+structured resource error, cancellation is not converted into that error, and
+already selected primary outcome and cleanup precedence remain unchanged.
+Frozen Flash 1 analysis and execution keep their established compatibility
+path.
+
+### Flash 2 downstream seams and planning refusal
+
+Flash 2 freezes later execution/project attachment points without implementing
+their owners. Named-function signatures and compiled operation descriptors
+carry `DownstreamCallMetadata`; structured execution results carry
+`DownstreamOutcomeMetadata`. The typed opaque slots cover evaluation context,
+effects, capability request, authority verdict, resource owner, cancellation
+scope, deadline, cleanup, action, project, task, tool, environment, and declared
+inputs/outputs. Every current call and outcome exposes those slots as `Absent`.
+The types have no public identity constructor, serializer, discovery path,
+grant path, or executor.
+
+Compiled operation descriptors additionally carry an explicit purity class.
+The current `std::value::length` descriptor is `Pure`; the reserved
+`RequiresAuthorityContract` class does not itself grant or enforce authority.
+Future layers must fill the opaque slots while preserving the same function,
+operation, type, carrier, and outcome identities.
+
+`fsh plan` remains the frozen Flash 1 low-level command-pipeline inspector. A
+root that explicitly selects Flash 2 returns `PLAN004` plus a structured
+`unsupported` refusal before the planner captures cwd, inherited environment,
+`PATH`, or executable metadata. Resolving an explicitly supplied relative root
+still uses the launcher's working directory to locate that source input. The
+refusal emits no partial operation, script, action, or workflow plan. The
+complete public foundation boundary is described in the [Flash 2 Language
+Foundation](flash-2-foundation.md).
+
 ## Workspace and dependency direction
 
 Flash is a nested Cargo workspace rooted at [`components/flash/`](../Cargo.toml). The workspace manifest is authoritative for current package membership. The architecture is defined by responsibilities and dependency direction rather than by a permanent number of crates.
@@ -116,6 +170,7 @@ Flash is a nested Cargo workspace rooted at [`components/flash/`](../Cargo.toml)
 | Responsibility | Current owner |
 | --- | --- |
 | Source representation, spans, lexical analysis, parsing, syntax trees, formatting, and source diagnostics | [`flash-syntax`](../crates/flash-syntax/) |
+| Read-only v1 source-graph migration analysis and schema rendering | [`flash-migrate`](../crates/flash-migrate/) |
 | Values, scopes, evaluation, functions, command metadata, planning, pipelines, sessions, jobs, module analysis, and shared semantic services | [`flash-runtime`](../crates/flash-runtime/) and syntax-owned analysis interfaces |
 | Portable operating-system capability contracts and deterministic test adapters | [`flash-platform`](../crates/flash-platform/) |
 | Unix-like process, descriptor, filesystem, signal, and terminal integration | [`flash-platform-posix`](../crates/flash-platform-posix/) |
@@ -129,7 +184,10 @@ abstract capability interface. `flash-cli` selects the appropriate runtime
 adapter and user-facing services. `flash-lsp` instead depends directly on
 `flash-syntax` and `flash-runtime`; it has no dependency on `flash-cli`,
 `flash-platform-posix`, or terminal integration and declares no direct
-dependency on `flash-platform`.
+dependency on `flash-platform`. `flash-migrate` depends only on `flash-syntax`
+and JSON serialization; it does not link runtime, platform, CLI, project,
+configuration, or execution owners. Its injected reader receives the remaining
+source-byte ceiling before each read, and exposes no write or execution method.
 
 New crates may be introduced as implementation responsibilities grow, but they must preserve this dependency direction and must not create an alternative grammar, evaluator, name resolver, or platform contract.
 
@@ -194,7 +252,7 @@ does not present ordered per-file replacement as a multi-file transaction.
 
 ## Execution-plan inspection frontend
 
-`fsh plan [--] SOURCE` exposes the runtime's concrete planning boundary for one
+For Flash 1, `fsh plan [--] SOURCE` exposes the runtime's concrete planning boundary for one
 top-level foreground command pipeline. The CLI frontend first uses the shared
 module parser and static command analysis, then supplies a fresh lexical scope,
 the inherited cwd and environment, default session options, the standard
@@ -209,6 +267,10 @@ approximated. `ExecutionPlan::render` is the single deterministic rendering
 owner and preserves source order, retained spans, and escaped native bytes; its
 output is inspection text rather than source, serialization, or a launcher
 protocol.
+
+For an explicit Flash 2 root, the source-only generation check instead returns
+`PLAN004` and a structured unsupported refusal. The host snapshot and
+executable probe are lazy boundaries and are never called on this route.
 
 ### Shared editor services
 
@@ -1153,6 +1215,27 @@ ignored, allowing pre-commit image testing while excluding generated targets.
 
 System-level package selection, image assembly, boot flow, and login configuration remain documented in [FlashOS Architecture](../../../docs/architecture.md). This document owns the internal architecture of the Flash component after its executable starts.
 
+The current Flash 2 evidence is host/source evidence only. FlashOS integration
+remains explicitly pending until all of the following are re-derived from the
+then-current exact tree:
+
+- the retained versioned FlashOS system API has completed its native Linux
+  qualification and merged;
+- FlashOS v0.3.0 has completed its separately owned release boundary;
+- the Flash package and both target binaries build from the exact candidate
+  source and manifests;
+- package contents, image identity, disk layout, boot, login, and clean shutdown
+  are verified for that candidate;
+- the versioned capability classification, operation map, capability evidence,
+  and runtime report agree with the selected FlashOS adapter;
+- the pure Flash 2 golden workflow and frozen Flash 1 target cases run in the
+  assembled image through QEMU; and
+- unavailable physical-hardware evidence and every unsupported adapter remain
+  named rather than inferred from host or target-build success.
+
+Until that checklist is complete, documentation and release notes must not
+claim Flash 2 runtime availability in FlashOS.
+
 ## Sources of truth
 
 Use the following files when evaluating or changing an architectural contract:
@@ -1162,6 +1245,7 @@ Use the following files when evaluating or changing an architectural contract:
 | Workspace membership and shared metadata              | [`Cargo.toml`](../Cargo.toml)                                                            |
 | Source, syntax trees, classification, and diagnostics | [`flash-syntax/src/lib.rs`](../crates/flash-syntax/src/lib.rs)                 |
 | Runtime module boundaries                             | [`flash-runtime/src/lib.rs`](../crates/flash-runtime/src/lib.rs)               |
+| Downstream call/outcome metadata seams                | [`seam.rs`](../crates/flash-runtime/src/seam.rs)                               |
 | Session ownership and submitted-source flow           | [`session.rs`](../crates/flash-runtime/src/session.rs)                              |
 | Script execution and background joining               | [`script.rs`](../crates/flash-runtime/src/script.rs)                                |
 | Command signatures and registry                       | [`command.rs`](../crates/flash-runtime/src/command.rs)                              |

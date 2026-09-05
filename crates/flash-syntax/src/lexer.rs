@@ -3,25 +3,30 @@ use crate::{SourceFile, Span, SpanError};
 /// A reserved source word.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum Keyword {
+    Action,
     Break,
     Catch,
     Continue,
     Def,
     Else,
+    Enum,
     Export,
     False,
     For,
     If,
     Import,
     In,
+    Language,
     Let,
     Match,
     Mut,
     Null,
     Return,
+    Task,
     Throw,
     True,
     Try,
+    Type,
     Unset,
     While,
 }
@@ -148,14 +153,36 @@ impl Token {
 /// Converts a source file into nonempty, ordered, lossless tokens.
 #[must_use]
 pub fn lex(source: &SourceFile) -> Vec<Token> {
-    Lexer::new(source).run()
+    Lexer::new(source, LexLanguage::V1).run()
+}
+
+/// Converts a Flash 2 source file into nonempty, ordered, lossless tokens.
+///
+/// Flash 2 reserves its complete major-version vocabulary without changing the
+/// frozen Flash 1 lexer exposed by [`lex`].
+#[must_use]
+pub fn lex_v2(source: &SourceFile) -> Vec<Token> {
+    Lexer::new(source, LexLanguage::V2).run()
 }
 
 pub(crate) fn lex_with_control(
     source: &SourceFile,
     is_cancelled: &dyn Fn() -> bool,
 ) -> Option<Vec<Token>> {
-    Lexer::new(source).run_with_control(is_cancelled)
+    Lexer::new(source, LexLanguage::V1).run_with_control(is_cancelled)
+}
+
+pub(crate) fn lex_v2_with_control(
+    source: &SourceFile,
+    is_cancelled: &dyn Fn() -> bool,
+) -> Option<Vec<Token>> {
+    Lexer::new(source, LexLanguage::V2).run_with_control(is_cancelled)
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum LexLanguage {
+    V1,
+    V2,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -168,15 +195,17 @@ enum Context {
 
 struct Lexer<'source> {
     source: &'source SourceFile,
+    language: LexLanguage,
     position: usize,
     tokens: Vec<Token>,
     contexts: Vec<Context>,
 }
 
 impl<'source> Lexer<'source> {
-    fn new(source: &'source SourceFile) -> Self {
+    fn new(source: &'source SourceFile, language: LexLanguage) -> Self {
         Self {
             source,
+            language,
             position: 0,
             tokens: Vec::new(),
             contexts: vec![Context::Normal],
@@ -580,7 +609,7 @@ impl<'source> Lexer<'source> {
             self.position += 1;
         }
         let text = &self.source.text()[start..self.position];
-        let kind = keyword(text).map_or(TokenKind::Identifier, TokenKind::Keyword);
+        let kind = keyword(text, self.language).map_or(TokenKind::Identifier, TokenKind::Keyword);
         self.push(kind, start);
         true
     }
@@ -779,27 +808,32 @@ fn is_identifier_continue(byte: u8) -> bool {
     is_identifier_start(byte) || byte.is_ascii_digit()
 }
 
-fn keyword(text: &str) -> Option<Keyword> {
+fn keyword(text: &str, language: LexLanguage) -> Option<Keyword> {
     Some(match text {
+        "action" if language == LexLanguage::V2 => Keyword::Action,
         "break" => Keyword::Break,
         "catch" => Keyword::Catch,
         "continue" => Keyword::Continue,
         "def" => Keyword::Def,
         "else" => Keyword::Else,
+        "enum" if language == LexLanguage::V2 => Keyword::Enum,
         "export" => Keyword::Export,
         "false" => Keyword::False,
         "for" => Keyword::For,
         "if" => Keyword::If,
         "import" => Keyword::Import,
         "in" => Keyword::In,
+        "language" if language == LexLanguage::V2 => Keyword::Language,
         "let" => Keyword::Let,
         "match" => Keyword::Match,
         "mut" => Keyword::Mut,
         "null" => Keyword::Null,
         "return" => Keyword::Return,
+        "task" if language == LexLanguage::V2 => Keyword::Task,
         "throw" => Keyword::Throw,
         "true" => Keyword::True,
         "try" => Keyword::Try,
+        "type" if language == LexLanguage::V2 => Keyword::Type,
         "unset" => Keyword::Unset,
         "while" => Keyword::While,
         _ => return None,

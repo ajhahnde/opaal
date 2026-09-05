@@ -14,9 +14,9 @@ code.
   `SIGABRT` termination.
 - `stream.rs` provides deterministic `source`, `relay`, `sink`, `both`, and
   `both-closed` modes for stream, status, merged-output, and descriptor tests.
-- `benchmark.rs` provides host-only in-process completion and lazy
-  structured-stream probes for the versioned performance suite. It is not
-  installed in the FlashOS image.
+- `benchmark.rs` provides host-only in-process completion, lazy
+  structured-stream, and Flash 2 analysis/runtime resource probes for the
+  versioned performance suite. It is not installed in the FlashOS image.
 
 ---
 

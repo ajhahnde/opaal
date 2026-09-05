@@ -586,14 +586,21 @@ fsh plan [--] SOURCE
 fsh plan --help
 ```
 
-`SOURCE` must contain exactly one top-level foreground command pipeline. The
-planner frontend shares canonical loading, parsing, static command analysis,
-ordinary expansion/resolution, structural preflight, and
+For Flash 1, `SOURCE` must contain exactly one top-level foreground command
+pipeline. The planner frontend shares canonical loading, parsing, static
+command analysis, ordinary expansion/resolution, structural preflight, and
 `ExecutionPlan::render`. It may receive an inherited cwd/environment snapshot
 and a read-only executable probe, but it must not gain a runtime platform,
 session, config/history provider, writable filesystem, editor, terminal, or
 process capability. Tests must prove that substitutions are rejected and that
 redirection targets and external fixtures remain untouched.
+
+For Flash 2, tests must prove `PLAN004` and the structured unsupported refusal
+occur before the lazy planner cwd/environment snapshot or executable probe is
+touched. Resolving an explicitly supplied relative source remains a source
+input read and necessarily uses the launcher's working directory. No partial
+operation, script, action, or workflow plan is accepted as a substitute for the
+future complete authority and controlled-planning contract.
 
 Focused planner coverage is:
 

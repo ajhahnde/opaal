@@ -1,3 +1,5 @@
+use std::fmt;
+
 use crate::Span;
 
 /// A syntax value paired with the exact source range that produced it.
@@ -77,7 +79,10 @@ pub type Statement = AstNode<StatementKind>;
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum StatementKind {
     Import(ImportStatement),
+    ModuleImport(ModuleAliasImport),
     ModuleExport(ModuleExportStatement),
+    NominalType(NominalTypeDeclaration),
+    VariantType(VariantTypeDeclaration),
     Declaration(Declaration),
     Assignment(Assignment),
     Environment(EnvironmentStatement),
@@ -101,18 +106,111 @@ pub struct ImportStatement {
     pub path: Span,
 }
 
+/// One Flash 2 module imported under a required local alias.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ModuleAliasImport {
+    pub source: ModuleImportSource,
+    pub alias: Identifier,
+}
+
+/// The closed module origins constructible by the Flash 2 foundation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ModuleImportSource {
+    /// A statically named source path resolved through the injected canonicalizer.
+    Local { path: Span },
+    /// A compiled standard module descriptor; it is never source-loaded.
+    Standard {
+        namespace: Identifier,
+        module: Identifier,
+        span: Span,
+    },
+}
+
+impl ModuleImportSource {
+    #[must_use]
+    pub const fn span(self) -> Span {
+        match self {
+            Self::Local { path } | Self::Standard { span: path, .. } => path,
+        }
+    }
+}
+
 /// One explicit module export list.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ModuleExportStatement {
     pub names: Vec<Identifier>,
 }
 
+/// The first nominal Flash 2 record type form.
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct NominalTypeDeclaration {
+    pub name: Identifier,
+    pub type_parameters: Vec<TypeParameter>,
+    pub fields: Vec<NominalTypeField>,
+}
+
+/// One closed nominal Flash 2 variant type.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct VariantTypeDeclaration {
+    pub name: Identifier,
+    pub type_parameters: Vec<TypeParameter>,
+    pub variants: Vec<VariantDeclaration>,
+}
+
+/// One constructor in a closed nominal variant declaration.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct VariantDeclaration {
+    pub name: Identifier,
+    pub payload: Vec<TypeReference>,
+    pub span: Span,
+}
+
+/// One invariant generic parameter and its closed constraint set.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TypeParameter {
+    pub name: Identifier,
+    pub constraints: Vec<TypeConstraint>,
+    pub span: Span,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum TypeConstraint {
+    Equal,
+    Ordered,
+}
+
+/// One exact field in a nominal record declaration.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct NominalTypeField {
+    pub name: Identifier,
+    pub value_type: TypeReference,
+    pub span: Span,
+}
+
+#[derive(Clone, Eq, PartialEq)]
 pub struct Declaration {
     pub mutable: bool,
+    /// The complete binding or destructuring pattern.
+    pub pattern: Pattern,
+    /// The first binding retained for frozen-v1 observers.
     pub name: Identifier,
     pub type_annotation: Option<TypeReference>,
     pub value: Expression,
+}
+
+impl fmt::Debug for Declaration {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut debug = formatter.debug_struct("Declaration");
+        debug.field("mutable", &self.mutable);
+        if !matches!(self.pattern, Pattern::Binding(identifier) if identifier == self.name) {
+            debug.field("pattern", &self.pattern);
+        }
+        debug
+            .field("name", &self.name)
+            .field("type_annotation", &self.type_annotation)
+            .field("value", &self.value)
+            .finish()
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -127,13 +225,31 @@ pub enum EnvironmentStatement {
     Unset { name: Identifier },
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq)]
 pub struct FunctionDefinition {
     pub documentation: Option<DocumentationBlock>,
     pub name: Identifier,
+    pub type_parameters: Vec<TypeParameter>,
     pub parameters: Vec<Parameter>,
     pub return_type: Option<TypeReference>,
     pub body: Block,
+}
+
+impl fmt::Debug for FunctionDefinition {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut debug = formatter.debug_struct("FunctionDefinition");
+        debug
+            .field("documentation", &self.documentation)
+            .field("name", &self.name);
+        if !self.type_parameters.is_empty() {
+            debug.field("type_parameters", &self.type_parameters);
+        }
+        debug
+            .field("parameters", &self.parameters)
+            .field("return_type", &self.return_type)
+            .field("body", &self.body)
+            .finish()
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -141,11 +257,27 @@ pub struct DocumentationBlock {
     pub lines: Vec<Span>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq)]
 pub struct Parameter {
+    pub pattern: Pattern,
+    /// The first binding retained for frozen-v1 observers.
     pub name: Identifier,
     pub type_annotation: Option<TypeReference>,
     pub span: Span,
+}
+
+impl fmt::Debug for Parameter {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut debug = formatter.debug_struct("Parameter");
+        if !matches!(self.pattern, Pattern::Binding(identifier) if identifier == self.name) {
+            debug.field("pattern", &self.pattern);
+        }
+        debug
+            .field("name", &self.name)
+            .field("type_annotation", &self.type_annotation)
+            .field("span", &self.span)
+            .finish()
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -215,6 +347,44 @@ pub enum Pattern {
     Wildcard(Span),
     Literal(Literal),
     Binding(Identifier),
+    List(ListPattern),
+    NominalRecord(NominalRecordPattern),
+    Variant(VariantPattern),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ListPattern {
+    pub elements: Vec<Pattern>,
+    pub rest: Option<Identifier>,
+    pub span: Span,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct NominalRecordPattern {
+    pub name: QualifiedName,
+    pub fields: Vec<PatternField>,
+    pub span: Span,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PatternField {
+    pub name: Identifier,
+    pub pattern: Pattern,
+    pub span: Span,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct VariantPattern {
+    pub constructor: QualifiedName,
+    pub payload: Vec<Pattern>,
+    pub span: Span,
+}
+
+/// A statically qualified `name` or `name::member` path.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct QualifiedName {
+    pub segments: Vec<Identifier>,
+    pub span: Span,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -291,8 +461,10 @@ pub enum ExpressionKind {
     Literal(Literal),
     Variable(VariableReference),
     Symbol(Identifier),
+    Qualified(QualifiedName),
     List(Vec<Expression>),
     Record(Vec<RecordEntry>),
+    NominalRecord(NominalRecordExpression),
     Closure(Closure),
     CommandSubstitution(CommandSubstitution),
     GroupedJob(Box<ConditionalChain>),
@@ -345,23 +517,63 @@ pub struct RecordEntry {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct NominalRecordExpression {
+    pub name: QualifiedName,
+    pub fields: Vec<NominalRecordFieldExpression>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct NominalRecordFieldExpression {
+    pub name: Identifier,
+    pub value: Expression,
+    pub span: Span,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum RecordKey {
     Identifier(Identifier),
     SingleQuoted(Span),
     DoubleQuoted(WordPart),
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq)]
 pub struct Closure {
     pub parameters: Vec<Parameter>,
+    pub result_type: Option<TypeReference>,
     pub body: Box<ConditionalChain>,
     pub span: Span,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+impl fmt::Debug for Closure {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut debug = formatter.debug_struct("Closure");
+        debug.field("parameters", &self.parameters);
+        if self.result_type.is_some() {
+            debug.field("result_type", &self.result_type);
+        }
+        debug
+            .field("body", &self.body)
+            .field("span", &self.span)
+            .finish()
+    }
+}
+
+#[derive(Clone, Eq, PartialEq)]
 pub struct CallExpression {
     pub callee: Box<Expression>,
+    pub type_arguments: Vec<TypeReference>,
     pub arguments: Vec<Expression>,
+}
+
+impl fmt::Debug for CallExpression {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut debug = formatter.debug_struct("CallExpression");
+        debug.field("callee", &self.callee);
+        if !self.type_arguments.is_empty() {
+            debug.field("type_arguments", &self.type_arguments);
+        }
+        debug.field("arguments", &self.arguments).finish()
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

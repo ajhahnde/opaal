@@ -4,6 +4,8 @@ use std::ffi::{OsStr, OsString};
 use std::fmt::{self, Write};
 use std::sync::Arc;
 
+use crate::module::{NominalTypeId, ValueType};
+
 /// A finite IEEE 754 binary64 value with both zero spellings normalized.
 #[derive(Clone, Copy, Eq, PartialEq)]
 pub struct FiniteFloat(u64);
@@ -290,6 +292,134 @@ impl fmt::Display for DuplicateRecordKey {
 }
 
 impl Error for DuplicateRecordKey {}
+
+/// An immutable nominal record value with exact declared identity and arguments.
+#[derive(Clone, Eq, PartialEq)]
+pub struct NominalRecordValue {
+    id: NominalTypeId,
+    type_arguments: Arc<[ValueType]>,
+    fields: Arc<[(Arc<str>, Value)]>,
+}
+
+impl NominalRecordValue {
+    #[must_use]
+    pub fn new(
+        id: NominalTypeId,
+        type_arguments: Vec<ValueType>,
+        fields: Vec<(Arc<str>, Value)>,
+    ) -> Self {
+        Self {
+            id,
+            type_arguments: Arc::from(type_arguments),
+            fields: Arc::from(fields),
+        }
+    }
+
+    #[must_use]
+    pub const fn id(&self) -> &NominalTypeId {
+        &self.id
+    }
+
+    #[must_use]
+    pub fn type_arguments(&self) -> &[ValueType] {
+        &self.type_arguments
+    }
+
+    #[must_use]
+    pub fn fields(&self) -> &[(Arc<str>, Value)] {
+        &self.fields
+    }
+
+    #[must_use]
+    pub fn get(&self, name: &str) -> Option<&Value> {
+        self.fields
+            .iter()
+            .find_map(|(candidate, value)| (candidate.as_ref() == name).then_some(value))
+    }
+}
+
+impl fmt::Debug for NominalRecordValue {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.id.name())?;
+        write_type_arguments(formatter, self.type_arguments())?;
+        formatter.write_str(" {")?;
+        for (index, (name, value)) in self.fields.iter().enumerate() {
+            if index != 0 {
+                formatter.write_str(",")?;
+            }
+            write!(formatter, " {name}: {value:?}")?;
+        }
+        if !self.fields.is_empty() {
+            formatter.write_str(" ")?;
+        }
+        formatter.write_str("}")
+    }
+}
+
+/// An immutable value of one constructor in a closed nominal variant type.
+#[derive(Clone, Eq, PartialEq)]
+pub struct VariantValue {
+    id: NominalTypeId,
+    type_arguments: Arc<[ValueType]>,
+    constructor: Arc<str>,
+    payload: Arc<[Value]>,
+}
+
+impl VariantValue {
+    #[must_use]
+    pub fn new(
+        id: NominalTypeId,
+        type_arguments: Vec<ValueType>,
+        constructor: impl Into<Arc<str>>,
+        payload: Vec<Value>,
+    ) -> Self {
+        Self {
+            id,
+            type_arguments: Arc::from(type_arguments),
+            constructor: constructor.into(),
+            payload: Arc::from(payload),
+        }
+    }
+
+    #[must_use]
+    pub const fn id(&self) -> &NominalTypeId {
+        &self.id
+    }
+
+    #[must_use]
+    pub fn type_arguments(&self) -> &[ValueType] {
+        &self.type_arguments
+    }
+
+    #[must_use]
+    pub fn constructor(&self) -> &str {
+        &self.constructor
+    }
+
+    #[must_use]
+    pub fn payload(&self) -> &[Value] {
+        &self.payload
+    }
+}
+
+impl fmt::Debug for VariantValue {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.id.name())?;
+        write_type_arguments(formatter, self.type_arguments())?;
+        write!(formatter, "::{}", self.constructor)?;
+        if !self.payload.is_empty() {
+            formatter.write_char('(')?;
+            for (index, value) in self.payload.iter().enumerate() {
+                if index != 0 {
+                    formatter.write_str(", ")?;
+                }
+                write!(formatter, "{value:?}")?;
+            }
+            formatter.write_char(')')?;
+        }
+        Ok(())
+    }
+}
 
 /// An immutable rectangular value with unique ordered columns and ordered rows.
 ///
@@ -696,6 +826,8 @@ pub enum Value {
     ByteSize(ByteSize),
     List(Arc<[Self]>),
     Record(Record),
+    NominalRecord(Box<NominalRecordValue>),
+    Variant(Box<VariantValue>),
     Table(Table),
     Range(Range),
     Status(Status),
@@ -742,6 +874,8 @@ impl Value {
             Self::ByteSize(_) => "byte size",
             Self::List(_) => "list",
             Self::Record(_) => "record",
+            Self::NominalRecord(_) => "nominal record",
+            Self::Variant(_) => "variant",
             Self::Table(_) => "table",
             Self::Range(_) => "range",
             Self::Status(_) => "status",
@@ -768,6 +902,8 @@ impl PartialEq for Value {
             (Self::ByteSize(left), Self::ByteSize(right)) => left == right,
             (Self::List(left), Self::List(right)) => left == right,
             (Self::Record(left), Self::Record(right)) => left == right,
+            (Self::NominalRecord(left), Self::NominalRecord(right)) => left == right,
+            (Self::Variant(left), Self::Variant(right)) => left == right,
             (Self::Table(left), Self::Table(right)) => left == right,
             (Self::Range(left), Self::Range(right)) => left == right,
             (Self::Status(left), Self::Status(right)) => left == right,
@@ -807,6 +943,8 @@ impl fmt::Debug for Value {
                 formatter.write_char(']')
             }
             Self::Record(value) => value.fmt(formatter),
+            Self::NominalRecord(value) => value.fmt(formatter),
+            Self::Variant(value) => value.fmt(formatter),
             Self::Table(value) => value.fmt(formatter),
             Self::Range(value) => value.fmt(formatter),
             Self::Status(value) => value.fmt(formatter),
@@ -833,7 +971,11 @@ impl fmt::Display for Value {
             Self::Path(value) => value.fmt(formatter),
             Self::Duration(value) => value.fmt(formatter),
             Self::ByteSize(value) => value.fmt(formatter),
-            Self::List(_) | Self::Record(_) | Self::Table(_) => fmt::Debug::fmt(self, formatter),
+            Self::List(_)
+            | Self::Record(_)
+            | Self::NominalRecord(_)
+            | Self::Variant(_)
+            | Self::Table(_) => fmt::Debug::fmt(self, formatter),
             Self::Range(value) => value.fmt(formatter),
             Self::Status(value) => value.fmt(formatter),
             Self::Error(value) => value.fmt(formatter),
@@ -869,6 +1011,18 @@ impl From<NativePath> for Value {
 impl From<Record> for Value {
     fn from(value: Record) -> Self {
         Self::Record(value)
+    }
+}
+
+impl From<NominalRecordValue> for Value {
+    fn from(value: NominalRecordValue) -> Self {
+        Self::NominalRecord(Box::new(value))
+    }
+}
+
+impl From<VariantValue> for Value {
+    fn from(value: VariantValue) -> Self {
+        Self::Variant(Box::new(value))
     }
 }
 
@@ -928,6 +1082,23 @@ fn write_quoted(formatter: &mut fmt::Formatter<'_>, value: &str) -> fmt::Result 
     formatter.write_char('"')?;
     write_string_content(formatter, value)?;
     formatter.write_char('"')
+}
+
+fn write_type_arguments(
+    formatter: &mut fmt::Formatter<'_>,
+    arguments: &[ValueType],
+) -> fmt::Result {
+    if arguments.is_empty() {
+        return Ok(());
+    }
+    formatter.write_char('[')?;
+    for (index, argument) in arguments.iter().enumerate() {
+        if index != 0 {
+            formatter.write_str(", ")?;
+        }
+        write!(formatter, "{argument}")?;
+    }
+    formatter.write_char(']')
 }
 
 fn write_string_content(formatter: &mut fmt::Formatter<'_>, value: &str) -> fmt::Result {

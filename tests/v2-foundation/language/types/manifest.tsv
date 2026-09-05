@@ -1,0 +1,40 @@
+# class	path	diagnostic
+complete	complete/domain-types.fsh	-
+complete	complete/closure-result.fsh	-
+complete	complete/list-and-record-patterns.fsh	-
+complete	complete/generic-inference.fsh	-
+complete	complete/cross-module-main.fsh	-
+complete	complete/reexport-main.fsh	-
+complete	complete/expected-generic-results.fsh	-
+complete	complete/destructured-exports.fsh	-
+invalid	invalid/ambiguous-generic.fsh	SIG010
+invalid	invalid/closure-result-mismatch.fsh	SIG005
+invalid	invalid/conflicting-inference.fsh	SIG004
+invalid	invalid/empty-list-inference.fsh	SIG010
+invalid	invalid/equal-constraint.fsh	SIG011
+invalid	invalid/explicit-generic-arity.fsh	SIG009
+invalid	invalid/explicit-generic-mismatch.fsh	SIG004
+invalid	invalid/guard-not-bool.fsh	SIG012
+invalid	invalid/invariant-nominal.fsh	SIG004
+invalid	invalid/non-exhaustive.fsh	SIG013
+invalid	invalid/ordered-constraint.fsh	SIG011
+invalid	invalid/rest-not-last.fsh	FS1000
+invalid	invalid/dynamic-inference.fsh	SIG010
+invalid	invalid/cross-module-invariance.fsh	SIG004
+invalid	invalid/duplicate-record-field.fsh	SIG014
+invalid	invalid/unknown-record-field.fsh	SIG015
+invalid	invalid/missing-record-field.fsh	SIG016
+invalid	invalid/private-nominal.fsh	SIG001
+invalid	invalid/private-variant.fsh	SIG001
+invalid	invalid/static-destructuring-mismatch.fsh	SIG017
+invalid	invalid/static-parameter-pattern-mismatch.fsh	SIG017
+invalid	invalid/unreachable-match.fsh	SIG018
+invalid	invalid/ambiguous-variant.fsh	SIG010
+invalid	invalid/declaration-annotation-mismatch.fsh	SIG019
+invalid	invalid/destructured-alias-conflict.fsh	MOD011
+runtime-invalid	invalid/destructuring-mismatch.fsh	value does not match the pattern
+runtime-invalid	invalid/generic-result-boundary.fsh	function result expects Int, found string
+runtime-invalid	invalid/cross-module-pattern-identity.fsh	value does not match the pattern
+runtime-invalid	invalid/dynamic-record-constraint.fsh	does not satisfy `Equal`
+runtime-invalid	invalid/dynamic-record-field.fsh	nominal record field `right` expects `String`, found int
+runtime-invalid	invalid/dynamic-variant-constraint.fsh	does not satisfy `Equal`

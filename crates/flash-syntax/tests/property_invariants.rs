@@ -260,6 +260,7 @@ impl<'source> SpanChecker<'source> {
 
     fn parameter(&self, parameter: &Parameter) {
         self.span(parameter.span);
+        self.pattern(&parameter.pattern);
         self.identifier(parameter.name);
         if let Some(annotation) = &parameter.type_annotation {
             self.type_reference(annotation);
@@ -282,12 +283,50 @@ impl<'source> SpanChecker<'source> {
                 }
                 self.span(import.path);
             }
+            StatementKind::ModuleImport(import) => {
+                self.span(import.source.span());
+                self.identifier(import.alias);
+                if let flash_syntax::ModuleImportSource::Standard {
+                    namespace, module, ..
+                } = import.source
+                {
+                    self.identifier(namespace);
+                    self.identifier(module);
+                }
+            }
             StatementKind::ModuleExport(export) => {
                 for name in &export.names {
                     self.identifier(*name);
                 }
             }
+            StatementKind::NominalType(declaration) => {
+                self.identifier(declaration.name);
+                for parameter in &declaration.type_parameters {
+                    self.span(parameter.span);
+                    self.identifier(parameter.name);
+                }
+                for field in &declaration.fields {
+                    self.span(field.span);
+                    self.identifier(field.name);
+                    self.type_reference(&field.value_type);
+                }
+            }
+            StatementKind::VariantType(declaration) => {
+                self.identifier(declaration.name);
+                for parameter in &declaration.type_parameters {
+                    self.span(parameter.span);
+                    self.identifier(parameter.name);
+                }
+                for variant in &declaration.variants {
+                    self.span(variant.span);
+                    self.identifier(variant.name);
+                    for payload in &variant.payload {
+                        self.type_reference(payload);
+                    }
+                }
+            }
             StatementKind::Declaration(declaration) => {
+                self.pattern(&declaration.pattern);
                 self.identifier(declaration.name);
                 if let Some(annotation) = &declaration.type_annotation {
                     self.type_reference(annotation);
@@ -312,6 +351,10 @@ impl<'source> SpanChecker<'source> {
                     }
                 }
                 self.identifier(function.name);
+                for parameter in &function.type_parameters {
+                    self.span(parameter.span);
+                    self.identifier(parameter.name);
+                }
                 for parameter in &function.parameters {
                     self.parameter(parameter);
                 }
@@ -386,6 +429,31 @@ impl<'source> SpanChecker<'source> {
             Pattern::Wildcard(span) => self.span(*span),
             Pattern::Literal(literal) => self.literal(literal),
             Pattern::Binding(identifier) => self.identifier(*identifier),
+            Pattern::List(pattern) => {
+                self.span(pattern.span);
+                for element in &pattern.elements {
+                    self.pattern(element);
+                }
+                if let Some(rest) = pattern.rest {
+                    self.identifier(rest);
+                }
+            }
+            Pattern::NominalRecord(pattern) => {
+                self.span(pattern.span);
+                self.qualified_name(&pattern.name);
+                for field in &pattern.fields {
+                    self.span(field.span);
+                    self.identifier(field.name);
+                    self.pattern(&field.pattern);
+                }
+            }
+            Pattern::Variant(pattern) => {
+                self.span(pattern.span);
+                self.qualified_name(&pattern.constructor);
+                for payload in &pattern.payload {
+                    self.pattern(payload);
+                }
+            }
         }
     }
 
@@ -395,6 +463,7 @@ impl<'source> SpanChecker<'source> {
             ExpressionKind::Literal(literal) => self.literal(literal),
             ExpressionKind::Variable(variable) => self.variable(*variable),
             ExpressionKind::Symbol(identifier) => self.identifier(*identifier),
+            ExpressionKind::Qualified(name) => self.qualified_name(name),
             ExpressionKind::List(items) => {
                 for item in items {
                     self.expression(item);
@@ -407,11 +476,22 @@ impl<'source> SpanChecker<'source> {
                     self.expression(&entry.value);
                 }
             }
+            ExpressionKind::NominalRecord(record) => {
+                self.qualified_name(&record.name);
+                for field in &record.fields {
+                    self.span(field.span);
+                    self.identifier(field.name);
+                    self.expression(&field.value);
+                }
+            }
             ExpressionKind::Closure(closure) => self.closure(closure),
             ExpressionKind::CommandSubstitution(substitution) => self.chain(substitution.chain()),
             ExpressionKind::GroupedJob(chain) => self.chain(chain),
             ExpressionKind::Call(call) => {
                 self.expression(&call.callee);
+                for argument in &call.type_arguments {
+                    self.type_reference(argument);
+                }
                 for argument in &call.arguments {
                     self.expression(argument);
                 }
@@ -458,7 +538,17 @@ impl<'source> SpanChecker<'source> {
         for parameter in &closure.parameters {
             self.parameter(parameter);
         }
+        if let Some(result) = &closure.result_type {
+            self.type_reference(result);
+        }
         self.chain(&closure.body);
+    }
+
+    fn qualified_name(&self, name: &flash_syntax::QualifiedName) {
+        self.span(name.span);
+        for segment in &name.segments {
+            self.identifier(*segment);
+        }
     }
 
     fn chain(&self, chain: &ConditionalChain) {

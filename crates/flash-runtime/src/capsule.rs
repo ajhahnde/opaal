@@ -708,6 +708,11 @@ fn encode_value_at(
                 encode_value_at(encoder, value, callable_ids, depth + 1)?;
             }
         }
+        Value::NominalRecord(_) | Value::Variant(_) => {
+            return Err(CapsuleError::new(
+                "nominal runtime values require an explicit versioned codec",
+            ));
+        }
         Value::Table(table) => {
             encoder.u8(11);
             encoder.usize(table.columns().len())?;
@@ -1123,6 +1128,11 @@ fn encode_value_type_at(
         ValueType::Error => 15,
         ValueType::Function => 16,
         ValueType::Closure => 17,
+        ValueType::TypeParameter(_) | ValueType::Nominal { .. } => {
+            return Err(CapsuleError::new(
+                "generic and nominal runtime type identities are not capsule-serializable",
+            ));
+        }
     };
     encoder.u8(tag);
     Ok(())

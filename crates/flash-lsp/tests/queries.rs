@@ -737,4 +737,12 @@ fn explicit_cancellation_wins_and_generation_changes_return_content_modified() {
             "error": {"code": -32602, "message": "Invalid params"}
         })
     );
+    assert_eq!(
+        request_failure_response(json!(10), RequestError::AnalysisLimitExceeded),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 10,
+            "error": {"code": -32803, "message": "Analysis limit exceeded"}
+        })
+    );
 }

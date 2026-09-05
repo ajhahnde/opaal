@@ -16,6 +16,12 @@
 //! owned pull boundary for byte-preserving chunks and retains source failure and
 //! cancellation without decoding.
 //!
+//! A value stream also carries one [`StreamSchema`]: its element type, declared
+//! cardinality, and runtime-only [`StreamOwnerId`]. Checked v2 consumers enforce
+//! that schema, latch the first terminal state, and close the owned resource at
+//! most once. Legacy v1 consumers retain the original untyped [`StreamPull`]
+//! boundary; they do not acquire an inferred v2 contract.
+//!
 //! The whole layer is span-independent, matching [`crate::resolve`] and
 //! [`crate::operation`]: a cancellation reports only its [`CancelReason`], and
 //! the executor that later drives a stream inside a pipeline attaches source
@@ -23,9 +29,145 @@
 //! clock.
 
 use std::collections::VecDeque;
+use std::fmt;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::Value;
 use crate::eval::{CancelReason, CancellationToken, RuntimeError};
+use crate::module::ValueType;
+
+static NEXT_STREAM_OWNER: AtomicU64 = AtomicU64::new(1);
+
+/// Runtime-only identity of the resource that owns one stream.
+///
+/// The identity is deliberately opaque and has no serialization contract. It
+/// exists so planners and fake schedules can prove that a single-consumer
+/// stream is not routed to two consumers.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct StreamOwnerId(u64);
+
+impl StreamOwnerId {
+    fn fresh() -> Self {
+        let mut owner = NEXT_STREAM_OWNER.load(Ordering::Relaxed);
+        loop {
+            let next = owner
+                .checked_add(1)
+                .expect("stream owner identity space is exhausted");
+            match NEXT_STREAM_OWNER.compare_exchange_weak(
+                owner,
+                next,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => return Self(owner),
+                Err(observed) => owner = observed,
+            }
+        }
+    }
+}
+
+/// Declared cardinality of a typed value stream.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum StreamCardinality {
+    /// The producer must yield exactly this many items.
+    Exact(usize),
+    /// The producer may yield no more than this many items.
+    AtMost(usize),
+    /// The producer has no statically known finite cardinality.
+    Unknown,
+}
+
+/// Host-free type, cardinality, and ownership metadata for one value stream.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StreamSchema {
+    element_type: ValueType,
+    cardinality: StreamCardinality,
+    owner: StreamOwnerId,
+}
+
+impl StreamSchema {
+    /// Builds one stream schema with a fresh runtime-only owner.
+    #[must_use]
+    pub fn new(element_type: ValueType, cardinality: StreamCardinality) -> Self {
+        Self {
+            element_type,
+            cardinality,
+            owner: StreamOwnerId::fresh(),
+        }
+    }
+
+    /// The exact item type promised by the producer.
+    #[must_use]
+    pub const fn element_type(&self) -> &ValueType {
+        &self.element_type
+    }
+
+    /// The declared number of items, when bounded statically.
+    #[must_use]
+    pub const fn cardinality(&self) -> StreamCardinality {
+        self.cardinality
+    }
+
+    /// The resource owner that may be claimed by exactly one consumer.
+    #[must_use]
+    pub const fn owner(&self) -> StreamOwnerId {
+        self.owner
+    }
+}
+
+/// A producer violated the type or cardinality declared in its stream schema.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum StreamContractViolation {
+    /// An item did not belong to the declared element type.
+    ElementType {
+        expected: ValueType,
+        actual: &'static str,
+    },
+    /// A producer yielded more items than its exact or upper-bound cardinality.
+    CardinalityExceeded {
+        declared: StreamCardinality,
+        observed: usize,
+    },
+    /// An exact-cardinality producer ended before yielding every promised item.
+    CardinalityShortfall { expected: usize, observed: usize },
+}
+
+/// A deterministic failure reported while closing an owned stream resource.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StreamCleanupFailure(Arc<str>);
+
+impl StreamCleanupFailure {
+    /// Builds cleanup evidence owned by the stream adapter.
+    #[must_use]
+    pub fn new(message: impl Into<Arc<str>>) -> Self {
+        Self(message.into())
+    }
+
+    /// Stable adapter-supplied failure detail.
+    #[must_use]
+    pub fn message(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for StreamCleanupFailure {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.message())
+    }
+}
+
+impl std::error::Error for StreamCleanupFailure {}
+
+/// A schema-checking pull from a typed [`ValueStream`].
+#[derive(Debug)]
+pub enum CheckedStreamPull {
+    Item(Value),
+    End,
+    Failed(RuntimeError),
+    Cancelled(CancelReason),
+    ContractViolation(StreamContractViolation),
+}
 
 /// The default staging capacity of a [`BoundedQueue`] built with [`BoundedQueue::new`].
 pub const DEFAULT_CAPACITY: usize = 1024;
@@ -82,7 +224,13 @@ impl ByteSource {
 /// A lazy, pull-driven sequence of byte-preserving chunks.
 pub struct ByteStream {
     source: ByteSource,
+    state: Box<ByteStreamState>,
+}
+
+struct ByteStreamState {
     cancel: CancellationToken,
+    owner: StreamOwnerId,
+    terminal: bool,
 }
 
 impl ByteStream {
@@ -101,23 +249,41 @@ impl ByteStream {
     fn with_source(source: ByteSource) -> Self {
         Self {
             source,
-            cancel: CancellationToken::never(),
+            state: Box::new(ByteStreamState {
+                cancel: CancellationToken::never(),
+                owner: StreamOwnerId::fresh(),
+                terminal: false,
+            }),
         }
+    }
+
+    /// The runtime-only owner of this byte-preserving stream.
+    #[must_use]
+    pub const fn owner(&self) -> StreamOwnerId {
+        self.state.owner
     }
 
     /// Attach a cooperative cancellation token, polled before each pull.
     #[must_use]
     pub fn with_cancellation(mut self, token: CancellationToken) -> Self {
-        self.cancel = token;
+        self.state.cancel = token;
         self
     }
 
     /// Pull the next chunk or terminal state.
     pub fn pull(&mut self) -> BytePull {
-        if self.cancel.is_cancelled() {
-            return BytePull::Cancelled(self.cancel.reason());
+        if self.state.terminal {
+            return BytePull::End;
         }
-        self.source.advance()
+        if self.state.cancel.is_cancelled() {
+            self.state.terminal = true;
+            return BytePull::Cancelled(self.state.cancel.reason());
+        }
+        let pulled = self.source.advance();
+        if !matches!(pulled, BytePull::Chunk(_)) {
+            self.state.terminal = true;
+        }
+        pulled
     }
 }
 
@@ -265,29 +431,43 @@ impl Source {
     }
 }
 
-/// A lazy, pull-driven sequence of values behind one structured pipeline edge.
+/// A lazy, pull-driven, single-consumer sequence behind one pipeline edge.
+///
+/// The stream is moved into its consumer. Its schema makes the element,
+/// cardinality, and owner contract inspectable without advancing the producer.
 pub struct ValueStream {
     source: Source,
+    state: Box<ValueStreamState>,
+}
+
+struct ValueStreamState {
     cancel: CancellationToken,
+    schema: StreamSchema,
+    checked_items: usize,
+    terminal: bool,
+    cleanup: Option<Box<dyn FnMut() -> Result<(), StreamCleanupFailure>>>,
+    closed: bool,
 }
 
 impl ValueStream {
     /// A stream of exactly one value.
     #[must_use]
     pub fn once(value: Value) -> Self {
-        Self::with_source(Source::Once(Some(value)))
+        Self::with_source(Source::Once(Some(value)), StreamCardinality::Exact(1))
     }
 
     /// A stream that drains an eager backing sequence in order.
     #[must_use]
     pub fn from_values(values: Vec<Value>) -> Self {
-        Self::with_source(Source::Values { values, cursor: 0 })
+        let cardinality = StreamCardinality::Exact(values.len());
+        Self::with_source(Source::Values { values, cursor: 0 }, cardinality)
     }
 
     /// A stream that drains the current contents of `queue` in FIFO order.
     #[must_use]
     pub fn from_queue(queue: BoundedQueue) -> Self {
-        Self::with_source(Source::Queue(queue))
+        let cardinality = StreamCardinality::Exact(queue.len());
+        Self::with_source(Source::Queue(queue), cardinality)
     }
 
     /// A stream advanced by a lazy producer, once per pull. `None` is exhaustion.
@@ -295,7 +475,10 @@ impl ValueStream {
     pub fn from_fn(
         producer: impl FnMut() -> Option<Result<Value, RuntimeError>> + 'static,
     ) -> Self {
-        Self::with_source(Source::Producer(Box::new(producer)))
+        Self::with_source(
+            Source::Producer(Box::new(producer)),
+            StreamCardinality::Unknown,
+        )
     }
 
     /// A stream advanced by a lazy producer that returns the complete
@@ -306,20 +489,58 @@ impl ValueStream {
     /// is still polled before the producer is advanced.
     #[must_use]
     pub fn from_pull_fn(producer: impl FnMut() -> StreamPull + 'static) -> Self {
-        Self::with_source(Source::Puller(Box::new(producer)))
+        Self::with_source(
+            Source::Puller(Box::new(producer)),
+            StreamCardinality::Unknown,
+        )
     }
 
-    fn with_source(source: Source) -> Self {
+    fn with_source(source: Source, cardinality: StreamCardinality) -> Self {
         Self {
             source,
-            cancel: CancellationToken::never(),
+            state: Box::new(ValueStreamState {
+                cancel: CancellationToken::never(),
+                schema: StreamSchema::new(ValueType::Any, cardinality),
+                checked_items: 0,
+                terminal: false,
+                cleanup: None,
+                closed: false,
+            }),
         }
+    }
+
+    /// Declares the element type and cardinality enforced by checked consumers.
+    #[must_use]
+    pub fn with_contract(
+        mut self,
+        element_type: ValueType,
+        cardinality: StreamCardinality,
+    ) -> Self {
+        self.state.schema.element_type = element_type;
+        self.state.schema.cardinality = cardinality;
+        self
+    }
+
+    /// Attaches the owned-resource cleanup action run at most once.
+    #[must_use]
+    pub fn with_cleanup(
+        mut self,
+        cleanup: impl FnMut() -> Result<(), StreamCleanupFailure> + 'static,
+    ) -> Self {
+        self.state.cleanup = Some(Box::new(cleanup));
+        self
+    }
+
+    /// The type, cardinality, and owner contract carried with this stream.
+    #[must_use]
+    pub const fn schema(&self) -> &StreamSchema {
+        &self.state.schema
     }
 
     /// Attaches a cooperative cancellation token, polled before each pull.
     #[must_use]
     pub fn with_cancellation(mut self, token: CancellationToken) -> Self {
-        self.cancel = token;
+        self.state.cancel = token;
         self
     }
 
@@ -331,10 +552,88 @@ impl ValueStream {
     /// `Iterator::next`: the outcome is a four-arm [`StreamPull`], not an
     /// `Option`, so cancellation and failure stay first-class terminal states.
     pub fn pull(&mut self) -> StreamPull {
-        if self.cancel.is_cancelled() {
-            return StreamPull::Cancelled(self.cancel.reason());
+        if self.state.terminal {
+            return StreamPull::End;
         }
-        self.source.advance()
+        if self.state.cancel.is_cancelled() {
+            self.state.terminal = true;
+            return StreamPull::Cancelled(self.state.cancel.reason());
+        }
+        let pulled = self.source.advance();
+        if !matches!(pulled, StreamPull::Item(_)) {
+            self.state.terminal = true;
+        }
+        pulled
+    }
+
+    /// Pulls one item while enforcing the declared element type and cardinality.
+    pub fn pull_checked(&mut self) -> CheckedStreamPull {
+        // `pull` normalizes every already-observed terminal state to `End` so
+        // legacy consumers never advance a terminated producer. Do not run
+        // exact-cardinality validation over that synthetic `End`: the first
+        // checked terminal (including a contract violation) already owns the
+        // outcome, and a later pull must not replace it with a shortfall.
+        if self.state.terminal {
+            return CheckedStreamPull::End;
+        }
+        match self.pull() {
+            StreamPull::Item(value) => {
+                let observed = self.state.checked_items + 1;
+                let cardinality_exceeded = match self.state.schema.cardinality {
+                    StreamCardinality::Exact(limit) | StreamCardinality::AtMost(limit) => {
+                        observed > limit
+                    }
+                    StreamCardinality::Unknown => false,
+                };
+                if cardinality_exceeded {
+                    self.state.terminal = true;
+                    return CheckedStreamPull::ContractViolation(
+                        StreamContractViolation::CardinalityExceeded {
+                            declared: self.state.schema.cardinality,
+                            observed,
+                        },
+                    );
+                }
+                if !self.state.schema.element_type.accepts(&value) {
+                    self.state.terminal = true;
+                    return CheckedStreamPull::ContractViolation(
+                        StreamContractViolation::ElementType {
+                            expected: self.state.schema.element_type.clone(),
+                            actual: value.family_name(),
+                        },
+                    );
+                }
+                self.state.checked_items = observed;
+                CheckedStreamPull::Item(value)
+            }
+            StreamPull::End => {
+                if let StreamCardinality::Exact(expected) = self.state.schema.cardinality
+                    && self.state.checked_items < expected
+                {
+                    return CheckedStreamPull::ContractViolation(
+                        StreamContractViolation::CardinalityShortfall {
+                            expected,
+                            observed: self.state.checked_items,
+                        },
+                    );
+                }
+                CheckedStreamPull::End
+            }
+            StreamPull::Failed(error) => CheckedStreamPull::Failed(error),
+            StreamPull::Cancelled(reason) => CheckedStreamPull::Cancelled(reason),
+        }
+    }
+
+    /// Runs owned-resource cleanup at most once and returns its exact evidence.
+    pub fn close(&mut self) -> Result<(), StreamCleanupFailure> {
+        if self.state.closed {
+            return Ok(());
+        }
+        self.state.closed = true;
+        match self.state.cleanup.as_mut() {
+            Some(cleanup) => cleanup(),
+            None => Ok(()),
+        }
     }
 
     /// Drains the stream into a vector, refusing to materialize more than `limit`
@@ -363,5 +662,11 @@ impl ValueStream {
                 StreamPull::Cancelled(reason) => return CollectOutcome::Cancelled(reason),
             }
         }
+    }
+}
+
+impl Drop for ValueStream {
+    fn drop(&mut self) {
+        let _ = self.close();
     }
 }

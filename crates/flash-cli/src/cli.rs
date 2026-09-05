@@ -52,6 +52,8 @@ pub enum Mode {
         descriptor: u32,
         completion_descriptor: Option<u32>,
     },
+    /// Start the isolated Flash 2 REPL acceptance launcher.
+    V2ReplFixture,
     /// Start an interactive session.
     Interactive,
 }
@@ -162,6 +164,7 @@ where
     let mut script_arguments = Vec::new();
     let mut async_capsule: Option<u32> = None;
     let mut async_completion: Option<u32> = None;
+    let mut v2_repl_fixture = false;
     let mut options_ended = false;
     let mut arguments = arguments.into_iter();
 
@@ -176,7 +179,7 @@ where
         }
 
         if options_ended {
-            if async_capsule.is_some() || async_completion.is_some() {
+            if async_capsule.is_some() || async_completion.is_some() || v2_repl_fixture {
                 return Err(CliError::UnexpectedArgument(
                     argument.to_string_lossy().into_owned(),
                 ));
@@ -190,6 +193,12 @@ where
             Some("--version" | "-V") => version = true,
             Some("--no-config") => no_config = true,
             Some("--no-history") => no_history = true,
+            Some("--flash-v2-repl-fixture") => {
+                if v2_repl_fixture {
+                    return Err(CliError::DuplicateOption("--flash-v2-repl-fixture"));
+                }
+                v2_repl_fixture = true;
+            }
             Some("--async-capsule") => {
                 let value = arguments
                     .next()
@@ -256,7 +265,7 @@ where
                 if no_history {
                     return Err(CliError::UnknownOption("--no-history".to_owned()));
                 }
-                if async_capsule.is_some() || async_completion.is_some() {
+                if async_capsule.is_some() || async_completion.is_some() || v2_repl_fixture {
                     return Err(CliError::UnexpectedArgument("format".to_owned()));
                 }
                 return parse_format_args(arguments);
@@ -282,7 +291,7 @@ where
                 if no_history {
                     return Err(CliError::UnknownOption("--no-history".to_owned()));
                 }
-                if async_capsule.is_some() || async_completion.is_some() {
+                if async_capsule.is_some() || async_completion.is_some() || v2_repl_fixture {
                     return Err(CliError::UnexpectedArgument("check".to_owned()));
                 }
                 return parse_check_args(arguments);
@@ -308,7 +317,7 @@ where
                 if no_history {
                     return Err(CliError::UnknownOption("--no-history".to_owned()));
                 }
-                if async_capsule.is_some() || async_completion.is_some() {
+                if async_capsule.is_some() || async_completion.is_some() || v2_repl_fixture {
                     return Err(CliError::UnexpectedArgument("plan".to_owned()));
                 }
                 return parse_plan_args(arguments);
@@ -324,6 +333,13 @@ where
         Mode::Help
     } else if version {
         Mode::Version
+    } else if v2_repl_fixture {
+        if async_capsule.is_some() || async_completion.is_some() || script.is_some() {
+            return Err(CliError::UnexpectedArgument(
+                "--flash-v2-repl-fixture".to_owned(),
+            ));
+        }
+        Mode::V2ReplFixture
     } else if let Some(descriptor) = async_capsule {
         if script.is_some() {
             return Err(CliError::UnexpectedArgument("--async-capsule".to_owned()));
@@ -567,6 +583,22 @@ mod tests {
         assert_eq!(invocation.mode, Mode::Interactive);
         assert!(!invocation.no_config);
         assert!(!invocation.no_history);
+    }
+
+    #[test]
+    fn the_v2_repl_fixture_is_reserved_and_isolated() {
+        let invocation = parse(&["--flash-v2-repl-fixture"]).expect("fixture mode is valid");
+        assert_eq!(invocation.mode, Mode::V2ReplFixture);
+        assert_eq!(
+            parse(&["--flash-v2-repl-fixture", "script.fsh"]),
+            Err(CliError::UnexpectedArgument(
+                "--flash-v2-repl-fixture".to_owned()
+            ))
+        );
+        assert_eq!(
+            parse(&["--flash-v2-repl-fixture", "--flash-v2-repl-fixture"]),
+            Err(CliError::DuplicateOption("--flash-v2-repl-fixture"))
+        );
     }
 
     #[test]

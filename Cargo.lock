@@ -251,6 +251,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "flash-migrate"
+version = "1.0.0"
+dependencies = [
+ "flash-syntax",
+ "serde_json",
+]
+
+[[package]]
 name = "flash-platform"
 version = "1.0.0"
 

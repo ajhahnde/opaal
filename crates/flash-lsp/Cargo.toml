@@ -11,6 +11,13 @@ repository.workspace = true
 name = "flash-language-server"
 path = "src/main.rs"
 
+[[bin]]
+name = "flash-v2-language-server-fixture"
+path = "src/v2_main.rs"
+test = false
+bench = false
+doc = false
+
 [dependencies]
 flash-runtime = { path = "../flash-runtime" }
 flash-syntax = { path = "../flash-syntax" }

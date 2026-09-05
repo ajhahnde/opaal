@@ -1,6 +1,6 @@
 #![no_main]
 
-use flash_syntax::{SourceFile, SourceId, parse};
+use flash_syntax::{SourceFile, SourceId, parse, parse_v2, parse_v2_submission};
 use libfuzzer_sys::fuzz_target;
 
 fuzz_target!(|data: &[u8]| {
@@ -8,4 +8,6 @@ fuzz_target!(|data: &[u8]| {
         return;
     };
     let _ = parse(&source);
+    let _ = parse_v2(&source);
+    let _ = parse_v2_submission(&source);
 });

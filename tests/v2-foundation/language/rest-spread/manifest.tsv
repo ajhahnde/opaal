@@ -1,0 +1,7 @@
+# class	path	diagnostic
+complete	complete/build-arguments.fsh	-
+cli	complete/cli-arguments.fsh	-
+syntax	complete/explicit-spread.fsh	-
+invalid	invalid/non-list-spread.fsh	SIG020
+invalid	invalid/nested-list-spread.fsh	SIG021
+runtime-invalid	invalid/dynamic-rest-mismatch.fsh	value does not match the pattern

@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use flash_lsp::uri::DocumentUri;
 use flash_lsp::workspace::{ChangeOutcome, DiagnosticPublishOutcome, DocumentError, Workspace};
 use flash_runtime::module::{ModuleProgramLoader, ModuleResolver, ModuleSourceLoader};
-use flash_syntax::{PositionEncoding, Severity};
+use flash_syntax::{LanguageMajor, PositionEncoding, Severity};
 
 static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(0);
 
@@ -37,6 +37,26 @@ impl Drop for TestDirectory {
     fn drop(&mut self) {
         fs::remove_dir_all(&self.0).unwrap();
     }
+}
+
+#[test]
+fn v2_source_budget_publishes_one_visible_incomplete_analysis_diagnostic() {
+    let directory = TestDirectory::new();
+    let uri = directory.uri("oversized.fsh");
+    let mut workspace = Workspace::for_language(LanguageMajor::V2);
+    let text = format!("language 2\n#{}\n", "x".repeat(8 * 1024 * 1024));
+    workspace.open(uri.clone(), 1, text).unwrap();
+
+    let analysis = workspace
+        .diagnostic_snapshot()
+        .analyze_diagnostics(PositionEncoding::Utf16)
+        .unwrap();
+    assert_eq!(analysis.documents().len(), 1);
+    assert_eq!(analysis.documents()[0].uri(), &uri);
+    let diagnostics = analysis.documents()[0].diagnostics();
+    assert_eq!(diagnostics.len(), 1);
+    assert_eq!(diagnostics[0].code(), Some("ANL001"));
+    assert!(diagnostics[0].message().contains("source-bytes limit"));
 }
 
 #[test]

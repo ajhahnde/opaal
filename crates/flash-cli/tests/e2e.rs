@@ -100,6 +100,7 @@ fn the_help_text_does_not_advertise_the_reserved_capsule_mode() {
     let rendered = String::from_utf8(output.stdout).expect("help output should be UTF-8");
     assert!(!rendered.contains("async-capsule"));
     assert!(!rendered.contains("async-completion"));
+    assert!(!rendered.contains("flash-v2-repl-fixture"));
 }
 
 #[test]
@@ -143,19 +144,232 @@ fn an_empty_script_is_silent_success() {
 }
 
 #[test]
-fn completed_program_codes_propagate_exactly_without_diagnostics() {
+fn v2_final_values_and_domain_results_are_silent_successes() {
+    let outcome_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .join("tests/v2-foundation/language/outcomes/complete");
+
+    for fixture in ["reference.fsh", "domain-error.fsh", "option-none.fsh"] {
+        let output = run_script(
+            &outcome_root.join(fixture),
+            &outcome_root,
+            fixture_directory(),
+        );
+        assert!(output.status.success(), "{fixture}: {output:?}");
+        assert!(output.stdout.is_empty(), "{fixture} printed a final value");
+        assert!(
+            output.stderr.is_empty(),
+            "{fixture} reported a domain value"
+        );
+    }
+}
+
+#[test]
+fn golden_v2_workflow_formats_checks_and_runs_with_exact_cli_channels() {
+    let workflow = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .join("tests/v2-foundation/workflow");
+    let foundation = workflow.parent().unwrap();
+    let preserved = foundation.join("v2/preserved.fsh");
+    let source = foundation.join("v2/source.fsh");
+    let workspace = workflow.join("workspace/root.fsh");
+    let facade = workflow.join("workspace/support/facade.fsh");
+
+    let formatted = Command::new(env!("CARGO_BIN_EXE_fsh"))
+        .args(["format", "--check"])
+        .arg(&preserved)
+        .arg(&source)
+        .arg(&workspace)
+        .arg(&facade)
+        .output()
+        .unwrap();
+    assert!(formatted.status.success(), "{formatted:?}");
+    assert!(formatted.stdout.is_empty());
+    assert!(formatted.stderr.is_empty());
+
+    let checked = Command::new(env!("CARGO_BIN_EXE_fsh"))
+        .arg("check")
+        .arg(&source)
+        .output()
+        .unwrap();
+    assert!(checked.status.success(), "{checked:?}");
+    assert!(checked.stdout.is_empty());
+    assert!(checked.stderr.is_empty());
+
+    let checked_workspace = Command::new(env!("CARGO_BIN_EXE_fsh"))
+        .arg("check")
+        .arg(&workspace)
+        .output()
+        .unwrap();
+    assert!(checked_workspace.status.success(), "{checked_workspace:?}");
+    assert!(checked_workspace.stdout.is_empty());
+    assert!(checked_workspace.stderr.is_empty());
+
+    let executed = Command::new(env!("CARGO_BIN_EXE_fsh"))
+        .arg(&source)
+        .args(["alpha", "beta", "gamma"])
+        .current_dir(source.parent().unwrap())
+        .output()
+        .unwrap();
+    assert!(executed.status.success(), "{executed:?}");
+    assert!(executed.stdout.is_empty());
+    assert!(executed.stderr.is_empty());
+
+    let executed_workspace = Command::new(env!("CARGO_BIN_EXE_fsh"))
+        .arg(&workspace)
+        .current_dir(workspace.parent().unwrap())
+        .output()
+        .unwrap();
+    assert!(
+        executed_workspace.status.success(),
+        "{executed_workspace:?}"
+    );
+    assert!(executed_workspace.stdout.is_empty());
+    assert!(executed_workspace.stderr.is_empty());
+}
+
+#[test]
+fn script_roots_reject_directories_and_special_files_before_source_reads() {
+    let temp = TempDir::new("script-special-files");
+    let directory = temp.path().join("directory.fsh");
+    fs::create_dir(&directory).unwrap();
+    let special = temp.path().join("fifo.fsh");
+    assert!(
+        Command::new("mkfifo")
+            .arg(&special)
+            .status()
+            .expect("mkfifo should start")
+            .success()
+    );
+
+    for source in [&directory, &special] {
+        let output = run_script(source, temp.path(), fixture_directory());
+        assert_eq!(output.status.code(), Some(1), "{output:?}");
+        assert!(output.stdout.is_empty());
+        assert!(
+            String::from_utf8(output.stderr)
+                .unwrap()
+                .contains("not a regular file")
+        );
+    }
+}
+
+#[test]
+fn v2_standard_outcome_diagnostics_render_from_the_compiled_descriptor() {
+    let outcome_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .join("tests/v2-foundation/language/outcomes");
+    let output = run_script(
+        &outcome_root.join("invalid/result-generic-arity.fsh"),
+        &outcome_root,
+        fixture_directory(),
+    );
+
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("error[SIG009]"), "{stderr}");
+    assert!(stderr.contains("std::outcome"), "{stderr}");
+}
+
+#[test]
+fn v1_and_v2_completed_program_codes_propagate_exactly_without_diagnostics() {
     let temp = TempDir::new("completed-codes");
     let script = temp.path().join("status.fsh");
 
-    for code in [0_u8, 1, 2, 125, 126, 127, 128, 255] {
-        fs::write(&script, format!("^{} exit {code}\n", status_fixture()))
-            .expect("status script should be written");
-        let output = run_script(&script, temp.path(), fixture_directory());
+    for (language, directive) in [("v1", ""), ("v2", "language 2\n\n")] {
+        for code in [0_u8, 1, 2, 125, 126, 127, 128, 255] {
+            fs::write(&script, format!("{directive}exit {code}\n"))
+                .expect("status script should be written");
+            let output = run_script(&script, temp.path(), fixture_directory());
 
-        assert_eq!(output.status.code(), Some(i32::from(code)), "{output:?}");
-        assert!(output.stdout.is_empty(), "code {code}: {output:?}");
-        assert!(output.stderr.is_empty(), "code {code}: {output:?}");
+            assert_eq!(
+                output.status.code(),
+                Some(i32::from(code)),
+                "{language}: {output:?}"
+            );
+            assert!(
+                output.stdout.is_empty(),
+                "{language} code {code}: {output:?}"
+            );
+            assert!(
+                output.stderr.is_empty(),
+                "{language} code {code}: {output:?}"
+            );
+        }
     }
+}
+
+#[test]
+fn v2_effectful_process_use_refuses_before_the_process_can_write() {
+    let temp = TempDir::new("v2-process-refusal");
+    let marker = temp.path().join("must-not-exist.txt");
+    let script = temp.script(
+        "refused.fsh",
+        &format!(
+            "language 2\n\n^{} late 0 {} 9\n",
+            status_fixture(),
+            marker.display()
+        ),
+    );
+    let output = run_script(&script, temp.path(), fixture_directory());
+
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert!(output.stdout.is_empty());
+    assert_eq!(
+        String::from_utf8(output.stderr).unwrap(),
+        "fsh: refused[unsupported]: operation `process execution` did not begin\n"
+    );
+    assert!(!marker.exists(), "a refused v2 process must never start");
+
+    for source in [
+        format!("language 2\n\nexit 0 > {}\n", marker.display()),
+        format!(
+            "language 2\n\nexit $(^{} late 0 {} 9)\n",
+            status_fixture(),
+            marker.display()
+        ),
+    ] {
+        fs::write(&script, source).expect("refusal script should be replaced");
+        let output = run_script(&script, temp.path(), fixture_directory());
+        assert_eq!(output.status.code(), Some(1), "{output:?}");
+        assert!(output.stdout.is_empty());
+        assert_eq!(
+            String::from_utf8(output.stderr).unwrap(),
+            "fsh: refused[unsupported]: operation `process execution` did not begin\n"
+        );
+        assert!(
+            !marker.exists(),
+            "effectful host-control syntax must refuse before its effect"
+        );
+    }
+}
+
+#[test]
+fn v2_catch_handles_only_language_error_and_uncaught_error_maps_to_one() {
+    let temp = TempDir::new("v2-error-catch");
+    let caught = temp.script(
+        "caught.fsh",
+        "language 2\n\ntry {\n    throw \"caught\"\n} catch error {\n    null\n}\n2\n",
+    );
+    let caught_output = run_script(&caught, temp.path(), fixture_directory());
+    assert_eq!(caught_output.status.code(), Some(0), "{caught_output:?}");
+    assert!(caught_output.stdout.is_empty());
+    assert!(caught_output.stderr.is_empty());
+
+    let uncaught = temp.script("uncaught.fsh", "language 2\n\nthrow \"uncaught\"\n");
+    let uncaught_output = run_script(&uncaught, temp.path(), fixture_directory());
+    assert_eq!(
+        uncaught_output.status.code(),
+        Some(1),
+        "{uncaught_output:?}"
+    );
+    assert!(uncaught_output.stdout.is_empty());
+    assert!(
+        String::from_utf8(uncaught_output.stderr)
+            .unwrap()
+            .contains("uncaught")
+    );
 }
 
 #[test]

@@ -12,8 +12,8 @@ use flash_runtime::module::{
     ModulePathError, ModuleProgramLoader, ModuleSourceError, ModuleSourceLoader,
 };
 use flash_syntax::{
-    Diagnostic, LabelStyle, PositionEncoding, PositionError, Severity, SourceFile, SourceId,
-    TextPosition, TextRange,
+    Diagnostic, LabelStyle, LanguageMajor, PositionEncoding, PositionError, Severity, SourceFile,
+    SourceId, TextPosition, TextRange,
 };
 
 use crate::uri::DocumentUri;
@@ -28,6 +28,7 @@ pub struct OpenDocument {
     text: String,
     provisional: bool,
     generation: u64,
+    language: LanguageMajor,
 }
 
 impl OpenDocument {
@@ -71,6 +72,12 @@ impl OpenDocument {
     #[must_use]
     pub const fn generation(&self) -> u64 {
         self.generation
+    }
+
+    /// The language major selected before this document was opened.
+    #[must_use]
+    pub const fn language(&self) -> LanguageMajor {
+        self.language
     }
 }
 
@@ -380,7 +387,15 @@ impl ModuleCanonicalizer for HostFileSystem {
 
 impl ModuleSourceLoader for HostFileSystem {
     fn load(&self, module: &ModuleId) -> Result<Vec<u8>, ModuleSourceError> {
-        let mut file =
+        self.load_bounded(module, usize::MAX)
+    }
+
+    fn load_bounded(
+        &self,
+        module: &ModuleId,
+        maximum: usize,
+    ) -> Result<Vec<u8>, ModuleSourceError> {
+        let file =
             File::open(module.path()).map_err(|error| ModuleSourceError::new(error.to_string()))?;
         let metadata = file
             .metadata()
@@ -389,7 +404,8 @@ impl ModuleSourceLoader for HostFileSystem {
             return Err(ModuleSourceError::new("path is not a regular file"));
         }
         let mut bytes = Vec::new();
-        file.read_to_end(&mut bytes)
+        file.take(maximum as u64)
+            .read_to_end(&mut bytes)
             .map_err(|error| ModuleSourceError::new(error.to_string()))?;
         Ok(bytes)
     }
@@ -402,6 +418,7 @@ pub struct Workspace {
     owners: BTreeMap<PathBuf, DocumentUri>,
     host: HostFileSystem,
     generation: u64,
+    language: LanguageMajor,
     published: BTreeMap<DocumentUri, PublishedDocument>,
 }
 
@@ -410,6 +427,21 @@ impl Workspace {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Creates an empty workspace for one explicitly selected language major.
+    #[must_use]
+    pub fn for_language(language: LanguageMajor) -> Self {
+        Self {
+            language,
+            ..Self::default()
+        }
+    }
+
+    /// The language major selected before any source handling.
+    #[must_use]
+    pub const fn language(&self) -> LanguageMajor {
+        self.language
     }
 
     /// The number of open document roots.
@@ -471,6 +503,7 @@ impl Workspace {
                 text,
                 provisional,
                 generation,
+                language: self.language,
             },
         );
         self.generation = generation;
@@ -585,6 +618,7 @@ impl Workspace {
         });
         WorkspaceSnapshot {
             generation: self.generation,
+            language: self.language,
             documents: self.documents.clone(),
             owners: self.owners.clone(),
             roots,
@@ -665,6 +699,7 @@ impl Workspace {
 #[derive(Clone, Debug)]
 pub struct WorkspaceSnapshot {
     generation: u64,
+    language: LanguageMajor,
     documents: BTreeMap<DocumentUri, OpenDocument>,
     owners: BTreeMap<PathBuf, DocumentUri>,
     roots: Vec<SnapshotRoot>,
@@ -676,6 +711,12 @@ impl WorkspaceSnapshot {
     #[must_use]
     pub const fn generation(&self) -> u64 {
         self.generation
+    }
+
+    /// The language major selected for this immutable workspace generation.
+    #[must_use]
+    pub const fn language(&self) -> LanguageMajor {
+        self.language
     }
 
     /// Every open root in deterministic canonical-module order.
@@ -713,7 +754,7 @@ impl WorkspaceSnapshot {
         control: &AnalysisControl,
     ) -> Result<Option<DiagnosticAnalysis>, DiagnosticProjectionError> {
         let commands = standard_registry();
-        let loader = ModuleProgramLoader::new(self, self);
+        let loader = ModuleProgramLoader::for_language(self, self, self.language);
         let mut by_uri = BTreeMap::<DocumentUri, Vec<WorkspaceDiagnostic>>::new();
         for root in &self.roots {
             by_uri.entry(root.uri.clone()).or_default();
@@ -724,6 +765,23 @@ impl WorkspaceSnapshot {
             ) {
                 ModuleAnalysisOutcome::Complete(report) => report,
                 ModuleAnalysisOutcome::Cancelled => return Ok(None),
+                ModuleAnalysisOutcome::BudgetExceeded(exceeded) => {
+                    by_uri
+                        .entry(root.uri.clone())
+                        .or_default()
+                        .push(WorkspaceDiagnostic {
+                            range: zero_range(),
+                            severity: Severity::Error,
+                            code: Some("ANL001".to_owned()),
+                            message: exceeded.to_string(),
+                            primary_annotation: None,
+                            related_information: Vec::new(),
+                            notes: vec![
+                                "analysis produced no partial executable program".to_owned(),
+                            ],
+                        });
+                    continue;
+                }
             };
             self.normalize_report(root, &report, encoding, &mut by_uri)?;
         }
@@ -865,14 +923,23 @@ impl ModuleCanonicalizer for WorkspaceSnapshot {
 
 impl ModuleSourceLoader for WorkspaceSnapshot {
     fn load(&self, module: &ModuleId) -> Result<Vec<u8>, ModuleSourceError> {
+        self.load_bounded(module, usize::MAX)
+    }
+
+    fn load_bounded(
+        &self,
+        module: &ModuleId,
+        maximum: usize,
+    ) -> Result<Vec<u8>, ModuleSourceError> {
         if let Some(uri) = self.owners.get(module.path()) {
             let document = self
                 .documents
                 .get(uri)
                 .expect("every snapshot overlay owner has an open document");
-            return Ok(document.text.as_bytes().to_vec());
+            let bytes = document.text.as_bytes();
+            return Ok(bytes[..bytes.len().min(maximum)].to_vec());
         }
-        self.host.load(module)
+        self.host.load_bounded(module, maximum)
     }
 }
 
@@ -907,14 +974,23 @@ impl ModuleCanonicalizer for Workspace {
 
 impl ModuleSourceLoader for Workspace {
     fn load(&self, module: &ModuleId) -> Result<Vec<u8>, ModuleSourceError> {
+        self.load_bounded(module, usize::MAX)
+    }
+
+    fn load_bounded(
+        &self,
+        module: &ModuleId,
+        maximum: usize,
+    ) -> Result<Vec<u8>, ModuleSourceError> {
         if let Some(uri) = self.owners.get(module.path()) {
             let document = self
                 .documents
                 .get(uri)
                 .expect("every overlay owner has an open document");
-            return Ok(document.text.as_bytes().to_vec());
+            let bytes = document.text.as_bytes();
+            return Ok(bytes[..bytes.len().min(maximum)].to_vec());
         }
-        self.host.load(module)
+        self.host.load_bounded(module, maximum)
     }
 }
 

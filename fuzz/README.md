@@ -2,11 +2,17 @@
 
 [FlashOS](../../../README.md) › [Flash](../README.md) › Fuzz Targets
 
-The `lexer`, `parser`, and `expander` targets accept arbitrary bytes. Valid
-UTF-8 inputs are passed through the public syntax and ordinary-word expansion
-APIs; invalid UTF-8 inputs exercise source-file loading and are then rejected
-normally. The expander target uses a fixed in-memory scope and never launches
-processes or performs platform I/O.
+The `lexer`, `parser`, `expander`, `migration`, and `resources` targets accept arbitrary
+bytes. Valid UTF-8 inputs are passed through the public syntax,
+ordinary-word expansion, and read-only migration APIs; invalid UTF-8 inputs
+exercise source-file loading and are then rejected normally. The migration
+target uses a single explicit in-memory root, rejects import reads outside it,
+varies every migration resource ceiling on a dedicated input route, and parses
+every emitted JSON report. The resource target independently varies every v2
+analysis ceiling, evaluator steps, call depth, retained collection items and
+bytes, and cancellation schedule while exposing no import or host capability. The
+expander, migration, and resource targets never launch
+processes or perform platform I/O.
 
 After building Flash, run a short campaign for all targets from the repository
 root:
@@ -21,11 +27,12 @@ Pass a run count to change the default 1,000 executions per target:
 components/flash/target/debug/fsh components/flash/fuzz/run-smoke.fsh 10000
 ```
 
-The runner uses every `.fsh` file below `tests/golden/grammar` and
-`tests/golden/lexical` as a seed. It puts libFuzzer's writable corpus
-in a temporary directory, so fuzzing never modifies the golden sources. Each
-generated input is limited to 4,096 bytes, ten seconds of execution, and 2,048
-MiB of resident memory.
+The runner uses every `.fsh` file below the v1 grammar/lexical corpora and the
+v2 language-foundation grammar, lexical, module, operation, and type corpora as
+a seed. It
+puts libFuzzer's writable corpus in a temporary directory, so fuzzing never
+modifies the golden sources. Each generated input is limited to 4,096 bytes,
+ten seconds of execution, and 2,048 MiB of resident memory.
 
 Run a sustained campaign for ten minutes per target:
 

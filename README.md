@@ -10,7 +10,9 @@ for the language reference and implementation guides.
 
 > **Project status:** FlashOS as a complete operating system remains pre-alpha
 > software. Flash 1.0.0 is released as the component contract in the current
-> source. FlashOS versions and images that carry it are qualified separately;
+> source. The development tree also contains an explicitly versioned,
+> unreleased pure [Flash 2 language foundation](docs/flash-2-foundation.md).
+> FlashOS versions and images that carry either generation are qualified separately;
 > execution on a Linux or macOS host is not proof of FlashOS target support.
 
 ## On this page
@@ -79,11 +81,21 @@ describe the implementation and maintenance work.
 
 ## Current implementation
 
+The unreleased Flash 2 foundation adds per-module `language 2` selection,
+qualified modules and compiled operations, nominal records and variants,
+bounded generics and patterns, structured outcomes, typed streams, shared
+tooling observers, and a standalone read-only Flash 1 source migration
+analyzer. It intentionally provides no ambient effects, authority grants,
+projects, actions, tasks, controlled workflow planner, or FlashOS runtime
+availability claim. See the [Flash 2 Language Foundation](docs/flash-2-foundation.md)
+for the exact contract and refusal boundaries.
+
 Flash is an independent Rust workspace inside the FlashOS repository. [`Cargo.toml`](Cargo.toml) lists the current members; this table is a quick map of the main responsibilities.
 
 | Path                           | Responsibility                                                                          |
 | ------------------------------ | --------------------------------------------------------------------------------------- |
 | `crates/flash-syntax/`         | Source representation, lexical analysis, parsing, syntax trees, and diagnostics         |
+| `crates/flash-migrate/`        | Read-only Flash 1 source-graph migration analysis and deterministic report rendering     |
 | `crates/flash-runtime/`        | Runtime values, shared analysis, built-ins, execution planning, sessions, and jobs      |
 | `crates/flash-platform/`       | Platform capability contracts used by the runtime                                       |
 | `crates/flash-platform-posix/` | Process, filesystem, descriptor, signal, and terminal integration for supported targets |

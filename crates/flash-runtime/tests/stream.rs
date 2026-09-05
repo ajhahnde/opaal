@@ -13,8 +13,10 @@ use std::rc::Rc;
 
 use flash_runtime::Value;
 use flash_runtime::eval::{CancelReason, CancellationToken};
+use flash_runtime::module::ValueType;
 use flash_runtime::stream::{
-    BoundedQueue, BytePull, ByteStream, CollectOutcome, QueueFull, StreamPull, ValueStream,
+    BoundedQueue, BytePull, ByteStream, CheckedStreamPull, CollectOutcome, QueueFull,
+    StreamCardinality, StreamCleanupFailure, StreamContractViolation, StreamPull, ValueStream,
 };
 use flash_syntax::{SourceFile, SourceId};
 
@@ -103,6 +105,8 @@ fn from_fn_can_fail_mid_stream() {
         }
         other => panic!("expected a producer failure, got {other:?}"),
     }
+    assert!(matches!(stream.pull(), StreamPull::End));
+    assert_eq!(calls.get(), 2, "a terminal failure stops producer work");
 }
 
 #[test]
@@ -122,6 +126,7 @@ fn from_pull_fn_preserves_a_first_class_cancellation_state() {
         stream.pull(),
         StreamPull::Cancelled(CancelReason::Timeout)
     ));
+    assert!(matches!(stream.pull(), StreamPull::End));
 }
 
 #[test]
@@ -152,6 +157,14 @@ fn byte_stream_puller_preserves_cancellation() {
         stream.pull(),
         BytePull::Cancelled(CancelReason::Timeout)
     ));
+    assert!(matches!(stream.pull(), BytePull::End));
+}
+
+#[test]
+fn byte_streams_have_distinct_runtime_owners() {
+    let first = ByteStream::from_chunks(Vec::new());
+    let second = ByteStream::from_chunks(Vec::new());
+    assert_ne!(first.owner(), second.owner());
 }
 
 #[test]
@@ -277,4 +290,114 @@ fn from_queue_drains_the_queue_in_fifo_order() {
     assert_eq!(expect_item(&mut stream), Value::Int(10));
     assert_eq!(expect_item(&mut stream), Value::Int(20));
     assert!(matches!(stream.pull(), StreamPull::End));
+}
+
+#[test]
+fn checked_streams_enforce_type_cardinality_and_sticky_terminals() {
+    let calls = Rc::new(Cell::new(0));
+    let mut stream = ValueStream::from_fn({
+        let calls = Rc::clone(&calls);
+        move || {
+            let call = calls.get();
+            calls.set(call + 1);
+            match call {
+                0 => Some(Ok(Value::Int(1))),
+                1 => Some(Ok(Value::string("wrong"))),
+                _ => Some(Ok(Value::Int(3))),
+            }
+        }
+    })
+    .with_contract(ValueType::Int, StreamCardinality::Exact(3));
+
+    assert_eq!(stream.schema().element_type(), &ValueType::Int);
+    assert_eq!(stream.schema().cardinality(), StreamCardinality::Exact(3));
+    assert!(matches!(
+        stream.pull_checked(),
+        CheckedStreamPull::Item(Value::Int(1))
+    ));
+    assert!(matches!(
+        stream.pull_checked(),
+        CheckedStreamPull::ContractViolation(StreamContractViolation::ElementType {
+            expected: ValueType::Int,
+            actual: "string",
+        })
+    ));
+    assert!(matches!(stream.pull_checked(), CheckedStreamPull::End));
+    assert_eq!(calls.get(), 2, "a terminal mismatch stops producer work");
+}
+
+#[test]
+fn exact_and_upper_bound_cardinalities_fail_at_the_first_wrong_boundary() {
+    let mut short = ValueStream::from_values(vec![Value::Int(1)])
+        .with_contract(ValueType::Int, StreamCardinality::Exact(2));
+    assert!(matches!(short.pull_checked(), CheckedStreamPull::Item(_)));
+    assert!(matches!(
+        short.pull_checked(),
+        CheckedStreamPull::ContractViolation(StreamContractViolation::CardinalityShortfall {
+            expected: 2,
+            observed: 1,
+        })
+    ));
+    assert!(matches!(short.pull_checked(), CheckedStreamPull::End));
+
+    let mut long = ValueStream::from_values(vec![Value::Int(1), Value::Int(2)])
+        .with_contract(ValueType::Int, StreamCardinality::AtMost(1));
+    assert!(matches!(long.pull_checked(), CheckedStreamPull::Item(_)));
+    assert!(matches!(
+        long.pull_checked(),
+        CheckedStreamPull::ContractViolation(StreamContractViolation::CardinalityExceeded {
+            declared: StreamCardinality::AtMost(1),
+            observed: 2,
+        })
+    ));
+    assert!(matches!(long.pull_checked(), CheckedStreamPull::End));
+}
+
+#[test]
+fn stream_cleanup_runs_once_across_explicit_close_and_drop() {
+    let cleanups = Rc::new(Cell::new(0));
+    {
+        let mut stream = ValueStream::once(Value::Int(1)).with_cleanup({
+            let cleanups = Rc::clone(&cleanups);
+            move || {
+                cleanups.set(cleanups.get() + 1);
+                Err(StreamCleanupFailure::new("fixture cleanup"))
+            }
+        });
+        assert_eq!(stream.close().unwrap_err().message(), "fixture cleanup");
+        assert!(stream.close().is_ok(), "closing is idempotent");
+    }
+    assert_eq!(cleanups.get(), 1);
+}
+
+#[test]
+fn bounded_queue_schedule_matrix_preserves_order_and_capacity() {
+    for capacity in 1..=8 {
+        for item_count in 0..=64_i64 {
+            let mut queue = BoundedQueue::with_capacity(capacity);
+            let mut next = 0_i64;
+            let mut consumed = Vec::new();
+            let mut tick = 0_usize;
+            while next < item_count || !queue.is_empty() {
+                let prefer_push = !(tick * 17 + capacity + item_count as usize).is_multiple_of(5);
+                if prefer_push && next < item_count {
+                    match queue.try_push(Value::Int(next)) {
+                        Ok(()) => next += 1,
+                        Err(QueueFull(value)) => {
+                            assert_eq!(value, Value::Int(next));
+                            consumed.push(queue.pop().expect("a full queue has an item"));
+                        }
+                    }
+                } else if let Some(value) = queue.pop() {
+                    consumed.push(value);
+                }
+                assert!(queue.len() <= capacity);
+                tick += 1;
+            }
+            assert_eq!(
+                consumed,
+                (0..item_count).map(Value::Int).collect::<Vec<_>>()
+            );
+        }
+    }
 }

@@ -1,5 +1,6 @@
 use crate::{
-    Delimiter, Diagnostic, IncompleteInput, ParseOutcome, SourceFile, Token, TokenKind, lex, parse,
+    Delimiter, Diagnostic, IncompleteInput, ParseOutcome, SourceFile, Token, TokenKind,
+    VersionedParseOutcome, lex, lex_v2, parse, parse_v2,
 };
 
 /// The result of formatting one source file through the shared parser.
@@ -17,6 +18,19 @@ pub fn format_source(source: &SourceFile) -> FormatOutcome {
         ParseOutcome::Complete(_) => FormatOutcome::Complete(format_tokens(source, &lex(source))),
         ParseOutcome::Incomplete(incomplete) => FormatOutcome::Incomplete(incomplete),
         ParseOutcome::Invalid(diagnostics) => FormatOutcome::Invalid(diagnostics),
+    }
+}
+
+/// Canonically formats one Flash 2 source after validating the file's own
+/// required language directive.
+#[must_use]
+pub fn format_source_v2(source: &SourceFile) -> FormatOutcome {
+    match parse_v2(source) {
+        VersionedParseOutcome::Complete(_) => {
+            FormatOutcome::Complete(format_tokens(source, &lex_v2(source)))
+        }
+        VersionedParseOutcome::Incomplete(incomplete) => FormatOutcome::Incomplete(incomplete),
+        VersionedParseOutcome::Invalid(diagnostics) => FormatOutcome::Invalid(diagnostics),
     }
 }
 

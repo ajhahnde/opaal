@@ -10,6 +10,7 @@ use flash_runtime::command::{
     Carrier, CommandLifecycle, CommandNamespaceEntry, CommandRegistry, CommandSignature,
 };
 use flash_runtime::{BindingMutability, Callable, ScopeStack, Value};
+use flash_syntax::LanguageMajor;
 
 #[derive(Debug)]
 struct NamedFunction;
@@ -191,6 +192,29 @@ fn expression_completion_uses_intrinsics_and_respects_lexical_shadowing() {
             .complete(source, cursor);
     assert_eq!(function[0].kind(), CompletionKind::Function);
     assert!(!function[0].append_whitespace());
+}
+
+#[test]
+fn v2_operation_completion_uses_the_retained_qualified_spelling() {
+    let catalog = CompletionCatalog::new()
+        .with_language(LanguageMajor::V2)
+        .with_operations(["value::length"]);
+    let engine = CompletionEngine::new(catalog);
+
+    let expression = "value::le([1])";
+    let cursor = expression.find('(').unwrap();
+    let completions = engine.complete(expression, cursor);
+    assert_eq!(completions.len(), 1);
+    assert_eq!(completions[0].value(), "value::length");
+    assert_eq!(completions[0].kind(), CompletionKind::Operation);
+    assert_eq!(completions[0].replacement(), 0..9);
+    assert!(!completions[0].append_whitespace());
+
+    let pipeline = "[1] | value::le";
+    let completions = engine.complete(pipeline, pipeline.len());
+    assert_eq!(completions.len(), 1);
+    assert_eq!(completions[0].value(), "value::length");
+    assert_eq!(completions[0].kind(), CompletionKind::Operation);
 }
 
 #[test]

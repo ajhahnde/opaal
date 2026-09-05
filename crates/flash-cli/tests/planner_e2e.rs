@@ -68,7 +68,9 @@ fn planner_help_and_misuse_have_exact_channels_and_statuses() {
     let stdout = String::from_utf8(help.stdout).unwrap();
     assert!(stdout.starts_with("Inspect one Flash execution plan without executing it\n"));
     assert!(stdout.contains("read-only PATH metadata checks"));
-    assert!(stdout.contains("does not load\nconfiguration or history"));
+    assert!(stdout.contains("Flash 2 planning is refused before the planner captures cwd"));
+    assert!(stdout.contains("relative\nSOURCE still uses the launcher's working directory"));
+    assert!(stdout.contains("does not load configuration or history"));
     assert!(!stdout.contains("async-capsule"));
 
     let misuse = fsh(["plan"]);
@@ -152,5 +154,39 @@ fn substitution_and_broader_script_shapes_fail_without_side_effects() {
         String::from_utf8(output.stderr)
             .unwrap()
             .contains("error[PLAN001]")
+    );
+}
+
+#[test]
+fn flash_2_planning_is_a_host_free_refusal() {
+    let temp = TempDir::new("v2-refusal");
+    let marker = temp.path().join("v2-marker.txt");
+    let source = temp.source(
+        "v2.fsh",
+        format!(
+            "language 2\n\n^flash-e2e-status-fixture late 0 '{}' 0\n",
+            marker.display()
+        ),
+    );
+
+    let output = Command::new(env!("CARGO_BIN_EXE_fsh"))
+        .arg("plan")
+        .arg(&source)
+        .current_dir(temp.path())
+        .env("PATH", fixture_directory())
+        .env("FLASH_PLAN_FORBIDDEN", "must-not-be-rendered")
+        .output()
+        .expect("fsh should start");
+
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.starts_with("error[PLAN004]"), "{stderr}");
+    assert!(stderr.contains("explicit authority and controlled-planning contracts"));
+    assert!(!stderr.contains("FLASH_PLAN_FORBIDDEN"));
+    assert!(!stderr.contains(fixture_directory().to_string_lossy().as_ref()));
+    assert!(
+        !marker.exists(),
+        "Flash 2 planning must not execute the source"
     );
 }

@@ -3,7 +3,8 @@
 use std::ops::Range;
 
 use flash_syntax::{
-    Keyword, LabelStyle, ParseOutcome, SourceFile, SourceId, Token, TokenKind, lex, parse,
+    Keyword, LabelStyle, LanguageMajor, ParseOutcome, SourceFile, SourceId, Token, TokenKind, lex,
+    lex_v2, parse, parse_v2_submission,
 };
 
 /// Stable semantic role for one exact interactive source fragment.
@@ -42,20 +43,33 @@ impl HighlightSegment {
 
 /// Pure parser-driven highlighter for one current interactive edit buffer.
 #[derive(Clone, Copy, Debug, Default)]
-pub struct SyntaxHighlighter;
+pub struct SyntaxHighlighter {
+    language: LanguageMajor,
+}
 
 impl SyntaxHighlighter {
     #[must_use]
     pub const fn new() -> Self {
-        Self
+        Self {
+            language: LanguageMajor::V1,
+        }
+    }
+
+    /// Creates a highlighter for one language selected before edit handling.
+    #[must_use]
+    pub const fn for_language(language: LanguageMajor) -> Self {
+        Self { language }
     }
 
     /// Classifies the complete buffer without evaluating or consulting host state.
     #[must_use]
     pub fn highlight(&self, text: &str) -> Vec<HighlightSegment> {
         let source = SourceFile::new(SourceId::new(0), "<interactive>", text);
-        let tokens = lex(&source);
-        let invalid_ranges = parser_invalid_ranges(&source);
+        let tokens = match self.language {
+            LanguageMajor::V1 => lex(&source),
+            LanguageMajor::V2 => lex_v2(&source),
+        };
+        let invalid_ranges = parser_invalid_ranges(&source, self.language);
         let mut segments = Vec::with_capacity(tokens.len());
 
         for token in tokens {
@@ -65,8 +79,12 @@ impl SyntaxHighlighter {
     }
 }
 
-fn parser_invalid_ranges(source: &SourceFile) -> Vec<Range<usize>> {
-    let ParseOutcome::Invalid(diagnostics) = parse(source) else {
+fn parser_invalid_ranges(source: &SourceFile, language: LanguageMajor) -> Vec<Range<usize>> {
+    let outcome = match language {
+        LanguageMajor::V1 => parse(source),
+        LanguageMajor::V2 => parse_v2_submission(source),
+    };
+    let ParseOutcome::Invalid(diagnostics) = outcome else {
         return Vec::new();
     };
     diagnostics

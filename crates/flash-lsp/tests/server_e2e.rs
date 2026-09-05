@@ -11,6 +11,7 @@ use flash_lsp::uri::DocumentUri;
 use serde_json::{Value, json};
 
 static NEXT_TEMP: AtomicU64 = AtomicU64::new(0);
+const V2_SERVER: &str = env!("CARGO_BIN_EXE_flash-v2-language-server-fixture");
 
 struct TempDirectory(PathBuf);
 
@@ -47,7 +48,11 @@ struct Server {
 
 impl Server {
     fn start() -> Self {
-        let mut child = Command::new(env!("CARGO_BIN_EXE_flash-language-server"))
+        Self::start_binary(env!("CARGO_BIN_EXE_flash-language-server"))
+    }
+
+    fn start_binary(binary: &str) -> Self {
+        let mut child = Command::new(binary)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -133,6 +138,33 @@ impl Server {
             .wait_with_output()
             .expect("language server should exit")
     }
+}
+
+#[test]
+fn v2_protocol_launcher_selects_major_two_before_document_open() {
+    let directory = TempDirectory::new();
+    let uri = directory.uri("main.fsh");
+    let mut server = Server::start_binary(V2_SERVER);
+    server.initialize();
+    server.open(&uri, 1, "let answer = 42\n");
+
+    let missing = wait_for_diagnostics(&mut server, &uri, 1);
+    assert_eq!(missing["params"]["diagnostics"][0]["code"], "FS2001");
+
+    server.send(json!({
+        "jsonrpc": "2.0",
+        "method": "textDocument/didChange",
+        "params": {
+            "textDocument": {"uri": uri.as_str(), "version": 2},
+            "contentChanges": [{"text": "language 2\nlet answer = 42\n"}]
+        }
+    }));
+    let valid = wait_for_diagnostics(&mut server, &uri, 2);
+    assert_eq!(valid["params"]["diagnostics"], json!([]));
+
+    let output = server.finish();
+    assert!(output.status.success());
+    assert!(output.stderr.is_empty());
 }
 
 fn position_request(id: i64, method: &str, uri: &DocumentUri, line: u64, character: u64) -> Value {

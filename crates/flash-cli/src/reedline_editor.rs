@@ -6,7 +6,7 @@ use std::sync::{Arc, RwLock};
 use std::thread;
 use std::time::Duration;
 
-use flash_syntax::{ParseOutcome, SourceFile, SourceId, parse};
+use flash_syntax::{LanguageMajor, ParseOutcome, SourceFile, SourceId, parse, parse_v2_submission};
 use nu_ansi_term::{Color, Style};
 use reedline::{
     ColumnarMenu, Completer, Emacs, ExternalPrinter, Highlighter, Hinter, History, KeyCode,
@@ -35,9 +35,15 @@ pub struct ReedlineEditor {
 impl ReedlineEditor {
     #[must_use]
     pub fn new() -> Self {
+        Self::for_language(LanguageMajor::V1)
+    }
+
+    /// Constructs an editor whose validator and highlighter use `language`.
+    #[must_use]
+    pub fn for_language(language: LanguageMajor) -> Self {
         let completion = default_completion();
         let (inner, external_printer, idle_ticks, break_signal) =
-            editor_engine(Arc::clone(&completion));
+            editor_engine(Arc::clone(&completion), language);
         Self {
             inner,
             completion,
@@ -49,10 +55,18 @@ impl ReedlineEditor {
 
     /// Constructs the editor with a Flash-selected history policy.
     pub fn with_history(selection: HistorySelection) -> Result<Self, HistoryError> {
+        Self::with_history_for_language(selection, LanguageMajor::V1)
+    }
+
+    /// Constructs a language-selected editor with an explicit history policy.
+    pub fn with_history_for_language(
+        selection: HistorySelection,
+        language: LanguageMajor,
+    ) -> Result<Self, HistoryError> {
         let history = EditorHistory::open(selection)?;
         let completion = default_completion();
         let (inner, external_printer, idle_ticks, break_signal) =
-            editor_engine(Arc::clone(&completion));
+            editor_engine(Arc::clone(&completion), language);
         Ok(Self {
             inner: inner.with_history(history.into_backend()),
             completion,
@@ -73,6 +87,7 @@ fn default_completion() -> Arc<RwLock<CompletionEngine>> {
 
 fn editor_engine(
     completion: Arc<RwLock<CompletionEngine>>,
+    language: LanguageMajor,
 ) -> (
     Reedline,
     ExternalPrinter<String>,
@@ -94,8 +109,8 @@ fn editor_engine(
     let break_signal = Arc::new(AtomicBool::new(false));
     let inner = Reedline::create()
         .with_cwd(Some(String::new()))
-        .with_validator(Box::new(FlashValidator))
-        .with_highlighter(Box::new(ReedlineSyntaxHighlighter))
+        .with_validator(Box::new(FlashValidator { language }))
+        .with_highlighter(Box::new(ReedlineSyntaxHighlighter { language }))
         .with_completer(Box::new(ReedlineCompleter { engine: completion }))
         .with_menu(ReedlineMenu::EngineCompleter(Box::new(
             ColumnarMenu::default().with_name(COMPLETION_MENU),
@@ -240,24 +255,32 @@ impl ReedlineEditor {
     }
 }
 
-struct FlashValidator;
+struct FlashValidator {
+    language: LanguageMajor,
+}
 
 impl Validator for FlashValidator {
     fn validate(&self, line: &str) -> ValidationResult {
         let source = SourceFile::new(SourceId::new(0), "<interactive>", line);
-        match parse(&source) {
+        let outcome = match self.language {
+            LanguageMajor::V1 => parse(&source),
+            LanguageMajor::V2 => parse_v2_submission(&source),
+        };
+        match outcome {
             ParseOutcome::Incomplete(_) => ValidationResult::Incomplete,
             ParseOutcome::Complete(_) | ParseOutcome::Invalid(_) => ValidationResult::Complete,
         }
     }
 }
 
-struct ReedlineSyntaxHighlighter;
+struct ReedlineSyntaxHighlighter {
+    language: LanguageMajor,
+}
 
 impl Highlighter for ReedlineSyntaxHighlighter {
     fn highlight(&self, line: &str, _cursor: usize) -> StyledText {
         let mut styled = StyledText::new();
-        for segment in SyntaxHighlighter::new().highlight(line) {
+        for segment in SyntaxHighlighter::for_language(self.language).highlight(line) {
             styled.push((highlight_style(segment.kind()), segment.text().to_owned()));
         }
         styled
@@ -442,7 +465,9 @@ mod tests {
 
     #[test]
     fn parser_validation_continues_only_structurally_incomplete_input() {
-        let validator = FlashValidator;
+        let validator = FlashValidator {
+            language: LanguageMajor::V1,
+        };
 
         for complete in ["", "echo hello", "if true {\n    echo yes\n}"] {
             assert!(matches!(
@@ -469,7 +494,10 @@ mod tests {
     #[test]
     fn reedline_highlighter_preserves_source_and_maps_semantic_styles() {
         let source = "let name = \"$value\" # note";
-        let styled = ReedlineSyntaxHighlighter.highlight(source, source.len());
+        let styled = ReedlineSyntaxHighlighter {
+            language: LanguageMajor::V1,
+        }
+        .highlight(source, source.len());
 
         assert_eq!(styled.raw_string(), source);
         assert!(styled.buffer.iter().any(|(style, text)| *style

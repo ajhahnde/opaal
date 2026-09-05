@@ -3814,6 +3814,17 @@ fn static_pipeline_analysis_reports_all_four_fault_families_in_source_order() {
 }
 
 #[test]
+fn frozen_v1_expression_pipeline_does_not_emit_v2_operation_diagnostics() {
+    let paths = FakeCanonicalizer::default().resolves("/project/main.fsh", "/project/main.fsh");
+    let sources = FakeSourceLoader::default().contains("/project/main.fsh", "1 | 2\n");
+
+    let report = ModuleProgramLoader::new(&paths, &sources)
+        .analyze_with_commands(Path::new("/project/main.fsh"), &standard_registry());
+
+    assert_eq!(analysis_codes(&report), ["PIP004", "PIP004"]);
+}
+
+#[test]
 fn forced_assumed_and_dynamic_heads_need_no_probe_or_expansion() {
     let paths = FakeCanonicalizer::default().resolves("/project/main.fsh", "/project/main.fsh");
     let sources = FakeSourceLoader::default().contains(

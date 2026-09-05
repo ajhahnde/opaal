@@ -188,7 +188,7 @@ observation = "Flash currently obtains monotonic readings from a runtime clock s
 id = "flashos-standard-directories"
 path = "components/flash/crates/flash-cli/src/main.rs"
 markers = [
-  "fn run_interactive(no_config: bool, no_history: bool)",
+  "fn run_interactive_v1(no_config: bool, no_history: bool)",
   "platform.standard_directories(&ProcessDirectoryEnvironment)",
   "FlashOsDirectoryEnvironment::new(standard_directories)",
 ]

@@ -4,11 +4,78 @@
 //! contains no source spans, scopes, environments, executable probes, or host
 //! capabilities; callers attach their own presentation and error surfaces.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use flash_syntax::PipeOperator;
 
 use crate::command::{Carrier, CommandOutput};
+use crate::module::ValueType;
+use crate::stream::{StreamOwnerId, StreamSchema};
+
+/// A typed-stream planning failure established before a consumer starts.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum StreamPlanningFault {
+    /// The producer's element type is incompatible with the consumer contract.
+    ElementTypeMismatch {
+        producer: String,
+        consumer: String,
+        produced: ValueType,
+        accepted: ValueType,
+    },
+    /// The same single-consumer owner was already routed elsewhere.
+    DuplicateConsumption {
+        owner: StreamOwnerId,
+        first_consumer: String,
+        duplicate_consumer: String,
+    },
+}
+
+/// Host-free planner state for single-consumer typed-stream edges.
+#[derive(Clone, Debug, Default)]
+pub struct StreamConsumptionPlanner {
+    claims: BTreeMap<StreamOwnerId, String>,
+}
+
+impl StreamConsumptionPlanner {
+    /// Validates and claims one typed stream for one consumer.
+    pub fn claim(
+        &mut self,
+        producer: impl Into<String>,
+        schema: &StreamSchema,
+        consumer: impl Into<String>,
+        accepted: &ValueType,
+    ) -> Result<(), StreamPlanningFault> {
+        let producer = producer.into();
+        let consumer = consumer.into();
+        if !stream_type_accepts(accepted, schema.element_type()) {
+            return Err(StreamPlanningFault::ElementTypeMismatch {
+                producer,
+                consumer,
+                produced: schema.element_type().clone(),
+                accepted: accepted.clone(),
+            });
+        }
+        if let Some(first_consumer) = self.claims.get(&schema.owner()) {
+            return Err(StreamPlanningFault::DuplicateConsumption {
+                owner: schema.owner(),
+                first_consumer: first_consumer.clone(),
+                duplicate_consumer: consumer,
+            });
+        }
+        self.claims.insert(schema.owner(), consumer);
+        Ok(())
+    }
+}
+
+fn stream_type_accepts(expected: &ValueType, actual: &ValueType) -> bool {
+    match (expected, actual) {
+        (ValueType::Any | ValueType::TypeParameter(_), _) => true,
+        (ValueType::List(expected), ValueType::List(actual)) => {
+            stream_type_accepts(expected, actual)
+        }
+        _ => expected == actual,
+    }
+}
 
 /// The explicit boundary that repairs a structured/byte carrier crossing.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

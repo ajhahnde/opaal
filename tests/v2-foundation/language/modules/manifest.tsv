@@ -1,0 +1,5 @@
+# class	path
+complete	complete/qualified-aliases.fsh
+complete	complete/nominal-type.fsh
+invalid	invalid/v1-load-only.fsh
+invalid	invalid/v1-named-from.fsh

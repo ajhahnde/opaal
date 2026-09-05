@@ -28,20 +28,19 @@ use flash_cli::config::{
     ConfigDefaults, ConfigFatalError, ConfigInvocation, ConfigLimits, ConfigPlatform,
     ConfigRequest, HostConfigSource, initialize_config,
 };
+use flash_cli::editor::EditorPrompt;
 use flash_cli::format::{FormatRequest, HostFormatFilesystem, format_files};
-#[cfg(target_os = "redox")]
-use flash_cli::history::EditorHistory;
-#[cfg(target_os = "redox")]
-use flash_cli::history::HistoryEnvironment;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 use flash_cli::history::ProcessHistoryEnvironment;
-use flash_cli::history::{HistoryPlatform, select_history};
+#[cfg(target_os = "redox")]
+use flash_cli::history::{EditorHistory, HistoryEnvironment};
+use flash_cli::history::{HistoryPlatform, HistorySelection, select_history};
 use flash_cli::interactive::{
     EvaluationControl, ExitDecision, InteractiveDiagnostic, InteractiveEvaluationError,
     InteractiveEvaluator, InteractiveNotice, InteractiveNoticeError, InteractiveNoticeId,
     format_job_notice, format_live_jobs, run_interactive_driver,
 };
-use flash_cli::plan::{PlanRequest, inspect_source};
+use flash_cli::plan::{PlanHost, inspect_host_source};
 use flash_cli::report::{HostReport, write_report};
 use flash_platform::{Platform, PlatformError};
 #[cfg(target_os = "redox")]
@@ -54,17 +53,19 @@ use flash_runtime::capsule::{
     MAX_CAPSULE_BYTES, decode_background_capsule, encode_supervisor_completion,
 };
 use flash_runtime::eval::{Clock, SystemClock};
-use flash_runtime::module::{
-    ModuleCanonicalizer, ModulePathError, ModuleProgramLoader, ModuleSourceError,
-    ModuleSourceLoader,
-};
+use flash_runtime::module::ModuleProgramLoader;
+use flash_runtime::outcome::{OutcomeEvidence, PrimaryOutcome};
 use flash_runtime::plan::SessionOptions;
 use flash_runtime::resolve::ExecutableProbe;
 use flash_runtime::script::{
-    ScriptCompletion, ScriptError, execute_background_capsule, execute_module_program,
+    ScriptCompletion, ScriptError, ScriptExecutionOutcome, execute_background_capsule,
+    execute_module_program, execute_module_program_outcome,
 };
 use flash_runtime::session::{BackgroundFailure, JobNoticeId, Session, SubmitError, SubmitOutcome};
-use flash_runtime::{Environment, ScopeStack};
+use flash_runtime::{Environment, ScopeStack, Value};
+use flash_syntax::{
+    LanguageDetection, LanguageMajor, SourceFile, SourceId, detect_source_language,
+};
 
 #[cfg(target_os = "redox")]
 type NativePlatform = FlashOsPlatform;
@@ -161,12 +162,17 @@ Options:
       --         Stop parsing planner options; the next operand is SOURCE
       --help     Print planner help
 
-Inspection parses and statically analyzes SOURCE, expands its one pipeline against
-an empty lexical scope and the inherited environment, resolves executables through
-read-only PATH metadata checks, and performs structural preflight. It does not load
-configuration or history, evaluate command substitution, mutate session state, open
-redirections, create pipes, spawn processes, or access a terminal. The deterministic
-plan is written to stdout; diagnostics are written to stderr.
+For Flash 1, inspection parses and statically analyzes SOURCE, expands its one
+pipeline against an empty lexical scope and the inherited environment, resolves
+executables through read-only PATH metadata checks, and performs structural
+preflight. Flash 2 planning is refused before the planner captures cwd,
+environment, PATH, or executable state until explicit authority and
+controlled-planning contracts exist. Resolving an explicitly supplied relative
+SOURCE still uses the launcher's working directory to locate that input.
+
+Inspection does not load configuration or history, evaluate command substitution,
+mutate session state, open redirections, create pipes, spawn processes, or access a
+terminal. A Flash 1 plan is written to stdout; diagnostics are written to stderr.
 The plan includes inherited environment values and may contain secrets; treat the
 output as sensitive.
 ";
@@ -197,7 +203,8 @@ fn main() -> ExitCode {
             descriptor,
             completion_descriptor,
         } => run_async_capsule(descriptor, completion_descriptor),
-        Mode::Interactive => run_interactive(invocation.no_config, invocation.no_history),
+        Mode::V2ReplFixture => run_interactive_v2(),
+        Mode::Interactive => run_interactive_v1(invocation.no_config, invocation.no_history),
     }
 }
 
@@ -210,7 +217,8 @@ fn emit_report(report: HostReport<'_>) -> ExitCode {
 }
 
 fn run_checker(source: PathBuf) -> ExitCode {
-    let request = CheckRequest::new(source);
+    let language = detect_root_language(&source);
+    let request = CheckRequest::for_language(source, language);
     let run = check_source(&request, &HostCheckFilesystem);
     if run.is_success() {
         emit_report(HostReport::success(b""))
@@ -221,15 +229,7 @@ fn run_checker(source: PathBuf) -> ExitCode {
 }
 
 fn run_planner(source: PathBuf) -> ExitCode {
-    let cwd = match env::current_dir() {
-        Ok(cwd) => cwd,
-        Err(error) => {
-            let diagnostic = format!("fsh: cannot read the current directory: {error}\n");
-            return emit_report(HostReport::failure(diagnostic.as_bytes()));
-        }
-    };
-    let request = PlanRequest::new(source, cwd, process_environment());
-    let run = inspect_source(&request, &HostCheckFilesystem, &NativeExecutableProbe);
+    let run = inspect_host_source(&source, &HostCheckFilesystem, &NativeExecutableProbe);
     if let Some(plan) = run.rendered_plan() {
         emit_report(HostReport::success(plan.as_bytes()))
     } else {
@@ -239,7 +239,7 @@ fn run_planner(source: PathBuf) -> ExitCode {
 }
 
 fn run_formatter(operation: flash_cli::cli::FormatOperation, paths: Vec<PathBuf>) -> ExitCode {
-    let request = FormatRequest::new(operation, paths);
+    let request = FormatRequest::detecting_language(operation, paths);
     let mut filesystem = HostFormatFilesystem;
     let run = format_files(&request, &mut filesystem);
     if run.is_success() {
@@ -313,7 +313,7 @@ impl HistoryEnvironment for FlashOsDirectoryEnvironment {
 }
 
 #[cfg(any(target_os = "macos", target_os = "linux"))]
-fn run_interactive(no_config: bool, no_history: bool) -> ExitCode {
+fn run_interactive_v1(no_config: bool, no_history: bool) -> ExitCode {
     let cwd = match env::current_dir() {
         Ok(cwd) => cwd,
         Err(error) => {
@@ -322,14 +322,6 @@ fn run_interactive(no_config: bool, no_history: bool) -> ExitCode {
         }
     };
 
-    // Only a shell holding the keyboard arranges anything. A shell reading a
-    // redirected input is still interrupted along with the terminal's foreground
-    // group, and that is what should happen to it: one that ignored the
-    // interrupt could not be stopped from the keyboard that started it. Where it
-    // is installed the arrangement lasts the whole session, and the guard puts
-    // the previous handling back on every exit path including a panic. A
-    // platform without the capability delivers no terminal signals either, so an
-    // unsupported result is not a startup failure.
     let platform = native_platform();
     let _signals = if platform.is_terminal() {
         match platform.install_job_control_signals() {
@@ -344,7 +336,6 @@ fn run_interactive(no_config: bool, no_history: bool) -> ExitCode {
         None
     };
 
-    // Consider configuration exactly once, before any editor or prompt work.
     let defaults = ConfigDefaults::new(ScopeStack::new(), process_environment());
     let request = ConfigRequest::new(
         ConfigInvocation::Interactive,
@@ -368,8 +359,6 @@ fn run_interactive(no_config: bool, no_history: bool) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-
-    // A safe-mode diagnostic is written before the first prompt is ever drawn.
     if let Some(diagnostic) = startup.diagnostic() {
         eprint!("{diagnostic}");
     }
@@ -392,7 +381,6 @@ fn run_interactive(no_config: bool, no_history: bool) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-
     let session = Session::with_scope(
         startup.scope().clone(),
         cwd,
@@ -416,7 +404,7 @@ fn run_interactive(no_config: bool, no_history: bool) -> ExitCode {
 }
 
 #[cfg(target_os = "redox")]
-fn run_interactive(no_config: bool, no_history: bool) -> ExitCode {
+fn run_interactive_v1(no_config: bool, no_history: bool) -> ExitCode {
     let cwd = match env::current_dir() {
         Ok(cwd) => cwd,
         Err(error) => {
@@ -424,15 +412,6 @@ fn run_interactive(no_config: bool, no_history: bool) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-
-    // Only a shell holding the keyboard arranges anything. A shell reading a
-    // redirected input is still interrupted along with the terminal's foreground
-    // group, and that is what should happen to it: one that ignored the
-    // interrupt could not be stopped from the keyboard that started it. Where it
-    // is installed the arrangement lasts the whole session, and the guard puts
-    // the previous handling back on every exit path including a panic. A
-    // platform without the capability delivers no terminal signals either, so an
-    // unsupported result is not a startup failure.
     let platform = native_platform();
     let _signals = if platform.is_terminal() {
         match platform.install_job_control_signals() {
@@ -491,11 +470,6 @@ fn run_interactive(no_config: bool, no_history: bool) -> ExitCode {
     let mut evaluator = SessionEvaluator::new(session, startup.interactive_settings().completion());
     let mut output = io::stdout();
     let mut diagnostics = io::stderr();
-
-    // A real terminal gets the raw-mode editor; a pipe or an uncooperative
-    // console falls back to canonical line reading. Both ends are checked: the
-    // editor redraws its row with cursor escapes, and a session typed at from
-    // a keyboard but redirected to a file must not have them written into it.
     let outcome = if platform.is_terminal() && platform.is_output_terminal() {
         let selection = match select_history(
             no_history || !startup.interactive_settings().history(),
@@ -544,6 +518,134 @@ fn run_interactive(no_config: bool, no_history: bool) -> ExitCode {
             &mut diagnostics,
         )
     };
+    ExitCode::from(outcome.code())
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn run_interactive_v2() -> ExitCode {
+    let cwd = match env::current_dir() {
+        Ok(cwd) => cwd,
+        Err(error) => {
+            eprintln!("fsh: cannot read the current directory: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    // Only a shell holding the keyboard arranges anything. A shell reading a
+    // redirected input is still interrupted along with the terminal's foreground
+    // group, and that is what should happen to it: one that ignored the
+    // interrupt could not be stopped from the keyboard that started it. Where it
+    // is installed the arrangement lasts the whole session, and the guard puts
+    // the previous handling back on every exit path including a panic. A
+    // platform without the capability delivers no terminal signals either, so an
+    // unsupported result is not a startup failure.
+    let platform = native_platform();
+    let _signals = if platform.is_terminal() {
+        match platform.install_job_control_signals() {
+            Ok(guard) => Some(guard),
+            Err(PlatformError::Unsupported { .. }) => None,
+            Err(error) => {
+                eprintln!("fsh: cannot arrange terminal signals: {error}");
+                return ExitCode::FAILURE;
+            }
+        }
+    } else {
+        None
+    };
+
+    let language = LanguageMajor::V2;
+    let mut editor =
+        match ReedlineEditor::with_history_for_language(HistorySelection::Disabled, language) {
+            Ok(editor) => editor,
+            Err(error) => {
+                eprintln!("fsh: {error}");
+                return ExitCode::FAILURE;
+            }
+        };
+
+    let session =
+        Session::for_language(language, cwd, Environment::new(), SessionOptions::default());
+    let mut evaluator = SessionEvaluator::new(session, true);
+    let mut output = io::stdout();
+    let mut diagnostics = io::stderr();
+    let prompt = EditorPrompt::default();
+
+    ExitCode::from(
+        run_interactive_driver(
+            &mut editor,
+            &mut evaluator,
+            &prompt,
+            &mut output,
+            &mut diagnostics,
+        )
+        .code(),
+    )
+}
+
+#[cfg(target_os = "redox")]
+fn run_interactive_v2() -> ExitCode {
+    let cwd = match env::current_dir() {
+        Ok(cwd) => cwd,
+        Err(error) => {
+            eprintln!("fsh: cannot read the current directory: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    // Only a shell holding the keyboard arranges anything. A shell reading a
+    // redirected input is still interrupted along with the terminal's foreground
+    // group, and that is what should happen to it: one that ignored the
+    // interrupt could not be stopped from the keyboard that started it. Where it
+    // is installed the arrangement lasts the whole session, and the guard puts
+    // the previous handling back on every exit path including a panic. A
+    // platform without the capability delivers no terminal signals either, so an
+    // unsupported result is not a startup failure.
+    let platform = native_platform();
+    let _signals = if platform.is_terminal() {
+        match platform.install_job_control_signals() {
+            Ok(guard) => Some(guard),
+            Err(PlatformError::Unsupported { .. }) => None,
+            Err(error) => {
+                eprintln!("fsh: cannot arrange terminal signals: {error}");
+                return ExitCode::FAILURE;
+            }
+        }
+    } else {
+        None
+    };
+
+    let language = LanguageMajor::V2;
+    let session =
+        Session::for_language(language, cwd, Environment::new(), SessionOptions::default());
+    let mut evaluator = SessionEvaluator::new(session, true);
+    let mut output = io::stdout();
+    let mut diagnostics = io::stderr();
+    let prompt = EditorPrompt::default();
+
+    // A real terminal gets the raw-mode editor; a pipe or an uncooperative
+    // console falls back to canonical line reading. Both ends are checked: the
+    // editor redraws its row with cursor escapes, and a session typed at from
+    // a keyboard but redirected to a file must not have them written into it.
+    let outcome = if platform.is_terminal() && platform.is_output_terminal() {
+        let mut editor =
+            TerminalEditor::for_language(platform, io::stdin(), io::stdout(), language);
+        run_interactive_driver(
+            &mut editor,
+            &mut evaluator,
+            &prompt,
+            &mut output,
+            &mut diagnostics,
+        )
+    } else {
+        let mut editor = RawLineEditor::new();
+        run_interactive_driver(
+            &mut editor,
+            &mut evaluator,
+            &prompt,
+            &mut output,
+            &mut diagnostics,
+        )
+    };
 
     ExitCode::from(outcome.code())
 }
@@ -582,17 +684,26 @@ impl SessionEvaluator {
 
 impl InteractiveEvaluator for SessionEvaluator {
     fn completion_catalog(&mut self) -> Option<CompletionCatalog> {
-        Some(if self.completion_enabled {
-            self.completion_provider.snapshot(
-                self.session.registry(),
-                self.session.scope(),
-                self.session.cwd(),
-                self.session.environment(),
-                &|| false,
-            )?
-        } else {
-            CompletionCatalog::new()
-        })
+        if !self.completion_enabled {
+            return Some(CompletionCatalog::new());
+        }
+        if self.session.language() == LanguageMajor::V2 {
+            // Pure v2 has neither external-command nor path authority. Build
+            // its prompt catalog from retained language state only, without
+            // reading PATH or walking the working directory.
+            return Some(
+                CompletionCatalog::from_runtime(self.session.registry(), self.session.scope())
+                    .with_language(LanguageMajor::V2)
+                    .with_operations(self.session.visible_operation_names()),
+            );
+        }
+        self.completion_provider.snapshot(
+            self.session.registry(),
+            self.session.scope(),
+            self.session.cwd(),
+            self.session.environment(),
+            &|| false,
+        )
     }
 
     fn fatal_cleanup(&mut self) -> Vec<String> {
@@ -663,14 +774,34 @@ impl InteractiveEvaluator for SessionEvaluator {
         source: &str,
         output: &mut dyn Write,
     ) -> Result<EvaluationControl, InteractiveEvaluationError> {
-        let outcome = self.session.submit(
-            "<interactive>",
-            source,
-            &self.probe,
-            &self.platform,
-            self.clock.as_ref(),
-            output,
-        );
+        let outcome = if self.session.language() == LanguageMajor::V2 {
+            self.session
+                .submit_with_value(
+                    "<interactive>",
+                    source,
+                    &self.probe,
+                    &self.platform,
+                    self.clock.as_ref(),
+                    output,
+                )
+                .and_then(|(outcome, value)| {
+                    if matches!(outcome, SubmitOutcome::Continued)
+                        && !matches!(value, Value::Null | Value::Status(_))
+                    {
+                        writeln!(output, "{value}").map_err(SubmitError::Output)?;
+                    }
+                    Ok(outcome)
+                })
+        } else {
+            self.session.submit(
+                "<interactive>",
+                source,
+                &self.probe,
+                &self.platform,
+                self.clock.as_ref(),
+                output,
+            )
+        };
         // Any submitted input that is not itself an exit request, successful or
         // failing, clears the refusal: the warning must describe the state the
         // user is actually leaving. An `exit` submission is the second attempt,
@@ -681,6 +812,19 @@ impl InteractiveEvaluator for SessionEvaluator {
         match outcome {
             Ok(SubmitOutcome::Continued) => Ok(EvaluationControl::Continue),
             Ok(SubmitOutcome::Exit(code)) => Ok(EvaluationControl::Exit(code)),
+            Ok(SubmitOutcome::Cancelled(cancellation)) => Err(InteractiveDiagnostic::new(format!(
+                "cancelled[{:?}] at bytes {}..{}\n",
+                cancellation.reason(),
+                cancellation.span().start(),
+                cancellation.span().end()
+            ))
+            .into()),
+            Ok(SubmitOutcome::Refused(refusal)) => Err(InteractiveDiagnostic::new(format!(
+                "refused[{}]: operation `{}` did not begin\n",
+                refusal.reason(),
+                refusal.operation()
+            ))
+            .into()),
             Err(SubmitError::Diagnostic(rendered)) => {
                 Err(InteractiveDiagnostic::new(rendered).into())
             }
@@ -695,8 +839,11 @@ impl InteractiveEvaluator for SessionEvaluator {
 }
 
 fn run_script(path: &Path, arguments: &[String]) -> ExitCode {
-    let filesystem = HostModuleFilesystem;
-    let program = match ModuleProgramLoader::new(&filesystem, &filesystem).load_for_frontend(path) {
+    let filesystem = HostCheckFilesystem;
+    let language = detect_root_language(path);
+    let program = match ModuleProgramLoader::for_language(&filesystem, &filesystem, language)
+        .load_for_frontend(path)
+    {
         Ok(program) => program,
         Err(error) => {
             if error.error().diagnostics().is_empty() {
@@ -719,35 +866,64 @@ fn run_script(path: &Path, arguments: &[String]) -> ExitCode {
     let stdout = io::stdout();
     let mut output = stdout.lock();
     let platform = native_platform();
-    let result = execute_module_program(
-        &program,
-        arguments,
-        &cwd,
-        &mut environment,
-        &registry,
-        &NativeExecutableProbe,
-        &SessionOptions::default(),
-        &platform,
-        Arc::new(SystemClock::new()) as Arc<dyn Clock>,
-        &mut output,
-    );
-    let flush = output.flush();
-    drop(output);
-
-    finish_script_report(result, flush)
-}
-
-struct HostModuleFilesystem;
-
-impl ModuleCanonicalizer for HostModuleFilesystem {
-    fn canonicalize(&self, candidate: &Path) -> Result<PathBuf, ModulePathError> {
-        fs::canonicalize(candidate).map_err(|error| ModulePathError::new(error.to_string()))
+    if program.graph().root().language() == LanguageMajor::V2 {
+        let outcome = execute_module_program_outcome(
+            &program,
+            arguments,
+            &cwd,
+            &mut environment,
+            &registry,
+            &NativeExecutableProbe,
+            &SessionOptions::default(),
+            &platform,
+            Arc::new(SystemClock::new()) as Arc<dyn Clock>,
+            &mut output,
+        );
+        let flush = output.flush();
+        drop(output);
+        finish_script_outcome_report(outcome, flush)
+    } else {
+        let result = execute_module_program(
+            &program,
+            arguments,
+            &cwd,
+            &mut environment,
+            &registry,
+            &NativeExecutableProbe,
+            &SessionOptions::default(),
+            &platform,
+            Arc::new(SystemClock::new()) as Arc<dyn Clock>,
+            &mut output,
+        );
+        let flush = output.flush();
+        drop(output);
+        finish_script_report(result, flush)
     }
 }
 
-impl ModuleSourceLoader for HostModuleFilesystem {
-    fn load(&self, module: &flash_runtime::module::ModuleId) -> Result<Vec<u8>, ModuleSourceError> {
-        fs::read(module.path()).map_err(|error| ModuleSourceError::new(error.to_string()))
+fn detect_root_language(path: &Path) -> LanguageMajor {
+    let Ok(metadata) = fs::metadata(path) else {
+        return LanguageMajor::V1;
+    };
+    if !metadata.file_type().is_file() {
+        return LanguageMajor::V1;
+    }
+    let Ok(bytes) = fs::read(path) else {
+        return LanguageMajor::V1;
+    };
+    let Ok(source) = SourceFile::from_bytes(SourceId::new(0), path.to_string_lossy(), bytes) else {
+        return LanguageMajor::V1;
+    };
+    match detect_source_language(&source) {
+        LanguageDetection::Complete(directive) => directive.major(),
+        LanguageDetection::Invalid(diagnostics)
+            if diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code() != "FS2001") =>
+        {
+            LanguageMajor::V2
+        }
+        LanguageDetection::Invalid(_) => LanguageMajor::V1,
     }
 }
 
@@ -891,6 +1067,106 @@ fn finish_script_report(
     }
 }
 
+fn finish_script_outcome_report(
+    outcome: ScriptExecutionOutcome,
+    output_flush: io::Result<()>,
+) -> ExitCode {
+    let (primary, evidence, _downstream) = outcome.into_parts();
+    if let Err(error) = output_flush {
+        let mut diagnostics = render_outcome_evidence(&evidence);
+        diagnostics.push_str(&format!("fsh: fatal[output]: {error}\n"));
+        return emit_report(HostReport::failure(diagnostics.as_bytes()));
+    }
+
+    let evidence = render_outcome_evidence(&evidence);
+    match primary {
+        PrimaryOutcome::Completed(completion) => {
+            let mut diagnostics = render_background_failures(completion.background_failures());
+            diagnostics.push_str(&evidence);
+            match completion.status() {
+                Some(status) if diagnostics.is_empty() => {
+                    emit_report(HostReport::completed(status, b""))
+                }
+                Some(status) => emit_report(HostReport::completed_with_diagnostic(
+                    status,
+                    b"",
+                    diagnostics.as_bytes(),
+                )),
+                None if diagnostics.is_empty() => emit_report(HostReport::success(b"")),
+                None => emit_report(HostReport::success_with_diagnostic(
+                    b"",
+                    diagnostics.as_bytes(),
+                )),
+            }
+        }
+        PrimaryOutcome::Error(error) => {
+            let mut diagnostics = render_background_failures(error.background_failures());
+            diagnostics.push_str(error.render());
+            diagnostics.push_str(&evidence);
+            emit_report(HostReport::failure(diagnostics.as_bytes()))
+        }
+        PrimaryOutcome::Cancelled(cancellation) => {
+            let mut diagnostics = format!(
+                "fsh: cancelled[{:?}] at bytes {}..{}\n",
+                cancellation.reason(),
+                cancellation.span().start(),
+                cancellation.span().end()
+            );
+            diagnostics.push_str(&evidence);
+            emit_report(HostReport::failure(diagnostics.as_bytes()))
+        }
+        PrimaryOutcome::Refused(refusal) => {
+            let mut diagnostics = format!(
+                "fsh: refused[{}]: operation `{}` did not begin\n",
+                refusal.reason(),
+                refusal.operation()
+            );
+            diagnostics.push_str(&evidence);
+            emit_report(HostReport::failure(diagnostics.as_bytes()))
+        }
+        PrimaryOutcome::FatalHostFailure(failure) => {
+            let mut diagnostics = format!(
+                "fsh: fatal[{}]: {}\n",
+                failure.kind().name(),
+                failure.message()
+            );
+            diagnostics.push_str(&evidence);
+            emit_report(HostReport::failure(diagnostics.as_bytes()))
+        }
+    }
+}
+
+fn render_outcome_evidence(evidence: &[OutcomeEvidence<ScriptError>]) -> String {
+    let mut rendered = String::new();
+    for item in evidence {
+        match item {
+            OutcomeEvidence::Completed(completed) => {
+                rendered.push_str(&format!(
+                    "fsh: completed evidence: {}",
+                    completed.operation()
+                ));
+                if let Some(status) = completed.status() {
+                    rendered.push_str(&format!(" ({status})"));
+                }
+                rendered.push('\n');
+            }
+            OutcomeEvidence::PartialEffect(partial) => rendered.push_str(&format!(
+                "fsh: partial effect [{}]: {}\n",
+                partial.operation(),
+                partial.detail()
+            )),
+            OutcomeEvidence::CleanupFailure(error) => {
+                rendered.push_str("fsh: cleanup failure: ");
+                rendered.push_str(error.render().trim_start_matches("fsh: "));
+                if !rendered.ends_with('\n') {
+                    rendered.push('\n');
+                }
+            }
+        }
+    }
+    rendered
+}
+
 fn render_background_failures(failures: &[BackgroundFailure]) -> String {
     failures
         .iter()
@@ -904,5 +1180,15 @@ impl ExecutableProbe for NativeExecutableProbe {
     fn is_executable(&self, path: &OsStr) -> bool {
         fs::metadata(Path::new(path))
             .is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
+    }
+}
+
+impl PlanHost for NativeExecutableProbe {
+    fn current_dir(&self) -> Result<PathBuf, String> {
+        env::current_dir().map_err(|error| error.to_string())
+    }
+
+    fn environment(&self) -> Environment {
+        process_environment()
     }
 }

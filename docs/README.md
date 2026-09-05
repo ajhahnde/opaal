@@ -6,7 +6,9 @@ Use this page to find the Flash guide that matches what you are doing. System-wi
 
 > **Project status:** FlashOS as a complete operating system remains pre-alpha
 > software. Flash 1.0.0 is released as the component contract in the current
-> source. Availability in a particular
+> source. The current development tree also contains an explicitly versioned,
+> unreleased pure [Flash 2 language foundation](flash-2-foundation.md).
+> Availability in a particular
 > FlashOS image or on another target is qualified separately; execution on a
 > Linux or macOS host is not proof of FlashOS target support.
 
@@ -16,6 +18,7 @@ Use this page to find the Flash guide that matches what you are doing. System-wi
 | ------------------------------ | ----------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
 | Learn through runnable programs | [Flash by Example](by-example.md)   | Structured values, byte conversion, status/error handling, and non-executing plan inspection                                                |
 | Learn the Flash language  | [Language Guide](language-guide.md) | Source structure, values, bindings, expressions, functions, modules, imports, exports, name resolution, commands, and typed pipelines        |
+| Inspect the unreleased Flash 2 foundation | [Flash 2 Language Foundation](flash-2-foundation.md) | Explicit versioning, qualified modules and operations, nominal types, outcomes, streams, migration, authority refusal, and release boundaries |
 | Create and verify `.fsh` files | [Scripting](scripting.md)           | Script execution, arguments, checks, formatting, external processes, redirections, statuses, jobs, and limits                               |
 | Understand the implementation  | [Architecture](architecture.md)     | Dependency direction, source and module analysis, language-server protocol boundary, runtime planning, platform capabilities, and lifecycle |
 | Modify and qualify Flash  | [Development](development.md)       | Toolchains, formatter and checker gates, language-server integration and gates, tests, scheduling stress, fuzzing, target builds, and documentation validation |
@@ -27,6 +30,8 @@ The guides overlap in examples, but each has a main job:
 - The [Flash overview](../README.md) introduces the component, its role in FlashOS, its v1 compatibility promise, and its implementation.
 - [Flash by Example](by-example.md) is the short, runnable introduction. Its examples demonstrate behavior defined elsewhere.
 - The [Language Guide](language-guide.md) defines syntax and semantics: functions, modules, imports and exports, name resolution, type metadata, and pipelines. It is not a build guide.
+- The [Flash 2 Language Foundation](flash-2-foundation.md) defines the
+  implemented but unreleased generation-2 contract and its explicit exclusions.
 - The [Scripting Guide](scripting.md) explains how to work with `.fsh` files, arguments, checks, formatting, external processes, redirections, statuses, and jobs.
 - The [Architecture Guide](architecture.md) explains implementation
   responsibilities, source and module analysis, the language-server protocol
@@ -46,6 +51,7 @@ These categories show which pages define Flash 1.0 behavior and which pages expl
 | Class | Current material | Contract effect |
 | --- | --- | --- |
 | Frozen v1 contract | The Flash overview's v1 contract section, the Language Guide, and the normative behavior in the Scripting Guide | Defines the grammar, runtime, namespace, tooling, and compatibility baseline released as Flash 1.0.0. Changes must preserve v1 compatibility or follow a future language-major decision. |
+| Unreleased Flash 2 contract | The Flash 2 Language Foundation, its linked shared implementation owners, and the `tests/v2-foundation/` acceptance corpus | Defines implemented generation-2 behavior in the development tree without claiming a stable release or FlashOS image availability. |
 | Tutorial and usage guidance | Worked examples and task-oriented instructions in the Language and Scripting guides | Teaches the frozen contract and is exercised where runnable, but does not introduce semantics independently of the contract text. |
 | Implementation and verification reference | The Architecture and Development guides plus focused source-adjacent README files | Describes current internals, maintenance, and evidence. It does not expand the public language contract unless it explicitly identifies a contract surface. |
 | Experimental or future proposal | Any document explicitly labeled experimental or future | Has no current availability or compatibility effect and cannot override the frozen contract. No active guide in this index is in this class. |

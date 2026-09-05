@@ -4,6 +4,7 @@
 
 use std::env;
 use std::io::{self, BufRead, Write};
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::Instant;
 
@@ -11,15 +12,101 @@ use flash_cli::completion::{
     CompletionCandidateProvider, CompletionEngine, CompletionSnapshotLimits,
 };
 use flash_runtime::builtin::standard_registry;
+use flash_runtime::eval::{CancellationToken, EvalLimits, ResourceBudget, evaluate_with_limits};
+use flash_runtime::module::{
+    ModuleCanonicalizer, ModuleId, ModulePathError, ModuleProgramLoader, ModuleSourceError,
+    ModuleSourceLoader,
+};
 use flash_runtime::stream::{StreamPull, ValueStream};
 use flash_runtime::{Environment, ScopeStack, Value};
+use flash_syntax::LanguageMajor;
 
 fn usage() -> ExitCode {
     eprintln!(
         "usage: flash-benchmark-fixture completion WARMUPS SAMPLES | \
-         structured-stream ITEMS"
+         structured-stream ITEMS | v2-resources WARMUPS SAMPLES STATEMENTS"
     );
     ExitCode::from(2)
+}
+
+struct BenchmarkSource {
+    bytes: Vec<u8>,
+}
+
+impl ModuleCanonicalizer for BenchmarkSource {
+    fn canonicalize(&self, candidate: &Path) -> Result<PathBuf, ModulePathError> {
+        (candidate == Path::new("/benchmark.fsh"))
+            .then(|| candidate.to_path_buf())
+            .ok_or_else(|| ModulePathError::new("benchmark imports are unavailable"))
+    }
+}
+
+impl ModuleSourceLoader for BenchmarkSource {
+    fn load(&self, module: &ModuleId) -> Result<Vec<u8>, ModuleSourceError> {
+        self.load_bounded(module, usize::MAX)
+    }
+
+    fn load_bounded(
+        &self,
+        module: &ModuleId,
+        maximum: usize,
+    ) -> Result<Vec<u8>, ModuleSourceError> {
+        (module.path() == Path::new("/benchmark.fsh"))
+            .then(|| self.bytes[..self.bytes.len().min(maximum)].to_vec())
+            .ok_or_else(|| ModuleSourceError::new("benchmark imports are unavailable"))
+    }
+}
+
+fn v2_resources(warmups: usize, samples: usize, statements: usize) -> Result<(), String> {
+    let mut text = String::from("language 2\n");
+    for index in 0..statements {
+        text.push_str(&format!("let value_{index} = [{index}, {index}]\n"));
+    }
+    text.push_str("[1, 2, 3, 4]\n");
+    let source = BenchmarkSource {
+        bytes: text.into_bytes(),
+    };
+
+    for index in 0..=warmups + samples {
+        let started = Instant::now();
+        let program = ModuleProgramLoader::for_language(&source, &source, LanguageMajor::V2)
+            .load(Path::new("/benchmark.fsh"))
+            .map_err(|error| error.to_string())?;
+        let root = program.graph().root();
+        let script = program
+            .sources()
+            .script(root)
+            .ok_or_else(|| "benchmark analysis retained no root syntax".to_owned())?;
+        let source_file = program
+            .sources()
+            .source(root)
+            .ok_or_else(|| "benchmark analysis retained no root source".to_owned())?;
+        evaluate_with_limits(
+            script,
+            source_file,
+            &mut ScopeStack::new(),
+            &EvalLimits::pure_v2(CancellationToken::never(), ResourceBudget::v2()),
+        )
+        .map_err(|error| error.to_string())?;
+        let elapsed = started.elapsed().as_nanos();
+        let class = if index == 0 {
+            "cold"
+        } else if index <= warmups {
+            "warmup"
+        } else {
+            "sample"
+        };
+        println!("{class}_ns={elapsed}");
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn v2_resource_probe_analyzes_and_executes_its_corpus() {
+        super::v2_resources(0, 1, 1).expect("the benchmark corpus must remain executable");
+    }
 }
 
 fn positive_usize(value: Option<String>, name: &str) -> Result<usize, String> {
@@ -134,6 +221,15 @@ fn run() -> Result<(), String> {
                 return Err("structured-stream accepts exactly one argument".to_owned());
             }
             structured_stream(items)
+        }
+        Some("v2-resources") => {
+            let warmups = nonnegative_usize(args.next(), "warmup count")?;
+            let samples = positive_usize(args.next(), "sample count")?;
+            let statements = positive_usize(args.next(), "statement count")?;
+            if args.next().is_some() {
+                return Err("v2-resources accepts exactly three arguments".to_owned());
+            }
+            v2_resources(warmups, samples, statements)
         }
         Some(_) | None => Err(String::new()),
     }

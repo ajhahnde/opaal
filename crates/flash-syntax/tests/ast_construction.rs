@@ -26,6 +26,7 @@ fn nodes_and_word_parts_retain_exact_source_spans() {
     let declaration = Statement::new(
         StatementKind::Declaration(flash_syntax::Declaration {
             mutable: false,
+            pattern: flash_syntax::Pattern::Binding(Identifier::new(span(&source, 4..9))),
             name: Identifier::new(span(&source, 4..9)),
             type_annotation: None,
             value: addition,

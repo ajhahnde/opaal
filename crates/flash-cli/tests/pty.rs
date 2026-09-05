@@ -60,6 +60,10 @@ struct Pty {
 
 impl Pty {
     fn spawn(args: &[&str], env: &[(&str, &str)], cwd: &Path) -> Self {
+        Self::spawn_binary(FSH, args, env, cwd)
+    }
+
+    fn spawn_binary(binary: &str, args: &[&str], env: &[(&str, &str)], cwd: &Path) -> Self {
         let controller = openpt(OpenptFlags::RDWR | OpenptFlags::NOCTTY).expect("open controller");
         grantpt(&controller).expect("grant");
         unlockpt(&controller).expect("unlock");
@@ -75,7 +79,7 @@ impl Pty {
         );
         tcsetwinsize(&control_user, winsize(24, 80)).expect("initial winsize");
 
-        let mut command = Command::new(FSH);
+        let mut command = Command::new(binary);
         command
             .args(args)
             .current_dir(cwd)
@@ -251,6 +255,68 @@ impl Pty {
         let tail = bytes.get(start..).unwrap_or(&[]);
         strip_ansi(&String::from_utf8_lossy(tail))
     }
+}
+
+#[test]
+fn v2_repl_preselects_its_grammar_without_v1_config_or_history() {
+    let cwd = unique_dir("v2-language");
+    let home = unique_dir("v2-state");
+    let config_root = home.join("config");
+    let state_root = home.join("state");
+    fs::create_dir_all(config_root.join("flash")).unwrap();
+    fs::write(
+        config_root.join("flash/config.fsh"),
+        "$prompt = 'V1-CONFIG> '\n",
+    )
+    .unwrap();
+    let environment = [
+        ("HOME", home.to_str().unwrap()),
+        ("XDG_CONFIG_HOME", config_root.to_str().unwrap()),
+        ("XDG_STATE_HOME", state_root.to_str().unwrap()),
+    ];
+    let mut session = Pty::spawn(&["--flash-v2-repl-fixture"], &environment, &cwd);
+    session.await_prompt(0);
+    assert!(!session.rendered().contains("V1-CONFIG> "));
+
+    let mark = session.mark();
+    session.send(b"let language = 2");
+    session.send(ENTER);
+    session.expect_from(mark, "error[FS1000]");
+    session.await_prompt(mark);
+
+    let mark = session.mark();
+    session.send(b"import std::value as value");
+    session.send(ENTER);
+    session.await_prompt(mark);
+    assert!(!session.rendered_from(mark).contains("error["));
+
+    let mark = session.mark();
+    session.send(b"value::length([\"one\", \"two\"])");
+    session.send(ENTER);
+    session.expect_from(mark, "2");
+    session.await_prompt(mark);
+
+    let mark = session.mark();
+    session.send(b"help value::length");
+    session.send(ENTER);
+    session.expect_from(mark, "operation std::value::length");
+    session.expect_from(mark, "std::value::length[T](input: List[T]) -> Int");
+    session.await_prompt(mark);
+
+    let mark = session.mark();
+    session.send(b"value::length([\"one\", \"two\"]) | value::length");
+    session.send(ENTER);
+    session.expect_from(mark, "error[RUN001]");
+    session.expect_from(
+        mark,
+        "operation `std::value::length` does not accept carrier Value(int)",
+    );
+    session.await_prompt(mark);
+
+    session.send(b"exit 0");
+    session.send(ENTER);
+    assert_eq!(session.wait_code(), 0);
+    assert!(!state_root.join("flash/history").exists());
 }
 
 impl Drop for Pty {

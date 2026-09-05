@@ -36,6 +36,11 @@ impl HostExit {
 pub enum HostReport<'a> {
     /// Successful CLI output with no completed program status.
     Success { output: &'a [u8] },
+    /// Successful CLI output followed by ordered secondary diagnostics.
+    SuccessWithDiagnostic {
+        output: &'a [u8],
+        diagnostic: &'a [u8],
+    },
     /// Program output followed by a real completed status.
     Completed {
         status: &'a Status,
@@ -53,6 +58,12 @@ impl<'a> HostReport<'a> {
     #[must_use]
     pub const fn success(output: &'a [u8]) -> Self {
         Self::Success { output }
+    }
+
+    /// Build successful CLI output followed by ordered secondary diagnostics.
+    #[must_use]
+    pub const fn success_with_diagnostic(output: &'a [u8], diagnostic: &'a [u8]) -> Self {
+        Self::SuccessWithDiagnostic { output, diagnostic }
     }
 
     /// Build program output with its completed status.
@@ -165,6 +176,20 @@ where
         HostReport::Success { output: bytes } => {
             if let Err(error) = write_required(output, bytes) {
                 report_output_failure(diagnostics, &error);
+                HostExit::Failure
+            } else {
+                HostExit::Success
+            }
+        }
+        HostReport::SuccessWithDiagnostic {
+            output: bytes,
+            diagnostic,
+        } => {
+            if let Err(error) = write_required(output, bytes) {
+                report_output_failure(diagnostics, &error);
+                return HostExit::Failure;
+            }
+            if write_required(diagnostics, diagnostic).is_err() {
                 HostExit::Failure
             } else {
                 HostExit::Success
@@ -331,6 +356,25 @@ mod tests {
             b"fsh: first background failure\nfsh: second background failure\n"
         );
         assert_eq!(stderr.flushes, 1);
+    }
+
+    #[test]
+    fn success_can_carry_ordered_secondary_diagnostics_without_becoming_failure() {
+        let mut stdout = RecordingWriter::default();
+        let mut stderr = RecordingWriter::default();
+
+        let exit = write_report(
+            HostReport::success_with_diagnostic(
+                b"program output\n",
+                b"fsh: completed evidence: cleanup\n",
+            ),
+            &mut stdout,
+            &mut stderr,
+        );
+
+        assert_eq!(exit, HostExit::Success);
+        assert_eq!(stdout.bytes, b"program output\n");
+        assert_eq!(stderr.bytes, b"fsh: completed evidence: cleanup\n");
     }
 
     #[test]

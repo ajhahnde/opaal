@@ -8,6 +8,7 @@ use flash_cli::check::{CheckRequest, check_source};
 use flash_runtime::module::{
     ModuleCanonicalizer, ModuleId, ModulePathError, ModuleSourceError, ModuleSourceLoader,
 };
+use flash_syntax::LanguageMajor;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum Call {
@@ -179,4 +180,75 @@ fn path_qualifies_an_unspanned_root_utf8_failure() {
         run.rendered_issues(),
         ["fsh check: /project/source.fsh: invalid UTF-8 at byte 4\n"]
     );
+}
+
+#[test]
+fn v2_checker_shares_alias_reexport_and_nominal_identity_without_loading_std() {
+    let filesystem = FakeFilesystem::default()
+        .resolves("/project/main.fsh", "/project/main.fsh")
+        .resolves("/project/model.fsh", "/project/model.fsh")
+        .contains(
+            "/project/main.fsh",
+            concat!(
+                "language 2\n\n",
+                "import './model.fsh' as model\n",
+                "import std::value as values\n",
+                "export { model, values }\n",
+            ),
+        )
+        .contains(
+            "/project/model.fsh",
+            "language 2\n\ntype Item = { value: Int, }\n",
+        );
+
+    let run = check_source(
+        &CheckRequest::for_language(PathBuf::from("/project/main.fsh"), LanguageMajor::V2),
+        &filesystem,
+    );
+
+    assert!(run.is_success(), "{:?}", run.rendered_issues());
+    assert_eq!(
+        filesystem.calls(),
+        vec![
+            Call::Canonicalize(PathBuf::from("/project/main.fsh")),
+            Call::Load(PathBuf::from("/project/main.fsh")),
+            Call::Canonicalize(PathBuf::from("/project/model.fsh")),
+            Call::Load(PathBuf::from("/project/model.fsh")),
+        ]
+    );
+}
+
+#[test]
+fn v2_checker_rejects_unknown_standard_modules_and_alias_conflicts() {
+    let unknown = FakeFilesystem::default()
+        .resolves("/project/main.fsh", "/project/main.fsh")
+        .contains(
+            "/project/main.fsh",
+            "language 2\n\nimport std::missing as missing\n",
+        );
+    let run = check_source(
+        &CheckRequest::for_language(PathBuf::from("/project/main.fsh"), LanguageMajor::V2),
+        &unknown,
+    );
+    assert!(run.has_errors());
+    assert!(run.rendered_issues()[0].starts_with("error[MOD010]"));
+
+    let conflict = FakeFilesystem::default()
+        .resolves("/project/main.fsh", "/project/main.fsh")
+        .resolves("/project/model.fsh", "/project/model.fsh")
+        .contains(
+            "/project/main.fsh",
+            concat!(
+                "language 2\n\n",
+                "import './model.fsh' as duplicate\n",
+                "import std::value as duplicate\n",
+            ),
+        )
+        .contains("/project/model.fsh", "language 2\n");
+    let run = check_source(
+        &CheckRequest::for_language(PathBuf::from("/project/main.fsh"), LanguageMajor::V2),
+        &conflict,
+    );
+    assert!(run.has_errors());
+    assert!(run.rendered_issues()[0].starts_with("error[MOD011]"));
 }

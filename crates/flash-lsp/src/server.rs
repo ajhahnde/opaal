@@ -5,7 +5,7 @@ use std::io::{BufRead, Write};
 use std::sync::mpsc::{self, Receiver, SyncSender, TrySendError};
 use std::thread;
 
-use flash_syntax::{PositionEncoding, Severity, TextRange};
+use flash_syntax::{LanguageMajor, PositionEncoding, Severity, TextRange};
 use serde_json::{Map, Value, json};
 
 use crate::protocol::{
@@ -30,6 +30,19 @@ pub fn run<R>(input: R, output: &mut impl Write) -> Result<ExitStatus, ServerErr
 where
     R: BufRead + Send + 'static,
 {
+    run_for_language(input, output, LanguageMajor::V1)
+}
+
+/// Runs the stdio server with one language selected before protocol documents
+/// or worker state are accepted.
+pub fn run_for_language<R>(
+    input: R,
+    output: &mut impl Write,
+    language: LanguageMajor,
+) -> Result<ExitStatus, ServerError>
+where
+    R: BufRead + Send + 'static,
+{
     let (events, incoming) = mpsc::channel();
     let reader_events = events.clone();
     thread::spawn(move || read_messages(input, &reader_events));
@@ -37,7 +50,7 @@ where
     let (jobs, worker_jobs) = mpsc::sync_channel(1);
     thread::spawn(move || work(worker_jobs, &events));
 
-    let mut coordinator = Coordinator::new();
+    let mut coordinator = Coordinator::for_language(language);
     loop {
         match incoming.recv() {
             Ok(Event::Message(message)) => {
@@ -201,10 +214,10 @@ struct Coordinator {
 }
 
 impl Coordinator {
-    fn new() -> Self {
+    fn for_language(language: LanguageMajor) -> Self {
         Self {
             lifecycle: Lifecycle::WaitingForInitialize,
-            workspace: Workspace::new(),
+            workspace: Workspace::for_language(language),
             encoding: PositionEncoding::Utf16,
             related_information: false,
             pending: VecDeque::new(),

@@ -15,7 +15,7 @@ use std::io::{Read, Write};
 use std::time::Duration;
 
 use flash_platform::{Platform, PlatformError};
-use flash_syntax::{ParseOutcome, SourceFile, SourceId, parse};
+use flash_syntax::{LanguageMajor, ParseOutcome, SourceFile, SourceId, parse, parse_v2_submission};
 
 use crate::completion::{CompletionCatalog, CompletionEngine};
 use crate::editor::{
@@ -52,6 +52,7 @@ impl DrawnOutput for Vec<u8> {
 
 /// A raw-mode line editor built on the platform terminal capability.
 pub struct TerminalEditor<P, R, W> {
+    language: LanguageMajor,
     platform: P,
     input: R,
     output: W,
@@ -66,7 +67,13 @@ pub struct TerminalEditor<P, R, W> {
 
 impl<P: Platform, R: Read, W: Write> TerminalEditor<P, R, W> {
     pub fn new(platform: P, input: R, output: W) -> Self {
+        Self::for_language(platform, input, output, LanguageMajor::V1)
+    }
+
+    /// Constructs an editor for one preselected submission language.
+    pub fn for_language(platform: P, input: R, output: W, language: LanguageMajor) -> Self {
         Self {
+            language,
             platform,
             input,
             output,
@@ -86,9 +93,20 @@ impl<P: Platform, R: Read, W: Write> TerminalEditor<P, R, W> {
         platform: P,
         input: R,
         output: W,
-        mut persistence: Box<dyn HistoryPersistence>,
+        persistence: Box<dyn HistoryPersistence>,
     ) -> Result<Self, EditorError> {
-        let mut editor = Self::new(platform, input, output);
+        Self::with_history_for_language(platform, input, output, persistence, LanguageMajor::V1)
+    }
+
+    /// Constructs a language-selected editor with explicit history storage.
+    pub fn with_history_for_language(
+        platform: P,
+        input: R,
+        output: W,
+        mut persistence: Box<dyn HistoryPersistence>,
+        language: LanguageMajor,
+    ) -> Result<Self, EditorError> {
+        let mut editor = Self::for_language(platform, input, output, language);
         editor.history.load(persistence.entries()?);
         editor.persistence = Some(persistence);
         Ok(editor)
@@ -156,9 +174,13 @@ impl<P: Platform, R: Read, W: Write + DrawnOutput> TerminalEditor<P, R, W> {
 /// This mirrors the host validator in `reedline_editor.rs`: only `Incomplete`
 /// retains the buffer, while `Complete` and `Invalid` both submit so the
 /// session's normal diagnostic boundary receives the source unchanged.
-fn needs_continuation(source: &str) -> bool {
+fn needs_continuation(source: &str, language: LanguageMajor) -> bool {
     let file = SourceFile::new(SourceId::new(0), "<interactive>", source);
-    matches!(parse(&file), ParseOutcome::Incomplete(_))
+    let outcome = match language {
+        LanguageMajor::V1 => parse(&file),
+        LanguageMajor::V2 => parse_v2_submission(&file),
+    };
+    matches!(outcome, ParseOutcome::Incomplete(_))
 }
 
 impl<P: Platform, R: Read, W: Write> LineEditor for TerminalEditor<P, R, W> {
@@ -328,7 +350,7 @@ impl<P: Platform, R: Read, W: Write> LineEditor for TerminalEditor<P, R, W> {
                     let _ = line.delete();
                 }
                 Key::Enter => {
-                    if needs_continuation(line.text()) {
+                    if needs_continuation(line.text(), self.language) {
                         line.insert('\n');
                         continue;
                     }
