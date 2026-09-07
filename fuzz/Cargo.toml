@@ -8,7 +8,6 @@ edition = "2024"
 cargo-fuzz = true
 
 [dependencies]
-opaal-migrate = { path = "../crates/opaal-migrate" }
 opaal-runtime = { path = "../crates/opaal-runtime" }
 opaal-syntax = { path = "../crates/opaal-syntax" }
 libfuzzer-sys = "0.4"
@@ -31,13 +30,6 @@ bench = false
 [[bin]]
 name = "expander"
 path = "fuzz_targets/expander.rs"
-test = false
-doc = false
-bench = false
-
-[[bin]]
-name = "migration"
-path = "fuzz_targets/migration.rs"
 test = false
 doc = false
 bench = false

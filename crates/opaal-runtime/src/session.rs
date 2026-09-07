@@ -30,9 +30,9 @@ use opaal_platform::{
     DirectoryStream, FileOpenMode, FileOpenRequest, JobSignal, Platform, ProcessGroupId,
 };
 use opaal_syntax::{
-    CommandHeadKind, CommandItemKind, ConditionalChain, Diagnostic, LanguageIdentity, OutputMode,
-    ParseOutcome, Script, Severity, SourceFile, SourceId, Span, StageKind, StatementKind, Word,
-    WordPartKind, parse_opaal_submission, render_diagnostic,
+    CommandHeadKind, CommandItemKind, ConditionalChain, Diagnostic, OutputMode, ParseOutcome,
+    Script, Severity, SourceFile, SourceId, Span, StageKind, StatementKind, Word, WordPartKind,
+    parse_opaal, render_diagnostic,
 };
 
 use crate::background::{BackgroundJobs, ForegroundJobOutcome, QuarantinePolicy, escape_job_label};
@@ -177,12 +177,6 @@ impl Session {
             jobs: None,
             opaal_aliases: ModuleAliasRegistry::default(),
         }
-    }
-
-    /// The submission grammar fixed before this session accepted user state.
-    #[must_use]
-    pub const fn language(&self) -> LanguageIdentity {
-        LanguageIdentity::OpaalV1
     }
 
     /// The retained logical working directory.
@@ -352,7 +346,7 @@ impl Session {
         let source = Arc::new(SourceFile::new(SourceId::new(self.next_source), name, text));
         self.next_source = self.next_source.wrapping_add(1);
 
-        let parsed = parse_opaal_submission(&source);
+        let parsed = parse_opaal(&source);
         let script = match parsed {
             ParseOutcome::Complete(script) => script,
             ParseOutcome::Incomplete(input) => {
@@ -438,7 +432,7 @@ impl Session {
         let source_file = source.as_ref();
         let binding_types =
             binding_types.unwrap_or_else(|| Arc::new(RuntimeBindingTypes::default()));
-        let policy = EvaluationPolicy::PureOpaalV1;
+        let policy = EvaluationPolicy::PureOpaal;
         let Session {
             scope,
             state,
@@ -452,7 +446,6 @@ impl Session {
         let mut last_value = Value::Null;
         for statement in script.statements() {
             match statement.kind() {
-                StatementKind::Import(_) if imports_analyzed => continue,
                 StatementKind::ModuleImport(import) if imports_analyzed => {
                     let alias_name = source_file
                         .slice(import.alias.span())
@@ -467,7 +460,7 @@ impl Session {
                 }
                 StatementKind::ModuleExport(_) if imports_analyzed => continue,
                 StatementKind::Job(job)
-                    if policy == EvaluationPolicy::PureOpaalV1
+                    if policy == EvaluationPolicy::PureOpaal
                         && job.background_span.is_none()
                         && let Some(operation) = standalone_opaal_operation_help(
                             &job.chain,
@@ -484,7 +477,7 @@ impl Session {
                     let background_span = job
                         .background_span
                         .expect("the guarded background statement has a marker");
-                    if policy == EvaluationPolicy::PureOpaalV1 {
+                    if policy == EvaluationPolicy::PureOpaal {
                         return Ok((
                             SubmitOutcome::Refused(Refusal::new(
                                 RefusalReason::Unsupported,
@@ -818,7 +811,7 @@ impl EvaluationHost for SessionEvaluationHost<'_> {
         context: EvaluationContext,
     ) -> Result<Status, Abort> {
         let inspection_only = chain_is_standalone_help(chain, &context.source);
-        if self.policy == EvaluationPolicy::PureOpaalV1
+        if self.policy == EvaluationPolicy::PureOpaal
             && !chain_is_pure_opaal_host_control(chain, &context.source)
         {
             return Err(Abort::Refused(Refusal::new(
@@ -913,7 +906,7 @@ impl EvaluationHost for SessionEvaluationHost<'_> {
         _position: CapturePosition,
         context: EvaluationContext,
     ) -> Result<CapturedChain, Abort> {
-        if self.policy == EvaluationPolicy::PureOpaalV1 {
+        if self.policy == EvaluationPolicy::PureOpaal {
             return Err(Abort::Refused(Refusal::new(
                 RefusalReason::Unsupported,
                 "process execution",

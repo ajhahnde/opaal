@@ -1,4 +1,3 @@
-language 1
 
 enum EqualMaybe[T: Equal] {
     Some(T),

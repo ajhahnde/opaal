@@ -1,4 +1,3 @@
-language 1
 
 type Pair = {
     left: Int,

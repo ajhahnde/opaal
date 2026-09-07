@@ -24,12 +24,6 @@ cleanup() {
 trap cleanup EXIT
 
 corpus_roots=(
-  "$repository_root/history/flash-v1/tests/golden/grammar/complete"
-  "$repository_root/history/flash-v1/tests/golden/grammar/incomplete"
-  "$repository_root/history/flash-v1/tests/golden/grammar/invalid"
-  "$repository_root/history/flash-v1/tests/golden/lexical/complete"
-  "$repository_root/history/flash-v1/tests/golden/lexical/incomplete"
-  "$repository_root/history/flash-v1/tests/golden/lexical/invalid"
   "$repository_root/tests/opaal-foundation/language/grammar/complete"
   "$repository_root/tests/opaal-foundation/language/grammar/incomplete"
   "$repository_root/tests/opaal-foundation/language/grammar/invalid"
@@ -48,7 +42,7 @@ corpus_roots=(
   "$repository_root/tests/opaal-foundation/language/types/invalid"
 )
 
-for target in lexer parser expander migration resources; do
+for target in lexer parser expander resources; do
   corpus="$work/$target"
   mkdir "$corpus"
   cargo fuzz run \

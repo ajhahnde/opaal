@@ -4,7 +4,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use opaal_syntax::{
-    ExpressionKind, FormatOutcome, SourceFile, SourceId, StatementKind, VersionedParseOutcome,
+    ExpressionKind, FormatOutcome, ParseOutcome, SourceFile, SourceId, StatementKind,
     format_source_opaal, parse_opaal,
 };
 
@@ -21,7 +21,7 @@ fn outcome_corpus_parses_and_formats_idempotently() {
         assert_eq!(fields.len(), 3, "malformed outcome row {}", index + 1);
         let source = fixture(fields[1], 1_300 + index as u32);
         assert!(
-            matches!(parse_opaal(&source), VersionedParseOutcome::Complete(_)),
+            matches!(parse_opaal(&source), ParseOutcome::Complete(_)),
             "{} must parse through the canonical opaal AST",
             fields[1]
         );
@@ -45,10 +45,10 @@ fn outcome_corpus_parses_and_formats_idempotently() {
 #[test]
 fn domain_error_fixture_retains_a_qualified_generic_constructor() {
     let source = fixture("complete/domain-error.opaal", 1_500);
-    let VersionedParseOutcome::Complete(parsed) = parse_opaal(&source) else {
+    let ParseOutcome::Complete(parsed) = parse_opaal(&source) else {
         panic!("the domain-error fixture must parse");
     };
-    let StatementKind::Job(job) = parsed.script().statements().last().unwrap().kind() else {
+    let StatementKind::Job(job) = parsed.statements().last().unwrap().kind() else {
         panic!("the final outcome expression must remain a job statement");
     };
     let opaal_syntax::StageKind::Expression(expression) =

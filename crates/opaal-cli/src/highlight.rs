@@ -4,7 +4,7 @@ use std::ops::Range;
 
 use opaal_syntax::{
     Keyword, LabelStyle, ParseOutcome, SourceFile, SourceId, Token, TokenKind, lex_opaal,
-    parse_opaal_submission,
+    parse_opaal,
 };
 
 /// Stable semantic role for one exact interactive source fragment.
@@ -67,7 +67,7 @@ impl SyntaxHighlighter {
 }
 
 fn parser_invalid_ranges(source: &SourceFile) -> Vec<Range<usize>> {
-    let outcome = parse_opaal_submission(source);
+    let outcome = parse_opaal(source);
     let ParseOutcome::Invalid(diagnostics) = outcome else {
         return Vec::new();
     };

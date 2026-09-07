@@ -4,8 +4,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use opaal_syntax::{
-    CommandItemKind, FormatOutcome, Pattern, SourceFile, SourceId, StageKind, StatementKind,
-    VersionedParseOutcome, format_source_opaal, parse_opaal,
+    CommandItemKind, FormatOutcome, ParseOutcome, Pattern, SourceFile, SourceId, StageKind,
+    StatementKind, format_source_opaal, parse_opaal,
 };
 
 #[test]
@@ -21,7 +21,7 @@ fn rest_spread_corpus_parses_and_formats_idempotently() {
         assert_eq!(fields.len(), 3, "malformed rest/spread row {}", index + 1);
         let source = fixture(fields[1], 1_000 + index as u32);
         assert!(
-            matches!(parse_opaal(&source), VersionedParseOutcome::Complete(_)),
+            matches!(parse_opaal(&source), ParseOutcome::Complete(_)),
             "{} must parse through the canonical opaal AST",
             fields[1]
         );
@@ -45,10 +45,10 @@ fn rest_spread_corpus_parses_and_formats_idempotently() {
 #[test]
 fn build_fixture_keeps_rest_and_spread_as_dedicated_nodes() {
     let build = fixture("complete/build-arguments.opaal", 1_200);
-    let VersionedParseOutcome::Complete(parsed) = parse_opaal(&build) else {
+    let ParseOutcome::Complete(parsed) = parse_opaal(&build) else {
         panic!("the build-argument fixture must parse");
     };
-    let StatementKind::Function(function) = parsed.script().statements()[0].kind() else {
+    let StatementKind::Function(function) = parsed.statements()[0].kind() else {
         panic!("the build-argument fixture must begin with a function");
     };
     let StatementKind::Match(statement) = function.body.statements[0].kind() else {
@@ -61,10 +61,10 @@ fn build_fixture_keeps_rest_and_spread_as_dedicated_nodes() {
     assert!(nonempty.rest.is_some());
 
     let spread = fixture("complete/explicit-spread.opaal", 1_201);
-    let VersionedParseOutcome::Complete(parsed) = parse_opaal(&spread) else {
+    let ParseOutcome::Complete(parsed) = parse_opaal(&spread) else {
         panic!("the explicit-spread fixture must parse");
     };
-    let StatementKind::Job(job) = parsed.script().statements()[1].kind() else {
+    let StatementKind::Job(job) = parsed.statements()[1].kind() else {
         panic!("the final statement must be a command job");
     };
     let StageKind::Command(command) = job.chain.or_terms()[0].and_terms()[0].stages()[0].kind()

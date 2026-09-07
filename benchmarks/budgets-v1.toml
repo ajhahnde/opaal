@@ -4,7 +4,7 @@ contract_sha256 = "585ce612378a04a966bc1906c89caabcece85a12161a3b0abcb5581faca31
 
 [[environments]]
 id = "host-darwin-arm64"
-evidence = "evidence/host-darwin-arm64-opaal-v1.json"
+evidence = "evidence/host-darwin-arm64-candidate.json"
 match = { kind = "host", os = "macos", architecture = "arm64" }
 
 [[budgets]]

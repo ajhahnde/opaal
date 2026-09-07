@@ -61,14 +61,13 @@ fn help_and_version_expose_only_opaal_identity() {
     assert!(stdout.starts_with("OPAAL language client\n"));
     assert!(stdout.contains("opaal SCRIPT"));
     assert!(stdout.contains(".opaal source"));
-    assert!(!stdout.contains("Flash"));
     assert!(!stdout.contains("fsh"));
 }
 
 #[test]
-fn pure_language_one_script_is_silent_success() {
+fn pure_directive_free_script_is_silent_success() {
     let temp = TempDir::new("pure-success");
-    let script = temp.script("main.opaal", "language 1\nlet value = 1\n");
+    let script = temp.script("main.opaal", "let value = 1\n");
     let output = run(&script, &[]);
 
     assert_eq!(output.status.code(), Some(0), "{output:?}");
@@ -77,29 +76,35 @@ fn pure_language_one_script_is_silent_success() {
 }
 
 #[test]
-fn every_non_opaal_language_entry_is_rejected() {
-    let temp = TempDir::new("language-rejections");
-    let cases = [
-        ("missing.opaal", "let value = 1\n", "error[OP2001]"),
-        ("late.opaal", "let value = 1\nlanguage 1\n", "error[OP2001]"),
-        ("future.opaal", "language 2\n", "error[OP2003]"),
-        (
-            "duplicate.opaal",
-            "language 1\nlanguage 1\n",
-            "error[OP2004]",
-        ),
-    ];
-    for (name, source, diagnostic) in cases {
+fn empty_and_declaration_first_sources_are_silent_successes() {
+    let temp = TempDir::new("directive-free-roots");
+    for (name, source) in [
+        ("empty.opaal", ""),
+        ("declaration.opaal", "let value = 1\n"),
+    ] {
         let script = temp.script(name, source);
         let output = run(&script, &[]);
-        assert_eq!(output.status.code(), Some(1), "{name}: {output:?}");
+        assert!(output.status.success(), "{name}: {output:?}");
         assert!(output.stdout.is_empty(), "{name}: {output:?}");
-        let stderr = String::from_utf8(output.stderr).unwrap();
-        assert!(stderr.contains(diagnostic), "{name}: {stderr}");
+        assert!(output.stderr.is_empty(), "{name}: {output:?}");
     }
+}
 
-    let flash = temp.script("legacy.fsh", "let value = 1\n");
-    let output = run(&flash, &[]);
+#[test]
+fn a_former_header_receives_only_ordinary_execution_refusal() {
+    let temp = TempDir::new("former-header");
+    let script = temp.script("former-header.opaal", "language 1\nlet value = 1\n");
+    let output = run(&script, &[]);
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("refused"), "{stderr}");
+    assert!(!stderr.contains("OP200"), "{stderr}");
+    assert!(!stderr.contains("directive"), "{stderr}");
+
+    let temp = TempDir::new("unsupported-extension");
+    let unsupported = temp.script("legacy.fsh", "let value = 1\n");
+    let output = run(&unsupported, &[]);
     assert_eq!(output.status.code(), Some(1));
     assert!(
         String::from_utf8(output.stderr)
@@ -109,30 +114,22 @@ fn every_non_opaal_language_entry_is_rejected() {
 }
 
 #[test]
-fn imports_are_opaal_only_and_report_the_imported_source() {
+fn directive_free_imports_run_silently() {
     let temp = TempDir::new("imports");
-    let dependency = temp.script("dependency.opaal", "let value = 1\n");
-    let root = temp.script(
-        "main.opaal",
-        "language 1\nimport './dependency.opaal' as dependency\n",
-    );
+    temp.script("dependency.opaal", "let value = 1\n");
+    let root = temp.script("main.opaal", "import './dependency.opaal' as dependency\n");
     let output = run(&root, &[]);
 
-    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert!(output.status.success(), "{output:?}");
     assert!(output.stdout.is_empty());
-    let stderr = String::from_utf8(output.stderr).unwrap();
-    assert!(stderr.contains("error[OP2001]"), "{stderr}");
-    assert!(
-        stderr.contains(dependency.file_name().unwrap().to_str().unwrap()),
-        "{stderr}"
-    );
+    assert!(output.stderr.is_empty());
 }
 
 #[test]
 fn effectful_source_is_refused_before_process_access() {
     let temp = TempDir::new("effect-refusal");
     let marker = temp.0.join("must-not-exist");
-    let source = format!("language 1\n^touch '{}'\n", marker.display());
+    let source = format!("^touch '{}'\n", marker.display());
     let script = temp.script("main.opaal", &source);
     let output = run(&script, &[]);
 

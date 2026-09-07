@@ -8,11 +8,11 @@ use opaal_runtime::eval::{
     ResourceBudget, RuntimeErrorKind, evaluate_with_limits,
 };
 use opaal_runtime::{ScopeStack, Value};
-use opaal_syntax::{ParseOutcome, SourceFile, SourceId, parse_opaal_submission};
+use opaal_syntax::{ParseOutcome, SourceFile, SourceId, parse_opaal};
 
 fn parse_source(source: &str) -> (SourceFile, opaal_syntax::Script) {
     let file = SourceFile::new(SourceId::new(1), "test.opaal", source);
-    let script = match parse_opaal_submission(&file) {
+    let script = match parse_opaal(&file) {
         ParseOutcome::Complete(script) => script,
         other => panic!("source did not parse: {other:?}\n{source}"),
     };

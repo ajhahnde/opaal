@@ -1,7 +1,7 @@
 //! Command-line invocation parsing and classification.
 //!
 //! OPAAL exposes one language personality. Parsing is kept separate from
-//! startup so no option can silently select historical Flash behavior.
+//! startup so no option can silently select another source mode.
 
 use std::ffi::OsString;
 use std::path::PathBuf;

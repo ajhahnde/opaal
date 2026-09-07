@@ -36,12 +36,6 @@ mkdir "$campaign/corpus" "$campaign/artifacts"
 echo "campaign directory: $campaign"
 
 corpus_roots=(
-  "$repository_root/history/flash-v1/tests/golden/grammar/complete"
-  "$repository_root/history/flash-v1/tests/golden/grammar/incomplete"
-  "$repository_root/history/flash-v1/tests/golden/grammar/invalid"
-  "$repository_root/history/flash-v1/tests/golden/lexical/complete"
-  "$repository_root/history/flash-v1/tests/golden/lexical/incomplete"
-  "$repository_root/history/flash-v1/tests/golden/lexical/invalid"
   "$repository_root/tests/opaal-foundation/language/grammar/complete"
   "$repository_root/tests/opaal-foundation/language/grammar/incomplete"
   "$repository_root/tests/opaal-foundation/language/grammar/invalid"
@@ -49,9 +43,18 @@ corpus_roots=(
   "$repository_root/tests/opaal-foundation/language/lexical"
   "$repository_root/tests/opaal-foundation/language/modules/complete"
   "$repository_root/tests/opaal-foundation/language/modules/invalid"
+  "$repository_root/tests/opaal-foundation/language/outcomes/complete"
+  "$repository_root/tests/opaal-foundation/language/outcomes/invalid"
+  "$repository_root/tests/opaal-foundation/language/outcomes/refused"
+  "$repository_root/tests/opaal-foundation/language/operations/complete"
+  "$repository_root/tests/opaal-foundation/language/operations/invalid"
+  "$repository_root/tests/opaal-foundation/language/rest-spread/complete"
+  "$repository_root/tests/opaal-foundation/language/rest-spread/invalid"
+  "$repository_root/tests/opaal-foundation/language/types/complete"
+  "$repository_root/tests/opaal-foundation/language/types/invalid"
 )
 
-for target in lexer parser expander migration resources; do
+for target in lexer parser expander resources; do
   corpus="$campaign/corpus/$target"
   artifacts="$campaign/artifacts/$target"
   mkdir -p "$corpus" "$artifacts"

@@ -21,13 +21,13 @@ use opaal_runtime::eval::{
 };
 use opaal_runtime::stream::ValueStream;
 use opaal_runtime::{Environment, Record, ScopeStack, Value};
-use opaal_syntax::{ParseOutcome, SourceFile, SourceId, Span, parse_opaal_submission};
+use opaal_syntax::{ParseOutcome, SourceFile, SourceId, Span, parse_opaal};
 
 /// Evaluates `source` as a closure expression, returning the owned source file
 /// (whose spans the closure body addresses) and the resulting callable value.
 fn built(source: &str) -> (SourceFile, Value) {
     let file = SourceFile::new(SourceId::new(1), "closure.opaal", source);
-    let script = match parse_opaal_submission(&file) {
+    let script = match parse_opaal(&file) {
         ParseOutcome::Complete(script) => script,
         other => panic!("source did not parse: {other:?}\n{source}"),
     };

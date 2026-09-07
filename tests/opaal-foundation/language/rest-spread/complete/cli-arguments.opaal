@@ -1,4 +1,3 @@
-language 1
 
 let [first, ...rest] = $args
 match $rest {

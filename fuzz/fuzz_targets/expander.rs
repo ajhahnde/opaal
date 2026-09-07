@@ -4,7 +4,7 @@ use opaal_runtime::eval::expand_word;
 use opaal_runtime::{BindingMutability, ScopeStack, Value};
 use opaal_syntax::{
     CommandItemKind, ParseOutcome, RedirectionKind, SourceFile, SourceId, StageKind, StatementKind,
-    Word, parse_opaal_submission,
+    Word, parse_opaal,
 };
 use libfuzzer_sys::fuzz_target;
 
@@ -12,7 +12,7 @@ fuzz_target!(|data: &[u8]| {
     let Ok(source) = SourceFile::from_bytes(SourceId::new(0), "fuzz", data.to_vec()) else {
         return;
     };
-    let ParseOutcome::Complete(script) = parse_opaal_submission(&source) else {
+    let ParseOutcome::Complete(script) = parse_opaal(&source) else {
         return;
     };
 

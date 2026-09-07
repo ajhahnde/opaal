@@ -1,7 +1,4 @@
-use crate::classification::classify_tokens_for_language;
-use crate::language::{SyntaxLanguage, detect_source_language_tokens};
-#[cfg(feature = "flash-v1-migration")]
-use crate::lexer::lex_flash_v1_with_control;
+use crate::classification::classify_opaal_tokens;
 use crate::lexer::lex_opaal_with_control;
 use crate::{
     AndChain, AndOperator, Assignment, AstNode, BinaryExpression, BinaryOperator, Block,
@@ -9,17 +6,17 @@ use crate::{
     CommandItemKind, CommandStage, CommandSubstitution, ConditionalChain, ConditionalOperator,
     ControlTransfer, Declaration, Delimiter, Diagnostic, DocumentationBlock, ElseBranch,
     EnvironmentStatement, Expression, ExpressionKind, FileRedirection, ForStatement,
-    FunctionDefinition, Identifier, IfStatement, ImportStatement, IncompleteInput,
-    IncompleteReason, IndexExpression, IoNumber, JobStatement, Keyword, LanguageDetection,
-    ListPattern, Literal, LiteralKind, MatchArm, MatchStatement, MemberExpression,
-    ModuleAliasImport, ModuleExportStatement, ModuleImportSource, NominalRecordExpression,
-    NominalRecordFieldExpression, NominalRecordPattern, NominalTypeDeclaration, NominalTypeField,
-    NumberKind, Operator, OutputMode, Parameter, Pattern, PatternField, PipeOperator, Pipeline,
-    QualifiedName, RecordEntry, RecordKey, Redirection, RedirectionKind, Script, Severity,
-    SourceFile, Span, Stage, StageKind, Statement, StatementKind, SyntaxClassification, Token,
-    TokenKind, TryStatement, TypeConstraint, TypeParameter, TypeReference, UnaryExpression,
-    UnaryOperator, VariableReference, VariantDeclaration, VariantPattern, VariantTypeDeclaration,
-    VersionedScript, WhileStatement, Word, WordPart, WordPartKind,
+    FunctionDefinition, Identifier, IfStatement, IncompleteInput, IncompleteReason,
+    IndexExpression, IoNumber, JobStatement, Keyword, ListPattern, Literal, LiteralKind, MatchArm,
+    MatchStatement, MemberExpression, ModuleAliasImport, ModuleExportStatement, ModuleImportSource,
+    NominalRecordExpression, NominalRecordFieldExpression, NominalRecordPattern,
+    NominalTypeDeclaration, NominalTypeField, NumberKind, Operator, OutputMode, Parameter, Pattern,
+    PatternField, PipeOperator, Pipeline, QualifiedName, RecordEntry, RecordKey, Redirection,
+    RedirectionKind, Script, Severity, SourceFile, Span, Stage, StageKind, Statement,
+    StatementKind, SyntaxClassification, Token, TokenKind, TryStatement, TypeConstraint,
+    TypeParameter, TypeReference, UnaryExpression, UnaryOperator, VariableReference,
+    VariantDeclaration, VariantPattern, VariantTypeDeclaration, WhileStatement, Word, WordPart,
+    WordPartKind,
 };
 
 /// The result of parsing one source file.
@@ -38,148 +35,39 @@ pub enum ControlledParseOutcome {
     Cancelled,
 }
 
-/// The result of parsing one explicitly versioned OPAAL source file.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum VersionedParseOutcome {
-    Complete(VersionedScript),
-    Incomplete(IncompleteInput),
-    Invalid(Vec<Diagnostic>),
-}
-
-/// A controlled OPAAL parse either completes with the versioned result or is
-/// cancelled without exposing partial syntax or diagnostics.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum ControlledVersionedParseOutcome {
-    Parsed(VersionedParseOutcome),
-    Cancelled,
-}
-
-/// Parses a source file through the shared lexer and structural classifier.
+/// Parses one OPAAL source file through the shared lexer and structural classifier.
 #[must_use]
-#[cfg(feature = "flash-v1-migration")]
-pub fn parse_flash_v1(source: &SourceFile) -> ParseOutcome {
-    match parse_flash_v1_with_control(source, &|| false) {
-        ControlledParseOutcome::Parsed(outcome) => outcome,
-        ControlledParseOutcome::Cancelled => unreachable!("the default parser never cancels"),
-    }
-}
-
-/// Parses one OPAAL source file after validating and retaining its required
-/// leading language directive.
-#[must_use]
-pub fn parse_opaal(source: &SourceFile) -> VersionedParseOutcome {
+pub fn parse_opaal(source: &SourceFile) -> ParseOutcome {
     match parse_opaal_with_control(source, &|| false) {
-        ControlledVersionedParseOutcome::Parsed(outcome) => outcome,
-        ControlledVersionedParseOutcome::Cancelled => {
+        ControlledParseOutcome::Parsed(outcome) => outcome,
+        ControlledParseOutcome::Cancelled => {
             unreachable!("the default opaal parser never cancels")
         }
     }
 }
 
-/// Parses one interactive OPAAL submission under a language identity selected
-/// by the REPL before user input is read.
-///
-/// Unlike a source module, an edit buffer carries no `language 1` directive;
-/// it still uses the exact OPAAL lexer and grammar vocabulary.
-#[must_use]
-pub fn parse_opaal_submission(source: &SourceFile) -> ParseOutcome {
-    match parse_opaal_submission_with_control(source, &|| false) {
-        ControlledParseOutcome::Parsed(outcome) => outcome,
-        ControlledParseOutcome::Cancelled => {
-            unreachable!("the default opaal submission parser never cancels")
-        }
-    }
-}
-
-/// Parses one interactive OPAAL submission with cooperative cancellation.
-///
-/// The predicate must remain `true` after it first requests cancellation.
-#[must_use]
-pub fn parse_opaal_submission_with_control(
-    source: &SourceFile,
-    is_cancelled: &dyn Fn() -> bool,
-) -> ControlledParseOutcome {
-    let Some(tokens) = lex_opaal_with_control(source, is_cancelled) else {
-        return ControlledParseOutcome::Cancelled;
-    };
-    parse_tokens(source, tokens, SyntaxLanguage::OpaalV1, is_cancelled)
-}
-
-/// Parses OPAAL with cooperative cancellation across lexing, directive
-/// validation, and body parsing. The predicate must remain `true` after it
-/// first requests cancellation.
+/// Parses OPAAL with cooperative cancellation across lexing and parsing. The
+/// predicate must remain `true` after it first requests cancellation.
 #[must_use]
 pub fn parse_opaal_with_control(
     source: &SourceFile,
     is_cancelled: &dyn Fn() -> bool,
-) -> ControlledVersionedParseOutcome {
-    let Some(tokens) = lex_opaal_with_control(source, is_cancelled) else {
-        return ControlledVersionedParseOutcome::Cancelled;
-    };
-    if is_cancelled() {
-        return ControlledVersionedParseOutcome::Cancelled;
-    }
-    let directive = match detect_source_language_tokens(source, &tokens) {
-        LanguageDetection::Complete(directive) => directive,
-        LanguageDetection::Invalid(diagnostics) => {
-            return ControlledVersionedParseOutcome::Parsed(VersionedParseOutcome::Invalid(
-                diagnostics,
-            ));
-        }
-    };
-    if is_cancelled() {
-        return ControlledVersionedParseOutcome::Cancelled;
-    }
-    let mut body = Vec::with_capacity(tokens.len());
-    for token in tokens {
-        if is_cancelled() {
-            return ControlledVersionedParseOutcome::Cancelled;
-        }
-        if token.span().start() >= directive.span().end() {
-            body.push(token);
-        }
-    }
-
-    let outcome = match parse_tokens(source, body, SyntaxLanguage::OpaalV1, is_cancelled) {
-        ControlledParseOutcome::Parsed(ParseOutcome::Complete(script)) => {
-            VersionedParseOutcome::Complete(VersionedScript::new(directive, script))
-        }
-        ControlledParseOutcome::Parsed(ParseOutcome::Incomplete(incomplete)) => {
-            VersionedParseOutcome::Incomplete(incomplete)
-        }
-        ControlledParseOutcome::Parsed(ParseOutcome::Invalid(diagnostics)) => {
-            VersionedParseOutcome::Invalid(diagnostics)
-        }
-        ControlledParseOutcome::Cancelled => return ControlledVersionedParseOutcome::Cancelled,
-    };
-    ControlledVersionedParseOutcome::Parsed(outcome)
-}
-
-/// Parses with a cooperative cancellation predicate while preserving the
-/// ordinary parser's complete/incomplete/invalid result unchanged. The
-/// predicate must remain `true` after it first requests cancellation.
-#[must_use]
-#[cfg(feature = "flash-v1-migration")]
-pub fn parse_flash_v1_with_control(
-    source: &SourceFile,
-    is_cancelled: &dyn Fn() -> bool,
 ) -> ControlledParseOutcome {
-    let Some(tokens) = lex_flash_v1_with_control(source, is_cancelled) else {
+    let Some(tokens) = lex_opaal_with_control(source, is_cancelled) else {
         return ControlledParseOutcome::Cancelled;
     };
-    parse_tokens(source, tokens, SyntaxLanguage::FlashV1, is_cancelled)
+    parse_tokens(source, tokens, is_cancelled)
 }
 
 fn parse_tokens(
     source: &SourceFile,
     tokens: Vec<Token>,
-    language: SyntaxLanguage,
     is_cancelled: &dyn Fn() -> bool,
 ) -> ControlledParseOutcome {
     if is_cancelled() {
         return ControlledParseOutcome::Cancelled;
     }
-    let classification = classify_tokens_for_language(source, &tokens, language)
+    let classification = classify_opaal_tokens(source, &tokens)
         .expect("tokens produced from a source file have source-local spans");
     if is_cancelled() {
         return ControlledParseOutcome::Cancelled;
@@ -193,7 +81,7 @@ fn parse_tokens(
         }
         SyntaxClassification::Complete => {}
     }
-    let parsed = Parser::new(source, tokens, language, is_cancelled).parse_script();
+    let parsed = Parser::new(source, tokens, is_cancelled).parse_script();
     if is_cancelled() {
         return ControlledParseOutcome::Cancelled;
     }
@@ -227,7 +115,6 @@ struct Parser<'source, 'control> {
     position: usize,
     continuation_depth: usize,
     diagnostics: Vec<Diagnostic>,
-    language: SyntaxLanguage,
     is_cancelled: &'control dyn Fn() -> bool,
 }
 
@@ -235,7 +122,6 @@ impl<'source, 'control> Parser<'source, 'control> {
     fn new(
         source: &'source SourceFile,
         tokens: Vec<Token>,
-        language: SyntaxLanguage,
         is_cancelled: &'control dyn Fn() -> bool,
     ) -> Self {
         Self {
@@ -244,7 +130,6 @@ impl<'source, 'control> Parser<'source, 'control> {
             position: 0,
             continuation_depth: 0,
             diagnostics: Vec::new(),
-            language,
             is_cancelled,
         }
     }
@@ -340,12 +225,7 @@ impl<'source, 'control> Parser<'source, 'control> {
         self.check_cancelled()?;
         self.skip_inline();
         match self.current_kind() {
-            Some(TokenKind::Keyword(Keyword::Import))
-                if top_level && self.language == SyntaxLanguage::OpaalV1 =>
-            {
-                self.parse_module_import()
-            }
-            Some(TokenKind::Keyword(Keyword::Import)) if top_level => self.parse_import(),
+            Some(TokenKind::Keyword(Keyword::Import)) if top_level => self.parse_module_import(),
             Some(TokenKind::Keyword(Keyword::Import)) => {
                 Err(self.invalid_here("imports are allowed only at module top level"))
             }
@@ -354,12 +234,8 @@ impl<'source, 'control> Parser<'source, 'control> {
             Some(TokenKind::Keyword(Keyword::Export)) => self.parse_export(top_level),
             Some(TokenKind::Keyword(Keyword::Unset)) => self.parse_unset(),
             Some(TokenKind::Keyword(Keyword::Def)) => self.parse_function(documentation),
-            Some(TokenKind::Keyword(Keyword::Type)) if self.language == SyntaxLanguage::OpaalV1 => {
-                self.parse_nominal_type(top_level)
-            }
-            Some(TokenKind::Keyword(Keyword::Enum)) if self.language == SyntaxLanguage::OpaalV1 => {
-                self.parse_variant_type(top_level)
-            }
+            Some(TokenKind::Keyword(Keyword::Type)) => self.parse_nominal_type(top_level),
+            Some(TokenKind::Keyword(Keyword::Enum)) => self.parse_variant_type(top_level),
             Some(TokenKind::Keyword(Keyword::If)) => {
                 let node = self.parse_if_node()?;
                 let span = node.span();
@@ -385,37 +261,6 @@ impl<'source, 'control> Parser<'source, 'control> {
             Some(_) => self.parse_job_statement(),
             None => Err(self.incomplete_here(IncompleteReason::Expression)),
         }
-    }
-
-    fn parse_import(&mut self) -> ParseResult<Statement> {
-        let start = self.take().expect("import keyword is current").span();
-        self.skip_inline();
-        let names = if self.at_delimiter(Some(Delimiter::LeftBrace)) {
-            let (names, _) = self.parse_module_name_list("import name list cannot be empty")?;
-            self.skip_inline();
-            self.expect_contextual_identifier("from", "named import requires `from`")?;
-            self.skip_inline();
-            names
-        } else {
-            Vec::new()
-        };
-        let path = match self.current_kind() {
-            Some(TokenKind::SingleQuoted) => self.take().expect("import path is current").span(),
-            _ => {
-                return Err(self.expected(
-                    "import requires a single-quoted path",
-                    IncompleteReason::Expression,
-                ));
-            }
-        };
-        if path.len() == 2 {
-            return Err(self.invalid_at(path, "import path cannot be empty"));
-        }
-        let span = self.span(start.start(), path.end());
-        Ok(Statement::new(
-            StatementKind::Import(ImportStatement { names, path }),
-            span,
-        ))
     }
 
     fn parse_module_import(&mut self) -> ParseResult<Statement> {
@@ -578,11 +423,7 @@ impl<'source, 'control> Parser<'source, 'control> {
     fn parse_declaration(&mut self, mutable: bool) -> ParseResult<Statement> {
         let start = self.take().expect("declaration starts on a keyword").span();
         self.skip_inline();
-        let pattern = if self.language == SyntaxLanguage::OpaalV1 {
-            self.parse_pattern()?
-        } else {
-            Pattern::Binding(self.parse_identifier()?)
-        };
+        let pattern = self.parse_pattern()?;
         let name = self.pattern_primary_binding(&pattern).ok_or_else(|| {
             self.invalid_at(
                 self.pattern_span(&pattern),
@@ -1062,11 +903,7 @@ impl<'source, 'control> Parser<'source, 'control> {
         let mut parameters = Vec::new();
         while !self.at_delimiter(Some(closing)) {
             let start = self.current_span()?;
-            let pattern = if self.language == SyntaxLanguage::OpaalV1 {
-                self.parse_pattern()?
-            } else {
-                Pattern::Binding(self.parse_identifier()?)
-            };
+            let pattern = self.parse_pattern()?;
             let name = self.pattern_primary_binding(&pattern).ok_or_else(|| {
                 self.invalid_at(
                     self.pattern_span(&pattern),
@@ -1756,11 +1593,7 @@ impl<'source, 'control> Parser<'source, 'control> {
         let mut parameters = Vec::new();
         while self.current_kind() != Some(TokenKind::Operator(Operator::Pipe)) {
             let start = self.current_span()?;
-            let pattern = if self.language == SyntaxLanguage::OpaalV1 {
-                self.parse_pattern()?
-            } else {
-                Pattern::Binding(self.parse_identifier()?)
-            };
+            let pattern = self.parse_pattern()?;
             let name = self.pattern_primary_binding(&pattern).ok_or_else(|| {
                 self.invalid_at(
                     self.pattern_span(&pattern),
@@ -2360,9 +2193,8 @@ impl<'source, 'control> Parser<'source, 'control> {
                 let next = self.next_non_inline(self.position + 1);
                 next.is_some_and(|token| {
                     token.kind() == TokenKind::Delimiter(Delimiter::LeftParenthesis)
-                }) || (self.language == SyntaxLanguage::OpaalV1
-                    && next
-                        .is_some_and(|token| token.kind() == TokenKind::Operator(Operator::Colon))
+                }) || (next
+                    .is_some_and(|token| token.kind() == TokenKind::Operator(Operator::Colon))
                     && self
                         .next_non_inline(self.position + 2)
                         .is_some_and(|token| token.kind() == TokenKind::Operator(Operator::Colon)))
@@ -2817,13 +2649,8 @@ impl<'source, 'control> Parser<'source, 'control> {
     }
 
     fn invalid_at(&self, span: Span, message: &str) -> ParseError {
-        let code = match self.language {
-            #[cfg(feature = "flash-v1-migration")]
-            SyntaxLanguage::FlashV1 => "FS1000",
-            SyntaxLanguage::OpaalV1 => "OP1000",
-        };
         ParseError::Invalid(
-            Diagnostic::new(Severity::Error, code, message).with_primary(span, message),
+            Diagnostic::new(Severity::Error, "OP1000", message).with_primary(span, message),
         )
     }
 }

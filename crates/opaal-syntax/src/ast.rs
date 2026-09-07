@@ -78,7 +78,6 @@ pub type Statement = AstNode<StatementKind>;
 /// The statement forms ratified for the initial grammar.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum StatementKind {
-    Import(ImportStatement),
     ModuleImport(ModuleAliasImport),
     ModuleExport(ModuleExportStatement),
     NominalType(NominalTypeDeclaration),
@@ -95,15 +94,6 @@ pub enum StatementKind {
     Throw(Expression),
     Control(ControlTransfer),
     Job(JobStatement),
-}
-
-/// One static top-level source dependency.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ImportStatement {
-    /// Explicit imported names. Empty only for a load-only import.
-    pub names: Vec<Identifier>,
-    /// The complete nonempty single-quoted path literal.
-    pub path: Span,
 }
 
 /// One OPAAL module imported under a required local alias.

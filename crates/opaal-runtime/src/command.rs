@@ -13,8 +13,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::documentation::CommandDocumentation;
 
-/// The language major owned by the current OPAAL namespace contract.
-pub const OPAAL_LANGUAGE_NUMBER: u16 = 1;
+/// The toolchain major owned by the current OPAAL namespace contract.
+pub const OPAAL_TOOLCHAIN_MAJOR: u16 = 1;
 
 /// One pipeline-edge carrier.
 ///
@@ -535,11 +535,11 @@ pub struct CommandLifecycle {
 }
 
 impl CommandLifecycle {
-    /// Metadata for an entry introduced in `language_major`.
+    /// Metadata for an entry introduced in `toolchain_major`.
     #[must_use]
-    pub const fn introduced(language_major: u16) -> Self {
+    pub const fn introduced(toolchain_major: u16) -> Self {
         Self {
-            introduced_major: language_major,
+            introduced_major: toolchain_major,
             deprecated_since: None,
             replacement: None,
         }
@@ -559,7 +559,7 @@ impl CommandLifecycle {
         self
     }
 
-    /// The language major in which the entry first existed or was reserved.
+    /// The toolchain major in which the entry first existed or was reserved.
     #[must_use]
     pub const fn introduced_major(&self) -> u16 {
         self.introduced_major
@@ -588,7 +588,7 @@ pub enum CommandNamespaceEntry {
         /// Compatibility lifecycle metadata.
         lifecycle: CommandLifecycle,
     },
-    /// One executable migration spelling targeting a canonical core entry.
+    /// One compatibility alias targeting a canonical core entry.
     Alias {
         /// The source spelling.
         name: String,
@@ -601,11 +601,11 @@ pub enum CommandNamespaceEntry {
     Reserved {
         /// The protected source spelling.
         name: String,
-        /// The language major in which the reservation first existed.
+        /// The toolchain major in which the reservation first existed.
         introduced_major: u16,
         /// Stable user-facing reason for the reservation.
         purpose: String,
-        /// Optional canonical migration target.
+        /// Optional canonical replacement target.
         replacement: Option<String>,
     },
 }
@@ -663,7 +663,7 @@ impl CommandNamespaceEntry {
 pub enum NamespaceClass {
     /// A canonical executable built-in.
     Core,
-    /// An executable migration spelling.
+    /// An executable compatibility alias.
     Alias,
     /// A spelling protected from external fallback.
     Reserved,
@@ -694,9 +694,9 @@ pub enum CommandClassification<'a> {
     Reserved {
         /// Stable user-facing reason for the reservation.
         purpose: &'a str,
-        /// Optional canonical migration target.
+        /// Optional canonical replacement target.
         replacement: Option<&'a str>,
-        /// The language major in which the reservation first existed.
+        /// The toolchain major in which the reservation first existed.
         introduced_major: u16,
     },
 }
@@ -725,17 +725,17 @@ impl<'a> NamespaceEntryRef<'a> {
 /// A manifest validation failure.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum CommandRegistryError {
-    /// The registry language major must be positive.
-    InvalidLanguageIdentity { language_major: u16 },
+    /// The registry toolchain major must be positive.
+    InvalidToolchainIdentity { toolchain_major: u16 },
     /// Namespace spellings cannot be empty.
     EmptyName,
     /// One spelling occurred in more than one manifest entry.
     DuplicateName { name: String },
-    /// An entry claims introduction outside the registry's language-major range.
+    /// An entry claims introduction outside the registry's toolchain-major range.
     InvalidIntroducedMajor {
         name: String,
         introduced_major: u16,
-        language_major: u16,
+        toolchain_major: u16,
     },
     /// A deprecation release spelling was empty.
     EmptyDeprecation { name: String },
@@ -870,17 +870,17 @@ impl CommandSignature {
     }
 }
 
-/// A validated command namespace. Empty at language major one by default.
+/// A validated command namespace. Empty at toolchain major one by default.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CommandRegistry {
-    language_major: u16,
+    toolchain_major: u16,
     entries: BTreeMap<String, StoredNamespaceEntry>,
 }
 
 impl Default for CommandRegistry {
     fn default() -> Self {
         Self {
-            language_major: OPAAL_LANGUAGE_NUMBER,
+            toolchain_major: OPAAL_TOOLCHAIN_MAJOR,
             entries: BTreeMap::new(),
         }
     }
@@ -895,15 +895,15 @@ impl CommandRegistry {
 
     /// Builds and validates one complete namespace manifest.
     pub fn try_from_entries(
-        language_major: u16,
+        toolchain_major: u16,
         entries: impl IntoIterator<Item = CommandNamespaceEntry>,
     ) -> Result<Self, CommandRegistryError> {
-        if language_major == 0 {
-            return Err(CommandRegistryError::InvalidLanguageIdentity { language_major });
+        if toolchain_major == 0 {
+            return Err(CommandRegistryError::InvalidToolchainIdentity { toolchain_major });
         }
 
         let mut registry = Self {
-            language_major,
+            toolchain_major,
             entries: BTreeMap::new(),
         };
         for entry in entries {
@@ -920,7 +920,7 @@ impl CommandRegistry {
                     signature,
                     lifecycle,
                 } => {
-                    validate_lifecycle(&name, &lifecycle, language_major)?;
+                    validate_lifecycle(&name, &lifecycle, toolchain_major)?;
                     StoredNamespaceEntry::Core {
                         signature,
                         lifecycle,
@@ -929,7 +929,7 @@ impl CommandRegistry {
                 CommandNamespaceEntry::Alias {
                     target, lifecycle, ..
                 } => {
-                    validate_lifecycle(&name, &lifecycle, language_major)?;
+                    validate_lifecycle(&name, &lifecycle, toolchain_major)?;
                     StoredNamespaceEntry::Alias { target, lifecycle }
                 }
                 CommandNamespaceEntry::Reserved {
@@ -938,7 +938,7 @@ impl CommandRegistry {
                     replacement,
                     ..
                 } => {
-                    validate_introduced_major(&name, introduced_major, language_major)?;
+                    validate_introduced_major(&name, introduced_major, toolchain_major)?;
                     if purpose.is_empty() {
                         return Err(CommandRegistryError::EmptyReservationPurpose { name });
                     }
@@ -967,7 +967,7 @@ impl CommandRegistry {
             signature.name.clone(),
             StoredNamespaceEntry::Core {
                 signature,
-                lifecycle: CommandLifecycle::introduced(self.language_major),
+                lifecycle: CommandLifecycle::introduced(self.toolchain_major),
             },
         );
         true
@@ -1020,10 +1020,10 @@ impl CommandRegistry {
         })
     }
 
-    /// The language major whose namespace policy this registry validates.
+    /// The toolchain major whose namespace policy this registry validates.
     #[must_use]
-    pub const fn language_major(&self) -> u16 {
-        self.language_major
+    pub const fn toolchain_major(&self) -> u16 {
+        self.toolchain_major
     }
 
     /// Classify one source spelling through the shared namespace seam.
@@ -1158,9 +1158,9 @@ impl CommandRegistry {
 fn validate_lifecycle(
     name: &str,
     lifecycle: &CommandLifecycle,
-    language_major: u16,
+    toolchain_major: u16,
 ) -> Result<(), CommandRegistryError> {
-    validate_introduced_major(name, lifecycle.introduced_major, language_major)?;
+    validate_introduced_major(name, lifecycle.introduced_major, toolchain_major)?;
     if lifecycle
         .deprecated_since
         .as_ref()
@@ -1181,13 +1181,13 @@ fn validate_lifecycle(
 fn validate_introduced_major(
     name: &str,
     introduced_major: u16,
-    language_major: u16,
+    toolchain_major: u16,
 ) -> Result<(), CommandRegistryError> {
-    if introduced_major == 0 || introduced_major > language_major {
+    if introduced_major == 0 || introduced_major > toolchain_major {
         return Err(CommandRegistryError::InvalidIntroducedMajor {
             name: name.to_owned(),
             introduced_major,
-            language_major,
+            toolchain_major,
         });
     }
     Ok(())

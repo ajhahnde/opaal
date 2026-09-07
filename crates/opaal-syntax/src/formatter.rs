@@ -1,12 +1,6 @@
-#[cfg(feature = "flash-v1-migration")]
-use crate::ParseOutcome;
-#[cfg(feature = "flash-v1-migration")]
-use crate::lexer::lex_flash_v1;
-#[cfg(feature = "flash-v1-migration")]
-use crate::parser::parse_flash_v1;
 use crate::{
-    Delimiter, Diagnostic, IncompleteInput, SourceFile, Token, TokenKind, VersionedParseOutcome,
-    lex_opaal, parse_opaal,
+    Delimiter, Diagnostic, IncompleteInput, ParseOutcome, SourceFile, Token, TokenKind, lex_opaal,
+    parse_opaal,
 };
 
 /// The result of formatting one source file through the shared parser.
@@ -17,29 +11,15 @@ pub enum FormatOutcome {
     Invalid(Vec<Diagnostic>),
 }
 
-/// Canonically formats complete source while retaining exact non-trivia spelling.
-#[must_use]
-#[cfg(feature = "flash-v1-migration")]
-pub fn format_flash_v1_source(source: &SourceFile) -> FormatOutcome {
-    match parse_flash_v1(source) {
-        ParseOutcome::Complete(_) => {
-            FormatOutcome::Complete(format_tokens(source, &lex_flash_v1(source)))
-        }
-        ParseOutcome::Incomplete(incomplete) => FormatOutcome::Incomplete(incomplete),
-        ParseOutcome::Invalid(diagnostics) => FormatOutcome::Invalid(diagnostics),
-    }
-}
-
-/// Canonically formats one OPAAL source after validating the file's own
-/// required language directive.
+/// Canonically formats one complete OPAAL source.
 #[must_use]
 pub fn format_source_opaal(source: &SourceFile) -> FormatOutcome {
     match parse_opaal(source) {
-        VersionedParseOutcome::Complete(_) => {
+        ParseOutcome::Complete(_) => {
             FormatOutcome::Complete(format_tokens(source, &lex_opaal(source)))
         }
-        VersionedParseOutcome::Incomplete(incomplete) => FormatOutcome::Incomplete(incomplete),
-        VersionedParseOutcome::Invalid(diagnostics) => FormatOutcome::Invalid(diagnostics),
+        ParseOutcome::Incomplete(incomplete) => FormatOutcome::Incomplete(incomplete),
+        ParseOutcome::Invalid(diagnostics) => FormatOutcome::Invalid(diagnostics),
     }
 }
 

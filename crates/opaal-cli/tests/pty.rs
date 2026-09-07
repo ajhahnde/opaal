@@ -4,7 +4,7 @@ use std::io::Write;
 use std::process::{Command, Stdio};
 
 #[test]
-fn interactive_entry_preselects_opaal_one_without_legacy_startup_state() {
+fn interactive_entry_uses_implicit_opaal_source() {
     let mut child = Command::new(env!("CARGO_BIN_EXE_opaal"))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -18,5 +18,4 @@ fn interactive_entry_preselects_opaal_one_without_legacy_startup_state() {
     assert!(output.stderr.is_empty(), "{output:?}");
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.contains('1'), "{stdout:?}");
-    assert!(!stdout.contains("Flash"), "{stdout:?}");
 }

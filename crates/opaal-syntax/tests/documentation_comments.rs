@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
 
 use opaal_syntax::{
-    FormatOutcome, SourceFile, SourceId, StatementKind, TokenKind, VersionedParseOutcome,
+    FormatOutcome, ParseOutcome, SourceFile, SourceId, StatementKind, TokenKind,
     format_source_opaal, lex_opaal, parse_opaal,
 };
 
@@ -12,7 +12,7 @@ fn source(text: &str) -> SourceFile {
 #[test]
 fn documentation_comments_attach_by_physical_adjacency_and_preserve_exact_spans() {
     let text = concat!(
-        "language 1\n",
+        "",
         "## Summary π\n",
         "##\n",
         "## Detail 🚀\n",
@@ -51,7 +51,7 @@ fn documentation_comments_attach_by_physical_adjacency_and_preserve_exact_spans(
         TokenKind::Comment,
     );
     let script = match parse_opaal(&file) {
-        VersionedParseOutcome::Complete(versioned) => versioned.into_script(),
+        ParseOutcome::Complete(script) => script,
         other => panic!("documentation source did not parse: {other:?}"),
     };
 

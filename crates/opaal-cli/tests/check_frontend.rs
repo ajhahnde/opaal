@@ -79,7 +79,7 @@ impl ModuleSourceLoader for FakeFilesystem {
 fn a_clean_program_is_silent_with_only_module_filesystem_capabilities() {
     let filesystem = FakeFilesystem::default()
         .resolves("/project/main.opaal", "/project/main.opaal")
-        .contains("/project/main.opaal", "language 1\necho ready\n");
+        .contains("/project/main.opaal", "echo ready\n");
 
     let run = check_source(
         &CheckRequest::new(PathBuf::from("/project/main.opaal")),
@@ -150,16 +150,13 @@ fn opaal_checker_shares_alias_reexport_and_nominal_identity_without_loading_std(
         .contains(
             "/project/main.opaal",
             concat!(
-                "language 1\n\n",
+                "\n",
                 "import './model.opaal' as model\n",
                 "import std::value as values\n",
                 "export { model, values }\n",
             ),
         )
-        .contains(
-            "/project/model.opaal",
-            "language 1\n\ntype Item = { value: Int, }\n",
-        );
+        .contains("/project/model.opaal", "\ntype Item = { value: Int, }\n");
 
     let run = check_source(
         &CheckRequest::new(PathBuf::from("/project/main.opaal")),
@@ -182,10 +179,7 @@ fn opaal_checker_shares_alias_reexport_and_nominal_identity_without_loading_std(
 fn opaal_checker_rejects_unknown_standard_modules_and_alias_conflicts() {
     let unknown = FakeFilesystem::default()
         .resolves("/project/main.opaal", "/project/main.opaal")
-        .contains(
-            "/project/main.opaal",
-            "language 1\n\nimport std::missing as missing\n",
-        );
+        .contains("/project/main.opaal", "\nimport std::missing as missing\n");
     let run = check_source(
         &CheckRequest::new(PathBuf::from("/project/main.opaal")),
         &unknown,
@@ -199,12 +193,12 @@ fn opaal_checker_rejects_unknown_standard_modules_and_alias_conflicts() {
         .contains(
             "/project/main.opaal",
             concat!(
-                "language 1\n\n",
+                "\n",
                 "import './model.opaal' as duplicate\n",
                 "import std::value as duplicate\n",
             ),
         )
-        .contains("/project/model.opaal", "language 1\n");
+        .contains("/project/model.opaal", "");
     let run = check_source(
         &CheckRequest::new(PathBuf::from("/project/main.opaal")),
         &conflict,

@@ -18,7 +18,7 @@ use crate::stream::{
 };
 use crate::{FiniteFloat, Range, Record, Value};
 
-/// The stable identity of one compiled, qualified OPAAL language 1 operation.
+/// The stable identity of one compiled, qualified OPAAL operation.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct OperationId {
     module: ModuleId,

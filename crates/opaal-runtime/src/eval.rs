@@ -24,10 +24,10 @@ use opaal_platform::{
 use opaal_syntax::{
     AndChain, Assignment, BinaryOperator, Block, CallExpression, Closure, CommandItemKind,
     ConditionalChain, ControlTransfer, Declaration, ElseBranch, EnvironmentStatement, Expression,
-    ExpressionKind, ForStatement, FunctionDefinition, IfStatement, LanguageIdentity, Literal,
-    LiteralKind, MatchArm, MatchStatement, Parameter, Pattern, Pipeline, RecordKey,
-    RedirectionKind, Script, SourceFile, Span, StageKind, Statement, StatementKind, TryStatement,
-    UnaryOperator, VariableReference, WhileStatement, Word, WordPart, WordPartKind,
+    ExpressionKind, ForStatement, FunctionDefinition, IfStatement, Literal, LiteralKind, MatchArm,
+    MatchStatement, Parameter, Pattern, Pipeline, RecordKey, RedirectionKind, Script, SourceFile,
+    Span, StageKind, Statement, StatementKind, TryStatement, UnaryOperator, VariableReference,
+    WhileStatement, Word, WordPart, WordPartKind,
 };
 
 use crate::glob::{DEFAULT_GLOB_ENTRY_LIMIT, GlobPattern};
@@ -1094,7 +1094,7 @@ impl ReservedCommandDetails {
         &self.purpose
     }
 
-    /// Optional canonical migration target.
+    /// Optional canonical replacement target.
     #[must_use]
     pub fn replacement(&self) -> Option<&str> {
         self.replacement.as_deref()
@@ -1310,13 +1310,13 @@ impl fmt::Debug for CancellationToken {
 }
 
 /// Default statement/expression charges permitted for one OPAAL evaluation.
-pub const DEFAULT_OPAAL_V1_EVALUATION_STEPS: u64 = 1_000_000;
+pub const DEFAULT_OPAAL_EVALUATION_STEPS: u64 = 1_000_000;
 /// Default nested callable depth permitted for one OPAAL evaluation.
-pub const DEFAULT_OPAAL_V1_CALL_DEPTH: u64 = 256;
+pub const DEFAULT_OPAAL_CALL_DEPTH: u64 = 256;
 /// Default retained collection elements permitted for one OPAAL evaluation.
-pub const DEFAULT_OPAAL_V1_COLLECTION_ITEMS: u64 = 1_000_000;
+pub const DEFAULT_OPAAL_COLLECTION_ITEMS: u64 = 1_000_000;
 /// Default newly retained string/collection bytes permitted for one OPAAL evaluation.
-pub const DEFAULT_OPAAL_V1_COLLECTION_BYTES: u64 = 16 * 1024 * 1024;
+pub const DEFAULT_OPAAL_COLLECTION_BYTES: u64 = 16 * 1024 * 1024;
 
 /// Deterministic resource limits and counters for one evaluation boundary.
 ///
@@ -1375,14 +1375,14 @@ impl ResourceBudget {
     #[must_use]
     pub const fn opaal() -> Self {
         Self {
-            step_limit: Some(DEFAULT_OPAAL_V1_EVALUATION_STEPS),
+            step_limit: Some(DEFAULT_OPAAL_EVALUATION_STEPS),
             used_steps: 0,
-            call_depth_limit: Some(DEFAULT_OPAAL_V1_CALL_DEPTH),
+            call_depth_limit: Some(DEFAULT_OPAAL_CALL_DEPTH),
             call_depth: 0,
             peak_call_depth: 0,
-            collection_item_limit: Some(DEFAULT_OPAAL_V1_COLLECTION_ITEMS),
+            collection_item_limit: Some(DEFAULT_OPAAL_COLLECTION_ITEMS),
             collection_items: 0,
-            collection_byte_limit: Some(DEFAULT_OPAAL_V1_COLLECTION_BYTES),
+            collection_byte_limit: Some(DEFAULT_OPAAL_COLLECTION_BYTES),
             collection_bytes: 0,
         }
     }
@@ -1509,7 +1509,7 @@ pub struct EvalLimits {
 pub(crate) enum EvaluationPolicy {
     General,
     Startup,
-    PureOpaalV1,
+    PureOpaal,
 }
 
 impl EvalLimits {
@@ -1539,7 +1539,7 @@ impl EvalLimits {
         Self {
             cancel,
             budget,
-            policy: EvaluationPolicy::PureOpaalV1,
+            policy: EvaluationPolicy::PureOpaal,
         }
     }
 
@@ -2282,29 +2282,8 @@ impl Evaluator<'_, '_> {
         let span = statement.span();
         self.charge(span)?;
         match statement.kind() {
-            StatementKind::ModuleImport(_) | StatementKind::ModuleExport(_)
-                if self.binding_types.language(self.source.id())
-                    == Some(LanguageIdentity::OpaalV1) =>
-            {
+            StatementKind::ModuleImport(_) | StatementKind::ModuleExport(_) => {
                 Ok(Flow::Fallthrough(None))
-            }
-            StatementKind::Import(_)
-            | StatementKind::ModuleImport(_)
-            | StatementKind::ModuleExport(_)
-                if self.host.policy() == EvaluationPolicy::Startup =>
-            {
-                Err(self.error(
-                    RuntimeErrorKind::RestrictedStartup {
-                        capability: RestrictedCapability::ModuleLoad,
-                    },
-                    span,
-                ))
-            }
-            StatementKind::Import(_)
-            | StatementKind::ModuleImport(_)
-            | StatementKind::ModuleExport(_) => {
-                // opaal-foundation-boundary(embedding-refusal): The module-program loader owns import and export execution.
-                Err(self.error(RuntimeErrorKind::ExecutionUnsupported, span))
             }
             StatementKind::NominalType(_) | StatementKind::VariantType(_) => {
                 Ok(Flow::Fallthrough(None))
@@ -2459,7 +2438,7 @@ impl Evaluator<'_, '_> {
         environment: &EnvironmentStatement,
         scope: &mut ScopeStack,
     ) -> Eval<()> {
-        if self.host.policy() == EvaluationPolicy::PureOpaalV1 {
+        if self.host.policy() == EvaluationPolicy::PureOpaal {
             let span = match environment {
                 EnvironmentStatement::Export { name, value: _ }
                 | EnvironmentStatement::Unset { name } => name.span(),
@@ -3055,11 +3034,10 @@ impl Evaluator<'_, '_> {
         {
             return self.expression_with_expected(expression, scope, expected);
         }
-        if self.binding_types.language(self.source.id()) == Some(LanguageIdentity::OpaalV1)
-            && pipeline
-                .stages()
-                .iter()
-                .all(|stage| matches!(stage.kind(), StageKind::Expression(_)))
+        if pipeline
+            .stages()
+            .iter()
+            .all(|stage| matches!(stage.kind(), StageKind::Expression(_)))
         {
             let mut stages = pipeline.stages().iter();
             let first = stages
@@ -3075,7 +3053,7 @@ impl Evaluator<'_, '_> {
                     unreachable!("the pure pipeline predicate accepts only expressions")
                 };
                 let ExpressionKind::Qualified(name) = expression.kind() else {
-                    // opaal-foundation-boundary(carrier-refusal): OpaalV1 value pipelines accept only qualified operation stages.
+                    // opaal-foundation-boundary(carrier-refusal): OPAAL value pipelines accept only qualified operation stages.
                     return Err(
                         self.unsupported("non-operation value pipeline stage", stage.span())
                     );
@@ -3089,7 +3067,7 @@ impl Evaluator<'_, '_> {
                     .binding_types
                     .qualified_operation(self.source.id(), &segments)
                 else {
-                    // opaal-foundation-boundary(carrier-refusal): Unknown OpaalV1 operation stages cannot consume a value carrier.
+                    // opaal-foundation-boundary(carrier-refusal): Unknown OPAAL operation stages cannot consume a value carrier.
                     return Err(self.unsupported("unknown value pipeline operation", stage.span()));
                 };
                 value = operation
@@ -3306,7 +3284,7 @@ impl Evaluator<'_, '_> {
                 ))));
             }
         }
-        // opaal-foundation-boundary(carrier-refusal): Unresolved OpaalV1 qualified names are not runtime values.
+        // opaal-foundation-boundary(carrier-refusal): Unresolved OPAAL qualified names are not runtime values.
         Err(self.unsupported("qualified value", span))
     }
 
@@ -3682,7 +3660,7 @@ impl Evaluator<'_, '_> {
                 value.push(self.encode_scalar(&resolved, span)?);
             }
             WordPartKind::CommandSubstitution(substitution) => {
-                if self.host.policy() == EvaluationPolicy::PureOpaalV1 {
+                if self.host.policy() == EvaluationPolicy::PureOpaal {
                     return Err(Abort::Refused(Refusal::new(
                         RefusalReason::Unsupported,
                         "process execution",
@@ -4049,7 +4027,7 @@ impl Evaluator<'_, '_> {
                 let argument = self.expression(&call.arguments[0], scope)?;
                 match intrinsic {
                     ExpressionIntrinsic::Env => {
-                        if self.host.policy() == EvaluationPolicy::PureOpaalV1 {
+                        if self.host.policy() == EvaluationPolicy::PureOpaal {
                             return Err(Abort::Refused(Refusal::new(
                                 RefusalReason::Unsupported,
                                 "environment read",
@@ -4297,7 +4275,7 @@ impl Evaluator<'_, '_> {
     }
 
     fn glob(&mut self, value: &Value, span: Span) -> Eval<Value> {
-        if self.host.policy() == EvaluationPolicy::PureOpaalV1 {
+        if self.host.policy() == EvaluationPolicy::PureOpaal {
             return Err(Abort::Refused(Refusal::new(
                 RefusalReason::Unsupported,
                 "filesystem read",
@@ -4839,7 +4817,7 @@ pub(crate) fn snapshot_callable(callable: &Arc<dyn Callable>) -> Option<Callable
 }
 
 pub(crate) fn restore_callable(snapshot: CallableSnapshot) -> Result<Arc<dyn Callable>, String> {
-    let parsed = match opaal_syntax::parse_opaal_submission(&snapshot.source) {
+    let parsed = match opaal_syntax::parse_opaal(&snapshot.source) {
         opaal_syntax::ParseOutcome::Complete(script) => script,
         opaal_syntax::ParseOutcome::Incomplete(_) => {
             return Err("callable source is incomplete".to_owned());
@@ -4899,8 +4877,7 @@ fn find_callable_in_statement(
     snapshot: &CallableSnapshot,
 ) -> Option<CallableBody> {
     match statement.kind() {
-        StatementKind::Import(_)
-        | StatementKind::ModuleImport(_)
+        StatementKind::ModuleImport(_)
         | StatementKind::ModuleExport(_)
         | StatementKind::NominalType(_)
         | StatementKind::VariantType(_) => None,
@@ -5214,7 +5191,7 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use opaal_platform::{DirectoryEntry, DirectoryEntryKind, DirectoryReadError};
-    use opaal_syntax::{ParseOutcome, SourceId, parse_opaal_submission};
+    use opaal_syntax::{ParseOutcome, SourceId, parse_opaal};
 
     use super::*;
 
@@ -5392,7 +5369,7 @@ mod tests {
             "glob.opaal",
             "glob('*.opaal')",
         ));
-        let script = match parse_opaal_submission(&source) {
+        let script = match parse_opaal(&source) {
             ParseOutcome::Complete(script) => script,
             other => panic!("glob fixture did not parse: {other:?}"),
         };
@@ -5434,7 +5411,7 @@ mod tests {
             "capture.opaal",
             "def capture() { return $(^tool) }\ncapture()",
         ));
-        let script = match parse_opaal_submission(&source) {
+        let script = match parse_opaal(&source) {
             ParseOutcome::Complete(script) => script,
             other => panic!("capture fixture did not parse: {other:?}"),
         };
@@ -5475,7 +5452,7 @@ mod tests {
             "stopped.opaal",
             "try { pwd } catch error { throw \"caught\" }",
         ));
-        let script = match parse_opaal_submission(&source) {
+        let script = match parse_opaal(&source) {
             ParseOutcome::Complete(script) => script,
             other => panic!("stopped fixture did not parse: {other:?}"),
         };

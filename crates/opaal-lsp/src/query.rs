@@ -362,10 +362,9 @@ fn hover(
                     }
                 };
                 let mut markdown = format!(
-                    "```opaal\nmodule `{}`\n```\n\nOrigin: {origin}\n\nCanonical identity: `{}`\n\nLanguage: {}",
+                    "```opaal\nmodule `{}`\n```\n\nOrigin: {origin}\n\nCanonical identity: `{}`",
                     alias.name(),
                     alias.target().path().display(),
-                    alias.target().language().get(),
                 );
                 if let Some(requested) = alias.requested() {
                     markdown.push_str(&format!("\n\nRequested as: `{}`", requested.display()));
@@ -391,9 +390,8 @@ fn hover(
                 let operation = hover.operation();
                 let signatures = operation.signature_labels().join("\n");
                 format!(
-                    "```opaal\n{signatures}\n```\n\nCanonical identity: `{}`\n\nLanguage: {}\n\n{}",
+                    "```opaal\n{signatures}\n```\n\nCanonical identity: `{}`\n\n{}",
                     operation.id().qualified_name(),
-                    operation.id().module().language().get(),
                     operation.documentation(),
                 )
             }

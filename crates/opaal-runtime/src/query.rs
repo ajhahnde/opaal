@@ -12,8 +12,8 @@ use opaal_syntax::{
 use crate::command::{CommandClassification, CommandRegistry, CommandSignature, NamespaceClass};
 use crate::intrinsic::{DynamicBinding, ExpressionIntrinsic};
 use crate::module::{
-    FunctionSignature, ModuleEffectSummary, ModuleId, ModuleNameImport, ModuleProgram,
-    ModuleReferenceTarget, NominalType, ValueType,
+    FunctionSignature, ModuleEffectSummary, ModuleId, ModuleProgram, ModuleReferenceTarget,
+    NominalType, ValueType,
 };
 use crate::operation::{OperationDescriptor, standard_operations};
 
@@ -199,9 +199,9 @@ impl FunctionHover {
     }
 }
 
-/// Named-import target and its shared direct/transitive initializer effects.
+/// Module-import alias target and its shared direct/transitive initializer effects.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct NamedImportEffects {
+pub struct ModuleImportEffects {
     target: ModuleId,
     direct: ModuleEffectSummary,
     transitive: ModuleEffectSummary,
@@ -283,7 +283,7 @@ impl NominalTypeHover {
     }
 }
 
-impl NamedImportEffects {
+impl ModuleImportEffects {
     #[must_use]
     pub const fn target(&self) -> &ModuleId {
         &self.target
@@ -592,14 +592,6 @@ impl SemanticQueries<'_> {
                     });
                 }
             }
-            for import in self.program.names().imports(entry.module()) {
-                if self.import_definition(import).as_ref() == Some(definition) {
-                    locations.push(SourceLocation {
-                        module: entry.module().clone(),
-                        span: import.name_span(),
-                    });
-                }
-            }
             for reference in self.program.names().references(entry.module()) {
                 if target_location(reference.target()).as_ref() == Some(definition) {
                     locations.push(SourceLocation {
@@ -791,28 +783,20 @@ impl SemanticQueries<'_> {
         })
     }
 
-    /// Returns shared effects for a named import identifier.
+    /// Returns shared effects for a module-import alias identifier.
     #[must_use]
     pub fn import_effects_at(
         &self,
         module: &ModuleId,
         offset: usize,
-    ) -> Option<NamedImportEffects> {
+    ) -> Option<ModuleImportEffects> {
         let target = self
             .program
-            .names()
-            .imports(module)
-            .iter()
-            .find(|import| contains(import.name_span(), offset))
-            .map(ModuleNameImport::target)
-            .or_else(|| {
-                self.program
-                    .aliases()
-                    .aliases(module)
-                    .find(|alias| contains(alias.declaration_span(), offset))
-                    .map(|alias| alias.target())
-            })?;
-        Some(NamedImportEffects {
+            .aliases()
+            .aliases(module)
+            .find(|alias| contains(alias.declaration_span(), offset))
+            .map(|alias| alias.target())?;
+        Some(ModuleImportEffects {
             target: target.clone(),
             direct: self.program.effects().direct(target).clone(),
             transitive: self.program.effects().transitive(target).clone(),
@@ -892,16 +876,6 @@ impl SemanticQueries<'_> {
             false,
             matches!(target, ModuleReferenceTarget::Imported { .. }),
         )
-    }
-
-    fn import_definition(&self, import: &ModuleNameImport) -> Option<SourceLocation> {
-        self.program
-            .names()
-            .export(import.target(), import.name())
-            .map(|export| SourceLocation {
-                module: import.target().clone(),
-                span: export.declaration_span(),
-            })
     }
 
     fn command_at(&self, module: &ModuleId, offset: usize) -> Option<CommandMetadata> {
@@ -1053,8 +1027,7 @@ impl<'a> CallFinder<'a> {
 
     fn statement(&mut self, statement: &'a Statement) {
         match statement.kind() {
-            StatementKind::Import(_)
-            | StatementKind::ModuleImport(_)
+            StatementKind::ModuleImport(_)
             | StatementKind::ModuleExport(_)
             | StatementKind::NominalType(_)
             | StatementKind::VariantType(_) => {}

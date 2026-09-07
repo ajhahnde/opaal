@@ -1,4 +1,3 @@
-language 1
 
 import std::value as value
 

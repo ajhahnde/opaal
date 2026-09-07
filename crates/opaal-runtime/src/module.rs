@@ -20,12 +20,11 @@ use std::sync::{Arc, Mutex};
 
 use opaal_syntax::{
     BinaryOperator, Block, Closure, CommandHeadKind, CommandItemKind, ConditionalChain,
-    ControlTransfer, ControlledParseOutcome, ControlledVersionedParseOutcome, Diagnostic,
-    ElseBranch, Expression, ExpressionKind, Identifier, LanguageIdentity, LiteralKind, MatchArm,
-    ParseOutcome, Pattern, Pipeline, RecordKey, RedirectionKind, Script, Severity, SourceFile,
-    SourceId, Span, StageKind, Statement, StatementKind, TypeConstraint, TypeReference,
-    UnaryOperator, VersionedParseOutcome, Word, WordPart, WordPartKind, parse_opaal_with_control,
-    render_diagnostic_sources,
+    ControlTransfer, ControlledParseOutcome, Diagnostic, ElseBranch, Expression, ExpressionKind,
+    Identifier, LiteralKind, MatchArm, ParseOutcome, Pattern, Pipeline, RecordKey, RedirectionKind,
+    Script, Severity, SourceFile, SourceId, Span, StageKind, Statement, StatementKind,
+    TypeConstraint, TypeReference, UnaryOperator, Word, WordPart, WordPartKind,
+    parse_opaal_with_control, render_diagnostic_sources,
 };
 
 use crate::Value;
@@ -208,8 +207,8 @@ impl AnalysisUsage {
 }
 
 impl AnalysisLimits {
-    /// Default OPAAL language 1 ceilings. These are semantic counters, never clocks.
-    pub const OPAAL_V1: Self = Self {
+    /// Default OPAAL analysis ceilings. These are semantic counters, never clocks.
+    pub const OPAAL: Self = Self {
         limits: [
             Some(8 * 1024 * 1024),
             Some(256),
@@ -247,7 +246,7 @@ impl AnalysisLimits {
 
 impl Default for AnalysisLimits {
     fn default() -> Self {
-        Self::OPAAL_V1
+        Self::OPAAL
     }
 }
 
@@ -276,7 +275,7 @@ impl fmt::Display for AnalysisLimitExceeded {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             formatter,
-            "OPAAL language 1 analysis exceeded the {} limit of {}",
+            "OPAAL analysis exceeded the {} limit of {}",
             self.kind.name(),
             self.limit
         )
@@ -445,11 +444,10 @@ impl std::error::Error for ModuleSourceError {}
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct ModuleId {
     path: PathBuf,
-    language: LanguageIdentity,
     origin: ModuleOrigin,
 }
 
-/// The closed module-origin set admitted by the OPAAL language 1 foundation.
+/// The closed module-origin set admitted by OPAAL.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum ModuleOrigin {
     /// A source module resolved by the injected native-path canonicalizer.
@@ -466,12 +464,6 @@ impl ModuleId {
         &self.path
     }
 
-    /// The OPAAL language identity for this module.
-    #[must_use]
-    pub const fn language(&self) -> LanguageIdentity {
-        self.language
-    }
-
     /// The canonical provenance class retained by this identity.
     #[must_use]
     pub const fn origin(&self) -> &ModuleOrigin {
@@ -481,7 +473,6 @@ impl ModuleId {
     fn standard(namespace: &str, module: &str) -> Self {
         Self {
             path: PathBuf::from(format!("{namespace}::{module}")),
-            language: LanguageIdentity::OpaalV1,
             origin: ModuleOrigin::Standard {
                 namespace: namespace.to_owned(),
                 module: module.to_owned(),
@@ -535,12 +526,6 @@ impl<'a> ModuleResolver<'a> {
     #[must_use]
     pub const fn new(canonicalizer: &'a dyn ModuleCanonicalizer) -> Self {
         Self { canonicalizer }
-    }
-
-    /// The OPAAL language identity retained by every resolved module.
-    #[must_use]
-    pub const fn language(&self) -> LanguageIdentity {
-        LanguageIdentity::OpaalV1
     }
 
     /// Resolves a root source path without an importing source span.
@@ -613,7 +598,6 @@ impl<'a> ModuleResolver<'a> {
 
         Ok(ModuleId {
             path: canonical,
-            language: LanguageIdentity::OpaalV1,
             origin: ModuleOrigin::Local,
         })
     }
@@ -1065,15 +1049,6 @@ impl ModuleExport {
     }
 }
 
-/// One explicit imported name after its target export has been validated.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ModuleNameImport {
-    name: String,
-    importer: ModuleId,
-    target: ModuleId,
-    name_span: Span,
-}
-
 /// The lexical binding selected by one statically resolved name read.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ModuleReferenceTarget {
@@ -1088,11 +1063,11 @@ pub enum ModuleReferenceTarget {
         /// The identifier that introduced the binding.
         declaration_span: Span,
     },
-    /// An explicit import whose definition and visibility live in another
-    /// canonical source module.
+    /// A qualified alias reference whose definition lives in another canonical
+    /// source module.
     Imported {
-        /// The identifier that introduced the binding in the importing module.
-        import_span: Span,
+        /// The identifier that introduced the module alias.
+        alias_span: Span,
         /// The canonical module that owns the exported declaration.
         target_module: ModuleId,
         /// The target module's declaration identifier.
@@ -1130,37 +1105,10 @@ impl ModuleNameReference {
     }
 }
 
-impl ModuleNameImport {
-    /// The imported and local identifier spelling.
-    #[must_use]
-    pub fn name(&self) -> &str {
-        &self.name
-    }
-
-    /// The canonical module containing the named import.
-    #[must_use]
-    pub const fn importer(&self) -> &ModuleId {
-        &self.importer
-    }
-
-    /// The canonical module exporting the name.
-    #[must_use]
-    pub const fn target(&self) -> &ModuleId {
-        &self.target
-    }
-
-    /// The identifier in the explicit import list.
-    #[must_use]
-    pub const fn name_span(&self) -> Span {
-        self.name_span
-    }
-}
-
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 struct ModuleNames {
     locals: BTreeMap<String, Span>,
     exports: BTreeMap<String, ModuleExport>,
-    imports: Vec<ModuleNameImport>,
     references: Vec<ModuleNameReference>,
     visible: Vec<ModuleVisibleBinding>,
 }
@@ -1184,7 +1132,7 @@ impl ModuleVisibleBinding {
     }
 }
 
-/// Deterministic local, exported, imported, and referenced names by module.
+/// Deterministic local, exported, and referenced names by module.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct ModuleNameRegistry {
     by_module: BTreeMap<ModuleId, ModuleNames>,
@@ -1197,14 +1145,6 @@ impl ModuleNameRegistry {
         self.by_module
             .get(module)
             .and_then(|names| names.exports.get(name))
-    }
-
-    /// Explicit imports in source order for one canonical module.
-    #[must_use]
-    pub fn imports(&self, module: &ModuleId) -> &[ModuleNameImport] {
-        self.by_module
-            .get(module)
-            .map_or(&[], |names| names.imports.as_slice())
     }
 
     /// Lexical reads in deterministic source-traversal order for one module.
@@ -1273,24 +1213,6 @@ impl ModuleNameRegistry {
         {
             return Some((reference.name.clone(), reference.target.clone()));
         }
-        if let Some(import) = names
-            .imports
-            .iter()
-            .find(|import| span_contains(import.name_span(), offset))
-        {
-            let export = self
-                .export(import.target(), import.name())
-                .expect("validated imports retain their target export");
-            return Some((
-                import.name.clone(),
-                ModuleReferenceTarget::Imported {
-                    import_span: import.name_span(),
-                    target_module: import.target().clone(),
-                    declaration_span: export.declaration_span(),
-                    export_span: export.export_span(),
-                },
-            ));
-        }
         if let Some((name, declaration_span)) = names
             .visible
             .iter()
@@ -1338,7 +1260,6 @@ impl ModuleNameRegistry {
         let mut registry = Self::default();
         let mut errors = Vec::new();
         let mut poisoned_exports = BTreeMap::<ModuleId, BTreeSet<String>>::new();
-        let mut poisoned_imports = BTreeMap::<ModuleId, BTreeSet<String>>::new();
 
         for entry in sources.entries() {
             if control.is_cancelled() {
@@ -1424,96 +1345,10 @@ impl ModuleNameRegistry {
             if control.is_cancelled() {
                 return Ok(registry);
             }
-            for statement in entry.script().statements() {
-                let StatementKind::Import(import) = statement.kind() else {
-                    continue;
-                };
-                if import.names.is_empty() {
-                    continue;
-                }
-                let edge = graph
-                    .imports()
-                    .iter()
-                    .find(|edge| edge.importer() == entry.module() && edge.span() == import.path)
-                    .expect("every parsed import has one resolved graph edge");
-                for identifier in &import.names {
-                    let name = entry
-                        .source()
-                        .slice(identifier.span())
-                        .expect("parsed identifiers belong to their module source")
-                        .to_owned();
-                    if DynamicBinding::lookup(&name).is_some() {
-                        errors.push(ModuleNameError::ReservedBinding {
-                            module: entry.module().clone(),
-                            name,
-                            declaration_span: identifier.span(),
-                        });
-                        continue;
-                    }
-                    let target_names = registry
-                        .by_module
-                        .get(edge.target())
-                        .expect("every graph target has a name table");
-                    if !target_names.exports.contains_key(&name) {
-                        let target_is_poisoned = poisoned_exports
-                            .get(edge.target())
-                            .is_some_and(|names| names.contains(&name));
-                        if !target_is_poisoned {
-                            let private_span = target_names.locals.get(&name).copied();
-                            errors.push(ModuleNameError::UnavailableImport {
-                                importer: entry.module().clone(),
-                                target: edge.target().clone(),
-                                name: name.clone(),
-                                import_span: identifier.span(),
-                                private_span,
-                            });
-                        }
-                        poisoned_imports
-                            .entry(entry.module().clone())
-                            .or_default()
-                            .insert(name);
-                        continue;
-                    }
-
-                    let importer_names = registry
-                        .by_module
-                        .get_mut(entry.module())
-                        .expect("every registered source has a name table");
-                    let conflict = importer_names.locals.get(&name).copied().or_else(|| {
-                        importer_names
-                            .imports
-                            .iter()
-                            .find(|imported| imported.name() == name)
-                            .map(ModuleNameImport::name_span)
-                    });
-                    if let Some(first_span) = conflict {
-                        errors.push(ModuleNameError::ImportConflict {
-                            module: entry.module().clone(),
-                            name,
-                            first_span,
-                            duplicate_span: identifier.span(),
-                        });
-                        continue;
-                    }
-                    importer_names.imports.push(ModuleNameImport {
-                        name,
-                        importer: entry.module().clone(),
-                        target: edge.target().clone(),
-                        name_span: identifier.span(),
-                    });
-                }
-            }
-        }
-
-        for entry in sources.entries() {
-            if control.is_cancelled() {
-                return Ok(registry);
-            }
             let (references, visible, mut reference_errors) = ReferenceResolver::new(
                 entry,
                 &registry,
                 aliases,
-                poisoned_imports.get(entry.module()),
                 entry.module() == graph.root(),
                 control,
             )
@@ -2002,9 +1837,6 @@ pub(crate) struct RuntimeBindingTypes {
 }
 
 impl RuntimeBindingTypes {
-    pub(crate) fn language(&self, source: SourceId) -> Option<LanguageIdentity> {
-        self.modules_by_source.get(&source).map(ModuleId::language)
-    }
     pub(crate) fn binding_type(
         &self,
         source: SourceId,
@@ -2192,7 +2024,6 @@ impl RuntimeBindingTypes {
                 // needs one stable module identity so aliases retained by an
                 // earlier cell resolve from later differently named cells.
                 path: PathBuf::from("<interactive>"),
-                language: LanguageIdentity::OpaalV1,
                 origin: ModuleOrigin::Local,
             },
             source: source.clone(),
@@ -2698,9 +2529,7 @@ impl<'a> TypeCollector<'a> {
             return Ok(());
         }
         match statement.kind() {
-            StatementKind::Import(_)
-            | StatementKind::ModuleImport(_)
-            | StatementKind::ModuleExport(_) => Ok(()),
+            StatementKind::ModuleImport(_) | StatementKind::ModuleExport(_) => Ok(()),
             StatementKind::NominalType(_) | StatementKind::VariantType(_) => Ok(()),
             StatementKind::Declaration(declaration) => {
                 self.collect_nominal_pattern_references(&declaration.pattern);
@@ -3398,11 +3227,8 @@ impl<'a> SignatureValidator<'a> {
                 .collect(),
         );
         let result = (|| {
-            if self.entry.module().language() == LanguageIdentity::OpaalV1 {
-                for (parameter, resolved) in function.parameters.iter().zip(signature.parameters())
-                {
-                    self.validate_pattern(&parameter.pattern, resolved.value_type());
-                }
+            for (parameter, resolved) in function.parameters.iter().zip(signature.parameters()) {
+                self.validate_pattern(&parameter.pattern, resolved.value_type());
             }
             self.function_statements(&function.body.statements, signature)?;
 
@@ -3482,24 +3308,16 @@ impl<'a> SignatureValidator<'a> {
             }
             StatementKind::Match(statement) => {
                 let subject_type = self.expression(&statement.value)?;
-                if self.entry.module().language() == LanguageIdentity::OpaalV1 {
-                    self.validate_match(statement, subject_type.as_ref())?;
-                }
+                self.validate_match(statement, subject_type.as_ref())?;
                 for arm in &statement.arms {
-                    if self.entry.module().language() == LanguageIdentity::OpaalV1
-                        && let Some(subject_type) = &subject_type
-                    {
+                    if let Some(subject_type) = &subject_type {
                         self.infer_pattern_bindings(&arm.pattern, subject_type);
                     }
                     if let Pattern::Literal(literal) = &arm.pattern {
                         self.literal(literal)?;
                     }
                     if let Some(guard) = &arm.guard {
-                        if self.entry.module().language() == LanguageIdentity::OpaalV1 {
-                            self.validate_guard(guard)?;
-                        } else {
-                            self.expression(guard)?;
-                        }
+                        self.validate_guard(guard)?;
                     }
                     self.function_statements(&arm.body.statements, signature)?;
                 }
@@ -3561,8 +3379,7 @@ impl<'a> SignatureValidator<'a> {
             return Ok(());
         }
         match statement.kind() {
-            StatementKind::Import(_)
-            | StatementKind::ModuleImport(_)
+            StatementKind::ModuleImport(_)
             | StatementKind::ModuleExport(_)
             | StatementKind::NominalType(_)
             | StatementKind::VariantType(_) => Ok(()),
@@ -3573,9 +3390,7 @@ impl<'a> SignatureValidator<'a> {
                         .map(ResolvedTypeAnnotation::value_type)
                 });
                 let actual = self.expression_with_expected(&declaration.value, expected)?;
-                if self.entry.module().language() == LanguageIdentity::OpaalV1
-                    && let Some(actual) = actual
-                {
+                if let Some(actual) = actual {
                     if actual != ValueType::Any
                         && let Some(expected) = expected
                         && !expected.accepts_type(&actual)
@@ -3627,24 +3442,16 @@ impl<'a> SignatureValidator<'a> {
             }
             StatementKind::Match(statement) => {
                 let subject_type = self.expression(&statement.value)?;
-                if self.entry.module().language() == LanguageIdentity::OpaalV1 {
-                    self.validate_match(statement, subject_type.as_ref())?;
-                }
+                self.validate_match(statement, subject_type.as_ref())?;
                 for arm in &statement.arms {
-                    if self.entry.module().language() == LanguageIdentity::OpaalV1
-                        && let Some(subject_type) = &subject_type
-                    {
+                    if let Some(subject_type) = &subject_type {
                         self.infer_pattern_bindings(&arm.pattern, subject_type);
                     }
                     if let Pattern::Literal(literal) = &arm.pattern {
                         self.literal(literal)?;
                     }
                     if let Some(guard) = &arm.guard {
-                        if self.entry.module().language() == LanguageIdentity::OpaalV1 {
-                            self.validate_guard(guard)?;
-                        } else {
-                            self.expression(guard)?;
-                        }
+                        self.validate_guard(guard)?;
                     }
                     self.statements(&arm.body.statements)?;
                 }
@@ -3787,9 +3594,6 @@ impl<'a> SignatureValidator<'a> {
     }
 
     fn validate_spread(&self, span: Span) {
-        if self.entry.module().language() != LanguageIdentity::OpaalV1 {
-            return;
-        }
         let Some(reference) = self.names.reference(self.entry.module(), span) else {
             return;
         };
@@ -3851,11 +3655,6 @@ impl<'a> SignatureValidator<'a> {
         pipeline: &Pipeline,
         expected: Option<&ValueType>,
     ) -> Result<Option<(Span, ValueType)>, Box<ModuleTypeError>> {
-        if pipeline.stages().len() > 1
-            && self.entry.module().language() != LanguageIdentity::OpaalV1
-        {
-            return Ok(None);
-        }
         let Some(first) = pipeline.stages().first() else {
             return Ok(None);
         };
@@ -4019,8 +3818,7 @@ impl<'a> SignatureValidator<'a> {
                 if actual.is_none() {
                     self.chain(&closure.body)?;
                 }
-                if self.entry.module().language() == LanguageIdentity::OpaalV1
-                    && let Some(annotation) = &closure.result_type
+                if let Some(annotation) = &closure.result_type
                     && let Some((result_span, actual)) = actual
                     && actual != ValueType::Any
                 {
@@ -5624,7 +5422,6 @@ impl<'a> ReferenceResolver<'a> {
         entry: &'a RegisteredModuleSource,
         registry: &'a ModuleNameRegistry,
         aliases: &'a ModuleAliasRegistry,
-        poisoned_imports: Option<&BTreeSet<String>>,
         is_root: bool,
         control: &'a AnalysisControl,
     ) -> Self {
@@ -5671,47 +5468,8 @@ impl<'a> ReferenceResolver<'a> {
                 depth: scopes.len().saturating_sub(1),
             });
         }
-        let mut root = BTreeMap::new();
-        for import in registry.imports(entry.module()) {
-            let export = registry
-                .export(import.target(), import.name())
-                .expect("validated imports always retain their target export");
-            let target = ModuleReferenceTarget::Imported {
-                import_span: import.name_span(),
-                target_module: import.target().clone(),
-                declaration_span: export.declaration_span(),
-                export_span: export.export_span(),
-            };
-            root.insert(
-                import.name().to_owned(),
-                Some(ReferenceBinding {
-                    target: target.clone(),
-                    mutable: false,
-                    callable_depth: 0,
-                }),
-            );
-            visible.push(ModuleVisibleBinding {
-                name: import.name().to_owned(),
-                target,
-                scope_span: source_span,
-                visible_from: source_span.start(),
-                depth: scopes.len(),
-            });
-        }
-        if let Some(poisoned_imports) = poisoned_imports {
-            let locals = &registry
-                .by_module
-                .get(entry.module())
-                .expect("every registered source has a name table")
-                .locals;
-            for name in poisoned_imports {
-                if !locals.contains_key(name) {
-                    root.entry(name.clone()).or_insert(None);
-                }
-            }
-        }
         scopes.push(ReferenceScope {
-            bindings: root,
+            bindings: BTreeMap::new(),
             span: source_span,
         });
         Self {
@@ -5754,8 +5512,7 @@ impl<'a> ReferenceResolver<'a> {
             return Ok(());
         }
         match statement.kind() {
-            StatementKind::Import(_)
-            | StatementKind::ModuleImport(_)
+            StatementKind::ModuleImport(_)
             | StatementKind::ModuleExport(_)
             | StatementKind::NominalType(_)
             | StatementKind::VariantType(_) => Ok(()),
@@ -6152,7 +5909,7 @@ impl<'a> ReferenceResolver<'a> {
                 .join("::"),
             reference_span: qualified.span,
             target: ModuleReferenceTarget::Imported {
-                import_span: alias.declaration_span(),
+                alias_span: alias.declaration_span(),
                 target_module: owner.clone(),
                 declaration_span: export.declaration_span(),
                 export_span: export.export_span(),
@@ -6192,12 +5949,12 @@ impl<'a> ReferenceResolver<'a> {
                     declaration_span: None,
                 })
             }
-            ModuleReferenceTarget::Imported { import_span, .. } => {
-                Some(ModuleNameError::ImportedAssignment {
+            ModuleReferenceTarget::Imported { alias_span, .. } => {
+                Some(ModuleNameError::ImmutableAssignment {
                     module: self.entry.module().clone(),
                     name,
                     assignment_span: reference_span,
-                    import_span: *import_span,
+                    declaration_span: Some(*alias_span),
                 })
             }
             ModuleReferenceTarget::Local {
@@ -6332,7 +6089,7 @@ fn binding_span(target: &ModuleReferenceTarget) -> Span {
         ModuleReferenceTarget::Local {
             declaration_span, ..
         } => *declaration_span,
-        ModuleReferenceTarget::Imported { import_span, .. } => *import_span,
+        ModuleReferenceTarget::Imported { alias_span, .. } => *alias_span,
     }
 }
 
@@ -6528,7 +6285,7 @@ impl ModuleEffectRegistry {
 
         fn visit(
             module: &ModuleId,
-            names: &ModuleNameRegistry,
+            aliases: &ModuleAliasRegistry,
             direct: &BTreeMap<ModuleId, ModuleEffectSummary>,
             initialized: &mut BTreeSet<ModuleId>,
             summary: &mut ModuleEffectSummary,
@@ -6537,10 +6294,10 @@ impl ModuleEffectRegistry {
             if control.is_cancelled() || initialized.contains(module) {
                 return;
             }
-            for import in names.imports(module) {
+            for alias in aliases.aliases(module) {
                 visit(
-                    import.target(),
-                    names,
+                    alias.target(),
+                    aliases,
                     direct,
                     initialized,
                     summary,
@@ -6562,7 +6319,7 @@ impl ModuleEffectRegistry {
             let mut summary = ModuleEffectSummary::default();
             visit(
                 entry.module(),
-                names,
+                aliases,
                 &direct,
                 &mut BTreeSet::new(),
                 &mut summary,
@@ -6629,8 +6386,7 @@ impl<'a> StaticEffectAnalyzer<'a> {
             return;
         }
         match statement.kind() {
-            StatementKind::Import(_)
-            | StatementKind::ModuleImport(_)
+            StatementKind::ModuleImport(_)
             | StatementKind::ModuleExport(_)
             | StatementKind::NominalType(_)
             | StatementKind::VariantType(_)
@@ -6745,7 +6501,7 @@ impl<'a> StaticEffectAnalyzer<'a> {
     }
 
     fn pure_operation_pipeline(&self, pipeline: &Pipeline) -> bool {
-        if self.module.language() != LanguageIdentity::OpaalV1 || pipeline.stages().len() < 2 {
+        if pipeline.stages().len() < 2 {
             return false;
         }
         matches!(pipeline.stages()[0].kind(), StageKind::Expression(_))
@@ -7181,8 +6937,7 @@ impl<'a> StaticPipelineAnalyzer<'a> {
             return;
         }
         match statement.kind() {
-            StatementKind::Import(_)
-            | StatementKind::ModuleImport(_)
+            StatementKind::ModuleImport(_)
             | StatementKind::ModuleExport(_)
             | StatementKind::NominalType(_)
             | StatementKind::VariantType(_) => {}
@@ -7274,11 +7029,10 @@ impl<'a> StaticPipelineAnalyzer<'a> {
         for fault in analyze_pipeline_carriers(&contracts, &operators) {
             self.errors.push(self.carrier_diagnostic(pipeline, fault));
         }
-        let pure_opaal_expression_pipeline = self.module.language() == LanguageIdentity::OpaalV1
-            && pipeline
-                .stages()
-                .iter()
-                .all(|stage| matches!(stage.kind(), StageKind::Expression(_)));
+        let pure_opaal_expression_pipeline = pipeline
+            .stages()
+            .iter()
+            .all(|stage| matches!(stage.kind(), StageKind::Expression(_)));
         if pipeline.stages().len() > 1 && !pure_opaal_expression_pipeline {
             for stage in pipeline.stages() {
                 if matches!(stage.kind(), StageKind::Expression(_)) {
@@ -8623,15 +8377,6 @@ impl<'a> ModuleProgramLoader<'a> {
             .statements()
             .iter()
             .filter_map(|statement| match statement.kind() {
-                StatementKind::Import(import) => Some(PendingModuleImport::Local {
-                    requested: {
-                        let quoted = source
-                            .slice(import.path)
-                            .expect("parsed import spans belong to their source");
-                        PathBuf::from(&quoted[1..quoted.len() - 1])
-                    },
-                    span: import.path,
-                }),
                 StatementKind::ModuleImport(import) => match import.source {
                     opaal_syntax::ModuleImportSource::Local { path } => {
                         let quoted = source
@@ -8740,9 +8485,7 @@ impl<'a> ModuleProgramLoader<'a> {
     }
 }
 
-const STANDARD_OUTCOME_MODULE: &str = r#"language 1
-
-export { Result, Option }
+const STANDARD_OUTCOME_MODULE: &str = r#"export { Result, Option }
 
 enum Result[T, E] {
     Ok(T),
@@ -8756,14 +8499,13 @@ enum Option[T] {
 "#;
 
 fn standard_module_source(module: &ModuleId) -> Option<&'static str> {
-    (module.language() == LanguageIdentity::OpaalV1
-        && matches!(
-            module.origin(),
-            ModuleOrigin::Standard {
-                namespace,
-                module,
-            } if namespace == "std" && module == "outcome"
-        ))
+    matches!(
+        module.origin(),
+        ModuleOrigin::Standard {
+            namespace,
+            module,
+        } if namespace == "std" && module == "outcome"
+    )
     .then_some(STANDARD_OUTCOME_MODULE)
 }
 
@@ -8775,18 +8517,7 @@ fn parse_opaal_source(
     source: &SourceFile,
     is_cancelled: &dyn Fn() -> bool,
 ) -> ControlledParseOutcome {
-    match parse_opaal_with_control(source, is_cancelled) {
-        ControlledVersionedParseOutcome::Cancelled => ControlledParseOutcome::Cancelled,
-        ControlledVersionedParseOutcome::Parsed(VersionedParseOutcome::Complete(script)) => {
-            ControlledParseOutcome::Parsed(ParseOutcome::Complete(script.into_script()))
-        }
-        ControlledVersionedParseOutcome::Parsed(VersionedParseOutcome::Incomplete(input)) => {
-            ControlledParseOutcome::Parsed(ParseOutcome::Incomplete(input))
-        }
-        ControlledVersionedParseOutcome::Parsed(VersionedParseOutcome::Invalid(diagnostics)) => {
-            ControlledParseOutcome::Parsed(ParseOutcome::Invalid(diagnostics))
-        }
-    }
+    parse_opaal_with_control(source, is_cancelled)
 }
 
 fn analysis_issue_count(issues: &[ModuleAnalysisIssue]) -> u64 {
@@ -8826,9 +8557,7 @@ impl SyntaxMetrics {
     fn statement(&mut self, statement: &Statement) {
         self.nodes += 1;
         match statement.kind() {
-            StatementKind::Import(_)
-            | StatementKind::ModuleImport(_)
-            | StatementKind::ModuleExport(_) => {}
+            StatementKind::ModuleImport(_) | StatementKind::ModuleExport(_) => {}
             StatementKind::NominalType(declaration) => {
                 for field in &declaration.fields {
                     self.type_reference(&field.value_type, 1);
@@ -9221,7 +8950,7 @@ impl fmt::Display for ModuleAliasError {
 
 impl std::error::Error for ModuleAliasError {}
 
-/// A failure while building explicit module export/import-name tables.
+/// A failure while building explicit module export and lexical-name tables.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ModuleNameError {
     /// A lexical declaration attempts to occupy a reserved dynamic name.
@@ -9238,21 +8967,6 @@ pub enum ModuleNameError {
     },
     /// One module exports the same name more than once.
     DuplicateExport {
-        module: ModuleId,
-        name: String,
-        first_span: Span,
-        duplicate_span: Span,
-    },
-    /// A target module does not explicitly export the requested name.
-    UnavailableImport {
-        importer: ModuleId,
-        target: ModuleId,
-        name: String,
-        import_span: Span,
-        private_span: Option<Span>,
-    },
-    /// An imported binding conflicts with a local or earlier imported name.
-    ImportConflict {
         module: ModuleId,
         name: String,
         first_span: Span,
@@ -9278,13 +8992,6 @@ pub enum ModuleNameError {
         assignment_span: Span,
         declaration_span: Option<Span>,
     },
-    /// An assignment targets an imported snapshot binding.
-    ImportedAssignment {
-        module: ModuleId,
-        name: String,
-        assignment_span: Span,
-        import_span: Span,
-    },
     /// An assignment crosses a callable's immutable by-value capture boundary.
     CapturedAssignment {
         module: ModuleId,
@@ -9302,13 +9009,10 @@ impl ModuleNameError {
             Self::ReservedBinding { module, .. }
             | Self::UnknownExport { module, .. }
             | Self::DuplicateExport { module, .. }
-            | Self::ImportConflict { module, .. }
             | Self::UnknownReference { module, .. }
             | Self::DuplicateBinding { module, .. }
             | Self::ImmutableAssignment { module, .. }
-            | Self::ImportedAssignment { module, .. }
             | Self::CapturedAssignment { module, .. } => module,
-            Self::UnavailableImport { importer, .. } => importer,
         }
     }
 
@@ -9337,29 +9041,6 @@ impl ModuleNameError {
             } => Diagnostic::new(Severity::Error, "MOD006", self.to_string())
                 .with_primary(*duplicate_span, "this name is exported again")
                 .with_secondary(*first_span, "first exported here"),
-            Self::UnavailableImport {
-                import_span,
-                private_span,
-                ..
-            } => {
-                let diagnostic = Diagnostic::new(Severity::Error, "MOD007", self.to_string())
-                    .with_primary(
-                        *import_span,
-                        "this name is not exported by the target module",
-                    );
-                if let Some(span) = private_span {
-                    diagnostic.with_secondary(*span, "a private declaration exists here")
-                } else {
-                    diagnostic
-                }
-            }
-            Self::ImportConflict {
-                first_span,
-                duplicate_span,
-                ..
-            } => Diagnostic::new(Severity::Error, "MOD008", self.to_string())
-                .with_primary(*duplicate_span, "this imported binding conflicts")
-                .with_secondary(*first_span, "the name is already bound here"),
             Self::UnknownReference {
                 name,
                 reference_span,
@@ -9393,13 +9074,6 @@ impl ModuleNameError {
                     "this assignment targets a read-only binding",
                 ),
             },
-            Self::ImportedAssignment {
-                assignment_span,
-                import_span,
-                ..
-            } => Diagnostic::new(Severity::Error, "BND002", self.to_string())
-                .with_primary(*assignment_span, "an imported snapshot cannot be assigned")
-                .with_secondary(*import_span, "the snapshot is imported here"),
             Self::CapturedAssignment {
                 assignment_span,
                 declaration_span,
@@ -9432,16 +9106,6 @@ impl fmt::Display for ModuleNameError {
                 "module `{}` exports `{name}` more than once",
                 module.path().display()
             ),
-            Self::UnavailableImport { target, name, .. } => write!(
-                formatter,
-                "module `{}` does not export `{name}`",
-                target.path().display()
-            ),
-            Self::ImportConflict { module, name, .. } => write!(
-                formatter,
-                "module `{}` imports conflicting name `{name}`",
-                module.path().display()
-            ),
             Self::UnknownReference { module, name, .. } => write!(
                 formatter,
                 "module `{}` references unknown binding `{name}`",
@@ -9455,11 +9119,6 @@ impl fmt::Display for ModuleNameError {
             Self::ImmutableAssignment { module, name, .. } => write!(
                 formatter,
                 "module `{}` assigns to immutable binding `{name}`",
-                module.path().display()
-            ),
-            Self::ImportedAssignment { module, name, .. } => write!(
-                formatter,
-                "module `{}` assigns to imported snapshot `{name}`",
                 module.path().display()
             ),
             Self::CapturedAssignment { module, name, .. } => write!(

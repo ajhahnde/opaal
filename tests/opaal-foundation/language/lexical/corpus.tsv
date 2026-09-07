@@ -1,0 +1,16 @@
+# class	path	reason
+complete	complete/comments.opaal	comments start only at a token boundary
+complete	complete/word-parts.opaal	adjacent word parts and empty quotes are complete
+complete	complete/escapes.opaal	all ratified bare and double-quoted escapes
+complete	complete/interpolation.opaal	all interpolation starters and literal dollars
+complete	complete/continuation.opaal	bare and double-quoted explicit continuation
+complete	complete/reserved-words.opaal	the reserved-word spellings are lexically complete
+incomplete	incomplete/single-quote.opaal	unmatched single quote
+incomplete	incomplete/double-quote.opaal	unmatched double quote
+incomplete	incomplete/trailing-backslash.opaal	explicit continuation requires more source
+incomplete	incomplete/braced-interpolation.opaal	unmatched braced interpolation
+incomplete	incomplete/command-substitution.opaal	unmatched command substitution
+invalid	invalid/unknown-double-escape.opaal	unknown double-quoted escape
+invalid	invalid/empty-unicode-escape.opaal	Unicode escape requires hexadecimal digits
+invalid	invalid/surrogate-unicode-escape.opaal	Unicode escape cannot encode a surrogate
+invalid	invalid/out-of-range-unicode-escape.opaal	Unicode escape exceeds the scalar range

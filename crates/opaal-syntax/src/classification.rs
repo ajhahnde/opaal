@@ -1,6 +1,5 @@
 use std::fmt;
 
-use crate::language::SyntaxLanguage;
 use crate::{
     Delimiter, Diagnostic, InvalidTokenKind, Keyword, Operator, Severity, SourceFile, Span,
     SpanError, Token, TokenKind,
@@ -109,33 +108,16 @@ struct Frame {
     span: Span,
 }
 
-/// Classifies an existing lossless token stream without reparsing source text.
-#[cfg(feature = "flash-v1-migration")]
-pub fn classify_flash_v1_tokens(
-    source: &SourceFile,
-    tokens: &[Token],
-) -> Result<SyntaxClassification, SpanError> {
-    classify_tokens_for_language(source, tokens, SyntaxLanguage::FlashV1)
-}
-
 /// Classifies an existing OPAAL lossless token stream without reparsing source text.
 pub fn classify_opaal_tokens(
     source: &SourceFile,
     tokens: &[Token],
 ) -> Result<SyntaxClassification, SpanError> {
-    classify_tokens_for_language(source, tokens, SyntaxLanguage::OpaalV1)
-}
-
-pub(crate) fn classify_tokens_for_language(
-    source: &SourceFile,
-    tokens: &[Token],
-    language: SyntaxLanguage,
-) -> Result<SyntaxClassification, SpanError> {
     for token in tokens {
         token.text(source)?;
         if let TokenKind::Invalid(kind) = token.kind() {
             return Ok(SyntaxClassification::Invalid(invalid_token_diagnostic(
-                token, kind, language,
+                token, kind,
             )));
         }
     }
@@ -160,7 +142,7 @@ pub(crate) fn classify_tokens_for_language(
             }),
             TokenKind::DoubleQuoteEnd => {
                 if !pop_matching(&mut frames, FrameKind::DoubleQuote) {
-                    return Ok(unexpected_closer(token.span(), language));
+                    return Ok(unexpected_closer(token.span()));
                 }
             }
             TokenKind::BracedExpansionStart => frames.push(Frame {
@@ -172,14 +154,9 @@ pub(crate) fn classify_tokens_for_language(
                 span: token.span(),
             }),
             TokenKind::Delimiter(delimiter) => {
-                if let Some(classification) = classify_delimiter(
-                    tokens,
-                    index,
-                    delimiter,
-                    previous_significant,
-                    &mut frames,
-                    language,
-                ) {
+                if let Some(classification) =
+                    classify_delimiter(tokens, index, delimiter, previous_significant, &mut frames)
+                {
                     return Ok(classification);
                 }
             }
@@ -209,7 +186,6 @@ fn classify_delimiter(
     delimiter: Delimiter,
     previous_significant: Option<usize>,
     frames: &mut Vec<Frame>,
-    language: SyntaxLanguage,
 ) -> Option<SyntaxClassification> {
     let token = &tokens[index];
     match delimiter {
@@ -247,19 +223,19 @@ fn classify_delimiter(
                     FrameKind::Parenthesis { .. } | FrameKind::CommandSubstitution
                 )
             }) {
-                return Some(unexpected_closer(token.span(), language));
+                return Some(unexpected_closer(token.span()));
             }
         }
         Delimiter::RightBracket => {
             if !pop_matching(frames, FrameKind::Bracket) {
-                return Some(unexpected_closer(token.span(), language));
+                return Some(unexpected_closer(token.span()));
             }
         }
         Delimiter::RightBrace => {
             if !pop_where(frames, |kind| {
                 matches!(kind, FrameKind::Brace { .. } | FrameKind::BracedExpansion)
             }) {
-                return Some(unexpected_closer(token.span(), language));
+                return Some(unexpected_closer(token.span()));
             }
         }
     }
@@ -343,11 +319,7 @@ fn trailing_requirement(
     Ok(Some(reason))
 }
 
-fn invalid_token_diagnostic(
-    token: &Token,
-    kind: InvalidTokenKind,
-    language: SyntaxLanguage,
-) -> Diagnostic {
+fn invalid_token_diagnostic(token: &Token, kind: InvalidTokenKind) -> Diagnostic {
     let message = match kind {
         InvalidTokenKind::Nul => "NUL byte is not valid source",
         InvalidTokenKind::LoneCarriageReturn => "lone carriage return is not a valid line ending",
@@ -357,23 +329,13 @@ fn invalid_token_diagnostic(
         InvalidTokenKind::UnicodeOutOfRange => "Unicode escape exceeds the scalar range",
         InvalidTokenKind::MalformedUnicodeEscape => "malformed Unicode escape",
     };
-    let code = match language {
-        #[cfg(feature = "flash-v1-migration")]
-        SyntaxLanguage::FlashV1 => "FS0001",
-        SyntaxLanguage::OpaalV1 => "OP0001",
-    };
-    Diagnostic::new(Severity::Error, code, message).with_primary(token.span(), message)
+    Diagnostic::new(Severity::Error, "OP0001", message).with_primary(token.span(), message)
 }
 
-fn unexpected_closer(span: Span, language: SyntaxLanguage) -> SyntaxClassification {
+fn unexpected_closer(span: Span) -> SyntaxClassification {
     let message = "unexpected closing delimiter";
-    let code = match language {
-        #[cfg(feature = "flash-v1-migration")]
-        SyntaxLanguage::FlashV1 => "FS0002",
-        SyntaxLanguage::OpaalV1 => "OP0002",
-    };
     SyntaxClassification::Invalid(
-        Diagnostic::new(Severity::Error, code, message).with_primary(span, message),
+        Diagnostic::new(Severity::Error, "OP0002", message).with_primary(span, message),
     )
 }
 

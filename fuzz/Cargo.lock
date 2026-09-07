@@ -86,16 +86,7 @@ name = "opaal-fuzz"
 version = "0.0.0"
 dependencies = [
  "libfuzzer-sys",
- "opaal-migrate",
  "opaal-runtime",
- "opaal-syntax",
- "serde_json",
-]
-
-[[package]]
-name = "opaal-migrate"
-version = "1.0.0-alpha.1"
-dependencies = [
  "opaal-syntax",
  "serde_json",
 ]

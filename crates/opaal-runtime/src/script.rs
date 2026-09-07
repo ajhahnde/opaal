@@ -220,16 +220,6 @@ pub fn execute_module_program_outcome_with_limits(
                 .expect("a fresh root input frame has no binding collisions");
             scope.push();
         }
-        for import in program.names().imports(&module) {
-            let value = instances
-                .get(import.target())
-                .and_then(|exports| exports.get(import.name()))
-                .expect("named dependencies initialize before their importers")
-                .clone();
-            scope
-                .declare(import.name(), BindingMutability::Immutable, value)
-                .expect("module name analysis rejects import binding collisions");
-        }
         for alias in program.aliases().aliases(&module) {
             declare_qualified_alias_values(
                 &mut scope,
@@ -405,9 +395,6 @@ fn module_initialization_order(program: &ModuleProgram) -> Vec<ModuleId> {
         if program.sources().script(module).is_none() {
             initialized.insert(module.clone());
             return;
-        }
-        for import in program.names().imports(module) {
-            visit(program, import.target(), initialized, order);
         }
         for alias in program.aliases().aliases(module) {
             visit(program, alias.target(), initialized, order);

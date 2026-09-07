@@ -13,7 +13,7 @@ use opaal_runtime::intrinsic::{DynamicBinding, ExpressionIntrinsic};
 use opaal_runtime::{Environment, ScopeStack};
 use opaal_syntax::{
     CompletionContext, CompletionTarget, ParseOutcome, PathCompletionStyle, SourceFile, SourceId,
-    completion_target, parse_opaal_submission,
+    completion_target, parse_opaal,
 };
 
 /// The semantic source of one completion candidate.
@@ -481,7 +481,7 @@ impl CompletionEngine {
         }
 
         let source_file = SourceFile::new(SourceId::new(0), "<interactive>", source);
-        let parsed = parse_opaal_submission(&source_file);
+        let parsed = parse_opaal(&source_file);
         if matches!(parsed, ParseOutcome::Invalid(_)) {
             return Vec::new();
         }

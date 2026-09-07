@@ -56,7 +56,7 @@ pub enum ResolutionError {
         name: String,
         /// Stable reason the spelling is unavailable.
         purpose: String,
-        /// Optional canonical migration target.
+        /// Optional canonical replacement target.
         replacement: Option<String>,
     },
 }

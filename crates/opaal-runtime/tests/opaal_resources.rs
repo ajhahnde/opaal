@@ -88,7 +88,7 @@ fn resource_sources(root_source: &str) -> Sources {
         .contains(
             "/project/support.opaal",
             concat!(
-                "language 1\n\n",
+                "\n",
                 "def identity[T: Equal](value: T) -> T {\n",
                 "    return $value\n",
                 "}\n\n",
@@ -99,7 +99,7 @@ fn resource_sources(root_source: &str) -> Sources {
 
 fn analysis_source() -> &'static str {
     concat!(
-        "language 1\n\n",
+        "\n",
         "import './support.opaal' as support\n",
         "import std::value as value\n\n",
         "let chosen: List[List[Int]] = [[support::identity[Int](1)]]\n",
@@ -140,7 +140,7 @@ impl ModuleSourceLoader for BoundedSource {
 #[test]
 fn source_limit_requests_only_the_ceiling_plus_one_byte() {
     let source = BoundedSource {
-        bytes: b"language 1\n".to_vec(),
+        bytes: b"let value = 1\n".to_vec(),
         requested: Cell::new(None),
     };
     let outcome = ModuleProgramLoader::new(&source, &source).analyze_with_limits_controlled(
@@ -212,7 +212,7 @@ fn every_analysis_counter_accepts_the_exact_boundary_and_refuses_first_excess() 
 
 #[test]
 fn inferred_nested_list_depth_is_measured_without_an_annotation() {
-    let sources = resource_sources("language 1\n[[[1]]]\n");
+    let sources = resource_sources("[[[1]]]\n");
     let baseline = loader(&sources).analyze_with_limits(
         Path::new("/project/main.opaal"),
         AnalysisLimits::unlimited(),
@@ -234,7 +234,7 @@ fn inferred_nested_list_depth_is_measured_without_an_annotation() {
 #[test]
 fn diagnostic_budget_refuses_instead_of_publishing_a_truncated_report() {
     let sources = resource_sources(concat!(
-        "language 1\n",
+        "",
         "let first: Missing = 1\n",
         "let second: Missing = 2\n",
     ));
@@ -287,7 +287,7 @@ fn execute(
 #[test]
 fn one_runtime_step_budget_crosses_statement_and_module_boundaries() {
     let program = program(concat!(
-        "language 1\n",
+        "",
         "import './support.opaal' as support\n",
         "let first = support::identity(1)\n",
         "let second = support::identity(2)\n",
@@ -333,7 +333,7 @@ fn one_runtime_step_budget_crosses_statement_and_module_boundaries() {
 
 #[test]
 fn collection_and_call_depth_limits_refuse_the_first_excess() {
-    let collection_program = program(concat!("language 1\n", "let marker = 1\n", "[1, 2, 3]\n",));
+    let collection_program = program(concat!("", "let marker = 1\n", "[1, 2, 3]\n",));
     assert!(matches!(
         execute(
             &collection_program,
@@ -351,7 +351,7 @@ fn collection_and_call_depth_limits_refuse_the_first_excess() {
     assert!(matches!(outcome.primary(), PrimaryOutcome::Error(_)));
 
     let retained_collections = program(concat!(
-        "language 1\n",
+        "",
         "type Pair = { left: Int, right: Int }\n",
         "enum Choice { Some(Int, Int), None }\n",
         "let values = [1, 2, 3]\n",
@@ -382,7 +382,7 @@ fn collection_and_call_depth_limits_refuse_the_first_excess() {
     assert!(matches!(outcome.primary(), PrimaryOutcome::Error(_)));
 
     let recursive = program(concat!(
-        "language 1\n",
+        "",
         "def descend(value: Int) -> Int {\n",
         "    if $value == 0 { return 0 }\n",
         "    return descend($value - 1)\n",
@@ -428,11 +428,7 @@ fn interpolated_collection_bytes_refuse_before_the_first_excess_copy() {
     fn assert_copy<T: Copy>() {}
     assert_copy::<ResourceBudget>();
 
-    let strings = program(concat!(
-        "language 1\n",
-        "let seed = 'abcd'\n",
-        "\"$seed$seed\"\n",
-    ));
+    let strings = program(concat!("", "let seed = 'abcd'\n", "\"$seed$seed\"\n",));
     assert!(matches!(
         execute(
             &strings,
@@ -454,7 +450,7 @@ fn interpolated_collection_bytes_refuse_before_the_first_excess_copy() {
 #[test]
 fn cancellation_wins_at_each_polled_schedule_without_becoming_a_budget_error() {
     let program = program(concat!(
-        "language 1\n",
+        "",
         "let values = [1, 2, 3, 4, 5, 6, 7, 8]\n",
         "let total = 0\n",
         "for value in $values { let total = $total + $value }\n",

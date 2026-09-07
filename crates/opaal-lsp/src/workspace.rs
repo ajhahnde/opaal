@@ -12,8 +12,8 @@ use opaal_runtime::module::{
     ModulePathError, ModuleProgramLoader, ModuleSourceError, ModuleSourceLoader,
 };
 use opaal_syntax::{
-    Diagnostic, LabelStyle, LanguageIdentity, PositionEncoding, PositionError, Severity,
-    SourceFile, SourceId, TextPosition, TextRange,
+    Diagnostic, LabelStyle, PositionEncoding, PositionError, Severity, SourceFile, SourceId,
+    TextPosition, TextRange,
 };
 
 use crate::uri::DocumentUri;
@@ -71,12 +71,6 @@ impl OpenDocument {
     #[must_use]
     pub const fn generation(&self) -> u64 {
         self.generation
-    }
-
-    /// The OPAAL language identity used for this document.
-    #[must_use]
-    pub const fn language(&self) -> LanguageIdentity {
-        LanguageIdentity::OpaalV1
     }
 }
 
@@ -427,12 +421,6 @@ impl Workspace {
         Self::default()
     }
 
-    /// The OPAAL language identity used by this workspace.
-    #[must_use]
-    pub const fn language(&self) -> LanguageIdentity {
-        LanguageIdentity::OpaalV1
-    }
-
     /// The number of open document roots.
     #[must_use]
     pub fn len(&self) -> usize {
@@ -697,12 +685,6 @@ impl WorkspaceSnapshot {
     #[must_use]
     pub const fn generation(&self) -> u64 {
         self.generation
-    }
-
-    /// The OPAAL language identity used by this snapshot.
-    #[must_use]
-    pub const fn language(&self) -> LanguageIdentity {
-        LanguageIdentity::OpaalV1
     }
 
     /// Every open root in deterministic canonical-module order.

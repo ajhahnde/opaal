@@ -1,4 +1,3 @@
-language 1
 
 import './support/facade.opaal' as api
 import std::value as value

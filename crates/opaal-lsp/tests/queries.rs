@@ -69,7 +69,7 @@ fn request(
 fn completion_is_deterministic_and_retains_registry_results_without_a_program() {
     let directory = TestDirectory::new();
     let uri = directory.uri("main.opaal");
-    let text = "language 1\npw\nif true {";
+    let text = "pw\nif true {";
     let mut workspace = Workspace::new();
     workspace.open(uri.clone(), 1, text.into()).unwrap();
 
@@ -93,11 +93,11 @@ fn completion_is_deterministic_and_retains_registry_results_without_a_program() 
     assert_eq!(result[0]["textEdit"]["newText"], "pwd");
     assert_eq!(
         result[0]["textEdit"]["range"]["start"],
-        json!({"line": 1, "character": 0})
+        json!({"line": 0, "character": 0})
     );
     assert_eq!(
         result[0]["textEdit"]["range"]["end"],
-        json!({"line": 1, "character": 2})
+        json!({"line": 0, "character": 2})
     );
 }
 
@@ -107,7 +107,7 @@ fn semantic_completion_hover_and_signature_help_use_shared_program_data() {
     let root_uri = directory.uri("main.opaal");
     let library_uri = directory.uri("library.opaal");
     let root = concat!(
-        "language 1\n",
+        "",
         "import './library.opaal' as library\n",
         "let message = library::greet('world')\n",
         "let copied = library::greet\n",
@@ -120,7 +120,7 @@ fn semantic_completion_hover_and_signature_help_use_shared_program_data() {
         "kill --kill 1\n",
     );
     let library = concat!(
-        "language 1\n",
+        "",
         "## Imported greeting\n",
         "def greet(name: String) -> String { $name }\n",
         "export { greet }\n",
@@ -382,7 +382,7 @@ fn typed_command_capture_is_shared_by_completion_hover_and_signature_help() {
     let directory = TestDirectory::new();
     let uri = directory.uri("main.opaal");
     let text = concat!(
-        "language 1\n",
+        "",
         "def accept(value: Bytes) -> Bytes { $value }\n",
         "let binary = $(bytes: ^tool)\n",
         "let text = $(text: ^tool)\n",
@@ -440,7 +440,7 @@ fn typed_command_capture_is_shared_by_completion_hover_and_signature_help() {
         "accept(value: Bytes) -> Bytes"
     );
 
-    let incomplete = "language 1\nlet binary = $(by";
+    let incomplete = "let binary = $(by";
     workspace.change(&uri, Some(2), incomplete.into()).unwrap();
     let completion = request(
         &workspace,
@@ -460,7 +460,7 @@ fn structured_error_catch_binding_is_shared_by_completion_and_hover() {
     let directory = TestDirectory::new();
     let uri = directory.uri("main.opaal");
     let text = concat!(
-        "language 1\n",
+        "",
         "try {\n",
         "    throw \"boom\"\n",
         "} catch error {\n",
@@ -510,12 +510,12 @@ fn definition_and_references_project_canonical_cross_file_locations() {
     let root_uri = directory.uri("main.opaal");
     let library_uri = directory.uri("library.opaal");
     let root = concat!(
-        "language 1\n",
+        "",
         "import './library.opaal' as library\n",
         "let message = library::greet('world')\n",
     );
     let library = concat!(
-        "language 1\n",
+        "",
         "def greet(name: String) -> String { $name }\n",
         "export { greet }\n",
     );
@@ -549,11 +549,11 @@ fn definition_and_references_project_canonical_cross_file_locations() {
     assert_eq!(definition["uri"], library_uri.as_str());
     assert_eq!(
         definition["range"]["start"],
-        json!({"line": 1, "character": 4})
+        json!({"line": 0, "character": 4})
     );
     assert_eq!(
         definition["range"]["end"],
-        json!({"line": 1, "character": 9})
+        json!({"line": 0, "character": 9})
     );
 
     let mut params = positional(&root_uri, root, call, PositionEncoding::Utf8);
@@ -593,7 +593,7 @@ fn definition_and_references_project_canonical_cross_file_locations() {
 fn formatting_returns_zero_or_one_full_document_edit() {
     let directory = TestDirectory::new();
     let uri = directory.uri("main.opaal");
-    let text = "language 1\nif true {\nlet value=1\n}\n";
+    let text = "if true {\nlet value=1\n}\n";
     let mut workspace = Workspace::new();
     workspace.open(uri.clone(), 1, text.into()).unwrap();
     let params = json!({
@@ -610,22 +610,15 @@ fn formatting_returns_zero_or_one_full_document_edit() {
     )
     .unwrap();
     assert_eq!(edits.as_array().unwrap().len(), 1);
-    assert_eq!(
-        edits[0]["newText"],
-        "language 1\nif true {\n    let value=1\n}\n"
-    );
+    assert_eq!(edits[0]["newText"], "if true {\n    let value=1\n}\n");
     assert_eq!(
         edits[0]["range"]["start"],
         json!({"line": 0, "character": 0})
     );
-    assert_eq!(edits[0]["range"]["end"], json!({"line": 4, "character": 0}));
+    assert_eq!(edits[0]["range"]["end"], json!({"line": 3, "character": 0}));
 
     workspace
-        .change(
-            &uri,
-            Some(2),
-            "language 1\nif true {\n    let value=1\n}\n".into(),
-        )
+        .change(&uri, Some(2), "if true {\n    let value=1\n}\n".into())
         .unwrap();
     let unchanged = request(
         &workspace,
@@ -637,9 +630,7 @@ fn formatting_returns_zero_or_one_full_document_edit() {
     .unwrap();
     assert_eq!(unchanged, json!([]));
 
-    workspace
-        .change(&uri, Some(3), "language 1\nif true {".into())
-        .unwrap();
+    workspace.change(&uri, Some(3), "if true {".into()).unwrap();
     let incomplete = request(
         &workspace,
         PositionEncoding::Utf16,
@@ -656,7 +647,7 @@ fn invalid_positions_fail_while_unopened_or_dynamic_targets_use_standard_empty_s
     let directory = TestDirectory::new();
     let uri = directory.uri("main.opaal");
     let unopened = directory.uri("closed.opaal");
-    let text = "language 1\nlet value = 1\n";
+    let text = "let value = 1\n";
     let mut workspace = Workspace::new();
     workspace.open(uri.clone(), 1, text.into()).unwrap();
     let control = RequestControl::new();
@@ -723,7 +714,7 @@ fn invalid_positions_fail_while_unopened_or_dynamic_targets_use_standard_empty_s
 fn explicit_cancellation_wins_and_generation_changes_return_content_modified() {
     let directory = TestDirectory::new();
     let uri = directory.uri("main.opaal");
-    let text = "language 1\nlet value = 1\n";
+    let text = "let value = 1\n";
     let mut workspace = Workspace::new();
     workspace.open(uri.clone(), 1, text.into()).unwrap();
 
@@ -749,7 +740,7 @@ fn explicit_cancellation_wins_and_generation_changes_return_content_modified() {
         &positional(&uri, text, 4, PositionEncoding::Utf16),
     );
     workspace
-        .change(&uri, Some(2), "language 1\nlet value = 2\n".into())
+        .change(&uri, Some(2), "let value = 2\n".into())
         .unwrap();
     assert_eq!(
         prepared.finish(&workspace),

@@ -4,12 +4,12 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use opaal_syntax::{
-    FormatOutcome, ModuleImportSource, SourceFile, SourceId, StatementKind, VersionedParseOutcome,
+    FormatOutcome, ModuleImportSource, ParseOutcome, SourceFile, SourceId, StatementKind,
     format_source_opaal, parse_opaal,
 };
 
 #[test]
-fn opaal_module_manifest_freezes_the_new_forms_and_rejects_flash_v1_imports() {
+fn opaal_module_manifest_freezes_the_supported_forms_and_rejects_other_imports() {
     let root = module_root();
     let manifest = fs::read_to_string(root.join("manifest.tsv")).unwrap();
 
@@ -26,12 +26,12 @@ fn opaal_module_manifest_freezes_the_new_forms_and_rejects_flash_v1_imports() {
 
         match class {
             "complete" => assert!(
-                matches!(parse_opaal(&source), VersionedParseOutcome::Complete(_)),
+                matches!(parse_opaal(&source), ParseOutcome::Complete(_)),
                 "{relative} must parse as canonical opaal module syntax"
             ),
             "invalid" => assert!(
-                matches!(parse_opaal(&source), VersionedParseOutcome::Invalid(_)),
-                "{relative} must not preserve a flash_v1 import form"
+                matches!(parse_opaal(&source), ParseOutcome::Invalid(_)),
+                "{relative} must not parse as a supported module import"
             ),
             _ => panic!("unknown module fixture class {class}"),
         }
@@ -41,10 +41,10 @@ fn opaal_module_manifest_freezes_the_new_forms_and_rejects_flash_v1_imports() {
 #[test]
 fn opaal_module_forms_have_one_exact_ast_shape() {
     let aliases_source = module_source("complete/qualified-aliases.opaal", 301);
-    let VersionedParseOutcome::Complete(aliases) = parse_opaal(&aliases_source) else {
+    let ParseOutcome::Complete(aliases) = parse_opaal(&aliases_source) else {
         panic!("qualified aliases must parse");
     };
-    let statements = aliases.script().statements();
+    let statements = aliases.statements();
     assert_eq!(statements.len(), 3);
 
     let StatementKind::ModuleImport(local) = statements[0].kind() else {
@@ -82,11 +82,10 @@ fn opaal_module_forms_have_one_exact_ast_shape() {
     );
 
     let nominal = module_source("complete/nominal-type.opaal", 302);
-    let VersionedParseOutcome::Complete(nominal_parse) = parse_opaal(&nominal) else {
+    let ParseOutcome::Complete(nominal_parse) = parse_opaal(&nominal) else {
         panic!("the nominal type fixture must parse");
     };
-    let StatementKind::NominalType(declaration) = nominal_parse.script().statements()[0].kind()
-    else {
+    let StatementKind::NominalType(declaration) = nominal_parse.statements()[0].kind() else {
         panic!("type must have a dedicated nominal declaration node");
     };
     assert_eq!(text(&nominal, declaration.name.span()), "Item");
@@ -104,7 +103,7 @@ fn opaal_module_forms_format_canonically_and_idempotently() {
         SourceId::new(303),
         "module-format.opaal",
         concat!(
-            "language   1\n\n",
+            "\n",
             "import   './model.opaal'   as   model\n",
             "import   std::value   as   value\n",
             "export   {   model,   value   }\n\n",
@@ -114,7 +113,7 @@ fn opaal_module_forms_format_canonically_and_idempotently() {
         ),
     );
     let expected = concat!(
-        "language 1\n\n",
+        "\n",
         "import './model.opaal' as model\n",
         "import std::value as value\n",
         "export { model, value }\n\n",

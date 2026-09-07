@@ -1,3 +1,0 @@
-language 1
-
-import { item } from './model.opaal'

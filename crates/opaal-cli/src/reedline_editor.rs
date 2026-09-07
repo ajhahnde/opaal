@@ -7,7 +7,7 @@ use std::thread;
 use std::time::Duration;
 
 use nu_ansi_term::{Color, Style};
-use opaal_syntax::{ParseOutcome, SourceFile, SourceId, parse_opaal_submission};
+use opaal_syntax::{ParseOutcome, SourceFile, SourceId, parse_opaal};
 use reedline::{
     ColumnarMenu, Completer, Emacs, ExternalPrinter, Highlighter, Hinter, History, KeyCode,
     KeyModifiers, MenuBuilder, Prompt, PromptEditMode, PromptHistorySearch, Reedline,
@@ -245,7 +245,7 @@ struct OpaalValidator;
 impl Validator for OpaalValidator {
     fn validate(&self, line: &str) -> ValidationResult {
         let source = SourceFile::new(SourceId::new(0), "<interactive>", line);
-        let outcome = parse_opaal_submission(&source);
+        let outcome = parse_opaal(&source);
         match outcome {
             ParseOutcome::Incomplete(_) => ValidationResult::Incomplete,
             ParseOutcome::Complete(_) | ParseOutcome::Invalid(_) => ValidationResult::Complete,
@@ -453,10 +453,7 @@ mod tests {
         }
 
         let invalid = SourceFile::new(SourceId::new(7), "<test-invalid>", "else");
-        assert!(matches!(
-            parse_opaal_submission(&invalid),
-            ParseOutcome::Invalid(_)
-        ));
+        assert!(matches!(parse_opaal(&invalid), ParseOutcome::Invalid(_)));
         assert!(matches!(
             validator.validate(invalid.text()),
             ValidationResult::Complete

@@ -1,4 +1,3 @@
-language 1
 
 def tail(items) {
     let [first, ...rest] = $items

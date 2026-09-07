@@ -147,35 +147,32 @@ fn check_accumulates_all_failures_and_noncanonical_sources_in_operand_order() {
     let mut filesystem = FakeFilesystem::default();
     filesystem.insert(
         "canonical.opaal",
-        Entry::regular("identity/canonical", b"language 1\necho ready\n".to_vec()),
+        Entry::regular("identity/canonical", b"echo ready\n".to_vec()),
     );
     filesystem.insert(
         "noncanonical.opaal",
-        Entry::regular(
-            "identity/noncanonical",
-            b"language 1\necho   spaced".to_vec(),
-        ),
+        Entry::regular("identity/noncanonical", b"echo   spaced".to_vec()),
     );
     filesystem.insert(
         "empty.opaal",
-        Entry::regular("identity/empty", b"language 1\n".to_vec()),
+        Entry::regular("identity/empty", b"".to_vec()),
     );
     filesystem.insert(
         "unicode-docs.opaal",
         Entry::regular(
             "identity/unicode-docs",
-            "language 1\n## Café docs\ndef   greet() { echo   'Grüße' }\n"
+            "## Café docs\ndef   greet() { echo   'Grüße' }\n"
                 .as_bytes()
                 .to_vec(),
         ),
     );
     filesystem.insert(
         "incomplete.opaal",
-        Entry::regular("identity/incomplete", b"language 1\necho \"".to_vec()),
+        Entry::regular("identity/incomplete", b"echo \"".to_vec()),
     );
     filesystem.insert(
         "invalid.opaal",
-        Entry::regular("identity/invalid", b"language 1\n| broken\n".to_vec()),
+        Entry::regular("identity/invalid", b"| broken\n".to_vec()),
     );
     filesystem.insert(
         "non-utf8.opaal",
@@ -199,16 +196,13 @@ fn check_accumulates_all_failures_and_noncanonical_sources_in_operand_order() {
         "late-noncanonical.opaal",
         Entry::regular(
             "identity/late-noncanonical",
-            b"language 1\necho   still-visited".to_vec(),
+            b"echo   still-visited".to_vec(),
         ),
     );
     filesystem.insert(
         "alias.opaal",
-        Entry::regular(
-            "identity/alias-placeholder",
-            b"language 1\necho ready\n".to_vec(),
-        )
-        .with_identity("identity/canonical"),
+        Entry::regular("identity/alias-placeholder", b"echo ready\n".to_vec())
+            .with_identity("identity/canonical"),
     );
 
     let paths = [
@@ -272,15 +266,15 @@ fn write_preflight_failure_prevents_every_replacement() {
     let mut filesystem = FakeFilesystem::default();
     filesystem.insert(
         "first.opaal",
-        Entry::regular("identity/first", b"language 1\necho   first".to_vec()),
+        Entry::regular("identity/first", b"echo   first".to_vec()),
     );
     filesystem.insert(
         "broken.opaal",
-        Entry::regular("identity/broken", b"language 1\necho \"".to_vec()),
+        Entry::regular("identity/broken", b"echo \"".to_vec()),
     );
     filesystem.insert(
         "last.opaal",
-        Entry::regular("identity/last", b"language 1\necho   last".to_vec()),
+        Entry::regular("identity/last", b"echo   last".to_vec()),
     );
 
     let run = format_files(
@@ -301,19 +295,17 @@ fn write_skips_unchanged_sources_and_replaces_changed_sources_in_order() {
     let mut filesystem = FakeFilesystem::default();
     filesystem.insert(
         "unchanged.opaal",
-        Entry::regular("identity/unchanged", b"language 1\necho one\n".to_vec())
-            .with_permissions(0o640),
+        Entry::regular("identity/unchanged", b"echo one\n".to_vec()).with_permissions(0o640),
     );
     filesystem.insert(
         "first.opaal",
-        Entry::regular("identity/first", b"language 1\necho   two".to_vec())
-            .with_permissions(0o600),
+        Entry::regular("identity/first", b"echo   two".to_vec()).with_permissions(0o600),
     );
     filesystem.insert(
         "second.opaal",
         Entry::regular(
             "identity/second",
-            "language 1\n## docs\necho   'Grüße'\n".as_bytes().to_vec(),
+            "## docs\necho   'Grüße'\n".as_bytes().to_vec(),
         )
         .with_permissions(0o755),
     );
@@ -334,14 +326,14 @@ fn write_skips_unchanged_sources_and_replaces_changed_sources_in_order() {
         vec![
             &Call::Replace {
                 path: PathBuf::from("first.opaal"),
-                expected: b"language 1\necho   two".to_vec(),
-                replacement: b"language 1\necho two\n".to_vec(),
+                expected: b"echo   two".to_vec(),
+                replacement: b"echo two\n".to_vec(),
                 permissions: 0o600,
             },
             &Call::Replace {
                 path: PathBuf::from("second.opaal"),
-                expected: "language 1\n## docs\necho   'Grüße'\n".as_bytes().to_vec(),
-                replacement: "language 1\n## docs\necho 'Grüße'\n".as_bytes().to_vec(),
+                expected: "## docs\necho   'Grüße'\n".as_bytes().to_vec(),
+                replacement: "## docs\necho 'Grüße'\n".as_bytes().to_vec(),
                 permissions: 0o755,
             },
         ]
@@ -356,7 +348,7 @@ fn write_stops_at_the_first_replacement_failure() {
             name,
             Entry::regular(
                 format!("identity/{name}"),
-                format!("language 1\necho   {name}").into_bytes(),
+                format!("echo   {name}").into_bytes(),
             ),
         );
     }
@@ -389,15 +381,15 @@ fn write_stops_at_the_first_replacement_failure() {
     );
     assert_eq!(
         filesystem.entries[Path::new("untouched.opaal")].bytes,
-        b"language 1\necho   untouched.opaal"
+        b"echo   untouched.opaal"
     );
 }
 
 #[test]
 fn fmt001_anchors_the_first_changed_scalar_and_an_end_insertion() {
     for (path, original) in [
-        ("changed-scalar.opaal", "language 1\necho  value\n"),
-        ("end-insertion.opaal", "language 1\necho value"),
+        ("changed-scalar.opaal", "echo  value\n"),
+        ("end-insertion.opaal", "echo value"),
     ] {
         let mut filesystem = FakeFilesystem::default();
         filesystem.insert(
@@ -421,13 +413,13 @@ fn incomplete_and_invalid_sources_reuse_existing_syntax_diagnostics_exactly() {
     for (path, text, expected) in [
         (
             "incomplete.opaal",
-            "language 1\necho \"",
-            expected_incomplete("incomplete.opaal", "language 1\necho \""),
+            "echo \"",
+            expected_incomplete("incomplete.opaal", "echo \""),
         ),
         (
             "invalid.opaal",
-            "language 1\n| broken\n",
-            expected_invalid("invalid.opaal", "language 1\n| broken\n"),
+            "| broken\n",
+            expected_invalid("invalid.opaal", "| broken\n"),
         ),
     ] {
         let mut filesystem = FakeFilesystem::default();

@@ -11,7 +11,6 @@ use opaal_runtime::module::{
     ModuleSourceError, ModuleSourceLoader,
 };
 use opaal_runtime::query::SemanticHover;
-use opaal_syntax::LanguageIdentity;
 
 #[derive(Default)]
 struct FakeModules {
@@ -63,7 +62,7 @@ fn aliases_reexports_and_nominal_types_keep_one_identity_and_provenance() {
         .contains(
             "/project/main.opaal",
             concat!(
-                "language 1\n\n",
+                "\n",
                 "import './facade.opaal' as api\n",
                 "import std::value as values\n",
                 "export { api, values }\n",
@@ -72,7 +71,7 @@ fn aliases_reexports_and_nominal_types_keep_one_identity_and_provenance() {
         .contains(
             "/project/facade.opaal",
             concat!(
-                "language 1\n\n",
+                "\n",
                 "import './model.opaal' as model\n",
                 "import './model-alias.opaal' as alternate\n",
                 "export { model, alternate }\n",
@@ -81,7 +80,7 @@ fn aliases_reexports_and_nominal_types_keep_one_identity_and_provenance() {
         .contains(
             "/canonical/model.opaal",
             concat!(
-                "language 1\n\n",
+                "\n",
                 "type Item = {\n",
                 "    value: Int,\n",
                 "}\n",
@@ -111,7 +110,6 @@ fn aliases_reexports_and_nominal_types_keep_one_identity_and_provenance() {
             module: "value".into(),
         }
     );
-    assert_eq!(values.target().language(), LanguageIdentity::OpaalV1);
     assert_eq!(
         modules.loads.borrow().as_slice(),
         [

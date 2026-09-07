@@ -4,10 +4,7 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use opaal_syntax::{
-    ParseOutcome, SourceFile, SourceId, TokenKind, VersionedParseOutcome, lex_opaal, parse_opaal,
-    parse_opaal_submission,
-};
+use opaal_syntax::{ParseOutcome, SourceFile, SourceId, TokenKind, lex_opaal, parse_opaal};
 
 #[test]
 fn lexical_manifest_is_the_exact_opaal_reserved_word_set() {
@@ -31,7 +28,7 @@ fn lexical_manifest_is_the_exact_opaal_reserved_word_set() {
         assert_eq!(token_class(lex_opaal(&source)[0].kind()), *opaal_kind);
     }
 
-    assert_eq!(spellings.len(), 26);
+    assert_eq!(spellings.len(), 25);
     let source = fs::read_to_string(root.join("reserved-words.opaal")).unwrap();
     assert_eq!(
         source.split_whitespace().collect::<BTreeSet<_>>(),
@@ -61,31 +58,22 @@ fn grammar_manifest_executes_every_module_and_repl_boundary() {
 
         match (context, class) {
             ("module", "complete") => {
-                assert!(matches!(
-                    parse_opaal(&source),
-                    VersionedParseOutcome::Complete(_)
-                ));
+                assert!(matches!(parse_opaal(&source), ParseOutcome::Complete(_)));
             }
             ("module", "incomplete") => {
-                assert!(matches!(
-                    parse_opaal(&source),
-                    VersionedParseOutcome::Incomplete(_)
-                ));
+                assert!(matches!(parse_opaal(&source), ParseOutcome::Incomplete(_)));
             }
             ("module", "invalid") => {
-                let VersionedParseOutcome::Invalid(diagnostics) = parse_opaal(&source) else {
+                let ParseOutcome::Invalid(diagnostics) = parse_opaal(&source) else {
                     panic!("{relative} should be invalid");
                 };
                 assert_eq!(diagnostics[0].code(), code);
             }
             ("repl", "complete") => {
-                assert!(matches!(
-                    parse_opaal_submission(&source),
-                    ParseOutcome::Complete(_)
-                ));
+                assert!(matches!(parse_opaal(&source), ParseOutcome::Complete(_)));
             }
             ("repl", "invalid") => {
-                let ParseOutcome::Invalid(diagnostics) = parse_opaal_submission(&source) else {
+                let ParseOutcome::Invalid(diagnostics) = parse_opaal(&source) else {
                     panic!("{relative} should be invalid");
                 };
                 assert_eq!(diagnostics[0].code(), code);
@@ -107,16 +95,13 @@ fn grammar_manifest_executes_every_module_and_repl_boundary() {
 }
 
 #[test]
-fn directive_detection_is_stable_across_leading_trivia_combinations() {
+fn directive_free_parsing_is_stable_across_leading_trivia_combinations() {
     let trivia = ["", " ", "\n", ";", "# note\n", "## docs\n"];
     for first in trivia {
         for second in trivia {
-            let text = format!("{first}{second}language 1\nlet answer = 42\n");
+            let text = format!("{first}{second}let answer = 42\n");
             let source = SourceFile::new(SourceId::new(3), "property", text);
-            assert!(matches!(
-                parse_opaal(&source),
-                VersionedParseOutcome::Complete(_)
-            ));
+            assert!(matches!(parse_opaal(&source), ParseOutcome::Complete(_)));
         }
     }
 }
