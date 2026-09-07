@@ -1,0 +1,146 @@
+{
+  "assertions": [
+    {
+      "detail": "sha256=3eb5ce4558effd89229a9a18bb203129e8f6bdec4bfdcce2d2112fa6499d77e6",
+      "name": "public-inventory-artifact",
+      "success": true
+    },
+    {
+      "detail": "source_tip='6b010a66e9ef9df125ff599e6a242eaf8fce85fc' source_tree='5cd3774ebc5500e3a1a1cea5b5706c1eab5c44e2' ancestor=True",
+      "name": "public-inventory-source-baseline",
+      "success": true
+    },
+    {
+      "detail": "paths=427 digest=60f985e7ebf9ec4d768cf6732a088f7a8ea092d18e1b92abb5a6ad30d5893747",
+      "name": "public-inventory-baseline",
+      "success": true
+    },
+    {
+      "detail": "classified=427 source_rows_match=True",
+      "name": "public-inventory-classification",
+      "success": true
+    },
+    {
+      "detail": "inventory_sha256=05ba099856a4d6324ed95771d189705c2eda040349ecb77b2f6ed6e8cd52a1da",
+      "name": "public-inventory-private-source",
+      "success": true
+    },
+    {
+      "detail": "unmatched=[] rows_match=True",
+      "name": "public-inventory-private-expansion",
+      "success": true
+    },
+    {
+      "detail": "missing=[]",
+      "name": "standalone-replacements",
+      "success": true
+    },
+    {
+      "detail": "members=['crates/opaal-syntax', 'crates/opaal-migrate', 'crates/opaal-runtime', 'crates/opaal-lsp', 'crates/opaal-platform', 'crates/opaal-platform-posix', 'crates/opaal-cli']",
+      "name": "seven-member-workspace",
+      "success": true
+    },
+    {
+      "detail": "workspace package identity={'version': '1.0.0-alpha.1', 'license': 'MPL-2.0', 'repository': 'https://github.com/ajhahnde/opaal'}",
+      "name": "workspace-identity",
+      "success": true
+    },
+    {
+      "detail": "crates/opaal-syntax package='opaal-syntax'",
+      "name": "package-opaal-syntax",
+      "success": true
+    },
+    {
+      "detail": "crates/opaal-migrate package='opaal-migrate'",
+      "name": "package-opaal-migrate",
+      "success": true
+    },
+    {
+      "detail": "crates/opaal-runtime package='opaal-runtime'",
+      "name": "package-opaal-runtime",
+      "success": true
+    },
+    {
+      "detail": "crates/opaal-lsp package='opaal-lsp'",
+      "name": "package-opaal-lsp",
+      "success": true
+    },
+    {
+      "detail": "crates/opaal-platform package='opaal-platform'",
+      "name": "package-opaal-platform",
+      "success": true
+    },
+    {
+      "detail": "crates/opaal-platform-posix package='opaal-platform-posix'",
+      "name": "package-opaal-platform-posix",
+      "success": true
+    },
+    {
+      "detail": "crates/opaal-cli package='opaal-cli'",
+      "name": "package-opaal-cli",
+      "success": true
+    },
+    {
+      "detail": "fuzz package={'name': 'opaal-fuzz', 'version': '0.0.0', 'publish': False, 'edition': '2024', 'metadata': {'cargo-fuzz': True}}",
+      "name": "standalone-fuzz-package",
+      "success": true
+    },
+    {
+      "detail": "missing=[]",
+      "name": "primary-binaries",
+      "success": true
+    },
+    {
+      "detail": "missing=[]",
+      "name": "fixture-identifiers",
+      "success": true
+    },
+    {
+      "detail": "opaal=['OP0001', 'OP0002', 'OP1000', 'OP1001', 'OP2001', 'OP2002', 'OP2003', 'OP2004'] migration=['AUTH3001', 'MIG1001', 'MIG2004', 'MIG3001', 'MIG3002', 'MIG3003', 'MIG3005']",
+      "name": "diagnostic-code-inventory",
+      "success": true
+    },
+    {
+      "detail": "current diagnostics and LSP identify OPAAL",
+      "name": "diagnostic-and-server-identity",
+      "success": true
+    },
+    {
+      "detail": "unclassified .fsh paths=[]",
+      "name": "source-extension-boundary",
+      "success": true
+    },
+    {
+      "detail": "current legacy environment names=[]",
+      "name": "environment-cutover",
+      "success": true
+    },
+    {
+      "detail": "unknown=[] missing=[]",
+      "name": "environment-inventory",
+      "success": true
+    },
+    {
+      "detail": "stale current identity=[]",
+      "name": "current-code-identity",
+      "success": true
+    },
+    {
+      "detail": "legacy public declarations=[]",
+      "name": "exported-identity",
+      "success": true
+    },
+    {
+      "detail": "LanguageIdentity exposes only OpaalV1",
+      "name": "public-language-identity",
+      "success": true
+    }
+  ],
+  "candidate_worktree_sha256": "fb81b5c3877843e404d3b733f1d901d3f259b18a96b013cb112daa051da95946",
+  "claim": "TR-004",
+  "commands": [],
+  "public_tip": null,
+  "schema": 1,
+  "source_tip": "6b010a66e9ef9df125ff599e6a242eaf8fce85fc",
+  "success": true
+}

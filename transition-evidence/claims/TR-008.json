@@ -1,0 +1,98 @@
+{
+  "assertions": [
+    {
+      "detail": "cases=['host-completion-cold', 'host-completion-warm', 'host-first-prompt-cold', 'host-first-prompt-warm', 'host-startup-cold', 'host-startup-warm', 'host-structured-stream-memory-warm']",
+      "name": "seven-host-benchmark-cases",
+      "success": true
+    },
+    {
+      "detail": "forbidden benchmark routes=[]",
+      "name": "pure-benchmark-surfaces",
+      "success": true
+    },
+    {
+      "detail": "exit 0; expected 0",
+      "name": "foundation-corpus",
+      "success": true
+    },
+    {
+      "detail": "exit 0; expected 0",
+      "name": "benchmark-contract-and-evidence",
+      "success": true
+    },
+    {
+      "detail": "exit 0; expected 0",
+      "name": "benchmark-smoke",
+      "success": true
+    },
+    {
+      "detail": "exit 0; expected 0",
+      "name": "candidate-macos-qualification-evidence",
+      "success": true
+    }
+  ],
+  "candidate_worktree_sha256": "fb81b5c3877843e404d3b733f1d901d3f259b18a96b013cb112daa051da95946",
+  "claim": "TR-008",
+  "commands": [
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--workspace",
+        "--locked",
+        "--no-fail-fast"
+      ],
+      "exit_status": 0,
+      "expected_exit_status": 0,
+      "name": "foundation-corpus",
+      "stderr_sha256": "2da6a0c7d803e2f7446ef6d87af0f9425ba89623b1fe0fd32724709b9833fc61",
+      "stdout_sha256": "f720234014b3d2b12cd43754068a98306f7b2c607fa2462464767241540444e8"
+    },
+    {
+      "command": [
+        "/opt/homebrew/opt/python@3.14/bin/python3.14",
+        "ci/check_benchmarks.py",
+        "--contract-only"
+      ],
+      "exit_status": 0,
+      "expected_exit_status": 0,
+      "name": "benchmark-contract-and-evidence",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout_sha256": "26e4597a9f2837840ba73e364dd75039e4da09543fc85c6d58e30b73e4cafba1"
+    },
+    {
+      "command": [
+        "/opt/homebrew/opt/python@3.14/bin/python3.14",
+        "benchmarks/run.py",
+        "--profile",
+        "smoke",
+        "--output",
+        "<temporary>/smoke.json"
+      ],
+      "exit_status": 0,
+      "expected_exit_status": 0,
+      "name": "benchmark-smoke",
+      "stderr_sha256": "c9ef3b68d69664e1d157e575848e4f6146e26ad39b9aa75897123cb92d2ce4bd",
+      "stdout_sha256": "e327676f95678a621a11103aced675942c820f4cdde11796cb9afb199fcc479f"
+    },
+    {
+      "command": [
+        "/opt/homebrew/opt/python@3.14/bin/python3.14",
+        "ci/check_benchmarks.py",
+        "--result",
+        "benchmarks/evidence/host-darwin-arm64-opaal-v1.json",
+        "--environment",
+        "host-darwin-arm64"
+      ],
+      "exit_status": 0,
+      "expected_exit_status": 0,
+      "name": "candidate-macos-qualification-evidence",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout_sha256": "26e4597a9f2837840ba73e364dd75039e4da09543fc85c6d58e30b73e4cafba1"
+    }
+  ],
+  "public_tip": null,
+  "schema": 1,
+  "source_tip": "6b010a66e9ef9df125ff599e6a242eaf8fce85fc",
+  "success": true
+}

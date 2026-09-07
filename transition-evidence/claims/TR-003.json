@@ -1,0 +1,217 @@
+{
+  "assertions": [
+    {
+      "detail": "missing=[]",
+      "name": "standalone-workflows",
+      "success": true
+    },
+    {
+      "detail": "CI and security expose stable required aggregates",
+      "name": "required-aggregates",
+      "success": true
+    },
+    {
+      "detail": "CI and security run for initial bootstrap, pull requests, and manual checks",
+      "name": "bootstrap-and-pr-events",
+      "success": true
+    },
+    {
+      "detail": "release policy is manual, read-only, and contains no publishing command",
+      "name": "non-publishing-release-workflow",
+      "success": true
+    },
+    {
+      "detail": "standalone dependency matches=[]",
+      "name": "no-flashos-sibling-dependency",
+      "success": true
+    },
+    {
+      "detail": "files=425 forbidden_private=[]",
+      "name": "fresh-public-candidate",
+      "success": true
+    },
+    {
+      "detail": "exit 0; expected 0",
+      "name": "format",
+      "success": true
+    },
+    {
+      "detail": "exit 0; expected 0",
+      "name": "build",
+      "success": true
+    },
+    {
+      "detail": "exit 0; expected 0",
+      "name": "workspace-tests",
+      "success": true
+    },
+    {
+      "detail": "exit 0; expected 0",
+      "name": "clippy",
+      "success": true
+    },
+    {
+      "detail": "exit 0; expected 0",
+      "name": "rustdoc",
+      "success": true
+    },
+    {
+      "detail": "exit 0; expected 0",
+      "name": "dependency-policy",
+      "success": true
+    },
+    {
+      "detail": "exit 0; expected 0",
+      "name": "public-boundary",
+      "success": true
+    },
+    {
+      "detail": "exit 0; expected 0",
+      "name": "python-policy-tests",
+      "success": true
+    },
+    {
+      "detail": "exit 0; expected 0",
+      "name": "benchmark-contract",
+      "success": true
+    },
+    {
+      "detail": "candidate_digest=fb81b5c3877843e404d3b733f1d901d3f259b18a96b013cb112daa051da95946",
+      "name": "digest-addressed-candidate-source",
+      "success": true
+    }
+  ],
+  "candidate_worktree_sha256": "fb81b5c3877843e404d3b733f1d901d3f259b18a96b013cb112daa051da95946",
+  "claim": "TR-003",
+  "commands": [
+    {
+      "command": [
+        "cargo",
+        "fmt",
+        "--all",
+        "--",
+        "--check"
+      ],
+      "exit_status": 0,
+      "expected_exit_status": 0,
+      "name": "format",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "command": [
+        "cargo",
+        "build",
+        "--workspace",
+        "--locked"
+      ],
+      "exit_status": 0,
+      "expected_exit_status": 0,
+      "name": "build",
+      "stderr_sha256": "299f16a2c523be18fef769975d2df00e0505521db047540feea3a74b94666887",
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--workspace",
+        "--locked",
+        "--no-fail-fast"
+      ],
+      "exit_status": 0,
+      "expected_exit_status": 0,
+      "name": "workspace-tests",
+      "stderr_sha256": "1e1747394cc39e4f91fb0b9f5a1dcae7585cdc8d20988324002cb0b8520e9a00",
+      "stdout_sha256": "84c075b00de1993b9c52b027495cfd25701b4bdfa210a939f79311eb48c812c2"
+    },
+    {
+      "command": [
+        "cargo",
+        "clippy",
+        "--workspace",
+        "--all-targets",
+        "--all-features",
+        "--locked",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "exit_status": 0,
+      "expected_exit_status": 0,
+      "name": "clippy",
+      "stderr_sha256": "fecede7c2157efe2f16c8c8b9dce94b0fb4dd384dca8207046c8bf7636eb0ffe",
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "command": [
+        "cargo",
+        "doc",
+        "--workspace",
+        "--no-deps",
+        "--locked"
+      ],
+      "exit_status": 0,
+      "expected_exit_status": 0,
+      "name": "rustdoc",
+      "stderr_sha256": "cceb6d10e27813c9faecc5472ed8df1176ab5f86e83d2158e9aa437014f7e32b",
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "command": [
+        "cargo",
+        "deny",
+        "check"
+      ],
+      "exit_status": 0,
+      "expected_exit_status": 0,
+      "name": "dependency-policy",
+      "stderr_sha256": "3b630c48ec64f8cd0c987b3296488c7e2cb19942b9bb6236cbf53378489442d9",
+      "stdout_sha256": "f1a0fca39d4280363937aabd77783990ea6480bd9ca257816de3b68fc8efa845"
+    },
+    {
+      "command": [
+        "/opt/homebrew/opt/python@3.14/bin/python3.14",
+        "ci/check_public_boundary.py"
+      ],
+      "exit_status": 0,
+      "expected_exit_status": 0,
+      "name": "public-boundary",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout_sha256": "9f46c9e16b1576aa385d452b853786da9f3dc3025af730377bd8f413e09c8f72"
+    },
+    {
+      "command": [
+        "/opt/homebrew/opt/python@3.14/bin/python3.14",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "ci/tests",
+        "-p",
+        "test_*.py"
+      ],
+      "exit_status": 0,
+      "expected_exit_status": 0,
+      "name": "python-policy-tests",
+      "stderr_sha256": "efbb8956ab708762706b73115389ded4c72525d106e5fe1f433e3224e440abfc",
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "command": [
+        "/opt/homebrew/opt/python@3.14/bin/python3.14",
+        "ci/check_benchmarks.py",
+        "--contract-only"
+      ],
+      "exit_status": 0,
+      "expected_exit_status": 0,
+      "name": "benchmark-contract",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout_sha256": "26e4597a9f2837840ba73e364dd75039e4da09543fc85c6d58e30b73e4cafba1"
+    }
+  ],
+  "public_tip": null,
+  "schema": 1,
+  "source_tip": "6b010a66e9ef9df125ff599e6a242eaf8fce85fc",
+  "success": true
+}

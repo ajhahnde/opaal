@@ -1,0 +1,10 @@
+# class	path	diagnostic
+complete	complete/reference.opaal	-
+invalid	invalid/wrong-value.opaal	SIG004
+invalid	invalid/repeated-length.opaal	SIG004
+invalid	invalid/non-operation-stage.opaal	OPR001
+invalid	invalid/unknown-operation.opaal	OPR002
+invalid	invalid/ambiguous-empty-length.opaal	SIG010
+invalid	invalid/ambiguous-empty-pipeline.opaal	SIG010
+invalid	invalid/explicit-generic-arity.opaal	SIG009
+invalid	invalid/explicit-element-mismatch.opaal	SIG004

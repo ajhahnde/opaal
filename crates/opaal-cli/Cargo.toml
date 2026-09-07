@@ -1,0 +1,77 @@
+[package]
+name = "opaal-cli"
+description = "Command-line and interactive client for OPAAL"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "opaal"
+path = "src/main.rs"
+
+[[bin]]
+name = "opaal-e2e-process-observer-fixture"
+path = "../../tests/fixtures/process_observer.rs"
+test = false
+bench = false
+doc = false
+
+[[bin]]
+name = "opaal-e2e-hangup-observer-fixture"
+path = "tests/fixtures/hangup_observer.rs"
+test = false
+bench = false
+doc = false
+
+[[bin]]
+name = "opaal-e2e-status-fixture"
+path = "../../tests/fixtures/status.rs"
+test = false
+bench = false
+doc = false
+
+[[bin]]
+name = "opaal-e2e-stream-fixture"
+path = "../../tests/fixtures/stream.rs"
+test = false
+bench = false
+doc = false
+
+[[bin]]
+name = "opaal-terminal-editor-fixture"
+path = "../../tests/fixtures/terminal_editor.rs"
+test = false
+bench = false
+doc = false
+
+[[bin]]
+name = "opaal-benchmark-fixture"
+path = "../../tests/fixtures/benchmark.rs"
+test = false
+bench = false
+doc = false
+
+[dependencies]
+opaal-platform = { path = "../opaal-platform" }
+opaal-platform-posix = { path = "../opaal-platform-posix" }
+opaal-runtime = { path = "../opaal-runtime" }
+opaal-syntax = { path = "../opaal-syntax" }
+fd-lock = "=4.0.4"
+rustix = { version = "=1.1.4", features = ["fs", "process"] }
+unicode-segmentation = "=1.13.3"
+unicode-width = "=0.2.2"
+
+[target.'cfg(any(target_os = "macos", target_os = "linux"))'.dependencies]
+nu-ansi-term = "=0.50.3"
+reedline = { version = "=0.49.0", default-features = false, features = ["external_printer", "idle_callback"] }
+
+# The PTY acceptance harness composes a pseudoterminal from rustix directly
+# rather than pulling a new crate; these features stay out of the shipped binary.
+[target.'cfg(any(target_os = "macos", target_os = "linux"))'.dev-dependencies]
+rustix = { version = "=1.1.4", features = ["fs", "process", "pty", "termios"] }
+
+[lints]
+workspace = true

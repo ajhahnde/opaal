@@ -4,13 +4,12 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use flash_runtime::ScopeStack;
-use flash_runtime::eval::{CancellationToken, EvalLimits, ResourceBudget, evaluate_with_limits};
-use flash_runtime::module::{
+use opaal_runtime::ScopeStack;
+use opaal_runtime::eval::{CancellationToken, EvalLimits, ResourceBudget, evaluate_with_limits};
+use opaal_runtime::module::{
     AnalysisControl, AnalysisLimitKind, AnalysisLimits, ModuleAnalysisOutcome, ModuleCanonicalizer,
     ModuleId, ModulePathError, ModuleProgramLoader, ModuleSourceError, ModuleSourceLoader,
 };
-use flash_syntax::LanguageMajor;
 use libfuzzer_sys::fuzz_target;
 
 struct FuzzSource<'input> {
@@ -19,7 +18,7 @@ struct FuzzSource<'input> {
 
 impl ModuleCanonicalizer for FuzzSource<'_> {
     fn canonicalize(&self, candidate: &Path) -> Result<PathBuf, ModulePathError> {
-        (candidate == Path::new("fuzz.fsh"))
+        (candidate == Path::new("fuzz.opaal"))
             .then(|| candidate.to_path_buf())
             .ok_or_else(|| ModulePathError::new("fuzz imports are unavailable"))
     }
@@ -35,7 +34,7 @@ impl ModuleSourceLoader for FuzzSource<'_> {
         module: &ModuleId,
         maximum: usize,
     ) -> Result<Vec<u8>, ModuleSourceError> {
-        (module.path() == Path::new("fuzz.fsh"))
+        (module.path() == Path::new("fuzz.opaal"))
             .then(|| self.bytes[..self.bytes.len().min(maximum)].to_vec())
             .ok_or_else(|| ModuleSourceError::new("fuzz imports are unavailable"))
     }
@@ -55,8 +54,8 @@ fuzz_target!(|data: &[u8]| {
         .with_limit(AnalysisLimitKind::Diagnostics, knob(7) % 32)
         .with_limit(AnalysisLimitKind::WorkUnits, knob(8) * 32);
     let fuzz = FuzzSource { bytes: source };
-    let outcome = ModuleProgramLoader::for_language(&fuzz, &fuzz, LanguageMajor::V2)
-        .analyze_with_limits_controlled(Path::new("fuzz.fsh"), &AnalysisControl::never(), limits);
+    let outcome = ModuleProgramLoader::new(&fuzz, &fuzz)
+        .analyze_with_limits_controlled(Path::new("fuzz.opaal"), &AnalysisControl::never(), limits);
 
     let ModuleAnalysisOutcome::Complete(report) = outcome else {
         assert!(matches!(outcome, ModuleAnalysisOutcome::BudgetExceeded(_)));
@@ -88,6 +87,6 @@ fuzz_target!(|data: &[u8]| {
         script,
         source,
         &mut ScopeStack::new(),
-        &EvalLimits::pure_v2(token, budget),
+        &EvalLimits::pure_opaal(token, budget),
     );
 });

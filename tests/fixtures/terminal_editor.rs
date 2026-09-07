@@ -2,7 +2,7 @@
 
 //! Test-only driver that runs an interactive session on the raw-mode editor.
 //!
-//! The shipped `fsh` selects its editor by target. This fixture selects the
+//! The shipped `opaal` selects its editor by host. This fixture selects the
 //! raw-mode editor unconditionally so the host pseudoterminal suite can drive
 //! it on macOS and Linux without adding a product-visible switch.
 //!
@@ -14,18 +14,18 @@ use std::io::{self, Write};
 use std::process::{Command, ExitCode};
 use std::time::{Duration, Instant};
 
-use flash_cli::completion::CompletionCatalog;
-use flash_cli::editor::{EditorPrompt, LineEditor};
-use flash_cli::history::{
+use opaal_cli::completion::CompletionCatalog;
+use opaal_cli::editor::{EditorPrompt, LineEditor};
+use opaal_cli::history::{
     EditorHistory, HistoryPlatform, ProcessHistoryEnvironment, select_history,
 };
-use flash_cli::interactive::{
+use opaal_cli::interactive::{
     EvaluationControl, InteractiveEvaluationError, InteractiveEvaluator, InteractiveExit,
     InteractiveNotice, InteractiveNoticeError, InteractiveNoticeId, run_interactive_session,
 };
-use flash_cli::terminal_editor::TerminalEditor;
-use flash_platform::Platform;
-use flash_platform_posix::PosixPlatform;
+use opaal_cli::terminal_editor::TerminalEditor;
+use opaal_platform::Platform;
+use opaal_platform_posix::PosixPlatform;
 
 fn main() -> ExitCode {
     // The adapter answers the two ends from two different descriptors, and
@@ -45,15 +45,15 @@ fn main() -> ExitCode {
         return ExitCode::SUCCESS;
     }
 
-    let prompt = if env::var_os("FLASH_TEST_SAFE_MODE").is_some() {
+    let prompt = if env::var_os("OPAAL_TEST_SAFE_MODE").is_some() {
         EditorPrompt::safe_mode()
     } else {
         EditorPrompt::new(
-            env::var("FLASH_TEST_PROMPT").unwrap_or_else(|_| ">> ".to_owned()),
-            env::var("FLASH_TEST_CONTINUATION_PROMPT").unwrap_or_else(|_| "...> ".to_owned()),
+            env::var("OPAAL_TEST_PROMPT").unwrap_or_else(|_| ">> ".to_owned()),
+            env::var("OPAAL_TEST_CONTINUATION_PROMPT").unwrap_or_else(|_| "...> ".to_owned()),
         )
     };
-    let mut editor = if env::var_os("FLASH_TEST_PERSISTENT_HISTORY").is_some() {
+    let mut editor = if env::var_os("OPAAL_TEST_PERSISTENT_HISTORY").is_some() {
         let selection = match select_history(
             false,
             HistoryPlatform::current(),
@@ -87,7 +87,7 @@ fn main() -> ExitCode {
     } else {
         TerminalEditor::new(PosixPlatform, io::stdin(), io::stdout())
     };
-    if env::var_os("FLASH_TEST_TERMINAL_RESTORE").is_some() {
+    if env::var_os("OPAAL_TEST_TERMINAL_RESTORE").is_some() {
         let before = match terminal_state() {
             Ok(state) => state,
             Err(error) => {
@@ -210,7 +210,7 @@ struct EchoEvaluator {
 
 impl EchoEvaluator {
     fn new() -> Self {
-        let external_notice_pending = env::var_os("FLASH_TEST_EXTERNAL_NOTICE").is_some();
+        let external_notice_pending = env::var_os("OPAAL_TEST_EXTERNAL_NOTICE").is_some();
         Self {
             external_notice_at: external_notice_pending
                 .then(|| Instant::now() + Duration::from_millis(150)),
@@ -222,8 +222,8 @@ impl EchoEvaluator {
 impl InteractiveEvaluator for EchoEvaluator {
     fn completion_catalog(&mut self) -> Option<CompletionCatalog> {
         Some(CompletionCatalog::from_runtime(
-            &flash_runtime::builtin::standard_registry(),
-            &flash_runtime::ScopeStack::new(),
+            &opaal_runtime::builtin::standard_registry(),
+            &opaal_runtime::ScopeStack::new(),
         ))
     }
 

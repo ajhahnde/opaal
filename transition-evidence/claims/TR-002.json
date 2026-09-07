@@ -1,0 +1,56 @@
+{
+  "assertions": [
+    {
+      "detail": "source=ce532330507f2b302bf603c0ffe27c11d7829d24 derived=6b010a66e9ef9df125ff599e6a242eaf8fce85fc",
+      "name": "history-map-baseline",
+      "success": true
+    },
+    {
+      "detail": "rows=171 reasons={'path-touching': 169, 'topology-only': 2}",
+      "name": "history-map-source-inventory",
+      "success": true
+    },
+    {
+      "detail": "mapped=171 history=171",
+      "name": "history-map-derived-lineage",
+      "success": true
+    },
+    {
+      "detail": "mismatches=[]",
+      "name": "history-map-derived-metadata",
+      "success": true
+    },
+    {
+      "detail": "release={'derived_commit': 'c3c603e8981e83b404d01b4c52c408f7c1d8c3b5', 'derived_tree': '99ea5790dc2be8bf6494282de722f926d3b26514', 'source_commit': '16609e7e71022eba8ba5bc884a47225c50e4ba7c'}",
+      "name": "history-map-release-tree",
+      "success": true
+    },
+    {
+      "detail": "non_main_branch_imports=0",
+      "name": "history-map-main-only",
+      "success": true
+    },
+    {
+      "detail": "source_head=ce532330507f2b302bf603c0ffe27c11d7829d24",
+      "name": "history-map-live-source",
+      "success": true
+    },
+    {
+      "detail": "the checked-in map exactly matches the re-derived source and derived histories",
+      "name": "history-map-live-expansion",
+      "success": true
+    },
+    {
+      "detail": "sha256=ce277faf5e45b81c6edd8df7748909e18e8fdd3c032789593dbe03d998a2a5c4",
+      "name": "history-map-artifact",
+      "success": true
+    }
+  ],
+  "candidate_worktree_sha256": "fb81b5c3877843e404d3b733f1d901d3f259b18a96b013cb112daa051da95946",
+  "claim": "TR-002",
+  "commands": [],
+  "public_tip": null,
+  "schema": 1,
+  "source_tip": "6b010a66e9ef9df125ff599e6a242eaf8fce85fc",
+  "success": true
+}

@@ -8,10 +8,10 @@ use std::path::PathBuf;
 use std::process;
 
 fn main() {
-    let report_path = env::var_os("FLASH_PROBE_REPORT").expect("report path is required");
-    let value = env::var_os("FLASH_PROBE_VALUE").unwrap_or_default();
+    let report_path = env::var_os("OPAAL_PROBE_REPORT").expect("report path is required");
+    let value = env::var_os("OPAAL_PROBE_VALUE").unwrap_or_default();
     let path = env::var_os("PATH").unwrap_or_default();
-    let fd_open = env::var("FLASH_PROBE_FD")
+    let fd_open = env::var("OPAAL_PROBE_FD")
         .ok()
         .is_some_and(|descriptor| descriptor_probe::is_open(&descriptor));
     let cwd = env::current_dir().expect("cwd should be readable");
@@ -33,7 +33,7 @@ fn main() {
     // not disturb the byte layout the argv, environment, and descriptor tests
     // compare exactly, and two pipeline members sharing one environment must
     // still report separately.
-    if let Some(group_directory) = env::var_os("FLASH_PROBE_GROUP_REPORT") {
+    if let Some(group_directory) = env::var_os("OPAAL_PROBE_GROUP_REPORT") {
         let report = PathBuf::from(group_directory).join(format!("{}.group", process::id()));
         fs::write(report, process_group::current().to_string())
             .expect("group report should be written");
@@ -42,13 +42,13 @@ fn main() {
     // Raising a signal at itself is how the fixture reports its own disposition
     // and mask together: it survives only if the signal was ignored or blocked,
     // and the parent reads the difference straight off the exit status.
-    if let Some(number) = env::var_os("FLASH_PROBE_RAISE") {
+    if let Some(number) = env::var_os("OPAAL_PROBE_RAISE") {
         let number: i32 = number
             .to_str()
             .and_then(|value| value.parse().ok())
             .expect("the raise probe takes a signal number");
         signal_probe::raise_signal(number);
-        if let Some(directory) = env::var_os("FLASH_PROBE_GROUP_REPORT") {
+        if let Some(directory) = env::var_os("OPAAL_PROBE_GROUP_REPORT") {
             let survived = PathBuf::from(directory).join(format!("{}.survived", process::id()));
             fs::write(survived, b"survived").expect("survival report should be written");
         }
@@ -58,7 +58,7 @@ fn main() {
     // fixture waits for the parent to release it. Polling rather than blocking
     // on a descriptor keeps the fixture free of any signal handling of its own,
     // which is exactly what the disposition probes assert about it.
-    if let Some(release) = env::var_os("FLASH_PROBE_HOLD_UNTIL") {
+    if let Some(release) = env::var_os("OPAAL_PROBE_HOLD_UNTIL") {
         let release = PathBuf::from(release);
         while !release.exists() {
             std::thread::sleep(std::time::Duration::from_millis(10));

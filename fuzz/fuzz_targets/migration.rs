@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
-use flash_migrate::{
+use opaal_migrate::{
     MigrationFormat, MigrationLimits, SourceReader, analyze_roots, analyze_roots_with_limits,
 };
 use libfuzzer_sys::fuzz_target;
@@ -17,7 +17,7 @@ impl SourceReader for FuzzReader<'_> {
     }
 
     fn read(&self, path: &Path, max_bytes: usize) -> Result<Vec<u8>, String> {
-        if path == Path::new("fuzz.fsh") {
+        if path == Path::new("fuzz.opaal") {
             Ok(self.bytes[..self.bytes.len().min(max_bytes.saturating_add(1))].to_vec())
         } else {
             Err("fuzz import is unavailable".to_owned())
@@ -28,7 +28,7 @@ impl SourceReader for FuzzReader<'_> {
 fuzz_target!(|data: &[u8]| {
     let (limits, source) = fuzz_limits(data);
     let reader = FuzzReader { bytes: source };
-    let roots = [PathBuf::from("fuzz.fsh")];
+    let roots = [PathBuf::from("fuzz.opaal")];
     let analyzed = limits.map_or_else(
         || analyze_roots(&reader, &roots),
         |limits| analyze_roots_with_limits(&reader, &roots, &limits),
@@ -50,7 +50,7 @@ fuzz_target!(|data: &[u8]| {
 
     let decoded: serde_json::Value =
         serde_json::from_str(&json).expect("migration JSON must always be valid");
-    assert_eq!(decoded["schema"], flash_migrate::SCHEMA_VERSION);
+    assert_eq!(decoded["schema"], opaal_migrate::SCHEMA_VERSION);
 });
 
 fn fuzz_limits(data: &[u8]) -> (Option<MigrationLimits>, &[u8]) {

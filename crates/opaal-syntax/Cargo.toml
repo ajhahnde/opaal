@@ -1,0 +1,16 @@
+[package]
+name = "opaal-syntax"
+description = "Source, syntax, and diagnostics for OPAAL"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[features]
+default = []
+flash-v1-migration = []
+
+[lints]
+workspace = true

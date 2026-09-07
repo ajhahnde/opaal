@@ -1,5 +1,5 @@
 [package]
-name = "flash-fuzz"
+name = "opaal-fuzz"
 version = "0.0.0"
 publish = false
 edition = "2024"
@@ -8,9 +8,9 @@ edition = "2024"
 cargo-fuzz = true
 
 [dependencies]
-flash-migrate = { path = "../crates/flash-migrate" }
-flash-runtime = { path = "../crates/flash-runtime" }
-flash-syntax = { path = "../crates/flash-syntax" }
+opaal-migrate = { path = "../crates/opaal-migrate" }
+opaal-runtime = { path = "../crates/opaal-runtime" }
+opaal-syntax = { path = "../crates/opaal-syntax" }
 libfuzzer-sys = "0.4"
 serde_json = { version = "=1.0.151", default-features = false, features = ["std"] }
 

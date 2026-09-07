@@ -1,0 +1,211 @@
+{
+  "schema": "opaal-performance-result-v1",
+  "suite_version": 1,
+  "profile": "qualification",
+  "started_utc": "2026-09-07T03:41:54Z",
+  "finished_utc": "2026-09-07T03:41:56Z",
+  "contract_sha256": "585ce612378a04a966bc1906c89caabcece85a12161a3b0abcb5581faca31adb",
+  "binary_sha256": "2f759033a958431a4f1dad2a82c5cd30612ec54e3fd4375724dc4d6eefbdf432",
+  "environment": {
+    "kind": "host",
+    "os": "macos",
+    "os_release": "25.6.0",
+    "architecture": "arm64",
+    "python": "3.14.7",
+    "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14)",
+    "cargo": "cargo 1.97.1 (c980f4866 2026-06-30)",
+    "logical_cpus": 8,
+    "load_average_at_finish": [
+      2.4814453125,
+      3.56884765625,
+      4.79541015625
+    ]
+  },
+  "noise_controls": {
+    "optimized_binary": true,
+    "isolated_home": true,
+    "config_disabled": true,
+    "history_disabled": true,
+    "locale": "C",
+    "completion_path_isolated": true,
+    "manual_cache_flush": false,
+    "sample_order": "surface-grouped; cold first; warmups discarded"
+  },
+  "parameters": {
+    "warmups": 3,
+    "samples": 15,
+    "stream_items": 5000000
+  },
+  "measurements": [
+    {
+      "case_id": "host-startup-cold",
+      "unit": "ns",
+      "warmup_samples": [],
+      "samples": [
+        13189291
+      ],
+      "summary": {
+        "minimum": 13189291,
+        "median": 13189291,
+        "p95": 13189291,
+        "maximum": 13189291
+      }
+    },
+    {
+      "case_id": "host-startup-warm",
+      "unit": "ns",
+      "warmup_samples": [
+        4795042,
+        4382084,
+        4548833
+      ],
+      "samples": [
+        4385459,
+        4308083,
+        4280625,
+        4736625,
+        4268417,
+        4415292,
+        4213708,
+        4360333,
+        4119083,
+        4264125,
+        4249583,
+        4588708,
+        4137166,
+        4355959,
+        4190500
+      ],
+      "summary": {
+        "minimum": 4119083,
+        "median": 4280625,
+        "p95": 4736625,
+        "maximum": 4736625
+      }
+    },
+    {
+      "case_id": "host-first-prompt-cold",
+      "unit": "ns",
+      "warmup_samples": [],
+      "samples": [
+        17578166
+      ],
+      "summary": {
+        "minimum": 17578166,
+        "median": 17578166,
+        "p95": 17578166,
+        "maximum": 17578166
+      }
+    },
+    {
+      "case_id": "host-first-prompt-warm",
+      "unit": "ns",
+      "warmup_samples": [
+        6132500,
+        5381625,
+        5523875
+      ],
+      "samples": [
+        5464875,
+        5253417,
+        5305875,
+        5345625,
+        4919250,
+        4867709,
+        5165250,
+        4939458,
+        5181750,
+        5202417,
+        4983583,
+        5085541,
+        5286375,
+        4945458,
+        5174333
+      ],
+      "summary": {
+        "minimum": 4867709,
+        "median": 5174333,
+        "p95": 5464875,
+        "maximum": 5464875
+      }
+    },
+    {
+      "case_id": "host-structured-stream-memory-warm",
+      "unit": "bytes",
+      "warmup_samples": [
+        6160384,
+        6160384,
+        6160384
+      ],
+      "samples": [
+        6160384,
+        6160384,
+        6160384,
+        6160384,
+        6160384,
+        6160384,
+        6160384,
+        6160384,
+        6160384,
+        6160384,
+        6160384,
+        6160384,
+        6160384,
+        6160384,
+        6160384
+      ],
+      "summary": {
+        "minimum": 6160384,
+        "median": 6160384,
+        "p95": 6160384,
+        "maximum": 6160384
+      }
+    },
+    {
+      "case_id": "host-completion-cold",
+      "unit": "ns",
+      "warmup_samples": [],
+      "samples": [
+        1764917
+      ],
+      "summary": {
+        "minimum": 1764917,
+        "median": 1764917,
+        "p95": 1764917,
+        "maximum": 1764917
+      }
+    },
+    {
+      "case_id": "host-completion-warm",
+      "unit": "ns",
+      "warmup_samples": [
+        972750,
+        934667,
+        936083
+      ],
+      "samples": [
+        942416,
+        929500,
+        921792,
+        925292,
+        918833,
+        910042,
+        910000,
+        941417,
+        903834,
+        908208,
+        916583,
+        904583,
+        910500,
+        902500,
+        897000
+      ],
+      "summary": {
+        "minimum": 897000,
+        "median": 910500,
+        "p95": 942416,
+        "maximum": 942416
+      }
+    }
+  ]
+}

@@ -1,6 +1,6 @@
 <div align="center">
 
-<h1>Flash</h1>
+<h1>OPAAL</h1>
 
 <p>
   <a href="README.md"><b>README</b></a> ·
@@ -12,7 +12,7 @@
 
 ---
 
-All notable changes to Flash will be documented in this file.
+All notable changes to OPAAL will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project intends to follow [Semantic Versioning](https://semver.org/).
 
@@ -20,18 +20,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
-- Add an explicitly versioned, pure Flash 2 language foundation with qualified
-  modules and compiled operations, nominal records and variants, bounded
-  generics and patterns, structured outcomes, typed owned streams, shared
-  formatter/checker/help/editor semantics, deterministic analysis and execution
-  budgets, and a standalone read-only Flash 1 source migration analyzer. Later
-  effects, authority grants, projects, actions, tasks, controlled planning, and
-  FlashOS runtime qualification remain explicitly unavailable boundaries.
+- Establish the standalone OPAAL language 1 foundation with the `opaal` CLI,
+  `.opaal` sources, qualified modules and operations, nominal records and
+  variants, bounded generics and patterns, structured outcomes, typed streams,
+  shared formatter/checker/help/editor semantics, deterministic resource
+  ceilings, and an isolated read-only Flash 1 migration analyzer.
+- Add a seven-case host benchmark contract and standard-library-only validator
+  for startup, first prompt, structured-stream memory, and completion latency.
+- Add standalone least-privilege CI and security aggregates, pinned dependency
+  automation, contribution and vulnerability-reporting policies, public-boundary
+  validation, and executable transition evidence.
+
+### Removed
+
+- Remove Flash 1 execution, configuration, history, job, and planning
+  personalities from current OPAAL entry points. Flash 1 remains available only
+  as preserved history and explicit input to `opaal-migrate-flash-v1`.
 
 ### Changed
 
-- License Flash under the Mozilla Public License 2.0. Versions distributed
+- License OPAAL under the Mozilla Public License 2.0. Versions distributed
   before this change retain their then-applicable licenses.
+- Mark every current package as non-publishable and provide only a read-only
+  manual release-policy check while OPAAL remains unreleased.
 
 ## [1.0.0] - 2026-08-24
 
@@ -179,4 +190,4 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ---
 
-[← Back to Flash Overview](README.md) · [Flash documentation](docs/README.md) · [FlashOS changelog →](../../CHANGELOG.md)
+[← Back to OPAAL Overview](README.md) · [OPAAL documentation](docs/README.md)

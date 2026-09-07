@@ -1,0 +1,3881 @@
+{
+  "inventory_sha256": "05ba099856a4d6324ed95771d189705c2eda040349ecb77b2f6ed6e8cd52a1da",
+  "rows": [
+    {
+      "destination": ".gitignore",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 26,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/.gitignore",
+      "standalone_source": ".gitignore"
+    },
+    {
+      "destination": "CHANGELOG.md",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 24,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/CHANGELOG.md",
+      "standalone_source": "CHANGELOG.md"
+    },
+    {
+      "destination": "Cargo.lock",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 22,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/Cargo.lock",
+      "standalone_source": "Cargo.lock"
+    },
+    {
+      "destination": "Cargo.toml",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 21,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/Cargo.toml",
+      "standalone_source": "Cargo.toml"
+    },
+    {
+      "destination": "LICENSE",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 25,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/LICENSE",
+      "standalone_source": "LICENSE"
+    },
+    {
+      "destination": "README.md",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 23,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/README.md",
+      "standalone_source": "README.md"
+    },
+    {
+      "destination": "benchmarks/README.md",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 12,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/benchmarks/README.md",
+      "standalone_source": "benchmarks/README.md"
+    },
+    {
+      "destination": "benchmarks/budgets-v1.toml",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 12,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/benchmarks/budgets-v1.toml",
+      "standalone_source": "benchmarks/budgets-v1.toml"
+    },
+    {
+      "destination": "benchmarks/contract-v1.toml",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 12,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/benchmarks/contract-v1.toml",
+      "standalone_source": "benchmarks/contract-v1.toml"
+    },
+    {
+      "destination": "git-history-only",
+      "disposition": "foreign-integration-history",
+      "owner": "system.flashos",
+      "rule_index": 10,
+      "shadowed_rule_indices": [
+        11,
+        12
+      ],
+      "source": "components/flash/benchmarks/evidence/flashos-qemu-tcg-v1.json",
+      "standalone_source": "benchmarks/evidence/flashos-qemu-tcg-v1.json"
+    },
+    {
+      "destination": "history/flash-v1/benchmarks/evidence/host-darwin-arm64-v1.json",
+      "disposition": "preserve-flash-history",
+      "owner": "historical.flash",
+      "rule_index": 11,
+      "shadowed_rule_indices": [
+        12
+      ],
+      "source": "components/flash/benchmarks/evidence/host-darwin-arm64-v1.json",
+      "standalone_source": "benchmarks/evidence/host-darwin-arm64-v1.json"
+    },
+    {
+      "destination": "benchmarks/run.py",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 12,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/benchmarks/run.py",
+      "standalone_source": "benchmarks/run.py"
+    },
+    {
+      "destination": "history/flash-v1/conformance/v1.toml",
+      "disposition": "preserve-flash-history",
+      "owner": "historical.flash",
+      "rule_index": 13,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/conformance/v1.toml",
+      "standalone_source": "conformance/v1.toml"
+    },
+    {
+      "destination": "crates/flash-cli/Cargo.toml",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-cli/Cargo.toml",
+      "standalone_source": "crates/flash-cli/Cargo.toml"
+    },
+    {
+      "destination": "crates/flash-cli/src/check.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-cli/src/check.rs",
+      "standalone_source": "crates/flash-cli/src/check.rs"
+    },
+    {
+      "destination": "crates/flash-cli/src/cli.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-cli/src/cli.rs",
+      "standalone_source": "crates/flash-cli/src/cli.rs"
+    },
+    {
+      "destination": "crates/flash-cli/src/completion.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-cli/src/completion.rs",
+      "standalone_source": "crates/flash-cli/src/completion.rs"
+    },
+    {
+      "destination": "crates/flash-cli/src/config.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-cli/src/config.rs",
+      "standalone_source": "crates/flash-cli/src/config.rs"
+    },
+    {
+      "destination": "crates/flash-cli/src/editor.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-cli/src/editor.rs",
+      "standalone_source": "crates/flash-cli/src/editor.rs"
+    },
+    {
+      "destination": "crates/flash-cli/src/format.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-cli/src/format.rs",
+      "standalone_source": "crates/flash-cli/src/format.rs"
+    },
+    {
+      "destination": "crates/flash-cli/src/highlight.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-cli/src/highlight.rs",
+      "standalone_source": "crates/flash-cli/src/highlight.rs"
+    },
+    {
+      "destination": "crates/flash-cli/src/hint.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-cli/src/hint.rs",
+      "standalone_source": "crates/flash-cli/src/hint.rs"
+    },
+    {
+      "destination": "crates/flash-cli/src/history.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-cli/src/history.rs",
+      "standalone_source": "crates/flash-cli/src/history.rs"
+    },
+    {
+      "destination": "crates/flash-cli/src/interactive.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-cli/src/interactive.rs",
+      "standalone_source": "crates/flash-cli/src/interactive.rs"
+    },
+    {
+      "destination": "crates/flash-cli/src/lib.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-cli/src/lib.rs",
+      "standalone_source": "crates/flash-cli/src/lib.rs"
+    },
+    {
+      "destination": "crates/flash-cli/src/main.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-cli/src/main.rs",
+      "standalone_source": "crates/flash-cli/src/main.rs"
+    },
+    {
+      "destination": "crates/flash-cli/src/plan.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-cli/src/plan.rs",
+      "standalone_source": "crates/flash-cli/src/plan.rs"
+    },
+    {
+      "destination": "crates/flash-cli/src/raw_editor.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-cli/src/raw_editor.rs",
+      "standalone_source": "crates/flash-cli/src/raw_editor.rs"
+    },
+    {
+      "destination": "crates/flash-cli/src/reedline_editor.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-cli/src/reedline_editor.rs",
+      "standalone_source": "crates/flash-cli/src/reedline_editor.rs"
+    },
+    {
+      "destination": "crates/flash-cli/src/report.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-cli/src/report.rs",
+      "standalone_source": "crates/flash-cli/src/report.rs"
+    },
+    {
+      "destination": "crates/flash-cli/src/terminal_editor/buffer.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-cli/src/terminal_editor/buffer.rs",
+      "standalone_source": "crates/flash-cli/src/terminal_editor/buffer.rs"
+    },
+    {
+      "destination": "crates/flash-cli/src/terminal_editor/history.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-cli/src/terminal_editor/history.rs",
+      "standalone_source": "crates/flash-cli/src/terminal_editor/history.rs"
+    },
+    {
+      "destination": "crates/flash-cli/src/terminal_editor/key.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-cli/src/terminal_editor/key.rs",
+      "standalone_source": "crates/flash-cli/src/terminal_editor/key.rs"
+    },
+    {
+      "destination": "crates/flash-cli/src/terminal_editor/mod.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-cli/src/terminal_editor/mod.rs",
+      "standalone_source": "crates/flash-cli/src/terminal_editor/mod.rs"
+    },
+    {
+      "destination": "crates/flash-cli/src/terminal_editor/render.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-cli/src/terminal_editor/render.rs",
+      "standalone_source": "crates/flash-cli/src/terminal_editor/render.rs"
+    },
+    {
+      "destination": "crates/flash-cli/tests/check_frontend.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-cli/tests/check_frontend.rs",
+      "standalone_source": "crates/flash-cli/tests/check_frontend.rs"
+    },
+    {
+      "destination": "crates/flash-cli/tests/checker_e2e.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-cli/tests/checker_e2e.rs",
+      "standalone_source": "crates/flash-cli/tests/checker_e2e.rs"
+    },
+    {
+      "destination": "crates/flash-cli/tests/config_policy.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-cli/tests/config_policy.rs",
+      "standalone_source": "crates/flash-cli/tests/config_policy.rs"
+    },
+    {
+      "destination": "crates/flash-cli/tests/config_startup.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-cli/tests/config_startup.rs",
+      "standalone_source": "crates/flash-cli/tests/config_startup.rs"
+    },
+    {
+      "destination": "crates/flash-cli/tests/context_aware_completion.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-cli/tests/context_aware_completion.rs",
+      "standalone_source": "crates/flash-cli/tests/context_aware_completion.rs"
+    },
+    {
+      "destination": "crates/flash-cli/tests/dependency_direction.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-cli/tests/dependency_direction.rs",
+      "standalone_source": "crates/flash-cli/tests/dependency_direction.rs"
+    },
+    {
+      "destination": "crates/flash-cli/tests/e2e.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-cli/tests/e2e.rs",
+      "standalone_source": "crates/flash-cli/tests/e2e.rs"
+    },
+    {
+      "destination": "crates/flash-cli/tests/editor_adapter.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-cli/tests/editor_adapter.rs",
+      "standalone_source": "crates/flash-cli/tests/editor_adapter.rs"
+    },
+    {
+      "destination": "crates/flash-cli/tests/fixtures/hangup_observer.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-cli/tests/fixtures/hangup_observer.rs",
+      "standalone_source": "crates/flash-cli/tests/fixtures/hangup_observer.rs"
+    },
+    {
+      "destination": "crates/flash-cli/tests/format_frontend.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-cli/tests/format_frontend.rs",
+      "standalone_source": "crates/flash-cli/tests/format_frontend.rs"
+    },
+    {
+      "destination": "crates/flash-cli/tests/formatter_e2e.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-cli/tests/formatter_e2e.rs",
+      "standalone_source": "crates/flash-cli/tests/formatter_e2e.rs"
+    },
+    {
+      "destination": "crates/flash-cli/tests/history_hints.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-cli/tests/history_hints.rs",
+      "standalone_source": "crates/flash-cli/tests/history_hints.rs"
+    },
+    {
+      "destination": "crates/flash-cli/tests/history_policy.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-cli/tests/history_policy.rs",
+      "standalone_source": "crates/flash-cli/tests/history_policy.rs"
+    },
+    {
+      "destination": "crates/flash-cli/tests/interactive_session.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-cli/tests/interactive_session.rs",
+      "standalone_source": "crates/flash-cli/tests/interactive_session.rs"
+    },
+    {
+      "destination": "crates/flash-cli/tests/language_version.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-cli/tests/language_version.rs",
+      "standalone_source": "crates/flash-cli/tests/language_version.rs"
+    },
+    {
+      "destination": "crates/flash-cli/tests/live_completion_snapshots.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-cli/tests/live_completion_snapshots.rs",
+      "standalone_source": "crates/flash-cli/tests/live_completion_snapshots.rs"
+    },
+    {
+      "destination": "crates/flash-cli/tests/plan_frontend.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-cli/tests/plan_frontend.rs",
+      "standalone_source": "crates/flash-cli/tests/plan_frontend.rs"
+    },
+    {
+      "destination": "crates/flash-cli/tests/planner_e2e.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-cli/tests/planner_e2e.rs",
+      "standalone_source": "crates/flash-cli/tests/planner_e2e.rs"
+    },
+    {
+      "destination": "crates/flash-cli/tests/pty.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-cli/tests/pty.rs",
+      "standalone_source": "crates/flash-cli/tests/pty.rs"
+    },
+    {
+      "destination": "crates/flash-cli/tests/syntax_highlighting.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-cli/tests/syntax_highlighting.rs",
+      "standalone_source": "crates/flash-cli/tests/syntax_highlighting.rs"
+    },
+    {
+      "destination": "crates/flash-cli/tests/terminal_editor.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-cli/tests/terminal_editor.rs",
+      "standalone_source": "crates/flash-cli/tests/terminal_editor.rs"
+    },
+    {
+      "destination": "crates/flash-cli/tests/terminal_editor_pty.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-cli/tests/terminal_editor_pty.rs",
+      "standalone_source": "crates/flash-cli/tests/terminal_editor_pty.rs"
+    },
+    {
+      "destination": "crates/flash-lsp/Cargo.toml",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-lsp/Cargo.toml",
+      "standalone_source": "crates/flash-lsp/Cargo.toml"
+    },
+    {
+      "destination": "crates/flash-lsp/src/lib.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-lsp/src/lib.rs",
+      "standalone_source": "crates/flash-lsp/src/lib.rs"
+    },
+    {
+      "destination": "crates/flash-lsp/src/main.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-lsp/src/main.rs",
+      "standalone_source": "crates/flash-lsp/src/main.rs"
+    },
+    {
+      "destination": "crates/flash-lsp/src/protocol.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-lsp/src/protocol.rs",
+      "standalone_source": "crates/flash-lsp/src/protocol.rs"
+    },
+    {
+      "destination": "crates/flash-lsp/src/query.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-lsp/src/query.rs",
+      "standalone_source": "crates/flash-lsp/src/query.rs"
+    },
+    {
+      "destination": "crates/flash-lsp/src/server.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-lsp/src/server.rs",
+      "standalone_source": "crates/flash-lsp/src/server.rs"
+    },
+    {
+      "destination": "crates/flash-lsp/src/transport.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-lsp/src/transport.rs",
+      "standalone_source": "crates/flash-lsp/src/transport.rs"
+    },
+    {
+      "destination": "crates/flash-lsp/src/uri.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-lsp/src/uri.rs",
+      "standalone_source": "crates/flash-lsp/src/uri.rs"
+    },
+    {
+      "destination": "crates/flash-lsp/src/v2_main.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-lsp/src/v2_main.rs",
+      "standalone_source": "crates/flash-lsp/src/v2_main.rs"
+    },
+    {
+      "destination": "crates/flash-lsp/src/workspace.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-lsp/src/workspace.rs",
+      "standalone_source": "crates/flash-lsp/src/workspace.rs"
+    },
+    {
+      "destination": "crates/flash-lsp/tests/language_version.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-lsp/tests/language_version.rs",
+      "standalone_source": "crates/flash-lsp/tests/language_version.rs"
+    },
+    {
+      "destination": "crates/flash-lsp/tests/lifecycle.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-lsp/tests/lifecycle.rs",
+      "standalone_source": "crates/flash-lsp/tests/lifecycle.rs"
+    },
+    {
+      "destination": "crates/flash-lsp/tests/queries.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-lsp/tests/queries.rs",
+      "standalone_source": "crates/flash-lsp/tests/queries.rs"
+    },
+    {
+      "destination": "crates/flash-lsp/tests/server_e2e.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-lsp/tests/server_e2e.rs",
+      "standalone_source": "crates/flash-lsp/tests/server_e2e.rs"
+    },
+    {
+      "destination": "crates/flash-lsp/tests/transport.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-lsp/tests/transport.rs",
+      "standalone_source": "crates/flash-lsp/tests/transport.rs"
+    },
+    {
+      "destination": "crates/flash-lsp/tests/uri.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-lsp/tests/uri.rs",
+      "standalone_source": "crates/flash-lsp/tests/uri.rs"
+    },
+    {
+      "destination": "crates/flash-lsp/tests/workspace.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-lsp/tests/workspace.rs",
+      "standalone_source": "crates/flash-lsp/tests/workspace.rs"
+    },
+    {
+      "destination": "crates/flash-migrate/Cargo.toml",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-migrate/Cargo.toml",
+      "standalone_source": "crates/flash-migrate/Cargo.toml"
+    },
+    {
+      "destination": "crates/flash-migrate/src/lib.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-migrate/src/lib.rs",
+      "standalone_source": "crates/flash-migrate/src/lib.rs"
+    },
+    {
+      "destination": "crates/flash-migrate/src/main.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-migrate/src/main.rs",
+      "standalone_source": "crates/flash-migrate/src/main.rs"
+    },
+    {
+      "destination": "crates/flash-migrate/src/scan.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-migrate/src/scan.rs",
+      "standalone_source": "crates/flash-migrate/src/scan.rs"
+    },
+    {
+      "destination": "crates/flash-migrate/src/sha256.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-migrate/src/sha256.rs",
+      "standalone_source": "crates/flash-migrate/src/sha256.rs"
+    },
+    {
+      "destination": "crates/flash-migrate/tests/acceptance.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-migrate/tests/acceptance.rs",
+      "standalone_source": "crates/flash-migrate/tests/acceptance.rs"
+    },
+    {
+      "destination": "git-history-only/Cargo.toml",
+      "disposition": "foreign-integration-history",
+      "owner": "system.flashos",
+      "rule_index": 0,
+      "shadowed_rule_indices": [
+        8
+      ],
+      "source": "components/flash/crates/flash-platform-flashos/Cargo.toml",
+      "standalone_source": "crates/flash-platform-flashos/Cargo.toml"
+    },
+    {
+      "destination": "git-history-only/src/lib.rs",
+      "disposition": "foreign-integration-history",
+      "owner": "system.flashos",
+      "rule_index": 0,
+      "shadowed_rule_indices": [
+        8
+      ],
+      "source": "components/flash/crates/flash-platform-flashos/src/lib.rs",
+      "standalone_source": "crates/flash-platform-flashos/src/lib.rs"
+    },
+    {
+      "destination": "git-history-only/tests/flashos.rs",
+      "disposition": "foreign-integration-history",
+      "owner": "system.flashos",
+      "rule_index": 0,
+      "shadowed_rule_indices": [
+        8
+      ],
+      "source": "components/flash/crates/flash-platform-flashos/tests/flashos.rs",
+      "standalone_source": "crates/flash-platform-flashos/tests/flashos.rs"
+    },
+    {
+      "destination": "crates/flash-platform-posix/Cargo.toml",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-platform-posix/Cargo.toml",
+      "standalone_source": "crates/flash-platform-posix/Cargo.toml"
+    },
+    {
+      "destination": "crates/flash-platform-posix/src/lib.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-platform-posix/src/lib.rs",
+      "standalone_source": "crates/flash-platform-posix/src/lib.rs"
+    },
+    {
+      "destination": "crates/flash-platform-posix/tests/fixtures/signal_guard.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-platform-posix/tests/fixtures/signal_guard.rs",
+      "standalone_source": "crates/flash-platform-posix/tests/fixtures/signal_guard.rs"
+    },
+    {
+      "destination": "crates/flash-platform-posix/tests/posix.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-platform-posix/tests/posix.rs",
+      "standalone_source": "crates/flash-platform-posix/tests/posix.rs"
+    },
+    {
+      "destination": "crates/flash-platform/Cargo.toml",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-platform/Cargo.toml",
+      "standalone_source": "crates/flash-platform/Cargo.toml"
+    },
+    {
+      "destination": "crates/flash-platform/src/lib.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-platform/src/lib.rs",
+      "standalone_source": "crates/flash-platform/src/lib.rs"
+    },
+    {
+      "destination": "crates/flash-platform/tests/platform.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-platform/tests/platform.rs",
+      "standalone_source": "crates/flash-platform/tests/platform.rs"
+    },
+    {
+      "destination": "crates/flash-runtime/Cargo.toml",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-runtime/Cargo.toml",
+      "standalone_source": "crates/flash-runtime/Cargo.toml"
+    },
+    {
+      "destination": "crates/flash-runtime/src/background.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-runtime/src/background.rs",
+      "standalone_source": "crates/flash-runtime/src/background.rs"
+    },
+    {
+      "destination": "crates/flash-runtime/src/builtin.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-runtime/src/builtin.rs",
+      "standalone_source": "crates/flash-runtime/src/builtin.rs"
+    },
+    {
+      "destination": "crates/flash-runtime/src/capsule.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-runtime/src/capsule.rs",
+      "standalone_source": "crates/flash-runtime/src/capsule.rs"
+    },
+    {
+      "destination": "crates/flash-runtime/src/carrier.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-runtime/src/carrier.rs",
+      "standalone_source": "crates/flash-runtime/src/carrier.rs"
+    },
+    {
+      "destination": "crates/flash-runtime/src/closure.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-runtime/src/closure.rs",
+      "standalone_source": "crates/flash-runtime/src/closure.rs"
+    },
+    {
+      "destination": "crates/flash-runtime/src/command.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-runtime/src/command.rs",
+      "standalone_source": "crates/flash-runtime/src/command.rs"
+    },
+    {
+      "destination": "crates/flash-runtime/src/convert.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-runtime/src/convert.rs",
+      "standalone_source": "crates/flash-runtime/src/convert.rs"
+    },
+    {
+      "destination": "crates/flash-runtime/src/directory.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-runtime/src/directory.rs",
+      "standalone_source": "crates/flash-runtime/src/directory.rs"
+    },
+    {
+      "destination": "crates/flash-runtime/src/documentation.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-runtime/src/documentation.rs",
+      "standalone_source": "crates/flash-runtime/src/documentation.rs"
+    },
+    {
+      "destination": "crates/flash-runtime/src/environment.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-runtime/src/environment.rs",
+      "standalone_source": "crates/flash-runtime/src/environment.rs"
+    },
+    {
+      "destination": "crates/flash-runtime/src/eval.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-runtime/src/eval.rs",
+      "standalone_source": "crates/flash-runtime/src/eval.rs"
+    },
+    {
+      "destination": "crates/flash-runtime/src/execute.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-runtime/src/execute.rs",
+      "standalone_source": "crates/flash-runtime/src/execute.rs"
+    },
+    {
+      "destination": "crates/flash-runtime/src/file.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-runtime/src/file.rs",
+      "standalone_source": "crates/flash-runtime/src/file.rs"
+    },
+    {
+      "destination": "crates/flash-runtime/src/format.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-runtime/src/format.rs",
+      "standalone_source": "crates/flash-runtime/src/format.rs"
+    },
+    {
+      "destination": "crates/flash-runtime/src/glob.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-runtime/src/glob.rs",
+      "standalone_source": "crates/flash-runtime/src/glob.rs"
+    },
+    {
+      "destination": "crates/flash-runtime/src/help.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-runtime/src/help.rs",
+      "standalone_source": "crates/flash-runtime/src/help.rs"
+    },
+    {
+      "destination": "crates/flash-runtime/src/internal.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-runtime/src/internal.rs",
+      "standalone_source": "crates/flash-runtime/src/internal.rs"
+    },
+    {
+      "destination": "crates/flash-runtime/src/intrinsic.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-runtime/src/intrinsic.rs",
+      "standalone_source": "crates/flash-runtime/src/intrinsic.rs"
+    },
+    {
+      "destination": "crates/flash-runtime/src/job.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-runtime/src/job.rs",
+      "standalone_source": "crates/flash-runtime/src/job.rs"
+    },
+    {
+      "destination": "crates/flash-runtime/src/lib.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-runtime/src/lib.rs",
+      "standalone_source": "crates/flash-runtime/src/lib.rs"
+    },
+    {
+      "destination": "crates/flash-runtime/src/module.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-runtime/src/module.rs",
+      "standalone_source": "crates/flash-runtime/src/module.rs"
+    },
+    {
+      "destination": "crates/flash-runtime/src/operation.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-runtime/src/operation.rs",
+      "standalone_source": "crates/flash-runtime/src/operation.rs"
+    },
+    {
+      "destination": "crates/flash-runtime/src/outcome.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-runtime/src/outcome.rs",
+      "standalone_source": "crates/flash-runtime/src/outcome.rs"
+    },
+    {
+      "destination": "crates/flash-runtime/src/plan.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-runtime/src/plan.rs",
+      "standalone_source": "crates/flash-runtime/src/plan.rs"
+    },
+    {
+      "destination": "crates/flash-runtime/src/presentation.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-runtime/src/presentation.rs",
+      "standalone_source": "crates/flash-runtime/src/presentation.rs"
+    },
+    {
+      "destination": "crates/flash-runtime/src/query.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-runtime/src/query.rs",
+      "standalone_source": "crates/flash-runtime/src/query.rs"
+    },
+    {
+      "destination": "crates/flash-runtime/src/resolve.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-runtime/src/resolve.rs",
+      "standalone_source": "crates/flash-runtime/src/resolve.rs"
+    },
+    {
+      "destination": "crates/flash-runtime/src/scope.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-runtime/src/scope.rs",
+      "standalone_source": "crates/flash-runtime/src/scope.rs"
+    },
+    {
+      "destination": "crates/flash-runtime/src/script.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-runtime/src/script.rs",
+      "standalone_source": "crates/flash-runtime/src/script.rs"
+    },
+    {
+      "destination": "crates/flash-runtime/src/seam.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-runtime/src/seam.rs",
+      "standalone_source": "crates/flash-runtime/src/seam.rs"
+    },
+    {
+      "destination": "crates/flash-runtime/src/session.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-runtime/src/session.rs",
+      "standalone_source": "crates/flash-runtime/src/session.rs"
+    },
+    {
+      "destination": "crates/flash-runtime/src/stream.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-runtime/src/stream.rs",
+      "standalone_source": "crates/flash-runtime/src/stream.rs"
+    },
+    {
+      "destination": "crates/flash-runtime/src/structured.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-runtime/src/structured.rs",
+      "standalone_source": "crates/flash-runtime/src/structured.rs"
+    },
+    {
+      "destination": "crates/flash-runtime/src/value.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-runtime/src/value.rs",
+      "standalone_source": "crates/flash-runtime/src/value.rs"
+    },
+    {
+      "destination": "crates/flash-runtime/tests/background.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-runtime/tests/background.rs",
+      "standalone_source": "crates/flash-runtime/tests/background.rs"
+    },
+    {
+      "destination": "crates/flash-runtime/tests/boolean_logic.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-runtime/tests/boolean_logic.rs",
+      "standalone_source": "crates/flash-runtime/tests/boolean_logic.rs"
+    },
+    {
+      "destination": "crates/flash-runtime/tests/builtins.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-runtime/tests/builtins.rs",
+      "standalone_source": "crates/flash-runtime/tests/builtins.rs"
+    },
+    {
+      "destination": "crates/flash-runtime/tests/cancellation.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-runtime/tests/cancellation.rs",
+      "standalone_source": "crates/flash-runtime/tests/cancellation.rs"
+    },
+    {
+      "destination": "crates/flash-runtime/tests/carrier.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-runtime/tests/carrier.rs",
+      "standalone_source": "crates/flash-runtime/tests/carrier.rs"
+    },
+    {
+      "destination": "crates/flash-runtime/tests/closure.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-runtime/tests/closure.rs",
+      "standalone_source": "crates/flash-runtime/tests/closure.rs"
+    },
+    {
+      "destination": "crates/flash-runtime/tests/convert.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-runtime/tests/convert.rs",
+      "standalone_source": "crates/flash-runtime/tests/convert.rs"
+    },
+    {
+      "destination": "crates/flash-runtime/tests/directory.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-runtime/tests/directory.rs",
+      "standalone_source": "crates/flash-runtime/tests/directory.rs"
+    },
+    {
+      "destination": "crates/flash-runtime/tests/drain.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-runtime/tests/drain.rs",
+      "standalone_source": "crates/flash-runtime/tests/drain.rs"
+    },
+    {
+      "destination": "crates/flash-runtime/tests/environment.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-runtime/tests/environment.rs",
+      "standalone_source": "crates/flash-runtime/tests/environment.rs"
+    },
+    {
+      "destination": "crates/flash-runtime/tests/evaluation.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-runtime/tests/evaluation.rs",
+      "standalone_source": "crates/flash-runtime/tests/evaluation.rs"
+    },
+    {
+      "destination": "crates/flash-runtime/tests/expansion.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-runtime/tests/expansion.rs",
+      "standalone_source": "crates/flash-runtime/tests/expansion.rs"
+    },
+    {
+      "destination": "crates/flash-runtime/tests/file.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-runtime/tests/file.rs",
+      "standalone_source": "crates/flash-runtime/tests/file.rs"
+    },
+    {
+      "destination": "crates/flash-runtime/tests/foreground.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-runtime/tests/foreground.rs",
+      "standalone_source": "crates/flash-runtime/tests/foreground.rs"
+    },
+    {
+      "destination": "crates/flash-runtime/tests/format.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-runtime/tests/format.rs",
+      "standalone_source": "crates/flash-runtime/tests/format.rs"
+    },
+    {
+      "destination": "crates/flash-runtime/tests/functions.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-runtime/tests/functions.rs",
+      "standalone_source": "crates/flash-runtime/tests/functions.rs"
+    },
+    {
+      "destination": "crates/flash-runtime/tests/glob.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-runtime/tests/glob.rs",
+      "standalone_source": "crates/flash-runtime/tests/glob.rs"
+    },
+    {
+      "destination": "crates/flash-runtime/tests/jobs.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-runtime/tests/jobs.rs",
+      "standalone_source": "crates/flash-runtime/tests/jobs.rs"
+    },
+    {
+      "destination": "crates/flash-runtime/tests/language_version.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-runtime/tests/language_version.rs",
+      "standalone_source": "crates/flash-runtime/tests/language_version.rs"
+    },
+    {
+      "destination": "crates/flash-runtime/tests/limits.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-runtime/tests/limits.rs",
+      "standalone_source": "crates/flash-runtime/tests/limits.rs"
+    },
+    {
+      "destination": "crates/flash-runtime/tests/match_statement.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-runtime/tests/match_statement.rs",
+      "standalone_source": "crates/flash-runtime/tests/match_statement.rs"
+    },
+    {
+      "destination": "crates/flash-runtime/tests/modules.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-runtime/tests/modules.rs",
+      "standalone_source": "crates/flash-runtime/tests/modules.rs"
+    },
+    {
+      "destination": "crates/flash-runtime/tests/operations.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-runtime/tests/operations.rs",
+      "standalone_source": "crates/flash-runtime/tests/operations.rs"
+    },
+    {
+      "destination": "crates/flash-runtime/tests/pipeline.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-runtime/tests/pipeline.rs",
+      "standalone_source": "crates/flash-runtime/tests/pipeline.rs"
+    },
+    {
+      "destination": "crates/flash-runtime/tests/plan.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-runtime/tests/plan.rs",
+      "standalone_source": "crates/flash-runtime/tests/plan.rs"
+    },
+    {
+      "destination": "crates/flash-runtime/tests/preflight.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-runtime/tests/preflight.rs",
+      "standalone_source": "crates/flash-runtime/tests/preflight.rs"
+    },
+    {
+      "destination": "crates/flash-runtime/tests/presentation.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-runtime/tests/presentation.rs",
+      "standalone_source": "crates/flash-runtime/tests/presentation.rs"
+    },
+    {
+      "destination": "crates/flash-runtime/tests/presentation_boundary.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-runtime/tests/presentation_boundary.rs",
+      "standalone_source": "crates/flash-runtime/tests/presentation_boundary.rs"
+    },
+    {
+      "destination": "crates/flash-runtime/tests/registry.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-runtime/tests/registry.rs",
+      "standalone_source": "crates/flash-runtime/tests/registry.rs"
+    },
+    {
+      "destination": "crates/flash-runtime/tests/resolution.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-runtime/tests/resolution.rs",
+      "standalone_source": "crates/flash-runtime/tests/resolution.rs"
+    },
+    {
+      "destination": "crates/flash-runtime/tests/runtime_errors.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-runtime/tests/runtime_errors.rs",
+      "standalone_source": "crates/flash-runtime/tests/runtime_errors.rs"
+    },
+    {
+      "destination": "crates/flash-runtime/tests/scopes.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-runtime/tests/scopes.rs",
+      "standalone_source": "crates/flash-runtime/tests/scopes.rs"
+    },
+    {
+      "destination": "crates/flash-runtime/tests/script.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-runtime/tests/script.rs",
+      "standalone_source": "crates/flash-runtime/tests/script.rs"
+    },
+    {
+      "destination": "crates/flash-runtime/tests/session.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-runtime/tests/session.rs",
+      "standalone_source": "crates/flash-runtime/tests/session.rs"
+    },
+    {
+      "destination": "crates/flash-runtime/tests/spread.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-runtime/tests/spread.rs",
+      "standalone_source": "crates/flash-runtime/tests/spread.rs"
+    },
+    {
+      "destination": "crates/flash-runtime/tests/status_execution.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-runtime/tests/status_execution.rs",
+      "standalone_source": "crates/flash-runtime/tests/status_execution.rs"
+    },
+    {
+      "destination": "crates/flash-runtime/tests/stream.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-runtime/tests/stream.rs",
+      "standalone_source": "crates/flash-runtime/tests/stream.rs"
+    },
+    {
+      "destination": "crates/flash-runtime/tests/structured.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-runtime/tests/structured.rs",
+      "standalone_source": "crates/flash-runtime/tests/structured.rs"
+    },
+    {
+      "destination": "crates/flash-runtime/tests/v2_modules.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-runtime/tests/v2_modules.rs",
+      "standalone_source": "crates/flash-runtime/tests/v2_modules.rs"
+    },
+    {
+      "destination": "crates/flash-runtime/tests/v2_operations.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-runtime/tests/v2_operations.rs",
+      "standalone_source": "crates/flash-runtime/tests/v2_operations.rs"
+    },
+    {
+      "destination": "crates/flash-runtime/tests/v2_outcomes.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-runtime/tests/v2_outcomes.rs",
+      "standalone_source": "crates/flash-runtime/tests/v2_outcomes.rs"
+    },
+    {
+      "destination": "crates/flash-runtime/tests/v2_resources.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-runtime/tests/v2_resources.rs",
+      "standalone_source": "crates/flash-runtime/tests/v2_resources.rs"
+    },
+    {
+      "destination": "crates/flash-runtime/tests/v2_rest_spread.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-runtime/tests/v2_rest_spread.rs",
+      "standalone_source": "crates/flash-runtime/tests/v2_rest_spread.rs"
+    },
+    {
+      "destination": "crates/flash-runtime/tests/v2_types.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-runtime/tests/v2_types.rs",
+      "standalone_source": "crates/flash-runtime/tests/v2_types.rs"
+    },
+    {
+      "destination": "crates/flash-runtime/tests/values.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-runtime/tests/values.rs",
+      "standalone_source": "crates/flash-runtime/tests/values.rs"
+    },
+    {
+      "destination": "crates/flash-syntax/Cargo.toml",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-syntax/Cargo.toml",
+      "standalone_source": "crates/flash-syntax/Cargo.toml"
+    },
+    {
+      "destination": "crates/flash-syntax/src/ast.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-syntax/src/ast.rs",
+      "standalone_source": "crates/flash-syntax/src/ast.rs"
+    },
+    {
+      "destination": "crates/flash-syntax/src/classification.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-syntax/src/classification.rs",
+      "standalone_source": "crates/flash-syntax/src/classification.rs"
+    },
+    {
+      "destination": "crates/flash-syntax/src/completion.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-syntax/src/completion.rs",
+      "standalone_source": "crates/flash-syntax/src/completion.rs"
+    },
+    {
+      "destination": "crates/flash-syntax/src/diagnostic.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-syntax/src/diagnostic.rs",
+      "standalone_source": "crates/flash-syntax/src/diagnostic.rs"
+    },
+    {
+      "destination": "crates/flash-syntax/src/formatter.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-syntax/src/formatter.rs",
+      "standalone_source": "crates/flash-syntax/src/formatter.rs"
+    },
+    {
+      "destination": "crates/flash-syntax/src/language.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-syntax/src/language.rs",
+      "standalone_source": "crates/flash-syntax/src/language.rs"
+    },
+    {
+      "destination": "crates/flash-syntax/src/lexer.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-syntax/src/lexer.rs",
+      "standalone_source": "crates/flash-syntax/src/lexer.rs"
+    },
+    {
+      "destination": "crates/flash-syntax/src/lib.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-syntax/src/lib.rs",
+      "standalone_source": "crates/flash-syntax/src/lib.rs"
+    },
+    {
+      "destination": "crates/flash-syntax/src/parser.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-syntax/src/parser.rs",
+      "standalone_source": "crates/flash-syntax/src/parser.rs"
+    },
+    {
+      "destination": "crates/flash-syntax/src/source.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-syntax/src/source.rs",
+      "standalone_source": "crates/flash-syntax/src/source.rs"
+    },
+    {
+      "destination": "crates/flash-syntax/tests/ast_construction.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-syntax/tests/ast_construction.rs",
+      "standalone_source": "crates/flash-syntax/tests/ast_construction.rs"
+    },
+    {
+      "destination": "crates/flash-syntax/tests/completion_context.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-syntax/tests/completion_context.rs",
+      "standalone_source": "crates/flash-syntax/tests/completion_context.rs"
+    },
+    {
+      "destination": "crates/flash-syntax/tests/documentation_comments.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-syntax/tests/documentation_comments.rs",
+      "standalone_source": "crates/flash-syntax/tests/documentation_comments.rs"
+    },
+    {
+      "destination": "crates/flash-syntax/tests/formatter.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-syntax/tests/formatter.rs",
+      "standalone_source": "crates/flash-syntax/tests/formatter.rs"
+    },
+    {
+      "destination": "crates/flash-syntax/tests/golden_snapshots.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-syntax/tests/golden_snapshots.rs",
+      "standalone_source": "crates/flash-syntax/tests/golden_snapshots.rs"
+    },
+    {
+      "destination": "crates/flash-syntax/tests/grammar_golden.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-syntax/tests/grammar_golden.rs",
+      "standalone_source": "crates/flash-syntax/tests/grammar_golden.rs"
+    },
+    {
+      "destination": "crates/flash-syntax/tests/input_classification.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-syntax/tests/input_classification.rs",
+      "standalone_source": "crates/flash-syntax/tests/input_classification.rs"
+    },
+    {
+      "destination": "crates/flash-syntax/tests/language_version.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-syntax/tests/language_version.rs",
+      "standalone_source": "crates/flash-syntax/tests/language_version.rs"
+    },
+    {
+      "destination": "crates/flash-syntax/tests/lexical_golden.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-syntax/tests/lexical_golden.rs",
+      "standalone_source": "crates/flash-syntax/tests/lexical_golden.rs"
+    },
+    {
+      "destination": "crates/flash-syntax/tests/lossless_lexer.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-syntax/tests/lossless_lexer.rs",
+      "standalone_source": "crates/flash-syntax/tests/lossless_lexer.rs"
+    },
+    {
+      "destination": "crates/flash-syntax/tests/parser.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-syntax/tests/parser.rs",
+      "standalone_source": "crates/flash-syntax/tests/parser.rs"
+    },
+    {
+      "destination": "crates/flash-syntax/tests/property_invariants.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-syntax/tests/property_invariants.rs",
+      "standalone_source": "crates/flash-syntax/tests/property_invariants.rs"
+    },
+    {
+      "destination": "crates/flash-syntax/tests/source_diagnostics.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-syntax/tests/source_diagnostics.rs",
+      "standalone_source": "crates/flash-syntax/tests/source_diagnostics.rs"
+    },
+    {
+      "destination": "crates/flash-syntax/tests/v2_language_manifest.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-syntax/tests/v2_language_manifest.rs",
+      "standalone_source": "crates/flash-syntax/tests/v2_language_manifest.rs"
+    },
+    {
+      "destination": "crates/flash-syntax/tests/v2_module_manifest.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-syntax/tests/v2_module_manifest.rs",
+      "standalone_source": "crates/flash-syntax/tests/v2_module_manifest.rs"
+    },
+    {
+      "destination": "crates/flash-syntax/tests/v2_operation_manifest.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-syntax/tests/v2_operation_manifest.rs",
+      "standalone_source": "crates/flash-syntax/tests/v2_operation_manifest.rs"
+    },
+    {
+      "destination": "crates/flash-syntax/tests/v2_outcome_manifest.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-syntax/tests/v2_outcome_manifest.rs",
+      "standalone_source": "crates/flash-syntax/tests/v2_outcome_manifest.rs"
+    },
+    {
+      "destination": "crates/flash-syntax/tests/v2_rest_spread_manifest.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-syntax/tests/v2_rest_spread_manifest.rs",
+      "standalone_source": "crates/flash-syntax/tests/v2_rest_spread_manifest.rs"
+    },
+    {
+      "destination": "crates/flash-syntax/tests/v2_type_manifest.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 8,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/crates/flash-syntax/tests/v2_type_manifest.rs",
+      "standalone_source": "crates/flash-syntax/tests/v2_type_manifest.rs"
+    },
+    {
+      "destination": "deny.toml",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 27,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/deny.toml",
+      "standalone_source": "deny.toml"
+    },
+    {
+      "destination": "docs/README.md",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 20,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/docs/README.md",
+      "standalone_source": "docs/README.md"
+    },
+    {
+      "destination": "docs/architecture.md",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 20,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/docs/architecture.md",
+      "standalone_source": "docs/architecture.md"
+    },
+    {
+      "destination": "docs/by-example.md",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 20,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/docs/by-example.md",
+      "standalone_source": "docs/by-example.md"
+    },
+    {
+      "destination": "docs/development.md",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 20,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/docs/development.md",
+      "standalone_source": "docs/development.md"
+    },
+    {
+      "destination": "docs/flash-2-foundation.md",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 20,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/docs/flash-2-foundation.md",
+      "standalone_source": "docs/flash-2-foundation.md"
+    },
+    {
+      "destination": "history/flash-v1/docs/language-guide.md",
+      "disposition": "preserve-flash-history",
+      "owner": "historical.flash",
+      "rule_index": 18,
+      "shadowed_rule_indices": [
+        20
+      ],
+      "source": "components/flash/docs/language-guide.md",
+      "standalone_source": "docs/language-guide.md"
+    },
+    {
+      "destination": "history/flash-v1/docs/scripting.md",
+      "disposition": "preserve-flash-history",
+      "owner": "historical.flash",
+      "rule_index": 19,
+      "shadowed_rule_indices": [
+        20
+      ],
+      "source": "components/flash/docs/scripting.md",
+      "standalone_source": "docs/scripting.md"
+    },
+    {
+      "destination": "history/flash-v1/examples/checked-status.fsh",
+      "disposition": "preserve-flash-history",
+      "owner": "historical.flash",
+      "rule_index": 17,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/examples/checked-status.fsh",
+      "standalone_source": "examples/checked-status.fsh"
+    },
+    {
+      "destination": "history/flash-v1/examples/json-boundary.fsh",
+      "disposition": "preserve-flash-history",
+      "owner": "historical.flash",
+      "rule_index": 17,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/examples/json-boundary.fsh",
+      "standalone_source": "examples/json-boundary.fsh"
+    },
+    {
+      "destination": "history/flash-v1/examples/planned-pipeline.fsh",
+      "disposition": "preserve-flash-history",
+      "owner": "historical.flash",
+      "rule_index": 17,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/examples/planned-pipeline.fsh",
+      "standalone_source": "examples/planned-pipeline.fsh"
+    },
+    {
+      "destination": "history/flash-v1/examples/structured-files.fsh",
+      "disposition": "preserve-flash-history",
+      "owner": "historical.flash",
+      "rule_index": 17,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/examples/structured-files.fsh",
+      "standalone_source": "examples/structured-files.fsh"
+    },
+    {
+      "destination": "history/flash-v1/exercises/README.md",
+      "disposition": "preserve-flash-history",
+      "owner": "historical.flash",
+      "rule_index": 15,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/exercises/README.md",
+      "standalone_source": "exercises/README.md"
+    },
+    {
+      "destination": "history/flash-v1/exercises/evidence/host-v1.json",
+      "disposition": "preserve-flash-history",
+      "owner": "historical.flash",
+      "rule_index": 15,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/exercises/evidence/host-v1.json",
+      "standalone_source": "exercises/evidence/host-v1.json"
+    },
+    {
+      "destination": "history/flash-v1/exercises/host-cases-v1.json",
+      "disposition": "preserve-flash-history",
+      "owner": "historical.flash",
+      "rule_index": 15,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/exercises/host-cases-v1.json",
+      "standalone_source": "exercises/host-cases-v1.json"
+    },
+    {
+      "destination": "history/flash-v1/exercises/run.fsh",
+      "disposition": "preserve-flash-history",
+      "owner": "historical.flash",
+      "rule_index": 15,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/exercises/run.fsh",
+      "standalone_source": "exercises/run.fsh"
+    },
+    {
+      "destination": "history/flash-v1/exercises/v1.toml",
+      "disposition": "preserve-flash-history",
+      "owner": "historical.flash",
+      "rule_index": 15,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/exercises/v1.toml",
+      "standalone_source": "exercises/v1.toml"
+    },
+    {
+      "destination": "fuzz/Cargo.lock",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 9,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/fuzz/Cargo.lock",
+      "standalone_source": "fuzz/Cargo.lock"
+    },
+    {
+      "destination": "fuzz/Cargo.toml",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 9,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/fuzz/Cargo.toml",
+      "standalone_source": "fuzz/Cargo.toml"
+    },
+    {
+      "destination": "fuzz/README.md",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 9,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/fuzz/README.md",
+      "standalone_source": "fuzz/README.md"
+    },
+    {
+      "destination": "fuzz/fuzz_targets/expander.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 9,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/fuzz/fuzz_targets/expander.rs",
+      "standalone_source": "fuzz/fuzz_targets/expander.rs"
+    },
+    {
+      "destination": "fuzz/fuzz_targets/lexer.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 9,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/fuzz/fuzz_targets/lexer.rs",
+      "standalone_source": "fuzz/fuzz_targets/lexer.rs"
+    },
+    {
+      "destination": "fuzz/fuzz_targets/migration.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 9,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/fuzz/fuzz_targets/migration.rs",
+      "standalone_source": "fuzz/fuzz_targets/migration.rs"
+    },
+    {
+      "destination": "fuzz/fuzz_targets/parser.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 9,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/fuzz/fuzz_targets/parser.rs",
+      "standalone_source": "fuzz/fuzz_targets/parser.rs"
+    },
+    {
+      "destination": "fuzz/fuzz_targets/resources.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 9,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/fuzz/fuzz_targets/resources.rs",
+      "standalone_source": "fuzz/fuzz_targets/resources.rs"
+    },
+    {
+      "destination": "fuzz/run-campaign.fsh",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 9,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/fuzz/run-campaign.fsh",
+      "standalone_source": "fuzz/run-campaign.fsh"
+    },
+    {
+      "destination": "fuzz/run-smoke.fsh",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 9,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/fuzz/run-smoke.fsh",
+      "standalone_source": "fuzz/run-smoke.fsh"
+    },
+    {
+      "destination": "git-history-only",
+      "disposition": "foreign-integration-history",
+      "owner": "system.flashos",
+      "rule_index": 1,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/platforms/flashos-x86_64-capability-classification.toml",
+      "standalone_source": "platforms/flashos-x86_64-capability-classification.toml"
+    },
+    {
+      "destination": "git-history-only",
+      "disposition": "foreign-integration-history",
+      "owner": "system.flashos",
+      "rule_index": 1,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/platforms/flashos-x86_64-capability-evidence.toml",
+      "standalone_source": "platforms/flashos-x86_64-capability-evidence.toml"
+    },
+    {
+      "destination": "git-history-only",
+      "disposition": "foreign-integration-history",
+      "owner": "system.flashos",
+      "rule_index": 1,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/platforms/flashos-x86_64-capability-report-v1.toml",
+      "standalone_source": "platforms/flashos-x86_64-capability-report-v1.toml"
+    },
+    {
+      "destination": "git-history-only",
+      "disposition": "foreign-integration-history",
+      "owner": "system.flashos",
+      "rule_index": 1,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/platforms/flashos-x86_64-operation-map.toml",
+      "standalone_source": "platforms/flashos-x86_64-operation-map.toml"
+    },
+    {
+      "destination": "git-history-only",
+      "disposition": "foreign-integration-history",
+      "owner": "system.flashos",
+      "rule_index": 1,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/platforms/flashos-x86_64-runtime-fixtures-v1.toml",
+      "standalone_source": "platforms/flashos-x86_64-runtime-fixtures-v1.toml"
+    },
+    {
+      "destination": "git-history-only",
+      "disposition": "foreign-integration-history",
+      "owner": "system.flashos",
+      "rule_index": 1,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/platforms/flashos-x86_64-target-matrix-v1.toml",
+      "standalone_source": "platforms/flashos-x86_64-target-matrix-v1.toml"
+    },
+    {
+      "destination": "git-history-only",
+      "disposition": "foreign-integration-history",
+      "owner": "system.flashos",
+      "rule_index": 1,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/platforms/flashos-x86_64.toml",
+      "standalone_source": "platforms/flashos-x86_64.toml"
+    },
+    {
+      "destination": "history/flash-v1/release/v1.toml",
+      "disposition": "preserve-flash-history",
+      "owner": "historical.flash",
+      "rule_index": 14,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/release/v1.toml",
+      "standalone_source": "release/v1.toml"
+    },
+    {
+      "destination": "rust-toolchain.toml",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 28,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/rust-toolchain.toml",
+      "standalone_source": "rust-toolchain.toml"
+    },
+    {
+      "destination": "rustfmt.toml",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 29,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/rustfmt.toml",
+      "standalone_source": "rustfmt.toml"
+    },
+    {
+      "destination": "history/flash-v1/scheduling/README.md",
+      "disposition": "preserve-flash-history",
+      "owner": "historical.flash",
+      "rule_index": 16,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/scheduling/README.md",
+      "standalone_source": "scheduling/README.md"
+    },
+    {
+      "destination": "history/flash-v1/scheduling/run-campaign.fsh",
+      "disposition": "preserve-flash-history",
+      "owner": "historical.flash",
+      "rule_index": 16,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/scheduling/run-campaign.fsh",
+      "standalone_source": "scheduling/run-campaign.fsh"
+    },
+    {
+      "destination": "history/flash-v1/tests/e2e/README.md",
+      "disposition": "preserve-flash-history",
+      "owner": "historical.flash",
+      "rule_index": 6,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/e2e/README.md",
+      "standalone_source": "tests/e2e/README.md"
+    },
+    {
+      "destination": "tests/fixtures/README.md",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 7,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/fixtures/README.md",
+      "standalone_source": "tests/fixtures/README.md"
+    },
+    {
+      "destination": "tests/fixtures/benchmark.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 7,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/fixtures/benchmark.rs",
+      "standalone_source": "tests/fixtures/benchmark.rs"
+    },
+    {
+      "destination": "tests/fixtures/process_observer.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 7,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/fixtures/process_observer.rs",
+      "standalone_source": "tests/fixtures/process_observer.rs"
+    },
+    {
+      "destination": "tests/fixtures/status.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 7,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/fixtures/status.rs",
+      "standalone_source": "tests/fixtures/status.rs"
+    },
+    {
+      "destination": "tests/fixtures/stream.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 7,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/fixtures/stream.rs",
+      "standalone_source": "tests/fixtures/stream.rs"
+    },
+    {
+      "destination": "tests/fixtures/terminal_editor.rs",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 7,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/fixtures/terminal_editor.rs",
+      "standalone_source": "tests/fixtures/terminal_editor.rs"
+    },
+    {
+      "destination": "history/flash-v1/tests/golden/ast/background.ast",
+      "disposition": "preserve-flash-history",
+      "owner": "historical.flash",
+      "rule_index": 5,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/golden/ast/background.ast",
+      "standalone_source": "tests/golden/ast/background.ast"
+    },
+    {
+      "destination": "history/flash-v1/tests/golden/ast/bindings.ast",
+      "disposition": "preserve-flash-history",
+      "owner": "historical.flash",
+      "rule_index": 5,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/golden/ast/bindings.ast",
+      "standalone_source": "tests/golden/ast/bindings.ast"
+    },
+    {
+      "destination": "history/flash-v1/tests/golden/ast/calls-and-grouping.ast",
+      "disposition": "preserve-flash-history",
+      "owner": "historical.flash",
+      "rule_index": 5,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/golden/ast/calls-and-grouping.ast",
+      "standalone_source": "tests/golden/ast/calls-and-grouping.ast"
+    },
+    {
+      "destination": "history/flash-v1/tests/golden/ast/closures.ast",
+      "disposition": "preserve-flash-history",
+      "owner": "historical.flash",
+      "rule_index": 5,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/golden/ast/closures.ast",
+      "standalone_source": "tests/golden/ast/closures.ast"
+    },
+    {
+      "destination": "history/flash-v1/tests/golden/ast/commands.ast",
+      "disposition": "preserve-flash-history",
+      "owner": "historical.flash",
+      "rule_index": 5,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/golden/ast/commands.ast",
+      "standalone_source": "tests/golden/ast/commands.ast"
+    },
+    {
+      "destination": "history/flash-v1/tests/golden/ast/conditional-chains.ast",
+      "disposition": "preserve-flash-history",
+      "owner": "historical.flash",
+      "rule_index": 5,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/golden/ast/conditional-chains.ast",
+      "standalone_source": "tests/golden/ast/conditional-chains.ast"
+    },
+    {
+      "destination": "history/flash-v1/tests/golden/ast/control-flow.ast",
+      "disposition": "preserve-flash-history",
+      "owner": "historical.flash",
+      "rule_index": 5,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/golden/ast/control-flow.ast",
+      "standalone_source": "tests/golden/ast/control-flow.ast"
+    },
+    {
+      "destination": "history/flash-v1/tests/golden/ast/control-transfer.ast",
+      "disposition": "preserve-flash-history",
+      "owner": "historical.flash",
+      "rule_index": 5,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/golden/ast/control-transfer.ast",
+      "standalone_source": "tests/golden/ast/control-transfer.ast"
+    },
+    {
+      "destination": "history/flash-v1/tests/golden/ast/environment.ast",
+      "disposition": "preserve-flash-history",
+      "owner": "historical.flash",
+      "rule_index": 5,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/golden/ast/environment.ast",
+      "standalone_source": "tests/golden/ast/environment.ast"
+    },
+    {
+      "destination": "history/flash-v1/tests/golden/ast/functions.ast",
+      "disposition": "preserve-flash-history",
+      "owner": "historical.flash",
+      "rule_index": 5,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/golden/ast/functions.ast",
+      "standalone_source": "tests/golden/ast/functions.ast"
+    },
+    {
+      "destination": "history/flash-v1/tests/golden/ast/literals-and-collections.ast",
+      "disposition": "preserve-flash-history",
+      "owner": "historical.flash",
+      "rule_index": 5,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/golden/ast/literals-and-collections.ast",
+      "standalone_source": "tests/golden/ast/literals-and-collections.ast"
+    },
+    {
+      "destination": "history/flash-v1/tests/golden/ast/manifest.tsv",
+      "disposition": "preserve-flash-history",
+      "owner": "historical.flash",
+      "rule_index": 5,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/golden/ast/manifest.tsv",
+      "standalone_source": "tests/golden/ast/manifest.tsv"
+    },
+    {
+      "destination": "history/flash-v1/tests/golden/ast/modules.ast",
+      "disposition": "preserve-flash-history",
+      "owner": "historical.flash",
+      "rule_index": 5,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/golden/ast/modules.ast",
+      "standalone_source": "tests/golden/ast/modules.ast"
+    },
+    {
+      "destination": "history/flash-v1/tests/golden/ast/operators.ast",
+      "disposition": "preserve-flash-history",
+      "owner": "historical.flash",
+      "rule_index": 5,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/golden/ast/operators.ast",
+      "standalone_source": "tests/golden/ast/operators.ast"
+    },
+    {
+      "destination": "history/flash-v1/tests/golden/ast/pipelines.ast",
+      "disposition": "preserve-flash-history",
+      "owner": "historical.flash",
+      "rule_index": 5,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/golden/ast/pipelines.ast",
+      "standalone_source": "tests/golden/ast/pipelines.ast"
+    },
+    {
+      "destination": "history/flash-v1/tests/golden/ast/redirections.ast",
+      "disposition": "preserve-flash-history",
+      "owner": "historical.flash",
+      "rule_index": 5,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/golden/ast/redirections.ast",
+      "standalone_source": "tests/golden/ast/redirections.ast"
+    },
+    {
+      "destination": "history/flash-v1/tests/golden/ast/script-separators.ast",
+      "disposition": "preserve-flash-history",
+      "owner": "historical.flash",
+      "rule_index": 5,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/golden/ast/script-separators.ast",
+      "standalone_source": "tests/golden/ast/script-separators.ast"
+    },
+    {
+      "destination": "history/flash-v1/tests/golden/ast/structured-errors.ast",
+      "disposition": "preserve-flash-history",
+      "owner": "historical.flash",
+      "rule_index": 5,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/golden/ast/structured-errors.ast",
+      "standalone_source": "tests/golden/ast/structured-errors.ast"
+    },
+    {
+      "destination": "history/flash-v1/tests/golden/ast/substitution.ast",
+      "disposition": "preserve-flash-history",
+      "owner": "historical.flash",
+      "rule_index": 5,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/golden/ast/substitution.ast",
+      "standalone_source": "tests/golden/ast/substitution.ast"
+    },
+    {
+      "destination": "history/flash-v1/tests/golden/diagnostics/grammar-chained-comparison.txt",
+      "disposition": "preserve-flash-history",
+      "owner": "historical.flash",
+      "rule_index": 5,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/golden/diagnostics/grammar-chained-comparison.txt",
+      "standalone_source": "tests/golden/diagnostics/grammar-chained-comparison.txt"
+    },
+    {
+      "destination": "history/flash-v1/tests/golden/diagnostics/grammar-declaration-background.txt",
+      "disposition": "preserve-flash-history",
+      "owner": "historical.flash",
+      "rule_index": 5,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/golden/diagnostics/grammar-declaration-background.txt",
+      "standalone_source": "tests/golden/diagnostics/grammar-declaration-background.txt"
+    },
+    {
+      "destination": "history/flash-v1/tests/golden/diagnostics/grammar-grouped-background.txt",
+      "disposition": "preserve-flash-history",
+      "owner": "historical.flash",
+      "rule_index": 5,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/golden/diagnostics/grammar-grouped-background.txt",
+      "standalone_source": "tests/golden/diagnostics/grammar-grouped-background.txt"
+    },
+    {
+      "destination": "history/flash-v1/tests/golden/diagnostics/grammar-leading-pipe.txt",
+      "disposition": "preserve-flash-history",
+      "owner": "historical.flash",
+      "rule_index": 5,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/golden/diagnostics/grammar-leading-pipe.txt",
+      "standalone_source": "tests/golden/diagnostics/grammar-leading-pipe.txt"
+    },
+    {
+      "destination": "history/flash-v1/tests/golden/diagnostics/grammar-stray-else.txt",
+      "disposition": "preserve-flash-history",
+      "owner": "historical.flash",
+      "rule_index": 5,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/golden/diagnostics/grammar-stray-else.txt",
+      "standalone_source": "tests/golden/diagnostics/grammar-stray-else.txt"
+    },
+    {
+      "destination": "history/flash-v1/tests/golden/diagnostics/lexical-empty-unicode-escape.txt",
+      "disposition": "preserve-flash-history",
+      "owner": "historical.flash",
+      "rule_index": 5,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/golden/diagnostics/lexical-empty-unicode-escape.txt",
+      "standalone_source": "tests/golden/diagnostics/lexical-empty-unicode-escape.txt"
+    },
+    {
+      "destination": "history/flash-v1/tests/golden/diagnostics/lexical-out-of-range-unicode-escape.txt",
+      "disposition": "preserve-flash-history",
+      "owner": "historical.flash",
+      "rule_index": 5,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/golden/diagnostics/lexical-out-of-range-unicode-escape.txt",
+      "standalone_source": "tests/golden/diagnostics/lexical-out-of-range-unicode-escape.txt"
+    },
+    {
+      "destination": "history/flash-v1/tests/golden/diagnostics/lexical-surrogate-unicode-escape.txt",
+      "disposition": "preserve-flash-history",
+      "owner": "historical.flash",
+      "rule_index": 5,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/golden/diagnostics/lexical-surrogate-unicode-escape.txt",
+      "standalone_source": "tests/golden/diagnostics/lexical-surrogate-unicode-escape.txt"
+    },
+    {
+      "destination": "history/flash-v1/tests/golden/diagnostics/lexical-unknown-double-escape.txt",
+      "disposition": "preserve-flash-history",
+      "owner": "historical.flash",
+      "rule_index": 5,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/golden/diagnostics/lexical-unknown-double-escape.txt",
+      "standalone_source": "tests/golden/diagnostics/lexical-unknown-double-escape.txt"
+    },
+    {
+      "destination": "history/flash-v1/tests/golden/diagnostics/manifest.tsv",
+      "disposition": "preserve-flash-history",
+      "owner": "historical.flash",
+      "rule_index": 5,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/golden/diagnostics/manifest.tsv",
+      "standalone_source": "tests/golden/diagnostics/manifest.tsv"
+    },
+    {
+      "destination": "history/flash-v1/tests/golden/grammar/README.md",
+      "disposition": "preserve-flash-history",
+      "owner": "historical.flash",
+      "rule_index": 5,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/golden/grammar/README.md",
+      "standalone_source": "tests/golden/grammar/README.md"
+    },
+    {
+      "destination": "history/flash-v1/tests/golden/grammar/complete/background.fsh",
+      "disposition": "preserve-flash-history",
+      "owner": "historical.flash",
+      "rule_index": 5,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/golden/grammar/complete/background.fsh",
+      "standalone_source": "tests/golden/grammar/complete/background.fsh"
+    },
+    {
+      "destination": "history/flash-v1/tests/golden/grammar/complete/bindings.fsh",
+      "disposition": "preserve-flash-history",
+      "owner": "historical.flash",
+      "rule_index": 5,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/golden/grammar/complete/bindings.fsh",
+      "standalone_source": "tests/golden/grammar/complete/bindings.fsh"
+    },
+    {
+      "destination": "history/flash-v1/tests/golden/grammar/complete/calls-and-grouping.fsh",
+      "disposition": "preserve-flash-history",
+      "owner": "historical.flash",
+      "rule_index": 5,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/golden/grammar/complete/calls-and-grouping.fsh",
+      "standalone_source": "tests/golden/grammar/complete/calls-and-grouping.fsh"
+    },
+    {
+      "destination": "history/flash-v1/tests/golden/grammar/complete/closures.fsh",
+      "disposition": "preserve-flash-history",
+      "owner": "historical.flash",
+      "rule_index": 5,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/golden/grammar/complete/closures.fsh",
+      "standalone_source": "tests/golden/grammar/complete/closures.fsh"
+    },
+    {
+      "destination": "history/flash-v1/tests/golden/grammar/complete/commands.fsh",
+      "disposition": "preserve-flash-history",
+      "owner": "historical.flash",
+      "rule_index": 5,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/golden/grammar/complete/commands.fsh",
+      "standalone_source": "tests/golden/grammar/complete/commands.fsh"
+    },
+    {
+      "destination": "history/flash-v1/tests/golden/grammar/complete/conditional-chains.fsh",
+      "disposition": "preserve-flash-history",
+      "owner": "historical.flash",
+      "rule_index": 5,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/golden/grammar/complete/conditional-chains.fsh",
+      "standalone_source": "tests/golden/grammar/complete/conditional-chains.fsh"
+    },
+    {
+      "destination": "history/flash-v1/tests/golden/grammar/complete/control-flow.fsh",
+      "disposition": "preserve-flash-history",
+      "owner": "historical.flash",
+      "rule_index": 5,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/golden/grammar/complete/control-flow.fsh",
+      "standalone_source": "tests/golden/grammar/complete/control-flow.fsh"
+    },
+    {
+      "destination": "history/flash-v1/tests/golden/grammar/complete/control-transfer.fsh",
+      "disposition": "preserve-flash-history",
+      "owner": "historical.flash",
+      "rule_index": 5,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/golden/grammar/complete/control-transfer.fsh",
+      "standalone_source": "tests/golden/grammar/complete/control-transfer.fsh"
+    },
+    {
+      "destination": "history/flash-v1/tests/golden/grammar/complete/environment.fsh",
+      "disposition": "preserve-flash-history",
+      "owner": "historical.flash",
+      "rule_index": 5,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/golden/grammar/complete/environment.fsh",
+      "standalone_source": "tests/golden/grammar/complete/environment.fsh"
+    },
+    {
+      "destination": "history/flash-v1/tests/golden/grammar/complete/functions.fsh",
+      "disposition": "preserve-flash-history",
+      "owner": "historical.flash",
+      "rule_index": 5,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/golden/grammar/complete/functions.fsh",
+      "standalone_source": "tests/golden/grammar/complete/functions.fsh"
+    },
+    {
+      "destination": "history/flash-v1/tests/golden/grammar/complete/literals-and-collections.fsh",
+      "disposition": "preserve-flash-history",
+      "owner": "historical.flash",
+      "rule_index": 5,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/golden/grammar/complete/literals-and-collections.fsh",
+      "standalone_source": "tests/golden/grammar/complete/literals-and-collections.fsh"
+    },
+    {
+      "destination": "history/flash-v1/tests/golden/grammar/complete/modules.fsh",
+      "disposition": "preserve-flash-history",
+      "owner": "historical.flash",
+      "rule_index": 5,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/golden/grammar/complete/modules.fsh",
+      "standalone_source": "tests/golden/grammar/complete/modules.fsh"
+    },
+    {
+      "destination": "history/flash-v1/tests/golden/grammar/complete/operators.fsh",
+      "disposition": "preserve-flash-history",
+      "owner": "historical.flash",
+      "rule_index": 5,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/golden/grammar/complete/operators.fsh",
+      "standalone_source": "tests/golden/grammar/complete/operators.fsh"
+    },
+    {
+      "destination": "history/flash-v1/tests/golden/grammar/complete/pipelines.fsh",
+      "disposition": "preserve-flash-history",
+      "owner": "historical.flash",
+      "rule_index": 5,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/golden/grammar/complete/pipelines.fsh",
+      "standalone_source": "tests/golden/grammar/complete/pipelines.fsh"
+    },
+    {
+      "destination": "history/flash-v1/tests/golden/grammar/complete/redirections.fsh",
+      "disposition": "preserve-flash-history",
+      "owner": "historical.flash",
+      "rule_index": 5,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/golden/grammar/complete/redirections.fsh",
+      "standalone_source": "tests/golden/grammar/complete/redirections.fsh"
+    },
+    {
+      "destination": "history/flash-v1/tests/golden/grammar/complete/script-separators.fsh",
+      "disposition": "preserve-flash-history",
+      "owner": "historical.flash",
+      "rule_index": 5,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/golden/grammar/complete/script-separators.fsh",
+      "standalone_source": "tests/golden/grammar/complete/script-separators.fsh"
+    },
+    {
+      "destination": "history/flash-v1/tests/golden/grammar/complete/structured-errors.fsh",
+      "disposition": "preserve-flash-history",
+      "owner": "historical.flash",
+      "rule_index": 5,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/golden/grammar/complete/structured-errors.fsh",
+      "standalone_source": "tests/golden/grammar/complete/structured-errors.fsh"
+    },
+    {
+      "destination": "history/flash-v1/tests/golden/grammar/complete/substitution.fsh",
+      "disposition": "preserve-flash-history",
+      "owner": "historical.flash",
+      "rule_index": 5,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/golden/grammar/complete/substitution.fsh",
+      "standalone_source": "tests/golden/grammar/complete/substitution.fsh"
+    },
+    {
+      "destination": "history/flash-v1/tests/golden/grammar/incomplete/call-close.fsh",
+      "disposition": "preserve-flash-history",
+      "owner": "historical.flash",
+      "rule_index": 5,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/golden/grammar/incomplete/call-close.fsh",
+      "standalone_source": "tests/golden/grammar/incomplete/call-close.fsh"
+    },
+    {
+      "destination": "history/flash-v1/tests/golden/grammar/incomplete/closure-body.fsh",
+      "disposition": "preserve-flash-history",
+      "owner": "historical.flash",
+      "rule_index": 5,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/golden/grammar/incomplete/closure-body.fsh",
+      "standalone_source": "tests/golden/grammar/incomplete/closure-body.fsh"
+    },
+    {
+      "destination": "history/flash-v1/tests/golden/grammar/incomplete/function-block.fsh",
+      "disposition": "preserve-flash-history",
+      "owner": "historical.flash",
+      "rule_index": 5,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/golden/grammar/incomplete/function-block.fsh",
+      "standalone_source": "tests/golden/grammar/incomplete/function-block.fsh"
+    },
+    {
+      "destination": "history/flash-v1/tests/golden/grammar/incomplete/pipeline-stage.fsh",
+      "disposition": "preserve-flash-history",
+      "owner": "historical.flash",
+      "rule_index": 5,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/golden/grammar/incomplete/pipeline-stage.fsh",
+      "standalone_source": "tests/golden/grammar/incomplete/pipeline-stage.fsh"
+    },
+    {
+      "destination": "history/flash-v1/tests/golden/grammar/incomplete/redirection-target.fsh",
+      "disposition": "preserve-flash-history",
+      "owner": "historical.flash",
+      "rule_index": 5,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/golden/grammar/incomplete/redirection-target.fsh",
+      "standalone_source": "tests/golden/grammar/incomplete/redirection-target.fsh"
+    },
+    {
+      "destination": "history/flash-v1/tests/golden/grammar/invalid/chained-comparison.fsh",
+      "disposition": "preserve-flash-history",
+      "owner": "historical.flash",
+      "rule_index": 5,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/golden/grammar/invalid/chained-comparison.fsh",
+      "standalone_source": "tests/golden/grammar/invalid/chained-comparison.fsh"
+    },
+    {
+      "destination": "history/flash-v1/tests/golden/grammar/invalid/declaration-background.fsh",
+      "disposition": "preserve-flash-history",
+      "owner": "historical.flash",
+      "rule_index": 5,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/golden/grammar/invalid/declaration-background.fsh",
+      "standalone_source": "tests/golden/grammar/invalid/declaration-background.fsh"
+    },
+    {
+      "destination": "history/flash-v1/tests/golden/grammar/invalid/grouped-background.fsh",
+      "disposition": "preserve-flash-history",
+      "owner": "historical.flash",
+      "rule_index": 5,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/golden/grammar/invalid/grouped-background.fsh",
+      "standalone_source": "tests/golden/grammar/invalid/grouped-background.fsh"
+    },
+    {
+      "destination": "history/flash-v1/tests/golden/grammar/invalid/leading-pipe.fsh",
+      "disposition": "preserve-flash-history",
+      "owner": "historical.flash",
+      "rule_index": 5,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/golden/grammar/invalid/leading-pipe.fsh",
+      "standalone_source": "tests/golden/grammar/invalid/leading-pipe.fsh"
+    },
+    {
+      "destination": "history/flash-v1/tests/golden/grammar/invalid/stray-else.fsh",
+      "disposition": "preserve-flash-history",
+      "owner": "historical.flash",
+      "rule_index": 5,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/golden/grammar/invalid/stray-else.fsh",
+      "standalone_source": "tests/golden/grammar/invalid/stray-else.fsh"
+    },
+    {
+      "destination": "history/flash-v1/tests/golden/grammar/manifest.tsv",
+      "disposition": "preserve-flash-history",
+      "owner": "historical.flash",
+      "rule_index": 5,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/golden/grammar/manifest.tsv",
+      "standalone_source": "tests/golden/grammar/manifest.tsv"
+    },
+    {
+      "destination": "history/flash-v1/tests/golden/lexical/README.md",
+      "disposition": "preserve-flash-history",
+      "owner": "historical.flash",
+      "rule_index": 5,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/golden/lexical/README.md",
+      "standalone_source": "tests/golden/lexical/README.md"
+    },
+    {
+      "destination": "history/flash-v1/tests/golden/lexical/complete/comments.fsh",
+      "disposition": "preserve-flash-history",
+      "owner": "historical.flash",
+      "rule_index": 5,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/golden/lexical/complete/comments.fsh",
+      "standalone_source": "tests/golden/lexical/complete/comments.fsh"
+    },
+    {
+      "destination": "history/flash-v1/tests/golden/lexical/complete/continuation.fsh",
+      "disposition": "preserve-flash-history",
+      "owner": "historical.flash",
+      "rule_index": 5,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/golden/lexical/complete/continuation.fsh",
+      "standalone_source": "tests/golden/lexical/complete/continuation.fsh"
+    },
+    {
+      "destination": "history/flash-v1/tests/golden/lexical/complete/escapes.fsh",
+      "disposition": "preserve-flash-history",
+      "owner": "historical.flash",
+      "rule_index": 5,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/golden/lexical/complete/escapes.fsh",
+      "standalone_source": "tests/golden/lexical/complete/escapes.fsh"
+    },
+    {
+      "destination": "history/flash-v1/tests/golden/lexical/complete/interpolation.fsh",
+      "disposition": "preserve-flash-history",
+      "owner": "historical.flash",
+      "rule_index": 5,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/golden/lexical/complete/interpolation.fsh",
+      "standalone_source": "tests/golden/lexical/complete/interpolation.fsh"
+    },
+    {
+      "destination": "history/flash-v1/tests/golden/lexical/complete/reserved-words.fsh",
+      "disposition": "preserve-flash-history",
+      "owner": "historical.flash",
+      "rule_index": 5,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/golden/lexical/complete/reserved-words.fsh",
+      "standalone_source": "tests/golden/lexical/complete/reserved-words.fsh"
+    },
+    {
+      "destination": "history/flash-v1/tests/golden/lexical/complete/word-parts.fsh",
+      "disposition": "preserve-flash-history",
+      "owner": "historical.flash",
+      "rule_index": 5,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/golden/lexical/complete/word-parts.fsh",
+      "standalone_source": "tests/golden/lexical/complete/word-parts.fsh"
+    },
+    {
+      "destination": "history/flash-v1/tests/golden/lexical/incomplete/braced-interpolation.fsh",
+      "disposition": "preserve-flash-history",
+      "owner": "historical.flash",
+      "rule_index": 5,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/golden/lexical/incomplete/braced-interpolation.fsh",
+      "standalone_source": "tests/golden/lexical/incomplete/braced-interpolation.fsh"
+    },
+    {
+      "destination": "history/flash-v1/tests/golden/lexical/incomplete/command-substitution.fsh",
+      "disposition": "preserve-flash-history",
+      "owner": "historical.flash",
+      "rule_index": 5,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/golden/lexical/incomplete/command-substitution.fsh",
+      "standalone_source": "tests/golden/lexical/incomplete/command-substitution.fsh"
+    },
+    {
+      "destination": "history/flash-v1/tests/golden/lexical/incomplete/double-quote.fsh",
+      "disposition": "preserve-flash-history",
+      "owner": "historical.flash",
+      "rule_index": 5,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/golden/lexical/incomplete/double-quote.fsh",
+      "standalone_source": "tests/golden/lexical/incomplete/double-quote.fsh"
+    },
+    {
+      "destination": "history/flash-v1/tests/golden/lexical/incomplete/single-quote.fsh",
+      "disposition": "preserve-flash-history",
+      "owner": "historical.flash",
+      "rule_index": 5,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/golden/lexical/incomplete/single-quote.fsh",
+      "standalone_source": "tests/golden/lexical/incomplete/single-quote.fsh"
+    },
+    {
+      "destination": "history/flash-v1/tests/golden/lexical/incomplete/trailing-backslash.fsh",
+      "disposition": "preserve-flash-history",
+      "owner": "historical.flash",
+      "rule_index": 5,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/golden/lexical/incomplete/trailing-backslash.fsh",
+      "standalone_source": "tests/golden/lexical/incomplete/trailing-backslash.fsh"
+    },
+    {
+      "destination": "history/flash-v1/tests/golden/lexical/invalid/empty-unicode-escape.fsh",
+      "disposition": "preserve-flash-history",
+      "owner": "historical.flash",
+      "rule_index": 5,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/golden/lexical/invalid/empty-unicode-escape.fsh",
+      "standalone_source": "tests/golden/lexical/invalid/empty-unicode-escape.fsh"
+    },
+    {
+      "destination": "history/flash-v1/tests/golden/lexical/invalid/out-of-range-unicode-escape.fsh",
+      "disposition": "preserve-flash-history",
+      "owner": "historical.flash",
+      "rule_index": 5,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/golden/lexical/invalid/out-of-range-unicode-escape.fsh",
+      "standalone_source": "tests/golden/lexical/invalid/out-of-range-unicode-escape.fsh"
+    },
+    {
+      "destination": "history/flash-v1/tests/golden/lexical/invalid/surrogate-unicode-escape.fsh",
+      "disposition": "preserve-flash-history",
+      "owner": "historical.flash",
+      "rule_index": 5,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/golden/lexical/invalid/surrogate-unicode-escape.fsh",
+      "standalone_source": "tests/golden/lexical/invalid/surrogate-unicode-escape.fsh"
+    },
+    {
+      "destination": "history/flash-v1/tests/golden/lexical/invalid/unknown-double-escape.fsh",
+      "disposition": "preserve-flash-history",
+      "owner": "historical.flash",
+      "rule_index": 5,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/golden/lexical/invalid/unknown-double-escape.fsh",
+      "standalone_source": "tests/golden/lexical/invalid/unknown-double-escape.fsh"
+    },
+    {
+      "destination": "history/flash-v1/tests/golden/lexical/manifest.tsv",
+      "disposition": "preserve-flash-history",
+      "owner": "historical.flash",
+      "rule_index": 5,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/golden/lexical/manifest.tsv",
+      "standalone_source": "tests/golden/lexical/manifest.tsv"
+    },
+    {
+      "destination": "tests/opaal-foundation/language/grammar/complete/directive-only.fsh",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 4,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/v2-foundation/language/grammar/complete/directive-only.fsh",
+      "standalone_source": "tests/v2-foundation/language/grammar/complete/directive-only.fsh"
+    },
+    {
+      "destination": "tests/opaal-foundation/language/grammar/complete/leading-trivia.fsh",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 4,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/v2-foundation/language/grammar/complete/leading-trivia.fsh",
+      "standalone_source": "tests/v2-foundation/language/grammar/complete/leading-trivia.fsh"
+    },
+    {
+      "destination": "tests/opaal-foundation/language/grammar/incomplete/declaration-value.fsh",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 4,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/v2-foundation/language/grammar/incomplete/declaration-value.fsh",
+      "standalone_source": "tests/v2-foundation/language/grammar/incomplete/declaration-value.fsh"
+    },
+    {
+      "destination": "tests/opaal-foundation/language/grammar/incomplete/open-block.fsh",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 4,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/v2-foundation/language/grammar/incomplete/open-block.fsh",
+      "standalone_source": "tests/v2-foundation/language/grammar/incomplete/open-block.fsh"
+    },
+    {
+      "destination": "tests/opaal-foundation/language/grammar/invalid/duplicate.fsh",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 4,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/v2-foundation/language/grammar/invalid/duplicate.fsh",
+      "standalone_source": "tests/v2-foundation/language/grammar/invalid/duplicate.fsh"
+    },
+    {
+      "destination": "tests/opaal-foundation/language/grammar/invalid/late.fsh",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 4,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/v2-foundation/language/grammar/invalid/late.fsh",
+      "standalone_source": "tests/v2-foundation/language/grammar/invalid/late.fsh"
+    },
+    {
+      "destination": "tests/opaal-foundation/language/grammar/invalid/malformed.fsh",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 4,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/v2-foundation/language/grammar/invalid/malformed.fsh",
+      "standalone_source": "tests/v2-foundation/language/grammar/invalid/malformed.fsh"
+    },
+    {
+      "destination": "tests/opaal-foundation/language/grammar/invalid/missing.fsh",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 4,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/v2-foundation/language/grammar/invalid/missing.fsh",
+      "standalone_source": "tests/v2-foundation/language/grammar/invalid/missing.fsh"
+    },
+    {
+      "destination": "tests/opaal-foundation/language/grammar/invalid/unsupported.fsh",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 4,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/v2-foundation/language/grammar/invalid/unsupported.fsh",
+      "standalone_source": "tests/v2-foundation/language/grammar/invalid/unsupported.fsh"
+    },
+    {
+      "destination": "tests/opaal-foundation/language/grammar/manifest.tsv",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 4,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/v2-foundation/language/grammar/manifest.tsv",
+      "standalone_source": "tests/v2-foundation/language/grammar/manifest.tsv"
+    },
+    {
+      "destination": "tests/opaal-foundation/language/grammar/repl/complete.fsh",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 4,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/v2-foundation/language/grammar/repl/complete.fsh",
+      "standalone_source": "tests/v2-foundation/language/grammar/repl/complete.fsh"
+    },
+    {
+      "destination": "tests/opaal-foundation/language/grammar/repl/directive.fsh",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 4,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/v2-foundation/language/grammar/repl/directive.fsh",
+      "standalone_source": "tests/v2-foundation/language/grammar/repl/directive.fsh"
+    },
+    {
+      "destination": "tests/opaal-foundation/language/lexical/manifest.tsv",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 4,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/v2-foundation/language/lexical/manifest.tsv",
+      "standalone_source": "tests/v2-foundation/language/lexical/manifest.tsv"
+    },
+    {
+      "destination": "tests/opaal-foundation/language/lexical/reserved-words.fsh",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 4,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/v2-foundation/language/lexical/reserved-words.fsh",
+      "standalone_source": "tests/v2-foundation/language/lexical/reserved-words.fsh"
+    },
+    {
+      "destination": "tests/opaal-foundation/language/modules/complete/nominal-type.fsh",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 4,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/v2-foundation/language/modules/complete/nominal-type.fsh",
+      "standalone_source": "tests/v2-foundation/language/modules/complete/nominal-type.fsh"
+    },
+    {
+      "destination": "tests/opaal-foundation/language/modules/complete/qualified-aliases.fsh",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 4,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/v2-foundation/language/modules/complete/qualified-aliases.fsh",
+      "standalone_source": "tests/v2-foundation/language/modules/complete/qualified-aliases.fsh"
+    },
+    {
+      "destination": "tests/opaal-foundation/language/modules/invalid/v1-load-only.fsh",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 4,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/v2-foundation/language/modules/invalid/v1-load-only.fsh",
+      "standalone_source": "tests/v2-foundation/language/modules/invalid/v1-load-only.fsh"
+    },
+    {
+      "destination": "tests/opaal-foundation/language/modules/invalid/v1-named-from.fsh",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 4,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/v2-foundation/language/modules/invalid/v1-named-from.fsh",
+      "standalone_source": "tests/v2-foundation/language/modules/invalid/v1-named-from.fsh"
+    },
+    {
+      "destination": "tests/opaal-foundation/language/modules/manifest.tsv",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 4,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/v2-foundation/language/modules/manifest.tsv",
+      "standalone_source": "tests/v2-foundation/language/modules/manifest.tsv"
+    },
+    {
+      "destination": "tests/opaal-foundation/language/operations/complete/reference.fsh",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 4,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/v2-foundation/language/operations/complete/reference.fsh",
+      "standalone_source": "tests/v2-foundation/language/operations/complete/reference.fsh"
+    },
+    {
+      "destination": "tests/opaal-foundation/language/operations/complete/support/facade.fsh",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 4,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/v2-foundation/language/operations/complete/support/facade.fsh",
+      "standalone_source": "tests/v2-foundation/language/operations/complete/support/facade.fsh"
+    },
+    {
+      "destination": "tests/opaal-foundation/language/operations/invalid/ambiguous-empty-length.fsh",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 4,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/v2-foundation/language/operations/invalid/ambiguous-empty-length.fsh",
+      "standalone_source": "tests/v2-foundation/language/operations/invalid/ambiguous-empty-length.fsh"
+    },
+    {
+      "destination": "tests/opaal-foundation/language/operations/invalid/ambiguous-empty-pipeline.fsh",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 4,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/v2-foundation/language/operations/invalid/ambiguous-empty-pipeline.fsh",
+      "standalone_source": "tests/v2-foundation/language/operations/invalid/ambiguous-empty-pipeline.fsh"
+    },
+    {
+      "destination": "tests/opaal-foundation/language/operations/invalid/explicit-element-mismatch.fsh",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 4,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/v2-foundation/language/operations/invalid/explicit-element-mismatch.fsh",
+      "standalone_source": "tests/v2-foundation/language/operations/invalid/explicit-element-mismatch.fsh"
+    },
+    {
+      "destination": "tests/opaal-foundation/language/operations/invalid/explicit-generic-arity.fsh",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 4,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/v2-foundation/language/operations/invalid/explicit-generic-arity.fsh",
+      "standalone_source": "tests/v2-foundation/language/operations/invalid/explicit-generic-arity.fsh"
+    },
+    {
+      "destination": "tests/opaal-foundation/language/operations/invalid/non-operation-stage.fsh",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 4,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/v2-foundation/language/operations/invalid/non-operation-stage.fsh",
+      "standalone_source": "tests/v2-foundation/language/operations/invalid/non-operation-stage.fsh"
+    },
+    {
+      "destination": "tests/opaal-foundation/language/operations/invalid/repeated-length.fsh",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 4,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/v2-foundation/language/operations/invalid/repeated-length.fsh",
+      "standalone_source": "tests/v2-foundation/language/operations/invalid/repeated-length.fsh"
+    },
+    {
+      "destination": "tests/opaal-foundation/language/operations/invalid/unknown-operation.fsh",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 4,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/v2-foundation/language/operations/invalid/unknown-operation.fsh",
+      "standalone_source": "tests/v2-foundation/language/operations/invalid/unknown-operation.fsh"
+    },
+    {
+      "destination": "tests/opaal-foundation/language/operations/invalid/wrong-value.fsh",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 4,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/v2-foundation/language/operations/invalid/wrong-value.fsh",
+      "standalone_source": "tests/v2-foundation/language/operations/invalid/wrong-value.fsh"
+    },
+    {
+      "destination": "tests/opaal-foundation/language/operations/manifest.tsv",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 4,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/v2-foundation/language/operations/manifest.tsv",
+      "standalone_source": "tests/v2-foundation/language/operations/manifest.tsv"
+    },
+    {
+      "destination": "tests/opaal-foundation/language/outcomes/complete/domain-error.fsh",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 4,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/v2-foundation/language/outcomes/complete/domain-error.fsh",
+      "standalone_source": "tests/v2-foundation/language/outcomes/complete/domain-error.fsh"
+    },
+    {
+      "destination": "tests/opaal-foundation/language/outcomes/complete/option-none.fsh",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 4,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/v2-foundation/language/outcomes/complete/option-none.fsh",
+      "standalone_source": "tests/v2-foundation/language/outcomes/complete/option-none.fsh"
+    },
+    {
+      "destination": "tests/opaal-foundation/language/outcomes/complete/reference.fsh",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 4,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/v2-foundation/language/outcomes/complete/reference.fsh",
+      "standalone_source": "tests/v2-foundation/language/outcomes/complete/reference.fsh"
+    },
+    {
+      "destination": "tests/opaal-foundation/language/outcomes/complete/status-success.fsh",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 4,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/v2-foundation/language/outcomes/complete/status-success.fsh",
+      "standalone_source": "tests/v2-foundation/language/outcomes/complete/status-success.fsh"
+    },
+    {
+      "destination": "tests/opaal-foundation/language/outcomes/complete/support/facade.fsh",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 4,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/v2-foundation/language/outcomes/complete/support/facade.fsh",
+      "standalone_source": "tests/v2-foundation/language/outcomes/complete/support/facade.fsh"
+    },
+    {
+      "destination": "tests/opaal-foundation/language/outcomes/invalid/error-to-result.fsh",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 4,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/v2-foundation/language/outcomes/invalid/error-to-result.fsh",
+      "standalone_source": "tests/v2-foundation/language/outcomes/invalid/error-to-result.fsh"
+    },
+    {
+      "destination": "tests/opaal-foundation/language/outcomes/invalid/result-generic-arity.fsh",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 4,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/v2-foundation/language/outcomes/invalid/result-generic-arity.fsh",
+      "standalone_source": "tests/v2-foundation/language/outcomes/invalid/result-generic-arity.fsh"
+    },
+    {
+      "destination": "tests/opaal-foundation/language/outcomes/invalid/result-to-status.fsh",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 4,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/v2-foundation/language/outcomes/invalid/result-to-status.fsh",
+      "standalone_source": "tests/v2-foundation/language/outcomes/invalid/result-to-status.fsh"
+    },
+    {
+      "destination": "tests/opaal-foundation/language/outcomes/invalid/status-to-result.fsh",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 4,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/v2-foundation/language/outcomes/invalid/status-to-result.fsh",
+      "standalone_source": "tests/v2-foundation/language/outcomes/invalid/status-to-result.fsh"
+    },
+    {
+      "destination": "tests/opaal-foundation/language/outcomes/manifest.tsv",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 4,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/v2-foundation/language/outcomes/manifest.tsv",
+      "standalone_source": "tests/v2-foundation/language/outcomes/manifest.tsv"
+    },
+    {
+      "destination": "tests/opaal-foundation/language/outcomes/refused/process.fsh",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 4,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/v2-foundation/language/outcomes/refused/process.fsh",
+      "standalone_source": "tests/v2-foundation/language/outcomes/refused/process.fsh"
+    },
+    {
+      "destination": "tests/opaal-foundation/language/rest-spread/complete/build-arguments.fsh",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 4,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/v2-foundation/language/rest-spread/complete/build-arguments.fsh",
+      "standalone_source": "tests/v2-foundation/language/rest-spread/complete/build-arguments.fsh"
+    },
+    {
+      "destination": "tests/opaal-foundation/language/rest-spread/complete/cli-arguments.fsh",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 4,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/v2-foundation/language/rest-spread/complete/cli-arguments.fsh",
+      "standalone_source": "tests/v2-foundation/language/rest-spread/complete/cli-arguments.fsh"
+    },
+    {
+      "destination": "tests/opaal-foundation/language/rest-spread/complete/explicit-spread.fsh",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 4,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/v2-foundation/language/rest-spread/complete/explicit-spread.fsh",
+      "standalone_source": "tests/v2-foundation/language/rest-spread/complete/explicit-spread.fsh"
+    },
+    {
+      "destination": "tests/opaal-foundation/language/rest-spread/invalid/dynamic-rest-mismatch.fsh",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 4,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/v2-foundation/language/rest-spread/invalid/dynamic-rest-mismatch.fsh",
+      "standalone_source": "tests/v2-foundation/language/rest-spread/invalid/dynamic-rest-mismatch.fsh"
+    },
+    {
+      "destination": "tests/opaal-foundation/language/rest-spread/invalid/nested-list-spread.fsh",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 4,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/v2-foundation/language/rest-spread/invalid/nested-list-spread.fsh",
+      "standalone_source": "tests/v2-foundation/language/rest-spread/invalid/nested-list-spread.fsh"
+    },
+    {
+      "destination": "tests/opaal-foundation/language/rest-spread/invalid/non-list-spread.fsh",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 4,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/v2-foundation/language/rest-spread/invalid/non-list-spread.fsh",
+      "standalone_source": "tests/v2-foundation/language/rest-spread/invalid/non-list-spread.fsh"
+    },
+    {
+      "destination": "tests/opaal-foundation/language/rest-spread/manifest.tsv",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 4,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/v2-foundation/language/rest-spread/manifest.tsv",
+      "standalone_source": "tests/v2-foundation/language/rest-spread/manifest.tsv"
+    },
+    {
+      "destination": "tests/opaal-foundation/language/rest-spread/support/v1-spread-baseline.fsh",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 4,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/v2-foundation/language/rest-spread/support/v1-spread-baseline.fsh",
+      "standalone_source": "tests/v2-foundation/language/rest-spread/support/v1-spread-baseline.fsh"
+    },
+    {
+      "destination": "tests/opaal-foundation/language/types/complete/closure-result.fsh",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 4,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/v2-foundation/language/types/complete/closure-result.fsh",
+      "standalone_source": "tests/v2-foundation/language/types/complete/closure-result.fsh"
+    },
+    {
+      "destination": "tests/opaal-foundation/language/types/complete/cross-module-main.fsh",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 4,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/v2-foundation/language/types/complete/cross-module-main.fsh",
+      "standalone_source": "tests/v2-foundation/language/types/complete/cross-module-main.fsh"
+    },
+    {
+      "destination": "tests/opaal-foundation/language/types/complete/destructured-exports.fsh",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 4,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/v2-foundation/language/types/complete/destructured-exports.fsh",
+      "standalone_source": "tests/v2-foundation/language/types/complete/destructured-exports.fsh"
+    },
+    {
+      "destination": "tests/opaal-foundation/language/types/complete/domain-types.fsh",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 4,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/v2-foundation/language/types/complete/domain-types.fsh",
+      "standalone_source": "tests/v2-foundation/language/types/complete/domain-types.fsh"
+    },
+    {
+      "destination": "tests/opaal-foundation/language/types/complete/expected-generic-results.fsh",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 4,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/v2-foundation/language/types/complete/expected-generic-results.fsh",
+      "standalone_source": "tests/v2-foundation/language/types/complete/expected-generic-results.fsh"
+    },
+    {
+      "destination": "tests/opaal-foundation/language/types/complete/generic-inference.fsh",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 4,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/v2-foundation/language/types/complete/generic-inference.fsh",
+      "standalone_source": "tests/v2-foundation/language/types/complete/generic-inference.fsh"
+    },
+    {
+      "destination": "tests/opaal-foundation/language/types/complete/list-and-record-patterns.fsh",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 4,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/v2-foundation/language/types/complete/list-and-record-patterns.fsh",
+      "standalone_source": "tests/v2-foundation/language/types/complete/list-and-record-patterns.fsh"
+    },
+    {
+      "destination": "tests/opaal-foundation/language/types/complete/reexport-main.fsh",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 4,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/v2-foundation/language/types/complete/reexport-main.fsh",
+      "standalone_source": "tests/v2-foundation/language/types/complete/reexport-main.fsh"
+    },
+    {
+      "destination": "tests/opaal-foundation/language/types/complete/support/bindings.fsh",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 4,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/v2-foundation/language/types/complete/support/bindings.fsh",
+      "standalone_source": "tests/v2-foundation/language/types/complete/support/bindings.fsh"
+    },
+    {
+      "destination": "tests/opaal-foundation/language/types/complete/support/facade.fsh",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 4,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/v2-foundation/language/types/complete/support/facade.fsh",
+      "standalone_source": "tests/v2-foundation/language/types/complete/support/facade.fsh"
+    },
+    {
+      "destination": "tests/opaal-foundation/language/types/complete/support/model.fsh",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 4,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/v2-foundation/language/types/complete/support/model.fsh",
+      "standalone_source": "tests/v2-foundation/language/types/complete/support/model.fsh"
+    },
+    {
+      "destination": "tests/opaal-foundation/language/types/complete/support/shadow.fsh",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 4,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/v2-foundation/language/types/complete/support/shadow.fsh",
+      "standalone_source": "tests/v2-foundation/language/types/complete/support/shadow.fsh"
+    },
+    {
+      "destination": "tests/opaal-foundation/language/types/complete/support/v1-static-pattern-baseline.fsh",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 4,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/v2-foundation/language/types/complete/support/v1-static-pattern-baseline.fsh",
+      "standalone_source": "tests/v2-foundation/language/types/complete/support/v1-static-pattern-baseline.fsh"
+    },
+    {
+      "destination": "tests/opaal-foundation/language/types/invalid/ambiguous-generic.fsh",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 4,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/v2-foundation/language/types/invalid/ambiguous-generic.fsh",
+      "standalone_source": "tests/v2-foundation/language/types/invalid/ambiguous-generic.fsh"
+    },
+    {
+      "destination": "tests/opaal-foundation/language/types/invalid/ambiguous-variant.fsh",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 4,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/v2-foundation/language/types/invalid/ambiguous-variant.fsh",
+      "standalone_source": "tests/v2-foundation/language/types/invalid/ambiguous-variant.fsh"
+    },
+    {
+      "destination": "tests/opaal-foundation/language/types/invalid/closure-result-mismatch.fsh",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 4,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/v2-foundation/language/types/invalid/closure-result-mismatch.fsh",
+      "standalone_source": "tests/v2-foundation/language/types/invalid/closure-result-mismatch.fsh"
+    },
+    {
+      "destination": "tests/opaal-foundation/language/types/invalid/conflicting-inference.fsh",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 4,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/v2-foundation/language/types/invalid/conflicting-inference.fsh",
+      "standalone_source": "tests/v2-foundation/language/types/invalid/conflicting-inference.fsh"
+    },
+    {
+      "destination": "tests/opaal-foundation/language/types/invalid/cross-module-invariance.fsh",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 4,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/v2-foundation/language/types/invalid/cross-module-invariance.fsh",
+      "standalone_source": "tests/v2-foundation/language/types/invalid/cross-module-invariance.fsh"
+    },
+    {
+      "destination": "tests/opaal-foundation/language/types/invalid/cross-module-pattern-identity.fsh",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 4,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/v2-foundation/language/types/invalid/cross-module-pattern-identity.fsh",
+      "standalone_source": "tests/v2-foundation/language/types/invalid/cross-module-pattern-identity.fsh"
+    },
+    {
+      "destination": "tests/opaal-foundation/language/types/invalid/declaration-annotation-mismatch.fsh",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 4,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/v2-foundation/language/types/invalid/declaration-annotation-mismatch.fsh",
+      "standalone_source": "tests/v2-foundation/language/types/invalid/declaration-annotation-mismatch.fsh"
+    },
+    {
+      "destination": "tests/opaal-foundation/language/types/invalid/destructured-alias-conflict.fsh",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 4,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/v2-foundation/language/types/invalid/destructured-alias-conflict.fsh",
+      "standalone_source": "tests/v2-foundation/language/types/invalid/destructured-alias-conflict.fsh"
+    },
+    {
+      "destination": "tests/opaal-foundation/language/types/invalid/destructuring-mismatch.fsh",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 4,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/v2-foundation/language/types/invalid/destructuring-mismatch.fsh",
+      "standalone_source": "tests/v2-foundation/language/types/invalid/destructuring-mismatch.fsh"
+    },
+    {
+      "destination": "tests/opaal-foundation/language/types/invalid/duplicate-record-field.fsh",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 4,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/v2-foundation/language/types/invalid/duplicate-record-field.fsh",
+      "standalone_source": "tests/v2-foundation/language/types/invalid/duplicate-record-field.fsh"
+    },
+    {
+      "destination": "tests/opaal-foundation/language/types/invalid/dynamic-inference.fsh",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 4,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/v2-foundation/language/types/invalid/dynamic-inference.fsh",
+      "standalone_source": "tests/v2-foundation/language/types/invalid/dynamic-inference.fsh"
+    },
+    {
+      "destination": "tests/opaal-foundation/language/types/invalid/dynamic-record-constraint.fsh",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 4,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/v2-foundation/language/types/invalid/dynamic-record-constraint.fsh",
+      "standalone_source": "tests/v2-foundation/language/types/invalid/dynamic-record-constraint.fsh"
+    },
+    {
+      "destination": "tests/opaal-foundation/language/types/invalid/dynamic-record-field.fsh",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 4,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/v2-foundation/language/types/invalid/dynamic-record-field.fsh",
+      "standalone_source": "tests/v2-foundation/language/types/invalid/dynamic-record-field.fsh"
+    },
+    {
+      "destination": "tests/opaal-foundation/language/types/invalid/dynamic-variant-constraint.fsh",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 4,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/v2-foundation/language/types/invalid/dynamic-variant-constraint.fsh",
+      "standalone_source": "tests/v2-foundation/language/types/invalid/dynamic-variant-constraint.fsh"
+    },
+    {
+      "destination": "tests/opaal-foundation/language/types/invalid/empty-list-inference.fsh",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 4,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/v2-foundation/language/types/invalid/empty-list-inference.fsh",
+      "standalone_source": "tests/v2-foundation/language/types/invalid/empty-list-inference.fsh"
+    },
+    {
+      "destination": "tests/opaal-foundation/language/types/invalid/equal-constraint.fsh",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 4,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/v2-foundation/language/types/invalid/equal-constraint.fsh",
+      "standalone_source": "tests/v2-foundation/language/types/invalid/equal-constraint.fsh"
+    },
+    {
+      "destination": "tests/opaal-foundation/language/types/invalid/explicit-generic-arity.fsh",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 4,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/v2-foundation/language/types/invalid/explicit-generic-arity.fsh",
+      "standalone_source": "tests/v2-foundation/language/types/invalid/explicit-generic-arity.fsh"
+    },
+    {
+      "destination": "tests/opaal-foundation/language/types/invalid/explicit-generic-mismatch.fsh",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 4,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/v2-foundation/language/types/invalid/explicit-generic-mismatch.fsh",
+      "standalone_source": "tests/v2-foundation/language/types/invalid/explicit-generic-mismatch.fsh"
+    },
+    {
+      "destination": "tests/opaal-foundation/language/types/invalid/generic-result-boundary.fsh",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 4,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/v2-foundation/language/types/invalid/generic-result-boundary.fsh",
+      "standalone_source": "tests/v2-foundation/language/types/invalid/generic-result-boundary.fsh"
+    },
+    {
+      "destination": "tests/opaal-foundation/language/types/invalid/guard-not-bool.fsh",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 4,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/v2-foundation/language/types/invalid/guard-not-bool.fsh",
+      "standalone_source": "tests/v2-foundation/language/types/invalid/guard-not-bool.fsh"
+    },
+    {
+      "destination": "tests/opaal-foundation/language/types/invalid/invariant-nominal.fsh",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 4,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/v2-foundation/language/types/invalid/invariant-nominal.fsh",
+      "standalone_source": "tests/v2-foundation/language/types/invalid/invariant-nominal.fsh"
+    },
+    {
+      "destination": "tests/opaal-foundation/language/types/invalid/missing-record-field.fsh",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 4,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/v2-foundation/language/types/invalid/missing-record-field.fsh",
+      "standalone_source": "tests/v2-foundation/language/types/invalid/missing-record-field.fsh"
+    },
+    {
+      "destination": "tests/opaal-foundation/language/types/invalid/non-exhaustive.fsh",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 4,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/v2-foundation/language/types/invalid/non-exhaustive.fsh",
+      "standalone_source": "tests/v2-foundation/language/types/invalid/non-exhaustive.fsh"
+    },
+    {
+      "destination": "tests/opaal-foundation/language/types/invalid/ordered-constraint.fsh",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 4,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/v2-foundation/language/types/invalid/ordered-constraint.fsh",
+      "standalone_source": "tests/v2-foundation/language/types/invalid/ordered-constraint.fsh"
+    },
+    {
+      "destination": "tests/opaal-foundation/language/types/invalid/private-nominal.fsh",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 4,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/v2-foundation/language/types/invalid/private-nominal.fsh",
+      "standalone_source": "tests/v2-foundation/language/types/invalid/private-nominal.fsh"
+    },
+    {
+      "destination": "tests/opaal-foundation/language/types/invalid/private-variant.fsh",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 4,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/v2-foundation/language/types/invalid/private-variant.fsh",
+      "standalone_source": "tests/v2-foundation/language/types/invalid/private-variant.fsh"
+    },
+    {
+      "destination": "tests/opaal-foundation/language/types/invalid/rest-not-last.fsh",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 4,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/v2-foundation/language/types/invalid/rest-not-last.fsh",
+      "standalone_source": "tests/v2-foundation/language/types/invalid/rest-not-last.fsh"
+    },
+    {
+      "destination": "tests/opaal-foundation/language/types/invalid/static-destructuring-mismatch.fsh",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 4,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/v2-foundation/language/types/invalid/static-destructuring-mismatch.fsh",
+      "standalone_source": "tests/v2-foundation/language/types/invalid/static-destructuring-mismatch.fsh"
+    },
+    {
+      "destination": "tests/opaal-foundation/language/types/invalid/static-parameter-pattern-mismatch.fsh",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 4,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/v2-foundation/language/types/invalid/static-parameter-pattern-mismatch.fsh",
+      "standalone_source": "tests/v2-foundation/language/types/invalid/static-parameter-pattern-mismatch.fsh"
+    },
+    {
+      "destination": "tests/opaal-foundation/language/types/invalid/support/private.fsh",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 4,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/v2-foundation/language/types/invalid/support/private.fsh",
+      "standalone_source": "tests/v2-foundation/language/types/invalid/support/private.fsh"
+    },
+    {
+      "destination": "tests/opaal-foundation/language/types/invalid/unknown-record-field.fsh",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 4,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/v2-foundation/language/types/invalid/unknown-record-field.fsh",
+      "standalone_source": "tests/v2-foundation/language/types/invalid/unknown-record-field.fsh"
+    },
+    {
+      "destination": "tests/opaal-foundation/language/types/invalid/unreachable-match.fsh",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 4,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/v2-foundation/language/types/invalid/unreachable-match.fsh",
+      "standalone_source": "tests/v2-foundation/language/types/invalid/unreachable-match.fsh"
+    },
+    {
+      "destination": "tests/opaal-foundation/language/types/manifest.tsv",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 4,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/v2-foundation/language/types/manifest.tsv",
+      "standalone_source": "tests/v2-foundation/language/types/manifest.tsv"
+    },
+    {
+      "destination": "tests/opaal-foundation/migration/automation-corpus.tsv",
+      "disposition": "migration-input-refactor",
+      "owner": "system.opaal",
+      "rule_index": 2,
+      "shadowed_rule_indices": [
+        4
+      ],
+      "source": "components/flash/tests/v2-foundation/migration/automation-corpus.tsv",
+      "standalone_source": "tests/v2-foundation/migration/automation-corpus.tsv"
+    },
+    {
+      "destination": "tests/opaal-foundation/migration/imports/root.fsh",
+      "disposition": "migration-input-refactor",
+      "owner": "system.opaal",
+      "rule_index": 2,
+      "shadowed_rule_indices": [
+        4
+      ],
+      "source": "components/flash/tests/v2-foundation/migration/imports/root.fsh",
+      "standalone_source": "tests/v2-foundation/migration/imports/root.fsh"
+    },
+    {
+      "destination": "tests/opaal-foundation/migration/imports/support.fsh",
+      "disposition": "migration-input-refactor",
+      "owner": "system.opaal",
+      "rule_index": 2,
+      "shadowed_rule_indices": [
+        4
+      ],
+      "source": "components/flash/tests/v2-foundation/migration/imports/support.fsh",
+      "standalone_source": "tests/v2-foundation/migration/imports/support.fsh"
+    },
+    {
+      "destination": "tests/opaal-foundation/migration/source uri/na\u00efve.fsh",
+      "disposition": "migration-input-refactor",
+      "owner": "system.opaal",
+      "rule_index": 2,
+      "shadowed_rule_indices": [
+        4
+      ],
+      "source": "components/flash/tests/v2-foundation/migration/source uri/na\u00efve.fsh",
+      "standalone_source": "tests/v2-foundation/migration/source uri/na\u00efve.fsh"
+    },
+    {
+      "destination": "tests/opaal-foundation/migration/flash-v1/preserved.fsh",
+      "disposition": "migration-input-refactor",
+      "owner": "system.opaal",
+      "rule_index": 3,
+      "shadowed_rule_indices": [
+        4
+      ],
+      "source": "components/flash/tests/v2-foundation/v1/preserved.fsh",
+      "standalone_source": "tests/v2-foundation/v1/preserved.fsh"
+    },
+    {
+      "destination": "tests/opaal-foundation/v2/preserved.fsh",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 4,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/v2-foundation/v2/preserved.fsh",
+      "standalone_source": "tests/v2-foundation/v2/preserved.fsh"
+    },
+    {
+      "destination": "tests/opaal-foundation/v2/source.fsh",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 4,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/v2-foundation/v2/source.fsh",
+      "standalone_source": "tests/v2-foundation/v2/source.fsh"
+    },
+    {
+      "destination": "tests/opaal-foundation/workflow/README.md",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 4,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/v2-foundation/workflow/README.md",
+      "standalone_source": "tests/v2-foundation/workflow/README.md"
+    },
+    {
+      "destination": "tests/opaal-foundation/workflow/workspace/root.fsh",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 4,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/v2-foundation/workflow/workspace/root.fsh",
+      "standalone_source": "tests/v2-foundation/workflow/workspace/root.fsh"
+    },
+    {
+      "destination": "tests/opaal-foundation/workflow/workspace/support/facade.fsh",
+      "disposition": "current-refactor",
+      "owner": "system.opaal",
+      "rule_index": 4,
+      "shadowed_rule_indices": [],
+      "source": "components/flash/tests/v2-foundation/workflow/workspace/support/facade.fsh",
+      "standalone_source": "tests/v2-foundation/workflow/workspace/support/facade.fsh"
+    }
+  ],
+  "schema": 1,
+  "source_tip": "6b010a66e9ef9df125ff599e6a242eaf8fce85fc",
+  "source_tree": "5cd3774ebc5500e3a1a1cea5b5706c1eab5c44e2",
+  "summary": {
+    "classified_paths": 427,
+    "source_paths": 427,
+    "standalone_replacements": 12
+  }
+}

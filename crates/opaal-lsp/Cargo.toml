@@ -1,0 +1,29 @@
+[package]
+name = "opaal-lsp"
+description = "Language Server Protocol adapter for OPAAL"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "opaal-language-server"
+path = "src/main.rs"
+
+[[bin]]
+name = "opaal-language-server-fixture"
+path = "src/opaal_main.rs"
+test = false
+bench = false
+doc = false
+
+[dependencies]
+opaal-runtime = { path = "../opaal-runtime" }
+opaal-syntax = { path = "../opaal-syntax" }
+serde = { version = "=1.0.229", default-features = false, features = ["std"] }
+serde_json = { version = "=1.0.151", default-features = false, features = ["std"] }
+
+[lints]
+workspace = true

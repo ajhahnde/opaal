@@ -1,0 +1,7 @@
+language 1
+
+def empty[T]() -> List[T] {
+    return []
+}
+
+empty()

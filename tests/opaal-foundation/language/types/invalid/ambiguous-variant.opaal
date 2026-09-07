@@ -1,0 +1,9 @@
+language 1
+
+enum Maybe[T] {
+    Some(T),
+    None,
+}
+
+let value = Maybe::None
+$value

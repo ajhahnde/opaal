@@ -33,44 +33,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5baebc0774151f905a1a2cc41989300b1e6fbb29aff0ceffa1064fdd3088d582"
 
 [[package]]
-name = "flash-fuzz"
-version = "0.0.0"
-dependencies = [
- "flash-migrate",
- "flash-runtime",
- "flash-syntax",
- "libfuzzer-sys",
- "serde_json",
-]
-
-[[package]]
-name = "flash-migrate"
-version = "1.0.0"
-dependencies = [
- "flash-syntax",
- "serde_json",
-]
-
-[[package]]
-name = "flash-platform"
-version = "1.0.0"
-
-[[package]]
-name = "flash-runtime"
-version = "1.0.0"
-dependencies = [
- "flash-platform",
- "flash-syntax",
- "serde",
- "serde_json",
- "unicode-width",
-]
-
-[[package]]
-name = "flash-syntax"
-version = "1.0.0"
-
-[[package]]
 name = "getrandom"
 version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -118,6 +80,44 @@ name = "memchr"
 version = "2.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
+
+[[package]]
+name = "opaal-fuzz"
+version = "0.0.0"
+dependencies = [
+ "libfuzzer-sys",
+ "opaal-migrate",
+ "opaal-runtime",
+ "opaal-syntax",
+ "serde_json",
+]
+
+[[package]]
+name = "opaal-migrate"
+version = "1.0.0-alpha.1"
+dependencies = [
+ "opaal-syntax",
+ "serde_json",
+]
+
+[[package]]
+name = "opaal-platform"
+version = "1.0.0-alpha.1"
+
+[[package]]
+name = "opaal-runtime"
+version = "1.0.0-alpha.1"
+dependencies = [
+ "opaal-platform",
+ "opaal-syntax",
+ "serde",
+ "serde_json",
+ "unicode-width",
+]
+
+[[package]]
+name = "opaal-syntax"
+version = "1.0.0-alpha.1"
 
 [[package]]
 name = "proc-macro2"

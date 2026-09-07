@@ -1,22 +1,22 @@
 [workspace]
 resolver = "3"
 members = [
-    "crates/flash-syntax",
-    "crates/flash-migrate",
-    "crates/flash-runtime",
-    "crates/flash-lsp",
-    "crates/flash-platform",
-    "crates/flash-platform-flashos",
-    "crates/flash-platform-posix",
-    "crates/flash-cli",
+    "crates/opaal-syntax",
+    "crates/opaal-migrate",
+    "crates/opaal-runtime",
+    "crates/opaal-lsp",
+    "crates/opaal-platform",
+    "crates/opaal-platform-posix",
+    "crates/opaal-cli",
 ]
 
 [workspace.package]
-version = "1.0.0"
+version = "1.0.0-alpha.1"
 edition = "2024"
 rust-version = "1.97"
 license = "MPL-2.0"
-repository = "https://github.com/ajhahnde/FlashOS"
+repository = "https://github.com/ajhahnde/opaal"
+publish = false
 
 [workspace.lints.rust]
 rust_2018_idioms = "deny"

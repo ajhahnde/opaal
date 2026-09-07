@@ -1,0 +1,37 @@
+name: Release policy
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-policy-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  unpublished-boundary:
+    name: unpublished-boundary
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Activate the pinned Rust toolchain
+        run: |
+          rustup show active-toolchain || rustup toolchain install
+          rustc --version
+
+      - name: Build the unpublished workspace
+        run: cargo build --workspace --locked
+
+      - name: Verify the prerelease and publication boundary
+        run: python3 ci/check_transition.py verify --claim TR-015
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Record the non-publishing result
+        run: echo "OPAAL remains an unpublished development project; no tag, package, artifact, or release was created." >> "${GITHUB_STEP_SUMMARY}"

@@ -1,23 +1,20 @@
 # Test fixtures
 
-[FlashOS](../../../../README.md) › [Flash](../../README.md) › Test Fixtures
+These small Rust programs provide host-only observation boundaries for adapter,
+runtime, CLI, terminal, and benchmark tests. They invoke no shell and contain no
+unreviewed unsafe code.
 
-These small Rust child programs are shared by the POSIX adapter and runtime
-acceptance tests. They invoke no shell or host utility and contain no unsafe
-code.
+- `process_observer.rs` reports cwd, selected native environment values,
+  descriptor visibility, process-group state, signals, and exact native argv.
+- `status.rs` returns an explicit exit code or a real signal termination.
+- `stream.rs` supplies deterministic source, relay, sink, and closed-endpoint
+  behavior for stream/status tests.
+- `terminal_editor.rs` drives isolated prompt, completion, history, restoration,
+  and external-notice observations.
+- `benchmark.rs` exposes direct completion, lazy structured-stream, and pure
+  OPAAL analysis/evaluation probes.
 
-- `process_observer.rs` writes a length-prefixed binary report containing cwd,
-  selected native environment values, descriptor visibility, and exact native
-  argv. `FLASH_PROBE_REPORT` selects the report path, `FLASH_PROBE_VALUE` supplies
-  the inspected environment value, and `FLASH_PROBE_FD` selects a descriptor.
-- `status.rs` accepts `exit CODE` for ordinary completion or `signal` for a real
-  `SIGABRT` termination.
-- `stream.rs` provides deterministic `source`, `relay`, `sink`, `both`, and
-  `both-closed` modes for stream, status, merged-output, and descriptor tests.
-- `benchmark.rs` provides host-only in-process completion, lazy
-  structured-stream, and Flash 2 analysis/runtime resource probes for the
-  versioned performance suite. It is not installed in the FlashOS image.
+Fixture binaries and their `OPAAL_*` environment protocol names are test-only.
+They are not installed language tools and do not expand source authority.
 
----
-
-[← Flash documentation](../../docs/README.md)
+[← OPAAL documentation](../../docs/README.md)

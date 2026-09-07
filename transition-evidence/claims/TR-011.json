@@ -1,0 +1,132 @@
+{
+  "assertions": [
+    {
+      "detail": "exit 0; expected 0",
+      "name": "route-opaal",
+      "success": true
+    },
+    {
+      "detail": "command emitted a JSON object",
+      "name": "route-opaal-json",
+      "success": true
+    },
+    {
+      "detail": "scope=['system.opaal'] facets=['current-identity', 'version-boundary', 'flash2-lineage', 'flash1-boundary', 'transition-state']",
+      "name": "route-opaal-contract",
+      "success": true
+    },
+    {
+      "detail": "exit 0; expected 0",
+      "name": "route-flash",
+      "success": true
+    },
+    {
+      "detail": "command emitted a JSON object",
+      "name": "route-flash-json",
+      "success": true
+    },
+    {
+      "detail": "scope=['system.opaal'] facets=['current-identity', 'transition-state']",
+      "name": "route-flash-contract",
+      "success": true
+    },
+    {
+      "detail": "exit 0; expected 0",
+      "name": "route-flash-2",
+      "success": true
+    },
+    {
+      "detail": "command emitted a JSON object",
+      "name": "route-flash-2-json",
+      "success": true
+    },
+    {
+      "detail": "scope=['system.opaal'] facets=['flash2-lineage']",
+      "name": "route-flash-2-contract",
+      "success": true
+    },
+    {
+      "detail": "exit 0; expected 0",
+      "name": "route-flash-1",
+      "success": true
+    },
+    {
+      "detail": "command emitted a JSON object",
+      "name": "route-flash-1-json",
+      "success": true
+    },
+    {
+      "detail": "scope=['system.opaal'] facets=['flash1-boundary']",
+      "name": "route-flash-1-contract",
+      "success": true
+    }
+  ],
+  "candidate_worktree_sha256": "fb81b5c3877843e404d3b733f1d901d3f259b18a96b013cb112daa051da95946",
+  "claim": "TR-011",
+  "commands": [
+    {
+      "command": [
+        "/opt/homebrew/opt/python@3.14/bin/python3.14",
+        "ajhahnde/scripts/context.py",
+        "evidence",
+        "--query",
+        "OPAAL",
+        "--json"
+      ],
+      "exit_status": 0,
+      "expected_exit_status": 0,
+      "name": "route-opaal",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout_sha256": "a2b3da67fa66cd95045b997f912174c195b8a049831cf9db4e04655e5208c089"
+    },
+    {
+      "command": [
+        "/opt/homebrew/opt/python@3.14/bin/python3.14",
+        "ajhahnde/scripts/context.py",
+        "evidence",
+        "--query",
+        "Flash",
+        "--json"
+      ],
+      "exit_status": 0,
+      "expected_exit_status": 0,
+      "name": "route-flash",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout_sha256": "b3f8e9993e7f42eab0eff2175c94d1a2f61ad8ed68b69599bca411acf562b99c"
+    },
+    {
+      "command": [
+        "/opt/homebrew/opt/python@3.14/bin/python3.14",
+        "ajhahnde/scripts/context.py",
+        "evidence",
+        "--query",
+        "Flash 2",
+        "--json"
+      ],
+      "exit_status": 0,
+      "expected_exit_status": 0,
+      "name": "route-flash-2",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout_sha256": "e10cbf32e30678e9f8389c91fafc3028c15ad4ec4dcafd7232691c9a9cc4b9c7"
+    },
+    {
+      "command": [
+        "/opt/homebrew/opt/python@3.14/bin/python3.14",
+        "ajhahnde/scripts/context.py",
+        "evidence",
+        "--query",
+        "Flash 1",
+        "--json"
+      ],
+      "exit_status": 0,
+      "expected_exit_status": 0,
+      "name": "route-flash-1",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout_sha256": "2ada0754d7eb59155785098b1cc94a5032324139bf5e6da30e2735677a711494"
+    }
+  ],
+  "public_tip": null,
+  "schema": 1,
+  "source_tip": "6b010a66e9ef9df125ff599e6a242eaf8fce85fc",
+  "success": true
+}

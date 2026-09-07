@@ -1,0 +1,6 @@
+language 1
+
+import './model.opaal' as model
+import std::value as value
+
+export { model, value }

@@ -1,0 +1,5 @@
+language 1
+
+import './model.opaal' as model
+
+export { model }

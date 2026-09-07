@@ -1,0 +1,7 @@
+# class	path	diagnostic
+complete	complete/build-arguments.opaal	-
+cli	complete/cli-arguments.opaal	-
+syntax	complete/explicit-spread.opaal	-
+invalid	invalid/non-list-spread.opaal	SIG020
+invalid	invalid/nested-list-spread.opaal	SIG021
+runtime-invalid	invalid/dynamic-rest-mismatch.opaal	value does not match the pattern

@@ -8,23 +8,22 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::Instant;
 
-use flash_cli::completion::{
+use opaal_cli::completion::{
     CompletionCandidateProvider, CompletionEngine, CompletionSnapshotLimits,
 };
-use flash_runtime::builtin::standard_registry;
-use flash_runtime::eval::{CancellationToken, EvalLimits, ResourceBudget, evaluate_with_limits};
-use flash_runtime::module::{
+use opaal_runtime::builtin::standard_registry;
+use opaal_runtime::eval::{CancellationToken, EvalLimits, ResourceBudget, evaluate_with_limits};
+use opaal_runtime::module::{
     ModuleCanonicalizer, ModuleId, ModulePathError, ModuleProgramLoader, ModuleSourceError,
     ModuleSourceLoader,
 };
-use flash_runtime::stream::{StreamPull, ValueStream};
-use flash_runtime::{Environment, ScopeStack, Value};
-use flash_syntax::LanguageMajor;
+use opaal_runtime::stream::{StreamPull, ValueStream};
+use opaal_runtime::{Environment, ScopeStack, Value};
 
 fn usage() -> ExitCode {
     eprintln!(
-        "usage: flash-benchmark-fixture completion WARMUPS SAMPLES | \
-         structured-stream ITEMS | v2-resources WARMUPS SAMPLES STATEMENTS"
+        "usage: opaal-benchmark-fixture completion WARMUPS SAMPLES | \
+         structured-stream ITEMS | opaal-resources WARMUPS SAMPLES STATEMENTS"
     );
     ExitCode::from(2)
 }
@@ -35,7 +34,7 @@ struct BenchmarkSource {
 
 impl ModuleCanonicalizer for BenchmarkSource {
     fn canonicalize(&self, candidate: &Path) -> Result<PathBuf, ModulePathError> {
-        (candidate == Path::new("/benchmark.fsh"))
+        (candidate == Path::new("/benchmark.opaal"))
             .then(|| candidate.to_path_buf())
             .ok_or_else(|| ModulePathError::new("benchmark imports are unavailable"))
     }
@@ -51,14 +50,14 @@ impl ModuleSourceLoader for BenchmarkSource {
         module: &ModuleId,
         maximum: usize,
     ) -> Result<Vec<u8>, ModuleSourceError> {
-        (module.path() == Path::new("/benchmark.fsh"))
+        (module.path() == Path::new("/benchmark.opaal"))
             .then(|| self.bytes[..self.bytes.len().min(maximum)].to_vec())
             .ok_or_else(|| ModuleSourceError::new("benchmark imports are unavailable"))
     }
 }
 
-fn v2_resources(warmups: usize, samples: usize, statements: usize) -> Result<(), String> {
-    let mut text = String::from("language 2\n");
+fn opaal_resources(warmups: usize, samples: usize, statements: usize) -> Result<(), String> {
+    let mut text = String::from("language 1\n");
     for index in 0..statements {
         text.push_str(&format!("let value_{index} = [{index}, {index}]\n"));
     }
@@ -69,8 +68,8 @@ fn v2_resources(warmups: usize, samples: usize, statements: usize) -> Result<(),
 
     for index in 0..=warmups + samples {
         let started = Instant::now();
-        let program = ModuleProgramLoader::for_language(&source, &source, LanguageMajor::V2)
-            .load(Path::new("/benchmark.fsh"))
+        let program = ModuleProgramLoader::new(&source, &source)
+            .load(Path::new("/benchmark.opaal"))
             .map_err(|error| error.to_string())?;
         let root = program.graph().root();
         let script = program
@@ -85,7 +84,7 @@ fn v2_resources(warmups: usize, samples: usize, statements: usize) -> Result<(),
             script,
             source_file,
             &mut ScopeStack::new(),
-            &EvalLimits::pure_v2(CancellationToken::never(), ResourceBudget::v2()),
+            &EvalLimits::pure_opaal(CancellationToken::never(), ResourceBudget::opaal()),
         )
         .map_err(|error| error.to_string())?;
         let elapsed = started.elapsed().as_nanos();
@@ -104,8 +103,8 @@ fn v2_resources(warmups: usize, samples: usize, statements: usize) -> Result<(),
 #[cfg(test)]
 mod tests {
     #[test]
-    fn v2_resource_probe_analyzes_and_executes_its_corpus() {
-        super::v2_resources(0, 1, 1).expect("the benchmark corpus must remain executable");
+    fn opaal_resource_probe_analyzes_and_executes_its_corpus() {
+        super::opaal_resources(0, 1, 1).expect("the benchmark corpus must remain executable");
     }
 }
 
@@ -222,14 +221,14 @@ fn run() -> Result<(), String> {
             }
             structured_stream(items)
         }
-        Some("v2-resources") => {
+        Some("opaal-resources") => {
             let warmups = nonnegative_usize(args.next(), "warmup count")?;
             let samples = positive_usize(args.next(), "sample count")?;
             let statements = positive_usize(args.next(), "statement count")?;
             if args.next().is_some() {
-                return Err("v2-resources accepts exactly three arguments".to_owned());
+                return Err("opaal-resources accepts exactly three arguments".to_owned());
             }
-            v2_resources(warmups, samples, statements)
+            opaal_resources(warmups, samples, statements)
         }
         Some(_) | None => Err(String::new()),
     }
@@ -240,7 +239,7 @@ fn main() -> ExitCode {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) if error.is_empty() => usage(),
         Err(error) => {
-            eprintln!("flash-benchmark-fixture: {error}");
+            eprintln!("opaal-benchmark-fixture: {error}");
             ExitCode::FAILURE
         }
     }

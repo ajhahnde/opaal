@@ -1,0 +1,10 @@
+# class	path	diagnostic-or-value
+complete	complete/reference.opaal	Int(2)
+complete	complete/domain-error.opaal	Result::Err("domain")
+complete	complete/option-none.opaal	Option::None
+complete	complete/status-success.opaal	Status(7)
+refused	refused/process.opaal	unsupported
+invalid	invalid/result-to-status.opaal	SIG004
+invalid	invalid/status-to-result.opaal	SIG005
+invalid	invalid/error-to-result.opaal	SIG005
+invalid	invalid/result-generic-arity.opaal	SIG009

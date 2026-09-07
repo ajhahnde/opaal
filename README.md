@@ -1,202 +1,131 @@
-# Flash
+# OPAAL
 
-[FlashOS](../../README.md) › Flash
+OPAAL is the Operational Programming & Automation Language. This repository
+contains the standalone OPAAL language 1 foundation, its command-line and
+editor tooling, and a read-only analyzer for migrating Flash 1 source.
 
-Flash (`fsh`) is the FlashOS shell and a language for structured system
-automation. Code tried at the prompt follows the same non-POSIX syntax and
-runtime rules as code in a `.fsh` file. Start with [Flash by
-Example](docs/by-example.md), or use the [documentation index](docs/README.md)
-for the language reference and implementation guides.
+> Project status: `1.0.0-alpha.1` is a development version, not a published
+> release. The current foundation is intentionally pure. It does not yet grant
+> filesystem, process, environment, network, terminal, project, action, task,
+> package, or workflow authority.
 
-> **Project status:** FlashOS as a complete operating system remains pre-alpha
-> software. Flash 1.0.0 is released as the component contract in the current
-> source. The development tree also contains an explicitly versioned,
-> unreleased pure [Flash 2 language foundation](docs/flash-2-foundation.md).
-> FlashOS versions and images that carry either generation are qualified separately;
-> execution on a Linux or macOS host is not proof of FlashOS target support.
+## Try the language foundation
 
-## On this page
+Every source module is UTF-8, uses the `.opaal` extension, and begins with
+`language 1` as its first non-trivia statement:
 
-- [Role in FlashOS](#role-in-flashos)
-- [Design boundaries](#design-boundaries)
-- [Flash v1 contract](#flash-v1-contract)
-- [Current implementation](#current-implementation)
-- [Using `fsh`](#using-fsh)
-- [Using the language server](#using-the-language-server)
-- [Development and verification](#development-and-verification)
-- [Documentation](#documentation)
-- [License](#license)
+```opaal
+language 1
 
-## Role in FlashOS
+import std::value as value
 
-The FlashOS x86_64 image configuration includes the `flash` package and assigns `/usr/bin/fsh` as the login shell for the configured root and user accounts.
+def remaining[T](items: List[T]) -> Int {
+    match $items {
+        [] => { return 0 }
+        [first, ...rest] => { return value::length($rest) }
+    }
+}
 
-Running `fsh` without a script starts an interactive session. Passing a script path evaluates the UTF-8 source file as a Flash program; Flash scripts conventionally use the `.fsh` extension.
+remaining(["build", "test", "review"])
+```
 
-Flash provides the language and execution environment, but it does not replace the rest of the userspace. External commands remain separate executables supplied by the system image and are launched through the platform integration layer.
-
-FlashOS also uses Flash for project automation wherever `fsh` is already
-available. Bootstrap, recovery, third-party tool integration, and independent
-validation still need a small number of non-Flash scripts.
-
-Later, Flash and higher-level terminal views are intended to share the same
-system actions. Those views and the required stable system API do not exist
-yet. [Flash and FlashOS](../../docs/flash.md) describes both the current setup
-and that longer-term idea.
-
-## Design boundaries
-
-Flash intentionally does not claim compatibility with POSIX shells such as `sh` or Bash. POSIX shell scripts should not be expected to run as Flash programs, and Flash syntax should not be passed to another shell interpreter.
-
-Several rules shape the implementation:
-
-- Interactive input and script execution use the same syntax and runtime crates, but their front ends are not required to expose identical editing, history, or startup behavior on every target.
-- Structured values belong to the Flash runtime. At an external process boundary, commands still use argument vectors, environment variables, working directories, file descriptors, and byte-oriented standard streams.
-- External executables are launched through the platform interface. Flash source is never translated into another shell language.
-- The `fsh` process preserves representable completed codes and signals while
-  keeping program output on stdout, shell diagnostics on stderr, launcher
-  misuse distinct from runtime failure, and required report writes checked.
-- A successful macOS or Linux run does not prove the same behavior in a FlashOS image. Target compilation and image execution are tested separately.
-
-## Flash v1 contract
-
-Flash 1.0 sets the compatibility baseline for the language, runtime, and tools: values,
-commands, pipelines, statuses, jobs, modules, script arguments, typed function
-metadata, help, formatting, static checking, language-server behavior, and
-platform capabilities. The 30-command core has no current
-aliases or reserved names; direct external execution remains available
-through `^name` and `command name`.
-
-Pipelines can alternate between external byte stages and internal typed
-segments while keeping conversions visible and streaming data in limited
-buffers. Post-v1 work may add compatible capabilities,
-diagnostics, tooling, and optimizations. An incompatible language redesign
-requires a future major-version decision.
-
-A FlashOS release still tests target availability separately. The
-[Language Guide](docs/language-guide.md) and [Scripting
-Guide](docs/scripting.md) define the public behavior. The [Architecture
-Guide](docs/architecture.md) and [Development Guide](docs/development.md)
-describe the implementation and maintenance work.
-
-## Current implementation
-
-The unreleased Flash 2 foundation adds per-module `language 2` selection,
-qualified modules and compiled operations, nominal records and variants,
-bounded generics and patterns, structured outcomes, typed streams, shared
-tooling observers, and a standalone read-only Flash 1 source migration
-analyzer. It intentionally provides no ambient effects, authority grants,
-projects, actions, tasks, controlled workflow planner, or FlashOS runtime
-availability claim. See the [Flash 2 Language Foundation](docs/flash-2-foundation.md)
-for the exact contract and refusal boundaries.
-
-Flash is an independent Rust workspace inside the FlashOS repository. [`Cargo.toml`](Cargo.toml) lists the current members; this table is a quick map of the main responsibilities.
-
-| Path                           | Responsibility                                                                          |
-| ------------------------------ | --------------------------------------------------------------------------------------- |
-| `crates/flash-syntax/`         | Source representation, lexical analysis, parsing, syntax trees, and diagnostics         |
-| `crates/flash-migrate/`        | Read-only Flash 1 source-graph migration analysis and deterministic report rendering     |
-| `crates/flash-runtime/`        | Runtime values, shared analysis, built-ins, execution planning, sessions, and jobs      |
-| `crates/flash-platform/`       | Platform capability contracts used by the runtime                                       |
-| `crates/flash-platform-posix/` | Process, filesystem, descriptor, signal, and terminal integration for supported targets |
-| `crates/flash-cli/`            | The `fsh` executable and its interactive and script entry points                        |
-| `crates/flash-lsp/`            | The non-executing `flash-language-server` protocol adapter                              |
-
-This split keeps language semantics and non-executing editor services
-independent of target-specific process and terminal handling. Flash is
-implemented in Rust; unsafe code is prohibited in the CLI and locally justified
-where the low-level platform adapter requires it.
-
-## Using `fsh`
-
-On an installed FlashOS image, the executable is available as `/usr/bin/fsh`.
+Build and exercise the checked-in example from the repository root:
 
 ```sh
-# Start an interactive session.
-fsh
-
-# Run a Flash script.
-fsh program.fsh
-
-# Check one file and everything it imports, without execution.
-fsh check program.fsh
-
-# Inspect one command pipeline without executing it.
-fsh plan command.fsh
-
-# Check formatting or rewrite the files atomically.
-fsh format --check program.fsh
-fsh format --write program.fsh
-
-# Show the supported command-line options.
-fsh --help
+cargo build --workspace --locked
+cargo run --locked -p opaal-cli --bin opaal -- examples/language-foundation.opaal
+cargo run --locked -p opaal-cli --bin opaal -- check examples/language-foundation.opaal
+cargo run --locked -p opaal-cli --bin opaal -- format --check examples/language-foundation.opaal
 ```
 
-Language syntax and runtime behavior are documented in the [Language Guide](docs/language-guide.md). Guidance for organizing and executing `.fsh` files belongs in the [Scripting Guide](docs/scripting.md).
+Successful non-interactive execution is silent; the embedding API retains the
+final value. Run `cargo run --locked -p opaal-cli --bin opaal` at a terminal to
+start the interactive client, which presents completed values.
 
-## Using the language server
+## Current surfaces
 
-The installed Flash package also provides `/usr/bin/flash-language-server`.
-Configure an editor's Language Server Protocol client to start it as a stdio
-process for `.fsh` files:
+- `opaal [SCRIPT [ARG...]]` runs one explicitly versioned `.opaal` root.
+- `opaal check SOURCE` analyzes a source graph without executing it.
+- `opaal format --check|--write PATH...` checks or atomically rewrites source.
+- `opaal plan SOURCE` returns the structured `PLAN004` unsupported refusal;
+  OPAAL language 1 has no controlled-planning authority yet.
+- `opaal-language-server` provides stdio diagnostics, completion, hover,
+  signature help, definitions, references, and whole-document formatting.
+- `opaal-migrate-flash-v1` analyzes explicit `.fsh` roots without applying
+  edits, executing source, discovering projects, or probing tools.
 
-```text
-command: ["flash-language-server"]
-transport: stdio
-```
+Missing, late, duplicate, malformed, mixed, or `language 2` directives are
+rejected before semantic analysis. `.fsh` roots are accepted only by the
+migration analyzer. Known effectful syntax is rejected during analysis; a
+dynamically reached effect returns a structured refusal before host access.
 
-The stdio server provides diagnostics, completion, hover, signature help,
-definition, references, and whole-document formatting without executing open
-source. It does not provide TCP transport, workspace configuration, or
-incremental edits. See the [Architecture
-Guide](docs/architecture.md#language-server-protocol-adapter) for the exact
-protocol details and [Development](docs/development.md#language-server-contract) for
-editor setup and verification.
+## Workspace
 
-## Development and verification
+| Path | Responsibility |
+| --- | --- |
+| `crates/opaal-syntax/` | OPAAL source, lexer, parser, syntax trees, diagnostics, and feature-gated migration syntax |
+| `crates/opaal-migrate/` | Deterministic read-only Flash 1 to OPAAL 1 analysis and schema-2 reports |
+| `crates/opaal-runtime/` | Pure values, module analysis, operations, outcomes, streams, and bounded evaluation |
+| `crates/opaal-platform/` | Platform capability contracts |
+| `crates/opaal-platform-posix/` | macOS/Linux host adapter and observation fixtures |
+| `crates/opaal-cli/` | Command-line, formatting, checking, planning-refusal, and interactive frontends |
+| `crates/opaal-lsp/` | Non-executing Language Server Protocol adapter |
+| `fuzz/` | Separate unpublished `opaal-fuzz` package and five fuzz targets |
 
-Run the complete host checks from the repository root:
+The workspace has exactly seven members. The fuzz package is intentionally
+separate because cargo-fuzz uses nightly instrumentation.
+
+## Migration and lineage
+
+Flash 1 is a predecessor, not an OPAAL execution mode. Analyze an explicit
+source graph with:
 
 ```sh
-make flash-bootstrap
-make flash-automation-tools
-build/flash-bootstrap/134635a5e1282b5d8455a4b2aeb754be5a3a77c1/fsh ci/check_flash_conformance.fsh
-build/flash-bootstrap/134635a5e1282b5d8455a4b2aeb754be5a3a77c1/fsh ci/check_flash_release.fsh
-cargo test --manifest-path components/flash/Cargo.toml --workspace --locked
-cargo clippy --manifest-path components/flash/Cargo.toml --workspace --all-targets -- -D warnings
+cargo run --locked -p opaal-migrate --bin opaal-migrate-flash-v1 -- \
+  --format human legacy.fsh
+cargo run --locked -p opaal-migrate --bin opaal-migrate-flash-v1 -- \
+  --format json -- legacy.fsh
 ```
 
-Target compilation is a separate check:
+The analyzer emits migration schema 2, preserves source digests and lossless
+URIs, applies deterministic resource ceilings, and never writes. Historical
+Flash source, tests, documentation, and evidence retained by the extraction
+live under [`history/flash-v1/`](history/flash-v1/) and remain historical.
+
+## Verification
+
+The host source gates are:
 
 ```sh
-redoxer build -p flash-cli --bin fsh
-redoxer build -p flash-lsp --bin flash-language-server
+cargo fmt --all -- --check
+cargo build --workspace --locked
+cargo test --workspace --locked
+cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+cargo doc --workspace --no-deps --locked
+cargo deny check
+python3 ci/check_transition.py verify --claim TR-004
+python3 ci/check_transition.py verify --claim TR-005
+python3 ci/check_transition.py verify --claim TR-006
+python3 ci/check_transition.py verify --claim TR-007
+python3 ci/check_transition.py verify --claim TR-008
+python3 ci/check_transition.py verify --claim TR-015
+python3 ci/check_public_boundary.py
+python3 -m unittest discover -s ci/tests -p 'test_check_benchmarks.py'
+python3 ci/check_benchmarks.py --contract-only
+python3 benchmarks/run.py --profile smoke
 ```
 
-The [Flash v1 exercises](exercises/README.md) cover the released user-facing
-features. The [1.0.0 release record](release/v1.toml) ties those exercises and
-other required checks to the component release. Host checks, target builds,
-image integration, and QEMU execution answer different questions. See [Flash
-Development](docs/development.md) for the component workflow and [FlashOS
-Verification](../../docs/verification.md) for the evidence model.
+Host success establishes only the exercised macOS/Linux surfaces. This
+repository makes no claim that OPAAL is packaged by another operating system,
+available on Redox, or qualified on physical hardware.
 
-## Documentation
-
-Use the [Flash documentation index](docs/README.md) for the complete guide and
-technical-reference inventory. New readers should begin with [Flash by
-Example](docs/by-example.md); system builders should begin with [FlashOS
-Getting Started](../../docs/getting-started.md). Component history lives in the
-[Flash changelog](CHANGELOG.md).
+See the [documentation index](docs/README.md), [language foundation](docs/opaal-language-1-foundation.md),
+[architecture](docs/architecture.md), [development guide](docs/development.md),
+[contribution guide](CONTRIBUTING.md), [security policy](SECURITY.md), and
+[changelog](CHANGELOG.md).
 
 ## License
 
-Copyright 2026 Anton Hahn. Unless a file states otherwise, the Flash workspace
-is licensed under the [Mozilla Public License 2.0](LICENSE). Versions
-distributed before this change remain available under the licenses that
-accompanied those distributions.
-
-Other FlashOS components and incorporated third-party materials may be subject to separate terms. See the repository-level [NOTICE](../../NOTICE) and the applicable license files for attribution and licensing details.
-
----
-
-[← Previous: Upstream References](../../docs/upstream/README.md) · [Product Guide](../../docs/README.md) · [Next: Flash Documentation →](docs/README.md)
+Unless a file states otherwise, OPAAL is licensed under the
+[Mozilla Public License 2.0](LICENSE). Preserved historical files retain the
+licensing statements that accompanied them.

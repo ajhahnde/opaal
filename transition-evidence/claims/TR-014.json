@@ -1,0 +1,31 @@
+{
+  "assertions": [
+    {
+      "detail": "the recorded FlashOS source checkout is available read-only",
+      "name": "flashos-source-available",
+      "success": true
+    },
+    {
+      "detail": "observed={'head': 'ce532330507f2b302bf603c0ffe27c11d7829d24', 'main': 'ce532330507f2b302bf603c0ffe27c11d7829d24', 'origin_main': 'ce532330507f2b302bf603c0ffe27c11d7829d24', 'component_tree': '5cd3774ebc5500e3a1a1cea5b5706c1eab5c44e2', 'candidate_source_tree': '5cd3774ebc5500e3a1a1cea5b5706c1eab5c44e2'} expected_head=ce532330507f2b302bf603c0ffe27c11d7829d24",
+      "name": "flashos-head-and-tree-frozen",
+      "success": true
+    },
+    {
+      "detail": "tracked status=''",
+      "name": "flashos-no-tracked-transition-diff",
+      "success": true
+    },
+    {
+      "detail": "current source and evidence retain the explicit downstream qualification boundary",
+      "name": "no-flashos-or-target-qualification-claim",
+      "success": true
+    }
+  ],
+  "candidate_worktree_sha256": "fb81b5c3877843e404d3b733f1d901d3f259b18a96b013cb112daa051da95946",
+  "claim": "TR-014",
+  "commands": [],
+  "public_tip": null,
+  "schema": 1,
+  "source_tip": "6b010a66e9ef9df125ff599e6a242eaf8fce85fc",
+  "success": true
+}

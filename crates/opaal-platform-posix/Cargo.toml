@@ -1,0 +1,30 @@
+[package]
+name = "opaal-platform-posix"
+description = "Unix-like platform primitives for OPAAL"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+opaal-platform = { path = "../opaal-platform" }
+libc = "0.2"
+
+[[bin]]
+name = "opaal-process-observer-fixture"
+path = "../../tests/fixtures/process_observer.rs"
+test = false
+bench = false
+doc = false
+
+[[bin]]
+name = "opaal-signal-guard-fixture"
+path = "tests/fixtures/signal_guard.rs"
+test = false
+bench = false
+doc = false
+
+[lints]
+workspace = true

@@ -1,0 +1,6 @@
+language 1
+
+import './support/bindings.opaal' as bindings
+
+let selected: Int = bindings::right
+$selected

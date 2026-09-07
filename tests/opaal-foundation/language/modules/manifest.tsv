@@ -1,0 +1,5 @@
+# class	path
+complete	complete/qualified-aliases.opaal
+complete	complete/nominal-type.opaal
+invalid	invalid/v1-load-only.opaal
+invalid	invalid/v1-named-from.opaal

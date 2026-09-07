@@ -1,161 +1,86 @@
 # Performance benchmarks
 
-[FlashOS](../../../README.md) › [Flash](../README.md) › Performance Benchmarks
+The OPAAL performance suite measures seven host-only surfaces from an optimized
+candidate. It contains no external-command, pipeline, operating-system image,
+or language-runtime validation path.
 
-These benchmarks measure an optimized `fsh` process whenever the test crosses
-an executable boundary. Structured-stream and completion tests use a host-only
-in-process fixture. Raw integer samples are retained, and host results stay
-separate from FlashOS target results.
+## Contract
 
-## Measured surfaces
+[`contract-v1.toml`](contract-v1.toml) owns the exact case and repetition set:
 
-[`contract-v1.toml`](contract-v1.toml) is the case and repetition source of
-truth. The suite owns these measurements:
+| Case | Boundary | Statistic |
+| --- | --- | --- |
+| `host-startup-cold` | First optimized `opaal` process running a minimal pure `.opaal` source | maximum elapsed ns |
+| `host-startup-warm` | New optimized processes after discarded warmups | p95 elapsed ns |
+| `host-first-prompt-cold` | First prompt from a fresh PTY process | maximum elapsed ns |
+| `host-first-prompt-warm` | Fresh PTY processes after discarded warmups | p95 elapsed ns |
+| `host-structured-stream-memory-warm` | Peak RSS while a direct fixture lazily pulls typed values | maximum bytes |
+| `host-completion-cold` | First completion snapshot/query over isolated injected candidates | maximum elapsed ns |
+| `host-completion-warm` | Completion snapshots/queries after discarded warmups | p95 elapsed ns |
 
-| Surface | Host boundary | FlashOS target boundary |
-|:--|:--|:--|
-| Startup | Optimized `fsh` executing an empty script | Included in the login-shell first-prompt observation; no separate guest process timer is claimed |
-| First prompt | Fresh PTY process with config and history disabled | Host-monotonic interval from the login success marker to the first target prompt |
-| Command overhead | Per-command time for a repeated external `true` script | Serial-observed latency of a source/output-distinct external `printf` probe |
-| Pipeline throughput | A fixed file through two `cat` stages and `wc` | One MiB through `yes`, `head`, `wc`, and a marker-transforming `tr` stage |
-| Structured-stream memory | Peak RSS of five million lazily pulled `Value::Int` items | Not measured: the current target exposes no qualified per-process peak-RSS telemetry |
-| Completion latency | Prompt-boundary host snapshot plus grammar-aware query over fixed command/path fixtures | Tab-to-accepted-completion latency through the portable editor and emulated UART |
-| Flash 2 resource contract | Combined host-free module analysis and pure evaluation over a generated adversarial statement corpus | Not measured: this is foundation host evidence, not a FlashOS integration claim |
+Cold means the first observation in a fresh benchmark workspace and process
+sequence. The runner does not flush system caches or claim power-on state. Warm
+startup and prompt samples still create new processes. The qualification
+profile discards three warmups and retains fifteen samples; cold cases retain
+one sample.
 
-The target pipeline's bounded `yes` producer reaches an expected broken pipe
-after `head` has consumed the requested byte count. The transformed count
-marker, rather than the typed source or diagnostic, closes the timed interval.
+Startup uses `language 1` in a minimal `.opaal` file. Interactive mode
+preselects OPAAL language 1. Structured-stream measurement calls the direct
+pure carrier fixture. Completion sees only the temporary candidate directory
+through `PATH` and never executes a candidate.
 
-## Cold and warm semantics
+## Run
 
-"Cold" means the first observation in a newly created benchmark workspace and
-process sequence. The runner does not flush kernel caches, request privileges,
-or claim a power-on storage state. This definition is reproducible without
-mutating the host and is recorded in every result.
-
-"Warm" means observations after the cold case and the profile's discarded
-warmups. Each measured operation still uses the process boundary named by its
-case. Warm startup and first-prompt samples therefore start new `fsh` processes;
-they do not reuse a live shell.
-
-The qualification profile uses three discarded host warmups and fifteen raw
-host samples. The exact-image target consumer uses one discarded warmup and
-five raw samples for each warm target case. Cold cases retain one sample rather
-than pretending that repeated first observations are independent.
-
-## Run the host suite
-
-From the repository root, acquire the independent Flash automation runtime and
-the pinned host tools described in
-[Public Automation](../../../docs/automation.md), then select that runtime:
+From the standalone repository root:
 
 ```sh
-make flash-bootstrap flash-automation-tools
-export FLASH_AUTOMATION_RUNTIME="$PWD/build/flash-bootstrap/134635a5e1282b5d8455a4b2aeb754be5a3a77c1/fsh"
-python3 components/flash/benchmarks/run.py --profile smoke
-python3 components/flash/benchmarks/run.py --profile qualification
+python3 benchmarks/run.py --profile smoke
+python3 benchmarks/run.py --profile qualification
 ```
 
-The runner builds optimized `fsh` and `flash-benchmark-fixture` binaries unless
-`--no-build` is supplied. It uses an isolated temporary home, disables config
-and history, fixes the locale to `C`, limits completion discovery to the fixed
-fixture directory, creates deterministic completion and pipeline fixtures,
-discards warmups, and writes a unique ignored JSON result under
-`benchmarks/results/` by default.
+The runner resolves the pinned Rust tools, builds `target/release/opaal` and
+`target/release/opaal-benchmark-fixture`, creates an isolated temporary home and
+completion set, retains raw integer samples, writes a JSON result under the
+ignored `benchmarks/results/` directory by default, and invokes
+`python3 ci/check_benchmarks.py --result RESULT` before success.
 
-Evaluate a qualification run only against a matching environment budget:
+The reviewed macOS-arm64 evidence command is:
 
 ```sh
-python3 components/flash/benchmarks/run.py \
-  --profile qualification \
-  --budget-environment host-darwin-arm64
+python3 benchmarks/run.py --profile qualification \
+  --output benchmarks/evidence/host-darwin-arm64-opaal-v1.json
 ```
 
-The ordinary CI job runs and schema-validates the smoke profile to catch broken
-probes and missing coverage. It does not compare an Ubuntu hosted runner with
-the tracked macOS baseline. Cross-environment absolute comparisons are invalid.
+The result uses schema `opaal-performance-result-v1` and binds the current
+contract and candidate binary by SHA-256.
 
-The Flash 2 resource probe is deliberately outside semantic evaluation clocks.
-It emits raw cold/warmup/sample nanoseconds while executable counters own
-semantic refusal. After building the release fixture, run:
+## Validate
 
 ```sh
-components/flash/target/release/flash-benchmark-fixture \
-  v2-resources 3 15 1000
+python3 -m unittest discover -s ci/tests -p 'test_check_benchmarks.py'
+python3 ci/check_benchmarks.py --contract-only
+python3 ci/check_benchmarks.py \
+  --result benchmarks/evidence/host-darwin-arm64-opaal-v1.json \
+  --environment host-darwin-arm64
 ```
 
-Compare only like-for-like host and corpus observations. This command supplies
-benchmark evidence; exact at-limit and first-excess behavior remains owned by
-the deterministic resource tests.
+The standard-library checker validates contract/result schemas, exact case
+coverage, unique measurements, units, profile sample counts, raw summaries,
+contract and binary digests, budget coverage and arithmetic, environment
+matching, and regression direction.
 
-## Run the FlashOS target suite
-
-The exact-image QEMU consumer accepts a result path:
-
-```sh
-python3 ci/qemu_smoke.py \
-  --image build/x86_64/flashos/harddrive.img \
-  --disk-interface nvme \
-  --log build/x86_64/flashos/qemu-benchmark.log \
-  --benchmark-output build/x86_64/flashos/qemu-performance.json
-```
-
-Target measurements run after the existing runtime fixtures and exhaustive
-capability matrix. They use one `core2duo` TCG vCPU, 1024 MiB of guest memory,
-an NVMe snapshot, the host monotonic clock, bounded UART interactions, and the
-exact image named in the raw result by SHA-256. The QEMU consumer evaluates the
-result against the matching target budget before reporting success. Hosted
-candidate runs upload their JSON as short-lived workflow evidence.
-
-## Evidence and budget derivation
-
-Qualification evidence under [`evidence/`](evidence/) is immutable input to
-[`budgets-v1.toml`](budgets-v1.toml). The budget file binds the contract and
-each evidence file by SHA-256. [`ci/flash_benchmarks.fsh`](../../../ci/flash_benchmarks.fsh)
-checks schema versions, exact case coverage, raw summaries, environment
-identity, evidence hashes, derivation arithmetic, and budget coverage.
-
-Maximum latency and memory budgets multiply the owning evidence statistic.
-Minimum throughput budgets divide it. Cold latency uses the retained maximum;
-warm latency uses p95; structured-stream RSS uses the maximum; and throughput
-uses the median. Host warm cases use 3× tolerance. Host cold cases retain only
-one first observation, so they use 4× tolerance for scheduler and cache-state
-variance that repetition cannot smooth. The TCG/serial target uses 3×
-tolerance; its cold first-prompt interval is already dominated by the
-controlled emulator and UART boundary. These factors are declared policy;
-every absolute limit is mechanically derived from the bound evidence.
-
-Validate the tracked contract or evaluate another matching result with:
-
-```sh
-"$FLASH_AUTOMATION_RUNTIME" ci/flash_benchmarks.fsh
-"$FLASH_AUTOMATION_RUNTIME" ci/flash_benchmarks.fsh \
-  --evaluate path/to/result.json \
-  --environment flashos-qemu-tcg-core2duo
-```
-
-A regression is a selected latency or memory statistic above its maximum, or a
-selected throughput statistic below its minimum. Investigate the result,
-reproduce it on the same environment, and fix or explain the change before
-replacing evidence. Never raise a budget merely to make an unexplained result
-green. A new operating system, architecture, CPU/emulator identity, or
-measurement contract requires separate evidence and a separately keyed budget.
+[`budgets-v1.toml`](budgets-v1.toml) derives each absolute ceiling from the
+candidate OPAAL evidence statistic. Cold latency uses 4× the observed maximum;
+warm latency and structured-stream memory use 3× p95 or maximum as declared.
+These factors absorb ordinary host scheduling and cache variance. They do not
+justify increasing a limit to hide an unexplained regression.
 
 ## Evidence boundary
 
-These results are bounded observations, not universal product guarantees. Host
-samples reflect one OS/architecture class and current system load. TCG target
-samples include serial transport and emulation overhead and are not physical
-hardware performance. The suite does not flush caches, pin CPU frequency,
-disable other host work, measure energy, establish whole-OS boot budgets, or
-claim target RSS without telemetry. Medians, p95 values, repetition, warmups,
-and generous evidence-derived tolerances reduce noise; they do not eliminate
-it.
+The checked-in evidence is one bounded macOS-arm64 observation under recorded
+host load. It is not a universal product guarantee and does not establish
+another operating system's package, image, target, emulation, or physical
+hardware performance. A different OS, architecture, or measurement contract
+requires separately keyed evidence and budget policy.
 
-Physical hardware, release qualification, long-duration behavior, workloads
-outside the fixed fixtures, and performance on a different host or QEMU
-configuration remain separate evidence.
-
----
-
-[← Flash documentation](../docs/README.md)
+[← OPAAL documentation](../docs/README.md)

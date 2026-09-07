@@ -1,0 +1,20 @@
+language 1
+
+import std::value as value
+
+enum Selection[T] {
+    Selected(T),
+    Empty,
+}
+
+def tail[T](items: List[T]) -> Selection[List[T]] {
+    match $items {
+        [] => { return Selection::Empty }
+        [first, ...rest] => { return Selection::Selected($rest) }
+    }
+}
+
+match tail(["build", "test", "review"]) {
+    Selection::Selected(rest) => { value::length($rest) }
+    Selection::Empty => { 0 }
+}

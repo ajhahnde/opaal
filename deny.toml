@@ -1,10 +1,7 @@
-# cargo-deny policy for the Flash nested workspace.
+# cargo-deny policy for the standalone OPAAL workspace.
 #
-# Flash is excluded from the root cargo workspace (edition 2024,
-# resolver 3, its own pinned toolchain), so the root deny.toml never sees this
-# lockfile. Reedline is the first external dependency; this policy keeps it and
-# every later addition audited by CI instead of allowing them to arrive
-# unreviewed.
+# OPAAL uses edition 2024, resolver 3, and a pinned toolchain. This policy keeps
+# every dependency addition visible to standalone security checks.
 
 [advisories]
 version = 2
@@ -14,7 +11,7 @@ ignore = []
 [licenses]
 version = 2
 confidence-threshold = 0.9
-# Flash itself ships under MPL-2.0. Dependencies may use this reviewed set;
+# OPAAL itself uses MPL-2.0. Dependencies may use this reviewed set;
 # Unicode-3.0 covers data tables in unicode-ident.
 allow = [
     "Apache-2.0",

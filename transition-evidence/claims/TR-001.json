@@ -1,0 +1,125 @@
+{
+  "assertions": [
+    {
+      "detail": "the FlashOS source checkout is available read-only",
+      "name": "source-baseline-available",
+      "success": true
+    },
+    {
+      "detail": "observed={'head': 'ce532330507f2b302bf603c0ffe27c11d7829d24', 'main': 'ce532330507f2b302bf603c0ffe27c11d7829d24', 'origin_main': 'ce532330507f2b302bf603c0ffe27c11d7829d24', 'status': '', 'component_tree': '5cd3774ebc5500e3a1a1cea5b5706c1eab5c44e2', 'retained_api_head': '1ee171795d1c4c45c703bf90d4cc547b7bbaf2fd', 'retained_api_origin': '1ee171795d1c4c45c703bf90d4cc547b7bbaf2fd'}",
+      "name": "source-baseline-current",
+      "success": true
+    },
+    {
+      "detail": "exit 0; expected 0",
+      "name": "target-repository",
+      "success": true
+    },
+    {
+      "detail": "exit 0; expected 0",
+      "name": "target-branches",
+      "success": true
+    },
+    {
+      "detail": "exit 0; expected 0",
+      "name": "target-tags",
+      "success": true
+    },
+    {
+      "detail": "exit 0; expected 0",
+      "name": "target-releases",
+      "success": true
+    },
+    {
+      "detail": "exit 0; expected 0",
+      "name": "source-pr-91",
+      "success": true
+    },
+    {
+      "detail": "target is public, unarchived, and has no branch, tag, or release",
+      "name": "target-public-empty",
+      "success": true
+    },
+    {
+      "detail": "pull_request={'baseRefName': 'main', 'closedAt': '2026-09-06T00:45:30Z', 'headRefName': 'dependabot/cargo/components/flash/reedline-0.51.0', 'headRefOid': '7f525768576e0903be956d7525f48bb026f9833a', 'mergedAt': None, 'number': 91, 'state': 'CLOSED', 'url': 'https://github.com/ajhahnde/FlashOS/pull/91'}",
+      "name": "source-pr-91-disposition",
+      "success": true
+    }
+  ],
+  "candidate_worktree_sha256": "fb81b5c3877843e404d3b733f1d901d3f259b18a96b013cb112daa051da95946",
+  "claim": "TR-001",
+  "commands": [
+    {
+      "command": [
+        "gh",
+        "repo",
+        "view",
+        "ajhahnde/opaal",
+        "--json",
+        "nameWithOwner,visibility,isArchived,defaultBranchRef,mergeCommitAllowed,squashMergeAllowed,rebaseMergeAllowed,deleteBranchOnMerge,url"
+      ],
+      "exit_status": 0,
+      "expected_exit_status": 0,
+      "name": "target-repository",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout_sha256": "ae1c45a2de1f9fda1cbc20c04070934c1b6bc8b8d4a4a95aecf034453c2b6571"
+    },
+    {
+      "command": [
+        "gh",
+        "api",
+        "repos/ajhahnde/opaal/branches"
+      ],
+      "exit_status": 0,
+      "expected_exit_status": 0,
+      "name": "target-branches",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    },
+    {
+      "command": [
+        "gh",
+        "api",
+        "repos/ajhahnde/opaal/tags"
+      ],
+      "exit_status": 0,
+      "expected_exit_status": 0,
+      "name": "target-tags",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    },
+    {
+      "command": [
+        "gh",
+        "api",
+        "repos/ajhahnde/opaal/releases"
+      ],
+      "exit_status": 0,
+      "expected_exit_status": 0,
+      "name": "target-releases",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    },
+    {
+      "command": [
+        "gh",
+        "pr",
+        "view",
+        "91",
+        "--repo",
+        "ajhahnde/FlashOS",
+        "--json",
+        "number,state,mergedAt,closedAt,headRefName,baseRefName,headRefOid,url"
+      ],
+      "exit_status": 0,
+      "expected_exit_status": 0,
+      "name": "source-pr-91",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout_sha256": "f561c1123010222a6c9a5790f3b472a5bbc0bfd8c04f27abe956c8bd30b6af7b"
+    }
+  ],
+  "public_tip": null,
+  "schema": 1,
+  "source_tip": "6b010a66e9ef9df125ff599e6a242eaf8fce85fc",
+  "success": true
+}

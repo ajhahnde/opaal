@@ -1,0 +1,129 @@
+{
+  "assertions": [
+    {
+      "detail": "opaal-syntax features={'default': [], 'flash-v1-migration': []}",
+      "name": "migration-feature-default-off",
+      "success": true
+    },
+    {
+      "detail": "feature enablers=['opaal-migrate']",
+      "name": "migration-feature-reachability",
+      "success": true
+    },
+    {
+      "detail": "legacy syntax reachable outside migration=[]",
+      "name": "flash-v1-source-reachability",
+      "success": true
+    },
+    {
+      "detail": "forbidden runtime routes=[]",
+      "name": "runtime-personality",
+      "success": true
+    },
+    {
+      "detail": "retained legacy adapters=[]",
+      "name": "legacy-script-api-removed",
+      "success": true
+    },
+    {
+      "detail": "the predecessor capsule API and wire identity are not public/current",
+      "name": "legacy-capsule-surface-removed",
+      "success": true
+    },
+    {
+      "detail": "migration facade requires the explicit feature",
+      "name": "migration-facade-gated",
+      "success": true
+    },
+    {
+      "detail": "exit 0; expected 0",
+      "name": "migration-crate-build",
+      "success": true
+    },
+    {
+      "detail": "exit 0; expected 0",
+      "name": "cli-fallback-negatives",
+      "success": true
+    },
+    {
+      "detail": "exit 101; expected 101",
+      "name": "default-syntax-api-rejects-migration",
+      "success": true
+    },
+    {
+      "detail": "exit 101; expected 101",
+      "name": "runtime-api-rejects-unversioned-script-adapter",
+      "success": true
+    }
+  ],
+  "candidate_worktree_sha256": "fb81b5c3877843e404d3b733f1d901d3f259b18a96b013cb112daa051da95946",
+  "claim": "TR-006",
+  "commands": [
+    {
+      "command": [
+        "cargo",
+        "check",
+        "--locked",
+        "-p",
+        "opaal-migrate"
+      ],
+      "exit_status": 0,
+      "expected_exit_status": 0,
+      "name": "migration-crate-build",
+      "stderr_sha256": "89cc731b9a3dacfe9df7632d85cd962804e6833924bc9ca5027b0631f76f4510",
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "opaal-cli",
+        "--test",
+        "e2e",
+        "--test",
+        "checker_e2e",
+        "--test",
+        "formatter_e2e",
+        "--test",
+        "planner_e2e"
+      ],
+      "exit_status": 0,
+      "expected_exit_status": 0,
+      "name": "cli-fallback-negatives",
+      "stderr_sha256": "893332fee2d9d7ae399ff1b20d11757c0f884a3484e69af641ecf9e82242c6d9",
+      "stdout_sha256": "b8ce1481a1a37ecd898d4a45b11c129df8569102edc86b25caa325ce5c9b48d2"
+    },
+    {
+      "command": [
+        "cargo",
+        "check",
+        "--offline",
+        "# default opaal-syntax consumer referencing migration"
+      ],
+      "exit_status": 101,
+      "expected_exit_status": 101,
+      "name": "default-syntax-api-rejects-migration",
+      "stderr_sha256": "9ff8652b7a48e397cdade7411dd6ce0b542dafc87dc7243a9647e161826feb5c",
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "command": [
+        "cargo",
+        "check",
+        "--offline",
+        "# consumer referencing removed unversioned script adapter"
+      ],
+      "exit_status": 101,
+      "expected_exit_status": 101,
+      "name": "runtime-api-rejects-unversioned-script-adapter",
+      "stderr_sha256": "59b0b7294b06ac871bb18f409b01c115451c7c29d4d5dd152857d8f08e3a2b3a",
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ],
+  "public_tip": null,
+  "schema": 1,
+  "source_tip": "6b010a66e9ef9df125ff599e6a242eaf8fce85fc",
+  "success": true
+}

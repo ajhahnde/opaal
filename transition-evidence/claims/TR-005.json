@@ -1,0 +1,118 @@
+{
+  "assertions": [
+    {
+      "detail": "OPAAL language number is exactly 1",
+      "name": "language-one-constant",
+      "success": true
+    },
+    {
+      "detail": "current syntax identity is OpaalV1 only",
+      "name": "single-current-identity",
+      "success": true
+    },
+    {
+      "detail": "exit 0; expected 0",
+      "name": "syntax-language-goldens",
+      "success": true
+    },
+    {
+      "detail": "exit 0; expected 0",
+      "name": "runtime-language-goldens",
+      "success": true
+    },
+    {
+      "detail": "exit 0; expected 0",
+      "name": "cli-language-goldens",
+      "success": true
+    },
+    {
+      "detail": "exit 0; expected 0",
+      "name": "lsp-language-goldens",
+      "success": true
+    }
+  ],
+  "candidate_worktree_sha256": "fb81b5c3877843e404d3b733f1d901d3f259b18a96b013cb112daa051da95946",
+  "claim": "TR-005",
+  "commands": [
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "opaal-syntax",
+        "--test",
+        "language_version",
+        "--test",
+        "input_classification",
+        "--test",
+        "formatter"
+      ],
+      "exit_status": 0,
+      "expected_exit_status": 0,
+      "name": "syntax-language-goldens",
+      "stderr_sha256": "48b5920fc69653fbe1247fb33affe4362b49a0d57121d4041a243ef63a0848ef",
+      "stdout_sha256": "2f240380c317984f6cfff01f7cb0d5c603a9b83fec8e20a3e7eb2c852b97a088"
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "opaal-runtime",
+        "--test",
+        "language_version"
+      ],
+      "exit_status": 0,
+      "expected_exit_status": 0,
+      "name": "runtime-language-goldens",
+      "stderr_sha256": "1eb3ca0791ababa2cc1511d2c0d1d17234b76ae6efbd49ec830c8d48233e99e9",
+      "stdout_sha256": "8d7e82531ae6b6d8d0603d9324f1ab1a752716c444963f699ab6c00b1ad9260d"
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "opaal-cli",
+        "--test",
+        "language_version",
+        "--test",
+        "check_frontend",
+        "--test",
+        "format_frontend",
+        "--test",
+        "interactive_session"
+      ],
+      "exit_status": 0,
+      "expected_exit_status": 0,
+      "name": "cli-language-goldens",
+      "stderr_sha256": "d58b39462ba15dfb71dae1c4337b632c4809e0b1df8e3787a1eb105c3bb9a50e",
+      "stdout_sha256": "7a5727a3afc73c5f8f0eb54a4335508f2052676cc8a5b6c6a0784f29bbe2f189"
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "opaal-lsp",
+        "--test",
+        "language_version",
+        "--test",
+        "server_e2e"
+      ],
+      "exit_status": 0,
+      "expected_exit_status": 0,
+      "name": "lsp-language-goldens",
+      "stderr_sha256": "a8a789cd2c41aa5f3c64b4c3336738d5a3c338b4cb311dfb1ad557e379bbde53",
+      "stdout_sha256": "9be975892fe47a29f458dc2c8b8be26bd091fd81cbab86e3b4cf17e57652f41d"
+    }
+  ],
+  "public_tip": null,
+  "schema": 1,
+  "source_tip": "6b010a66e9ef9df125ff599e6a242eaf8fce85fc",
+  "success": true
+}

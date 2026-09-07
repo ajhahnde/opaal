@@ -1,0 +1,125 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  foundation:
+    name: language-foundation
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Activate the pinned Rust toolchain
+        run: |
+          rustup show active-toolchain || rustup toolchain install
+          rustc --version
+
+      - name: Formatting
+        run: cargo fmt --all -- --check
+
+      - name: Build
+        run: cargo build --workspace --locked
+
+      - name: Tests
+        run: cargo test --workspace --locked --no-fail-fast
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+
+      - name: Documentation
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --workspace --no-deps --locked
+
+  policy:
+    name: repository-policy
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Compile Python validators
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: python3 -m compileall -q ci benchmarks
+
+      - name: Test Python validators
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: python3 -m unittest discover -s ci/tests -p 'test_*.py'
+
+      - name: Enforce the public boundary
+        run: python3 ci/check_public_boundary.py
+
+      - name: Validate the benchmark contract and retained evidence
+        run: python3 ci/check_benchmarks.py --contract-only
+
+      - name: Reject whitespace errors
+        run: git show --check --format= HEAD
+
+  transition:
+    name: transition-contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Activate the pinned Rust toolchain
+        run: |
+          rustup show active-toolchain || rustup toolchain install
+          rustc --version
+
+      - name: Acquire the migration fuzz checker
+        run: |
+          rustup toolchain install nightly --profile minimal
+          cargo install cargo-fuzz --version 0.13.2 --locked
+
+      - name: Verify public transition claims
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 ci/check_transition.py verify --claim TR-002
+          python3 ci/check_transition.py verify --claim TR-004
+          python3 ci/check_transition.py verify --claim TR-005
+          python3 ci/check_transition.py verify --claim TR-006
+          python3 ci/check_transition.py verify --claim TR-007
+          python3 ci/check_transition.py verify --claim TR-008
+          python3 ci/check_transition.py verify --claim TR-015
+
+  required:
+    name: required
+    if: always()
+    needs: [foundation, policy, transition]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Enforce every required job
+        env:
+          FOUNDATION_RESULT: ${{ needs.foundation.result }}
+          POLICY_RESULT: ${{ needs.policy.result }}
+          TRANSITION_RESULT: ${{ needs.transition.result }}
+        run: |
+          if [ "${FOUNDATION_RESULT}" != "success" ] ||
+             [ "${POLICY_RESULT}" != "success" ] ||
+             [ "${TRANSITION_RESULT}" != "success" ]; then
+            echo "foundation=${FOUNDATION_RESULT} policy=${POLICY_RESULT} transition=${TRANSITION_RESULT}"
+            exit 1
+          fi

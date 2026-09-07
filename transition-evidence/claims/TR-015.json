@@ -1,0 +1,332 @@
+{
+  "assertions": [
+    {
+      "detail": "workspace version='1.0.0-alpha.1'",
+      "name": "development-version",
+      "success": true
+    },
+    {
+      "detail": "workspace publish=False",
+      "name": "workspace-publication-disabled",
+      "success": true
+    },
+    {
+      "detail": "publishable or unbound packages=[]",
+      "name": "all-packages-unpublishable",
+      "success": true
+    },
+    {
+      "detail": "exit 0; expected 0",
+      "name": "cargo-metadata",
+      "success": true
+    },
+    {
+      "detail": "invalid metadata={}",
+      "name": "metadata-version-and-publication",
+      "success": true
+    },
+    {
+      "detail": "exit 0; expected 0",
+      "name": "cli-development-version",
+      "success": true
+    },
+    {
+      "detail": "stdout='opaal 1.0.0-alpha.1'",
+      "name": "cli-version-output",
+      "success": true
+    },
+    {
+      "detail": "forbidden release entries=[]",
+      "name": "release-workflow-read-only",
+      "success": true
+    },
+    {
+      "detail": "local tags=''",
+      "name": "no-transition-tag",
+      "success": true
+    },
+    {
+      "detail": "exit 0; expected 0",
+      "name": "target-tags",
+      "success": true
+    },
+    {
+      "detail": "exit 0; expected 0",
+      "name": "target-releases",
+      "success": true
+    },
+    {
+      "detail": "tags=[] releases=[]",
+      "name": "no-remote-tag-or-release",
+      "success": true
+    },
+    {
+      "detail": "exit 0; expected 0",
+      "name": "unpublished-crate-opaal-syntax",
+      "success": true
+    },
+    {
+      "detail": "exit 0; expected 0",
+      "name": "unpublished-crate-opaal-migrate",
+      "success": true
+    },
+    {
+      "detail": "exit 0; expected 0",
+      "name": "unpublished-crate-opaal-runtime",
+      "success": true
+    },
+    {
+      "detail": "exit 0; expected 0",
+      "name": "unpublished-crate-opaal-lsp",
+      "success": true
+    },
+    {
+      "detail": "exit 0; expected 0",
+      "name": "unpublished-crate-opaal-platform",
+      "success": true
+    },
+    {
+      "detail": "exit 0; expected 0",
+      "name": "unpublished-crate-opaal-platform-posix",
+      "success": true
+    },
+    {
+      "detail": "exit 0; expected 0",
+      "name": "unpublished-crate-opaal-cli",
+      "success": true
+    },
+    {
+      "detail": "exit 0; expected 0",
+      "name": "unpublished-crate-opaal-fuzz",
+      "success": true
+    },
+    {
+      "detail": "crates.io statuses={'opaal-syntax': '404', 'opaal-migrate': '404', 'opaal-runtime': '404', 'opaal-lsp': '404', 'opaal-platform': '404', 'opaal-platform-posix': '404', 'opaal-cli': '404', 'opaal-fuzz': '404'}",
+      "name": "no-published-transition-package",
+      "success": true
+    },
+    {
+      "detail": "README and changelog identify an unreleased development line",
+      "name": "unreleased-public-claim",
+      "success": true
+    }
+  ],
+  "candidate_worktree_sha256": "fb81b5c3877843e404d3b733f1d901d3f259b18a96b013cb112daa051da95946",
+  "claim": "TR-015",
+  "commands": [
+    {
+      "command": [
+        "cargo",
+        "metadata",
+        "--no-deps",
+        "--format-version",
+        "1",
+        "--locked"
+      ],
+      "exit_status": 0,
+      "expected_exit_status": 0,
+      "name": "cargo-metadata",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout_sha256": "b9ec5091c51bc98745ee0f8a1c640c2bd3502800428c3521467cd86ddef5c5fe"
+    },
+    {
+      "command": [
+        "cargo",
+        "run",
+        "--quiet",
+        "--locked",
+        "-p",
+        "opaal-cli",
+        "--bin",
+        "opaal",
+        "--",
+        "--version"
+      ],
+      "exit_status": 0,
+      "expected_exit_status": 0,
+      "name": "cli-development-version",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout_sha256": "0933ebd86c630011b4e8d75c5b06f1b9ec4b5bd582069b5bf4aabf7ff1623b43"
+    },
+    {
+      "command": [
+        "gh",
+        "api",
+        "repos/ajhahnde/opaal/tags"
+      ],
+      "exit_status": 0,
+      "expected_exit_status": 0,
+      "name": "target-tags",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    },
+    {
+      "command": [
+        "gh",
+        "api",
+        "repos/ajhahnde/opaal/releases"
+      ],
+      "exit_status": 0,
+      "expected_exit_status": 0,
+      "name": "target-releases",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    },
+    {
+      "command": [
+        "curl",
+        "--silent",
+        "--show-error",
+        "--user-agent",
+        "opaal-transition-verifier/1.0 (+https://github.com/ajhahnde/opaal)",
+        "--output",
+        "/dev/null",
+        "--write-out",
+        "%{http_code}",
+        "https://crates.io/api/v1/crates/opaal-syntax/1.0.0-alpha.1"
+      ],
+      "exit_status": 0,
+      "expected_exit_status": 0,
+      "name": "unpublished-crate-opaal-syntax",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout_sha256": "6b3c238ebcf1f3c07cf0e556faa82c6b8fe96840ff4b6b7e9962a2d855843a0b"
+    },
+    {
+      "command": [
+        "curl",
+        "--silent",
+        "--show-error",
+        "--user-agent",
+        "opaal-transition-verifier/1.0 (+https://github.com/ajhahnde/opaal)",
+        "--output",
+        "/dev/null",
+        "--write-out",
+        "%{http_code}",
+        "https://crates.io/api/v1/crates/opaal-migrate/1.0.0-alpha.1"
+      ],
+      "exit_status": 0,
+      "expected_exit_status": 0,
+      "name": "unpublished-crate-opaal-migrate",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout_sha256": "6b3c238ebcf1f3c07cf0e556faa82c6b8fe96840ff4b6b7e9962a2d855843a0b"
+    },
+    {
+      "command": [
+        "curl",
+        "--silent",
+        "--show-error",
+        "--user-agent",
+        "opaal-transition-verifier/1.0 (+https://github.com/ajhahnde/opaal)",
+        "--output",
+        "/dev/null",
+        "--write-out",
+        "%{http_code}",
+        "https://crates.io/api/v1/crates/opaal-runtime/1.0.0-alpha.1"
+      ],
+      "exit_status": 0,
+      "expected_exit_status": 0,
+      "name": "unpublished-crate-opaal-runtime",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout_sha256": "6b3c238ebcf1f3c07cf0e556faa82c6b8fe96840ff4b6b7e9962a2d855843a0b"
+    },
+    {
+      "command": [
+        "curl",
+        "--silent",
+        "--show-error",
+        "--user-agent",
+        "opaal-transition-verifier/1.0 (+https://github.com/ajhahnde/opaal)",
+        "--output",
+        "/dev/null",
+        "--write-out",
+        "%{http_code}",
+        "https://crates.io/api/v1/crates/opaal-lsp/1.0.0-alpha.1"
+      ],
+      "exit_status": 0,
+      "expected_exit_status": 0,
+      "name": "unpublished-crate-opaal-lsp",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout_sha256": "6b3c238ebcf1f3c07cf0e556faa82c6b8fe96840ff4b6b7e9962a2d855843a0b"
+    },
+    {
+      "command": [
+        "curl",
+        "--silent",
+        "--show-error",
+        "--user-agent",
+        "opaal-transition-verifier/1.0 (+https://github.com/ajhahnde/opaal)",
+        "--output",
+        "/dev/null",
+        "--write-out",
+        "%{http_code}",
+        "https://crates.io/api/v1/crates/opaal-platform/1.0.0-alpha.1"
+      ],
+      "exit_status": 0,
+      "expected_exit_status": 0,
+      "name": "unpublished-crate-opaal-platform",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout_sha256": "6b3c238ebcf1f3c07cf0e556faa82c6b8fe96840ff4b6b7e9962a2d855843a0b"
+    },
+    {
+      "command": [
+        "curl",
+        "--silent",
+        "--show-error",
+        "--user-agent",
+        "opaal-transition-verifier/1.0 (+https://github.com/ajhahnde/opaal)",
+        "--output",
+        "/dev/null",
+        "--write-out",
+        "%{http_code}",
+        "https://crates.io/api/v1/crates/opaal-platform-posix/1.0.0-alpha.1"
+      ],
+      "exit_status": 0,
+      "expected_exit_status": 0,
+      "name": "unpublished-crate-opaal-platform-posix",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout_sha256": "6b3c238ebcf1f3c07cf0e556faa82c6b8fe96840ff4b6b7e9962a2d855843a0b"
+    },
+    {
+      "command": [
+        "curl",
+        "--silent",
+        "--show-error",
+        "--user-agent",
+        "opaal-transition-verifier/1.0 (+https://github.com/ajhahnde/opaal)",
+        "--output",
+        "/dev/null",
+        "--write-out",
+        "%{http_code}",
+        "https://crates.io/api/v1/crates/opaal-cli/1.0.0-alpha.1"
+      ],
+      "exit_status": 0,
+      "expected_exit_status": 0,
+      "name": "unpublished-crate-opaal-cli",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout_sha256": "6b3c238ebcf1f3c07cf0e556faa82c6b8fe96840ff4b6b7e9962a2d855843a0b"
+    },
+    {
+      "command": [
+        "curl",
+        "--silent",
+        "--show-error",
+        "--user-agent",
+        "opaal-transition-verifier/1.0 (+https://github.com/ajhahnde/opaal)",
+        "--output",
+        "/dev/null",
+        "--write-out",
+        "%{http_code}",
+        "https://crates.io/api/v1/crates/opaal-fuzz/1.0.0-alpha.1"
+      ],
+      "exit_status": 0,
+      "expected_exit_status": 0,
+      "name": "unpublished-crate-opaal-fuzz",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout_sha256": "6b3c238ebcf1f3c07cf0e556faa82c6b8fe96840ff4b6b7e9962a2d855843a0b"
+    }
+  ],
+  "public_tip": null,
+  "schema": 1,
+  "source_tip": "6b010a66e9ef9df125ff599e6a242eaf8fce85fc",
+  "success": true
+}

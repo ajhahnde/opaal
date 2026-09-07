@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Measure the bounded Flash host performance contract and retain raw samples."""
+"""Measure the bounded OPAAL host performance contract and retain raw samples."""
 
 from __future__ import annotations
 
@@ -23,7 +23,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 CONTRACT_PATH = Path(__file__).with_name("contract-v1.toml")
-RESULT_SCHEMA = "flash-performance-result-v1"
+RESULT_SCHEMA = "opaal-performance-result-v1"
 PROMPT = b">> "
 CSI_SEQUENCE = re.compile(rb"\x1b\[[0-?]*[ -/]*[@-~]")
 DSR_QUERY = b"\x1b[6n"
@@ -46,23 +46,6 @@ def parse_args() -> argparse.Namespace:
 
 def digest(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
-
-
-def automation_runtime() -> Path:
-    selected = os.environ.get("FLASH_AUTOMATION_RUNTIME")
-    if not selected:
-        raise SystemExit(
-            "FLASH_AUTOMATION_RUNTIME must select the independent Flash "
-            "automation runtime"
-        )
-    runtime = Path(selected).expanduser()
-    if not runtime.is_absolute():
-        runtime = (Path.cwd() / runtime).resolve()
-    if not runtime.is_file() or not os.access(runtime, os.X_OK):
-        raise SystemExit(
-            f"FLASH_AUTOMATION_RUNTIME is not an executable file: {runtime}"
-        )
-    return runtime
 
 
 def pinned_tool(name: str) -> Path:
@@ -122,7 +105,7 @@ def first_prompt(binary: Path, *, cwd: Path, env: dict[str, str]) -> int:
         os.chdir(cwd)
         os.execve(
             binary,
-            [str(binary), "--no-config", "--no-history"],
+            [str(binary)],
             env,
         )
     captured = bytearray()
@@ -141,7 +124,7 @@ def first_prompt(binary: Path, *, cwd: Path, env: dict[str, str]) -> int:
                 transcript = CSI_SEQUENCE.sub(b"", bytes(captured)).decode(
                     errors="replace"
                 )
-                raise RuntimeError(f"fsh exited before the first prompt: {transcript}")
+                raise RuntimeError(f"opaal exited before the first prompt: {transcript}")
             captured.extend(chunk)
             observed_queries = bytes(captured).count(DSR_QUERY)
             while answered_queries < observed_queries:
@@ -159,7 +142,7 @@ def first_prompt(binary: Path, *, cwd: Path, env: dict[str, str]) -> int:
             if time.monotonic() >= exit_deadline:
                 os.kill(pid, signal.SIGKILL)
                 _, status = os.waitpid(pid, 0)
-                raise RuntimeError("interactive fsh did not exit after `exit`")
+                raise RuntimeError("interactive opaal did not exit after `exit`")
             ready, _, _ = select.select([descriptor], [], [], 0.05)
             if ready:
                 try:
@@ -173,7 +156,7 @@ def first_prompt(binary: Path, *, cwd: Path, env: dict[str, str]) -> int:
                         os.write(descriptor, DSR_RESPONSE)
                         answered_queries += 1
         if status != 0:
-            raise RuntimeError(f"interactive fsh exited with wait status {status}")
+            raise RuntimeError(f"interactive opaal exited with wait status {status}")
         return elapsed
     finally:
         try:
@@ -282,7 +265,7 @@ def main() -> int:
     rustc = pinned_tool("rustc")
 
     if sys.platform not in {"linux", "darwin"}:
-        raise SystemExit("Flash host benchmarks support Linux and macOS")
+        raise SystemExit("OPAAL host benchmarks support Linux and macOS")
     if not args.no_build:
         build_environment = dict(os.environ)
         build_environment["RUSTC"] = str(rustc)
@@ -293,34 +276,32 @@ def main() -> int:
                 "--release",
                 "--locked",
                 "-p",
-                "flash-cli",
+                "opaal-cli",
                 "--bin",
-                "fsh",
+                "opaal",
                 "--bin",
-                "flash-benchmark-fixture",
+                "opaal-benchmark-fixture",
             ],
             cwd=ROOT,
             env=build_environment,
             check=True,
         )
-    binary = (ROOT / "target/release/fsh").resolve()
-    fixture = (ROOT / "target/release/flash-benchmark-fixture").resolve()
+    binary = (ROOT / "target/release/opaal").resolve()
+    fixture = (ROOT / "target/release/opaal-benchmark-fixture").resolve()
     if not binary.is_file() or not fixture.is_file():
         raise SystemExit("optimized benchmark binaries are missing")
 
-    with tempfile.TemporaryDirectory(prefix="flash-benchmark-") as temporary:
+    with tempfile.TemporaryDirectory(prefix="opaal-benchmark-") as temporary:
         work = Path(temporary)
         home = work / "home"
         run_dir = work / "run"
         completion_dir = work / "completion"
-        path_dir = work / "commands"
-        for directory in (home, run_dir, completion_dir, path_dir):
+        for directory in (home, run_dir, completion_dir):
             directory.mkdir()
         for index in range(256):
-            (completion_dir / f"benchmark-path-{index:04}").write_text("fixture\n")
-            command = path_dir / f"benchmark-command-{index:04}"
-            command.write_text("#!/bin/sh\nexit 0\n")
-            command.chmod(0o755)
+            candidate = completion_dir / f"benchmark-candidate-{index:04}"
+            candidate.write_text("not executed\n")
+            candidate.chmod(0o700)
 
         environment = dict(os.environ)
         environment.update(
@@ -329,27 +310,16 @@ def main() -> int:
                 "XDG_CONFIG_HOME": str(home / "config"),
                 "XDG_CACHE_HOME": str(home / "cache"),
                 "XDG_STATE_HOME": str(home / "state"),
-                "PATH": os.pathsep.join((str(path_dir), os.environ.get("PATH", ""))),
+                "PATH": "",
                 "LC_ALL": "C",
                 "LANG": "C",
                 "TERM": "xterm-256color",
             }
         )
         completion_environment = dict(environment)
-        completion_environment["PATH"] = str(path_dir)
-        empty_script = run_dir / "empty.fsh"
-        empty_script.write_text("")
-        command_count = int(settings["command_iterations"])
-        command_script = run_dir / "commands.fsh"
-        command_script.write_text("^/usr/bin/true\n" * command_count)
-        pipeline_bytes = int(settings["pipeline_bytes"])
-        pipeline_input = run_dir / "pipeline-input.bin"
-        with pipeline_input.open("wb") as output:
-            output.truncate(pipeline_bytes)
-        pipeline_script = run_dir / "pipeline.fsh"
-        pipeline_script.write_text(
-            f"^/bin/cat {pipeline_input} | ^/bin/cat | ^/usr/bin/wc -c\n"
-        )
+        completion_environment["PATH"] = str(completion_dir)
+        empty_script = run_dir / "minimal.opaal"
+        empty_script.write_text("language 1\n")
 
         measurements: list[dict[str, object]] = []
         cold_startup, _ = timed_run(
@@ -387,48 +357,6 @@ def main() -> int:
                 "ns",
                 prompt_samples,
                 warmups=prompt_warmups,
-            )
-        )
-
-        command_warmups = [
-            timed_run([str(binary), str(command_script)], cwd=run_dir, env=environment)[
-                0
-            ]
-            // command_count
-            for _ in range(warmups)
-        ]
-        command_samples = [
-            timed_run([str(binary), str(command_script)], cwd=run_dir, env=environment)[
-                0
-            ]
-            // command_count
-            for _ in range(samples)
-        ]
-        measurements.append(
-            record(
-                "host-command-overhead-warm",
-                "ns/command",
-                command_samples,
-                warmups=command_warmups,
-            )
-        )
-
-        def pipeline_sample() -> int:
-            elapsed, output = timed_run(
-                [str(binary), str(pipeline_script)], cwd=run_dir, env=environment
-            )
-            if str(pipeline_bytes).encode() not in output:
-                raise RuntimeError("pipeline fixture returned the wrong byte count")
-            return pipeline_bytes * 1_000_000_000 // elapsed
-
-        pipeline_warmups = [pipeline_sample() for _ in range(warmups)]
-        pipeline_samples = [pipeline_sample() for _ in range(samples)]
-        measurements.append(
-            record(
-                "host-pipeline-throughput-warm",
-                "bytes/second",
-                pipeline_samples,
-                warmups=pipeline_warmups,
             )
         )
 
@@ -505,18 +433,17 @@ def main() -> int:
         output = ROOT / "benchmarks/results" / f"{timestamp}-{args.profile}-host.json"
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(result, indent=2) + "\n")
-    repository_root = ROOT.parents[1]
     checker = [
-        automation_runtime(),
-        repository_root / "ci/flash_benchmarks.fsh",
+        sys.executable,
+        ROOT / "ci/check_benchmarks.py",
+        "--result",
+        output,
     ]
     if args.budget_environment:
         if args.profile != "qualification":
             raise SystemExit("budget evaluation requires the qualification profile")
-        checker.extend(["--evaluate", output, "--environment", args.budget_environment])
-    else:
-        checker.extend(["--result", output])
-    subprocess.run(checker, check=True, cwd=repository_root)
+        checker.extend(["--environment", args.budget_environment])
+    subprocess.run(checker, check=True, cwd=ROOT)
     print(f"benchmark result: {output}")
     for measurement in measurements:
         print(f"{measurement['case_id']}: {measurement['summary']}")

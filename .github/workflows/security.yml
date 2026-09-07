@@ -1,0 +1,76 @@
+name: Security
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 4 * * 1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  dependency-review:
+    name: dependency-review
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Reject newly introduced high-severity dependencies
+        uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+        with:
+          fail-on-severity: high
+
+  cargo-policy:
+    name: cargo-policy
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Advisories, licenses, bans, and sources
+        uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2
+        with:
+          command: check advisories bans licenses sources
+
+  repository-policy:
+    name: repository-policy
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Enforce pinned actions, read-only workflows, and public boundaries
+        run: python3 ci/check_public_boundary.py
+
+  required:
+    name: security-required
+    if: always()
+    needs: [dependency-review, cargo-policy, repository-policy]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Enforce every security job
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          DEPENDENCY_REVIEW_RESULT: ${{ needs.dependency-review.result }}
+          CARGO_POLICY_RESULT: ${{ needs.cargo-policy.result }}
+          REPOSITORY_POLICY_RESULT: ${{ needs.repository-policy.result }}
+        run: |
+          if [ "${CARGO_POLICY_RESULT}" != "success" ] ||
+             [ "${REPOSITORY_POLICY_RESULT}" != "success" ]; then
+            echo "cargo-policy=${CARGO_POLICY_RESULT} repository-policy=${REPOSITORY_POLICY_RESULT}"
+            exit 1
+          fi
+          if [ "${EVENT_NAME}" = "pull_request" ]; then
+            [ "${DEPENDENCY_REVIEW_RESULT}" = "success" ] || exit 1
+          else
+            [ "${DEPENDENCY_REVIEW_RESULT}" = "skipped" ] || exit 1
+          fi

@@ -1,0 +1,27 @@
+# spelling	kind
+action	keyword
+break	keyword
+catch	keyword
+continue	keyword
+def	keyword
+else	keyword
+enum	keyword
+export	keyword
+false	keyword
+for	keyword
+if	keyword
+import	keyword
+in	keyword
+language	keyword
+let	keyword
+match	keyword
+mut	keyword
+null	keyword
+return	keyword
+task	keyword
+throw	keyword
+true	keyword
+try	keyword
+type	keyword
+unset	keyword
+while	keyword

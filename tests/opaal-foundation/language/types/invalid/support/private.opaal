@@ -1,0 +1,10 @@
+language 1
+
+type Hidden = {
+    value: Int,
+}
+
+enum HiddenChoice {
+    Some(Int),
+    None,
+}

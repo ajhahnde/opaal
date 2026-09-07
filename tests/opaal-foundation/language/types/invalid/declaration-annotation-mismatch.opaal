@@ -1,0 +1,4 @@
+language 1
+
+let value: Int = "wrong"
+$value

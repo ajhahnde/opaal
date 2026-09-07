@@ -1,0 +1,40 @@
+# class	path	diagnostic
+complete	complete/domain-types.opaal	-
+complete	complete/closure-result.opaal	-
+complete	complete/list-and-record-patterns.opaal	-
+complete	complete/generic-inference.opaal	-
+complete	complete/cross-module-main.opaal	-
+complete	complete/reexport-main.opaal	-
+complete	complete/expected-generic-results.opaal	-
+complete	complete/destructured-exports.opaal	-
+invalid	invalid/ambiguous-generic.opaal	SIG010
+invalid	invalid/closure-result-mismatch.opaal	SIG005
+invalid	invalid/conflicting-inference.opaal	SIG004
+invalid	invalid/empty-list-inference.opaal	SIG010
+invalid	invalid/equal-constraint.opaal	SIG011
+invalid	invalid/explicit-generic-arity.opaal	SIG009
+invalid	invalid/explicit-generic-mismatch.opaal	SIG004
+invalid	invalid/guard-not-bool.opaal	SIG012
+invalid	invalid/invariant-nominal.opaal	SIG004
+invalid	invalid/non-exhaustive.opaal	SIG013
+invalid	invalid/ordered-constraint.opaal	SIG011
+invalid	invalid/rest-not-last.opaal	OP1000
+invalid	invalid/dynamic-inference.opaal	SIG010
+invalid	invalid/cross-module-invariance.opaal	SIG004
+invalid	invalid/duplicate-record-field.opaal	SIG014
+invalid	invalid/unknown-record-field.opaal	SIG015
+invalid	invalid/missing-record-field.opaal	SIG016
+invalid	invalid/private-nominal.opaal	SIG001
+invalid	invalid/private-variant.opaal	SIG001
+invalid	invalid/static-destructuring-mismatch.opaal	SIG017
+invalid	invalid/static-parameter-pattern-mismatch.opaal	SIG017
+invalid	invalid/unreachable-match.opaal	SIG018
+invalid	invalid/ambiguous-variant.opaal	SIG010
+invalid	invalid/declaration-annotation-mismatch.opaal	SIG019
+invalid	invalid/destructured-alias-conflict.opaal	MOD011
+runtime-invalid	invalid/destructuring-mismatch.opaal	value does not match the pattern
+runtime-invalid	invalid/generic-result-boundary.opaal	function result expects Int, found string
+runtime-invalid	invalid/cross-module-pattern-identity.opaal	value does not match the pattern
+runtime-invalid	invalid/dynamic-record-constraint.opaal	does not satisfy `Equal`
+runtime-invalid	invalid/dynamic-record-field.opaal	nominal record field `right` expects `String`, found int
+runtime-invalid	invalid/dynamic-variant-constraint.opaal	does not satisfy `Equal`
