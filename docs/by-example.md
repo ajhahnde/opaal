@@ -1,11 +1,9 @@
 # OPAAL by example
 
 The checked-in [`language-foundation.opaal`](../examples/language-foundation.opaal)
-demonstrates the pure language 1 surface:
+demonstrates the pure source surface:
 
 ```opaal
-language 1
-
 import std::value as value
 
 enum Selection[T] {
@@ -35,20 +33,14 @@ target/debug/opaal check examples/language-foundation.opaal
 target/debug/opaal examples/language-foundation.opaal
 ```
 
-All three successful non-interactive commands are silent. The runtime retains
-the final `Int(2)` for an embedding caller; it does not implicitly serialize a
-language value to stdout.
+All three successful non-interactive commands are silent. The embedding API
+retains the final `Int(2)` rather than serializing a language value to stdout.
 
-The example shows four important rules:
+The example uses qualified module aliases, immutable nominal variants, generic
+list patterns, and the shared `std::value::length` operation descriptor used by
+checking, execution, help, completion, hover, and signature help.
 
-- every module declares `language 1`;
-- imports use qualified aliases and preserve canonical module identity;
-- nominal variants and generic list patterns keep their declared types; and
-- `std::value::length` uses the same compiled descriptor in checking,
-  execution, help, completion, hover, and signature help.
-
-Run `target/debug/opaal` in a terminal for the interactive client. Interactive
-cells preselect OPAAL language 1 and omit the file directive:
+Running `target/debug/opaal` in a terminal starts the interactive client:
 
 ```opaal
 import std::value as value
@@ -56,12 +48,8 @@ value::length(["build", "test"])
 help value::length
 ```
 
-The first expression is presented as `2`; help renders the same operation
-descriptor used by static analysis and execution.
-
-Effectful examples are deliberately absent. A source such as
-`^touch marker` is rejected or refused before process access. `opaal plan`
-similarly returns `PLAN004` until a later, separately reviewed authority and
+Effectful source such as `^touch marker` is rejected or refused before process
+access. `opaal plan` returns `PLAN004` until a separately designed authority and
 planning contract exists.
 
-[← Documentation index](README.md) · [Language 1 foundation →](opaal-language-1-foundation.md)
+[← Documentation index](README.md) · [Language foundation →](language-foundation.md)

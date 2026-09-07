@@ -141,22 +141,22 @@ impl Server {
 }
 
 #[test]
-fn opaal_protocol_launcher_selects_language_one_before_document_open() {
+fn opaal_protocol_launcher_accepts_directive_free_documents() {
     let directory = TempDirectory::new();
     let uri = directory.uri("main.opaal");
     let mut server = Server::start_binary(OPAAL_SERVER);
     server.initialize();
     server.open(&uri, 1, "let answer = 42\n");
 
-    let missing = wait_for_diagnostics(&mut server, &uri, 1);
-    assert_eq!(missing["params"]["diagnostics"][0]["code"], "OP2001");
+    let initial = wait_for_diagnostics(&mut server, &uri, 1);
+    assert_eq!(initial["params"]["diagnostics"], json!([]));
 
     server.send(json!({
         "jsonrpc": "2.0",
         "method": "textDocument/didChange",
         "params": {
             "textDocument": {"uri": uri.as_str(), "version": 2},
-            "contentChanges": [{"text": "language 1\nlet answer = 42\n"}]
+            "contentChanges": [{"text": "let answer = 42\n"}]
         }
     }));
     let valid = wait_for_diagnostics(&mut server, &uri, 2);
@@ -197,7 +197,7 @@ fn executable_serves_overlays_diagnostics_queries_and_clean_shutdown() {
     let uri = directory.uri("main.opaal");
     let mut server = Server::start();
     server.initialize();
-    server.open(&uri, 1, "language 1\nlet broken =\n");
+    server.open(&uri, 1, "let broken =\n");
 
     let diagnostics = wait_for_diagnostics(&mut server, &uri, 1);
     assert!(
@@ -212,13 +212,13 @@ fn executable_serves_overlays_diagnostics_queries_and_clean_shutdown() {
         "method": "textDocument/didChange",
         "params": {
             "textDocument": {"uri": uri.as_str(), "version": 2},
-            "contentChanges": [{"text": "language 1\nlet answer = 42\n$answer\n"}]
+            "contentChanges": [{"text": "let answer = 42\n$answer\n"}]
         }
     }));
     let cleared = wait_for_diagnostics(&mut server, &uri, 2);
     assert_eq!(cleared["params"]["diagnostics"], json!([]));
 
-    server.send(position_request(2, "textDocument/hover", &uri, 2, 2));
+    server.send(position_request(2, "textDocument/hover", &uri, 1, 2));
     let hover = server.receive_response(2);
     assert!(
         hover["result"]["contents"]["value"]
@@ -243,7 +243,7 @@ fn executable_serves_overlays_diagnostics_queries_and_clean_shutdown() {
 fn cancellation_and_document_changes_terminate_each_request_once() {
     let directory = TempDirectory::new();
     let uri = directory.uri("large.opaal");
-    let source = "language 1\n".to_owned()
+    let source = "".to_owned()
         + &(0..20_000)
             .map(|index| format!("let value_{index} = {index}\n"))
             .collect::<String>();
@@ -268,7 +268,7 @@ fn cancellation_and_document_changes_terminate_each_request_once() {
         "method": "textDocument/didChange",
         "params": {
             "textDocument": {"uri": uri.as_str(), "version": 2},
-            "contentChanges": [{"text": "language 1\nlet current = 1\n"}]
+            "contentChanges": [{"text": "let current = 1\n"}]
         }
     }));
     assert_eq!(server.receive_response(11)["error"]["code"], -32801);
@@ -286,7 +286,7 @@ fn analysis_never_executes_effectful_source() {
     let uri = directory.uri("effects.opaal");
     let marker = directory.path("must-not-exist");
     let source = format!(
-        "language 1\ncd '/'\nexport OPAAL_LSP_EFFECT = 'forbidden'\n^/usr/bin/touch '{}'\necho forbidden > '{}'\n^/bin/sleep 1 &\n",
+        "cd '/'\nexport OPAAL_LSP_EFFECT = 'forbidden'\n^/usr/bin/touch '{}'\necho forbidden > '{}'\n^/bin/sleep 1 &\n",
         marker.display(),
         marker.display()
     );

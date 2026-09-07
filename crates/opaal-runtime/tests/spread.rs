@@ -11,7 +11,7 @@ use opaal_runtime::eval::{ExpandedWord, RuntimeErrorKind, expand_spread};
 use opaal_runtime::{BindingMutability, ScopeError, ScopeStack, Table, Value};
 use opaal_syntax::{
     CommandItemKind, CommandStage, ParseOutcome, SourceFile, SourceId, Span, StageKind,
-    StatementKind, VariableReference, parse_opaal_submission,
+    StatementKind, VariableReference, parse_opaal,
 };
 
 fn source(text: &str) -> SourceFile {
@@ -19,7 +19,7 @@ fn source(text: &str) -> SourceFile {
 }
 
 fn command(file: &SourceFile) -> CommandStage {
-    let script = match parse_opaal_submission(file) {
+    let script = match parse_opaal(file) {
         ParseOutcome::Complete(script) => script,
         other => panic!("source did not parse: {other:?}"),
     };

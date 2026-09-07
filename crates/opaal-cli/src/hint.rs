@@ -1,6 +1,6 @@
 //! Editor-neutral history autosuggestions with bounded synchronous work.
 
-use opaal_syntax::{ParseOutcome, SourceFile, SourceId, parse_opaal_submission};
+use opaal_syntax::{ParseOutcome, SourceFile, SourceId, parse_opaal};
 
 /// Maximum edit-buffer size considered for an inline hint.
 pub const MAX_HINT_BUFFER_BYTES: usize = 4_096;
@@ -66,10 +66,7 @@ impl HintEngine {
         }
 
         let source_file = SourceFile::new(SourceId::new(0), "<interactive>", source);
-        if matches!(
-            parse_opaal_submission(&source_file),
-            ParseOutcome::Invalid(_)
-        ) {
+        if matches!(parse_opaal(&source_file), ParseOutcome::Invalid(_)) {
             return None;
         }
 

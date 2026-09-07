@@ -1,4 +1,3 @@
-language 1
 
 def choose[T](left: T, right: T) -> T {
     return $left

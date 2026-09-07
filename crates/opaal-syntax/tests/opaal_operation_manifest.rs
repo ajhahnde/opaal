@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
 
 use opaal_syntax::{
-    ExpressionKind, FormatOutcome, SourceFile, SourceId, StageKind, VersionedParseOutcome,
+    ExpressionKind, FormatOutcome, ParseOutcome, SourceFile, SourceId, StageKind,
     format_source_opaal, parse_opaal,
 };
 
@@ -10,12 +10,12 @@ fn qualified_opaal_pipeline_operation_is_an_expression_stage_and_formats_idempot
     let source = SourceFile::new(
         SourceId::new(920),
         "operation.opaal",
-        "language 1\n\n[1, 2] | value::length\n",
+        "\n[1, 2] | value::length\n",
     );
-    let VersionedParseOutcome::Complete(parsed) = parse_opaal(&source) else {
+    let ParseOutcome::Complete(parsed) = parse_opaal(&source) else {
         panic!("the opaal operation pipeline must parse");
     };
-    let opaal_syntax::StatementKind::Job(job) = parsed.script().statements()[0].kind() else {
+    let opaal_syntax::StatementKind::Job(job) = parsed.statements()[0].kind() else {
         panic!("the operation pipeline is a job statement");
     };
     let pipeline = &job.chain.or_terms()[0].and_terms()[0];

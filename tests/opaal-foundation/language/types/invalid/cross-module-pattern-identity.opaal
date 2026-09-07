@@ -1,4 +1,3 @@
-language 1
 
 import '../complete/support/model.opaal' as model
 import '../complete/support/shadow.opaal' as shadow

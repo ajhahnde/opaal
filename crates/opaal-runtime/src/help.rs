@@ -186,7 +186,7 @@ pub enum HelpSignature {
 pub enum HelpNamespace {
     /// A canonical executable built-in.
     Core { lifecycle: CommandLifecycle },
-    /// An executable migration spelling backed by a canonical built-in.
+    /// An executable compatibility alias backed by a canonical built-in.
     Alias {
         canonical_name: String,
         lifecycle: CommandLifecycle,
@@ -584,7 +584,7 @@ mod tests {
     use std::fmt;
     use std::sync::Arc;
 
-    use opaal_syntax::{ParseOutcome, SourceId, parse_opaal_submission};
+    use opaal_syntax::{ParseOutcome, SourceId, parse_opaal};
 
     use super::*;
     use crate::command::{CommandLifecycle, CommandNamespaceEntry};
@@ -630,7 +630,7 @@ mod tests {
     }
 
     fn inspected(source: &SourceFile, name: &str) -> FunctionInspection {
-        let ParseOutcome::Complete(script) = parse_opaal_submission(source) else {
+        let ParseOutcome::Complete(script) = parse_opaal(source) else {
             panic!("test function source must parse");
         };
         let types = RuntimeBindingTypes::analyze_repl_source(

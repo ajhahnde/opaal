@@ -1,4 +1,3 @@
-language 1
 
 type Hidden = {
     value: Int,

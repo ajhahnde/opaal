@@ -2,7 +2,6 @@
 resolver = "3"
 members = [
     "crates/opaal-syntax",
-    "crates/opaal-migrate",
     "crates/opaal-runtime",
     "crates/opaal-lsp",
     "crates/opaal-platform",

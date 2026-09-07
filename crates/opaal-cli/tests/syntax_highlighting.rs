@@ -2,7 +2,7 @@
 #![cfg(any(target_os = "macos", target_os = "linux"))]
 
 use opaal_cli::highlight::{HighlightKind, SyntaxHighlighter};
-use opaal_syntax::{ParseOutcome, SourceFile, SourceId, parse_opaal_submission};
+use opaal_syntax::{ParseOutcome, SourceFile, SourceId, parse_opaal};
 
 #[test]
 fn complete_source_uses_stable_semantic_categories_without_changing_text() {
@@ -29,10 +29,7 @@ fn complete_source_uses_stable_semantic_categories_without_changing_text() {
 fn incomplete_multiline_source_keeps_token_styles_without_error_coloring() {
     let source = "if true {\n    echo \"💡 $name";
     let parsed = SourceFile::new(SourceId::new(1), "<test>", source);
-    assert!(matches!(
-        parse_opaal_submission(&parsed),
-        ParseOutcome::Incomplete(_)
-    ));
+    assert!(matches!(parse_opaal(&parsed), ParseOutcome::Incomplete(_)));
 
     let segments = SyntaxHighlighter::new().highlight(source);
     assert_lossless(source, &segments);
@@ -51,10 +48,7 @@ fn incomplete_multiline_source_keeps_token_styles_without_error_coloring() {
 fn parser_and_lexer_errors_override_only_their_source_ranges() {
     let grammatical = "else echo still-visible";
     let parsed = SourceFile::new(SourceId::new(2), "<test>", grammatical);
-    assert!(matches!(
-        parse_opaal_submission(&parsed),
-        ParseOutcome::Invalid(_)
-    ));
+    assert!(matches!(parse_opaal(&parsed), ParseOutcome::Invalid(_)));
     let grammatical_segments = SyntaxHighlighter::new().highlight(grammatical);
     assert_lossless(grammatical, &grammatical_segments);
     assert_segment(&grammatical_segments, "else", HighlightKind::Invalid);

@@ -4,11 +4,11 @@ use opaal_runtime::ScopeError;
 use opaal_runtime::eval::{ControlKind, RuntimeError, RuntimeErrorKind, evaluate};
 use opaal_runtime::operation::OperationError;
 use opaal_runtime::{ScopeStack, Value};
-use opaal_syntax::{ParseOutcome, SourceFile, SourceId, parse_opaal_submission};
+use opaal_syntax::{ParseOutcome, SourceFile, SourceId, parse_opaal};
 
 fn run(source: &str) -> Result<Value, RuntimeError> {
     let file = SourceFile::new(SourceId::new(1), "test.opaal", source);
-    let script = match parse_opaal_submission(&file) {
+    let script = match parse_opaal(&file) {
         ParseOutcome::Complete(script) => script,
         other => panic!("source did not parse: {other:?}\n{source}"),
     };
@@ -60,8 +60,8 @@ fn double_quoted_values_interpolate_scalars_and_record_keys() {
         Value::string("OPAAL 1.0")
     );
     assert_eq!(
-        ok("let record = {\"display name\": \"Flash\"}\n$record[\"display name\"]"),
-        Value::string("Flash")
+        ok("let record = {\"display name\": \"OPAAL\"}\n$record[\"display name\"]"),
+        Value::string("OPAAL")
     );
 }
 
@@ -222,7 +222,7 @@ fn deferred_forms_report_precise_errors_with_spans() {
 
     // The failing node's span is attached: the non-bool condition `3`.
     let file = SourceFile::new(SourceId::new(7), "span.opaal", "if 3 { }");
-    let ParseOutcome::Complete(script) = parse_opaal_submission(&file) else {
+    let ParseOutcome::Complete(script) = parse_opaal(&file) else {
         panic!("parse");
     };
     let mut scope = ScopeStack::new();

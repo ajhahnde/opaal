@@ -98,7 +98,7 @@ fn initialize_defaults_to_utf16_and_rejects_invalid_lifecycle_requests() {
         json!({"jsonrpc": "2.0", "id": 1, "method": "textDocument/hover", "params": {}}),
         json!({"jsonrpc": "2.0", "id": 2, "method": "initialize", "params": {"capabilities": {}}}),
         json!({"jsonrpc": "2.0", "id": 3, "method": "initialize", "params": {"capabilities": {}}}),
-        json!({"jsonrpc": "2.0", "id": 4, "method": "flash/unknown"}),
+        json!({"jsonrpc": "2.0", "id": 4, "method": "other/unknown"}),
         json!({"jsonrpc": "2.0", "id": 5, "method": "shutdown"}),
         json!({"jsonrpc": "2.0", "id": 6, "method": "textDocument/hover", "params": {}}),
         json!({"jsonrpc": "2.0", "method": "exit"}),

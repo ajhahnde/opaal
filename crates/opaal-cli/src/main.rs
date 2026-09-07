@@ -84,7 +84,7 @@ Usage:
   opaal plan [--] SOURCE
   opaal plan --help
 
-OPAAL language 1 planning is not implemented. The explicit .opaal source is
+OPAAL planning is not implemented. The explicit .opaal source is
 validated and refused before ambient host, environment, PATH, or process access.
 ";
 

@@ -319,7 +319,7 @@ def main() -> int:
         completion_environment = dict(environment)
         completion_environment["PATH"] = str(completion_dir)
         empty_script = run_dir / "minimal.opaal"
-        empty_script.write_text("language 1\n")
+        empty_script.write_text("")
 
         measurements: list[dict[str, object]] = []
         cold_startup, _ = timed_run(

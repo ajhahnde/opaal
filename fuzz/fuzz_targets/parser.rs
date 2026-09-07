@@ -1,6 +1,6 @@
 #![no_main]
 
-use opaal_syntax::{SourceFile, SourceId, parse_opaal, parse_opaal_submission};
+use opaal_syntax::{SourceFile, SourceId, parse_opaal};
 use libfuzzer_sys::fuzz_target;
 
 fuzz_target!(|data: &[u8]| {
@@ -8,5 +8,4 @@ fuzz_target!(|data: &[u8]| {
         return;
     };
     let _ = parse_opaal(&source);
-    let _ = parse_opaal_submission(&source);
 });

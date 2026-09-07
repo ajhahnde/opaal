@@ -4,8 +4,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use opaal_syntax::{
     BinaryOperator, CommandCaptureKind, CommandItemKind, ControlledParseOutcome, Expression,
-    ExpressionKind, ParseOutcome, SourceFile, SourceId, StageKind, StatementKind,
-    parse_opaal_submission, parse_opaal_submission_with_control,
+    ExpressionKind, ParseOutcome, SourceFile, SourceId, StageKind, StatementKind, parse_opaal,
+    parse_opaal_with_control,
 };
 
 #[test]
@@ -16,16 +16,12 @@ fn controlled_parsing_cancels_without_exposing_a_partial_parse_outcome() {
     let source = SourceFile::new(SourceId::new(799), "cancelled.opaal", text);
     let polls = AtomicUsize::new(0);
 
-    let outcome = parse_opaal_submission_with_control(&source, &|| {
-        polls.fetch_add(1, Ordering::Relaxed) >= 32
-    });
+    let outcome =
+        parse_opaal_with_control(&source, &|| polls.fetch_add(1, Ordering::Relaxed) >= 32);
 
     assert_eq!(outcome, ControlledParseOutcome::Cancelled);
     assert!(polls.load(Ordering::Relaxed) >= 33);
-    assert!(matches!(
-        parse_opaal_submission(&source),
-        ParseOutcome::Complete(_)
-    ));
+    assert!(matches!(parse_opaal(&source), ParseOutcome::Complete(_)));
 }
 
 #[test]
@@ -50,7 +46,7 @@ fn structured_error_statements_retain_blocks_bindings_and_operands() {
 #[test]
 fn catch_without_try_is_rejected_at_its_reserved_keyword() {
     let source = SourceFile::new(SourceId::new(91), "catch.opaal", "catch error { null }");
-    let ParseOutcome::Invalid(diagnostics) = parse_opaal_submission(&source) else {
+    let ParseOutcome::Invalid(diagnostics) = parse_opaal(&source) else {
         panic!("orphan catch should be invalid");
     };
     assert_eq!(
@@ -183,7 +179,7 @@ fn mode_boundaries_and_newline_continuation_are_syntax_driven() {
     for invalid in ["$(let value = 1)\n", "^ spaced\n"] {
         let source = SourceFile::new(SourceId::new(901), "invalid-mode.opaal", invalid);
         assert!(
-            matches!(parse_opaal_submission(&source), ParseOutcome::Invalid(_)),
+            matches!(parse_opaal(&source), ParseOutcome::Invalid(_)),
             "{invalid:?}"
         );
     }
@@ -200,7 +196,7 @@ fn independent_statement_errors_are_reported_without_cascades() {
         "echo after\n",
     );
     let source = SourceFile::new(SourceId::new(902), "recovery.opaal", text);
-    let ParseOutcome::Invalid(diagnostics) = parse_opaal_submission(&source) else {
+    let ParseOutcome::Invalid(diagnostics) = parse_opaal(&source) else {
         panic!("expected invalid parse");
     };
 
@@ -241,7 +237,7 @@ fn recovery_respects_block_and_match_arm_boundaries() {
         "echo final\n",
     );
     let source = SourceFile::new(SourceId::new(903), "nested-recovery.opaal", text);
-    let ParseOutcome::Invalid(diagnostics) = parse_opaal_submission(&source) else {
+    let ParseOutcome::Invalid(diagnostics) = parse_opaal(&source) else {
         panic!("expected invalid parse");
     };
 
@@ -265,7 +261,7 @@ fn binary(expression: &Expression, operator: BinaryOperator) -> &opaal_syntax::B
 
 fn complete(text: &str) -> opaal_syntax::Script {
     let source = SourceFile::new(SourceId::new(900), "parser.opaal", text);
-    let ParseOutcome::Complete(script) = parse_opaal_submission(&source) else {
+    let ParseOutcome::Complete(script) = parse_opaal(&source) else {
         panic!("expected complete parse for {text:?}");
     };
     script

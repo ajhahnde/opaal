@@ -106,7 +106,7 @@ fn bounded_utf8_sources_preserve_syntax_invariants() {
             }
         }
 
-        let parsed = catch_unwind(AssertUnwindSafe(|| parse_opaal_submission(&source)))
+        let parsed = catch_unwind(AssertUnwindSafe(|| parse_opaal(&source)))
             .unwrap_or_else(|_| panic!("parser panicked for case {case} ({:?})", source.text()));
         match parsed {
             ParseOutcome::Complete(script) => SpanChecker::new(case, &source).script(&script),
@@ -277,12 +277,6 @@ impl<'source> SpanChecker<'source> {
     fn statement(&self, statement: &Statement) {
         self.span(statement.span());
         match statement.kind() {
-            StatementKind::Import(import) => {
-                for name in &import.names {
-                    self.identifier(*name);
-                }
-                self.span(import.path);
-            }
             StatementKind::ModuleImport(import) => {
                 self.span(import.source.span());
                 self.identifier(import.alias);

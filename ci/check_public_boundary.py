@@ -25,7 +25,6 @@ TEXT_SUFFIXES = {
     ".yml",
 }
 IGNORED_PARTS = {".git", "__pycache__", "target"}
-HISTORICAL_PREFIXES = {"history", "transition-evidence"}
 REQUIRED_POLICY_FILES = {
     ".github/dependabot.yml",
     ".github/workflows/ci.yml",
@@ -103,13 +102,15 @@ def audit(root: Path) -> list[str]:
         except UnicodeDecodeError:
             continue
 
-        is_historical = bool(path.parts and path.parts[0] in HISTORICAL_PREFIXES)
         is_validator = path in {
             Path("ci/check_public_boundary.py"),
-            Path("ci/check_transition.py"),
+            Path("ci/check_product.py"),
+            Path("ci/check_benchmarks.py"),
             Path("ci/tests/test_check_public_boundary.py"),
+            Path("ci/tests/test_check_product.py"),
+            Path("ci/tests/test_check_benchmarks.py"),
         }
-        if not is_historical and not is_validator:
+        if not is_validator:
             for label, pattern in PRIVATE_PATTERNS.items():
                 for match in pattern.finditer(text):
                     problems.append(

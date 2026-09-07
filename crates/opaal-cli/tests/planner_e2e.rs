@@ -16,7 +16,7 @@ fn fixture(name: &str, source: &str) -> PathBuf {
 
 #[test]
 fn opaal_planning_is_always_a_host_free_refusal() {
-    let source = fixture("refusal", "language 1\nlet value = 1\n");
+    let source = fixture("refusal", "let value = 1\n");
     let output = Command::new(env!("CARGO_BIN_EXE_opaal"))
         .args(["plan", source.to_str().unwrap()])
         .output()
@@ -26,12 +26,12 @@ fn opaal_planning_is_always_a_host_free_refusal() {
     assert!(output.stdout.is_empty());
     let stderr = String::from_utf8(output.stderr).unwrap();
     assert!(stderr.contains("error[PLAN004]"), "{stderr}");
-    assert!(stderr.contains("OPAAL 1 execution planning"), "{stderr}");
+    assert!(stderr.contains("OPAAL execution planning"), "{stderr}");
 }
 
 #[test]
-fn missing_directive_is_not_a_flash_planner_fallback() {
-    let source = fixture("missing-directive", "let value = 1\n");
+fn a_former_header_uses_the_ordinary_planning_route() {
+    let source = fixture("former-header", "language 1\nlet value = 1\n");
     let output = Command::new(env!("CARGO_BIN_EXE_opaal"))
         .args(["plan", source.to_str().unwrap()])
         .output()
@@ -40,8 +40,8 @@ fn missing_directive_is_not_a_flash_planner_fallback() {
     assert_eq!(output.status.code(), Some(1));
     assert!(output.stdout.is_empty());
     let stderr = String::from_utf8(output.stderr).unwrap();
-    assert!(stderr.contains("error[OP2001]"), "{stderr}");
-    assert!(!stderr.contains("error[FS"), "{stderr}");
+    assert!(stderr.contains("error[PLAN004]"), "{stderr}");
+    assert!(!stderr.contains("OP200"), "{stderr}");
 }
 
 #[test]
@@ -54,5 +54,4 @@ fn planner_help_names_only_the_opaal_boundary() {
     assert!(output.stderr.is_empty());
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.starts_with("Inspect the OPAAL planning boundary"));
-    assert!(!stdout.contains("Flash"));
 }

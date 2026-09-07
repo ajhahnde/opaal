@@ -17,8 +17,7 @@ use opaal_runtime::resolve::ExecutableProbe;
 use opaal_runtime::script::execute_module_program;
 use opaal_runtime::{BindingMutability, Environment, ScopeStack, Value};
 use opaal_syntax::{
-    CommandItemKind, ParseOutcome, SourceFile, SourceId, StageKind, StatementKind,
-    VersionedParseOutcome, parse_opaal, parse_opaal_submission,
+    CommandItemKind, ParseOutcome, SourceFile, SourceId, StageKind, StatementKind, parse_opaal,
 };
 
 struct FixtureModules;
@@ -130,7 +129,7 @@ fn pure_list_rest_then_explicit_spread_preserves_every_argument_exactly() {
         "build-arguments.opaal",
         fs::read_to_string(fixture_root().join("complete/build-arguments.opaal")).unwrap(),
     );
-    let VersionedParseOutcome::Complete(parsed) = parse_opaal(&source) else {
+    let ParseOutcome::Complete(parsed) = parse_opaal(&source) else {
         panic!("the build-argument fixture must parse");
     };
 
@@ -155,7 +154,7 @@ fn pure_list_rest_then_explicit_spread_preserves_every_argument_exactly() {
                 Value::list(arguments.iter().cloned().map(Value::string).collect()),
             )
             .unwrap();
-        let tail = evaluate(parsed.script(), &source, &mut scope).unwrap();
+        let tail = evaluate(&parsed, &source, &mut scope).unwrap();
         let expected = arguments.iter().skip(1).cloned().collect::<Vec<_>>();
         assert_eq!(
             tail,
@@ -203,7 +202,7 @@ fn expand_submission(
     scope: &mut ScopeStack,
 ) -> Result<Vec<opaal_runtime::eval::ExpandedWord>, opaal_runtime::eval::RuntimeError> {
     let source = SourceFile::new(SourceId::new(1_302), "spread.opaal", text);
-    let ParseOutcome::Complete(script) = parse_opaal_submission(&source) else {
+    let ParseOutcome::Complete(script) = parse_opaal(&source) else {
         panic!("the spread submission must parse");
     };
     let StatementKind::Job(job) = script.statements()[0].kind() else {

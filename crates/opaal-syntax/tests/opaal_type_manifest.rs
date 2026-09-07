@@ -4,8 +4,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use opaal_syntax::{
-    ExpressionKind, Pattern, SourceFile, SourceId, StatementKind, VersionedParseOutcome,
-    parse_opaal,
+    ExpressionKind, ParseOutcome, Pattern, SourceFile, SourceId, StatementKind, parse_opaal,
 };
 
 #[test]
@@ -24,7 +23,7 @@ fn complete_opaal_type_corpus_has_one_shared_ast() {
         }
         let source = fixture(fields[1], 700 + index as u32);
         assert!(
-            matches!(parse_opaal(&source), VersionedParseOutcome::Complete(_)),
+            matches!(parse_opaal(&source), ParseOutcome::Complete(_)),
             "{} must parse through the canonical opaal AST",
             fields[1]
         );
@@ -34,10 +33,10 @@ fn complete_opaal_type_corpus_has_one_shared_ast() {
 #[test]
 fn domain_fixture_retains_generic_variant_pattern_and_explicit_call_shapes() {
     let source = fixture("complete/domain-types.opaal", 750);
-    let VersionedParseOutcome::Complete(parsed) = parse_opaal(&source) else {
+    let ParseOutcome::Complete(parsed) = parse_opaal(&source) else {
         panic!("the domain fixture must parse");
     };
-    let statements = parsed.script().statements();
+    let statements = parsed.statements();
 
     let StatementKind::NominalType(record) = statements[0].kind() else {
         panic!("the first declaration must be a nominal record");
@@ -89,11 +88,10 @@ fn domain_fixture_retains_generic_variant_pattern_and_explicit_call_shapes() {
 #[test]
 fn closure_result_and_destructuring_forms_have_dedicated_nodes() {
     let closure_source = fixture("complete/closure-result.opaal", 760);
-    let VersionedParseOutcome::Complete(closure_parse) = parse_opaal(&closure_source) else {
+    let ParseOutcome::Complete(closure_parse) = parse_opaal(&closure_source) else {
         panic!("the closure fixture must parse");
     };
-    let StatementKind::Declaration(declaration) = closure_parse.script().statements()[0].kind()
-    else {
+    let StatementKind::Declaration(declaration) = closure_parse.statements()[0].kind() else {
         panic!("the closure must be bound");
     };
     let ExpressionKind::Closure(closure) = declaration.value.kind() else {
@@ -105,14 +103,14 @@ fn closure_result_and_destructuring_forms_have_dedicated_nodes() {
     );
 
     let pattern_source = fixture("complete/list-and-record-patterns.opaal", 761);
-    let VersionedParseOutcome::Complete(pattern_parse) = parse_opaal(&pattern_source) else {
+    let ParseOutcome::Complete(pattern_parse) = parse_opaal(&pattern_source) else {
         panic!("the destructuring fixture must parse");
     };
-    let StatementKind::Declaration(record) = pattern_parse.script().statements()[1].kind() else {
+    let StatementKind::Declaration(record) = pattern_parse.statements()[1].kind() else {
         panic!("the record destructuring must be a declaration");
     };
     assert!(matches!(record.pattern, Pattern::NominalRecord(_)));
-    let StatementKind::Declaration(list) = pattern_parse.script().statements()[2].kind() else {
+    let StatementKind::Declaration(list) = pattern_parse.statements()[2].kind() else {
         panic!("the list destructuring must be a declaration");
     };
     let Pattern::List(list) = &list.pattern else {
@@ -123,15 +121,11 @@ fn closure_result_and_destructuring_forms_have_dedicated_nodes() {
 
 #[test]
 fn name_followed_by_brackets_remains_an_index_without_a_call() {
-    let source = SourceFile::new(
-        SourceId::new(762),
-        "index.opaal",
-        "language 1\nlet value = name[0]\n",
-    );
-    let VersionedParseOutcome::Complete(parsed) = parse_opaal(&source) else {
+    let source = SourceFile::new(SourceId::new(762), "index.opaal", "let value = name[0]\n");
+    let ParseOutcome::Complete(parsed) = parse_opaal(&source) else {
         panic!("a name followed by an index must parse as an index expression");
     };
-    let StatementKind::Declaration(declaration) = parsed.script().statements()[0].kind() else {
+    let StatementKind::Declaration(declaration) = parsed.statements()[0].kind() else {
         panic!("the index expression must be retained as a declaration value");
     };
     assert!(matches!(declaration.value.kind(), ExpressionKind::Index(_)));

@@ -1,4 +1,3 @@
-language 1
 
 import std::outcome as outcome
 import './support/facade.opaal' as api

@@ -313,7 +313,7 @@ fn fake_spawn_is_host_free_and_returns_an_owned_waitable_child() {
         OsString::from("fixture"),
         OsString::from("literal argument"),
     ];
-    let environment = [(OsString::from("FLASH"), OsString::from("shell"))];
+    let environment = [(OsString::from("OPAAL_TEST"), OsString::from("value"))];
     let request = SpawnRequest::new(
         Path::new("/does/not/need/to/exist"),
         &argv,

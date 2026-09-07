@@ -12,7 +12,6 @@ for	keyword
 if	keyword
 import	keyword
 in	keyword
-language	keyword
 let	keyword
 match	keyword
 mut	keyword

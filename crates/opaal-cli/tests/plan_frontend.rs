@@ -39,22 +39,23 @@ impl ModuleSourceLoader for Sources {
 
 #[test]
 fn valid_opaal_is_refused_before_any_host_capability_can_be_supplied() {
-    let sources = Sources::default().with("/project/main.opaal", "language 1\nlet value = 1\n");
+    let sources = Sources::default().with("/project/main.opaal", "let value = 1\n");
     let run = inspect_source(Path::new("/project/main.opaal"), &sources);
 
     assert!(!run.is_success());
     assert!(run.refusal().is_some());
     assert_eq!(run.rendered_issues().len(), 1);
     assert!(run.rendered_issues()[0].contains("error[PLAN004]"));
-    assert!(run.rendered_issues()[0].contains("OPAAL 1 execution planning"));
+    assert!(run.rendered_issues()[0].contains("OPAAL execution planning"));
 }
 
 #[test]
-fn missing_directive_never_falls_back_to_flash_analysis() {
-    let sources = Sources::default().with("/project/main.opaal", "let value = 1\n");
+fn a_former_header_uses_the_ordinary_planning_route() {
+    let sources = Sources::default().with("/project/main.opaal", "language 1\nlet value = 1\n");
     let run = inspect_source(Path::new("/project/main.opaal"), &sources);
 
-    assert!(run.refusal().is_none());
+    assert!(run.refusal().is_some());
     assert_eq!(run.rendered_issues().len(), 1);
-    assert!(run.rendered_issues()[0].contains("error[OP2001]"));
+    assert!(run.rendered_issues()[0].contains("error[PLAN004]"));
+    assert!(!run.rendered_issues()[0].contains("OP200"));
 }

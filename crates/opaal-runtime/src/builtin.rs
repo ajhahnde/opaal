@@ -9,7 +9,7 @@ use opaal_platform::{Platform, WorkingDirectoryRequest};
 use crate::command::{
     Carrier, CommandArgumentKind, CommandArgumentSchema, CommandClassification, CommandLifecycle,
     CommandNamespaceEntry, CommandOptionSchema, CommandOptionTerminator, CommandRegistry,
-    CommandSignature, OPAAL_LANGUAGE_NUMBER,
+    CommandSignature, OPAAL_TOOLCHAIN_MAJOR,
 };
 use crate::documentation::{CommandDocumentation, Documentation};
 use crate::eval::{RuntimeError, RuntimeErrorKind};
@@ -463,7 +463,7 @@ pub fn standard_registry() -> CommandRegistry {
             "Inspect built-in and visible function metadata without execution.",
         ),
     ];
-    CommandRegistry::try_from_entries(OPAAL_LANGUAGE_NUMBER, entries)
+    CommandRegistry::try_from_entries(OPAAL_TOOLCHAIN_MAJOR, entries)
         .expect("the standard command namespace manifest must be valid")
 }
 
@@ -495,7 +495,7 @@ fn documented(
             invocation,
             Documentation::new(summary),
         )),
-        CommandLifecycle::introduced(OPAAL_LANGUAGE_NUMBER),
+        CommandLifecycle::introduced(OPAAL_TOOLCHAIN_MAJOR),
     )
 }
 

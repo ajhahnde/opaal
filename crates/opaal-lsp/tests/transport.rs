@@ -4,7 +4,7 @@ use opaal_lsp::transport::{FrameError, read_frame, write_frame};
 
 #[test]
 fn framing_is_byte_exact_and_counts_utf8_body_bytes() {
-    let body = r#"{"jsonrpc":"2.0","id":1,"result":"Flash ⚡"}"#.as_bytes();
+    let body = r#"{"jsonrpc":"2.0","id":1,"result":"OPAAL ⚡"}"#.as_bytes();
     let mut framed = Vec::new();
 
     write_frame(&mut framed, body).expect("the response frame should be writable");

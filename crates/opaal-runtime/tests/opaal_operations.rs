@@ -323,7 +323,7 @@ fn operation_identity_overloads_help_and_budgeted_stream_share_one_descriptor() 
 fn golden_workflow_retains_int_two_in_the_embedding_api() {
     let source = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
-        .join("tests/opaal-foundation/opaal/source.opaal");
+        .join("tests/opaal-foundation/workflow/workspace/root.opaal");
     let modules = FixtureModules;
     let program = ModuleProgramLoader::new(&modules, &modules)
         .load(&source)

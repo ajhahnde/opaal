@@ -15,7 +15,7 @@ use std::io::{Read, Write};
 use std::time::Duration;
 
 use opaal_platform::{Platform, PlatformError};
-use opaal_syntax::{ParseOutcome, SourceFile, SourceId, parse_opaal_submission};
+use opaal_syntax::{ParseOutcome, SourceFile, SourceId, parse_opaal};
 
 use crate::completion::{CompletionCatalog, CompletionEngine};
 use crate::editor::{
@@ -158,7 +158,7 @@ impl<P: Platform, R: Read, W: Write + DrawnOutput> TerminalEditor<P, R, W> {
 /// session's normal diagnostic boundary receives the source unchanged.
 fn needs_continuation(source: &str) -> bool {
     let file = SourceFile::new(SourceId::new(0), "<interactive>", source);
-    let outcome = parse_opaal_submission(&file);
+    let outcome = parse_opaal(&file);
     matches!(outcome, ParseOutcome::Incomplete(_))
 }
 

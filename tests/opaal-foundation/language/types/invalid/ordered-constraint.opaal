@@ -1,4 +1,3 @@
-language 1
 
 def ordered_only[T: Ordered](value: T) -> T {
     return $value

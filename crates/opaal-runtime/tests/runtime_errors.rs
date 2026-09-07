@@ -9,12 +9,12 @@ use std::sync::Arc;
 use opaal_runtime::eval::{ErrorLabel, FrameCallee, RuntimeError, RuntimeErrorKind, evaluate};
 use opaal_runtime::operation;
 use opaal_runtime::{Duration, Record, ScopeStack, Status, Value};
-use opaal_syntax::{ParseOutcome, SourceFile, SourceId, parse_opaal_submission};
+use opaal_syntax::{ParseOutcome, SourceFile, SourceId, parse_opaal};
 
 /// Parses and evaluates `source`, returning the file so span text can be resolved.
 fn run(source: &str) -> (SourceFile, Result<Value, RuntimeError>) {
     let file = SourceFile::new(SourceId::new(1), "test.opaal", source);
-    let script = match parse_opaal_submission(&file) {
+    let script = match parse_opaal(&file) {
         ParseOutcome::Complete(script) => script,
         other => panic!("source did not parse: {other:?}\n{source}"),
     };

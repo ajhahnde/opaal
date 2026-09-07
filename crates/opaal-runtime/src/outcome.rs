@@ -13,7 +13,7 @@ use crate::seam::DownstreamOutcomeMetadata;
 pub enum RefusalReason {
     /// A known authority contract exists but did not grant the operation.
     Denied,
-    /// The selected host or language generation does not implement the operation.
+    /// The selected toolchain or host does not implement the operation.
     Unsupported,
     /// No executable operational contract can be established.
     Unknown,

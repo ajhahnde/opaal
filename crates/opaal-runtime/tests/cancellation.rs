@@ -11,12 +11,12 @@ use opaal_runtime::eval::{
     CancelReason, CancellationToken, Completion, evaluate_with_cancellation,
 };
 use opaal_runtime::{ScopeStack, Value};
-use opaal_syntax::{ParseOutcome, SourceFile, SourceId, parse_opaal_submission};
+use opaal_syntax::{ParseOutcome, SourceFile, SourceId, parse_opaal};
 
 /// Evaluates `source` under `token`, returning the file and the top-level outcome.
 fn run(source: &str, token: &CancellationToken) -> (SourceFile, Completion) {
     let file = SourceFile::new(SourceId::new(1), "test.opaal", source);
-    let script = match parse_opaal_submission(&file) {
+    let script = match parse_opaal(&file) {
         ParseOutcome::Complete(script) => script,
         other => panic!("source did not parse: {other:?}\n{source}"),
     };

@@ -9,7 +9,7 @@ use opaal_runtime::eval::{ExpandedWord, RuntimeErrorKind, expand_word};
 use opaal_runtime::{BindingMutability, ByteSize, Duration, ScopeError, ScopeStack, Value};
 use opaal_syntax::{
     CommandItemKind, CommandStage, ParseOutcome, SourceFile, SourceId, StageKind, StatementKind,
-    Word, parse_opaal_submission,
+    Word, parse_opaal,
 };
 
 fn source(text: &str) -> SourceFile {
@@ -18,7 +18,7 @@ fn source(text: &str) -> SourceFile {
 
 /// Parses one bare command statement and returns its command stage.
 fn command(file: &SourceFile) -> CommandStage {
-    let script = match parse_opaal_submission(file) {
+    let script = match parse_opaal(file) {
         ParseOutcome::Complete(script) => script,
         other => panic!("source did not parse: {other:?}"),
     };
@@ -100,7 +100,7 @@ fn double_quotes_decode_escapes_and_join_adjacent_parts() {
 fn scalar_interpolation_encodes_each_family_canonically() {
     let mut scope = ScopeStack::new();
     scope
-        .declare("name", BindingMutability::Immutable, Value::string("Flash"))
+        .declare("name", BindingMutability::Immutable, Value::string("OPAAL"))
         .unwrap();
     scope
         .declare("count", BindingMutability::Immutable, Value::Int(-7))
@@ -138,7 +138,7 @@ fn scalar_interpolation_encodes_each_family_canonically() {
     );
     assert_eq!(
         expand_in("show $name", &mut scope).unwrap().value(),
-        OsStr::new("Flash")
+        OsStr::new("OPAAL")
     );
     assert_eq!(
         expand_in("show $ratio", &mut scope).unwrap().value(),

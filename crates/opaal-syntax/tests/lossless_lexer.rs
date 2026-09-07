@@ -9,8 +9,8 @@ use opaal_syntax::{
 
 #[test]
 fn lexical_corpus_is_covered_exactly_and_makes_progress() {
-    let root = workspace_root().join("history/flash-v1/tests/golden/lexical");
-    let manifest = fs::read_to_string(root.join("manifest.tsv")).unwrap();
+    let root = workspace_root().join("tests/opaal-foundation/language/lexical");
+    let manifest = fs::read_to_string(root.join("corpus.tsv")).unwrap();
 
     for (index, row) in manifest.lines().enumerate() {
         if row.is_empty() || row.starts_with('#') {
@@ -74,7 +74,7 @@ fn lexical_corpus_is_covered_exactly_and_makes_progress() {
 
 #[test]
 fn word_parts_comments_and_continuations_remain_distinct_and_adjacent() {
-    let word_parts = lex_fixture("complete/word-parts.fsh");
+    let word_parts = lex_fixture("complete/word-parts.opaal");
     assert_token(&word_parts, "pre", TokenKind::Identifier);
     assert_token(&word_parts, "\"", TokenKind::DoubleQuoteStart);
     assert_token(&word_parts, "$name", TokenKind::Variable);
@@ -87,7 +87,7 @@ fn word_parts_comments_and_continuations_remain_distinct_and_adjacent() {
     let quote = token_with_text(&word_parts, "\"");
     assert!(pre.is_adjacent_to(quote));
 
-    let comments = lex_fixture("complete/comments.fsh");
+    let comments = lex_fixture("complete/comments.opaal");
     assert_eq!(
         token_with_text(&comments, "# a whole-line comment").kind(),
         TokenKind::Comment
@@ -98,7 +98,7 @@ fn word_parts_comments_and_continuations_remain_distinct_and_adjacent() {
     );
     assert_ne!(token_with_text(&comments, "#42").kind(), TokenKind::Comment);
 
-    let continuations = lex_fixture("complete/continuation.fsh");
+    let continuations = lex_fixture("complete/continuation.opaal");
     assert_eq!(
         continuations
             .tokens
@@ -111,18 +111,21 @@ fn word_parts_comments_and_continuations_remain_distinct_and_adjacent() {
 
 #[test]
 fn expansions_operators_numbers_keywords_and_delimiters_have_stable_kinds() {
-    let interpolation = lex_fixture("complete/interpolation.fsh");
+    let interpolation = lex_fixture("complete/interpolation.opaal");
     assert_token(&interpolation, "$name", TokenKind::Variable);
     assert_token(&interpolation, "${", TokenKind::BracedExpansionStart);
     assert_token(&interpolation, "$(", TokenKind::CommandSubstitutionStart);
     assert_token(&interpolation, "\\$", TokenKind::DoubleEscape);
 
-    let reserved = lex_fixture("complete/reserved-words.fsh");
+    let reserved = lex_fixture("complete/reserved-words.opaal");
     assert_token(&reserved, "let", TokenKind::Keyword(Keyword::Let));
     assert_token(&reserved, "import", TokenKind::Keyword(Keyword::Import));
     assert_token(&reserved, "null", TokenKind::Keyword(Keyword::Null));
 
-    let grammar = fixture_source("grammar/complete/literals-and-collections.fsh");
+    let grammar = source_text(
+        "literals-and-collections.opaal",
+        "let values = [null, true, false, 42, 0xff, 3.5, \"text\", 'exact']\n",
+    );
     let tokens = lex_opaal(&grammar);
     assert_token_in(
         &grammar,
@@ -149,7 +152,10 @@ fn expansions_operators_numbers_keywords_and_delimiters_have_stable_kinds() {
         TokenKind::Delimiter(Delimiter::LeftBracket),
     );
 
-    let operators = fixture_source("grammar/complete/operators.fsh");
+    let operators = source_text(
+        "operators.opaal",
+        "let range = 0..=10\nlet same = $left == $right\n",
+    );
     let tokens = lex_opaal(&operators);
     assert_token_in(
         &operators,
@@ -164,7 +170,10 @@ fn expansions_operators_numbers_keywords_and_delimiters_have_stable_kinds() {
         TokenKind::Operator(Operator::Equal),
     );
 
-    let redirects = fixture_source("grammar/complete/redirections.fsh");
+    let redirects = source_text(
+        "redirections.opaal",
+        "^build >> build.log 2>&1\n^build 2> errors.txt > output.txt\n",
+    );
     let tokens = lex_opaal(&redirects);
     assert_token_in(
         &redirects,
@@ -193,13 +202,17 @@ fn lex_fixture(relative: &str) -> LexFixture {
 
 fn fixture_source(relative: &str) -> SourceFile {
     let path = workspace_root()
-        .join("history/flash-v1/tests/golden")
+        .join("tests/opaal-foundation/language")
         .join(relative);
     SourceFile::new(
         SourceId::new(91),
         relative,
         fs::read_to_string(path).unwrap(),
     )
+}
+
+fn source_text(name: &str, text: &str) -> SourceFile {
+    SourceFile::new(SourceId::new(92), name, text)
 }
 
 fn assert_token(fixture: &LexFixture, text: &str, kind: TokenKind) {

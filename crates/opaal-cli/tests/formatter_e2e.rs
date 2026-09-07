@@ -51,7 +51,6 @@ fn formatter_help_and_usage_are_opaal_only() {
     assert!(stdout.starts_with("Check or rewrite OPAAL source formatting\n"));
     assert!(stdout.contains("opaal format --check [--] PATH..."));
     assert!(stdout.contains("regular .opaal files"));
-    assert!(!stdout.contains("Flash"));
 
     let misuse = opaal(["format", "--check"]);
     assert_eq!(misuse.status.code(), Some(2), "{misuse:?}");
@@ -61,7 +60,7 @@ fn formatter_help_and_usage_are_opaal_only() {
 #[test]
 fn check_is_silent_for_canonical_opaal_and_never_writes() {
     let temp = TempDir::new("check");
-    let source = temp.source("canonical.opaal", b"language 1\necho ready\n");
+    let source = temp.source("canonical.opaal", b"echo ready\n");
     let before = fs::read(&source).unwrap();
     let metadata = fs::metadata(&source).unwrap();
 
@@ -80,7 +79,7 @@ fn check_is_silent_for_canonical_opaal_and_never_writes() {
 #[test]
 fn write_formats_opaal_and_preserves_permissions() {
     let temp = TempDir::new("write");
-    let source = temp.source("changed.opaal", b"language 1\necho   'ready'");
+    let source = temp.source("changed.opaal", b"echo   'ready'");
     fs::set_permissions(&source, fs::Permissions::from_mode(0o751)).unwrap();
 
     let output = opaal([
@@ -91,7 +90,7 @@ fn write_formats_opaal_and_preserves_permissions() {
     assert!(output.status.success(), "{output:?}");
     assert!(output.stdout.is_empty());
     assert!(output.stderr.is_empty());
-    assert_eq!(fs::read(&source).unwrap(), b"language 1\necho 'ready'\n");
+    assert_eq!(fs::read(&source).unwrap(), b"echo 'ready'\n");
     assert_eq!(
         fs::metadata(source).unwrap().permissions().mode() & 0o777,
         0o751
@@ -99,12 +98,12 @@ fn write_formats_opaal_and_preserves_permissions() {
 }
 
 #[test]
-fn invalid_language_and_non_opaal_paths_are_rejected_without_writes() {
+fn invalid_source_and_non_opaal_paths_are_rejected_without_writes() {
     let temp = TempDir::new("identity");
-    let missing = temp.source("missing.opaal", b"echo   ready");
-    let legacy = temp.source("legacy.fsh", b"language 1\necho   ready");
+    let invalid = temp.source("invalid.opaal", b"| broken\n");
+    let legacy = temp.source("legacy.fsh", b"echo   ready");
 
-    for source in [&missing, &legacy] {
+    for source in [&invalid, &legacy] {
         let before = fs::read(source).unwrap();
         let output = opaal([
             OsString::from("format"),

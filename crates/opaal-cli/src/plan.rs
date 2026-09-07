@@ -4,9 +4,7 @@ use std::path::Path;
 
 use opaal_runtime::module::{ModuleCanonicalizer, ModuleProgramLoader, ModuleSourceLoader};
 use opaal_runtime::outcome::{Refusal, RefusalReason};
-use opaal_syntax::{
-    Diagnostic, Severity, detect_source_language, render_diagnostic, render_diagnostic_sources,
-};
+use opaal_syntax::{Diagnostic, Severity, render_diagnostic, render_diagnostic_sources};
 
 pub trait PlanFilesystem: ModuleCanonicalizer + ModuleSourceLoader {}
 
@@ -83,21 +81,14 @@ pub fn inspect_source(source_path: &Path, filesystem: &impl PlanFilesystem) -> P
         .sources()
         .source(root)
         .expect("the complete program retains its root source");
-    let span = match detect_source_language(source) {
-        opaal_syntax::LanguageDetection::Complete(directive) => directive.span(),
-        opaal_syntax::LanguageDetection::Invalid(_) => source
-            .span(0..0)
-            .expect("the beginning of a source is a valid span"),
-    };
-    let refusal = Refusal::new(
-        RefusalReason::Unsupported,
-        "OPAAL 1 execution planning",
-        span,
-    );
+    let span = source
+        .span(0..0)
+        .expect("the beginning of a source is a valid span");
+    let refusal = Refusal::new(RefusalReason::Unsupported, "OPAAL execution planning", span);
     let diagnostic = Diagnostic::new(
         Severity::Error,
         "PLAN004",
-        "OPAAL 1 execution planning requires a future authority and controlled-planning contract",
+        "OPAAL execution planning requires a future authority and controlled-planning contract",
     )
     .with_primary(span, "planning was refused before ambient host observation");
     PlanRun {

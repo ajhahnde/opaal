@@ -57,7 +57,7 @@ impl ModuleSourceLoader for BenchmarkSource {
 }
 
 fn opaal_resources(warmups: usize, samples: usize, statements: usize) -> Result<(), String> {
-    let mut text = String::from("language 1\n");
+    let mut text = String::from("");
     for index in 0..statements {
         text.push_str(&format!("let value_{index} = [{index}, {index}]\n"));
     }

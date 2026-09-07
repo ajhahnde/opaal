@@ -1,6 +1,6 @@
 //! Opaque metadata seams reserved for later execution and project owners.
 //!
-//! OPAAL language 1 freezes where authority, resource, action, project, and task
+//! OPAAL freezes where authority, resource, action, project, and task
 //! metadata attaches without defining those later-owned concepts. The current
 //! foundation can represent only an absent or unknown slot; it cannot create
 //! an identity, grant authority, schedule a deadline, or claim cleanup.

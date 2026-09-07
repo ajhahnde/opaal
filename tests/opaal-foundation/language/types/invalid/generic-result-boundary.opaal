@@ -1,4 +1,3 @@
-language 1
 
 def dynamic(value) {
     $value

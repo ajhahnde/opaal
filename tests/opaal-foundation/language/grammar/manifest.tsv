@@ -1,12 +1,9 @@
 # context	class	path	code
-module	complete	complete/directive-only.opaal	-
 module	complete	complete/leading-trivia.opaal	-
+module	complete	complete/declaration-first.opaal	-
+module	complete	complete/expression-first.opaal	-
 module	incomplete	incomplete/declaration-value.opaal	-
 module	incomplete	incomplete/open-block.opaal	-
-module	invalid	invalid/missing.opaal	OP2001
-module	invalid	invalid/late.opaal	OP2001
-module	invalid	invalid/malformed.opaal	OP2002
-module	invalid	invalid/unsupported.opaal	OP2003
-module	invalid	invalid/duplicate.opaal	OP2004
+module	invalid	invalid/leading-pipe.opaal	OP1000
 repl	complete	repl/complete.opaal	-
-repl	invalid	repl/directive.opaal	OP1000
+repl	invalid	invalid/leading-pipe.opaal	OP1000

@@ -44,7 +44,7 @@ fn opaal_source_budget_publishes_one_visible_incomplete_analysis_diagnostic() {
     let directory = TestDirectory::new();
     let uri = directory.uri("oversized.opaal");
     let mut workspace = Workspace::new();
-    let text = format!("language 1\n#{}\n", "x".repeat(8 * 1024 * 1024));
+    let text = format!("#{}\n", "x".repeat(8 * 1024 * 1024));
     workspace.open(uri.clone(), 1, text).unwrap();
 
     let analysis = workspace
@@ -72,7 +72,7 @@ fn unsaved_roots_and_imports_load_from_one_canonical_overlay_graph() {
         .open(
             root_uri.clone(),
             1,
-            "language 1\nimport './library.opaal' as library\nlet result = library::answer\nexport { result }\n"
+            "import './library.opaal' as library\nlet result = library::answer\nexport { result }\n"
                 .into(),
         )
         .unwrap();
@@ -80,7 +80,7 @@ fn unsaved_roots_and_imports_load_from_one_canonical_overlay_graph() {
         .open(
             dependency_uri.clone(),
             7,
-            "language 1\nlet answer = 42\nexport { answer }\n".into(),
+            "let answer = 42\nexport { answer }\n".into(),
         )
         .unwrap();
 
@@ -95,8 +95,8 @@ fn unsaved_roots_and_imports_load_from_one_canonical_overlay_graph() {
     assert_eq!(
         sources,
         [
-            "language 1\nimport './library.opaal' as library\nlet result = library::answer\nexport { result }\n",
-            "language 1\nlet answer = 42\nexport { answer }\n",
+            "import './library.opaal' as library\nlet result = library::answer\nexport { result }\n",
+            "let answer = 42\nexport { answer }\n",
         ]
     );
     assert!(
@@ -281,7 +281,7 @@ fn diagnostics_are_normalized_deduplicated_versioned_and_published_atomically() 
             main_uri.clone(),
             3,
             concat!(
-                "language 1\n",
+                "",
                 "import './library.opaal' as library\n",
                 "library::echo()\n",
                 "ls | ^cat\n",
@@ -295,14 +295,14 @@ fn diagnostics_are_normalized_deduplicated_versioned_and_published_atomically() 
         .open(
             consumer_uri.clone(),
             1,
-            "language 1\nimport './main.opaal' as main\nlet copy = main::marker\n".into(),
+            "import './main.opaal' as main\nlet copy = main::marker\n".into(),
         )
         .unwrap();
     workspace
         .open(
             library_uri.clone(),
             9,
-            "language 1\ndef echo(value: String) -> String { $value }\nexport { echo }\n".into(),
+            "def echo(value: String) -> String { $value }\nexport { echo }\n".into(),
         )
         .unwrap();
 
@@ -314,7 +314,7 @@ fn diagnostics_are_normalized_deduplicated_versioned_and_published_atomically() 
         .change(
             &consumer_uri,
             Some(2),
-            "language 1\nimport './main.opaal' as main\nlet copy = main::marker\n".into(),
+            "import './main.opaal' as main\nlet copy = main::marker\n".into(),
         )
         .unwrap();
     assert_eq!(
@@ -351,7 +351,7 @@ fn diagnostics_are_normalized_deduplicated_versioned_and_published_atomically() 
     );
 
     let signature = &document.diagnostics()[0];
-    assert_eq!(signature.range().start().line(), 2);
+    assert_eq!(signature.range().start().line(), 1);
     assert_eq!(
         signature.primary_annotation(),
         Some("expected 1 arguments, found 0")
@@ -371,7 +371,7 @@ fn diagnostics_are_normalized_deduplicated_versioned_and_published_atomically() 
             &main_uri,
             Some(4),
             concat!(
-                "language 1\n",
+                "",
                 "import './library.opaal' as library\n",
                 "library::echo('ok')\n",
                 "let marker = 1\n",
@@ -399,7 +399,7 @@ fn disk_dependency_diagnostics_omit_versions_and_are_cleared_after_invalidation(
     let directory = TestDirectory::new();
     let root_uri = directory.uri("main.opaal");
     let dependency_path = directory.path("library.opaal");
-    fs::write(&dependency_path, "language 1\nlet broken =\n").unwrap();
+    fs::write(&dependency_path, "let broken =\n").unwrap();
     let dependency_uri =
         DocumentUri::from_absolute_path(&fs::canonicalize(&dependency_path).unwrap()).unwrap();
     let mut workspace = Workspace::new();
@@ -407,7 +407,7 @@ fn disk_dependency_diagnostics_omit_versions_and_are_cleared_after_invalidation(
         .open(
             root_uri.clone(),
             1,
-            "language 1\nimport './library.opaal' as library\nlet root = 1\n".into(),
+            "import './library.opaal' as library\nlet root = 1\n".into(),
         )
         .unwrap();
 
@@ -424,12 +424,12 @@ fn disk_dependency_diagnostics_omit_versions_and_are_cleared_after_invalidation(
     assert_eq!(publication.documents()[0].version(), None);
     assert!(!publication.documents()[0].diagnostics().is_empty());
 
-    fs::write(&dependency_path, "language 1\nlet fixed = 1\n").unwrap();
+    fs::write(&dependency_path, "let fixed = 1\n").unwrap();
     workspace
         .change(
             &root_uri,
             Some(2),
-            "language 1\nimport './library.opaal' as library\nlet root = 1\n".into(),
+            "import './library.opaal' as library\nlet root = 1\n".into(),
         )
         .unwrap();
     let analysis = workspace

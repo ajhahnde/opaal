@@ -1,16 +1,14 @@
 # Fuzz targets
 
-The separate unpublished `opaal-fuzz` package owns five targets:
+The separate unpublished `opaal-fuzz` package owns four targets:
 
-- `lexer` and `parser` exercise OPAAL language 1 syntax;
-- `expander` exercises pure word expansion;
-- `migration` exercises explicit in-memory Flash 1 migration, schema-2 JSON,
-  and every migration resource ceiling; and
-- `resources` varies OPAAL analysis/evaluation ceilings and cancellation.
+- `lexer` checks lossless tokenization and progress;
+- `parser` checks bounded parsing and syntax-tree traversal;
+- `expander` checks pure word expansion; and
+- `resources` varies analysis and evaluation ceilings and cancellation.
 
-Invalid UTF-8 is rejected through the normal source boundary. Migration import
-reads are confined to the injected in-memory root. The expander, migration, and
-resource targets launch no process and perform no platform I/O.
+Invalid UTF-8 is rejected through the normal source boundary. Targets launch no
+process and perform no platform I/O.
 
 Install cargo-fuzz and a nightly toolchain, then run every target from the
 repository root:
@@ -21,9 +19,9 @@ fuzz/run-smoke.sh 10000
 ```
 
 The smoke script uses 1,000 executions per target by default. Inputs are seeded
-from the preserved Flash 1 grammar/lexical corpus and the current OPAAL grammar,
-module, operation, outcome, rest/spread, and type corpora. Writable corpora live
-in a temporary directory; checked-in sources are never modified.
+from current grammar, lexical, module, operation, outcome, rest/spread, and type
+corpora. Writable corpora live in a temporary directory; checked-in sources are
+never modified.
 
 For a sustained campaign, choose seconds per target and optionally a new result
 directory:
@@ -33,13 +31,12 @@ fuzz/run-campaign.sh 600
 fuzz/run-campaign.sh 3600 /path/to/new-results
 ```
 
-An explicit result directory must not already exist. Default campaigns create a
-unique ignored directory under `fuzz/campaigns/`. Each input is limited to
-4,096 bytes, ten seconds, and 2,048 MiB resident memory.
+An explicit result directory must not already exist. Default campaigns use an
+ignored directory under `fuzz/campaigns/`. Each input is limited to 4,096 bytes,
+ten seconds, and 2,048 MiB resident memory.
 
-Review every failure artifact. Reproduce and minimize it, add a focused
-regression with the implementation fix, and only then decide whether the
-campaign directory is no longer needed. Bounded fuzz completion is evidence for
-the exercised target and corpus, not proof that defects are absent.
+Review, reproduce, and minimize every failure before retaining a regression.
+Bounded completion is evidence for the exercised target and corpus, not proof
+that defects are absent.
 
 [← OPAAL documentation](../docs/README.md)

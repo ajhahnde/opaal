@@ -50,7 +50,6 @@ fn checker_help_and_usage_are_opaal_only() {
     assert!(stdout.starts_with("Analyze OPAAL source without executing it\n"));
     assert!(stdout.contains("opaal check [--] SOURCE"));
     assert!(stdout.contains("regular .opaal files"));
-    assert!(!stdout.contains("Flash"));
 
     let misuse = opaal(["check"]);
     assert_eq!(misuse.status.code(), Some(2), "{misuse:?}");
@@ -62,12 +61,12 @@ fn checker_help_and_usage_are_opaal_only() {
 }
 
 #[test]
-fn declared_language_one_module_closure_checks_silently() {
+fn directive_free_module_closure_checks_silently() {
     let temp = TempDir::new("closure");
-    temp.source("dependency.opaal", "language 1\nlet answer = 42\n");
+    temp.source("dependency.opaal", "let answer = 42\n");
     let root = temp.source(
         "main.opaal",
-        "language 1\nimport './dependency.opaal' as dependency\necho ready\n",
+        "import './dependency.opaal' as dependency\necho ready\n",
     );
 
     let output = opaal([OsString::from("check"), root.into_os_string()]);
@@ -77,20 +76,15 @@ fn declared_language_one_module_closure_checks_silently() {
 }
 
 #[test]
-fn every_module_requires_the_opaal_directive() {
-    let temp = TempDir::new("directive");
-    temp.source("dependency.opaal", "let answer = 42\n");
-    let root = temp.source(
-        "main.opaal",
-        "language 1\nimport './dependency.opaal' as dependency\n",
-    );
+fn a_former_header_in_an_import_has_no_special_checking_diagnostic() {
+    let temp = TempDir::new("ordinary-former-header");
+    temp.source("dependency.opaal", "language 1\nlet answer = 42\n");
+    let root = temp.source("main.opaal", "import './dependency.opaal' as dependency\n");
 
     let output = opaal([OsString::from("check"), root.into_os_string()]);
-    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert!(output.status.success(), "{output:?}");
     assert!(output.stdout.is_empty());
-    let stderr = String::from_utf8(output.stderr).unwrap();
-    assert!(stderr.contains("error[OP2001]"), "{stderr}");
-    assert!(stderr.contains("dependency.opaal"), "{stderr}");
+    assert!(output.stderr.is_empty());
 }
 
 #[test]
@@ -100,7 +94,7 @@ fn checker_analyzes_effects_without_executing_them() {
     let root = temp.source(
         "main.opaal",
         &format!(
-            "language 1\necho changed > '{}'\n^touch '{}'\n",
+            "echo changed > '{}'\n^touch '{}'\n",
             marker.display(),
             marker.display()
         ),

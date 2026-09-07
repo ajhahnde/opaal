@@ -1,4 +1,3 @@
-language 1
 
 def build_arguments(items: List[String]) -> List[String] {
     match $items {

@@ -5,11 +5,11 @@
 
 use opaal_runtime::eval::{RuntimeError, RuntimeErrorKind, evaluate};
 use opaal_runtime::{BindingMutability, Duration, ScopeStack, Status, Value};
-use opaal_syntax::{ParseOutcome, SourceFile, SourceId, parse_opaal_submission};
+use opaal_syntax::{ParseOutcome, SourceFile, SourceId, parse_opaal};
 
 fn run(source: &str) -> Result<Value, RuntimeError> {
     let file = SourceFile::new(SourceId::new(1), "test.opaal", source);
-    let script = match parse_opaal_submission(&file) {
+    let script = match parse_opaal(&file) {
         ParseOutcome::Complete(script) => script,
         other => panic!("source did not parse: {other:?}\n{source}"),
     };
@@ -19,7 +19,7 @@ fn run(source: &str) -> Result<Value, RuntimeError> {
 
 fn run_with_scope(source: &str, scope: &mut ScopeStack) -> Result<Value, RuntimeError> {
     let file = SourceFile::new(SourceId::new(1), "test.opaal", source);
-    let script = match parse_opaal_submission(&file) {
+    let script = match parse_opaal(&file) {
         ParseOutcome::Complete(script) => script,
         other => panic!("source did not parse: {other:?}\n{source}"),
     };

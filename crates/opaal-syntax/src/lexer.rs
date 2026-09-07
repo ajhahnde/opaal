@@ -16,7 +16,6 @@ pub enum Keyword {
     If,
     Import,
     In,
-    Language,
     Let,
     Match,
     Mut,
@@ -150,39 +149,17 @@ impl Token {
     }
 }
 
-/// Converts a Flash 1 migration source into nonempty, ordered, lossless tokens.
-#[must_use]
-#[cfg(feature = "flash-v1-migration")]
-pub fn lex_flash_v1(source: &SourceFile) -> Vec<Token> {
-    Lexer::new(source, LexLanguage::FlashV1).run()
-}
-
 /// Converts an OPAAL source file into nonempty, ordered, lossless tokens.
 #[must_use]
 pub fn lex_opaal(source: &SourceFile) -> Vec<Token> {
-    Lexer::new(source, LexLanguage::OpaalV1).run()
-}
-
-#[cfg(feature = "flash-v1-migration")]
-pub(crate) fn lex_flash_v1_with_control(
-    source: &SourceFile,
-    is_cancelled: &dyn Fn() -> bool,
-) -> Option<Vec<Token>> {
-    Lexer::new(source, LexLanguage::FlashV1).run_with_control(is_cancelled)
+    Lexer::new(source).run()
 }
 
 pub(crate) fn lex_opaal_with_control(
     source: &SourceFile,
     is_cancelled: &dyn Fn() -> bool,
 ) -> Option<Vec<Token>> {
-    Lexer::new(source, LexLanguage::OpaalV1).run_with_control(is_cancelled)
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum LexLanguage {
-    #[cfg(feature = "flash-v1-migration")]
-    FlashV1,
-    OpaalV1,
+    Lexer::new(source).run_with_control(is_cancelled)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -195,17 +172,15 @@ enum Context {
 
 struct Lexer<'source> {
     source: &'source SourceFile,
-    language: LexLanguage,
     position: usize,
     tokens: Vec<Token>,
     contexts: Vec<Context>,
 }
 
 impl<'source> Lexer<'source> {
-    fn new(source: &'source SourceFile, language: LexLanguage) -> Self {
+    fn new(source: &'source SourceFile) -> Self {
         Self {
             source,
-            language,
             position: 0,
             tokens: Vec::new(),
             contexts: vec![Context::Normal],
@@ -609,7 +584,7 @@ impl<'source> Lexer<'source> {
             self.position += 1;
         }
         let text = &self.source.text()[start..self.position];
-        let kind = keyword(text, self.language).map_or(TokenKind::Identifier, TokenKind::Keyword);
+        let kind = keyword(text).map_or(TokenKind::Identifier, TokenKind::Keyword);
         self.push(kind, start);
         true
     }
@@ -808,32 +783,31 @@ fn is_identifier_continue(byte: u8) -> bool {
     is_identifier_start(byte) || byte.is_ascii_digit()
 }
 
-fn keyword(text: &str, language: LexLanguage) -> Option<Keyword> {
+fn keyword(text: &str) -> Option<Keyword> {
     Some(match text {
-        "action" if language == LexLanguage::OpaalV1 => Keyword::Action,
+        "action" => Keyword::Action,
         "break" => Keyword::Break,
         "catch" => Keyword::Catch,
         "continue" => Keyword::Continue,
         "def" => Keyword::Def,
         "else" => Keyword::Else,
-        "enum" if language == LexLanguage::OpaalV1 => Keyword::Enum,
+        "enum" => Keyword::Enum,
         "export" => Keyword::Export,
         "false" => Keyword::False,
         "for" => Keyword::For,
         "if" => Keyword::If,
         "import" => Keyword::Import,
         "in" => Keyword::In,
-        "language" if language == LexLanguage::OpaalV1 => Keyword::Language,
         "let" => Keyword::Let,
         "match" => Keyword::Match,
         "mut" => Keyword::Mut,
         "null" => Keyword::Null,
         "return" => Keyword::Return,
-        "task" if language == LexLanguage::OpaalV1 => Keyword::Task,
+        "task" => Keyword::Task,
         "throw" => Keyword::Throw,
         "true" => Keyword::True,
         "try" => Keyword::Try,
-        "type" if language == LexLanguage::OpaalV1 => Keyword::Type,
+        "type" => Keyword::Type,
         "unset" => Keyword::Unset,
         "while" => Keyword::While,
         _ => return None,
