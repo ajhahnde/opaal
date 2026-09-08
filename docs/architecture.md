@@ -59,18 +59,24 @@ refusal, fatal failure, partial evidence, and cleanup evidence distinct.
 
 ## Operational embedding boundary
 
-`opaal-runtime` owns the explicit authority and resource context. Exact typed
+`opaal-runtime` owns the explicit authority and resource context plus the
+maintained bounded data/path/file/time/version/integrity/URL/HTTP/process
+module APIs. Exact typed
 requests are matched only against external grant or deny rows; `opaal-platform`
 adapters report enforcement without granting permission. The context also owns
 sticky cancellation, a narrow-only monotonic deadline, injected-secret
 redaction, and a LIFO cleanup stack. The POSIX and fake platforms implement the
-same enforcement query contract.
+same enforcement query and bounded adapter contracts. POSIX file operations use
+retained descriptors and no-follow opens, HTTPS trusts only the endpoint CA,
+and process execution clears ambient environment and owns one process group.
+Fake calls record identities and sizes without retaining secret payloads.
 
 The source evaluator does not construct or consume this context. Project checks
 populate concrete source-facing identities but invoke no adapter. Pure call and
 outcome constructors retain empty operational metadata, so the embedding
 boundary cannot activate an effectful source route. See
-[Authority and resource embedding](authority-and-resources.md).
+[Authority and resource embedding](authority-and-resources.md) and
+[Bounded operational modules](operational-modules.md).
 
 ## Language Server Protocol
 

@@ -23,6 +23,12 @@ environment, network, terminal, project, action, task, package, or controlled
 workflow authority. Crossing that boundary unexpectedly is security relevant
 even without memory corruption.
 
+Embedding clients may call the maintained bounded operational APIs only through
+an explicit exact authority context. HTTPS uses only the endpoint's supplied
+CA, secret bytes can enter only the one-use `SecretHeader` sink, and maintained
+children receive an explicit environment with no ambient inheritance. Process
+internals are reported as unenforced and require explicit acknowledgement.
+
 Repository automation uses read-only tokens for ordinary checks. Package
 publication is disabled, and successful workflows create no tag, package,
 artifact, or release.

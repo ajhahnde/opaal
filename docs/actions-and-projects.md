@@ -148,7 +148,8 @@ normalized files. Success is silent. The complete `opaal.check.v1` machine
 artifact belongs to the later reviewable-planning lifecycle and is not emitted
 by this check-only surface. A missing or explicitly denied request, malformed
 document, mismatched identity, invalid input, or unknown task exits nonzero.
-Project check never invokes the task or an adapter; effectful execution remains
-unavailable.
+Project check never invokes the task or an adapter. Maintained bounded adapters
+now exist for embedders and direct host/fake verification, but effectful source
+execution remains unavailable.
 
-[← Documentation index](README.md) · [Language foundation](language-foundation.md) · [Authority and resources](authority-and-resources.md)
+[← Documentation index](README.md) · [Language foundation](language-foundation.md) · [Authority and resources](authority-and-resources.md) · [Bounded operational modules](operational-modules.md)

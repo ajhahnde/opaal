@@ -144,6 +144,16 @@ impl OperationalContext {
         self.secrets.contains(id)
     }
 
+    pub(crate) fn consume_secret_with_cancellation<T, E>(
+        &mut self,
+        id: &SecretId,
+        sink: impl FnOnce(&[u8], &CancellationScope) -> Result<T, E>,
+    ) -> Result<Option<T>, E> {
+        let cancellation = &self.cancellation;
+        self.secrets
+            .consume_with(id, |bytes| sink(bytes, cancellation))
+    }
+
     /// Redact raw and common encoded secret representations in bytes.
     #[must_use]
     pub fn redact_bytes(&self, input: &[u8]) -> Vec<u8> {

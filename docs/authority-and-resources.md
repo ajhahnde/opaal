@@ -32,9 +32,12 @@ call's declared `EffectSet` is `Unknown`, even if a matching grant exists.
 filesystem, HTTP, secret-sink, and clock effects must be fully enforced.
 
 `FakePlatform::with_authority_profile` provides a deterministic enforcement
-schedule. Ordinary fake and POSIX constructors report every operational effect
-as unsupported until a maintained bounded adapter owns and enforces that exact
-scope. Existing low-level platform capabilities never imply authority.
+schedule. The maintained POSIX operational adapter reports direct filesystem,
+HTTP/TLS, typed secret-sink, and clock boundaries as enforced. Maintained
+process execution reports `Unenforced` because the parent can bind the exact
+executable, argv, environment, process group, output, and deadline but cannot
+contain the child's internal filesystem or network behavior. Existing low-level
+platform capabilities alone never imply authority.
 
 ## Cancellation and deadlines
 
@@ -59,9 +62,10 @@ order; secret text in cleanup failures is redacted.
 serialization implementation, equality, or hashing. Secrets enter only through
 explicit `OperationalContext::insert_secret`; the runtime never discovers an
 environment value, credential file, cache, or account session. Dropping the
-owned value overwrites its buffer, and each redaction pass clears its temporary
-raw and encoded representations. One evaluation accepts at most eight secrets,
-each no larger than 64 KiB.
+owned value overwrites its consuming buffer. Evaluation-owned raw and encoded
+redaction patterns remain available after consumption and are overwritten when
+the context closes. One evaluation accepts at most eight secret identities,
+each no larger than 64 KiB; a consumed identity cannot be injected again.
 
 Debug output exposes only the `SecretId` and `[redacted]`. The context redactor
 replaces raw bytes plus lowercase hexadecimal, standard base64, unpadded
@@ -69,8 +73,10 @@ base64url, percent-encoded, and JSON-escaped representations before diagnostic
 or evidence text leaves the embedding boundary. If a replacement marker would
 overlap a registered representation, the complete sink value fails closed to
 one marker rather than preserving ambiguous surrounding bytes. Secret
-materialization has no public operation in this API; a later maintained typed
-sink must add the sole consuming route without widening this contract.
+materialization occurs only through the maintained `SecretHeader` sink. Both
+its exact network and reveal grants are checked before bytes are borrowed, it
+is consumed by one HTTP call, and ordinary values and ordinary HTTP headers
+cannot carry it.
 
 ## Pure-source compatibility
 

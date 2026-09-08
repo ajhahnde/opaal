@@ -1,6 +1,6 @@
 //! Opaque secret storage and deterministic redaction for embedding boundaries.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 /// The stable replacement emitted for every registered secret representation.
@@ -134,6 +134,8 @@ impl Drop for Secret {
 #[derive(Default)]
 pub struct SecretStore {
     secrets: BTreeMap<SecretId, Secret>,
+    seen_ids: BTreeSet<SecretId>,
+    redaction_needles: SecretNeedles,
 }
 
 impl SecretStore {
@@ -142,17 +144,23 @@ impl SecretStore {
     pub const fn new() -> Self {
         Self {
             secrets: BTreeMap::new(),
+            seen_ids: BTreeSet::new(),
+            redaction_needles: SecretNeedles::new(),
         }
     }
 
     /// Add one explicitly injected secret.
     pub fn insert(&mut self, secret: Secret) -> Result<(), SecretError> {
-        if self.secrets.contains_key(secret.id()) {
+        if self.seen_ids.contains(secret.id()) {
             return Err(SecretError::DuplicateId(secret.id().clone()));
         }
-        if self.secrets.len() == MAX_SECRETS {
+        if self.seen_ids.len() == MAX_SECRETS {
             return Err(SecretError::TooManySecrets { max: MAX_SECRETS });
         }
+        self.redaction_needles
+            .extend(needle_variants(secret.payload()));
+        self.redaction_needles.sort_longest_first();
+        self.seen_ids.insert(secret.id().clone());
         self.secrets.insert(secret.id().clone(), secret);
         Ok(())
     }
@@ -168,15 +176,27 @@ impl SecretStore {
         self.secrets.keys()
     }
 
+    /// Consume one secret exactly once inside a typed sink.
+    ///
+    /// The callback borrow cannot outlive this call. The removed owner is
+    /// zeroized immediately afterwards whether the callback succeeds or fails.
+    pub(crate) fn consume_with<T, E>(
+        &mut self,
+        id: &SecretId,
+        sink: impl FnOnce(&[u8]) -> Result<T, E>,
+    ) -> Result<Option<T>, E> {
+        let Some(secret) = self.secrets.remove(id) else {
+            return Ok(None);
+        };
+        let result = sink(secret.payload());
+        drop(secret);
+        result.map(Some)
+    }
+
     /// Redact raw and common encoded representations in arbitrary bytes.
     #[must_use]
     pub fn redact_bytes(&self, input: &[u8]) -> Vec<u8> {
-        let mut needles = SecretNeedles::new();
-        for secret in self.secrets.values() {
-            needles.extend(needle_variants(secret.payload()));
-        }
-        needles.sort_longest_first();
-        replace_needles(input, needles.as_slice())
+        replace_needles(input, self.redaction_needles.as_slice())
     }
 
     /// Redact raw text secrets and common encoded representations without
@@ -184,13 +204,9 @@ impl SecretStore {
     #[must_use]
     pub fn redact_text(&self, input: &str) -> String {
         let mut needles = SecretNeedles::new();
-        for secret in self.secrets.values() {
-            for mut needle in needle_variants(secret.payload()) {
-                if std::str::from_utf8(&needle).is_ok() {
-                    needles.extend([needle]);
-                } else {
-                    clear_secret_bytes(&mut needle);
-                }
+        for needle in self.redaction_needles.as_slice() {
+            if std::str::from_utf8(needle).is_ok() {
+                needles.extend([needle.clone()]);
             }
         }
         needles.sort_longest_first();
@@ -208,12 +224,13 @@ impl fmt::Debug for SecretStore {
     }
 }
 
+#[derive(Default)]
 struct SecretNeedles {
     values: Vec<Vec<u8>>,
 }
 
 impl SecretNeedles {
-    fn new() -> Self {
+    const fn new() -> Self {
         Self { values: Vec::new() }
     }
 

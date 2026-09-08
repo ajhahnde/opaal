@@ -3,12 +3,13 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use opaal_platform::operational::FakeOperationalAdapter;
 use opaal_runtime::module::{
     ModuleCanonicalizer, ModuleId, ModulePathError, ModuleSourceError, ModuleSourceLoader,
 };
 use opaal_runtime::project::{
     MAX_PROJECT_ENTRIES, MAX_PROJECT_INPUTS, check_project, load_project_program,
-    parse_authority_document, parse_project_manifest, parse_tool_lock,
+    parse_authority_document, parse_project_manifest, parse_tool_lock, read_tool_lock,
 };
 
 struct MemorySources(BTreeMap<PathBuf, Vec<u8>>);
@@ -93,6 +94,22 @@ path = { encoding = "base64url-nopad", platform = "unix", value = "L3Vzci9iaW4vZ
 version = "2.50.0"
 digest = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
 "#;
+
+#[test]
+fn tool_lock_reader_uses_only_the_selected_environment_path() {
+    let manifest =
+        parse_project_manifest(Path::new("/project/opaal.toml"), MANIFEST.as_bytes()).unwrap();
+    let adapter = FakeOperationalAdapter::new();
+    adapter.insert_file("/project/tools.toml", LOCK.as_bytes().to_vec());
+    adapter.insert_file("/project/other.toml", LOCK.as_bytes().to_vec());
+    assert!(read_tool_lock(&adapter, &manifest, "ci", Path::new("/project/tools.toml")).is_ok());
+    assert_eq!(
+        read_tool_lock(&adapter, &manifest, "ci", Path::new("/project/other.toml"))
+            .unwrap_err()
+            .code(),
+        "LOCK021"
+    );
+}
 
 #[test]
 fn explicit_project_task_and_documents_bind_without_execution() {
@@ -289,6 +306,29 @@ fn hostile_schema_boundaries_and_native_encodings_refuse() {
             .unwrap_err()
             .code(),
         "LOCK020"
+    );
+
+    let nonnormalized_tool = LOCK.replace(
+        "platform = \"unix\", value = \"L3Vzci9iaW4vZ2l0\"",
+        "platform = \"unix\", value = \"L3Vzci9iaW4vLi4vZXZpbA\"",
+    );
+    assert_eq!(
+        parse_tool_lock(&manifest, "ci", nonnormalized_tool.as_bytes())
+            .unwrap_err()
+            .code(),
+        "LOCK020"
+    );
+
+    let exact_environment_value = "QUFB".repeat(16_383);
+    let exact_environment = LOCK.replacen("L2Jpbg", &exact_environment_value, 1);
+    assert!(parse_tool_lock(&manifest, "ci", exact_environment.as_bytes()).is_ok());
+    let first_excess_environment =
+        exact_environment.replacen("name = \"PATH\"", "name = \"PATHX\"", 1);
+    assert_eq!(
+        parse_tool_lock(&manifest, "ci", first_excess_environment.as_bytes())
+            .unwrap_err()
+            .code(),
+        "LOCK007"
     );
 
     let mut oversized_lock = LOCK.to_owned();
