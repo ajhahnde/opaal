@@ -306,7 +306,33 @@ fn replace_needles(input: &[u8], needles: &[Vec<u8>]) -> Vec<u8> {
             offset += 1;
         }
     }
-    output
+    if contains_unredacted_needle(&output, needles) {
+        clear_secret_bytes(&mut output);
+        replacement.to_vec()
+    } else {
+        output
+    }
+}
+
+fn contains_unredacted_needle(input: &[u8], needles: &[Vec<u8>]) -> bool {
+    needles.iter().any(|needle| {
+        input
+            .windows(needle.len())
+            .enumerate()
+            .any(|(start, window)| {
+                window == needle.as_slice()
+                    && !contained_in_replacement(input, start, start + needle.len())
+            })
+    })
+}
+
+fn contained_in_replacement(input: &[u8], start: usize, end: usize) -> bool {
+    let replacement = REDACTED.as_bytes();
+    let earliest = start.saturating_sub(replacement.len() - 1);
+    let latest = start.min(input.len().saturating_sub(replacement.len()));
+    (earliest..=latest).any(|marker_start| {
+        input[marker_start..].starts_with(replacement) && end <= marker_start + replacement.len()
+    })
 }
 
 fn encode_hex(bytes: &[u8]) -> Vec<u8> {

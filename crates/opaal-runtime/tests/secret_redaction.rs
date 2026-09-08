@@ -108,6 +108,44 @@ fn a_secret_extending_the_redaction_marker_is_not_preserved_as_existing_output()
 }
 
 #[test]
+fn secrets_overlapping_an_existing_marker_fail_closed() {
+    let payload = b"redacted]\0\0";
+    let mut store = SecretStore::new();
+    store
+        .insert(secret("marker-overlap", payload))
+        .expect("the identity is unique");
+
+    let redacted = store.redact_bytes(b"[redacted]\0\0 suffix");
+
+    assert_eq!(redacted, REDACTED.as_bytes());
+    assert!(
+        !redacted
+            .windows(payload.len())
+            .any(|window| window == payload)
+    );
+    assert_eq!(store.redact_bytes(&redacted), redacted);
+}
+
+#[test]
+fn replacement_boundaries_cannot_recreate_a_secret() {
+    let payload = b"]a";
+    let mut store = SecretStore::new();
+    store
+        .insert(secret("replacement-boundary", payload))
+        .expect("the identity is unique");
+
+    let redacted = store.redact_bytes(b"]aa");
+
+    assert_eq!(redacted, REDACTED.as_bytes());
+    assert!(
+        !redacted
+            .windows(payload.len())
+            .any(|window| window == payload)
+    );
+    assert_eq!(store.redact_bytes(&redacted), redacted);
+}
+
+#[test]
 fn empty_and_duplicate_secrets_are_refused() {
     assert_eq!(SecretId::new(""), Err(SecretError::EmptyId));
     let id = SecretId::new("token").expect("the identity is valid");

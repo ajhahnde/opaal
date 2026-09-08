@@ -66,9 +66,11 @@ each no larger than 64 KiB.
 Debug output exposes only the `SecretId` and `[redacted]`. The context redactor
 replaces raw bytes plus lowercase hexadecimal, standard base64, unpadded
 base64url, percent-encoded, and JSON-escaped representations before diagnostic
-or evidence text leaves the embedding boundary. Secret materialization has no
-public operation in this API; a later maintained typed sink must add the sole
-consuming route without widening this contract.
+or evidence text leaves the embedding boundary. If a replacement marker would
+overlap a registered representation, the complete sink value fails closed to
+one marker rather than preserving ambiguous surrounding bytes. Secret
+materialization has no public operation in this API; a later maintained typed
+sink must add the sole consuming route without widening this contract.
 
 ## Pure-source compatibility
 
