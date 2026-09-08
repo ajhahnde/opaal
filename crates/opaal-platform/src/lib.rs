@@ -142,6 +142,156 @@ impl Capabilities {
     }
 }
 
+/// One source-independent operational effect whose enforcement is reported by
+/// a platform adapter.
+///
+/// These names describe the authority boundary, not permission. A platform
+/// can report that it enforces an effect only after an external authority
+/// context has supplied an exact matching grant.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[repr(u8)]
+pub enum AuthorityEffect {
+    /// Bounded reading from one authorized project path.
+    FilesystemRead,
+    /// Bounded writing to one authorized project path.
+    FilesystemWrite,
+    /// Running one explicitly identified maintained tool.
+    ProcessRun,
+    /// Calling one explicitly identified HTTP endpoint.
+    NetworkHttp,
+    /// Revealing one secret to one typed endpoint sink.
+    SecretReveal,
+    /// Observing wall-clock time.
+    ClockWall,
+    /// Observing monotonic time.
+    ClockMonotonic,
+}
+
+impl AuthorityEffect {
+    /// Every operational effect, in stable declaration order.
+    pub const ALL: [Self; 7] = [
+        Self::FilesystemRead,
+        Self::FilesystemWrite,
+        Self::ProcessRun,
+        Self::NetworkHttp,
+        Self::SecretReveal,
+        Self::ClockWall,
+        Self::ClockMonotonic,
+    ];
+
+    const fn index(self) -> usize {
+        self as usize
+    }
+}
+
+/// The exact typed scope supplied to an adapter enforcement query.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AuthorityScope<'a> {
+    /// One native project path.
+    ProjectPath(&'a Path),
+    /// One maintained tool identity.
+    Tool(&'a str),
+    /// One normalized endpoint and method.
+    Endpoint {
+        /// Project endpoint identity.
+        endpoint: &'a str,
+        /// Canonical HTTP method.
+        method: &'a str,
+    },
+    /// One secret, endpoint, and header sink tuple.
+    SecretSink {
+        /// Project secret identity.
+        secret: &'a str,
+        /// Project endpoint identity.
+        endpoint: &'a str,
+        /// Canonical header name.
+        header: &'a str,
+    },
+    /// The current evaluation's clock.
+    Evaluation,
+}
+
+/// One adapter enforcement query after the runtime has matched authority.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AuthorityQuery<'a> {
+    effect: AuthorityEffect,
+    scope: AuthorityScope<'a>,
+}
+
+impl<'a> AuthorityQuery<'a> {
+    /// Build a query from an already type-checked effect and scope.
+    #[must_use]
+    pub const fn new(effect: AuthorityEffect, scope: AuthorityScope<'a>) -> Self {
+        Self { effect, scope }
+    }
+
+    /// The requested effect.
+    #[must_use]
+    pub const fn effect(&self) -> AuthorityEffect {
+        self.effect
+    }
+
+    /// The exact requested scope.
+    #[must_use]
+    pub const fn scope(&self) -> AuthorityScope<'a> {
+        self.scope
+    }
+}
+
+/// What one adapter can truthfully enforce for an exact operational request.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AuthorityEnforcement {
+    /// The adapter enforces the complete requested boundary.
+    Enforced,
+    /// The adapter owns the parent boundary but cannot contain child behavior.
+    Unenforced,
+    /// The adapter does not implement the requested operation.
+    Unsupported,
+    /// The adapter cannot prove which boundary applies.
+    Unknown,
+}
+
+/// A fixed fake-platform enforcement schedule, indexed by operational effect.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AuthorityProfile {
+    enforcement: [AuthorityEnforcement; AuthorityEffect::ALL.len()],
+}
+
+impl AuthorityProfile {
+    /// A profile in which every operational request is unsupported.
+    #[must_use]
+    pub const fn unsupported() -> Self {
+        Self {
+            enforcement: [AuthorityEnforcement::Unsupported; AuthorityEffect::ALL.len()],
+        }
+    }
+
+    /// A profile in which every operational request is enforced.
+    #[must_use]
+    pub const fn enforced() -> Self {
+        Self {
+            enforcement: [AuthorityEnforcement::Enforced; AuthorityEffect::ALL.len()],
+        }
+    }
+
+    /// Return a copy with one effect assigned `enforcement`.
+    #[must_use]
+    pub const fn with(
+        mut self,
+        effect: AuthorityEffect,
+        enforcement: AuthorityEnforcement,
+    ) -> Self {
+        self.enforcement[effect.index()] = enforcement;
+        self
+    }
+
+    /// The scripted answer for `effect`.
+    #[must_use]
+    pub const fn enforcement(self, effect: AuthorityEffect) -> AuthorityEnforcement {
+        self.enforcement[effect.index()]
+    }
+}
+
 /// A platform capability that failed to be satisfied.
 ///
 /// [`Unsupported`](PlatformError::Unsupported) is a permanent gap: the platform
@@ -1215,6 +1365,15 @@ pub trait Platform: Send + Sync {
         }
     }
 
+    /// Report the enforcement available for one already-authorized exact
+    /// operational request.
+    ///
+    /// The default is fail-closed so existing and minimal adapters acquire no
+    /// operational authority merely by implementing this trait.
+    fn authority_enforcement(&self, _query: AuthorityQuery<'_>) -> AuthorityEnforcement {
+        AuthorityEnforcement::Unsupported
+    }
+
     /// Whether the standard input of this process is a terminal.
     fn is_terminal(&self) -> bool {
         false
@@ -1426,6 +1585,7 @@ pub trait Platform: Send + Sync {
 #[derive(Clone, Copy, Debug)]
 pub struct FakePlatform {
     capabilities: Capabilities,
+    authority_profile: AuthorityProfile,
     is_terminal: bool,
     is_output_terminal: bool,
     terminal_size: TerminalSize,
@@ -1437,6 +1597,7 @@ impl FakePlatform {
     pub const fn new(capabilities: Capabilities) -> Self {
         Self {
             capabilities,
+            authority_profile: AuthorityProfile::unsupported(),
             is_terminal: false,
             is_output_terminal: false,
             terminal_size: TerminalSize::new(80, 24),
@@ -1477,6 +1638,7 @@ impl FakePlatform {
     ) -> Self {
         Self {
             capabilities,
+            authority_profile: AuthorityProfile::unsupported(),
             is_terminal,
             is_output_terminal,
             terminal_size: size,
@@ -1493,10 +1655,27 @@ impl FakePlatform {
     pub const fn with_stopping_children(capabilities: Capabilities, stops: u32) -> Self {
         Self {
             capabilities,
+            authority_profile: AuthorityProfile::unsupported(),
             is_terminal: false,
             is_output_terminal: false,
             terminal_size: TerminalSize::new(80, 24),
             child_stops: stops,
+        }
+    }
+
+    /// A fake platform with an explicit operational enforcement schedule.
+    #[must_use]
+    pub const fn with_authority_profile(
+        capabilities: Capabilities,
+        authority_profile: AuthorityProfile,
+    ) -> Self {
+        Self {
+            capabilities,
+            authority_profile,
+            is_terminal: false,
+            is_output_terminal: false,
+            terminal_size: TerminalSize::new(80, 24),
+            child_stops: 0,
         }
     }
 }
@@ -1504,6 +1683,10 @@ impl FakePlatform {
 impl Platform for FakePlatform {
     fn capabilities(&self) -> Capabilities {
         self.capabilities
+    }
+
+    fn authority_enforcement(&self, query: AuthorityQuery<'_>) -> AuthorityEnforcement {
+        self.authority_profile.enforcement(query.effect())
     }
 
     fn is_terminal(&self) -> bool {
@@ -1869,6 +2052,10 @@ impl RecordingPlatform {
 impl Platform for RecordingPlatform {
     fn capabilities(&self) -> Capabilities {
         self.inner.capabilities()
+    }
+
+    fn authority_enforcement(&self, query: AuthorityQuery<'_>) -> AuthorityEnforcement {
+        self.inner.authority_enforcement(query)
     }
 
     fn is_terminal(&self) -> bool {

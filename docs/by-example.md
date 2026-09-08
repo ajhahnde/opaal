@@ -49,7 +49,7 @@ help value::length
 ```
 
 Effectful source such as `^touch marker` is rejected or refused before process
-access. `opaal plan` returns `PLAN004` until a separately designed authority and
-planning contract exists.
+access. `opaal plan` returns `PLAN004`; the explicit embedding authority context
+does not add a source planning or execution route.
 
 [← Documentation index](README.md) · [Language foundation →](language-foundation.md)

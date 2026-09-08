@@ -41,5 +41,12 @@ test = false
 doc = false
 bench = false
 
+[[bin]]
+name = "secret_sinks"
+path = "fuzz_targets/secret_sinks.rs"
+test = false
+doc = false
+bench = false
+
 [workspace]
 members = ["."]

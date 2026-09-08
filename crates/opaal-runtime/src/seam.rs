@@ -1,11 +1,14 @@
-//! Opaque metadata seams reserved for later execution and project owners.
+//! Public metadata shared by pure call descriptors and embedding outcomes.
 //!
-//! OPAAL freezes where authority, resource, action, project, and task
-//! metadata attaches without defining those later-owned concepts. The current
-//! foundation can represent only an absent or unknown slot; it cannot create
-//! an identity, grant authority, schedule a deadline, or claim cleanup.
+//! Authority, cancellation, deadlines, secrets, and resource cleanup are
+//! concrete embedding contracts. Action, project, task, tool, and environment
+//! identities remain deliberately opaque until their source-facing owner is
+//! delivered.
 
 use std::marker::PhantomData;
+
+pub use crate::authority::{AuthorityVerdict, CapabilityRequest, EffectSet, EvaluationContextId};
+pub use crate::lifetime::{CancellationScopeId, CleanupOutcome, Deadline, ResourceOwnerId};
 
 /// The observable state of one later-owned metadata slot.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -66,32 +69,6 @@ macro_rules! opaque_later_owned_type {
     };
 }
 
-opaque_later_owned_type!(
-    EvaluationContextId,
-    "Opaque identity of a later-owned evaluation context."
-);
-opaque_later_owned_type!(EffectSet, "Opaque later-owned effect declaration.");
-opaque_later_owned_type!(
-    CapabilityRequest,
-    "Opaque later-owned request for explicit capability authority."
-);
-opaque_later_owned_type!(
-    AuthorityVerdict,
-    "Opaque later-owned authority decision; this foundation creates no grant."
-);
-opaque_later_owned_type!(
-    ResourceOwnerId,
-    "Opaque identity of a later-owned execution resource owner."
-);
-opaque_later_owned_type!(
-    CancellationScopeId,
-    "Opaque identity of a later-owned cancellation scope."
-);
-opaque_later_owned_type!(Deadline, "Opaque later-owned execution deadline.");
-opaque_later_owned_type!(
-    CleanupOutcome,
-    "Opaque later-owned cleanup result attached to a structured outcome."
-);
 opaque_later_owned_type!(ActionId, "Opaque identity of a future typed action.");
 opaque_later_owned_type!(ProjectId, "Opaque identity of a future project.");
 opaque_later_owned_type!(TaskId, "Opaque identity of a future exported task.");
@@ -109,16 +86,16 @@ opaque_later_owned_type!(
     "Opaque future declaration of a callable's external outputs."
 );
 
-/// Later-owned metadata attached to every inspectable call record.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+/// Metadata attached to every inspectable call record.
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DownstreamCallMetadata {
-    evaluation_context: OpaqueSlot<EvaluationContextId>,
-    effects: OpaqueSlot<EffectSet>,
-    capability_request: OpaqueSlot<CapabilityRequest>,
-    authority_verdict: OpaqueSlot<AuthorityVerdict>,
-    resource_owner: OpaqueSlot<ResourceOwnerId>,
-    cancellation_scope: OpaqueSlot<CancellationScopeId>,
-    deadline: OpaqueSlot<Deadline>,
+    evaluation_context: Option<EvaluationContextId>,
+    effects: EffectSet,
+    capability_request: Option<CapabilityRequest>,
+    authority_verdict: Option<AuthorityVerdict>,
+    resource_owner: Option<ResourceOwnerId>,
+    cancellation_scope: Option<CancellationScopeId>,
+    deadline: Option<Deadline>,
     action: OpaqueSlot<ActionId>,
     project: OpaqueSlot<ProjectId>,
     task: OpaqueSlot<TaskId>,
@@ -129,17 +106,17 @@ pub struct DownstreamCallMetadata {
 }
 
 impl DownstreamCallMetadata {
-    /// The foundation value: every later-owned concept is explicitly absent.
+    /// The pure-source value: no authority, resource, or later-owned identity.
     #[must_use]
-    pub const fn foundation() -> Self {
+    pub fn foundation() -> Self {
         Self {
-            evaluation_context: OpaqueSlot::absent(),
-            effects: OpaqueSlot::absent(),
-            capability_request: OpaqueSlot::absent(),
-            authority_verdict: OpaqueSlot::absent(),
-            resource_owner: OpaqueSlot::absent(),
-            cancellation_scope: OpaqueSlot::absent(),
-            deadline: OpaqueSlot::absent(),
+            evaluation_context: None,
+            effects: EffectSet::default(),
+            capability_request: None,
+            authority_verdict: None,
+            resource_owner: None,
+            cancellation_scope: None,
+            deadline: None,
             action: OpaqueSlot::absent(),
             project: OpaqueSlot::absent(),
             task: OpaqueSlot::absent(),
@@ -150,16 +127,43 @@ impl DownstreamCallMetadata {
         }
     }
 
-    /// Whether every later-owned slot is explicitly absent.
+    pub(crate) fn operational(
+        evaluation_context: EvaluationContextId,
+        effects: EffectSet,
+        capability_request: Option<CapabilityRequest>,
+        authority_verdict: Option<AuthorityVerdict>,
+        resource_owner: ResourceOwnerId,
+        cancellation_scope: CancellationScopeId,
+        deadline: Option<Deadline>,
+    ) -> Self {
+        Self {
+            evaluation_context: Some(evaluation_context),
+            effects,
+            capability_request,
+            authority_verdict,
+            resource_owner: Some(resource_owner),
+            cancellation_scope: Some(cancellation_scope),
+            deadline,
+            action: OpaqueSlot::absent(),
+            project: OpaqueSlot::absent(),
+            task: OpaqueSlot::absent(),
+            tool: OpaqueSlot::absent(),
+            environment: OpaqueSlot::absent(),
+            declared_inputs: OpaqueSlot::absent(),
+            declared_outputs: OpaqueSlot::absent(),
+        }
+    }
+
+    /// Whether this is the empty pure-source value.
     #[must_use]
-    pub const fn is_foundation_only(&self) -> bool {
-        matches!(self.evaluation_context.state(), OpaqueSlotState::Absent)
-            && matches!(self.effects.state(), OpaqueSlotState::Absent)
-            && matches!(self.capability_request.state(), OpaqueSlotState::Absent)
-            && matches!(self.authority_verdict.state(), OpaqueSlotState::Absent)
-            && matches!(self.resource_owner.state(), OpaqueSlotState::Absent)
-            && matches!(self.cancellation_scope.state(), OpaqueSlotState::Absent)
-            && matches!(self.deadline.state(), OpaqueSlotState::Absent)
+    pub fn is_foundation_only(&self) -> bool {
+        self.evaluation_context.is_none()
+            && self.effects.is_empty()
+            && self.capability_request.is_none()
+            && self.authority_verdict.is_none()
+            && self.resource_owner.is_none()
+            && self.cancellation_scope.is_none()
+            && self.deadline.is_none()
             && matches!(self.action.state(), OpaqueSlotState::Absent)
             && matches!(self.project.state(), OpaqueSlotState::Absent)
             && matches!(self.task.state(), OpaqueSlotState::Absent)
@@ -169,46 +173,46 @@ impl DownstreamCallMetadata {
             && matches!(self.declared_outputs.state(), OpaqueSlotState::Absent)
     }
 
-    /// Opaque evaluation-context slot.
+    /// Explicit evaluation identity, absent for pure-source descriptors.
     #[must_use]
-    pub const fn evaluation_context(&self) -> &OpaqueSlot<EvaluationContextId> {
-        &self.evaluation_context
+    pub const fn evaluation_context(&self) -> Option<EvaluationContextId> {
+        self.evaluation_context
     }
 
-    /// Opaque effect-declaration slot.
+    /// Canonical declared request set.
     #[must_use]
-    pub const fn effects(&self) -> &OpaqueSlot<EffectSet> {
+    pub const fn effects(&self) -> &EffectSet {
         &self.effects
     }
 
-    /// Opaque capability-request slot.
+    /// The exact current adapter request, when one is being inspected.
     #[must_use]
-    pub const fn capability_request(&self) -> &OpaqueSlot<CapabilityRequest> {
-        &self.capability_request
+    pub const fn capability_request(&self) -> Option<&CapabilityRequest> {
+        self.capability_request.as_ref()
     }
 
-    /// Opaque authority-verdict slot.
+    /// The exact verdict for the current request.
     #[must_use]
-    pub const fn authority_verdict(&self) -> &OpaqueSlot<AuthorityVerdict> {
-        &self.authority_verdict
+    pub const fn authority_verdict(&self) -> Option<AuthorityVerdict> {
+        self.authority_verdict
     }
 
-    /// Opaque resource-owner slot.
+    /// Explicit resource owner, absent for pure-source descriptors.
     #[must_use]
-    pub const fn resource_owner(&self) -> &OpaqueSlot<ResourceOwnerId> {
-        &self.resource_owner
+    pub const fn resource_owner(&self) -> Option<ResourceOwnerId> {
+        self.resource_owner
     }
 
-    /// Opaque cancellation-scope slot.
+    /// Explicit cancellation scope, absent for pure-source descriptors.
     #[must_use]
-    pub const fn cancellation_scope(&self) -> &OpaqueSlot<CancellationScopeId> {
-        &self.cancellation_scope
+    pub const fn cancellation_scope(&self) -> Option<CancellationScopeId> {
+        self.cancellation_scope
     }
 
-    /// Opaque deadline slot.
+    /// The current deadline, when present.
     #[must_use]
-    pub const fn deadline(&self) -> &OpaqueSlot<Deadline> {
-        &self.deadline
+    pub const fn deadline(&self) -> Option<Deadline> {
+        self.deadline
     }
 
     /// Opaque future action slot.
@@ -260,66 +264,82 @@ impl Default for DownstreamCallMetadata {
     }
 }
 
-/// Later-owned metadata attached to every structured execution outcome.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+/// Metadata attached to every structured execution outcome.
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DownstreamOutcomeMetadata {
-    evaluation_context: OpaqueSlot<EvaluationContextId>,
-    resource_owner: OpaqueSlot<ResourceOwnerId>,
-    cancellation_scope: OpaqueSlot<CancellationScopeId>,
-    deadline: OpaqueSlot<Deadline>,
-    cleanup: OpaqueSlot<CleanupOutcome>,
+    evaluation_context: Option<EvaluationContextId>,
+    resource_owner: Option<ResourceOwnerId>,
+    cancellation_scope: Option<CancellationScopeId>,
+    deadline: Option<Deadline>,
+    cleanup: Vec<CleanupOutcome>,
 }
 
 impl DownstreamOutcomeMetadata {
-    /// The foundation value: no later owner or cleanup claim is attached.
+    /// The pure-source value: no operational identity or cleanup claim.
     #[must_use]
-    pub const fn foundation() -> Self {
+    pub fn foundation() -> Self {
         Self {
-            evaluation_context: OpaqueSlot::absent(),
-            resource_owner: OpaqueSlot::absent(),
-            cancellation_scope: OpaqueSlot::absent(),
-            deadline: OpaqueSlot::absent(),
-            cleanup: OpaqueSlot::absent(),
+            evaluation_context: None,
+            resource_owner: None,
+            cancellation_scope: None,
+            deadline: None,
+            cleanup: Vec::new(),
         }
     }
 
-    /// Whether every later-owned outcome slot is explicitly absent.
-    #[must_use]
-    pub const fn is_foundation_only(&self) -> bool {
-        matches!(self.evaluation_context.state(), OpaqueSlotState::Absent)
-            && matches!(self.resource_owner.state(), OpaqueSlotState::Absent)
-            && matches!(self.cancellation_scope.state(), OpaqueSlotState::Absent)
-            && matches!(self.deadline.state(), OpaqueSlotState::Absent)
-            && matches!(self.cleanup.state(), OpaqueSlotState::Absent)
+    pub(crate) fn operational(
+        evaluation_context: EvaluationContextId,
+        resource_owner: ResourceOwnerId,
+        cancellation_scope: CancellationScopeId,
+        deadline: Option<Deadline>,
+        cleanup: Vec<CleanupOutcome>,
+    ) -> Self {
+        Self {
+            evaluation_context: Some(evaluation_context),
+            resource_owner: Some(resource_owner),
+            cancellation_scope: Some(cancellation_scope),
+            deadline,
+            cleanup,
+        }
     }
 
-    /// Opaque evaluation-context slot.
+    /// Whether this is the empty pure-source value.
     #[must_use]
-    pub const fn evaluation_context(&self) -> &OpaqueSlot<EvaluationContextId> {
-        &self.evaluation_context
+    pub fn is_foundation_only(&self) -> bool {
+        self.evaluation_context.is_none()
+            && self.resource_owner.is_none()
+            && self.cancellation_scope.is_none()
+            && self.deadline.is_none()
+            && self.cleanup.is_empty()
     }
 
-    /// Opaque resource-owner slot.
+    /// Explicit evaluation identity, absent for pure-source outcomes.
     #[must_use]
-    pub const fn resource_owner(&self) -> &OpaqueSlot<ResourceOwnerId> {
-        &self.resource_owner
+    pub const fn evaluation_context(&self) -> Option<EvaluationContextId> {
+        self.evaluation_context
     }
 
-    /// Opaque cancellation-scope slot.
+    /// Explicit resource owner, absent for pure-source outcomes.
     #[must_use]
-    pub const fn cancellation_scope(&self) -> &OpaqueSlot<CancellationScopeId> {
-        &self.cancellation_scope
+    pub const fn resource_owner(&self) -> Option<ResourceOwnerId> {
+        self.resource_owner
     }
 
-    /// Opaque deadline slot.
+    /// Explicit cancellation scope, absent for pure-source outcomes.
     #[must_use]
-    pub const fn deadline(&self) -> &OpaqueSlot<Deadline> {
-        &self.deadline
+    pub const fn cancellation_scope(&self) -> Option<CancellationScopeId> {
+        self.cancellation_scope
     }
 
-    /// Opaque cleanup-outcome slot.
+    /// The effective deadline, when present.
     #[must_use]
-    pub const fn cleanup(&self) -> &OpaqueSlot<CleanupOutcome> {
+    pub const fn deadline(&self) -> Option<Deadline> {
+        self.deadline
+    }
+
+    /// LIFO cleanup results in observation order.
+    #[must_use]
+    pub fn cleanup(&self) -> &[CleanupOutcome] {
         &self.cleanup
     }
 }

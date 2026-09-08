@@ -59,10 +59,16 @@ fn workspace_crates_follow_the_ratified_dependency_direction() {
 }
 
 #[test]
-fn downstream_seams_have_no_owner_implementation_or_wire_contract() {
+fn operational_context_and_later_seams_keep_the_ratified_boundary() {
     let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let source = fs::read_to_string(workspace.join("crates/opaal-runtime/src/seam.rs"))
-        .expect("the downstream seam owner should be readable");
+    let seam = fs::read_to_string(workspace.join("crates/opaal-runtime/src/seam.rs"))
+        .expect("the remaining seam owner should be readable");
+    let authority = fs::read_to_string(workspace.join("crates/opaal-runtime/src/authority.rs"))
+        .expect("the authority owner should be readable");
+    let context = fs::read_to_string(workspace.join("crates/opaal-runtime/src/context.rs"))
+        .expect("the operational context should be readable");
+    let lifetime = fs::read_to_string(workspace.join("crates/opaal-runtime/src/lifetime.rs"))
+        .expect("the lifetime owner should be readable");
 
     for required in [
         "EvaluationContextId",
@@ -73,11 +79,20 @@ fn downstream_seams_have_no_owner_implementation_or_wire_contract() {
         "CancellationScopeId",
         "Deadline",
         "CleanupOutcome",
-        "ActionId",
-        "ProjectId",
-        "TaskId",
     ] {
-        assert!(source.contains(required), "missing typed seam `{required}`");
+        assert!(
+            authority.contains(required)
+                || context.contains(required)
+                || lifetime.contains(required),
+            "missing concrete operational contract `{required}`"
+        );
+    }
+
+    for required in ["ActionId", "ProjectId", "TaskId", "ToolId", "EnvironmentId"] {
+        assert!(
+            seam.contains(required),
+            "missing later-owned seam `{required}`"
+        );
     }
 
     for forbidden in [
@@ -86,18 +101,14 @@ fn downstream_seams_have_no_owner_implementation_or_wire_contract() {
         "std::net",
         "std::process",
         "std::thread",
-        "std::time",
-        "opaal_platform",
-        "serde",
-        "serialize",
-        "deserialize",
-        "pub fn grant",
-        "pub fn execute",
         "pub fn discover",
     ] {
         assert!(
-            !source.contains(forbidden),
-            "downstream seam source must not implement `{forbidden}`"
+            !seam.contains(forbidden)
+                && !authority.contains(forbidden)
+                && !context.contains(forbidden)
+                && !lifetime.contains(forbidden),
+            "operational metadata must not implement `{forbidden}`"
         );
     }
 }

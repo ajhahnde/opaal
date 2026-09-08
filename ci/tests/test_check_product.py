@@ -151,7 +151,7 @@ publish = false
         )
         findings = "\n".join(checker.source_problems(self.root, run=self.runner))
         self.assertIn("does not run the product source validator", findings)
-        self.assertIn("does not run the four-target fuzz smoke", findings)
+        self.assertIn("does not run the supported fuzz smoke", findings)
         self.assertIn("required aggregate", findings)
         self.assertIn("removed transition checker", findings)
 

@@ -20,14 +20,14 @@ use std::process::{Child, Command, Stdio};
 use std::time::Duration;
 
 use opaal_platform::{
-    Capabilities, Capability, ChildProcess, DescriptorEndpoint, DescriptorReadError,
-    DescriptorWriteError, DirectoryEntry, DirectoryEntryKind, DirectoryReadError,
-    DirectoryReadRequest, DirectoryStream, FileActionError, FileIoEndpoint, FileOpenMode,
-    FileOpenRequest, ForegroundTerminalGuard, JobControlSignalGuard, JobSignal, PipeEndpoints,
-    PipeError, Platform, PlatformError, ProcessGroupId, ProcessStatus, ProcessTransition,
-    SignalError, SpawnError, SpawnRequest, StandardDirectories, StandardDirectoryEnvironment,
-    TerminalModeGuard, TerminalModeToken, TerminalSize, TerminateError, WaitError,
-    WorkingDirectoryError, WorkingDirectoryRequest,
+    AuthorityEnforcement, AuthorityQuery, Capabilities, Capability, ChildProcess,
+    DescriptorEndpoint, DescriptorReadError, DescriptorWriteError, DirectoryEntry,
+    DirectoryEntryKind, DirectoryReadError, DirectoryReadRequest, DirectoryStream, FileActionError,
+    FileIoEndpoint, FileOpenMode, FileOpenRequest, ForegroundTerminalGuard, JobControlSignalGuard,
+    JobSignal, PipeEndpoints, PipeError, Platform, PlatformError, ProcessGroupId, ProcessStatus,
+    ProcessTransition, SignalError, SpawnError, SpawnRequest, StandardDirectories,
+    StandardDirectoryEnvironment, TerminalModeGuard, TerminalModeToken, TerminalSize,
+    TerminateError, WaitError, WorkingDirectoryError, WorkingDirectoryRequest,
 };
 
 /// A uniquely owned POSIX descriptor with close-on-exec discipline.
@@ -293,6 +293,11 @@ impl PosixChild {
 impl Platform for PosixPlatform {
     fn capabilities(&self) -> Capabilities {
         Capabilities::full()
+    }
+
+    fn authority_enforcement(&self, query: AuthorityQuery<'_>) -> AuthorityEnforcement {
+        let _ = query;
+        AuthorityEnforcement::Unsupported
     }
 
     fn is_terminal(&self) -> bool {

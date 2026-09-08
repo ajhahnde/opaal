@@ -42,7 +42,7 @@ corpus_roots=(
   "$repository_root/tests/opaal-foundation/language/types/invalid"
 )
 
-for target in lexer parser expander resources; do
+for target in lexer parser expander resources secret_sinks; do
   corpus="$work/$target"
   mkdir "$corpus"
   cargo fuzz run \

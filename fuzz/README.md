@@ -1,11 +1,12 @@
 # Fuzz targets
 
-The separate unpublished `opaal-fuzz` package owns four targets:
+The separate unpublished `opaal-fuzz` package owns five targets:
 
 - `lexer` checks lossless tokenization and progress;
 - `parser` checks bounded parsing and syntax-tree traversal;
 - `expander` checks pure word expansion; and
-- `resources` varies analysis and evaluation ceilings and cancellation.
+- `resources` varies analysis and evaluation ceilings and cancellation; and
+- `secret_sinks` checks raw and encoded secret redaction.
 
 Invalid UTF-8 is rejected through the normal source boundary. Targets launch no
 process and perform no platform I/O.
