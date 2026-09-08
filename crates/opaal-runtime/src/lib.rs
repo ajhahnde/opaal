@@ -29,6 +29,7 @@ pub mod operation;
 pub mod outcome;
 pub mod plan;
 pub mod presentation;
+pub mod project;
 pub mod query;
 pub mod resolve;
 mod scope;

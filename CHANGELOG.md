@@ -6,6 +6,13 @@ All notable changes to OPAAL are documented here.
 
 ### Changed
 
+- Add typed actions with explicit effect declarations, exported project tasks,
+  strict project/authority/tool-lock documents, non-executing task inspection,
+  and explicit project checks.
+- Carry a concrete action identity across analysis, help, and editor queries,
+  carry project, task, and environment identities through project checks and
+  downstream metadata, and expose project-qualified tool identities through
+  manifest and task inspection.
 - Add one explicit fail-closed embedding context for exact authority verdicts,
   cancellation and deadlines, secret redaction, and owned-resource cleanup
   while keeping OPAAL source pure-only.

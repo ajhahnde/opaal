@@ -86,6 +86,8 @@ pub enum StatementKind {
     Assignment(Assignment),
     Environment(EnvironmentStatement),
     Function(FunctionDefinition),
+    Action(ActionDefinition),
+    Task(TaskDefinition),
     If(IfStatement),
     While(WhileStatement),
     For(ForStatement),
@@ -114,13 +116,21 @@ pub enum ModuleImportSource {
         module: Identifier,
         span: Span,
     },
+    /// Declarative metadata from one explicitly selected project manifest.
+    Project {
+        namespace: Identifier,
+        module: Identifier,
+        span: Span,
+    },
 }
 
 impl ModuleImportSource {
     #[must_use]
     pub const fn span(self) -> Span {
         match self {
-            Self::Local { path } | Self::Standard { span: path, .. } => path,
+            Self::Local { path }
+            | Self::Standard { span: path, .. }
+            | Self::Project { span: path, .. } => path,
         }
     }
 }
@@ -223,6 +233,75 @@ pub struct FunctionDefinition {
     pub parameters: Vec<Parameter>,
     pub return_type: Option<TypeReference>,
     pub body: Block,
+}
+
+/// One top-level effect-aware callable declaration.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ActionDefinition {
+    pub documentation: Option<DocumentationBlock>,
+    pub name: Identifier,
+    pub type_parameters: Vec<TypeParameter>,
+    pub parameters: Vec<Parameter>,
+    pub return_type: TypeReference,
+    pub effects: Vec<EffectRequest>,
+    pub effects_span: Span,
+    pub body: Block,
+}
+
+impl ActionDefinition {
+    /// Projects the shared callable portion for existing type/evaluation machinery.
+    #[must_use]
+    pub fn as_function(&self) -> FunctionDefinition {
+        FunctionDefinition {
+            documentation: self.documentation.clone(),
+            name: self.name,
+            type_parameters: self.type_parameters.clone(),
+            parameters: self.parameters.clone(),
+            return_type: Some(self.return_type.clone()),
+            body: self.body.clone(),
+        }
+    }
+}
+
+/// One source-order static request in an action contract.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EffectRequest {
+    pub capability: CapabilityName,
+    pub arguments: Vec<StaticEffectArgument>,
+    pub span: Span,
+}
+
+/// A two-segment capability spelling such as `filesystem.read`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CapabilityName {
+    pub family: Identifier,
+    pub operation: Identifier,
+    pub span: Span,
+}
+
+/// The only expressions admitted in a static effect request.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum StaticEffectArgument {
+    Literal(Literal),
+    Qualified(QualifiedName),
+}
+
+impl StaticEffectArgument {
+    #[must_use]
+    pub const fn span(&self) -> Span {
+        match self {
+            Self::Literal(literal) => literal.span(),
+            Self::Qualified(name) => name.span,
+        }
+    }
+}
+
+/// One root-module export of exactly one qualified action.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TaskDefinition {
+    pub documentation: Option<DocumentationBlock>,
+    pub name: Identifier,
+    pub action: QualifiedName,
 }
 
 impl fmt::Debug for FunctionDefinition {

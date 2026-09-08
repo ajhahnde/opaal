@@ -280,12 +280,17 @@ impl<'source> SpanChecker<'source> {
             StatementKind::ModuleImport(import) => {
                 self.span(import.source.span());
                 self.identifier(import.alias);
-                if let opaal_syntax::ModuleImportSource::Standard {
-                    namespace, module, ..
-                } = import.source
-                {
-                    self.identifier(namespace);
-                    self.identifier(module);
+                match import.source {
+                    opaal_syntax::ModuleImportSource::Standard {
+                        namespace, module, ..
+                    }
+                    | opaal_syntax::ModuleImportSource::Project {
+                        namespace, module, ..
+                    } => {
+                        self.identifier(namespace);
+                        self.identifier(module);
+                    }
+                    opaal_syntax::ModuleImportSource::Local { .. } => {}
                 }
             }
             StatementKind::ModuleExport(export) => {
@@ -356,6 +361,49 @@ impl<'source> SpanChecker<'source> {
                     self.type_reference(return_type);
                 }
                 self.block(&function.body);
+            }
+            StatementKind::Action(action) => {
+                if let Some(documentation) = &action.documentation {
+                    for line in &documentation.lines {
+                        self.span(*line);
+                    }
+                }
+                self.identifier(action.name);
+                for parameter in &action.type_parameters {
+                    self.span(parameter.span);
+                    self.identifier(parameter.name);
+                }
+                for parameter in &action.parameters {
+                    self.parameter(parameter);
+                }
+                self.type_reference(&action.return_type);
+                self.span(action.effects_span);
+                for effect in &action.effects {
+                    self.span(effect.span);
+                    self.span(effect.capability.span);
+                    self.identifier(effect.capability.family);
+                    self.identifier(effect.capability.operation);
+                    for argument in &effect.arguments {
+                        match argument {
+                            opaal_syntax::StaticEffectArgument::Literal(literal) => {
+                                self.literal(literal);
+                            }
+                            opaal_syntax::StaticEffectArgument::Qualified(name) => {
+                                self.qualified_name(name);
+                            }
+                        }
+                    }
+                }
+                self.block(&action.body);
+            }
+            StatementKind::Task(task) => {
+                if let Some(documentation) = &task.documentation {
+                    for line in &documentation.lines {
+                        self.span(*line);
+                    }
+                }
+                self.identifier(task.name);
+                self.qualified_name(&task.action);
             }
             StatementKind::If(statement) => self.if_statement(statement),
             StatementKind::While(statement) => {

@@ -8,7 +8,7 @@ use crate::command::{
     CommandSignature,
 };
 pub use crate::documentation::{CommandDocumentation, Documentation};
-use crate::module::{FunctionSignature, ModuleId, ModuleProgram, NominalType};
+use crate::module::{CallableKind, FunctionSignature, ModuleId, ModuleProgram, NominalType};
 use crate::operation::OperationDescriptor;
 
 /// The semantic class returned by qualified opaal module/type/operation help.
@@ -171,6 +171,7 @@ pub enum HelpKind {
     Alias,
     Reserved,
     Function,
+    Action,
 }
 
 /// Structured signature metadata retained in one immutable help entry.
@@ -178,7 +179,7 @@ pub enum HelpKind {
 pub enum HelpSignature {
     Builtin(CommandSignature),
     Reserved,
-    Function(FunctionSignature),
+    Function(Box<FunctionSignature>),
 }
 
 /// Namespace metadata retained by one help result.
@@ -199,6 +200,8 @@ pub enum HelpNamespace {
     },
     /// A visible lexical function, outside the command registry.
     Function,
+    /// A visible typed action, outside the command registry.
+    Action,
 }
 
 /// One immutable command-namespace or visible named-function help result.
@@ -316,12 +319,16 @@ impl HelpCatalog {
                     };
                     let inspection = callable.inspection()?.clone();
                     let signature = inspection.signature().clone();
+                    let (kind, namespace) = match signature.kind() {
+                        CallableKind::Function => (HelpKind::Function, HelpNamespace::Function),
+                        CallableKind::Action => (HelpKind::Action, HelpNamespace::Action),
+                    };
                     Some(HelpEntry {
-                        kind: HelpKind::Function,
+                        kind,
                         name: signature.name().to_owned(),
                         documentation: signature.documentation().cloned().unwrap_or_default(),
-                        signature: HelpSignature::Function(signature),
-                        namespace: HelpNamespace::Function,
+                        signature: HelpSignature::Function(Box::new(signature)),
+                        namespace,
                         definition: Some(inspection),
                     })
                 }),
@@ -420,7 +427,7 @@ fn render_detail(output: &mut String, entry: &HelpEntry) {
                 output.push_str(&format!("  replacement: {replacement}\n"));
             }
         }
-        HelpNamespace::Core { .. } | HelpNamespace::Function => {}
+        HelpNamespace::Core { .. } | HelpNamespace::Function | HelpNamespace::Action => {}
     }
     match &entry.signature {
         HelpSignature::Function(_) => {
@@ -428,6 +435,28 @@ fn render_detail(output: &mut String, entry: &HelpEntry) {
                 "  signature: {}\n",
                 signature_text(&entry.signature)
             ));
+            if let HelpSignature::Function(signature) = &entry.signature
+                && signature.kind() == CallableKind::Action
+            {
+                if let Some(action) = signature.downstream().action() {
+                    output.push_str(&format!(
+                        "  action identity: {}\n  contract digest: sha256:{}\n",
+                        action.qualified_name(),
+                        action.contract_digest()
+                    ));
+                }
+                output.push_str("  effects:\n");
+                for effect in signature.declared_effects() {
+                    output.push_str("    ");
+                    output.push_str(effect.capability());
+                    if !effect.arguments().is_empty() {
+                        output.push('(');
+                        output.push_str(&effect.arguments().join(", "));
+                        output.push(')');
+                    }
+                    output.push('\n');
+                }
+            }
             if let Some(definition) = &entry.definition {
                 output.push_str(&format!(
                     "  defined at: {}:{}:{}\n",
@@ -476,7 +505,7 @@ fn render_detail(output: &mut String, entry: &HelpEntry) {
                 }
             }
         }
-        HelpNamespace::Reserved { .. } | HelpNamespace::Function => {}
+        HelpNamespace::Reserved { .. } | HelpNamespace::Function | HelpNamespace::Action => {}
     }
     output.push_str(&format!("  summary: {}\n", summary(entry)));
     if !entry.documentation.is_empty() {
@@ -508,8 +537,12 @@ fn signature_text(signature: &HelpSignature) -> String {
                 .map(|parameter| format!("{}: {}", parameter.name(), parameter.value_type()))
                 .collect::<Vec<_>>()
                 .join(", ");
+            let keyword = match signature.kind() {
+                CallableKind::Function => "def",
+                CallableKind::Action => "action",
+            };
             format!(
-                "def {}({parameters}) -> {}",
+                "{keyword} {}({parameters}) -> {}",
                 signature.name(),
                 signature.result()
             )
@@ -535,7 +568,8 @@ fn list_summary(entry: &HelpEntry) -> String {
         HelpNamespace::Reserved {
             replacement: None, ..
         }
-        | HelpNamespace::Function => {}
+        | HelpNamespace::Function
+        | HelpNamespace::Action => {}
     }
     rendered
 }
@@ -566,6 +600,7 @@ const fn kind_name(kind: HelpKind) -> &'static str {
         HelpKind::Alias => "alias",
         HelpKind::Reserved => "reserved",
         HelpKind::Function => "function",
+        HelpKind::Action => "action",
     }
 }
 

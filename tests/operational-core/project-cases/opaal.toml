@@ -1,0 +1,18 @@
+schema_version = 1
+
+[project]
+name = "release_readiness"
+root_module = "tasks.opaal"
+required_opaal = ">=1.0.0-alpha.1,<2.0.0"
+
+[paths]
+root = "."
+evidence = "evidence.json"
+
+[tools.git]
+adapter = "git"
+version = ">=2.39.0,<3.0.0"
+
+[environments.ci]
+authority = "authority-ci.toml"
+tool_lock = "tools-host.toml"

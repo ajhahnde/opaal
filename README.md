@@ -5,9 +5,9 @@ contains its standalone syntax, runtime, command-line client, platform
 contracts, POSIX adapter, and Language Server Protocol implementation.
 
 > Project status: `1.0.0-alpha.1` is an unreleased development version. The
-> current foundation is intentionally pure: source cannot exercise filesystem,
-> process, environment, network, terminal, project, action, task, package, or
-> workflow authority.
+> current authoring surface is intentionally non-operational: typed actions and
+> explicit project tasks can be inspected and checked, but declared effects
+> cannot execute. Package and controlled workflow execution remain absent.
 
 ## Try OPAAL
 
@@ -43,14 +43,20 @@ interactive client, which presents completed values.
 
 - `opaal [SCRIPT [ARG...]]` runs one explicit `.opaal` root.
 - `opaal check SOURCE` analyzes a source graph without executing it.
+- `opaal check --project opaal.toml ...` validates one explicit task,
+  environment, authority document, tool lock, and typed input set without
+  executing an action or adapter.
+- `opaal task inspect --project opaal.toml TASK` reports the task's shared
+  action signature, declared effects, tools, and environments.
 - `opaal format --check|--write PATH...` checks or atomically rewrites source.
 - `opaal plan SOURCE` returns the structured `PLAN004` unsupported refusal;
   controlled planning authority is not implemented.
 - `opaal-language-server` provides stdio diagnostics, completion, hover,
   signature help, definitions, references, and whole-document formatting.
 
-Known effectful syntax is rejected during analysis. A dynamically reached
-effect returns a structured refusal before host access.
+Effectful action declarations are statically analyzed, but invoking an action
+with any declared effect returns a structured refusal before host access. Pure
+actions retain the existing evaluator route.
 
 ## Workspace
 
@@ -90,6 +96,7 @@ claim packaging by another operating system, Redox support, or physical
 hardware qualification.
 
 See the [documentation index](docs/README.md), [language foundation](docs/language-foundation.md),
+[actions and explicit projects](docs/actions-and-projects.md),
 [architecture](docs/architecture.md), [development guide](docs/development.md),
 [contribution guide](CONTRIBUTING.md), [security policy](SECURITY.md), and
 [changelog](CHANGELOG.md).

@@ -12,6 +12,7 @@ pub mod hint;
 pub mod history;
 pub mod interactive;
 pub mod plan;
+pub mod project;
 pub mod report;
 pub mod terminal_editor;
 

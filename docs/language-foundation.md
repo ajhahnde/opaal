@@ -1,9 +1,9 @@
 # OPAAL language foundation
 
-OPAAL `1.0.0-alpha.1` defines pure source, module, type, operation, outcome,
-stream, tooling, and resource semantics. A separate embedding contract defines
-explicit authority and adapter-owned lifetimes, but source does not define
-grants, projects, actions, tasks, packages, or controlled workflows.
+OPAAL `1.0.0-alpha.1` defines source, module, type, action, project-authoring,
+outcome, stream, tooling, and resource semantics. A separate embedding contract
+defines explicit authority and adapter-owned lifetimes. Project checks validate
+declarations and grants without enabling adapters or controlled execution.
 
 ## Source and modules
 
@@ -22,6 +22,12 @@ export { model }
 
 Aliases and re-exports retain one canonical module identity. Ambient preludes,
 wildcard imports, filesystem search paths, and package discovery are absent.
+
+An explicitly selected `opaal.toml` additionally permits imports from the
+closed `project::context`, `project::tools`, `project::endpoints`, and
+`project::secrets` namespaces. These imports are declarative identities, not
+ordinary values or a route to ambient configuration. See
+[Actions and explicit projects](actions-and-projects.md).
 
 ## Types, patterns, operations, and streams
 
@@ -46,9 +52,12 @@ language errors, cooperative cancellation, classified refusal, and fatal host
 or reporting failure. Completed stages, partial effects, and cleanup failures
 remain ordered secondary evidence.
 
-Known filesystem, process, environment, network, terminal, secret, clock,
-random, substitution, redirection, and background routes are rejected during
-analysis. A dynamically reached route is refused before platform access.
+Actions may declare the closed static effect taxonomy. Analysis rejects
+undeclared callee effects, cycles, action values, function-to-action calls, and
+invalid project scopes. Invoking an action with a declared effect is refused
+before platform access. Other known filesystem, process, environment, network,
+terminal, random, substitution, redirection, and background routes retain
+their existing refusal boundary.
 `opaal plan` returns `PLAN004` after reading the explicit root but before
 capturing ambient launcher or executable state.
 
@@ -69,4 +78,4 @@ instantiations, overload candidates, diagnostics, and work units. Evaluation
 bounds steps, calls, retained collection items, and retained bytes. Exact limits
 succeed; the first excess returns structured failure without a partial program.
 
-[← Documentation index](README.md) · [Architecture](architecture.md) · [Development](development.md)
+[← Documentation index](README.md) · [Actions and explicit projects](actions-and-projects.md) · [Architecture](architecture.md) · [Development](development.md)

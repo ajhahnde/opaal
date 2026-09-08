@@ -91,7 +91,7 @@ fn operational_context_and_later_seams_keep_the_ratified_boundary() {
     for required in ["ActionId", "ProjectId", "TaskId", "ToolId", "EnvironmentId"] {
         assert!(
             seam.contains(required),
-            "missing later-owned seam `{required}`"
+            "missing concrete identity seam `{required}`"
         );
     }
 
