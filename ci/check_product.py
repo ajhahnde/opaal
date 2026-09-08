@@ -28,7 +28,7 @@ WORKSPACE_PACKAGES = {
     "crates/opaal-cli": "opaal-cli",
 }
 PRIMARY_BINARIES = {"opaal", "opaal-language-server"}
-FUZZ_TARGETS = {"lexer", "parser", "expander", "resources"}
+FUZZ_TARGETS = {"lexer", "parser", "expander", "resources", "secret_sinks"}
 SOURCE_DIRECTIVE = re.compile(
     r"^[ \t]*language[ \t]+[0-9]+(?=[ \t]*(?:[;#\r\n]|$))", re.MULTILINE
 )
@@ -269,7 +269,7 @@ def source_problems(root: Path, *, run: Run = run_command) -> list[str]:
         if "python3 ci/check_product.py source" not in ci:
             problems.append("CI does not run the product source validator")
         if "fuzz/run-smoke.sh" not in ci:
-            problems.append("CI does not run the four-target fuzz smoke")
+            problems.append("CI does not run the supported fuzz smoke")
         if not re.search(r"needs:\s*\[foundation, policy, fuzz\]", ci):
             problems.append("CI required aggregate does not require foundation, policy, and fuzz")
         if "python3 ci/check_product.py unpublished" not in release:

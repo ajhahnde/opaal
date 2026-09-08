@@ -1,8 +1,9 @@
 # OPAAL language foundation
 
 OPAAL `1.0.0-alpha.1` defines pure source, module, type, operation, outcome,
-stream, tooling, and resource semantics. It does not define authority grants,
-projects, actions, tasks, packages, or controlled workflows.
+stream, tooling, and resource semantics. A separate embedding contract defines
+explicit authority and adapter-owned lifetimes, but source does not define
+grants, projects, actions, tasks, packages, or controlled workflows.
 
 ## Source and modules
 
@@ -50,6 +51,11 @@ random, substitution, redirection, and background routes are rejected during
 analysis. A dynamically reached route is refused before platform access.
 `opaal plan` returns `PLAN004` after reading the explicit root but before
 capturing ambient launcher or executable state.
+
+Embedders may construct the documented
+[authority and resource context](authority-and-resources.md). Its presence does
+not alter parsing, analysis, pure evaluation, planning refusal, or any source
+host-access boundary.
 
 ## Tool and resource agreement
 

@@ -138,7 +138,7 @@ impl OperationDescriptor {
         self.purity
     }
 
-    /// Opaque attachment points reserved for later execution/project owners.
+    /// Empty operational metadata plus later-owned execution/project slots.
     #[must_use]
     pub const fn downstream(&self) -> &DownstreamCallMetadata {
         &self.downstream

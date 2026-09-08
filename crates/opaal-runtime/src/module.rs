@@ -1798,7 +1798,7 @@ impl FunctionSignature {
         self.documentation.as_ref()
     }
 
-    /// Opaque attachment points reserved for later action/project owners.
+    /// Empty operational metadata plus later-owned action/project slots.
     #[must_use]
     pub const fn downstream(&self) -> &crate::seam::DownstreamCallMetadata {
         &self.downstream

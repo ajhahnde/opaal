@@ -4,6 +4,7 @@ use std::ffi::{OsStr, OsString};
 use std::path::Path;
 
 use opaal_platform::{
+    AuthorityEffect, AuthorityEnforcement, AuthorityProfile, AuthorityQuery, AuthorityScope,
     Capabilities, Capability, ChildDescriptor, ChildProcess, DescriptorEndpoint,
     DescriptorReadError, DirectoryEntry, DirectoryEntryKind, DirectoryReadError,
     DirectoryReadRequest, FAKE_STOP_SIGNAL, FakeChild, FakePlatform, FileActionError, FileOpenMode,
@@ -54,6 +55,34 @@ fn require_rejects_an_unsupported_capability_naming_it() {
         Err(PlatformError::Unsupported {
             capability: Capability::ProcessSpawn,
         }),
+    );
+}
+
+#[test]
+fn authority_enforcement_is_fail_closed_and_scriptable() {
+    let query = AuthorityQuery::new(
+        AuthorityEffect::NetworkHttp,
+        AuthorityScope::Endpoint {
+            endpoint: "readiness",
+            method: "GET",
+        },
+    );
+    assert_eq!(
+        FakePlatform::none().authority_enforcement(query),
+        AuthorityEnforcement::Unsupported
+    );
+
+    let profile = AuthorityProfile::unsupported()
+        .with(AuthorityEffect::NetworkHttp, AuthorityEnforcement::Unknown);
+    let platform = FakePlatform::with_authority_profile(Capabilities::full(), profile);
+    assert_eq!(
+        platform.authority_enforcement(query),
+        AuthorityEnforcement::Unknown
+    );
+    assert_eq!(
+        RecordingPlatform::new(platform).authority_enforcement(query),
+        AuthorityEnforcement::Unknown,
+        "the recording wrapper must preserve its adapter's authority answer"
     );
 }
 

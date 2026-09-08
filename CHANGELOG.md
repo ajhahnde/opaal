@@ -6,12 +6,15 @@ All notable changes to OPAAL are documented here.
 
 ### Changed
 
+- Add one explicit fail-closed embedding context for exact authority verdicts,
+  cancellation and deadlines, secret redaction, and owned-resource cleanup
+  while keeping OPAAL source pure-only.
 - Treat every UTF-8 `.opaal` module as ordinary directive-free OPAAL source.
 - Use one parser, syntax tree, module identity, formatter, runtime, and semantic
   query model across file, interactive, embedding, and editor frontends.
 - Key command-namespace compatibility metadata to the installed OPAAL
   toolchain major while retaining independent protocol and result schemas.
-- Keep the current pure authority boundary, structured outcomes, deterministic
+- Keep the pure source boundary, structured outcomes, deterministic
   resource ceilings, module aliases, nominal types, operations, and streams.
 
 ### Removed
@@ -25,6 +28,6 @@ All notable changes to OPAAL are documented here.
 
 - Add permanent source-product and fail-closed unpublished-release validators.
 - Preserve stable `required` and `security-required` workflow aggregates,
-  public-boundary checks, benchmark validation, and four-target fuzz smoke.
+  public-boundary checks, benchmark validation, and five-target fuzz smoke.
 
 `1.0.0-alpha.1` remains an unreleased, non-publishable development version.

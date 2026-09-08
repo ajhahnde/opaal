@@ -54,6 +54,20 @@ terminal presentation, and adapters; their presence grants no source authority.
 Outcome composition keeps values, statuses, language errors, cancellation,
 refusal, fatal failure, partial evidence, and cleanup evidence distinct.
 
+## Operational embedding boundary
+
+`opaal-runtime` owns the explicit authority and resource context. Exact typed
+requests are matched only against external grant or deny rows; `opaal-platform`
+adapters report enforcement without granting permission. The context also owns
+sticky cancellation, a narrow-only monotonic deadline, injected-secret
+redaction, and a LIFO cleanup stack. The POSIX and fake platforms implement the
+same enforcement query contract.
+
+The source evaluator does not construct or consume this context. Pure call and
+outcome constructors retain empty operational metadata, so adding the embedding
+boundary cannot activate an effectful source route. See
+[Authority and resource embedding](authority-and-resources.md).
+
 ## Language Server Protocol
 
 `opaal-language-server` supports initialize, shutdown, exit, full-document

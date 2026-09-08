@@ -249,6 +249,18 @@ impl<T, E> ExecutionOutcome<T, E> {
         }
     }
 
+    pub(crate) fn with_downstream(
+        primary: PrimaryOutcome<T, E>,
+        evidence: Vec<OutcomeEvidence<E>>,
+        downstream: DownstreamOutcomeMetadata,
+    ) -> Self {
+        Self {
+            primary,
+            evidence,
+            downstream,
+        }
+    }
+
     /// The sole primary outcome.
     #[must_use]
     pub const fn primary(&self) -> &PrimaryOutcome<T, E> {
@@ -261,7 +273,7 @@ impl<T, E> ExecutionOutcome<T, E> {
         &self.evidence
     }
 
-    /// Opaque attachment points reserved for later execution/resource owners.
+    /// Explicit embedding outcome metadata; empty for pure-source evaluation.
     #[must_use]
     pub const fn downstream(&self) -> &DownstreamOutcomeMetadata {
         &self.downstream

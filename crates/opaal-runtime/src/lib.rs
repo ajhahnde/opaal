@@ -2,12 +2,14 @@
 
 //! Platform-independent runtime contracts for OPAAL.
 
+pub mod authority;
 pub mod background;
 pub mod builtin;
 mod capsule;
 pub mod carrier;
 pub mod closure;
 pub mod command;
+pub mod context;
 pub mod convert;
 pub mod directory;
 pub mod documentation;
@@ -21,6 +23,7 @@ pub mod help;
 pub mod internal;
 pub mod intrinsic;
 pub mod job;
+pub mod lifetime;
 pub mod module;
 pub mod operation;
 pub mod outcome;
@@ -31,6 +34,7 @@ pub mod resolve;
 mod scope;
 pub mod script;
 pub mod seam;
+pub mod security;
 pub mod session;
 pub mod stream;
 pub mod structured;
