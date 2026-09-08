@@ -20,6 +20,19 @@ pub enum Mode {
     Check {
         source: PathBuf,
     },
+    ProjectCheck {
+        project: PathBuf,
+        task: String,
+        environment: String,
+        authority: PathBuf,
+        tools: PathBuf,
+        inputs: Vec<(String, String)>,
+    },
+    TaskHelp,
+    TaskInspect {
+        project: PathBuf,
+        task: String,
+    },
     PlanHelp,
     Plan {
         source: PathBuf,
@@ -56,6 +69,7 @@ pub enum CliError {
     MissingPlanSource,
     UnexpectedPlanSource(String),
     StdinPlanSource,
+    InvalidProjectArgument(String),
 }
 
 impl CliError {
@@ -85,6 +99,7 @@ impl CliError {
             Self::StdinPlanSource => {
                 "'-' is not supported as a planner source; name a file".to_owned()
             }
+            Self::InvalidProjectArgument(message) => message.clone(),
         }
     }
 }
@@ -108,6 +123,7 @@ where
             });
         }
         Some("check") => return parse_check_args(arguments.into_iter().skip(1)),
+        Some("task") => return parse_task_args(arguments.into_iter().skip(1)),
         Some("plan") => return parse_plan_args(arguments.into_iter().skip(1)),
         Some("format") => return parse_format_args(arguments.into_iter().skip(1)),
         Some(text) if text.starts_with('-') && text != "-" && text != "--" => {
@@ -149,7 +165,170 @@ fn parse_check_args<I>(arguments: I) -> Result<Invocation, CliError>
 where
     I: IntoIterator<Item = OsString>,
 {
-    parse_single_source(arguments, false)
+    let arguments = arguments.into_iter().collect::<Vec<_>>();
+    if arguments.iter().any(|argument| argument == "--project") {
+        parse_project_check_args(&arguments)
+    } else {
+        parse_single_source(arguments, false)
+    }
+}
+
+fn parse_project_check_args(arguments: &[OsString]) -> Result<Invocation, CliError> {
+    let mut project = None;
+    let mut task = None;
+    let mut environment = None;
+    let mut authority = None;
+    let mut tools = None;
+    let mut inputs = Vec::new();
+    let mut index = 0;
+    while index < arguments.len() {
+        let option = arguments[index].to_str().ok_or_else(|| {
+            CliError::InvalidProjectArgument("project option names must be UTF-8".to_owned())
+        })?;
+        index += 1;
+        match option {
+            "--project" => set_path_option(&mut project, "--project", arguments, &mut index)?,
+            "--task" => set_text_option(&mut task, "--task", arguments, &mut index)?,
+            "--environment" => {
+                set_text_option(&mut environment, "--environment", arguments, &mut index)?;
+            }
+            "--authority" => {
+                set_path_option(&mut authority, "--authority", arguments, &mut index)?;
+            }
+            "--tools" => set_path_option(&mut tools, "--tools", arguments, &mut index)?,
+            "--input" => {
+                let value = text_option_value("--input", arguments, &mut index)?;
+                let (name, value) = value.split_once('=').ok_or_else(|| {
+                    CliError::InvalidProjectArgument("--input requires name=value".to_owned())
+                })?;
+                if name.is_empty() {
+                    return Err(CliError::InvalidProjectArgument(
+                        "--input name cannot be empty".to_owned(),
+                    ));
+                }
+                if inputs.iter().any(|(existing, _)| existing == name) {
+                    return Err(CliError::InvalidProjectArgument(format!(
+                        "duplicate --input name '{name}'"
+                    )));
+                }
+                inputs.push((name.to_owned(), value.to_owned()));
+            }
+            "--help" if arguments.len() == 1 => {
+                return Ok(Invocation {
+                    mode: Mode::CheckHelp,
+                });
+            }
+            value => {
+                return Err(CliError::InvalidProjectArgument(format!(
+                    "unexpected project check argument '{value}'"
+                )));
+            }
+        }
+    }
+    Ok(Invocation {
+        mode: Mode::ProjectCheck {
+            project: required_option(project, "--project")?,
+            task: required_option(task, "--task")?,
+            environment: required_option(environment, "--environment")?,
+            authority: required_option(authority, "--authority")?,
+            tools: required_option(tools, "--tools")?,
+            inputs,
+        },
+    })
+}
+
+fn parse_task_args<I>(arguments: I) -> Result<Invocation, CliError>
+where
+    I: IntoIterator<Item = OsString>,
+{
+    let arguments = arguments.into_iter().collect::<Vec<_>>();
+    if arguments.as_slice() == [OsString::from("--help")] {
+        return Ok(Invocation {
+            mode: Mode::TaskHelp,
+        });
+    }
+    if arguments.first().and_then(|value| value.to_str()) != Some("inspect") {
+        return Err(CliError::InvalidProjectArgument(
+            "task requires `inspect --project opaal.toml TASK`".to_owned(),
+        ));
+    }
+    let mut project = None;
+    let mut task = None;
+    let mut index = 1;
+    while index < arguments.len() {
+        if arguments[index] == "--project" {
+            index += 1;
+            if project.is_some() {
+                return Err(CliError::DuplicateOption("--project"));
+            }
+            project = Some(PathBuf::from(arguments.get(index).ok_or_else(|| {
+                CliError::InvalidProjectArgument("--project requires a path".to_owned())
+            })?));
+            index += 1;
+        } else if task.is_none() {
+            task = Some(arguments[index].clone().into_string().map_err(|_| {
+                CliError::InvalidProjectArgument("task name must be UTF-8".to_owned())
+            })?);
+            index += 1;
+        } else {
+            return Err(CliError::InvalidProjectArgument(
+                "task inspect accepts exactly one task name".to_owned(),
+            ));
+        }
+    }
+    Ok(Invocation {
+        mode: Mode::TaskInspect {
+            project: required_option(project, "--project")?,
+            task: required_option(task, "TASK")?,
+        },
+    })
+}
+
+fn required_option<T>(value: Option<T>, name: &'static str) -> Result<T, CliError> {
+    value.ok_or_else(|| CliError::InvalidProjectArgument(format!("missing required {name}")))
+}
+
+fn set_path_option(
+    slot: &mut Option<PathBuf>,
+    name: &'static str,
+    arguments: &[OsString],
+    index: &mut usize,
+) -> Result<(), CliError> {
+    if slot.is_some() {
+        return Err(CliError::DuplicateOption(name));
+    }
+    *slot = Some(PathBuf::from(arguments.get(*index).ok_or_else(|| {
+        CliError::InvalidProjectArgument(format!("{name} requires a value"))
+    })?));
+    *index += 1;
+    Ok(())
+}
+
+fn set_text_option(
+    slot: &mut Option<String>,
+    name: &'static str,
+    arguments: &[OsString],
+    index: &mut usize,
+) -> Result<(), CliError> {
+    if slot.is_some() {
+        return Err(CliError::DuplicateOption(name));
+    }
+    *slot = Some(text_option_value(name, arguments, index)?.to_owned());
+    Ok(())
+}
+
+fn text_option_value<'a>(
+    name: &str,
+    arguments: &'a [OsString],
+    index: &mut usize,
+) -> Result<&'a str, CliError> {
+    let value = arguments
+        .get(*index)
+        .ok_or_else(|| CliError::InvalidProjectArgument(format!("{name} requires a value")))?
+        .to_str()
+        .ok_or_else(|| CliError::InvalidProjectArgument(format!("{name} requires UTF-8")))?;
+    *index += 1;
+    Ok(value)
 }
 
 fn parse_single_source<I>(arguments: I, plan: bool) -> Result<Invocation, CliError>
@@ -367,6 +546,82 @@ mod tests {
                 operation: FormatOperation::Write,
                 paths: vec![PathBuf::from("a.opaal"), PathBuf::from("b.opaal")],
             }
+        );
+    }
+
+    #[test]
+    fn project_check_and_task_inspection_require_the_exact_explicit_shape() {
+        assert_eq!(
+            parse(&[
+                "check",
+                "--project",
+                "opaal.toml",
+                "--task",
+                "release",
+                "--environment",
+                "ci",
+                "--authority",
+                "authority.toml",
+                "--tools",
+                "tools.toml",
+                "--input",
+                "candidate=artifact.tar",
+            ])
+            .unwrap()
+            .mode,
+            Mode::ProjectCheck {
+                project: PathBuf::from("opaal.toml"),
+                task: "release".to_owned(),
+                environment: "ci".to_owned(),
+                authority: PathBuf::from("authority.toml"),
+                tools: PathBuf::from("tools.toml"),
+                inputs: vec![("candidate".to_owned(), "artifact.tar".to_owned())],
+            }
+        );
+        assert_eq!(
+            parse(&["task", "inspect", "--project", "opaal.toml", "release"])
+                .unwrap()
+                .mode,
+            Mode::TaskInspect {
+                project: PathBuf::from("opaal.toml"),
+                task: "release".to_owned(),
+            }
+        );
+        assert_eq!(
+            parse(&["check", "--project", "one.toml", "--project", "two.toml",]),
+            Err(CliError::DuplicateOption("--project"))
+        );
+        assert_eq!(
+            parse(&["check", "--project", "opaal.toml", "--format", "json",]),
+            Err(CliError::InvalidProjectArgument(
+                "unexpected project check argument '--format'".to_owned()
+            ))
+        );
+        assert_eq!(
+            parse(&[
+                "check",
+                "--project",
+                "opaal.toml",
+                "--input",
+                "missing-separator",
+            ]),
+            Err(CliError::InvalidProjectArgument(
+                "--input requires name=value".to_owned()
+            ))
+        );
+        assert_eq!(
+            parse(&[
+                "check",
+                "--project",
+                "opaal.toml",
+                "--input",
+                "candidate=one",
+                "--input",
+                "candidate=two",
+            ]),
+            Err(CliError::InvalidProjectArgument(
+                "duplicate --input name 'candidate'".to_owned()
+            ))
         );
     }
 }

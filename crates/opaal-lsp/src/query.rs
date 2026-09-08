@@ -10,8 +10,8 @@ use opaal_runtime::command::{
     NamespaceClass,
 };
 use opaal_runtime::module::{
-    AnalysisControl, FunctionSignature, ModuleAnalysisOutcome, ModuleEffect, ModuleOrigin,
-    ModuleProgram, ModuleProgramLoader,
+    AnalysisControl, CallableKind, FunctionSignature, ModuleAnalysisOutcome, ModuleEffect,
+    ModuleOrigin, ModuleProgram, ModuleProgramLoader,
 };
 use opaal_runtime::query::{NameKind, SemanticHover, SourceLocation};
 use opaal_syntax::{
@@ -423,10 +423,34 @@ fn hover(
                 )
             }
             Some(SemanticHover::Function(function)) => {
+                let keyword = match function.signature().kind() {
+                    CallableKind::Function => "def ",
+                    CallableKind::Action => "",
+                };
                 let mut markdown = format!(
-                    "```opaal\ndef {}\n```",
+                    "```opaal\n{keyword}{}\n```",
                     function_label(function.signature())
                 );
+                if !function.effects().is_empty() {
+                    markdown.push_str("\n\nDeclared effects:");
+                    for effect in function.effects() {
+                        markdown.push_str("\n\n- `");
+                        markdown.push_str(effect.capability());
+                        if !effect.arguments().is_empty() {
+                            markdown.push('(');
+                            markdown.push_str(&effect.arguments().join(", "));
+                            markdown.push(')');
+                        }
+                        markdown.push('`');
+                    }
+                }
+                if let Some(action) = function.signature().downstream().action() {
+                    markdown.push_str("\n\nCanonical action identity: `");
+                    markdown.push_str(&action.qualified_name());
+                    markdown.push_str("`\n\nContract digest: `sha256:");
+                    markdown.push_str(action.contract_digest());
+                    markdown.push('`');
+                }
                 append_documentation(
                     &mut markdown,
                     function.signature().documentation().map(|docs| docs.text()),
@@ -851,8 +875,12 @@ fn function_label(signature: &FunctionSignature) -> String {
         .map(|parameter| format!("{}: {}", parameter.name(), parameter.value_type()))
         .collect::<Vec<_>>()
         .join(", ");
+    let keyword = match signature.kind() {
+        CallableKind::Function => "",
+        CallableKind::Action => "action ",
+    };
     format!(
-        "{}({parameters}) -> {}",
+        "{keyword}{}({parameters}) -> {}",
         signature.name(),
         signature.result()
     )

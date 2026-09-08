@@ -17,9 +17,11 @@ opaal-platform ── opaal-runtime
 - `opaal-syntax` owns source bytes, spans, tokens, syntax trees, parsing,
   formatting primitives, completion context, and diagnostics.
 - `opaal-runtime` owns module analysis, types, operations, values, streams,
-  outcomes, semantic queries, deterministic budgets, and pure evaluation.
+  outcomes, semantic queries, typed actions and projects, deterministic
+  budgets, and pure evaluation.
 - `opaal-cli` owns invocation parsing, file inspection, reporting, interactive
-  presentation, and the current planning refusal.
+  presentation, explicit project inspection/checking, and the current planning
+  refusal.
 - `opaal-lsp` owns stdio framing, JSON-RPC lifecycle, document snapshots,
   cancellation, and projection of shared semantic queries.
 - `opaal-platform` defines host capability traits and byte-preserving native
@@ -45,9 +47,10 @@ documents and discards stale results by document generation.
 ## Pure execution boundary
 
 OPAAL evaluates an analyzed module program with `EvaluationPolicy::PureOpaal`.
-Known effects fail analysis. Dynamically reached effects are refused before
-platform or executable access. Successful non-interactive execution retains a
-value and emits no implicit bytes.
+Static effects are legal only in typed action declarations and are checked as
+closed request sets. Effectful action invocation and dynamically reached
+effects are refused before platform or executable access. Successful pure
+non-interactive execution retains a value and emits no implicit bytes.
 
 Platform contracts and host observers remain available to test refusal,
 terminal presentation, and adapters; their presence grants no source authority.
@@ -63,8 +66,9 @@ sticky cancellation, a narrow-only monotonic deadline, injected-secret
 redaction, and a LIFO cleanup stack. The POSIX and fake platforms implement the
 same enforcement query contract.
 
-The source evaluator does not construct or consume this context. Pure call and
-outcome constructors retain empty operational metadata, so adding the embedding
+The source evaluator does not construct or consume this context. Project checks
+populate concrete source-facing identities but invoke no adapter. Pure call and
+outcome constructors retain empty operational metadata, so the embedding
 boundary cannot activate an effectful source route. See
 [Authority and resource embedding](authority-and-resources.md).
 

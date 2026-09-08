@@ -1,0 +1,15 @@
+schema_version = 1
+project = "release_readiness"
+environment = "ci"
+
+[[rules]]
+decision = "grant"
+effect = "filesystem.read"
+scope = "project.root"
+required_enforcement = "enforced"
+
+[[rules]]
+decision = "grant"
+effect = "process.run"
+scope = "tool.git"
+required_enforcement = "acknowledge-unenforced"

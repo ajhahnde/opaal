@@ -12,8 +12,8 @@ use opaal_syntax::{
 use crate::command::{CommandClassification, CommandRegistry, CommandSignature, NamespaceClass};
 use crate::intrinsic::{DynamicBinding, ExpressionIntrinsic};
 use crate::module::{
-    FunctionSignature, ModuleEffectSummary, ModuleId, ModuleProgram, ModuleReferenceTarget,
-    NominalType, ValueType,
+    DeclaredEffect, FunctionSignature, ModuleEffectSummary, ModuleId, ModuleProgram,
+    ModuleReferenceTarget, NominalType, ValueType,
 };
 use crate::operation::{OperationDescriptor, standard_operations};
 
@@ -196,6 +196,12 @@ impl FunctionHover {
     #[must_use]
     pub const fn signature(&self) -> &FunctionSignature {
         &self.signature
+    }
+
+    /// Exact source-ordered requests for an action; empty for a function.
+    #[must_use]
+    pub fn effects(&self) -> &[DeclaredEffect] {
+        self.signature.declared_effects()
     }
 }
 
@@ -1039,6 +1045,8 @@ impl<'a> CallFinder<'a> {
                 }
             }
             StatementKind::Function(function) => self.block(&function.body),
+            StatementKind::Action(action) => self.block(&action.body),
+            StatementKind::Task(_) => {}
             StatementKind::If(statement) => {
                 self.chain(&statement.condition);
                 self.block(&statement.then_block);

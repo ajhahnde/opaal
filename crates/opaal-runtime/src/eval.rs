@@ -2304,6 +2304,11 @@ impl Evaluator<'_, '_> {
                 self.function_definition(definition, scope)?;
                 Ok(Flow::Fallthrough(None))
             }
+            StatementKind::Action(definition) => {
+                self.function_definition(&definition.as_function(), scope)?;
+                Ok(Flow::Fallthrough(None))
+            }
+            StatementKind::Task(_) => Ok(Flow::Fallthrough(None)),
             StatementKind::If(if_statement) => self.if_statement(if_statement, scope),
             StatementKind::While(while_statement) => self.while_statement(while_statement, scope),
             StatementKind::For(for_statement) => self.for_statement(for_statement, scope),
@@ -4447,6 +4452,13 @@ impl Evaluator<'_, '_> {
         explicit_type_arguments: Option<Vec<ValueType>>,
         expected_result: Option<&ValueType>,
     ) -> Eval<Value> {
+        if action_has_declared_effects(&function.source, function.origin_span) {
+            return Err(Abort::Refused(Refusal::new(
+                RefusalReason::Unsupported,
+                "effectful action execution",
+                span,
+            )));
+        }
         let substitutions = self.runtime_type_substitutions(
             function,
             &arguments,
@@ -4653,6 +4665,19 @@ impl Evaluator<'_, '_> {
             location.column()
         )
     }
+}
+
+fn action_has_declared_effects(source: &SourceFile, origin_span: Span) -> bool {
+    let opaal_syntax::ParseOutcome::Complete(script) = opaal_syntax::parse_opaal(source) else {
+        return false;
+    };
+    script.statements().iter().any(|statement| {
+        matches!(
+            statement.kind(),
+            StatementKind::Action(action)
+                if action.name.span() == origin_span && !action.effects.is_empty()
+        )
+    })
 }
 
 fn chain_contains_command_stage(chain: &ConditionalChain) -> bool {
@@ -4903,6 +4928,19 @@ fn find_callable_in_statement(
                 .then(|| CallableBody::Block(definition.body.clone()))
                 .or_else(|| find_callable_in_block(&definition.body, snapshot))
         }
+        StatementKind::Action(definition) => {
+            let matches = snapshot.name.as_deref().is_some_and(|name| {
+                definition.name.span() == snapshot.origin_span
+                    && snapshot
+                        .source
+                        .slice(definition.name.span())
+                        .is_ok_and(|candidate| candidate == name)
+            });
+            matches
+                .then(|| CallableBody::Block(definition.body.clone()))
+                .or_else(|| find_callable_in_block(&definition.body, snapshot))
+        }
+        StatementKind::Task(_) => None,
         StatementKind::If(statement) => find_callable_in_chain(&statement.condition, snapshot)
             .or_else(|| find_callable_in_block(&statement.then_block, snapshot))
             .or_else(|| {

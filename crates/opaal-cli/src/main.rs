@@ -18,6 +18,9 @@ use opaal_cli::interactive::{
     run_interactive_driver,
 };
 use opaal_cli::plan::inspect_source;
+use opaal_cli::project::{
+    CheckProjectRequest, InspectProjectRequest, check_explicit_project, inspect_project,
+};
 use opaal_cli::report::{HostReport, write_report};
 use opaal_cli::{RawLineEditor, ReedlineEditor};
 use opaal_platform_posix::PosixPlatform;
@@ -36,7 +39,10 @@ Usage:
   opaal
   opaal SCRIPT [ARGUMENT]...
   opaal check [--] SOURCE
+  opaal check --project opaal.toml --task TASK --environment ID --authority PATH --tools PATH [--input NAME=VALUE]...
   opaal check --help
+  opaal task inspect --project opaal.toml TASK
+  opaal task --help
   opaal plan [--] SOURCE
   opaal plan --help
   opaal format --check [--] PATH...
@@ -60,11 +66,23 @@ const CHECK_HELP: &str = "Analyze OPAAL source without executing it
 
 Usage:
   opaal check [--] SOURCE
+  opaal check --project opaal.toml --task TASK --environment ID --authority PATH --tools PATH [--input NAME=VALUE]...
   opaal check --help
 
 SOURCE and every static import must be regular .opaal files. Checking performs
-syntax, module, name, signature, and carrier analysis without configuration,
-history, host discovery, or execution. Success is silent; diagnostics use stderr.
+syntax, module, name, signature, and carrier analysis without ambient
+configuration, history, host discovery, or execution. Success is silent;
+diagnostics use stderr.
+";
+
+const TASK_HELP: &str = "Inspect typed tasks without executing them
+
+Usage:
+  opaal task inspect --project opaal.toml TASK
+  opaal task --help
+
+The exact manifest path is required. Inspection reads only the explicit project
+source closure and reports the task's shared action signature and effect identities.
 ";
 
 const FORMAT_HELP: &str = "Check or rewrite OPAAL source formatting
@@ -101,6 +119,16 @@ fn main() -> ExitCode {
         }
         Mode::CheckHelp => emit_report(HostReport::success(CHECK_HELP.as_bytes())),
         Mode::Check { source } => run_checker(source),
+        Mode::ProjectCheck {
+            project,
+            task,
+            environment,
+            authority,
+            tools,
+            inputs,
+        } => run_project_checker(project, task, environment, authority, tools, inputs),
+        Mode::TaskHelp => emit_report(HostReport::success(TASK_HELP.as_bytes())),
+        Mode::TaskInspect { project, task } => run_task_inspect(project, task),
         Mode::PlanHelp => emit_report(HostReport::success(PLAN_HELP.as_bytes())),
         Mode::Plan { source } => run_planner(source),
         Mode::FormatHelp => emit_report(HostReport::success(FORMAT_HELP.as_bytes())),
@@ -142,6 +170,29 @@ fn run_checker(source: PathBuf) -> ExitCode {
         emit_report(HostReport::failure(
             run.rendered_issues().concat().as_bytes(),
         ))
+    }
+}
+
+fn run_task_inspect(project: PathBuf, task: String) -> ExitCode {
+    match inspect_project(&InspectProjectRequest::new(project, task)) {
+        Ok(run) => emit_report(HostReport::success(run.output())),
+        Err(error) => emit_report(HostReport::failure(error.rendered().as_bytes())),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_project_checker(
+    project: PathBuf,
+    task: String,
+    environment: String,
+    authority: PathBuf,
+    tools: PathBuf,
+    inputs: Vec<(String, String)>,
+) -> ExitCode {
+    let request = CheckProjectRequest::new(project, task, environment, authority, tools, inputs);
+    match check_explicit_project(&request) {
+        Ok(run) => emit_report(HostReport::success(run.output())),
+        Err(error) => emit_report(HostReport::failure(error.rendered().as_bytes())),
     }
 }
 

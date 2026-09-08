@@ -1,14 +1,14 @@
 //! Public metadata shared by pure call descriptors and embedding outcomes.
 //!
-//! Authority, cancellation, deadlines, secrets, and resource cleanup are
-//! concrete embedding contracts. Action, project, task, tool, and environment
-//! identities remain deliberately opaque until their source-facing owner is
-//! delivered.
+//! Authority, cancellation, deadlines, secrets, resource cleanup, and the
+//! source-facing action/project identities are concrete embedding contracts.
 
 use std::marker::PhantomData;
 
 pub use crate::authority::{AuthorityVerdict, CapabilityRequest, EffectSet, EvaluationContextId};
 pub use crate::lifetime::{CancellationScopeId, CleanupOutcome, Deadline, ResourceOwnerId};
+pub use crate::module::ActionId;
+pub use crate::project::{EnvironmentId, ProjectId, TaskId, ToolId};
 
 /// The observable state of one later-owned metadata slot.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -69,14 +69,6 @@ macro_rules! opaque_later_owned_type {
     };
 }
 
-opaque_later_owned_type!(ActionId, "Opaque identity of a future typed action.");
-opaque_later_owned_type!(ProjectId, "Opaque identity of a future project.");
-opaque_later_owned_type!(TaskId, "Opaque identity of a future exported task.");
-opaque_later_owned_type!(ToolId, "Opaque identity of a future declared tool.");
-opaque_later_owned_type!(
-    EnvironmentId,
-    "Opaque identity of a future declared execution environment."
-);
 opaque_later_owned_type!(
     DeclaredInputs,
     "Opaque future declaration of a callable's external inputs."
@@ -96,11 +88,11 @@ pub struct DownstreamCallMetadata {
     resource_owner: Option<ResourceOwnerId>,
     cancellation_scope: Option<CancellationScopeId>,
     deadline: Option<Deadline>,
-    action: OpaqueSlot<ActionId>,
-    project: OpaqueSlot<ProjectId>,
-    task: OpaqueSlot<TaskId>,
-    tool: OpaqueSlot<ToolId>,
-    environment: OpaqueSlot<EnvironmentId>,
+    action: Option<ActionId>,
+    project: Option<ProjectId>,
+    task: Option<TaskId>,
+    tool: Option<ToolId>,
+    environment: Option<EnvironmentId>,
     declared_inputs: OpaqueSlot<DeclaredInputs>,
     declared_outputs: OpaqueSlot<DeclaredOutputs>,
 }
@@ -117,11 +109,11 @@ impl DownstreamCallMetadata {
             resource_owner: None,
             cancellation_scope: None,
             deadline: None,
-            action: OpaqueSlot::absent(),
-            project: OpaqueSlot::absent(),
-            task: OpaqueSlot::absent(),
-            tool: OpaqueSlot::absent(),
-            environment: OpaqueSlot::absent(),
+            action: None,
+            project: None,
+            task: None,
+            tool: None,
+            environment: None,
             declared_inputs: OpaqueSlot::absent(),
             declared_outputs: OpaqueSlot::absent(),
         }
@@ -144,14 +136,31 @@ impl DownstreamCallMetadata {
             resource_owner: Some(resource_owner),
             cancellation_scope: Some(cancellation_scope),
             deadline,
-            action: OpaqueSlot::absent(),
-            project: OpaqueSlot::absent(),
-            task: OpaqueSlot::absent(),
-            tool: OpaqueSlot::absent(),
-            environment: OpaqueSlot::absent(),
+            action: None,
+            project: None,
+            task: None,
+            tool: None,
+            environment: None,
             declared_inputs: OpaqueSlot::absent(),
             declared_outputs: OpaqueSlot::absent(),
         }
+    }
+
+    pub(crate) fn with_action(mut self, action: ActionId) -> Self {
+        self.action = Some(action);
+        self
+    }
+
+    pub(crate) fn with_project_task(
+        mut self,
+        project: ProjectId,
+        task: TaskId,
+        environment: EnvironmentId,
+    ) -> Self {
+        self.project = Some(project);
+        self.task = Some(task);
+        self.environment = Some(environment);
+        self
     }
 
     /// Whether this is the empty pure-source value.
@@ -164,11 +173,11 @@ impl DownstreamCallMetadata {
             && self.resource_owner.is_none()
             && self.cancellation_scope.is_none()
             && self.deadline.is_none()
-            && matches!(self.action.state(), OpaqueSlotState::Absent)
-            && matches!(self.project.state(), OpaqueSlotState::Absent)
-            && matches!(self.task.state(), OpaqueSlotState::Absent)
-            && matches!(self.tool.state(), OpaqueSlotState::Absent)
-            && matches!(self.environment.state(), OpaqueSlotState::Absent)
+            && self.action.is_none()
+            && self.project.is_none()
+            && self.task.is_none()
+            && self.tool.is_none()
+            && self.environment.is_none()
             && matches!(self.declared_inputs.state(), OpaqueSlotState::Absent)
             && matches!(self.declared_outputs.state(), OpaqueSlotState::Absent)
     }
@@ -215,34 +224,34 @@ impl DownstreamCallMetadata {
         self.deadline
     }
 
-    /// Opaque future action slot.
+    /// Exact typed action identity, when this call belongs to an action.
     #[must_use]
-    pub const fn action(&self) -> &OpaqueSlot<ActionId> {
-        &self.action
+    pub const fn action(&self) -> Option<&ActionId> {
+        self.action.as_ref()
     }
 
-    /// Opaque future project slot.
+    /// Exact selected project identity, when this is a project call.
     #[must_use]
-    pub const fn project(&self) -> &OpaqueSlot<ProjectId> {
-        &self.project
+    pub const fn project(&self) -> Option<&ProjectId> {
+        self.project.as_ref()
     }
 
-    /// Opaque future task slot.
+    /// Exact exported task identity, when this is a task call.
     #[must_use]
-    pub const fn task(&self) -> &OpaqueSlot<TaskId> {
-        &self.task
+    pub const fn task(&self) -> Option<&TaskId> {
+        self.task.as_ref()
     }
 
-    /// Opaque future tool slot.
+    /// Exact selected tool identity, when the call targets a tool.
     #[must_use]
-    pub const fn tool(&self) -> &OpaqueSlot<ToolId> {
-        &self.tool
+    pub const fn tool(&self) -> Option<&ToolId> {
+        self.tool.as_ref()
     }
 
-    /// Opaque future execution-environment slot.
+    /// Exact selected project environment, when present.
     #[must_use]
-    pub const fn environment(&self) -> &OpaqueSlot<EnvironmentId> {
-        &self.environment
+    pub const fn environment(&self) -> Option<&EnvironmentId> {
+        self.environment.as_ref()
     }
 
     /// Opaque future declared-input slot.

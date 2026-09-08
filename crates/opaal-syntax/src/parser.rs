@@ -1,19 +1,20 @@
 use crate::classification::classify_opaal_tokens;
 use crate::lexer::lex_opaal_with_control;
 use crate::{
-    AndChain, AndOperator, Assignment, AstNode, BinaryExpression, BinaryOperator, Block,
-    CallExpression, Closure, CommandCaptureKind, CommandHead, CommandHeadKind, CommandItem,
-    CommandItemKind, CommandStage, CommandSubstitution, ConditionalChain, ConditionalOperator,
-    ControlTransfer, Declaration, Delimiter, Diagnostic, DocumentationBlock, ElseBranch,
-    EnvironmentStatement, Expression, ExpressionKind, FileRedirection, ForStatement,
-    FunctionDefinition, Identifier, IfStatement, IncompleteInput, IncompleteReason,
-    IndexExpression, IoNumber, JobStatement, Keyword, ListPattern, Literal, LiteralKind, MatchArm,
-    MatchStatement, MemberExpression, ModuleAliasImport, ModuleExportStatement, ModuleImportSource,
-    NominalRecordExpression, NominalRecordFieldExpression, NominalRecordPattern,
-    NominalTypeDeclaration, NominalTypeField, NumberKind, Operator, OutputMode, Parameter, Pattern,
-    PatternField, PipeOperator, Pipeline, QualifiedName, RecordEntry, RecordKey, Redirection,
-    RedirectionKind, Script, Severity, SourceFile, Span, Stage, StageKind, Statement,
-    StatementKind, SyntaxClassification, Token, TokenKind, TryStatement, TypeConstraint,
+    ActionDefinition, AndChain, AndOperator, Assignment, AstNode, BinaryExpression, BinaryOperator,
+    Block, CallExpression, CapabilityName, Closure, CommandCaptureKind, CommandHead,
+    CommandHeadKind, CommandItem, CommandItemKind, CommandStage, CommandSubstitution,
+    ConditionalChain, ConditionalOperator, ControlTransfer, Declaration, Delimiter, Diagnostic,
+    DocumentationBlock, EffectRequest, ElseBranch, EnvironmentStatement, Expression,
+    ExpressionKind, FileRedirection, ForStatement, FunctionDefinition, Identifier, IfStatement,
+    IncompleteInput, IncompleteReason, IndexExpression, IoNumber, JobStatement, Keyword,
+    ListPattern, Literal, LiteralKind, MatchArm, MatchStatement, MemberExpression,
+    ModuleAliasImport, ModuleExportStatement, ModuleImportSource, NominalRecordExpression,
+    NominalRecordFieldExpression, NominalRecordPattern, NominalTypeDeclaration, NominalTypeField,
+    NumberKind, Operator, OutputMode, Parameter, Pattern, PatternField, PipeOperator, Pipeline,
+    QualifiedName, RecordEntry, RecordKey, Redirection, RedirectionKind, Script, Severity,
+    SourceFile, Span, Stage, StageKind, Statement, StatementKind, StaticEffectArgument,
+    SyntaxClassification, TaskDefinition, Token, TokenKind, TryStatement, TypeConstraint,
     TypeParameter, TypeReference, UnaryExpression, UnaryOperator, VariableReference,
     VariantDeclaration, VariantPattern, VariantTypeDeclaration, WhileStatement, Word, WordPart,
     WordPartKind,
@@ -234,6 +235,10 @@ impl<'source, 'control> Parser<'source, 'control> {
             Some(TokenKind::Keyword(Keyword::Export)) => self.parse_export(top_level),
             Some(TokenKind::Keyword(Keyword::Unset)) => self.parse_unset(),
             Some(TokenKind::Keyword(Keyword::Def)) => self.parse_function(documentation),
+            Some(TokenKind::Keyword(Keyword::Action)) => {
+                self.parse_action(top_level, documentation)
+            }
+            Some(TokenKind::Keyword(Keyword::Task)) => self.parse_task(top_level, documentation),
             Some(TokenKind::Keyword(Keyword::Type)) => self.parse_nominal_type(top_level),
             Some(TokenKind::Keyword(Keyword::Enum)) => self.parse_variant_type(top_level),
             Some(TokenKind::Keyword(Keyword::If)) => {
@@ -276,20 +281,39 @@ impl<'source, 'control> Parser<'source, 'control> {
             }
             Some(TokenKind::Identifier) => {
                 let namespace = self.parse_identifier()?;
-                if self.source.slice(namespace.span()).ok() != Some("std") {
+                let namespace_text = self.source.slice(namespace.span()).ok();
+                if !matches!(namespace_text, Some("std" | "project")) {
                     return Err(self.invalid_at(
                         namespace.span(),
-                        "opaal module imports require a local path or `std::name`",
+                        "opaal module imports require a local path, `std::name`, or `project::name`",
                     ));
                 }
-                self.expect_operator(Operator::Colon, "standard module requires `::`")?;
-                self.expect_operator(Operator::Colon, "standard module requires `::`")?;
+                self.expect_operator(Operator::Colon, "qualified module requires `::`")?;
+                self.expect_operator(Operator::Colon, "qualified module requires `::`")?;
                 let module = self.parse_identifier()?;
                 let span = self.span(namespace.span().start(), module.span().end());
-                ModuleImportSource::Standard {
-                    namespace,
-                    module,
-                    span,
+                if namespace_text == Some("project") {
+                    let module_text = self.source.slice(module.span()).ok();
+                    if !matches!(
+                        module_text,
+                        Some("context" | "tools" | "endpoints" | "secrets")
+                    ) {
+                        return Err(self.invalid_at(
+                            module.span(),
+                            "project module must be `context`, `tools`, `endpoints`, or `secrets`",
+                        ));
+                    }
+                    ModuleImportSource::Project {
+                        namespace,
+                        module,
+                        span,
+                    }
+                } else {
+                    ModuleImportSource::Standard {
+                        namespace,
+                        module,
+                        span,
+                    }
                 }
             }
             _ => {
@@ -567,6 +591,142 @@ impl<'source, 'control> Parser<'source, 'control> {
                 parameters,
                 return_type,
                 body,
+            }),
+            span,
+        ))
+    }
+
+    fn parse_action(
+        &mut self,
+        top_level: bool,
+        documentation: Option<DocumentationBlock>,
+    ) -> ParseResult<Statement> {
+        if !top_level {
+            return Err(self.invalid_here("actions are allowed only at module top level"));
+        }
+        let start = self.take().expect("action keyword is current").span();
+        self.skip_inline();
+        let name = self.parse_identifier()?;
+        let type_parameters = self.parse_type_parameters()?;
+        self.skip_inline();
+        self.expect_delimiter(Delimiter::LeftParenthesis, "action requires parameters")?;
+        let parameters = self.parse_parameters(Delimiter::RightParenthesis)?;
+        self.expect_delimiter(
+            Delimiter::RightParenthesis,
+            "action parameters are not closed",
+        )?;
+        self.skip_inline();
+        self.expect_operator(Operator::Arrow, "action requires an explicit result type")?;
+        self.skip_layout();
+        let return_type = self.parse_type_reference()?;
+        self.skip_layout();
+        let effects_keyword =
+            self.expect_contextual_identifier("effects", "action requires `effects {}`")?;
+        self.skip_inline();
+        let (effects, effects_block_span) = self.parse_effect_block()?;
+        let effects_span = self.span(effects_keyword.span().start(), effects_block_span.end());
+        self.skip_layout();
+        let body = self.parse_block()?;
+        let span = self.span(start.start(), body.span.end());
+        Ok(Statement::new(
+            StatementKind::Action(ActionDefinition {
+                documentation,
+                name,
+                type_parameters,
+                parameters,
+                return_type,
+                effects,
+                effects_span,
+                body,
+            }),
+            span,
+        ))
+    }
+
+    fn parse_effect_block(&mut self) -> ParseResult<(Vec<EffectRequest>, Span)> {
+        let left = self.expect_delimiter(Delimiter::LeftBrace, "effects block requires `{`")?;
+        self.skip_layout();
+        let mut requests = Vec::new();
+        while !self.at_delimiter(Some(Delimiter::RightBrace)) {
+            let family = self.parse_identifier()?;
+            let start = family.span().start();
+            self.expect_operator(Operator::Dot, "capability requires `family.operation`")?;
+            let operation = self.parse_identifier()?;
+            let capability_span = self.span(start, operation.span().end());
+            self.skip_inline();
+            let mut arguments = Vec::new();
+            if self.take_delimiter(Delimiter::LeftParenthesis).is_some() {
+                self.skip_layout();
+                while !self.at_delimiter(Some(Delimiter::RightParenthesis)) {
+                    let argument = match self.current_kind() {
+                        Some(TokenKind::Identifier) => {
+                            StaticEffectArgument::Qualified(self.parse_qualified_name()?)
+                        }
+                        Some(TokenKind::Keyword(
+                            Keyword::Null | Keyword::True | Keyword::False,
+                        ))
+                        | Some(TokenKind::Number(_))
+                        | Some(TokenKind::SingleQuoted)
+                        | Some(TokenKind::DoubleQuoteStart) => {
+                            StaticEffectArgument::Literal(self.parse_literal()?)
+                        }
+                        _ => {
+                            return Err(self.invalid_here(
+                                "effect arguments must be literals or qualified project identities",
+                            ));
+                        }
+                    };
+                    arguments.push(argument);
+                    self.skip_layout();
+                    if self.take_operator(Operator::Comma).is_none() {
+                        break;
+                    }
+                    self.skip_layout();
+                }
+                self.expect_delimiter(
+                    Delimiter::RightParenthesis,
+                    "effect arguments are not closed",
+                )?;
+                self.skip_inline();
+            }
+            let semicolon =
+                self.expect_operator(Operator::Semicolon, "effect request requires `;`")?;
+            requests.push(EffectRequest {
+                capability: CapabilityName {
+                    family,
+                    operation,
+                    span: capability_span,
+                },
+                arguments,
+                span: self.span(start, semicolon.span().end()),
+            });
+            self.skip_layout();
+        }
+        let right = self.expect_delimiter(Delimiter::RightBrace, "effects block is not closed")?;
+        Ok((requests, self.span(left.span().start(), right.span().end())))
+    }
+
+    fn parse_task(
+        &mut self,
+        top_level: bool,
+        documentation: Option<DocumentationBlock>,
+    ) -> ParseResult<Statement> {
+        if !top_level {
+            return Err(self.invalid_here("tasks are allowed only at module top level"));
+        }
+        let start = self.take().expect("task keyword is current").span();
+        self.skip_inline();
+        let name = self.parse_identifier()?;
+        self.skip_inline();
+        self.expect_operator(Operator::Assign, "task requires `=`")?;
+        self.skip_layout();
+        let action = self.parse_qualified_name()?;
+        let span = self.span(start.start(), action.span.end());
+        Ok(Statement::new(
+            StatementKind::Task(TaskDefinition {
+                documentation,
+                name,
+                action,
             }),
             span,
         ))

@@ -215,5 +215,5 @@ fn one_context_rejects_an_undeclared_request_and_exposes_exact_metadata() {
         metadata.authority_verdict(),
         Some(AuthorityVerdict::GrantedEnforced)
     );
-    assert!(metadata.project().state() == opaal_runtime::seam::OpaqueSlotState::Absent);
+    assert_eq!(metadata.project(), None);
 }

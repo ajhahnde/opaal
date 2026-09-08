@@ -1,0 +1,14 @@
+schema_version = 1
+project = "release_readiness"
+environment = "ci"
+platform = "fixture-host"
+
+[child_environment]
+inherit = []
+
+[[tools]]
+id = "git"
+adapter = "git"
+path = { encoding = "base64url-nopad", platform = "unix", value = "L3Vzci9iaW4vZ2l0" }
+version = "2.50.0"
+digest = "sha256:0000000000000000000000000000000000000000000000000000000000000000"

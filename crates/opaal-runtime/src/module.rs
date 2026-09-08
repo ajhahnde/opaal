@@ -26,6 +26,7 @@ use opaal_syntax::{
     TypeConstraint, TypeReference, UnaryOperator, Word, WordPart, WordPartKind,
     parse_opaal_with_control, render_diagnostic_sources,
 };
+use sha2::{Digest, Sha256};
 
 use crate::Value;
 use crate::builtin::standard_registry;
@@ -953,7 +954,8 @@ impl ModuleAliasRegistry {
                             .expect("local import paths belong to their source");
                         Some(PathBuf::from(&quoted[1..quoted.len() - 1]))
                     }
-                    opaal_syntax::ModuleImportSource::Standard { .. } => None,
+                    opaal_syntax::ModuleImportSource::Standard { .. }
+                    | opaal_syntax::ModuleImportSource::Project { .. } => None,
                 };
                 registry
                     .by_module
@@ -1751,6 +1753,7 @@ impl FunctionParameterSignature {
 /// A named function's resolved non-executing signature.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FunctionSignature {
+    kind: CallableKind,
     name: String,
     declaration_span: Span,
     type_parameters: Vec<ResolvedTypeParameter>,
@@ -1758,10 +1761,1319 @@ pub struct FunctionSignature {
     result: ValueType,
     result_annotation_span: Option<Span>,
     documentation: Option<Documentation>,
+    declared_effects: Vec<DeclaredEffect>,
     downstream: crate::seam::DownstreamCallMetadata,
 }
 
+/// The source declaration that owns one shared callable signature.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CallableKind {
+    Function,
+    Action,
+}
+
+/// The stable module-qualified identity of one typed action contract.
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct ActionId {
+    module: ModuleId,
+    name: String,
+    contract_digest: String,
+}
+
+impl ActionId {
+    #[must_use]
+    pub const fn module(&self) -> &ModuleId {
+        &self.module
+    }
+
+    #[must_use]
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Lowercase SHA-256 over the normalized signature, effects, and source graph.
+    #[must_use]
+    pub fn contract_digest(&self) -> &str {
+        &self.contract_digest
+    }
+
+    #[must_use]
+    pub fn qualified_name(&self) -> String {
+        format!("{}::{}", self.module.path().display(), self.name)
+    }
+}
+
+/// One normalized source-order effect request declared by an action.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DeclaredEffect {
+    capability: String,
+    arguments: Vec<String>,
+    project_bindings: Vec<Option<(String, String)>>,
+    span: Span,
+}
+
+impl DeclaredEffect {
+    #[must_use]
+    pub fn capability(&self) -> &str {
+        &self.capability
+    }
+
+    #[must_use]
+    pub fn arguments(&self) -> &[String] {
+        &self.arguments
+    }
+
+    #[must_use]
+    pub const fn span(&self) -> Span {
+        self.span
+    }
+
+    pub(crate) fn project_binding(&self, index: usize) -> Option<(&str, &str)> {
+        self.project_bindings
+            .get(index)
+            .and_then(Option::as_ref)
+            .map(|(module, name)| (module.as_str(), name.as_str()))
+    }
+
+    fn canonical(&self) -> String {
+        format!("{}({})", self.capability, self.arguments.join(","))
+    }
+}
+
+/// One action's shared callable signature and exact static request set.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ActionSignature {
+    id: ActionId,
+    callable: FunctionSignature,
+    effects: Vec<DeclaredEffect>,
+}
+
+impl ActionSignature {
+    #[must_use]
+    pub const fn id(&self) -> &ActionId {
+        &self.id
+    }
+
+    #[must_use]
+    pub const fn callable(&self) -> &FunctionSignature {
+        &self.callable
+    }
+
+    /// Deduplicated requests in their first source-declaration order.
+    #[must_use]
+    pub fn effects(&self) -> &[DeclaredEffect] {
+        &self.effects
+    }
+}
+
+/// Action contracts indexed by canonical defining module.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ModuleActionRegistry {
+    by_module: BTreeMap<ModuleId, Vec<ActionSignature>>,
+}
+
+impl ModuleActionRegistry {
+    #[must_use]
+    pub fn actions(&self, module: &ModuleId) -> &[ActionSignature] {
+        self.by_module.get(module).map_or(&[], Vec::as_slice)
+    }
+
+    #[must_use]
+    pub fn action(&self, module: &ModuleId, name: &str) -> Option<&ActionSignature> {
+        self.actions(module)
+            .iter()
+            .find(|action| action.id().name() == name)
+    }
+
+    fn analyze(
+        graph: &ModuleGraph,
+        sources: &ModuleSourceRegistry,
+        aliases: &ModuleAliasRegistry,
+        types: &mut ModuleTypeRegistry,
+        names: &ModuleNameRegistry,
+        control: &AnalysisControl,
+    ) -> Result<Self, Vec<ModuleActionError>> {
+        let graph_digest = source_graph_digest(graph, sources);
+        let mut registry = Self::default();
+        let mut errors = Vec::new();
+        for entry in sources.entries() {
+            if control.is_cancelled() {
+                break;
+            }
+            let mut actions = Vec::new();
+            for statement in entry.script().statements() {
+                if control.is_cancelled() {
+                    break;
+                }
+                let StatementKind::Action(action) = statement.kind() else {
+                    continue;
+                };
+                let name = entry
+                    .source()
+                    .slice(action.name.span())
+                    .expect("action name belongs to its source")
+                    .to_owned();
+                for parameter in &action.parameters {
+                    if parameter.type_annotation.is_none() {
+                        errors.push(ModuleActionError::UntypedParameter {
+                            module: entry.module().clone(),
+                            action: name.clone(),
+                            span: parameter.span,
+                        });
+                    }
+                }
+                if action.effects.len() > 64 {
+                    errors.push(ModuleActionError::TooManyEffects {
+                        module: entry.module().clone(),
+                        action: name.clone(),
+                        span: action.name.span(),
+                        count: action.effects.len(),
+                    });
+                }
+                let mut effects = Vec::new();
+                let mut seen = BTreeSet::new();
+                for request in action.effects.iter().take(65) {
+                    if control.is_cancelled() {
+                        break;
+                    }
+                    match normalize_declared_effect(entry, request, aliases) {
+                        Ok(effect) => {
+                            if seen.insert(effect.canonical()) {
+                                effects.push(effect);
+                            }
+                        }
+                        Err(error) => errors.push(*error),
+                    }
+                }
+                let Some(mut callable) =
+                    types.function(entry.module(), action.name.span()).cloned()
+                else {
+                    continue;
+                };
+                let digest =
+                    action_contract_digest(entry.module(), &callable, &effects, &graph_digest);
+                let id = ActionId {
+                    module: entry.module().clone(),
+                    name,
+                    contract_digest: digest,
+                };
+                callable.declared_effects = effects.clone();
+                callable.downstream = callable.downstream.with_action(id.clone());
+                if let Some(signature) = types.by_module.get_mut(entry.module()).and_then(|types| {
+                    types
+                        .functions
+                        .iter_mut()
+                        .find(|signature| signature.declaration_span() == action.name.span())
+                }) {
+                    *signature = callable.clone();
+                }
+                actions.push(ActionSignature {
+                    id,
+                    callable,
+                    effects,
+                });
+            }
+            registry.by_module.insert(entry.module().clone(), actions);
+        }
+        if !control.is_cancelled() {
+            validate_action_call_graph(&registry, sources, types, names, control, &mut errors);
+        }
+        if errors.is_empty() {
+            Ok(registry)
+        } else {
+            Err(errors)
+        }
+    }
+}
+
+type ActionKey = (ModuleId, String);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CallOwnerKind {
+    Function,
+    Action,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct CallableRead {
+    span: Span,
+    is_callee: bool,
+}
+
+fn validate_action_call_graph(
+    registry: &ModuleActionRegistry,
+    sources: &ModuleSourceRegistry,
+    types: &ModuleTypeRegistry,
+    names: &ModuleNameRegistry,
+    control: &AnalysisControl,
+    errors: &mut Vec<ModuleActionError>,
+) {
+    if control.is_cancelled() {
+        return;
+    }
+    let action_count = registry.by_module.values().map(Vec::len).sum::<usize>();
+    if action_count > 1_024
+        && let Some(action) = registry.by_module.values().flatten().next()
+    {
+        errors.push(ModuleActionError::TooManyActions {
+            module: action.id.module().clone(),
+            span: action.callable().declaration_span(),
+            count: action_count,
+        });
+        return;
+    }
+
+    let mut edges = BTreeMap::<ActionKey, Vec<(ActionKey, Span)>>::new();
+    for entry in sources.entries() {
+        if control.is_cancelled() {
+            return;
+        }
+        validate_module_action_values(entry, registry, types, names, control, errors);
+        validate_callable_definitions(
+            entry,
+            entry.script().statements(),
+            registry,
+            types,
+            names,
+            control,
+            &mut edges,
+            errors,
+        );
+    }
+    for calls in edges.values_mut() {
+        calls.sort_by_key(|(_, span)| span.start());
+        calls.dedup_by(|left, right| left.0 == right.0);
+    }
+
+    for (caller, calls) in &edges {
+        if control.is_cancelled() {
+            return;
+        }
+        let Some(caller_action) = registry.action(&caller.0, &caller.1) else {
+            continue;
+        };
+        let caller_effects = caller_action
+            .effects()
+            .iter()
+            .map(DeclaredEffect::canonical)
+            .collect::<BTreeSet<_>>();
+        for (callee, call_span) in calls {
+            let Some(callee_action) = registry.action(&callee.0, &callee.1) else {
+                continue;
+            };
+            for effect in callee_action.effects() {
+                if !caller_effects.contains(&effect.canonical()) {
+                    errors.push(ModuleActionError::MissingCalleeEffect {
+                        module: caller.0.clone(),
+                        action: caller.1.clone(),
+                        callee: callee.1.clone(),
+                        effect: effect.canonical(),
+                        span: *call_span,
+                    });
+                }
+            }
+        }
+    }
+
+    let mut cycle_states = BTreeMap::<ActionKey, u8>::new();
+    for action in registry.by_module.values().flatten() {
+        if control.is_cancelled() {
+            return;
+        }
+        let key = (action.id.module().clone(), action.id.name().to_owned());
+        detect_action_cycles(&key, 1, &edges, &mut cycle_states, control, errors);
+    }
+    let mut reported_depths = BTreeSet::new();
+    let mut greatest_depth = BTreeMap::new();
+    for action in registry.by_module.values().flatten() {
+        if control.is_cancelled() {
+            return;
+        }
+        let key = (action.id.module().clone(), action.id.name().to_owned());
+        check_action_depth(
+            &key,
+            1,
+            &edges,
+            &mut BTreeSet::new(),
+            &mut greatest_depth,
+            &mut reported_depths,
+            control,
+            errors,
+        );
+    }
+}
+
+fn validate_module_action_values(
+    entry: &RegisteredModuleSource,
+    registry: &ModuleActionRegistry,
+    types: &ModuleTypeRegistry,
+    names: &ModuleNameRegistry,
+    control: &AnalysisControl,
+    errors: &mut Vec<ModuleActionError>,
+) {
+    let reads = CallableReadCollector::collect(entry.script().statements(), control);
+    for read in reads.into_iter().filter(|read| !read.is_callee) {
+        if control.is_cancelled() {
+            return;
+        }
+        let Some(reference) = names.reference(entry.module(), read.span) else {
+            continue;
+        };
+        let (target_module, declaration_span) = match reference.target() {
+            ModuleReferenceTarget::Local {
+                module,
+                declaration_span,
+            } => (module, *declaration_span),
+            ModuleReferenceTarget::Imported {
+                target_module,
+                declaration_span,
+                ..
+            } => (target_module, *declaration_span),
+            ModuleReferenceTarget::DynamicStatus | ModuleReferenceTarget::ScriptArguments => {
+                continue;
+            }
+        };
+        let Some(signature) = types.function(target_module, declaration_span) else {
+            continue;
+        };
+        if signature.kind() == CallableKind::Action
+            && registry.action(target_module, signature.name()).is_some()
+        {
+            errors.push(ModuleActionError::ActionValue {
+                module: entry.module().clone(),
+                action: signature.name().to_owned(),
+                span: read.span,
+            });
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn validate_callable_definitions(
+    entry: &RegisteredModuleSource,
+    statements: &[Statement],
+    registry: &ModuleActionRegistry,
+    types: &ModuleTypeRegistry,
+    names: &ModuleNameRegistry,
+    control: &AnalysisControl,
+    edges: &mut BTreeMap<ActionKey, Vec<(ActionKey, Span)>>,
+    errors: &mut Vec<ModuleActionError>,
+) {
+    for statement in statements {
+        if control.is_cancelled() {
+            return;
+        }
+        match statement.kind() {
+            StatementKind::Function(function) => {
+                validate_callable_body(
+                    entry,
+                    CallOwnerKind::Function,
+                    entry
+                        .source()
+                        .slice(function.name.span())
+                        .expect("function name belongs to its source"),
+                    &function.body,
+                    registry,
+                    types,
+                    names,
+                    control,
+                    edges,
+                    errors,
+                );
+                validate_callable_definitions(
+                    entry,
+                    &function.body.statements,
+                    registry,
+                    types,
+                    names,
+                    control,
+                    edges,
+                    errors,
+                );
+            }
+            StatementKind::Action(action) => {
+                validate_callable_body(
+                    entry,
+                    CallOwnerKind::Action,
+                    entry
+                        .source()
+                        .slice(action.name.span())
+                        .expect("action name belongs to its source"),
+                    &action.body,
+                    registry,
+                    types,
+                    names,
+                    control,
+                    edges,
+                    errors,
+                );
+                validate_callable_definitions(
+                    entry,
+                    &action.body.statements,
+                    registry,
+                    types,
+                    names,
+                    control,
+                    edges,
+                    errors,
+                );
+            }
+            StatementKind::If(statement) => {
+                validate_callable_definitions(
+                    entry,
+                    &statement.then_block.statements,
+                    registry,
+                    types,
+                    names,
+                    control,
+                    edges,
+                    errors,
+                );
+                match &statement.else_branch {
+                    Some(ElseBranch::Block(block)) => validate_callable_definitions(
+                        entry,
+                        &block.statements,
+                        registry,
+                        types,
+                        names,
+                        control,
+                        edges,
+                        errors,
+                    ),
+                    Some(ElseBranch::If(nested)) => {
+                        let nested =
+                            Statement::new(StatementKind::If(nested.kind().clone()), nested.span());
+                        validate_callable_definitions(
+                            entry,
+                            std::slice::from_ref(&nested),
+                            registry,
+                            types,
+                            names,
+                            control,
+                            edges,
+                            errors,
+                        );
+                    }
+                    None => {}
+                }
+            }
+            StatementKind::While(statement) => validate_callable_definitions(
+                entry,
+                &statement.body.statements,
+                registry,
+                types,
+                names,
+                control,
+                edges,
+                errors,
+            ),
+            StatementKind::For(statement) => validate_callable_definitions(
+                entry,
+                &statement.body.statements,
+                registry,
+                types,
+                names,
+                control,
+                edges,
+                errors,
+            ),
+            StatementKind::Match(statement) => {
+                for arm in &statement.arms {
+                    validate_callable_definitions(
+                        entry,
+                        &arm.body.statements,
+                        registry,
+                        types,
+                        names,
+                        control,
+                        edges,
+                        errors,
+                    );
+                }
+            }
+            StatementKind::Try(statement) => {
+                validate_callable_definitions(
+                    entry,
+                    &statement.try_block.statements,
+                    registry,
+                    types,
+                    names,
+                    control,
+                    edges,
+                    errors,
+                );
+                validate_callable_definitions(
+                    entry,
+                    &statement.catch_block.statements,
+                    registry,
+                    types,
+                    names,
+                    control,
+                    edges,
+                    errors,
+                );
+            }
+            StatementKind::ModuleImport(_)
+            | StatementKind::ModuleExport(_)
+            | StatementKind::NominalType(_)
+            | StatementKind::VariantType(_)
+            | StatementKind::Declaration(_)
+            | StatementKind::Assignment(_)
+            | StatementKind::Environment(_)
+            | StatementKind::Task(_)
+            | StatementKind::Throw(_)
+            | StatementKind::Control(_)
+            | StatementKind::Job(_) => {}
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn validate_callable_body(
+    entry: &RegisteredModuleSource,
+    owner_kind: CallOwnerKind,
+    owner_name: &str,
+    body: &Block,
+    registry: &ModuleActionRegistry,
+    types: &ModuleTypeRegistry,
+    names: &ModuleNameRegistry,
+    control: &AnalysisControl,
+    edges: &mut BTreeMap<ActionKey, Vec<(ActionKey, Span)>>,
+    errors: &mut Vec<ModuleActionError>,
+) {
+    let reads = CallableReadCollector::collect(&body.statements, control);
+    for read in reads {
+        if control.is_cancelled() {
+            return;
+        }
+        let Some(reference) = names.reference(entry.module(), read.span) else {
+            continue;
+        };
+        let (target_module, declaration_span) = match reference.target() {
+            ModuleReferenceTarget::Local {
+                module,
+                declaration_span,
+            } => (module, *declaration_span),
+            ModuleReferenceTarget::Imported {
+                target_module,
+                declaration_span,
+                ..
+            } => (target_module, *declaration_span),
+            ModuleReferenceTarget::DynamicStatus | ModuleReferenceTarget::ScriptArguments => {
+                continue;
+            }
+        };
+        let Some(signature) = types.function(target_module, declaration_span) else {
+            continue;
+        };
+        if signature.kind() != CallableKind::Action
+            || registry.action(target_module, signature.name()).is_none()
+        {
+            continue;
+        }
+        if !read.is_callee {
+            errors.push(ModuleActionError::ActionValue {
+                module: entry.module().clone(),
+                action: signature.name().to_owned(),
+                span: read.span,
+            });
+        } else if owner_kind == CallOwnerKind::Function {
+            errors.push(ModuleActionError::FunctionCallsAction {
+                module: entry.module().clone(),
+                function: owner_name.to_owned(),
+                action: signature.name().to_owned(),
+                span: read.span,
+            });
+        } else {
+            edges
+                .entry((entry.module().clone(), owner_name.to_owned()))
+                .or_default()
+                .push((
+                    (target_module.clone(), signature.name().to_owned()),
+                    read.span,
+                ));
+        }
+    }
+}
+
+fn detect_action_cycles(
+    action: &ActionKey,
+    depth: usize,
+    edges: &BTreeMap<ActionKey, Vec<(ActionKey, Span)>>,
+    states: &mut BTreeMap<ActionKey, u8>,
+    control: &AnalysisControl,
+    errors: &mut Vec<ModuleActionError>,
+) {
+    if control.is_cancelled() || matches!(states.get(action).copied(), Some(1 | 2)) {
+        return;
+    }
+    states.insert(action.clone(), 1);
+    for (callee, span) in edges.get(action).into_iter().flatten() {
+        if control.is_cancelled() {
+            return;
+        }
+        if states.get(callee) == Some(&1) {
+            errors.push(ModuleActionError::CallCycle {
+                module: action.0.clone(),
+                action: action.1.clone(),
+                callee: callee.1.clone(),
+                span: *span,
+            });
+        } else if depth < 64 {
+            detect_action_cycles(callee, depth + 1, edges, states, control, errors);
+        }
+    }
+    states.insert(action.clone(), 2);
+}
+
+#[allow(clippy::too_many_arguments)]
+fn check_action_depth(
+    action: &ActionKey,
+    depth: usize,
+    edges: &BTreeMap<ActionKey, Vec<(ActionKey, Span)>>,
+    path: &mut BTreeSet<ActionKey>,
+    greatest_depth: &mut BTreeMap<ActionKey, usize>,
+    reported: &mut BTreeSet<(ActionKey, usize)>,
+    control: &AnalysisControl,
+    errors: &mut Vec<ModuleActionError>,
+) {
+    if control.is_cancelled()
+        || greatest_depth
+            .get(action)
+            .is_some_and(|greatest| *greatest >= depth)
+    {
+        return;
+    }
+    greatest_depth.insert(action.clone(), depth);
+    if !path.insert(action.clone()) {
+        return;
+    }
+    for (callee, span) in edges.get(action).into_iter().flatten() {
+        if control.is_cancelled() {
+            return;
+        }
+        let next_depth = depth + 1;
+        if next_depth > 64 {
+            if reported.insert((action.clone(), span.start())) {
+                errors.push(ModuleActionError::CallDepth {
+                    module: action.0.clone(),
+                    action: action.1.clone(),
+                    span: *span,
+                    depth: next_depth,
+                });
+            }
+        } else {
+            check_action_depth(
+                callee,
+                next_depth,
+                edges,
+                path,
+                greatest_depth,
+                reported,
+                control,
+                errors,
+            );
+        }
+    }
+    path.remove(action);
+}
+
+struct CallableReadCollector<'a> {
+    reads: Vec<CallableRead>,
+    control: &'a AnalysisControl,
+}
+
+impl<'a> CallableReadCollector<'a> {
+    fn collect(statements: &[Statement], control: &'a AnalysisControl) -> Vec<CallableRead> {
+        let mut collector = Self {
+            reads: Vec::new(),
+            control,
+        };
+        collector.statements(statements);
+        collector.reads
+    }
+
+    fn statements(&mut self, statements: &[Statement]) {
+        for statement in statements {
+            if self.control.is_cancelled() {
+                return;
+            }
+            self.statement(statement);
+        }
+    }
+
+    fn statement(&mut self, statement: &Statement) {
+        if self.control.is_cancelled() {
+            return;
+        }
+        match statement.kind() {
+            StatementKind::ModuleImport(_)
+            | StatementKind::ModuleExport(_)
+            | StatementKind::NominalType(_)
+            | StatementKind::VariantType(_)
+            | StatementKind::Function(_)
+            | StatementKind::Action(_)
+            | StatementKind::Task(_) => {}
+            StatementKind::Declaration(declaration) => self.expression(&declaration.value),
+            StatementKind::Assignment(assignment) => self.expression(&assignment.value),
+            StatementKind::Environment(environment) => {
+                if let opaal_syntax::EnvironmentStatement::Export { value, .. } = environment {
+                    self.expression(value);
+                }
+            }
+            StatementKind::If(statement) => {
+                self.chain(&statement.condition);
+                self.statements(&statement.then_block.statements);
+                match &statement.else_branch {
+                    Some(ElseBranch::Block(block)) => self.statements(&block.statements),
+                    Some(ElseBranch::If(nested)) => self.statement(&Statement::new(
+                        StatementKind::If(nested.kind().clone()),
+                        nested.span(),
+                    )),
+                    None => {}
+                }
+            }
+            StatementKind::While(statement) => {
+                self.chain(&statement.condition);
+                self.statements(&statement.body.statements);
+            }
+            StatementKind::For(statement) => {
+                self.expression(&statement.iterable);
+                self.statements(&statement.body.statements);
+            }
+            StatementKind::Match(statement) => {
+                self.expression(&statement.value);
+                for arm in &statement.arms {
+                    if let Some(guard) = &arm.guard {
+                        self.expression(guard);
+                    }
+                    self.statements(&arm.body.statements);
+                }
+            }
+            StatementKind::Try(statement) => {
+                self.statements(&statement.try_block.statements);
+                self.statements(&statement.catch_block.statements);
+            }
+            StatementKind::Throw(expression) => self.expression(expression),
+            StatementKind::Control(ControlTransfer::Return(Some(expression))) => {
+                self.expression(expression)
+            }
+            StatementKind::Control(
+                ControlTransfer::Break | ControlTransfer::Continue | ControlTransfer::Return(None),
+            ) => {}
+            StatementKind::Job(job) => self.chain(&job.chain),
+        }
+    }
+
+    fn chain(&mut self, chain: &ConditionalChain) {
+        for and_chain in chain.or_terms() {
+            for pipeline in and_chain.and_terms() {
+                for stage in pipeline.stages() {
+                    if self.control.is_cancelled() {
+                        return;
+                    }
+                    match stage.kind() {
+                        StageKind::Expression(expression) => self.expression(expression),
+                        StageKind::Command(command) => {
+                            self.word(command.head.word());
+                            for item in &command.items {
+                                match item.kind() {
+                                    CommandItemKind::Word(word) => self.word(word),
+                                    CommandItemKind::Closure(closure) => self.chain(&closure.body),
+                                    CommandItemKind::Redirection(redirection) => match redirection
+                                        .kind()
+                                    {
+                                        RedirectionKind::Input { target, .. } => self.word(target),
+                                        RedirectionKind::File(file) => self.word(&file.target),
+                                        RedirectionKind::Duplicate { .. }
+                                        | RedirectionKind::Close { .. } => {}
+                                    },
+                                    CommandItemKind::Spread(variable) => {
+                                        self.reads.push(CallableRead {
+                                            span: variable.span,
+                                            is_callee: false,
+                                        })
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn expression(&mut self, expression: &Expression) {
+        if self.control.is_cancelled() {
+            return;
+        }
+        match expression.kind() {
+            ExpressionKind::Literal(literal) => self.literal(literal),
+            ExpressionKind::Variable(_)
+            | ExpressionKind::Symbol(_)
+            | ExpressionKind::Qualified(_) => self.reads.push(CallableRead {
+                span: expression.span(),
+                is_callee: false,
+            }),
+            ExpressionKind::List(elements) => {
+                elements.iter().for_each(|element| self.expression(element))
+            }
+            ExpressionKind::Record(entries) => {
+                for entry in entries {
+                    if let RecordKey::DoubleQuoted(part) = &entry.key {
+                        self.word_part(part);
+                    }
+                    self.expression(&entry.value);
+                }
+            }
+            ExpressionKind::NominalRecord(record) => record
+                .fields
+                .iter()
+                .for_each(|field| self.expression(&field.value)),
+            ExpressionKind::Closure(closure) => self.chain(&closure.body),
+            ExpressionKind::CommandSubstitution(substitution) => self.chain(substitution.chain()),
+            ExpressionKind::GroupedJob(chain) => self.chain(chain),
+            ExpressionKind::Call(call) => {
+                if matches!(
+                    call.callee.kind(),
+                    ExpressionKind::Variable(_)
+                        | ExpressionKind::Symbol(_)
+                        | ExpressionKind::Qualified(_)
+                ) {
+                    self.reads.push(CallableRead {
+                        span: call.callee.span(),
+                        is_callee: true,
+                    });
+                } else {
+                    self.expression(&call.callee);
+                }
+                for argument in &call.arguments {
+                    self.expression(argument);
+                }
+            }
+            ExpressionKind::Index(index) => {
+                self.expression(&index.target);
+                self.expression(&index.index);
+            }
+            ExpressionKind::Member(member) => self.expression(&member.target),
+            ExpressionKind::Unary(unary) => self.expression(&unary.operand),
+            ExpressionKind::Binary(binary) => {
+                self.expression(&binary.left);
+                self.expression(&binary.right);
+            }
+        }
+    }
+
+    fn literal(&mut self, literal: &opaal_syntax::Literal) {
+        if let LiteralKind::DoubleQuoted(parts) = literal.kind() {
+            for part in parts {
+                self.word_part(part);
+            }
+        }
+    }
+
+    fn word(&mut self, word: &Word) {
+        for part in word.parts() {
+            if self.control.is_cancelled() {
+                return;
+            }
+            self.word_part(part);
+        }
+    }
+
+    fn word_part(&mut self, part: &WordPart) {
+        if self.control.is_cancelled() {
+            return;
+        }
+        match part.kind() {
+            WordPartKind::DoubleQuoted(parts) => parts.iter().for_each(|part| self.word_part(part)),
+            WordPartKind::Variable(_) => self.reads.push(CallableRead {
+                span: part.span(),
+                is_callee: false,
+            }),
+            WordPartKind::BracedInterpolation(expression) => self.expression(expression),
+            WordPartKind::CommandSubstitution(substitution) => self.chain(substitution.chain()),
+            WordPartKind::Bare
+            | WordPartKind::BareEscape
+            | WordPartKind::SingleQuoted
+            | WordPartKind::DoubleText
+            | WordPartKind::DoubleEscape => {}
+        }
+    }
+}
+
+fn normalize_declared_effect(
+    entry: &RegisteredModuleSource,
+    request: &opaal_syntax::EffectRequest,
+    aliases: &ModuleAliasRegistry,
+) -> Result<DeclaredEffect, Box<ModuleActionError>> {
+    let source = entry.source();
+    let family = source
+        .slice(request.capability.family.span())
+        .expect("capability family belongs to its source");
+    let operation = source
+        .slice(request.capability.operation.span())
+        .expect("capability operation belongs to its source");
+    let capability = format!("{family}.{operation}");
+    let expected = match capability.as_str() {
+        "filesystem.read" | "filesystem.write" | "process.run" | "network.http" => 1,
+        "secret.reveal" => 2,
+        "clock.wall" | "clock.monotonic" => 0,
+        _ => {
+            return Err(Box::new(ModuleActionError::UnknownCapability {
+                module: entry.module().clone(),
+                capability,
+                span: request.capability.span,
+            }));
+        }
+    };
+    if request.arguments.len() != expected {
+        return Err(Box::new(ModuleActionError::InvalidEffectArity {
+            module: entry.module().clone(),
+            capability,
+            span: request.span,
+            expected,
+            actual: request.arguments.len(),
+        }));
+    }
+    let arguments = request
+        .arguments
+        .iter()
+        .map(|argument| match argument {
+            opaal_syntax::StaticEffectArgument::Qualified(name) => {
+                let segments = name
+                    .segments
+                    .iter()
+                    .map(|segment| {
+                        source
+                            .slice(segment.span())
+                            .expect("effect argument segment belongs to its source")
+                    })
+                    .collect::<Vec<_>>();
+                let Some((binding, qualifiers)) = segments.split_last() else {
+                    return Ok((String::new(), None));
+                };
+                if let Some(ModuleId {
+                    origin: ModuleOrigin::Standard { namespace, module },
+                    ..
+                }) = aliases.resolve(entry.module(), qualifiers)
+                    && namespace == "project"
+                {
+                    Ok((
+                        format!("project::{module}::{binding}"),
+                        Some((module.clone(), (*binding).to_owned())),
+                    ))
+                } else {
+                    Ok((segments.join("::"), None))
+                }
+            }
+            opaal_syntax::StaticEffectArgument::Literal(literal) => {
+                if let LiteralKind::DoubleQuoted(parts) = literal.kind()
+                    && parts.iter().any(|part| {
+                        !matches!(
+                            part.kind(),
+                            WordPartKind::DoubleText | WordPartKind::DoubleEscape
+                        )
+                    })
+                {
+                    return Err(Box::new(ModuleActionError::DynamicEffectArgument {
+                        module: entry.module().clone(),
+                        span: argument.span(),
+                    }));
+                }
+                Ok((
+                    source
+                        .slice(argument.span())
+                        .expect("effect argument belongs to its source")
+                        .to_owned(),
+                    None,
+                ))
+            }
+        })
+        .collect::<Result<Vec<_>, Box<ModuleActionError>>>()?;
+    let (arguments, project_bindings) = arguments.into_iter().unzip();
+    Ok(DeclaredEffect {
+        capability,
+        arguments,
+        project_bindings,
+        span: request.span,
+    })
+}
+
+fn source_graph_digest(graph: &ModuleGraph, sources: &ModuleSourceRegistry) -> String {
+    let mut digest = Sha256::new();
+    for module in graph.modules() {
+        digest.update(module.path().as_os_str().as_encoded_bytes());
+        digest.update([0]);
+        if let Some(source) = sources.source(module) {
+            digest.update(source.text().as_bytes());
+        }
+        digest.update([0xff]);
+    }
+    hex_digest(digest.finalize().as_slice())
+}
+
+fn action_contract_digest(
+    module: &ModuleId,
+    callable: &FunctionSignature,
+    effects: &[DeclaredEffect],
+    graph_digest: &str,
+) -> String {
+    let mut normalized = String::new();
+    normalized.push_str(&module.path().to_string_lossy());
+    normalized.push('\0');
+    normalized.push_str(callable.name());
+    for parameter in callable.parameters() {
+        normalized.push('\0');
+        normalized.push_str(parameter.name());
+        normalized.push(':');
+        normalized.push_str(&parameter.value_type().to_string());
+    }
+    normalized.push_str("->");
+    normalized.push_str(&callable.result().to_string());
+    let mut canonical_effects = effects
+        .iter()
+        .map(DeclaredEffect::canonical)
+        .collect::<Vec<_>>();
+    canonical_effects.sort();
+    for effect in canonical_effects {
+        normalized.push('\0');
+        normalized.push_str(&effect);
+    }
+    normalized.push('\0');
+    normalized.push_str(graph_digest);
+    hex_digest(Sha256::digest(normalized.as_bytes()).as_slice())
+}
+
+fn hex_digest(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut output = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        output.push(char::from(HEX[usize::from(byte >> 4)]));
+        output.push(char::from(HEX[usize::from(byte & 0x0f)]));
+    }
+    output
+}
+
+/// A static action-contract failure.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ModuleActionError {
+    UntypedParameter {
+        module: ModuleId,
+        action: String,
+        span: Span,
+    },
+    UnknownCapability {
+        module: ModuleId,
+        capability: String,
+        span: Span,
+    },
+    InvalidEffectArity {
+        module: ModuleId,
+        capability: String,
+        span: Span,
+        expected: usize,
+        actual: usize,
+    },
+    TooManyEffects {
+        module: ModuleId,
+        action: String,
+        span: Span,
+        count: usize,
+    },
+    FunctionCallsAction {
+        module: ModuleId,
+        function: String,
+        action: String,
+        span: Span,
+    },
+    ActionValue {
+        module: ModuleId,
+        action: String,
+        span: Span,
+    },
+    MissingCalleeEffect {
+        module: ModuleId,
+        action: String,
+        callee: String,
+        effect: String,
+        span: Span,
+    },
+    CallCycle {
+        module: ModuleId,
+        action: String,
+        callee: String,
+        span: Span,
+    },
+    TooManyActions {
+        module: ModuleId,
+        span: Span,
+        count: usize,
+    },
+    CallDepth {
+        module: ModuleId,
+        action: String,
+        span: Span,
+        depth: usize,
+    },
+    DynamicEffectArgument {
+        module: ModuleId,
+        span: Span,
+    },
+}
+
+impl ModuleActionError {
+    #[must_use]
+    pub const fn module(&self) -> &ModuleId {
+        match self {
+            Self::UntypedParameter { module, .. }
+            | Self::UnknownCapability { module, .. }
+            | Self::InvalidEffectArity { module, .. }
+            | Self::TooManyEffects { module, .. }
+            | Self::FunctionCallsAction { module, .. }
+            | Self::ActionValue { module, .. }
+            | Self::MissingCalleeEffect { module, .. }
+            | Self::CallCycle { module, .. }
+            | Self::TooManyActions { module, .. }
+            | Self::CallDepth { module, .. }
+            | Self::DynamicEffectArgument { module, .. } => module,
+        }
+    }
+
+    #[must_use]
+    pub fn diagnostic(&self) -> Diagnostic {
+        let (code, span, label) = match self {
+            Self::UntypedParameter { span, .. } => (
+                "ACT001",
+                *span,
+                "action parameters require explicit types".to_owned(),
+            ),
+            Self::UnknownCapability { span, .. } => (
+                "ACT002",
+                *span,
+                "this capability is not in the OPAAL 1.0 taxonomy".to_owned(),
+            ),
+            Self::InvalidEffectArity {
+                span,
+                expected,
+                actual,
+                ..
+            } => (
+                "ACT003",
+                *span,
+                format!("expected {expected} static arguments, found {actual}"),
+            ),
+            Self::TooManyEffects { span, count, .. } => (
+                "ACT004",
+                *span,
+                format!("action declares {count} requests; maximum is 64"),
+            ),
+            Self::FunctionCallsAction { span, .. } => {
+                ("ACT005", *span, "functions cannot call actions".to_owned())
+            }
+            Self::ActionValue { span, .. } => (
+                "ACT006",
+                *span,
+                "actions are static callees, not first-class values".to_owned(),
+            ),
+            Self::MissingCalleeEffect { span, effect, .. } => (
+                "ACT007",
+                *span,
+                format!("the caller must also declare `{effect}`"),
+            ),
+            Self::CallCycle { span, .. } => (
+                "ACT008",
+                *span,
+                "the static action call graph must be acyclic".to_owned(),
+            ),
+            Self::TooManyActions { span, count, .. } => (
+                "ACT009",
+                *span,
+                format!("source closure contains {count} actions; maximum is 1024"),
+            ),
+            Self::CallDepth { span, depth, .. } => (
+                "ACT010",
+                *span,
+                format!("action call depth is {depth}; maximum is 64"),
+            ),
+            Self::DynamicEffectArgument { span, .. } => (
+                "ACT011",
+                *span,
+                "effect arguments must be statically literal".to_owned(),
+            ),
+        };
+        Diagnostic::new(Severity::Error, code, self.to_string()).with_primary(span, label)
+    }
+}
+
+impl fmt::Display for ModuleActionError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UntypedParameter { action, .. } => {
+                write!(formatter, "action `{action}` has an untyped parameter")
+            }
+            Self::UnknownCapability { capability, .. } => {
+                write!(formatter, "unknown action capability `{capability}`")
+            }
+            Self::InvalidEffectArity {
+                capability,
+                expected,
+                actual,
+                ..
+            } => write!(
+                formatter,
+                "capability `{capability}` expects {expected} arguments, found {actual}"
+            ),
+            Self::TooManyEffects { action, count, .. } => {
+                write!(
+                    formatter,
+                    "action `{action}` declares {count} effect requests"
+                )
+            }
+            Self::FunctionCallsAction {
+                function, action, ..
+            } => {
+                write!(
+                    formatter,
+                    "function `{function}` cannot call action `{action}`"
+                )
+            }
+            Self::ActionValue { action, .. } => {
+                write!(formatter, "action `{action}` cannot be used as a value")
+            }
+            Self::MissingCalleeEffect {
+                action,
+                callee,
+                effect,
+                ..
+            } => write!(
+                formatter,
+                "action `{action}` calls `{callee}` without declaring `{effect}`"
+            ),
+            Self::CallCycle { action, callee, .. } => {
+                write!(formatter, "action call cycle from `{action}` to `{callee}`")
+            }
+            Self::TooManyActions { count, .. } => {
+                write!(formatter, "source closure contains {count} actions")
+            }
+            Self::CallDepth { action, depth, .. } => {
+                write!(formatter, "action `{action}` reaches call depth {depth}")
+            }
+            Self::DynamicEffectArgument { .. } => {
+                formatter.write_str("effect argument contains a dynamic interpolation")
+            }
+        }
+    }
+}
+
+impl std::error::Error for ModuleActionError {}
+
 impl FunctionSignature {
+    #[must_use]
+    pub const fn kind(&self) -> CallableKind {
+        self.kind
+    }
+
     #[must_use]
     pub fn name(&self) -> &str {
         &self.name
@@ -1796,6 +3108,12 @@ impl FunctionSignature {
     #[must_use]
     pub const fn documentation(&self) -> Option<&Documentation> {
         self.documentation.as_ref()
+    }
+
+    /// Exact source-ordered requests for an action; empty for a function.
+    #[must_use]
+    pub fn declared_effects(&self) -> &[DeclaredEffect] {
+        &self.declared_effects
     }
 
     /// Empty operational metadata plus later-owned action/project slots.
@@ -2340,6 +3658,7 @@ fn top_level_declared_identifiers(statement: &Statement) -> Vec<Identifier> {
             collect_pattern(&declaration.pattern, &mut identifiers);
         }
         StatementKind::Function(function) => identifiers.push(function.name),
+        StatementKind::Action(action) => identifiers.push(action.name),
         StatementKind::NominalType(declaration) => identifiers.push(declaration.name),
         StatementKind::VariantType(declaration) => identifiers.push(declaration.name),
         _ => {}
@@ -2585,6 +3904,7 @@ impl<'a> TypeCollector<'a> {
                     None => ValueType::Any,
                 };
                 self.types.functions.push(FunctionSignature {
+                    kind: CallableKind::Function,
                     name: self.text(function.name.span()).to_owned(),
                     declaration_span: function.name.span(),
                     type_parameters,
@@ -2598,11 +3918,24 @@ impl<'a> TypeCollector<'a> {
                         .documentation
                         .as_ref()
                         .map(|block| Documentation::from_block(self.entry.source(), block)),
+                    declared_effects: Vec::new(),
                     downstream: crate::seam::DownstreamCallMetadata::foundation(),
                 });
                 self.type_parameter_scopes.pop();
                 self.statements(&function.body.statements)
             }
+            StatementKind::Action(action) => {
+                let signature_index = self.types.functions.len();
+                self.statement(&Statement::new(
+                    StatementKind::Function(action.as_function()),
+                    statement.span(),
+                ))?;
+                if let Some(signature) = self.types.functions.get_mut(signature_index) {
+                    signature.kind = CallableKind::Action;
+                }
+                Ok(())
+            }
+            StatementKind::Task(_) => Ok(()),
             StatementKind::If(statement) => {
                 self.chain(&statement.condition)?;
                 self.statements(&statement.then_block.statements)?;
@@ -3275,6 +4608,8 @@ impl<'a> SignatureValidator<'a> {
         }
         match statement.kind() {
             StatementKind::Function(function) => self.function(function),
+            StatementKind::Action(action) => self.function(&action.as_function()),
+            StatementKind::Task(_) => Ok(()),
             StatementKind::Control(ControlTransfer::Return(value)) => {
                 let (span, actual) = match value {
                     Some(expression) => (
@@ -3423,6 +4758,8 @@ impl<'a> SignatureValidator<'a> {
                 opaal_syntax::EnvironmentStatement::Unset { .. } => Ok(()),
             },
             StatementKind::Function(function) => self.function(function),
+            StatementKind::Action(action) => self.function(&action.as_function()),
+            StatementKind::Task(_) => Ok(()),
             StatementKind::If(statement) => {
                 self.chain(&statement.condition)?;
                 self.statements(&statement.then_block.statements)?;
@@ -5553,6 +6890,11 @@ impl<'a> ReferenceResolver<'a> {
                 }
                 Ok(())
             }
+            StatementKind::Action(action) => self.statement(&Statement::new(
+                StatementKind::Function(action.as_function()),
+                statement.span(),
+            )),
+            StatementKind::Task(_) => Ok(()),
             StatementKind::If(statement) => self.if_statement(statement),
             StatementKind::While(statement) => {
                 self.chain(&statement.condition)?;
@@ -6390,7 +7732,9 @@ impl<'a> StaticEffectAnalyzer<'a> {
             | StatementKind::ModuleExport(_)
             | StatementKind::NominalType(_)
             | StatementKind::VariantType(_)
-            | StatementKind::Function(_) => {}
+            | StatementKind::Function(_)
+            | StatementKind::Action(_)
+            | StatementKind::Task(_) => {}
             StatementKind::Declaration(declaration) => self.expression(&declaration.value),
             StatementKind::Assignment(assignment) => self.expression(&assignment.value),
             StatementKind::Environment(environment) => {
@@ -6852,6 +8196,7 @@ pub struct ModuleProgram {
     aliases: ModuleAliasRegistry,
     names: ModuleNameRegistry,
     types: ModuleTypeRegistry,
+    actions: ModuleActionRegistry,
     effects: ModuleEffectRegistry,
 }
 
@@ -6949,6 +8294,8 @@ impl<'a> StaticPipelineAnalyzer<'a> {
                 }
             }
             StatementKind::Function(function) => self.statements(&function.body.statements),
+            StatementKind::Action(action) => self.statements(&action.body.statements),
+            StatementKind::Task(_) => {}
             StatementKind::If(statement) => self.if_statement(statement),
             StatementKind::While(statement) => {
                 self.chain(&statement.condition);
@@ -7744,6 +9091,12 @@ impl ModuleProgram {
         &self.types
     }
 
+    /// Typed action identities and exact declared requests.
+    #[must_use]
+    pub const fn actions(&self) -> &ModuleActionRegistry {
+        &self.actions
+    }
+
     /// Host-free direct and named-dependency-folded initializer effects.
     #[must_use]
     pub const fn effects(&self) -> &ModuleEffectRegistry {
@@ -7826,6 +9179,7 @@ impl ModuleProgram {
 pub struct ModuleProgramLoader<'a> {
     resolver: ModuleResolver<'a>,
     source_loader: &'a dyn ModuleSourceLoader,
+    allow_project: bool,
 }
 
 enum PendingModuleImport {
@@ -7834,6 +9188,11 @@ enum PendingModuleImport {
         span: Span,
     },
     Standard {
+        namespace: String,
+        module: String,
+        span: Span,
+    },
+    Project {
         namespace: String,
         module: String,
         span: Span,
@@ -7850,6 +9209,20 @@ impl<'a> ModuleProgramLoader<'a> {
         Self {
             resolver: ModuleResolver::new(canonicalizer),
             source_loader,
+            allow_project: false,
+        }
+    }
+
+    /// Creates a loader for an explicitly selected, already validated project.
+    #[must_use]
+    pub(crate) const fn for_project(
+        canonicalizer: &'a dyn ModuleCanonicalizer,
+        source_loader: &'a dyn ModuleSourceLoader,
+    ) -> Self {
+        Self {
+            resolver: ModuleResolver::new(canonicalizer),
+            source_loader,
+            allow_project: true,
         }
     }
 
@@ -8187,7 +9560,7 @@ impl<'a> ModuleProgramLoader<'a> {
         if control.is_cancelled() {
             return Self::stopped_outcome(&control);
         }
-        let types = match types_result {
+        let mut types = match types_result {
             Ok(types) => types,
             Err(errors) => {
                 if !control.charge(AnalysisLimitKind::Diagnostics, errors.len() as u64) {
@@ -8197,6 +9570,32 @@ impl<'a> ModuleProgramLoader<'a> {
                     .into_iter()
                     .map(|error| {
                         ModuleAnalysisIssue::new(ModuleProgramError::Signatures(Box::new(error)))
+                    })
+                    .collect::<Vec<_>>();
+                issues.extend(pipeline_issues);
+                return ModuleAnalysisOutcome::Complete(Box::new(ModuleAnalysisReport {
+                    sources: retained,
+                    issues,
+                    program: None,
+                    usage: control.usage(),
+                }));
+            }
+        };
+        if control.is_cancelled() {
+            return Self::stopped_outcome(&control);
+        }
+        let actions = match ModuleActionRegistry::analyze(
+            &graph, &sources, &aliases, &mut types, &names, &control,
+        ) {
+            Ok(actions) => actions,
+            Err(errors) => {
+                if !control.charge(AnalysisLimitKind::Diagnostics, errors.len() as u64) {
+                    return Self::stopped_outcome(&control);
+                }
+                let mut issues = errors
+                    .into_iter()
+                    .map(|error| {
+                        ModuleAnalysisIssue::new(ModuleProgramError::Actions(Box::new(error)))
                     })
                     .collect::<Vec<_>>();
                 issues.extend(pipeline_issues);
@@ -8243,6 +9642,7 @@ impl<'a> ModuleProgramLoader<'a> {
                 aliases,
                 names,
                 types,
+                actions,
                 effects,
             }),
             usage: control.usage(),
@@ -8402,6 +9802,21 @@ impl<'a> ModuleProgramLoader<'a> {
                             .to_owned(),
                         span,
                     }),
+                    opaal_syntax::ModuleImportSource::Project {
+                        namespace,
+                        module: project,
+                        span,
+                    } => Some(PendingModuleImport::Project {
+                        namespace: source
+                            .slice(namespace.span())
+                            .expect("project namespace belongs to its source")
+                            .to_owned(),
+                        module: source
+                            .slice(project.span())
+                            .expect("project module belongs to its source")
+                            .to_owned(),
+                        span,
+                    }),
                 },
                 _ => None,
             })
@@ -8412,6 +9827,35 @@ impl<'a> ModuleProgramLoader<'a> {
             source,
             script: Some(script),
         });
+
+        if !self.allow_project {
+            let project_span = sources.script(&module).and_then(|script| {
+                script
+                    .statements()
+                    .iter()
+                    .find_map(|statement| match statement.kind() {
+                        StatementKind::Task(_) => Some(statement.span()),
+                        StatementKind::ModuleImport(import)
+                            if matches!(
+                                import.source,
+                                opaal_syntax::ModuleImportSource::Project { .. }
+                            ) =>
+                        {
+                            Some(import.source.span())
+                        }
+                        _ => None,
+                    })
+            });
+            if let Some(span) = project_span {
+                issues.push(ModuleAnalysisIssue::new(
+                    ModuleProgramError::ProjectRequired {
+                        module: module.clone(),
+                        span,
+                    },
+                ));
+                return;
+            }
+        }
 
         for pending in imports {
             if control.is_cancelled() {
@@ -8455,6 +9899,23 @@ impl<'a> ModuleProgramLoader<'a> {
                             span,
                         },
                         recurse,
+                    )
+                }
+                PendingModuleImport::Project {
+                    namespace,
+                    module: project,
+                    span,
+                } => {
+                    debug_assert!(self.allow_project);
+                    let target = ModuleId::standard(&namespace, &project);
+                    (
+                        ModuleImport {
+                            importer: module.clone(),
+                            requested: PathBuf::from(format!("{namespace}::{project}")),
+                            target,
+                            span,
+                        },
+                        true,
                     )
                 }
             };
@@ -8599,6 +10060,18 @@ impl SyntaxMetrics {
                 }
                 self.block(&function.body);
             }
+            StatementKind::Action(action) => {
+                for parameter in &action.parameters {
+                    self.pattern(&parameter.pattern);
+                    if let Some(annotation) = &parameter.type_annotation {
+                        self.type_reference(annotation, 1);
+                    }
+                }
+                self.type_reference(&action.return_type, 1);
+                self.nodes += action.effects.len() as u64;
+                self.block(&action.body);
+            }
+            StatementKind::Task(_) => {}
             StatementKind::If(statement) => {
                 self.chain(&statement.condition);
                 self.block(&statement.then_block);
@@ -9961,10 +11434,14 @@ pub enum ModuleProgramError {
     Names(Box<ModuleNameError>),
     /// Static type resolution or known-call validation failed.
     Signatures(Box<ModuleTypeError>),
+    /// A typed action contract was invalid.
+    Actions(Box<ModuleActionError>),
     /// Static command-pipeline carrier analysis failed.
     Pipelines(Box<ModulePipelineError>),
     /// Deterministic OPAAL analysis resource exhaustion.
     BudgetExceeded(AnalysisLimitExceeded),
+    /// Project-only syntax appeared without an explicitly selected manifest.
+    ProjectRequired { module: ModuleId, span: Span },
     /// More source identities were required than `SourceId` can represent.
     SourceIdentityExhausted,
 }
@@ -9996,6 +11473,15 @@ impl ModuleProgramError {
             Self::Aliases(error) => vec![error.diagnostic()],
             Self::Names(error) => vec![error.diagnostic()],
             Self::Signatures(error) => vec![error.diagnostic()],
+            Self::Actions(error) => vec![error.diagnostic()],
+            Self::ProjectRequired { span, .. } => vec![
+                Diagnostic::new(
+                    Severity::Error,
+                    "PROJECT001",
+                    "project syntax requires an explicitly selected opaal.toml",
+                )
+                .with_primary(*span, "use an explicit project operation"),
+            ],
             Self::Pipelines(error) => vec![error.diagnostic().clone()],
             Self::Graph(ModuleGraphError::UnknownImporter(_))
             | Self::BudgetExceeded(_)
@@ -10010,10 +11496,12 @@ impl ModuleProgramError {
         match self {
             Self::SourceRead { module, .. }
             | Self::InvalidUtf8 { module, .. }
-            | Self::Syntax { module, .. } => Some(module),
+            | Self::Syntax { module, .. }
+            | Self::ProjectRequired { module, .. } => Some(module),
             Self::Aliases(error) => Some(error.module()),
             Self::Names(error) => Some(error.module()),
             Self::Signatures(error) => Some(error.module()),
+            Self::Actions(error) => Some(error.module()),
             Self::Pipelines(error) => Some(error.module()),
             Self::Resolution(_)
             | Self::Graph(_)
@@ -10050,8 +11538,14 @@ impl fmt::Display for ModuleProgramError {
             Self::Aliases(error) => error.fmt(formatter),
             Self::Names(error) => error.fmt(formatter),
             Self::Signatures(error) => error.fmt(formatter),
+            Self::Actions(error) => error.fmt(formatter),
             Self::Pipelines(error) => error.fmt(formatter),
             Self::BudgetExceeded(error) => error.fmt(formatter),
+            Self::ProjectRequired { module, .. } => write!(
+                formatter,
+                "module `{}` requires an explicit project manifest",
+                module.path().display()
+            ),
             Self::SourceIdentityExhausted => {
                 formatter.write_str("module program exhausted stable source identities")
             }
@@ -10068,9 +11562,11 @@ impl std::error::Error for ModuleProgramError {
             Self::Aliases(error) => Some(error.as_ref()),
             Self::Names(error) => Some(error),
             Self::Signatures(error) => Some(error),
+            Self::Actions(error) => Some(error),
             Self::Pipelines(error) => Some(error),
             Self::InvalidUtf8 { .. }
             | Self::Syntax { .. }
+            | Self::ProjectRequired { .. }
             | Self::BudgetExceeded(_)
             | Self::SourceIdentityExhausted => None,
         }

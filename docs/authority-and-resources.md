@@ -77,8 +77,10 @@ sink must add the sole consuming route without widening this contract.
 Pure function and operation descriptors still receive
 `DownstreamCallMetadata::foundation()`. Ordinary `ExecutionOutcome::new`
 receives empty downstream metadata. Existing `.opaal` parsing, checking,
-planning refusal, evaluation, diagnostics, output bytes, and host-access
-refusals are unchanged. Action, project, task, tool, and environment identities
-remain absent opaque slots.
+planning refusal, diagnostics, and host-access refusals remain fail closed.
+Action analysis populates action identity. Explicit project checks additionally
+populate project, task, and environment identity; manifests and locks expose
+project-qualified tool identities for later request-specific use. Pure-source
+descriptors leave these optional identities absent.
 
 [← Documentation index](README.md) · [Architecture](architecture.md)

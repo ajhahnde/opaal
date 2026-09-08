@@ -26,7 +26,7 @@ use opaal_runtime::resolve::ExecutableProbe;
 use opaal_runtime::script::{
     ScriptCompletion, execute_module_program, execute_module_program_outcome,
 };
-use opaal_runtime::seam::{OpaqueSlot, OpaqueSlotState, ProjectId};
+use opaal_runtime::seam::{DeclaredInputs, OpaqueSlot, OpaqueSlotState};
 use opaal_runtime::{Environment, Value};
 use opaal_syntax::{SourceFile, SourceId};
 
@@ -364,8 +364,8 @@ fn outcome_precedence_retains_one_primary_and_ordered_secondary_evidence() {
         &[OutcomeEvidence::CleanupFailure("secondary resource error")]
     );
 
-    let unknown_project = OpaqueSlot::<ProjectId>::unknown();
-    assert_eq!(unknown_project.state(), OpaqueSlotState::Unknown);
+    let unknown_inputs = OpaqueSlot::<DeclaredInputs>::unknown();
+    assert_eq!(unknown_inputs.state(), OpaqueSlotState::Unknown);
 }
 
 #[test]
