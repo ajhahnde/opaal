@@ -12,9 +12,12 @@ ignore = []
 version = 2
 confidence-threshold = 0.9
 # OPAAL itself uses MPL-2.0. Dependencies may use this reviewed set;
+# ISC and BSD-3-Clause cover the pinned Rustls cryptography chain;
 # Unicode-3.0 covers data tables in unicode-ident.
 allow = [
     "Apache-2.0",
+    "BSD-3-Clause",
+    "ISC",
     "MIT",
     "MPL-2.0",
     "Unicode-3.0",

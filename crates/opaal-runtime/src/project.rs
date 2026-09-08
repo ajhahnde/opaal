@@ -5,6 +5,7 @@ use std::fmt;
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::path::{Component, Path, PathBuf};
 
+use opaal_platform::operational::{OperationalAdapter, ReadFileRequest};
 use semver::{Version, VersionReq};
 use sha2::{Digest, Sha256};
 use toml::{Table, Value};
@@ -232,6 +233,7 @@ impl MaintainedAdapter {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct EndpointDeclaration {
+    id: String,
     url: String,
     methods: Vec<String>,
     secret_headers: Vec<String>,
@@ -241,6 +243,11 @@ pub struct EndpointDeclaration {
 }
 
 impl EndpointDeclaration {
+    #[must_use]
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
     #[must_use]
     pub fn url(&self) -> &str {
         &self.url
@@ -661,6 +668,7 @@ pub fn parse_project_manifest(
             ));
         }
         Ok(EndpointDeclaration {
+            id: id.to_owned(),
             url,
             methods,
             secret_headers,
@@ -948,9 +956,16 @@ pub fn parse_tool_lock(
                 format!("adapter mismatch for tool `{id}`"),
             ));
         }
-        let version = Version::parse(required_string(table, "version")?).map_err(|error| {
+        let version_text = required_string(table, "version")?;
+        let version = Version::parse(version_text).map_err(|error| {
             ProjectError::new("LOCK011", format!("invalid tool version: {error}"))
         })?;
+        if version.to_string() != version_text {
+            return Err(ProjectError::new(
+                "LOCK011",
+                format!("tool `{id}` version is not canonical SemVer"),
+            ));
+        }
         if !declaration.version.matches(&version) {
             return Err(ProjectError::new(
                 "LOCK012",
@@ -965,10 +980,10 @@ pub fn parse_tool_lock(
             ));
         }
         let path = parse_native_bytes(required_table(table, "path")?)?;
-        if path.bytes().first() != Some(&b'/') || path.bytes().contains(&0) {
+        if !is_normalized_absolute_native_path(path.bytes()) {
             return Err(ProjectError::new(
                 "LOCK020",
-                format!("tool `{id}` path must be a nonempty absolute Unix path without NUL"),
+                format!("tool `{id}` path must be a normalized absolute Unix file path"),
             ));
         }
         let locked = LockedTool {
@@ -999,6 +1014,64 @@ pub fn parse_tool_lock(
         variables,
         tools,
     })
+}
+
+/// Read one explicitly named project-contained tool lock without following a
+/// symlink, then apply the same closed schema used by in-memory callers.
+pub fn read_tool_lock(
+    adapter: &dyn OperationalAdapter,
+    manifest: &ProjectManifest,
+    environment: &str,
+    path: &Path,
+) -> Result<ToolLock, ProjectError> {
+    let path = crate::operational::path::contained(manifest.root(), path).map_err(|_| {
+        ProjectError::new(
+            "LOCK021",
+            "tool-lock path must be absolute and lexically project-contained",
+        )
+    })?;
+    if path == manifest.root() {
+        return Err(ProjectError::new(
+            "LOCK021",
+            "tool-lock path must be absolute and lexically project-contained",
+        ));
+    }
+    let expected = manifest.environment(environment)?.tool_lock();
+    if path != expected {
+        return Err(ProjectError::new(
+            "LOCK021",
+            "tool-lock path differs from the selected environment binding",
+        ));
+    }
+    let bytes = adapter
+        .read_file(ReadFileRequest {
+            root: manifest.root(),
+            path: &path,
+            max_bytes: MAX_PROJECT_DOCUMENT_BYTES,
+        })
+        .map_err(|error| ProjectError::new("LOCK022", format!("cannot read tool lock: {error}")))?;
+    parse_tool_lock(manifest, environment, &bytes)
+}
+
+fn is_normalized_absolute_native_path(bytes: &[u8]) -> bool {
+    use std::os::unix::ffi::{OsStrExt, OsStringExt};
+
+    if bytes.contains(&0) {
+        return false;
+    }
+    let path = PathBuf::from(std::ffi::OsString::from_vec(bytes.to_vec()));
+    if !path.is_absolute() || path == Path::new("/") {
+        return false;
+    }
+    let mut normalized = PathBuf::from("/");
+    for component in path.components() {
+        match component {
+            Component::RootDir => {}
+            Component::Normal(name) => normalized.push(name),
+            Component::CurDir | Component::ParentDir | Component::Prefix(_) => return false,
+        }
+    }
+    normalized.as_os_str().as_bytes() == bytes
 }
 
 fn parse_document(bytes: &[u8], role: &str) -> Result<Table, ProjectError> {
@@ -1463,6 +1536,9 @@ fn valid_port(port: &str) -> bool {
 
 fn is_dns_name(name: &str) -> bool {
     !name.is_empty()
+        && !name
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || byte == b'.')
         && name.len() <= 253
         && !name.ends_with('.')
         && name.bytes().all(|byte| {

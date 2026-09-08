@@ -11,6 +11,8 @@ publish.workspace = true
 [dependencies]
 opaal-platform = { path = "../opaal-platform" }
 libc = "0.2"
+httparse = "=1.10.1"
+rustls = { version = "=0.23.43", default-features = false, features = ["std", "ring", "tls12"] }
 
 [[bin]]
 name = "opaal-process-observer-fixture"

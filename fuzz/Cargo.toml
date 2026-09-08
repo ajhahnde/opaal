@@ -8,6 +8,7 @@ edition = "2024"
 cargo-fuzz = true
 
 [dependencies]
+opaal-platform = { path = "../crates/opaal-platform" }
 opaal-runtime = { path = "../crates/opaal-runtime" }
 opaal-syntax = { path = "../crates/opaal-syntax" }
 libfuzzer-sys = "0.4"

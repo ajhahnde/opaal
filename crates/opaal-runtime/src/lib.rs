@@ -26,6 +26,7 @@ pub mod job;
 pub mod lifetime;
 pub mod module;
 pub mod operation;
+pub mod operational;
 pub mod outcome;
 pub mod plan;
 pub mod presentation;

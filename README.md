@@ -7,7 +7,9 @@ contracts, POSIX adapter, and Language Server Protocol implementation.
 > Project status: `1.0.0-alpha.1` is an unreleased development version. The
 > current authoring surface is intentionally non-operational: typed actions and
 > explicit project tasks can be inspected and checked, but declared effects
-> cannot execute. Package and controlled workflow execution remain absent.
+> cannot execute. Maintained bounded adapters are available to embedders and
+> direct host/fake verification; package and controlled workflow execution
+> remain absent.
 
 ## Try OPAAL
 
@@ -63,9 +65,9 @@ actions retain the existing evaluator route.
 | Path | Responsibility |
 | --- | --- |
 | `crates/opaal-syntax/` | Source, lexer, parser, syntax trees, formatting, and diagnostics |
-| `crates/opaal-runtime/` | Pure values, module analysis, operations, outcomes, streams, and bounded evaluation |
-| `crates/opaal-platform/` | Platform capability contracts |
-| `crates/opaal-platform-posix/` | macOS/Linux host adapter and observation fixtures |
+| `crates/opaal-runtime/` | Values, module analysis, maintained operational APIs, outcomes, streams, and bounded evaluation |
+| `crates/opaal-platform/` | Platform capability and bounded operational adapter contracts plus fakes |
+| `crates/opaal-platform-posix/` | macOS/Linux shell and maintained operational adapters plus observation fixtures |
 | `crates/opaal-cli/` | Command-line, checker, formatter, planning-refusal, and interactive frontends |
 | `crates/opaal-lsp/` | Non-executing Language Server Protocol adapter |
 | `fuzz/` | Separate unpublished package with four fuzz targets |
@@ -97,6 +99,7 @@ hardware qualification.
 
 See the [documentation index](docs/README.md), [language foundation](docs/language-foundation.md),
 [actions and explicit projects](docs/actions-and-projects.md),
+[bounded operational modules](docs/operational-modules.md),
 [architecture](docs/architecture.md), [development guide](docs/development.md),
 [contribution guide](CONTRIBUTING.md), [security policy](SECURITY.md), and
 [changelog](CHANGELOG.md).

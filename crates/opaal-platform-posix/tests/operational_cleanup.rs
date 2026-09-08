@@ -8,7 +8,7 @@ use opaal_platform::{
 use opaal_platform_posix::PosixPlatform;
 
 #[test]
-fn posix_does_not_promote_low_level_capabilities_to_operational_authority() {
+fn posix_reports_only_maintained_operational_enforcement_truth() {
     let filesystem = AuthorityQuery::new(
         AuthorityEffect::FilesystemRead,
         AuthorityScope::ProjectPath(Path::new("/project/input")),
@@ -24,16 +24,16 @@ fn posix_does_not_promote_low_level_capabilities_to_operational_authority() {
 
     assert_eq!(
         PosixPlatform.authority_enforcement(filesystem),
-        AuthorityEnforcement::Unsupported
+        AuthorityEnforcement::Enforced
     );
     assert_eq!(
         PosixPlatform.authority_enforcement(process),
-        AuthorityEnforcement::Unsupported,
-        "process primitives alone do not implement the bounded maintained adapter"
+        AuthorityEnforcement::Unenforced,
+        "the parent process boundary is enforced while child internals remain opaque"
     );
     assert_eq!(
         PosixPlatform.authority_enforcement(network),
-        AuthorityEnforcement::Unsupported,
-        "the bounded HTTP adapter is not part of this platform surface yet"
+        AuthorityEnforcement::Enforced,
+        "the maintained HTTP adapter enforces endpoint and TLS policy"
     );
 }

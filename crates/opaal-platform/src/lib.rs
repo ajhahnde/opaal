@@ -13,6 +13,8 @@
 //! standard [`std::ffi::OsStr`] / [`std::path::Path`] family so native argv,
 //! environment, and path bytes survive without lossy UTF-8 conversion.
 
+pub mod operational;
+
 use std::any::Any;
 use std::ffi::{OsStr, OsString};
 use std::fmt;

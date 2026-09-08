@@ -6,6 +6,8 @@
 //! capability set for those hosts. Target-specific adapters remain separate
 //! and own their own policy and qualification state.
 
+pub mod operational;
+
 use std::any::Any;
 use std::collections::BTreeSet;
 use std::ffi::{CString, OsStr};
@@ -296,8 +298,15 @@ impl Platform for PosixPlatform {
     }
 
     fn authority_enforcement(&self, query: AuthorityQuery<'_>) -> AuthorityEnforcement {
-        let _ = query;
-        AuthorityEnforcement::Unsupported
+        match query.effect() {
+            opaal_platform::AuthorityEffect::ProcessRun => AuthorityEnforcement::Unenforced,
+            opaal_platform::AuthorityEffect::FilesystemRead
+            | opaal_platform::AuthorityEffect::FilesystemWrite
+            | opaal_platform::AuthorityEffect::NetworkHttp
+            | opaal_platform::AuthorityEffect::SecretReveal
+            | opaal_platform::AuthorityEffect::ClockWall
+            | opaal_platform::AuthorityEffect::ClockMonotonic => AuthorityEnforcement::Enforced,
+        }
     }
 
     fn is_terminal(&self) -> bool {
