@@ -27,6 +27,19 @@ pub const MAX_PROCESS_OUTPUT_BYTES: usize = 8 * 1024 * 1024;
 /// Maximum duration of one maintained process attempt.
 pub const MAX_PROCESS_DURATION: Duration = Duration::from_secs(10 * 60);
 
+/// Whether a target can execute the exact retained executable identity.
+///
+/// Linux provides a descriptor-backed execution route for the maintained
+/// adapter. Darwin exposes only pathname execution, which cannot close the
+/// replacement race after identity verification.
+#[must_use]
+pub fn supports_exact_process_execution(platform: &str) -> bool {
+    matches!(
+        platform,
+        "x86_64-unknown-linux-gnu" | "aarch64-unknown-linux-gnu"
+    )
+}
+
 /// A stable class for a bounded adapter failure.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum OperationalErrorKind {
@@ -225,6 +238,11 @@ impl HttpResponse {
 #[derive(Debug)]
 pub struct ProcessRequest<'a> {
     pub executable: &'a Path,
+    /// A securely opened executable identity. Linux adapters execute this
+    /// descriptor instead of resolving `executable` again when it is present.
+    /// Adapters without descriptor-backed execution must refuse the request
+    /// rather than fall back to pathname execution.
+    pub executable_file: Option<&'a std::fs::File>,
     pub argv: &'a [OsString],
     pub environment: &'a [(OsString, OsString)],
     pub cwd: &'a Path,

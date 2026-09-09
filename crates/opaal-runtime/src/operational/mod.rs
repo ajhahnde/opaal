@@ -22,6 +22,7 @@ pub mod http;
 pub mod integrity;
 pub mod path;
 pub mod process;
+pub mod source;
 pub mod time;
 pub mod url;
 pub mod version;
@@ -47,6 +48,12 @@ pub const STANDARD_MODULES: [&str; 9] = [
     "std::http",
     "std::process",
 ];
+
+pub(crate) fn is_source_module(module: &str) -> bool {
+    STANDARD_MODULES
+        .iter()
+        .any(|candidate| candidate.strip_prefix("std::") == Some(module))
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ModuleError {

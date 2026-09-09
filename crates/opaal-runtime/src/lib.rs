@@ -41,6 +41,7 @@ pub mod session;
 pub mod stream;
 pub mod structured;
 mod value;
+pub mod workflow;
 
 pub use environment::Environment;
 pub use scope::*;

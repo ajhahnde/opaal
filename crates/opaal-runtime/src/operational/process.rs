@@ -2,7 +2,9 @@
 
 use std::collections::BTreeSet;
 use std::ffi::OsString;
+use std::fs::File;
 use std::os::unix::ffi::OsStringExt;
+use std::os::unix::fs::FileExt as _;
 use std::path::{Path, PathBuf};
 use std::time::Duration as StdDuration;
 
@@ -136,6 +138,52 @@ pub fn verify_executable(
     Ok(())
 }
 
+fn verify_retained_executable(file: &File, tool: &LockedTool) -> Result<(), ModuleError> {
+    let metadata = file
+        .metadata()
+        .map_err(|error| ModuleError::invalid("PROCESS003", error.to_string()))?;
+    if !metadata.is_file() {
+        return Err(ModuleError::invalid(
+            "PROCESS003",
+            "retained executable is not a regular file",
+        ));
+    }
+    let mut bytes = Vec::with_capacity(
+        usize::try_from(metadata.len())
+            .unwrap_or(MAX_TOOL_EXECUTABLE_BYTES)
+            .min(MAX_TOOL_EXECUTABLE_BYTES),
+    );
+    let mut offset = 0_u64;
+    let mut buffer = [0_u8; 64 * 1024];
+    while bytes.len() <= MAX_TOOL_EXECUTABLE_BYTES {
+        let remaining = MAX_TOOL_EXECUTABLE_BYTES + 1 - bytes.len();
+        let chunk = remaining.min(buffer.len());
+        let read = file
+            .read_at(&mut buffer[..chunk], offset)
+            .map_err(|error| ModuleError::invalid("PROCESS003", error.to_string()))?;
+        if read == 0 {
+            break;
+        }
+        bytes.extend_from_slice(&buffer[..read]);
+        offset = offset
+            .checked_add(u64::try_from(read).expect("read size fits u64"))
+            .ok_or_else(|| ModuleError::invalid("PROCESS003", "executable offset overflow"))?;
+    }
+    if bytes.len() > MAX_TOOL_EXECUTABLE_BYTES {
+        return Err(ModuleError::invalid(
+            "PROCESS003",
+            "locked executable exceeds its byte limit",
+        ));
+    }
+    if integrity::sha256(&bytes) != tool.digest() {
+        return Err(ModuleError::invalid(
+            "PROCESS003",
+            "locked executable digest changed",
+        ));
+    }
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn probe(
     context: &OperationalContext,
@@ -147,6 +195,50 @@ pub fn probe(
     cwd: &Path,
     budget: &mut ProcessBudget,
 ) -> Result<ToolResult, ModuleError> {
+    probe_inner(
+        context, effects, platform, adapter, lock, tool_id, cwd, budget, None,
+    )
+}
+
+/// On a supported host, probe the exact executable descriptor retained by
+/// accepted-plan identity verification without resolving its pathname again.
+#[allow(clippy::too_many_arguments)]
+pub fn probe_retained(
+    context: &OperationalContext,
+    effects: &EffectSet,
+    platform: &dyn Platform,
+    adapter: &dyn OperationalAdapter,
+    lock: &ToolLock,
+    tool_id: &str,
+    cwd: &Path,
+    budget: &mut ProcessBudget,
+    executable_file: &File,
+) -> Result<ToolResult, ModuleError> {
+    probe_inner(
+        context,
+        effects,
+        platform,
+        adapter,
+        lock,
+        tool_id,
+        cwd,
+        budget,
+        Some(executable_file),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn probe_inner(
+    context: &OperationalContext,
+    effects: &EffectSet,
+    platform: &dyn Platform,
+    adapter: &dyn OperationalAdapter,
+    lock: &ToolLock,
+    tool_id: &str,
+    cwd: &Path,
+    budget: &mut ProcessBudget,
+    executable_file: Option<&File>,
+) -> Result<ToolResult, ModuleError> {
     let tool = lock.tools().get(tool_id).ok_or_else(|| {
         ModuleError::invalid("PROCESS004", format!("unknown locked tool `{tool_id}`"))
     })?;
@@ -155,7 +247,7 @@ pub fn probe(
         MaintainedAdapter::Git => &["--version"][..],
         MaintainedAdapter::Cargo => &["--version", "--verbose"][..],
     };
-    let result = run(
+    let result = run_inner(
         context,
         effects,
         platform,
@@ -168,6 +260,7 @@ pub fn probe(
         MAX_PROBE_OUTPUT_BYTES,
         MAX_PROCESS_DURATION,
         budget,
+        executable_file,
     )?;
     if !result.status.is_ok() {
         return Err(ModuleError::invalid(
@@ -203,6 +296,74 @@ pub fn run(
     timeout: StdDuration,
     budget: &mut ProcessBudget,
 ) -> Result<ToolResult, ModuleError> {
+    run_inner(
+        context,
+        effects,
+        platform,
+        adapter,
+        lock,
+        tool_id,
+        arguments,
+        cwd,
+        stdout_limit,
+        stderr_limit,
+        timeout,
+        budget,
+        None,
+    )
+}
+
+/// On a supported host, run the exact executable descriptor retained by
+/// accepted-plan identity verification without resolving its pathname again.
+#[allow(clippy::too_many_arguments)]
+pub fn run_retained(
+    context: &OperationalContext,
+    effects: &EffectSet,
+    platform: &dyn Platform,
+    adapter: &dyn OperationalAdapter,
+    lock: &ToolLock,
+    tool_id: &str,
+    arguments: &[&str],
+    cwd: &Path,
+    stdout_limit: usize,
+    stderr_limit: usize,
+    timeout: StdDuration,
+    budget: &mut ProcessBudget,
+    executable_file: &File,
+) -> Result<ToolResult, ModuleError> {
+    run_inner(
+        context,
+        effects,
+        platform,
+        adapter,
+        lock,
+        tool_id,
+        arguments,
+        cwd,
+        stdout_limit,
+        stderr_limit,
+        timeout,
+        budget,
+        Some(executable_file),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_inner(
+    context: &OperationalContext,
+    effects: &EffectSet,
+    platform: &dyn Platform,
+    adapter: &dyn OperationalAdapter,
+    lock: &ToolLock,
+    tool_id: &str,
+    arguments: &[&str],
+    cwd: &Path,
+    stdout_limit: usize,
+    stderr_limit: usize,
+    timeout: StdDuration,
+    budget: &mut ProcessBudget,
+    executable_file: Option<&File>,
+) -> Result<ToolResult, ModuleError> {
     if stdout_limit > MAX_PROCESS_OUTPUT_BYTES
         || stderr_limit > MAX_PROCESS_OUTPUT_BYTES
         || timeout > MAX_PROCESS_DURATION
@@ -219,7 +380,10 @@ pub fn run(
     let authority = CapabilityRequest::process_run(tool_id.to_owned())
         .map_err(|error| ModuleError::invalid("PROCESS008", error.to_string()))?;
     authorize(context, effects, &authority, platform)?;
-    verify_executable(adapter, tool)?;
+    match executable_file {
+        Some(file) if cfg!(target_os = "linux") => verify_retained_executable(file, tool)?,
+        _ => verify_executable(adapter, tool)?,
+    }
     if let Some(reason) = context.poll_cancellation() {
         return Err(ModuleError::Cancelled(reason));
     }
@@ -233,6 +397,7 @@ pub fn run(
         .run_process(
             ProcessRequest {
                 executable: &executable,
+                executable_file,
                 argv: &argv,
                 environment: &environment,
                 cwd,

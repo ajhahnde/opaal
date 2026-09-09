@@ -27,6 +27,7 @@ pub enum Mode {
         authority: PathBuf,
         tools: PathBuf,
         inputs: Vec<(String, String)>,
+        format_json: bool,
     },
     TaskHelp,
     TaskInspect {
@@ -36,6 +37,31 @@ pub enum Mode {
     PlanHelp,
     Plan {
         source: PathBuf,
+    },
+    ProjectPlan {
+        project: PathBuf,
+        task: String,
+        environment: String,
+        authority: PathBuf,
+        tools: PathBuf,
+        inputs: Vec<(String, String)>,
+        expires_in_seconds: u64,
+        out: PathBuf,
+    },
+    ExecuteHelp,
+    Execute {
+        plan: PathBuf,
+        accept: String,
+        run_id: String,
+        authority: PathBuf,
+        secret_stdin: String,
+        journal: PathBuf,
+    },
+    AuditHelp,
+    Audit {
+        project: PathBuf,
+        journal: PathBuf,
+        out: PathBuf,
     },
     FormatHelp,
     Format {
@@ -125,6 +151,8 @@ where
         Some("check") => return parse_check_args(arguments.into_iter().skip(1)),
         Some("task") => return parse_task_args(arguments.into_iter().skip(1)),
         Some("plan") => return parse_plan_args(arguments.into_iter().skip(1)),
+        Some("execute") => return parse_execute_args(arguments.into_iter().skip(1)),
+        Some("audit") => return parse_audit_args(arguments.into_iter().skip(1)),
         Some("format") => return parse_format_args(arguments.into_iter().skip(1)),
         Some(text) if text.starts_with('-') && text != "-" && text != "--" => {
             return Err(CliError::UnknownOption(text.to_owned()));
@@ -158,7 +186,14 @@ fn parse_plan_args<I>(arguments: I) -> Result<Invocation, CliError>
 where
     I: IntoIterator<Item = OsString>,
 {
-    parse_single_source(arguments, true)
+    let arguments = arguments.into_iter().collect::<Vec<_>>();
+    if arguments.first().is_none_or(|argument| argument != "--")
+        && arguments.iter().any(|argument| argument == "--project")
+    {
+        parse_project_plan_args(&arguments)
+    } else {
+        parse_single_source(arguments, true)
+    }
 }
 
 fn parse_check_args<I>(arguments: I) -> Result<Invocation, CliError>
@@ -166,7 +201,9 @@ where
     I: IntoIterator<Item = OsString>,
 {
     let arguments = arguments.into_iter().collect::<Vec<_>>();
-    if arguments.iter().any(|argument| argument == "--project") {
+    if arguments.first().is_none_or(|argument| argument != "--")
+        && arguments.iter().any(|argument| argument == "--project")
+    {
         parse_project_check_args(&arguments)
     } else {
         parse_single_source(arguments, false)
@@ -180,6 +217,7 @@ fn parse_project_check_args(arguments: &[OsString]) -> Result<Invocation, CliErr
     let mut authority = None;
     let mut tools = None;
     let mut inputs = Vec::new();
+    let mut format_json = false;
     let mut index = 0;
     while index < arguments.len() {
         let option = arguments[index].to_str().ok_or_else(|| {
@@ -213,6 +251,18 @@ fn parse_project_check_args(arguments: &[OsString]) -> Result<Invocation, CliErr
                 }
                 inputs.push((name.to_owned(), value.to_owned()));
             }
+            "--format" => {
+                let value = text_option_value("--format", arguments, &mut index)?;
+                if value != "json" {
+                    return Err(CliError::InvalidProjectArgument(
+                        "--format supports only 'json'".to_owned(),
+                    ));
+                }
+                if format_json {
+                    return Err(CliError::DuplicateOption("--format"));
+                }
+                format_json = true;
+            }
             "--help" if arguments.len() == 1 => {
                 return Ok(Invocation {
                     mode: Mode::CheckHelp,
@@ -233,8 +283,191 @@ fn parse_project_check_args(arguments: &[OsString]) -> Result<Invocation, CliErr
             authority: required_option(authority, "--authority")?,
             tools: required_option(tools, "--tools")?,
             inputs,
+            format_json,
         },
     })
+}
+
+fn parse_project_plan_args(arguments: &[OsString]) -> Result<Invocation, CliError> {
+    let mut project = None;
+    let mut task = None;
+    let mut environment = None;
+    let mut authority = None;
+    let mut tools = None;
+    let mut inputs = Vec::new();
+    let mut expires_in_seconds = None;
+    let mut out = None;
+    let mut index = 0;
+    while index < arguments.len() {
+        let option = arguments[index].to_str().ok_or_else(|| {
+            CliError::InvalidProjectArgument("project option names must be UTF-8".to_owned())
+        })?;
+        index += 1;
+        match option {
+            "--project" => set_path_option(&mut project, "--project", arguments, &mut index)?,
+            "--task" => set_text_option(&mut task, "--task", arguments, &mut index)?,
+            "--environment" => {
+                set_text_option(&mut environment, "--environment", arguments, &mut index)?
+            }
+            "--authority" => set_path_option(&mut authority, "--authority", arguments, &mut index)?,
+            "--tools" => set_path_option(&mut tools, "--tools", arguments, &mut index)?,
+            "--input" => push_binding(&mut inputs, "--input", arguments, &mut index)?,
+            "--expires-in" => {
+                if expires_in_seconds.is_some() {
+                    return Err(CliError::DuplicateOption("--expires-in"));
+                }
+                let value = text_option_value("--expires-in", arguments, &mut index)?;
+                let seconds = value
+                    .strip_suffix('s')
+                    .and_then(|number| number.parse::<u64>().ok())
+                    .filter(|seconds| *seconds > 0 && *seconds <= 900)
+                    .ok_or_else(|| {
+                        CliError::InvalidProjectArgument(
+                            "--expires-in requires 1s through 900s".to_owned(),
+                        )
+                    })?;
+                expires_in_seconds = Some(seconds);
+            }
+            "--out" => set_path_option(&mut out, "--out", arguments, &mut index)?,
+            "--help" if arguments.len() == 1 => {
+                return Ok(Invocation {
+                    mode: Mode::PlanHelp,
+                });
+            }
+            value => {
+                return Err(CliError::InvalidProjectArgument(format!(
+                    "unexpected project plan argument '{value}'"
+                )));
+            }
+        }
+    }
+    Ok(Invocation {
+        mode: Mode::ProjectPlan {
+            project: required_option(project, "--project")?,
+            task: required_option(task, "--task")?,
+            environment: required_option(environment, "--environment")?,
+            authority: required_option(authority, "--authority")?,
+            tools: required_option(tools, "--tools")?,
+            inputs,
+            expires_in_seconds: required_option(expires_in_seconds, "--expires-in")?,
+            out: required_option(out, "--out")?,
+        },
+    })
+}
+
+fn parse_execute_args<I>(arguments: I) -> Result<Invocation, CliError>
+where
+    I: IntoIterator<Item = OsString>,
+{
+    let arguments = arguments.into_iter().collect::<Vec<_>>();
+    if arguments.as_slice() == [OsString::from("--help")] {
+        return Ok(Invocation {
+            mode: Mode::ExecuteHelp,
+        });
+    }
+    let mut plan = None;
+    let mut accept = None;
+    let mut run_id = None;
+    let mut authority = None;
+    let mut secret_stdin = None;
+    let mut journal = None;
+    let mut index = 0;
+    while index < arguments.len() {
+        let option = arguments[index].to_str().ok_or_else(|| {
+            CliError::InvalidProjectArgument("execute option names must be UTF-8".to_owned())
+        })?;
+        index += 1;
+        match option {
+            "--plan" => set_path_option(&mut plan, "--plan", &arguments, &mut index)?,
+            "--accept" => set_text_option(&mut accept, "--accept", &arguments, &mut index)?,
+            "--run-id" => set_text_option(&mut run_id, "--run-id", &arguments, &mut index)?,
+            "--authority" => {
+                set_path_option(&mut authority, "--authority", &arguments, &mut index)?
+            }
+            "--secret-stdin" => {
+                set_text_option(&mut secret_stdin, "--secret-stdin", &arguments, &mut index)?
+            }
+            "--journal" => set_path_option(&mut journal, "--journal", &arguments, &mut index)?,
+            value => {
+                return Err(CliError::InvalidProjectArgument(format!(
+                    "unexpected execute argument '{value}'"
+                )));
+            }
+        }
+    }
+    Ok(Invocation {
+        mode: Mode::Execute {
+            plan: required_option(plan, "--plan")?,
+            accept: required_option(accept, "--accept")?,
+            run_id: required_option(run_id, "--run-id")?,
+            authority: required_option(authority, "--authority")?,
+            secret_stdin: required_option(secret_stdin, "--secret-stdin")?,
+            journal: required_option(journal, "--journal")?,
+        },
+    })
+}
+
+fn parse_audit_args<I>(arguments: I) -> Result<Invocation, CliError>
+where
+    I: IntoIterator<Item = OsString>,
+{
+    let arguments = arguments.into_iter().collect::<Vec<_>>();
+    if arguments.as_slice() == [OsString::from("--help")] {
+        return Ok(Invocation {
+            mode: Mode::AuditHelp,
+        });
+    }
+    let mut project = None;
+    let mut journal = None;
+    let mut out = None;
+    let mut index = 0;
+    while index < arguments.len() {
+        let option = arguments[index].to_str().ok_or_else(|| {
+            CliError::InvalidProjectArgument("audit option names must be UTF-8".to_owned())
+        })?;
+        index += 1;
+        match option {
+            "--project" => set_path_option(&mut project, "--project", &arguments, &mut index)?,
+            "--journal" => set_path_option(&mut journal, "--journal", &arguments, &mut index)?,
+            "--out" => set_path_option(&mut out, "--out", &arguments, &mut index)?,
+            value => {
+                return Err(CliError::InvalidProjectArgument(format!(
+                    "unexpected audit argument '{value}'"
+                )));
+            }
+        }
+    }
+    Ok(Invocation {
+        mode: Mode::Audit {
+            project: required_option(project, "--project")?,
+            journal: required_option(journal, "--journal")?,
+            out: required_option(out, "--out")?,
+        },
+    })
+}
+
+fn push_binding(
+    bindings: &mut Vec<(String, String)>,
+    option: &'static str,
+    arguments: &[OsString],
+    index: &mut usize,
+) -> Result<(), CliError> {
+    let value = text_option_value(option, arguments, index)?;
+    let (name, value) = value
+        .split_once('=')
+        .ok_or_else(|| CliError::InvalidProjectArgument(format!("{option} requires name=value")))?;
+    if name.is_empty() {
+        return Err(CliError::InvalidProjectArgument(format!(
+            "{option} name cannot be empty"
+        )));
+    }
+    if bindings.iter().any(|(existing, _)| existing == name) {
+        return Err(CliError::InvalidProjectArgument(format!(
+            "duplicate {option} name '{name}'"
+        )));
+    }
+    bindings.push((name.to_owned(), value.to_owned()));
+    Ok(())
 }
 
 fn parse_task_args<I>(arguments: I) -> Result<Invocation, CliError>
@@ -529,6 +762,18 @@ mod tests {
                 source: PathBuf::from("root.opaal")
             }
         );
+        assert_eq!(
+            parse(&["check", "--", "--project"]).unwrap().mode,
+            Mode::Check {
+                source: PathBuf::from("--project")
+            }
+        );
+        assert_eq!(
+            parse(&["plan", "--", "--project"]).unwrap().mode,
+            Mode::Plan {
+                source: PathBuf::from("--project")
+            }
+        );
     }
 
     #[test]
@@ -576,6 +821,7 @@ mod tests {
                 authority: PathBuf::from("authority.toml"),
                 tools: PathBuf::from("tools.toml"),
                 inputs: vec![("candidate".to_owned(), "artifact.tar".to_owned())],
+                format_json: false,
             }
         );
         assert_eq!(
@@ -592,9 +838,9 @@ mod tests {
             Err(CliError::DuplicateOption("--project"))
         );
         assert_eq!(
-            parse(&["check", "--project", "opaal.toml", "--format", "json",]),
+            parse(&["check", "--project", "opaal.toml", "--format", "xml",]),
             Err(CliError::InvalidProjectArgument(
-                "unexpected project check argument '--format'".to_owned()
+                "--format supports only 'json'".to_owned()
             ))
         );
         assert_eq!(
@@ -621,6 +867,95 @@ mod tests {
             ]),
             Err(CliError::InvalidProjectArgument(
                 "duplicate --input name 'candidate'".to_owned()
+            ))
+        );
+    }
+
+    #[test]
+    fn plan_execute_and_audit_require_every_explicit_control_identity() {
+        assert_eq!(
+            parse(&[
+                "plan",
+                "--project",
+                "opaal.toml",
+                "--task",
+                "release",
+                "--environment",
+                "ci",
+                "--authority",
+                "authority.toml",
+                "--tools",
+                "tools.toml",
+                "--input",
+                "candidate=artifact.tar",
+                "--expires-in",
+                "900s",
+                "--out",
+                "release.plan.json",
+            ])
+            .unwrap()
+            .mode,
+            Mode::ProjectPlan {
+                project: PathBuf::from("opaal.toml"),
+                task: "release".to_owned(),
+                environment: "ci".to_owned(),
+                authority: PathBuf::from("authority.toml"),
+                tools: PathBuf::from("tools.toml"),
+                inputs: vec![("candidate".to_owned(), "artifact.tar".to_owned())],
+                expires_in_seconds: 900,
+                out: PathBuf::from("release.plan.json"),
+            }
+        );
+        assert_eq!(
+            parse(&[
+                "execute",
+                "--plan",
+                "release.plan.json",
+                "--accept",
+                "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "--run-id",
+                "00000000000000000000000000000001",
+                "--authority",
+                "authority.toml",
+                "--secret-stdin",
+                "token",
+                "--journal",
+                "run.jsonl",
+            ])
+            .unwrap()
+            .mode,
+            Mode::Execute {
+                plan: PathBuf::from("release.plan.json"),
+                accept: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                    .to_owned(),
+                run_id: "00000000000000000000000000000001".to_owned(),
+                authority: PathBuf::from("authority.toml"),
+                secret_stdin: "token".to_owned(),
+                journal: PathBuf::from("run.jsonl"),
+            }
+        );
+        assert_eq!(
+            parse(&[
+                "audit",
+                "--project",
+                "opaal.toml",
+                "--journal",
+                "run.jsonl",
+                "--out",
+                "audit.json",
+            ])
+            .unwrap()
+            .mode,
+            Mode::Audit {
+                project: PathBuf::from("opaal.toml"),
+                journal: PathBuf::from("run.jsonl"),
+                out: PathBuf::from("audit.json"),
+            }
+        );
+        assert_eq!(
+            parse(&["plan", "--project", "opaal.toml", "--expires-in", "901s"]),
+            Err(CliError::InvalidProjectArgument(
+                "--expires-in requires 1s through 900s".to_owned()
             ))
         );
     }

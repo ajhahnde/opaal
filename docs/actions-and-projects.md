@@ -2,9 +2,10 @@
 
 OPAAL actions are typed callables with a closed, statically declared effect
 set. A project exports selected actions as tasks and binds their effect scopes
-to named project metadata. The current surface formats, analyzes, inspects, and
-checks these contracts; it does not execute an effect, probe a tool, contact a
-network endpoint, read ambient environment, or materialize a secret.
+to named project metadata. The explicit project lifecycle formats, analyzes,
+inspects, checks, plans, accepts, executes, journals, and audits those same
+contracts. Check and plan remain non-executing; only execution of one exact
+accepted plan receives an operational host.
 
 ## Actions and tasks
 
@@ -21,7 +22,7 @@ effects {
     process.run(tools::git);
 }
 {
-    return candidate
+    return $candidate
 }
 
 task release = prepare
@@ -127,6 +128,13 @@ and integer `ns` or `b` suffixes for `Duration` and `ByteSize`. Types without an
 exact `name=value` representation cannot be exported as task parameters and are
 refused while the project is loaded.
 
+One check, plan, execute, or audit invocation also shares a 192 MiB aggregate
+control-read budget across every control input it reads, including the
+manifest, source closure, named path inputs, authority and tool-lock files, TLS
+CA material, tool executables, and accepted or audited artifacts. The exact
+limit is admitted; the first byte beyond it refuses the invocation. The
+smaller per-file and per-family limits still apply independently.
+
 ## CLI boundary
 
 Inspect a task without selecting authority:
@@ -144,12 +152,98 @@ opaal check --project opaal.toml --task release --environment ci \
 ```
 
 The supplied authority and tool paths must be the selected environment's exact
-normalized files. Success is silent. The complete `opaal.check.v1` machine
-artifact belongs to the later reviewable-planning lifecycle and is not emitted
-by this check-only surface. A missing or explicitly denied request, malformed
-document, mismatched identity, invalid input, or unknown task exits nonzero.
-Project check never invokes the task or an adapter. Maintained bounded adapters
-now exist for embedders and direct host/fake verification, but effectful source
-execution remains unavailable.
+normalized files. Success is silent by default; adding `--format json` writes
+one canonical `opaal.check.v1` artifact to standard output. A missing or
+explicitly denied request, malformed document, mismatched identity, invalid
+input, unknown task, or unsupported target capability exits nonzero. A task
+declaring `process.run` against a macOS tool lock receives a `CHECK008` finding
+and an `unsupported` request verdict because exact executable identity cannot
+be preserved through process creation. An unrecognized target receives
+`CHECK009` and an `unknown` verdict. Project check never invokes the task, reads
+an executable, probes a tool, reads a secret, or calls an adapter.
+
+Create an expiring review artifact for the same checked task:
+
+```sh
+opaal plan --project opaal.toml --task release --environment ci \
+  --authority authority-ci.toml --tools tools-host.toml \
+  --input candidate=artifact.tar --expires-in 900s \
+  --out release.plan.json
+```
+
+The plan binds the canonical check, project and source closure, typed inputs,
+authority and tool lock, child environment, platform and toolchain, TLS CA
+material, tool executables, and its creation and expiry instants. Planning
+performs bounded reads and one wall-clock observation, but does not probe a
+tool, invoke the action, read a secret, or contact an endpoint. It writes the
+canonical `opaal.plan.v1` file only when the project-contained destination does
+not already exist, then prints its exact digest. A process-bearing plan on
+macOS is written with a `refused` outcome and cannot be executed.
+
+The artifact schema also retains `unknown` for an adapter that cannot establish
+its enforcement verdict. Such a request always makes the action and plan
+non-executable. On the currently supported Linux and macOS hosts, the
+maintained POSIX project adapters report only the granted, denied, or
+unsupported verdicts. An unrecognized target remains `unknown`; artifact
+readers preserve and fail closed on that verdict rather than treating it as
+malformed or executable.
+
+After reviewing that artifact, copy its complete digest into one execution
+request:
+
+```sh
+opaal execute --plan release.plan.json \
+  --accept sha256:EXACT_PLAN_DIGEST \
+  --run-id 00000000000000000000000000000001 \
+  --authority authority-ci.toml \
+  --secret-stdin readiness_token \
+  --journal release.run.jsonl < secret-input
+```
+
+`--accept` must equal the plan's digest byte for byte and applies only to this
+request. A run ID is exactly 32 lowercase hexadecimal digits and is a
+correlation label local to the exact journal target. Exclusive journal creation
+prevents reuse at the same target, while a different journal may use the same
+label; correlate artifacts by journal identity plus run ID. Secret input must
+come from non-terminal standard input, names exactly one declared and used
+secret, and is read only after static identities and maintained tool probes
+have been revalidated. Execution rejects an expired plan or any drift in its
+project root, manifest, source, input, authority, tool lock, child environment,
+TLS material, executable, platform, or toolchain identities.
+
+Accepted execution of a process-bearing task is currently Linux-only. On
+macOS, refusal occurs during check and planning, before journal creation,
+secret consumption, a tool probe, or a pathname process spawn. Inspection,
+check artifacts, refused plans, and audit remain available there.
+
+The journal destination is project-contained, mode `0600`, and never
+overwritten. Its initial header is written and synced in an exclusive sibling,
+atomically published to the exact absent target without replacement, and
+followed by a parent-directory sync. Later canonical `opaal.run-journal.v1`
+lines are synced in hash-chain order: action boundaries, paired effect
+boundaries, cleanup, and one terminal record. A secret-bearing HTTP request
+nests its own paired `secret.reveal` records inside the surrounding
+`network.http` records; journal payloads contain only the secret identity and
+sink scope, never secret bytes.
+Completed and partial external facts remain evidence even when the action later
+fails, and no effect is retried implicitly.
+
+Validate and project that evidence without granting authority or resuming work:
+
+```sh
+opaal audit --project opaal.toml --journal release.run.jsonl \
+  --out release.audit.json
+```
+
+Audit checks the closed journal schema, contiguous sequence, digests, hash
+chain, and terminal state, then exclusively publishes `opaal.audit.v1` under
+the same explicit project root. A valid complete-line prefix with no terminal
+record becomes an `incomplete` audit and exits 1; earlier parse, schema,
+sequence, or hash corruption refuses without publishing success.
+
+All plan, journal, and audit outputs refuse pre-existing files, symlinks,
+non-regular paths, and paths outside the explicit project root. Ordinary
+`opaal SCRIPT`, interactive evaluation, and `opaal plan SOURCE` still refuse
+effectful source before host access.
 
 [← Documentation index](README.md) · [Language foundation](language-foundation.md) · [Authority and resources](authority-and-resources.md) · [Bounded operational modules](operational-modules.md)

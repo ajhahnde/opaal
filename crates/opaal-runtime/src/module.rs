@@ -1565,6 +1565,20 @@ pub struct NominalTypeId {
 }
 
 impl NominalTypeId {
+    pub(crate) fn standard(module: &str, name: &str) -> Self {
+        Self {
+            module: ModuleId::standard("std", module),
+            name: name.to_owned(),
+        }
+    }
+
+    pub(crate) fn project(module: &str, name: &str) -> Self {
+        Self {
+            module: ModuleId::standard("project", module),
+            name: name.to_owned(),
+        }
+    }
+
     #[must_use]
     pub const fn module(&self) -> &ModuleId {
         &self.module
@@ -1573,6 +1587,18 @@ impl NominalTypeId {
     #[must_use]
     pub fn name(&self) -> &str {
         &self.name
+    }
+}
+
+fn is_opaque_operational_nominal(id: &NominalTypeId) -> bool {
+    match id.module().origin() {
+        ModuleOrigin::Standard { namespace, module } if namespace == "project" => {
+            matches!(module.as_str(), "tools" | "endpoints" | "secrets")
+        }
+        ModuleOrigin::Standard { namespace, module } if namespace == "std" => {
+            module == "http" && id.name() == "SecretHeader"
+        }
+        _ => false,
     }
 }
 
@@ -1846,6 +1872,7 @@ pub struct ActionSignature {
     id: ActionId,
     callable: FunctionSignature,
     effects: Vec<DeclaredEffect>,
+    dependencies: Vec<ActionId>,
 }
 
 impl ActionSignature {
@@ -1863,6 +1890,12 @@ impl ActionSignature {
     #[must_use]
     pub fn effects(&self) -> &[DeclaredEffect] {
         &self.effects
+    }
+
+    /// Direct statically named action callees in first source-call order.
+    #[must_use]
+    pub fn dependencies(&self) -> &[ActionId] {
+        &self.dependencies
     }
 }
 
@@ -1971,12 +2004,13 @@ impl ModuleActionRegistry {
                     id,
                     callable,
                     effects,
+                    dependencies: Vec::new(),
                 });
             }
             registry.by_module.insert(entry.module().clone(), actions);
         }
         if !control.is_cancelled() {
-            validate_action_call_graph(&registry, sources, types, names, control, &mut errors);
+            validate_action_call_graph(&mut registry, sources, types, names, control, &mut errors);
         }
         if errors.is_empty() {
             Ok(registry)
@@ -2001,7 +2035,7 @@ struct CallableRead {
 }
 
 fn validate_action_call_graph(
-    registry: &ModuleActionRegistry,
+    registry: &mut ModuleActionRegistry,
     sources: &ModuleSourceRegistry,
     types: &ModuleTypeRegistry,
     names: &ModuleNameRegistry,
@@ -2043,6 +2077,29 @@ fn validate_action_call_graph(
     for calls in edges.values_mut() {
         calls.sort_by_key(|(_, span)| span.start());
         calls.dedup_by(|left, right| left.0 == right.0);
+    }
+
+    let action_ids = registry
+        .by_module
+        .values()
+        .flatten()
+        .map(|action| {
+            (
+                (action.id.module().clone(), action.id.name().to_owned()),
+                action.id.clone(),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    for actions in registry.by_module.values_mut() {
+        for action in actions {
+            let key = (action.id.module().clone(), action.id.name().to_owned());
+            action.dependencies = edges
+                .get(&key)
+                .into_iter()
+                .flatten()
+                .filter_map(|(callee, _)| action_ids.get(callee).cloned())
+                .collect();
+        }
     }
 
     for (caller, calls) in &edges {
@@ -3235,6 +3292,24 @@ impl RuntimeBindingTypes {
         standard_operation(owner, name)
     }
 
+    pub(crate) fn qualified_operational_call(
+        &self,
+        source: SourceId,
+        segments: &[&str],
+    ) -> Option<(ModuleId, String)> {
+        let (name, modules) = segments.split_last()?;
+        if modules.is_empty() {
+            return None;
+        }
+        let current = self.modules_by_source.get(&source)?;
+        let owner = self.aliases.resolve(current, modules)?;
+        let ModuleOrigin::Standard { namespace, module } = owner.origin() else {
+            return None;
+        };
+        (namespace == "std" && crate::operational::is_source_module(module))
+            .then(|| (owner.clone(), (*name).to_owned()))
+    }
+
     pub(crate) fn module_alias(&self, source: SourceId, name: &str) -> Option<&ModuleAlias> {
         let current = self.modules_by_source.get(&source)?;
         self.aliases.alias(current, name)
@@ -3272,6 +3347,9 @@ impl RuntimeBindingTypes {
                     self.type_satisfies_constraint_inner(element, constraint, visiting)
                 }
                 ValueType::Nominal { id, arguments } => {
+                    if is_opaque_operational_nominal(id) {
+                        return false;
+                    }
                     if !arguments.iter().all(|argument| {
                         self.type_satisfies_constraint_inner(argument, constraint, visiting)
                     }) {
@@ -3612,6 +3690,34 @@ fn nominal_type_id(value_type: &ValueType) -> Option<&NominalTypeId> {
         ValueType::Nominal { id, .. } => Some(id.as_ref()),
         ValueType::List(element) => nominal_type_id(element),
         _ => None,
+    }
+}
+
+fn permits_nullable_http_argument(
+    module: &ModuleId,
+    signature: &FunctionSignature,
+    parameter: &FunctionParameterSignature,
+    actual: &ValueType,
+) -> bool {
+    if actual != &ValueType::Null
+        || signature.name() != "request"
+        || !matches!(
+            module.origin(),
+            ModuleOrigin::Standard { namespace, module }
+                if namespace == "std" && module == "http"
+        )
+    {
+        return false;
+    }
+    match parameter.name() {
+        "secret" => matches!(
+            parameter.value_type(),
+            ValueType::Nominal { id, arguments }
+                if arguments.is_empty()
+                    && id.as_ref() == &NominalTypeId::standard("http", "SecretHeader")
+        ),
+        "body" => parameter.value_type() == &ValueType::Bytes,
+        _ => false,
     }
 }
 
@@ -5913,7 +6019,7 @@ impl<'a> SignatureValidator<'a> {
             return Ok(Some(ValueType::Any));
         }
 
-        let signature = if let ExpressionKind::Qualified(name) = call.callee.kind() {
+        let resolved = if let ExpressionKind::Qualified(name) = call.callee.kind() {
             self.function_for_qualified(name)
         } else {
             let Some(reference) = self
@@ -5951,9 +6057,11 @@ impl<'a> SignatureValidator<'a> {
                     ..
                 } => (target_module, *declaration_span),
             };
-            self.types.function(target_module, declaration_span)
+            self.types
+                .function(target_module, declaration_span)
+                .map(|signature| (target_module, signature))
         };
-        let Some(signature) = signature else {
+        let Some((signature_module, signature)) = resolved else {
             for argument in &call.arguments {
                 self.expression(argument)?;
             }
@@ -6067,7 +6175,9 @@ impl<'a> SignatureValidator<'a> {
                 continue;
             }
             let expected = substitute_type(parameter.value_type(), &substitutions);
-            if !expected.accepts_type(&actual) {
+            if !expected.accepts_type(&actual)
+                && !permits_nullable_http_argument(signature_module, signature, parameter, &actual)
+            {
                 self.errors
                     .borrow_mut()
                     .push(ModuleTypeError::ArgumentMismatch {
@@ -6314,7 +6424,7 @@ impl<'a> SignatureValidator<'a> {
     fn function_for_qualified(
         &self,
         name: &opaal_syntax::QualifiedName,
-    ) -> Option<&FunctionSignature> {
+    ) -> Option<(&ModuleId, &FunctionSignature)> {
         let (function, modules) = name.segments.split_last()?;
         if modules.is_empty() {
             return None;
@@ -6326,10 +6436,12 @@ impl<'a> SignatureValidator<'a> {
         let owner = self.aliases.resolve(self.entry.module(), &modules)?;
         let function = self.text(function.span());
         self.names.export(owner, function)?;
-        self.types
+        let signature = self
+            .types
             .functions(owner)
             .iter()
-            .find(|signature| signature.name() == function)
+            .find(|signature| signature.name() == function)?;
+        Some((owner, signature))
     }
 
     fn operation_for_qualified(
@@ -6358,8 +6470,12 @@ impl<'a> SignatureValidator<'a> {
             .map(|segment| self.text(segment.span()))
             .collect::<Vec<_>>();
         let owner = self.aliases.resolve(self.entry.module(), &modules)?;
-        matches!(owner.origin(), ModuleOrigin::Standard { .. })
-            .then(|| self.text(operation.span()).to_owned())
+        matches!(
+            owner.origin(),
+            ModuleOrigin::Standard { namespace, module }
+                if namespace == "std" && module == "value"
+        )
+        .then(|| self.text(operation.span()).to_owned())
     }
 
     fn operation_call_type(
@@ -6547,6 +6663,9 @@ impl<'a> SignatureValidator<'a> {
                     self.type_satisfies_constraint_inner(element, constraint, visiting)
                 }
                 ValueType::Nominal { id, arguments } => {
+                    if is_opaque_operational_nominal(id) {
+                        return false;
+                    }
                     if !arguments.iter().all(|argument| {
                         self.type_satisfies_constraint_inner(argument, constraint, visiting)
                     }) {
@@ -9959,19 +10078,99 @@ enum Option[T] {
 }
 "#;
 
+const STANDARD_DATA_MODULE: &str = r#"export { toml_decode, get, json_encode }
+def toml_decode(input: Bytes) -> Any { throw "controlled operation unavailable" }
+def get(input: Any, keys: List[String]) -> Any { throw "controlled operation unavailable" }
+def json_encode(input: Any) -> Bytes { throw "controlled operation unavailable" }
+"#;
+
+const STANDARD_PATH_MODULE: &str = r#"export { normalize, join, contained }
+def normalize(input: Path) -> Path { throw "controlled operation unavailable" }
+def join(root: Path, child: String) -> Path { throw "controlled operation unavailable" }
+def contained(root: Path, target: Path) -> Path { throw "controlled operation unavailable" }
+"#;
+
+const STANDARD_FILESYSTEM_MODULE: &str = r#"export { read, write_atomic }
+def read(target: Path, max_bytes: Int) -> Bytes { throw "controlled operation unavailable" }
+def write_atomic(target: Path, bytes: Bytes) -> Null { throw "controlled operation unavailable" }
+"#;
+
+const STANDARD_TIME_MODULE: &str = r#"export { Timestamp, wall_now, monotonic_now }
+type Timestamp = {}
+def wall_now() -> Timestamp { throw "controlled operation unavailable" }
+def monotonic_now() -> Int { throw "controlled operation unavailable" }
+"#;
+
+const STANDARD_VERSION_MODULE: &str = r#"export { Version, parse, render, matches }
+type Version = {}
+def parse(input: String) -> Version { throw "controlled operation unavailable" }
+def render(input: Version) -> String { throw "controlled operation unavailable" }
+def matches(range: String, version: Version) -> Bool { throw "controlled operation unavailable" }
+"#;
+
+const STANDARD_INTEGRITY_MODULE: &str = r#"export { sha256 }
+def sha256(input: Bytes) -> String { throw "controlled operation unavailable" }
+"#;
+
+const STANDARD_URL_MODULE: &str = r#"export { Url, parse, render }
+type Url = {}
+def parse(input: String) -> Url { throw "controlled operation unavailable" }
+def render(input: Url) -> String { throw "controlled operation unavailable" }
+"#;
+
+const STANDARD_HTTP_MODULE: &str = r#"import project::endpoints as endpoints
+import project::secrets as secrets
+export { SecretHeader, HttpResponse, secret_header, request }
+type SecretHeader = {}
+type HttpResponse = { status: Int, headers: Record, body: Bytes }
+def secret_header(name: String, secret: secrets::SecretIdentity) -> SecretHeader { throw "controlled operation unavailable" }
+def request(endpoint: endpoints::EndpointIdentity, method: String, headers: Record, secret: SecretHeader, body: Bytes, max_response_bytes: Int) -> HttpResponse { throw "controlled operation unavailable" }
+"#;
+
+const STANDARD_PROCESS_MODULE: &str = r#"import project::tools as tools
+export { ToolResult, run }
+type ToolResult = { status: Status, stdout: Bytes, stderr: Bytes }
+def run(tool: tools::ToolIdentity, arguments: List[String]) -> ToolResult { throw "controlled operation unavailable" }
+"#;
+
 fn standard_module_source(module: &ModuleId) -> Option<&'static str> {
-    matches!(
-        module.origin(),
-        ModuleOrigin::Standard {
-            namespace,
-            module,
-        } if namespace == "std" && module == "outcome"
-    )
-    .then_some(STANDARD_OUTCOME_MODULE)
+    let ModuleOrigin::Standard { namespace, module } = module.origin() else {
+        return None;
+    };
+    if namespace != "std" {
+        return None;
+    }
+    match module.as_str() {
+        "outcome" => Some(STANDARD_OUTCOME_MODULE),
+        "data" => Some(STANDARD_DATA_MODULE),
+        "path" => Some(STANDARD_PATH_MODULE),
+        "filesystem" => Some(STANDARD_FILESYSTEM_MODULE),
+        "time" => Some(STANDARD_TIME_MODULE),
+        "version" => Some(STANDARD_VERSION_MODULE),
+        "integrity" => Some(STANDARD_INTEGRITY_MODULE),
+        "url" => Some(STANDARD_URL_MODULE),
+        "http" => Some(STANDARD_HTTP_MODULE),
+        "process" => Some(STANDARD_PROCESS_MODULE),
+        _ => None,
+    }
 }
 
 fn is_standard_module(namespace: &str, module: &str) -> bool {
-    namespace == "std" && (module == "value" || module == "outcome")
+    namespace == "std"
+        && matches!(
+            module,
+            "value"
+                | "outcome"
+                | "data"
+                | "path"
+                | "filesystem"
+                | "time"
+                | "version"
+                | "integrity"
+                | "url"
+                | "http"
+                | "process"
+        )
 }
 
 fn parse_opaal_source(

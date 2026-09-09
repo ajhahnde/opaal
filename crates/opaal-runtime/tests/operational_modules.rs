@@ -328,6 +328,7 @@ fn fake_adapter_call_log_is_ordered_and_payload_free() {
         .run_process(
             ProcessRequest {
                 executable: Path::new("/tool/git"),
+                executable_file: None,
                 argv: &[OsString::from("/tool/git"), OsString::from("status")],
                 environment: &[(OsString::from("LC_ALL"), OsString::from("C"))],
                 cwd: Path::new("/project"),
@@ -1001,4 +1002,129 @@ digest = "{digest}"
         .is_err()
     );
     assert_eq!(exact_adapter.calls().len(), call_count);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn retained_executable_is_rehashed_after_probe_before_action_run() {
+    static NEXT_EXECUTABLE: AtomicUsize = AtomicUsize::new(0);
+
+    let executable = b"fake git executable";
+    let digest = integrity::sha256(executable);
+    let executable_path = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!(
+        "retained-executable-{}-{}",
+        std::process::id(),
+        NEXT_EXECUTABLE.fetch_add(1, Ordering::Relaxed)
+    ));
+    std::fs::write(&executable_path, executable).unwrap();
+    let retained = std::fs::File::open(&executable_path).unwrap();
+    let manifest = parse_project_manifest(
+        Path::new("/project/opaal.toml"),
+        br#"
+schema_version = 1
+[project]
+name = "demo"
+root_module = "tasks.opaal"
+required_opaal = ">=1.0.0-alpha.1,<2.0.0"
+[paths]
+root = "."
+evidence = "evidence.json"
+[tools.git]
+adapter = "git"
+version = ">=2.50.0,<3.0.0"
+[environments.ci]
+authority = "authority.toml"
+tool_lock = "tools.toml"
+"#,
+    )
+    .unwrap();
+    let variables = ["HOME", "TMPDIR", "PATH", "CARGO_HOME", "RUSTC", "RUSTDOC", "LC_ALL", "TZ", "CARGO_NET_OFFLINE", "GIT_CONFIG_NOSYSTEM", "GIT_CONFIG_GLOBAL"]
+        .into_iter().map(|name| format!("[[child_environment.variables]]\nname = \"{name}\"\nvalue = {{ encoding = \"base64url-nopad\", platform = \"unix\", value = \"eA\" }}\n"))
+        .collect::<String>();
+    let encoded_path = opaal_runtime::workflow::native_path(&executable_path)["value"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let lock = parse_tool_lock(
+        &manifest,
+        "ci",
+        format!(
+            r#"schema_version = 1
+project = "demo"
+environment = "ci"
+platform = "fixture"
+[child_environment]
+inherit = []
+{variables}
+[[tools]]
+id = "git"
+adapter = "git"
+path = {{ encoding = "base64url-nopad", platform = "unix", value = "{encoded_path}" }}
+version = "2.50.0"
+digest = "{digest}"
+"#
+        )
+        .as_bytes(),
+    )
+    .unwrap();
+    let request = CapabilityRequest::process_run("git").unwrap();
+    let context = context(vec![AuthorityRule::grant(
+        request.clone(),
+        RequiredEnforcement::AcknowledgeUnenforced,
+    )]);
+    let effects = EffectSet::new([request]);
+    let platform = platform(AuthorityProfile::unsupported().with(
+        AuthorityEffect::ProcessRun,
+        AuthorityEnforcement::Unenforced,
+    ));
+    let adapter = FakeOperationalAdapter::new();
+    adapter.push_process(Ok(ProcessOutput::new(
+        ProcessExit::Exited(0),
+        b"git version 2.50.0\n".to_vec(),
+        Vec::new(),
+        Duration::from_millis(1),
+    )));
+    let mut budget = process::ProcessBudget::default();
+    process::probe_retained(
+        &context,
+        &effects,
+        &platform,
+        &adapter,
+        &lock,
+        "git",
+        Path::new("/project"),
+        &mut budget,
+        &retained,
+    )
+    .unwrap();
+
+    std::fs::write(&executable_path, b"mutated in place").unwrap();
+    let error = process::run_retained(
+        &context,
+        &effects,
+        &platform,
+        &adapter,
+        &lock,
+        "git",
+        &["status"],
+        Path::new("/project"),
+        1024,
+        1024,
+        Duration::from_secs(1),
+        &mut budget,
+        &retained,
+    )
+    .unwrap_err();
+    assert_eq!(error.code(), "PROCESS003");
+    assert_eq!(budget.attempts(), 1);
+    assert_eq!(
+        adapter
+            .calls()
+            .into_iter()
+            .filter(|call| matches!(call, OperationalCall::Process { .. }))
+            .count(),
+        1,
+        "the mutated descriptor must be refused before the action spawn"
+    );
+    std::fs::remove_file(executable_path).unwrap();
 }

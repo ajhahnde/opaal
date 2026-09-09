@@ -12,6 +12,7 @@ publish.workspace = true
 opaal-platform = { path = "../opaal-platform" }
 libc = "0.2"
 httparse = "=1.10.1"
+rustix = { version = "=1.1.4", features = ["fs"] }
 rustls = { version = "=0.23.43", default-features = false, features = ["std", "ring", "tls12"] }
 
 [[bin]]

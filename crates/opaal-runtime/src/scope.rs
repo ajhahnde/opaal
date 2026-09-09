@@ -144,6 +144,12 @@ impl ScopeStack {
         self.find(name).map(|binding| &binding.value)
     }
 
+    pub(crate) fn values(&self) -> impl Iterator<Item = &Value> {
+        self.frames
+            .iter()
+            .flat_map(|frame| frame.bindings.iter().map(|(_, binding)| &binding.value))
+    }
+
     #[must_use]
     pub fn mutability(&self, name: &str) -> Option<BindingMutability> {
         self.find(name).map(|binding| binding.mutability)

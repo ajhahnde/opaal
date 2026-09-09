@@ -88,13 +88,18 @@ pub struct Secret {
 
 impl Secret {
     /// Take ownership of one nonempty payload.
-    pub fn new(id: SecretId, payload: Vec<u8>) -> Result<Self, SecretError> {
+    pub fn new(id: SecretId, mut payload: Vec<u8>) -> Result<Self, SecretError> {
         if payload.is_empty() {
+            payload.fill(0);
+            let _ = std::hint::black_box(&mut payload);
             return Err(SecretError::EmptyPayload);
         }
         if payload.len() > MAX_SECRET_BYTES {
+            let size = payload.len();
+            payload.fill(0);
+            let _ = std::hint::black_box(&mut payload);
             return Err(SecretError::PayloadTooLarge {
-                size: payload.len(),
+                size,
                 max: MAX_SECRET_BYTES,
             });
         }

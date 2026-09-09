@@ -5,11 +5,9 @@ contains its standalone syntax, runtime, command-line client, platform
 contracts, POSIX adapter, and Language Server Protocol implementation.
 
 > Project status: `1.0.0-alpha.1` is an unreleased development version. The
-> current authoring surface is intentionally non-operational: typed actions and
-> explicit project tasks can be inspected and checked, but declared effects
-> cannot execute. Maintained bounded adapters are available to embedders and
-> direct host/fake verification; package and controlled workflow execution
-> remain absent.
+> explicit project surface can inspect, check, render, explicitly accept,
+> execute, journal, and audit one typed task under bound authority. Standalone
+> source remains non-operational, and packages remain absent.
 
 ## Try OPAAL
 
@@ -47,18 +45,30 @@ interactive client, which presents completed values.
 - `opaal check SOURCE` analyzes a source graph without executing it.
 - `opaal check --project opaal.toml ...` validates one explicit task,
   environment, authority document, tool lock, and typed input set without
-  executing an action or adapter.
+  executing an action or adapter; `--format json` emits its canonical check
+  artifact.
 - `opaal task inspect --project opaal.toml TASK` reports the task's shared
   action signature, declared effects, tools, and environments.
 - `opaal format --check|--write PATH...` checks or atomically rewrites source.
 - `opaal plan SOURCE` returns the structured `PLAN004` unsupported refusal;
-  controlled planning authority is not implemented.
+  `opaal plan --project opaal.toml ... --out PATH` writes one canonical,
+  identity-bound, expiring plan without executing the task or probing tools.
+- `opaal execute --plan PATH --accept DIGEST ... --journal PATH` revalidates
+  and, on a supported execution host, runs exactly one accepted project plan
+  under its explicit authority and writes a synced hash-chained journal.
+- `opaal audit --project opaal.toml --journal PATH --out PATH` validates a
+  journal without executing or resuming work and publishes a complete or
+  incomplete canonical audit.
 - `opaal-language-server` provides stdio diagnostics, completion, hover,
   signature help, definitions, references, and whole-document formatting.
 
-Effectful action declarations are statically analyzed, but invoking an action
-with any declared effect returns a structured refusal before host access. Pure
-actions retain the existing evaluator route.
+Effectful action declarations are statically analyzed everywhere. Ordinary
+script and interactive evaluation still refuse them before host access; only
+the explicit accepted-plan route can supply the controlled operational host.
+Pure actions retain the existing evaluator route. Process-bearing accepted
+execution is currently Linux-only: macOS can inspect and check such tasks,
+produce a refused non-executable plan, and audit journals, but never falls back
+to pathname process execution.
 
 ## Workspace
 
@@ -68,9 +78,9 @@ actions retain the existing evaluator route.
 | `crates/opaal-runtime/` | Values, module analysis, maintained operational APIs, outcomes, streams, and bounded evaluation |
 | `crates/opaal-platform/` | Platform capability and bounded operational adapter contracts plus fakes |
 | `crates/opaal-platform-posix/` | macOS/Linux shell and maintained operational adapters plus observation fixtures |
-| `crates/opaal-cli/` | Command-line, checker, formatter, planning-refusal, and interactive frontends |
+| `crates/opaal-cli/` | Command-line, project workflow, checker, formatter, and interactive frontends |
 | `crates/opaal-lsp/` | Non-executing Language Server Protocol adapter |
-| `fuzz/` | Separate unpublished package with four fuzz targets |
+| `fuzz/` | Separate unpublished package with five fuzz targets |
 
 The Cargo workspace has exactly six members. The fuzz package has its own
 workspace so nightly instrumentation does not change the normal locked graph.
