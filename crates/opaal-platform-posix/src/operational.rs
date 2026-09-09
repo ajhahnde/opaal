@@ -1,4 +1,6 @@
 //! macOS/Linux implementation of the bounded operational adapter contract.
+//! Exact retained-identity process execution is Linux-only; macOS refuses it
+//! as unsupported before pathname execution.
 
 use std::ffi::{CString, OsStr, OsString};
 use std::fs::{File, OpenOptions};
@@ -251,6 +253,12 @@ impl OperationalAdapter for PosixOperationalAdapter {
         cancelled: &dyn Fn() -> bool,
     ) -> Result<ProcessOutput, OperationalError> {
         validate_process_request(&request)?;
+        if cfg!(target_os = "macos") {
+            return Err(error(
+                OperationalErrorKind::Unsupported,
+                "maintained process execution is unsupported on macOS because exact executable identity cannot be preserved",
+            ));
+        }
         if cancelled() {
             return Err(error(
                 OperationalErrorKind::Cancelled,
@@ -264,7 +272,20 @@ impl OperationalAdapter for PosixOperationalAdapter {
                 "process deadline overflows",
             )
         })?;
-        let mut command = Command::new(request.executable);
+        #[cfg(target_os = "linux")]
+        let executable_descriptor = request
+            .executable_file
+            .map(rustix::io::dup)
+            .transpose()
+            .map_err(|cause| io_error(cause.into()))?;
+        #[cfg(target_os = "linux")]
+        let retained_path = executable_descriptor.as_ref().map(|descriptor| {
+            std::path::PathBuf::from(format!("/proc/self/fd/{}", descriptor.as_raw_fd()))
+        });
+        #[cfg(target_os = "macos")]
+        let retained_path: Option<std::path::PathBuf> = None;
+        let executable = retained_path.as_deref().unwrap_or(request.executable);
+        let mut command = Command::new(executable);
         command.arg0(&request.argv[0]);
         command.args(&request.argv[1..]);
         command.env_clear();

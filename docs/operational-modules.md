@@ -1,9 +1,9 @@
 # Bounded operational modules
 
 OPAAL's maintained operational module layer implements the narrow adapter
-contract needed for repository-readiness work while effectful source invocation
-remains unavailable. The public embedding APIs are grouped under
-`opaal_runtime::operational` and identify these future source modules:
+contract needed for repository-readiness work. The public embedding APIs are
+grouped under `opaal_runtime::operational`; the explicit accepted-project-plan
+executor exposes the same operations to these source modules:
 
 - `std::data`: bounded TOML decoding, nested record lookup, and canonical JSON
   encoding;
@@ -17,12 +17,27 @@ remains unavailable. The public embedding APIs are grouped under
   fragments;
 - `std::http`: bounded no-redirect requests with endpoint-bound TLS and one
   opaque `SecretHeader`; and
-- `std::process`: fixed Git/Cargo version probes plus bounded locked-tool
-  execution under an explicit complete child environment.
+- `std::process`: on Linux, fixed Git/Cargo version probes plus bounded
+  locked-tool execution under an explicit complete child environment; macOS
+  reports process requests as unsupported.
 
-These modules add no global built-ins. The current source evaluator still
-refuses an effectful action before any adapter call; a later controlled
-plan/execution lifecycle will connect the same typed operations to source.
+These modules add no global built-ins. Ordinary script and interactive
+evaluation still refuse an effectful action before any adapter call. The
+accepted-plan executor initializes the project source closure without effects,
+then supplies a controlled operational host only while invoking the selected
+task action.
+
+Operational identities are nominal rather than interchangeable strings.
+`std::time::wall_now`, `std::version::parse`, and `std::url::parse` return
+`Timestamp`, `Version`, and `Url`; HTTP returns `HttpResponse`, and process
+execution returns `ToolResult`. HTTP requests accept only the selected
+project's `EndpointIdentity`, process execution accepts only its
+`ToolIdentity`, and `secret_header` accepts only its `SecretIdentity`.
+`SecretHeader` is a separate opaque sink handle. Its request slot may be
+`null`, and the byte-body slot may be `null`, but ordinary values cannot stand
+in for any of these nominal identities or handles. Project identities and
+secret handles cannot escape an action, including through a list, record,
+nominal value, variant, table, or captured callable.
 
 ## Data and path behavior
 
@@ -58,8 +73,8 @@ not extend trust with platform roots, proxy settings, ambient credentials, or
 environment state. The POSIX adapter requires a literal IP connect host so DNS
 resolution cannot escape the request deadline; TLS identity remains the
 separate declared server name. The adapter validates the certificate chain,
-time, and declared TLS server name. Changing any of those identity inputs is
-later handled as plan staleness by the controlled-execution owner.
+time, and declared TLS server name. Changing any of those identity inputs makes
+an accepted plan stale before task execution.
 
 `SecretHeader` is non-cloneable, non-displayable, and non-serializable. Its
 debug form contains only the secret ID, endpoint, header name, and
@@ -76,6 +91,13 @@ raw, hex, base64, percent-encoded, and JSON-escaped forms before they can become
 ordinary values. Denial or stale preflight never consumes the secret; a second
 use or reinjection of the same identity refuses.
 
+Controlled execution syncs a `network.http` before-record before the request.
+For a secret-bearing request it then syncs a distinct `secret.reveal`
+before-record, performs the one materialization and adapter call, and syncs the
+matching reveal after-record before closing the network effect. These records
+carry only endpoint, method, secret ID, header name, verdict, attempt, outcome,
+and digests; the payload is never journaled.
+
 ## Maintained processes
 
 The tool lock supplies an exact native executable path, canonical version,
@@ -84,6 +106,15 @@ SHA-256 digest, platform, and an ordered complete child environment.
 `HOME`, `TMPDIR`, `PATH`, `CARGO_HOME`, `RUSTC`, `RUSTDOC`, `LC_ALL`, `TZ`,
 `CARGO_NET_OFFLINE`, `GIT_CONFIG_NOSYSTEM`, and `GIT_CONFIG_GLOBAL` values and
 never reads the ambient environment.
+
+Maintained process execution is currently Linux-only. After accepted-plan
+identity verification, the Linux adapter retains the securely opened
+executable and starts that exact descriptor through `/proc/self/fd`; replacing
+the pathname cannot change what runs. macOS provides no maintained
+descriptor-backed execution route, so check records the process request as
+`unsupported`, plan emits a refused non-executable artifact, and the adapter
+refuses before any pathname spawn. Inspection, check, refused planning, and
+audit remain available on macOS.
 
 The only version probes are adapter-owned `git --version` and
 `cargo --version --verbose`; project data cannot select another probe. Process

@@ -9,7 +9,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+#[cfg(target_os = "linux")]
+use std::time::Instant;
 
 use opaal_platform::operational::{
     AtomicWriteRequest, HttpRequest, MaterializedSecretHeader, OperationalAdapter,
@@ -171,6 +173,7 @@ fn descriptor_relative_files_preserve_limits_atomicity_and_symlink_refusal() {
     fs::remove_file(outside).unwrap();
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 fn process_uses_empty_ambient_environment_and_bounded_timeout_cleanup() {
     let root = TempRoot::new();
@@ -184,6 +187,7 @@ fn process_uses_empty_ambient_environment_and_bounded_timeout_cleanup() {
         .run_process(
             ProcessRequest {
                 executable: Path::new("/usr/bin/printf"),
+                executable_file: None,
                 argv: &argv,
                 environment: &[],
                 cwd: &root.0,
@@ -204,6 +208,7 @@ fn process_uses_empty_ambient_environment_and_bounded_timeout_cleanup() {
         .run_process(
             ProcessRequest {
                 executable: Path::new("/usr/bin/printf"),
+                executable_file: None,
                 argv: &[
                     OsString::from("printf"),
                     OsString::from("%s"),
@@ -230,6 +235,7 @@ fn process_uses_empty_ambient_environment_and_bounded_timeout_cleanup() {
         .run_process(
             ProcessRequest {
                 executable: Path::new("/bin/sh"),
+                executable_file: None,
                 argv: &argv,
                 environment: &[],
                 cwd: &root.0,
@@ -247,6 +253,62 @@ fn process_uses_empty_ambient_environment_and_bounded_timeout_cleanup() {
     );
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn process_executes_the_retained_descriptor_instead_of_a_replaced_path() {
+    let root = TempRoot::new();
+    let adapter = PosixOperationalAdapter::new();
+    let retained = fs::File::open("/usr/bin/printf").unwrap();
+    let argv = [OsString::from("printf"), OsString::from("descriptor")];
+    let output = adapter
+        .run_process(
+            ProcessRequest {
+                executable: Path::new("/usr/bin/false"),
+                executable_file: Some(&retained),
+                argv: &argv,
+                environment: &[],
+                cwd: &root.0,
+                stdout_limit: 10,
+                stderr_limit: 0,
+                timeout: Duration::from_secs(1),
+            },
+            &|| false,
+        )
+        .unwrap();
+    assert_eq!(
+        output.status(),
+        opaal_platform::operational::ProcessExit::Exited(0)
+    );
+    assert_eq!(output.stdout(), b"descriptor");
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn process_is_unsupported_before_pathname_execution_on_macos() {
+    let root = TempRoot::new();
+    let adapter = PosixOperationalAdapter::new();
+    let retained = fs::File::open("/usr/bin/printf").unwrap();
+    for executable_file in [None, Some(&retained)] {
+        let error = adapter
+            .run_process(
+                ProcessRequest {
+                    executable: Path::new("/usr/bin/printf"),
+                    executable_file,
+                    argv: &[OsString::from("printf"), OsString::from("unreachable")],
+                    environment: &[],
+                    cwd: &root.0,
+                    stdout_limit: 16,
+                    stderr_limit: 0,
+                    timeout: Duration::from_secs(1),
+                },
+                &|| false,
+            )
+            .unwrap_err();
+        assert_eq!(error.kind(), OperationalErrorKind::Unsupported);
+    }
+}
+
+#[cfg(target_os = "linux")]
 #[test]
 fn process_term_kill_wait_and_descendant_cleanup_are_bounded() {
     let root = TempRoot::new();
@@ -256,6 +318,7 @@ fn process_term_kill_wait_and_descendant_cleanup_are_bounded() {
         .run_process(
             ProcessRequest {
                 executable: Path::new("/bin/sh"),
+                executable_file: None,
                 argv: &[
                     OsString::from("sh"),
                     OsString::from("-c"),
@@ -285,6 +348,7 @@ fn process_term_kill_wait_and_descendant_cleanup_are_bounded() {
         .run_process(
             ProcessRequest {
                 executable: Path::new("/bin/sh"),
+                executable_file: None,
                 argv: &[
                     OsString::from("sh"),
                     OsString::from("-c"),

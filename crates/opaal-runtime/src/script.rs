@@ -7,15 +7,25 @@ use std::path::Path;
 use std::sync::Arc;
 
 use crate::command::CommandRegistry;
-use crate::eval::{CancellationToken, Clock, EvalLimits, ResourceBudget};
-use crate::module::{ModuleId, ModuleProgram, ModuleSourceRegistry};
-use crate::outcome::{ExecutionOutcome, FatalHostFailure, FatalHostFailureKind, PrimaryOutcome};
+use crate::eval::{
+    CancellationToken, Clock, EvalLimits, HostedEvaluationFailure, HostedEvaluationOutcome,
+    ResourceBudget, apply_callable_with_controlled_host_and_budget,
+};
+use crate::module::{ModuleId, ModuleOrigin, ModuleProgram, ModuleSourceRegistry, NominalTypeId};
+use crate::operational::source::{
+    ControlledSourceOperations, SourceOperationalEvidence, SourceOperationalHost,
+};
+use crate::outcome::{
+    CompletedEvidence, ExecutionOutcome, FatalHostFailure, FatalHostFailureKind, OutcomeEvidence,
+    PartialEffectEvidence, PrimaryOutcome,
+};
 use crate::plan::SessionOptions;
+use crate::project::{ProjectProgram, TaskSignature};
 use crate::resolve::ExecutableProbe;
 use crate::session::{
     BackgroundFailure, BackgroundFailureReason, Session, SubmitError, SubmitOutcome,
 };
-use crate::{BindingMutability, Environment, ScopeStack, Status, Value};
+use crate::{BindingMutability, Environment, NominalRecordValue, ScopeStack, Status, Value};
 use opaal_platform::Platform;
 
 /// The normally completed result of one non-interactive source file.
@@ -294,7 +304,246 @@ pub fn execute_module_program_outcome_with_limits(
         }
     }
 
-    finish_script_session_outcome(&mut session, environment, platform, outcome)
+    finish_script_session_outcome(&mut session, environment, platform, outcome, Vec::new())
+}
+
+/// Invoke one checked project task through the controlled-action evaluator.
+///
+/// Every module is initialized under the ordinary pure OPAAL policy first, so
+/// project loading cannot execute an action. Only the selected task callable is
+/// then admitted under the controlled policy, with one cancellation token and
+/// resource budget shared across initialization and invocation.
+#[allow(clippy::too_many_arguments)]
+pub fn execute_project_task_outcome(
+    project: &ProjectProgram,
+    task: &TaskSignature,
+    arguments: Vec<Value>,
+    cwd: &Path,
+    environment: &mut Environment,
+    registry: &CommandRegistry,
+    probe: &dyn ExecutableProbe,
+    options: &SessionOptions,
+    platform: &dyn Platform,
+    clock: Arc<dyn Clock>,
+    cancellation: CancellationToken,
+    operations: &mut ControlledSourceOperations<'_>,
+    output: &mut dyn Write,
+) -> ScriptExecutionOutcome {
+    let program = project.modules();
+    let mut session = Session::with_scope_and_registry(
+        ScopeStack::new(),
+        cwd,
+        environment.clone(),
+        *options,
+        registry.clone(),
+    );
+    session.enable_script_job_control(Arc::clone(&clock));
+    let binding_types = Arc::new(program.runtime_binding_types());
+    let mut instances: BTreeMap<ModuleId, BTreeMap<String, Value>> = BTreeMap::new();
+    let mut scopes: BTreeMap<ModuleId, ScopeStack> = BTreeMap::new();
+    let mut budget = ResourceBudget::opaal();
+    let initialization_limits = EvalLimits::pure_opaal(cancellation.clone(), budget);
+    let mut outcome: Result<(SubmitOutcome, Value), ScriptFailure> =
+        Ok((SubmitOutcome::Continued, Value::Null));
+
+    for module in module_initialization_order(program) {
+        if let Some(bindings) = project_module_bindings(project, &module) {
+            instances.insert(module.clone(), bindings);
+            scopes.insert(module, ScopeStack::new());
+            continue;
+        }
+        let mut scope = ScopeStack::new();
+        for alias in program.aliases().aliases(&module) {
+            declare_qualified_alias_values(
+                &mut scope,
+                program,
+                &instances,
+                alias.name(),
+                alias.target(),
+            );
+        }
+        let source = program
+            .sources()
+            .source(&module)
+            .expect("a loaded project registers every source");
+        let script = program
+            .sources()
+            .script(&module)
+            .expect("a loaded project registers every syntax tree");
+        match session.submit_module_source(
+            source,
+            script,
+            scope,
+            Arc::clone(&binding_types),
+            &initialization_limits,
+            &mut budget,
+            probe,
+            platform,
+            clock.as_ref(),
+            output,
+        ) {
+            Ok((SubmitOutcome::Continued, completed_scope, _)) => {
+                let exports = program
+                    .names()
+                    .exports(&module)
+                    .filter_map(|export| {
+                        completed_scope
+                            .get(export.name())
+                            .cloned()
+                            .map(|value| (export.name().to_owned(), value))
+                    })
+                    .collect();
+                instances.insert(module.clone(), exports);
+                scopes.insert(module, completed_scope);
+            }
+            Ok((control, _, value)) => {
+                outcome = Ok((control, value));
+                break;
+            }
+            Err(error) => {
+                outcome = Err(ScriptFailure::module_submit(
+                    error,
+                    source,
+                    program.sources(),
+                ));
+                break;
+            }
+        }
+    }
+
+    if matches!(outcome, Ok((SubmitOutcome::Continued, _))) {
+        let action = task.action();
+        let source = program
+            .sources()
+            .source(action.id().module())
+            .expect("a checked task action has source");
+        let callable = scopes
+            .get(action.id().module())
+            .and_then(|scope| scope.get(action.id().name()))
+            .expect("a checked task action is initialized");
+        let controlled_limits = EvalLimits::controlled_action(cancellation, budget);
+        outcome = match apply_callable_with_controlled_host_and_budget(
+            callable,
+            arguments,
+            source,
+            action.callable().declaration_span(),
+            environment,
+            &controlled_limits,
+            &mut budget,
+            operations,
+        ) {
+            Ok(HostedEvaluationOutcome::Value(value)) => Ok((SubmitOutcome::Continued, value)),
+            Ok(HostedEvaluationOutcome::Cancelled(cancelled)) => {
+                Ok((SubmitOutcome::Cancelled(cancelled), Value::Null))
+            }
+            Ok(HostedEvaluationOutcome::Refused(refusal)) => {
+                Ok((SubmitOutcome::Refused(refusal), Value::Null))
+            }
+            Ok(HostedEvaluationOutcome::Exit(code)) => Ok((SubmitOutcome::Exit(code), Value::Null)),
+            Ok(HostedEvaluationOutcome::Stopped(_)) => {
+                unreachable!("controlled source operations cannot create managed jobs")
+            }
+            Err(HostedEvaluationFailure::Runtime(error)) => {
+                Err(ScriptFailure::Error(ScriptError {
+                    rendered: crate::session::render_runtime_diagnostic(
+                        source,
+                        &error,
+                        program
+                            .sources()
+                            .entries()
+                            .map(|entry| entry.source().clone()),
+                    ),
+                    background_failures: Vec::new(),
+                }))
+            }
+            Err(HostedEvaluationFailure::Output(error)) => Err(ScriptFailure::Fatal(
+                FatalHostFailure::new(FatalHostFailureKind::Output, error.to_string()),
+            )),
+        };
+    }
+
+    let evidence = operations
+        .take_evidence()
+        .into_iter()
+        .map(|evidence| match evidence {
+            SourceOperationalEvidence::Completed { operation, status } => {
+                OutcomeEvidence::Completed(CompletedEvidence::new(operation, status))
+            }
+            SourceOperationalEvidence::Partial { operation, detail } => {
+                OutcomeEvidence::PartialEffect(PartialEffectEvidence::new(operation, detail))
+            }
+        })
+        .collect();
+    finish_script_session_outcome(&mut session, environment, platform, outcome, evidence)
+}
+
+fn project_module_bindings(
+    project: &ProjectProgram,
+    module: &ModuleId,
+) -> Option<BTreeMap<String, Value>> {
+    let ModuleOrigin::Standard { namespace, module } = module.origin() else {
+        return None;
+    };
+    if namespace != "project" {
+        return None;
+    }
+    let manifest = project.manifest();
+    let bindings = match module.as_str() {
+        "context" => BTreeMap::from([
+            (
+                "root".to_owned(),
+                Value::Path(crate::NativePath::new(
+                    manifest.root().as_os_str().to_owned(),
+                )),
+            ),
+            (
+                "evidence".to_owned(),
+                Value::Path(crate::NativePath::new(
+                    manifest.evidence().as_os_str().to_owned(),
+                )),
+            ),
+        ]),
+        "tools" => manifest
+            .tools()
+            .keys()
+            .map(|name| {
+                (
+                    name.clone(),
+                    project_identity("tools", "ToolIdentity", name),
+                )
+            })
+            .collect(),
+        "endpoints" => manifest
+            .endpoints()
+            .keys()
+            .map(|name| {
+                (
+                    name.clone(),
+                    project_identity("endpoints", "EndpointIdentity", name),
+                )
+            })
+            .collect(),
+        "secrets" => manifest
+            .secrets()
+            .keys()
+            .map(|name| {
+                (
+                    name.clone(),
+                    project_identity("secrets", "SecretIdentity", name),
+                )
+            })
+            .collect(),
+        _ => return None,
+    };
+    Some(bindings)
+}
+
+fn project_identity(module: &str, type_name: &str, id: &str) -> Value {
+    Value::NominalRecord(Box::new(NominalRecordValue::new(
+        NominalTypeId::project(module, type_name),
+        Vec::new(),
+        vec![(Arc::from("_id"), Value::string(id))],
+    )))
 }
 
 /// Execute an already validated OPAAL module program through the legacy
@@ -420,6 +669,7 @@ fn finish_script_session_outcome(
     environment: &mut Environment,
     platform: &dyn Platform,
     outcome: Result<(SubmitOutcome, Value), ScriptFailure>,
+    evidence: Vec<OutcomeEvidence<ScriptError>>,
 ) -> ScriptExecutionOutcome {
     // Cleanup always runs after the primary-producing evaluation route. Pure
     // opaal currently owns no external resources; later adapters attach their
@@ -452,7 +702,7 @@ fn finish_script_session_outcome(
             })
         }
     };
-    ExecutionOutcome::new(primary, Vec::new())
+    ExecutionOutcome::new(primary, evidence)
 }
 
 /// The exit status a failing background job imposes on its script.

@@ -28,8 +28,12 @@ fn posix_reports_only_maintained_operational_enforcement_truth() {
     );
     assert_eq!(
         PosixPlatform.authority_enforcement(process),
-        AuthorityEnforcement::Unenforced,
-        "the parent process boundary is enforced while child internals remain opaque"
+        if cfg!(target_os = "linux") {
+            AuthorityEnforcement::Unenforced
+        } else {
+            AuthorityEnforcement::Unsupported
+        },
+        "Linux retains exact executable identity; macOS must report the process route as unsupported"
     );
     assert_eq!(
         PosixPlatform.authority_enforcement(network),

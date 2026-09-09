@@ -2,9 +2,10 @@
 
 //! Unix-like platform primitives for OPAAL.
 //!
-//! [`PosixPlatform`] is the concrete macOS/Linux adapter and reports the full
-//! capability set for those hosts. Target-specific adapters remain separate
-//! and own their own policy and qualification state.
+//! [`PosixPlatform`] is the concrete macOS/Linux adapter. Maintained process
+//! execution is available only on Linux because macOS cannot preserve the
+//! verified executable identity through process creation. Target-specific
+//! adapters remain separate and own their own policy and qualification state.
 
 pub mod operational;
 
@@ -299,7 +300,10 @@ impl Platform for PosixPlatform {
 
     fn authority_enforcement(&self, query: AuthorityQuery<'_>) -> AuthorityEnforcement {
         match query.effect() {
-            opaal_platform::AuthorityEffect::ProcessRun => AuthorityEnforcement::Unenforced,
+            opaal_platform::AuthorityEffect::ProcessRun if cfg!(target_os = "linux") => {
+                AuthorityEnforcement::Unenforced
+            }
+            opaal_platform::AuthorityEffect::ProcessRun => AuthorityEnforcement::Unsupported,
             opaal_platform::AuthorityEffect::FilesystemRead
             | opaal_platform::AuthorityEffect::FilesystemWrite
             | opaal_platform::AuthorityEffect::NetworkHttp

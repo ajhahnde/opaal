@@ -5,7 +5,8 @@ use std::path::{Path, PathBuf};
 
 use opaal_platform::operational::FakeOperationalAdapter;
 use opaal_runtime::module::{
-    ModuleCanonicalizer, ModuleId, ModulePathError, ModuleSourceError, ModuleSourceLoader,
+    ModuleCanonicalizer, ModuleId, ModuleOrigin, ModulePathError, ModuleSourceError,
+    ModuleSourceLoader, ValueType,
 };
 use opaal_runtime::project::{
     MAX_PROJECT_ENTRIES, MAX_PROJECT_INPUTS, check_project, load_project_program,
@@ -123,6 +124,7 @@ effects {
     filesystem.read(project::root);
     process.run(tools::git);
 }
+
 {
     return candidate
 }
@@ -172,6 +174,112 @@ task release = ready
     assert_eq!(manifest.id().root(), Path::new("/project"));
     assert!(manifest.id().manifest_digest().starts_with("sha256:"));
     assert_eq!(manifest.id().manifest_digest().len(), 71);
+}
+
+#[test]
+fn operational_standard_signatures_expose_nominal_values_and_project_identities() {
+    let manifest =
+        parse_project_manifest(Path::new("/project/opaal.toml"), MANIFEST.as_bytes()).unwrap();
+    let source = br#"import std::http as http
+import std::process as process
+import std::time as time
+import std::url as url
+import std::version as version
+
+action nominal_surface(input: String) -> String
+effects {}
+{
+    let parsed_version = version::parse($input)
+    let parsed_url = url::parse("https://example.com/")
+    return version::render($parsed_version)
+}
+
+task release = nominal_surface
+"#;
+    let sources = MemorySources(BTreeMap::from([(
+        PathBuf::from("/project/tasks.opaal"),
+        source.to_vec(),
+    )]));
+    let project = load_project_program(manifest, &sources, &sources).unwrap();
+
+    let standard_module = |namespace: &str, module: &str| {
+        project
+            .modules()
+            .graph()
+            .modules()
+            .find(|candidate| {
+                matches!(
+                    candidate.origin(),
+                    ModuleOrigin::Standard {
+                        namespace: candidate_namespace,
+                        module: candidate_module,
+                    } if candidate_namespace == namespace && candidate_module == module
+                )
+            })
+            .unwrap()
+    };
+    let signature = |module: &str, name: &str| {
+        project
+            .modules()
+            .types()
+            .functions(standard_module("std", module))
+            .iter()
+            .find(|signature| signature.name() == name)
+            .unwrap()
+    };
+    assert_eq!(
+        signature("time", "wall_now").result().to_string(),
+        "Timestamp"
+    );
+    assert_eq!(
+        signature("version", "parse").result().to_string(),
+        "Version"
+    );
+    assert_eq!(
+        signature("version", "render").parameters()[0]
+            .value_type()
+            .to_string(),
+        "Version"
+    );
+    assert_eq!(signature("url", "parse").result().to_string(), "Url");
+    assert_eq!(
+        signature("http", "request").result().to_string(),
+        "HttpResponse"
+    );
+
+    let assert_project_identity = |value_type: &ValueType, module: &str, name: &str| {
+        let ValueType::Nominal { id, arguments } = value_type else {
+            panic!("expected nominal project identity, found {value_type}");
+        };
+        assert!(arguments.is_empty());
+        assert_eq!(id.module(), standard_module("project", module));
+        assert_eq!(id.name(), name);
+    };
+    assert_project_identity(
+        signature("http", "request").parameters()[0].value_type(),
+        "endpoints",
+        "EndpointIdentity",
+    );
+    assert_project_identity(
+        signature("http", "secret_header").parameters()[1].value_type(),
+        "secrets",
+        "SecretIdentity",
+    );
+    assert_project_identity(
+        signature("process", "run").parameters()[0].value_type(),
+        "tools",
+        "ToolIdentity",
+    );
+    assert_eq!(
+        signature("http", "request").parameters()[3]
+            .value_type()
+            .to_string(),
+        "SecretHeader"
+    );
+    assert_eq!(
+        signature("http", "request").parameters()[4].value_type(),
+        &ValueType::Bytes
+    );
 }
 
 #[test]
@@ -445,7 +553,7 @@ effects {
 }
 
 #[test]
-fn project_identities_require_explicit_imports_and_never_become_values() {
+fn project_identities_require_explicit_imports_and_context_paths_remain_project_bound() {
     let manifest =
         parse_project_manifest(Path::new("/project/opaal.toml"), MANIFEST.as_bytes()).unwrap();
 
@@ -473,9 +581,9 @@ task release = ready
         PathBuf::from("/project/tasks.opaal"),
         value.to_vec(),
     )]));
-    let error = load_project_program(manifest, &sources, &sources).unwrap_err();
-    let opaal_runtime::project::ProjectProgramError::Contract(error) = error else {
-        panic!("expected a project-value contract error");
-    };
-    assert_eq!(error.code(), "PROJECT027");
+    let project = load_project_program(manifest, &sources, &sources).unwrap();
+    assert_eq!(
+        project.task("release").unwrap().action().id().name(),
+        "ready"
+    );
 }

@@ -2,7 +2,8 @@
 
 use std::io::{self, Write};
 
-use crate::{FiniteFloat, Record, Value};
+use crate::module::ModuleOrigin;
+use crate::{FiniteFloat, Record, Status, Value};
 
 use super::ModuleError;
 
@@ -93,6 +94,15 @@ fn encode_json(value: &Value, output: &mut LimitedJson, depth: usize) -> Result<
             output.append(number.to_string().as_bytes())?;
         }
         Value::String(value) => output.serialize_string(value.as_ref())?,
+        Value::Path(value) => {
+            let text = value.as_os_str().to_str().ok_or_else(|| {
+                ModuleError::invalid(
+                    "DATA013",
+                    "a non-UTF-8 path has no canonical JSON representation",
+                )
+            })?;
+            output.serialize_string(text)?;
+        }
         Value::List(values) => {
             output.append(b"[")?;
             for (index, value) in values.iter().enumerate() {
@@ -104,19 +114,18 @@ fn encode_json(value: &Value, output: &mut LimitedJson, depth: usize) -> Result<
             output.append(b"]")?;
         }
         Value::Record(record) => {
-            output.append(b"{")?;
-            let mut entries = record.entries().iter().collect::<Vec<_>>();
-            entries.sort_by(|left, right| left.0.cmp(&right.0));
-            for (index, (key, value)) in entries.into_iter().enumerate() {
-                if index != 0 {
-                    output.append(b",")?;
-                }
-                output.serialize_string(key.as_ref())?;
-                output.append(b":")?;
-                encode_json(value, output, depth + 1)?;
-            }
-            output.append(b"}")?;
+            encode_object(record.entries(), output, depth)?;
         }
+        Value::NominalRecord(record)
+            if record.id() != &crate::module::NominalTypeId::standard("http", "SecretHeader")
+                && !matches!(
+                    record.id().module().origin(),
+                    ModuleOrigin::Standard { namespace, .. } if namespace == "project"
+                ) =>
+        {
+            encode_object(record.fields(), output, depth)?;
+        }
+        Value::Status(status) => encode_status(status, output, depth)?,
         other => {
             return Err(ModuleError::invalid(
                 "DATA013",
@@ -127,6 +136,65 @@ fn encode_json(value: &Value, output: &mut LimitedJson, depth: usize) -> Result<
             ));
         }
     }
+    Ok(())
+}
+
+fn encode_status(
+    status: &Status,
+    output: &mut LimitedJson,
+    depth: usize,
+) -> Result<(), ModuleError> {
+    let duration = i64::try_from(status.duration().as_nanos()).map_err(|_| {
+        ModuleError::invalid("DATA013", "status duration exceeds canonical JSON Int")
+    })?;
+    let signal = status.signal().map_or(Value::Null, |signal| {
+        Value::Record(
+            Record::new(vec![
+                (
+                    "name".to_owned(),
+                    signal.name().map_or(Value::Null, Value::string),
+                ),
+                (
+                    "number".to_owned(),
+                    signal.number().map_or(Value::Null, Value::Int),
+                ),
+            ])
+            .expect("status signal fields are distinct"),
+        )
+    });
+    let fields = Record::new(vec![
+        (
+            "code".to_owned(),
+            status.code().map_or(Value::Null, Value::Int),
+        ),
+        ("signal".to_owned(), signal),
+        (
+            "stages".to_owned(),
+            Value::list(status.stages().iter().cloned().map(Value::Status).collect()),
+        ),
+        ("duration_ns".to_owned(), Value::Int(duration)),
+    ])
+    .expect("status fields are distinct");
+    encode_object(fields.entries(), output, depth)
+}
+
+fn encode_object(
+    entries: &[(std::sync::Arc<str>, Value)],
+    output: &mut LimitedJson,
+    depth: usize,
+) -> Result<(), ModuleError> {
+    output.append(b"{")?;
+    let mut entries = entries.iter().collect::<Vec<_>>();
+    entries.sort_by(|left, right| left.0.cmp(&right.0));
+    for (index, (key, value)) in entries.into_iter().enumerate() {
+        if index != 0 {
+            output.append(b",")?;
+        }
+        output.serialize_string(key.as_ref())?;
+        output.append(b":")?;
+        encode_json(value, output, depth + 1)?;
+    }
+    output.append(b"}")?;
     Ok(())
 }
 

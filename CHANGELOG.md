@@ -6,11 +6,16 @@ All notable changes to OPAAL are documented here.
 
 ### Changed
 
+- Add canonical project check and expiring plan artifacts, exact request-local
+  acceptance, stale-revalidated task execution, exclusive hash-chained run
+  journals with paired secret-reveal evidence, and read-only complete or
+  incomplete audit artifacts while ordinary source remains non-operational;
+  process-bearing accepted execution uses retained executable descriptors on
+  Linux and is explicitly unsupported on macOS.
 - Add maintained bounded data, path, filesystem, time, version, integrity,
   URL, HTTP/TLS, and locked Git/Cargo process APIs with deterministic fakes,
   exact resource ceilings, a one-use typed secret-header sink, explicit child
-  environments, and POSIX no-follow/cancellation cleanup while effectful source
-  invocation remains refused.
+  environments, and POSIX no-follow/cancellation cleanup.
 - Add typed actions with explicit effect declarations, exported project tasks,
   strict project/authority/tool-lock documents, non-executing task inspection,
   and explicit project checks.

@@ -19,7 +19,9 @@ use opaal_cli::interactive::{
 };
 use opaal_cli::plan::inspect_source;
 use opaal_cli::project::{
-    CheckProjectRequest, InspectProjectRequest, check_explicit_project, inspect_project,
+    AuditRequest, CheckProjectRequest, ExecuteProjectRequest, InspectProjectRequest,
+    PlanProjectRequest, audit_explicit_journal, check_explicit_project, execute_explicit_plan,
+    inspect_project, plan_explicit_project,
 };
 use opaal_cli::report::{HostReport, write_report};
 use opaal_cli::{RawLineEditor, ReedlineEditor};
@@ -31,7 +33,7 @@ use opaal_runtime::plan::SessionOptions;
 use opaal_runtime::resolve::ExecutableProbe;
 use opaal_runtime::script::{ScriptError, ScriptExecutionOutcome, execute_module_program_outcome};
 use opaal_runtime::session::{BackgroundFailure, Session, SubmitError, SubmitOutcome};
-use opaal_runtime::{Environment, Value};
+use opaal_runtime::{Environment, Status, Value};
 
 const HELP: &str = "OPAAL language client
 
@@ -39,12 +41,17 @@ Usage:
   opaal
   opaal SCRIPT [ARGUMENT]...
   opaal check [--] SOURCE
-  opaal check --project opaal.toml --task TASK --environment ID --authority PATH --tools PATH [--input NAME=VALUE]...
+  opaal check --project opaal.toml --task TASK --environment ID --authority PATH --tools PATH [--input NAME=VALUE]... [--format json]
   opaal check --help
   opaal task inspect --project opaal.toml TASK
   opaal task --help
   opaal plan [--] SOURCE
+  opaal plan --project opaal.toml --task TASK --environment ID --authority PATH --tools PATH [--input NAME=VALUE]... --expires-in SECONDSs --out PATH
   opaal plan --help
+  opaal execute --plan PATH --accept DIGEST --run-id ID --authority PATH --secret-stdin ID --journal PATH
+  opaal execute --help
+  opaal audit --project opaal.toml --journal PATH --out PATH
+  opaal audit --help
   opaal format --check [--] PATH...
   opaal format --write [--] PATH...
   opaal format --help
@@ -66,7 +73,7 @@ const CHECK_HELP: &str = "Analyze OPAAL source without executing it
 
 Usage:
   opaal check [--] SOURCE
-  opaal check --project opaal.toml --task TASK --environment ID --authority PATH --tools PATH [--input NAME=VALUE]...
+  opaal check --project opaal.toml --task TASK --environment ID --authority PATH --tools PATH [--input NAME=VALUE]... [--format json]
   opaal check --help
 
 SOURCE and every static import must be regular .opaal files. Checking performs
@@ -100,10 +107,32 @@ const PLAN_HELP: &str = "Inspect the OPAAL planning boundary without execution
 
 Usage:
   opaal plan [--] SOURCE
+  opaal plan --project opaal.toml --task TASK --environment ID --authority PATH --tools PATH [--input NAME=VALUE]... --expires-in SECONDSs --out PATH
   opaal plan --help
 
-OPAAL planning is not implemented. The explicit .opaal source is
-validated and refused before ambient host, environment, PATH, or process access.
+The source form remains a host-free refusal. The project form writes one
+identity-bound canonical plan without executing the task, probing a tool,
+materializing a secret, or contacting an endpoint.
+";
+
+const EXECUTE_HELP: &str = "Execute one explicitly accepted OPAAL plan
+
+Usage:
+  opaal execute --plan PATH --accept sha256:DIGEST --run-id ID --authority PATH --secret-stdin ID --journal PATH
+  opaal execute --help
+
+Acceptance belongs only to this request. Execution revalidates every bound
+identity before affected work and writes an exclusive hash-chained journal.
+";
+
+const AUDIT_HELP: &str = "Audit one OPAAL run journal without execution
+
+Usage:
+  opaal audit --project opaal.toml --journal PATH --out PATH
+  opaal audit --help
+
+Audit validates the closed schema, sequence, and hash chain and writes one
+exclusive complete or incomplete evidence artifact. It never resumes a run.
 ";
 
 fn main() -> ExitCode {
@@ -126,11 +155,54 @@ fn main() -> ExitCode {
             authority,
             tools,
             inputs,
-        } => run_project_checker(project, task, environment, authority, tools, inputs),
+            format_json,
+        } => run_project_checker(
+            project,
+            task,
+            environment,
+            authority,
+            tools,
+            inputs,
+            format_json,
+        ),
         Mode::TaskHelp => emit_report(HostReport::success(TASK_HELP.as_bytes())),
         Mode::TaskInspect { project, task } => run_task_inspect(project, task),
         Mode::PlanHelp => emit_report(HostReport::success(PLAN_HELP.as_bytes())),
         Mode::Plan { source } => run_planner(source),
+        Mode::ProjectPlan {
+            project,
+            task,
+            environment,
+            authority,
+            tools,
+            inputs,
+            expires_in_seconds,
+            out,
+        } => run_project_planner(
+            project,
+            task,
+            environment,
+            authority,
+            tools,
+            inputs,
+            expires_in_seconds,
+            out,
+        ),
+        Mode::ExecuteHelp => emit_report(HostReport::success(EXECUTE_HELP.as_bytes())),
+        Mode::Execute {
+            plan,
+            accept,
+            run_id,
+            authority,
+            secret_stdin,
+            journal,
+        } => run_execute(plan, accept, run_id, authority, secret_stdin, journal),
+        Mode::AuditHelp => emit_report(HostReport::success(AUDIT_HELP.as_bytes())),
+        Mode::Audit {
+            project,
+            journal,
+            out,
+        } => run_audit(project, journal, out),
         Mode::FormatHelp => emit_report(HostReport::success(FORMAT_HELP.as_bytes())),
         Mode::Format { operation, paths } => run_formatter(operation, paths),
         Mode::Script { path, arguments } => run_script(&path, &arguments),
@@ -188,10 +260,25 @@ fn run_project_checker(
     authority: PathBuf,
     tools: PathBuf,
     inputs: Vec<(String, String)>,
+    format_json: bool,
 ) -> ExitCode {
     let request = CheckProjectRequest::new(project, task, environment, authority, tools, inputs);
+    let request = if format_json {
+        request.with_json()
+    } else {
+        request
+    };
     match check_explicit_project(&request) {
-        Ok(run) => emit_report(HostReport::success(run.output())),
+        Ok(run) if run.is_successful() => emit_report(HostReport::success(run.output())),
+        Ok(run) => {
+            let refused = Status::exit(1, opaal_runtime::Duration::ZERO)
+                .expect("one is a valid refused-check status");
+            emit_report(HostReport::completed_with_diagnostic(
+                &refused,
+                run.output(),
+                run.diagnostic(),
+            ))
+        }
         Err(error) => emit_report(HostReport::failure(error.rendered().as_bytes())),
     }
 }
@@ -222,6 +309,78 @@ fn run_planner(source: PathBuf) -> ExitCode {
     let run = inspect_source(&source, &HostCheckFilesystem);
     let diagnostics = run.rendered_issues().concat();
     emit_report(HostReport::failure(diagnostics.as_bytes()))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_project_planner(
+    project: PathBuf,
+    task: String,
+    environment: String,
+    authority: PathBuf,
+    tools: PathBuf,
+    inputs: Vec<(String, String)>,
+    expires_in_seconds: u64,
+    out: PathBuf,
+) -> ExitCode {
+    let request = PlanProjectRequest::new(
+        project,
+        task,
+        environment,
+        authority,
+        tools,
+        inputs,
+        expires_in_seconds,
+        out,
+    );
+    match plan_explicit_project(&request) {
+        Ok(run) if run.is_successful() => emit_report(HostReport::success(run.output())),
+        Ok(run) => {
+            let refused = Status::exit(1, opaal_runtime::Duration::ZERO)
+                .expect("one is a valid refused-plan status");
+            emit_report(HostReport::completed_with_diagnostic(
+                &refused,
+                run.output(),
+                run.diagnostic(),
+            ))
+        }
+        Err(error) => emit_report(HostReport::failure(error.rendered().as_bytes())),
+    }
+}
+
+fn run_audit(project: PathBuf, journal: PathBuf, out: PathBuf) -> ExitCode {
+    match audit_explicit_journal(&AuditRequest::new(project, journal, out)) {
+        Ok(run) if run.is_complete() => emit_report(HostReport::success(run.output())),
+        Ok(run) => {
+            let incomplete = Status::exit(1, opaal_runtime::Duration::ZERO)
+                .expect("one is a valid incomplete-audit status");
+            emit_report(HostReport::completed(&incomplete, run.output()))
+        }
+        Err(error) => emit_report(HostReport::failure(error.rendered().as_bytes())),
+    }
+}
+
+fn run_execute(
+    plan: PathBuf,
+    accept: String,
+    run_id: String,
+    authority: PathBuf,
+    secret_stdin: String,
+    journal: PathBuf,
+) -> ExitCode {
+    let request =
+        ExecuteProjectRequest::new(plan, accept, run_id, authority, secret_stdin, journal);
+    let stdin = io::stdin();
+    let is_terminal = stdin.is_terminal();
+    let mut input = stdin.lock();
+    match execute_explicit_plan(&request, is_terminal, &mut input) {
+        Ok(run) if run.is_successful() => emit_report(HostReport::success(run.output())),
+        Ok(run) => {
+            let failed = Status::exit(1, opaal_runtime::Duration::ZERO)
+                .expect("one is a valid failed-execution status");
+            emit_report(HostReport::completed(&failed, run.output()))
+        }
+        Err(error) => emit_report(HostReport::failure(error.rendered().as_bytes())),
+    }
 }
 
 fn run_script(path: &Path, arguments: &[String]) -> ExitCode {

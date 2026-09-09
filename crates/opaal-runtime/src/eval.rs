@@ -32,8 +32,14 @@ use opaal_syntax::{
 
 use crate::glob::{DEFAULT_GLOB_ENTRY_LIMIT, GlobPattern};
 use crate::intrinsic::{DynamicBinding, ExpressionIntrinsic};
-use crate::module::{ModuleAliasRegistry, ResolvedTypeParameter, RuntimeBindingTypes, ValueType};
+use crate::module::{
+    ActionId, ModuleAliasRegistry, ModuleId, ResolvedTypeParameter, RuntimeBindingTypes, ValueType,
+};
 use crate::operation::{self, OperationError};
+use crate::operational::ModuleError as OperationalModuleError;
+use crate::operational::source::{
+    SourceActionOutcome, SourceOperationalHost, contains_control_carrier,
+};
 use crate::outcome::{Refusal, RefusalReason};
 use crate::{
     BindingMutability, Callable, Environment, NativePath, NominalRecordValue, Record, ScopeError,
@@ -1510,6 +1516,7 @@ pub(crate) enum EvaluationPolicy {
     General,
     Startup,
     PureOpaal,
+    ControlledAction,
 }
 
 impl EvalLimits {
@@ -1540,6 +1547,17 @@ impl EvalLimits {
             cancel,
             budget,
             policy: EvaluationPolicy::PureOpaal,
+        }
+    }
+
+    /// Limits for invoking one already checked action through the accepted-plan
+    /// boundary. Project initialization still uses [`Self::pure_opaal`].
+    #[must_use]
+    pub const fn controlled_action(cancel: CancellationToken, budget: ResourceBudget) -> Self {
+        Self {
+            cancel,
+            budget,
+            policy: EvaluationPolicy::ControlledAction,
         }
     }
 
@@ -1642,6 +1660,31 @@ pub(crate) trait EvaluationHost {
     fn current_status(&self) -> Option<&Status>;
     fn policy(&self) -> EvaluationPolicy;
 
+    fn permits_controlled_action(&self) -> bool {
+        false
+    }
+
+    fn invoke_operational(
+        &mut self,
+        _module: &ModuleId,
+        _operation: &str,
+        _arguments: Vec<Value>,
+    ) -> Option<Result<Value, OperationalModuleError>> {
+        None
+    }
+
+    fn action_start(&mut self, _action: &ActionId) -> Option<Result<(), OperationalModuleError>> {
+        None
+    }
+
+    fn action_end(
+        &mut self,
+        _action: &ActionId,
+        _outcome: SourceActionOutcome,
+    ) -> Option<Result<(), OperationalModuleError>> {
+        None
+    }
+
     /// Whether this host can retain a complete submitted job as one managed
     /// foreground process group. Other hosts keep evaluating conditional
     /// chains operand by operand through the ordinary recursive evaluator.
@@ -1685,6 +1728,85 @@ pub(crate) trait EvaluationHost {
 struct PureEvaluationHost<'environment> {
     environment: &'environment mut Environment,
     policy: EvaluationPolicy,
+}
+
+struct ControlledEvaluationHost<'environment, 'operations> {
+    environment: &'environment mut Environment,
+    operations: &'operations mut dyn SourceOperationalHost,
+}
+
+impl EvaluationHost for ControlledEvaluationHost<'_, '_> {
+    fn environment(&mut self) -> &mut Environment {
+        self.environment
+    }
+
+    fn current_status(&self) -> Option<&Status> {
+        None
+    }
+
+    fn policy(&self) -> EvaluationPolicy {
+        EvaluationPolicy::ControlledAction
+    }
+
+    fn permits_controlled_action(&self) -> bool {
+        true
+    }
+
+    fn invoke_operational(
+        &mut self,
+        module: &ModuleId,
+        operation: &str,
+        arguments: Vec<Value>,
+    ) -> Option<Result<Value, OperationalModuleError>> {
+        Some(self.operations.invoke(module, operation, arguments))
+    }
+
+    fn action_start(&mut self, action: &ActionId) -> Option<Result<(), OperationalModuleError>> {
+        Some(self.operations.action_start(action))
+    }
+
+    fn action_end(
+        &mut self,
+        action: &ActionId,
+        outcome: SourceActionOutcome,
+    ) -> Option<Result<(), OperationalModuleError>> {
+        Some(self.operations.action_end(action, outcome))
+    }
+
+    fn read_directory(
+        &mut self,
+        _path: &Path,
+    ) -> Result<Box<dyn DirectoryStream>, RuntimeErrorKind> {
+        Err(RuntimeErrorKind::ExecutionUnsupported)
+    }
+
+    fn execute_chain(
+        &mut self,
+        chain: &ConditionalChain,
+        _scope: &mut ScopeStack,
+        _context: EvaluationContext,
+    ) -> Result<Status, Abort> {
+        Err(Abort::Refused(Refusal::new(
+            RefusalReason::Unsupported,
+            "process execution outside std::process",
+            chain.span(),
+        )))
+    }
+
+    fn capture_chain(
+        &mut self,
+        _chain: &ConditionalChain,
+        _scope: &mut ScopeStack,
+        span: Span,
+        _position: CapturePosition,
+        _context: EvaluationContext,
+    ) -> Result<CapturedChain, Abort> {
+        Err(Abort::Refused(Refusal::new(
+            RefusalReason::Unsupported,
+            "process capture outside std::process",
+            span,
+        )))
+    }
 }
 
 impl EvaluationHost for PureEvaluationHost<'_> {
@@ -2019,6 +2141,19 @@ pub fn apply_callable(
     env: &mut Environment,
     limits: &EvalLimits,
 ) -> Result<Completion, RuntimeError> {
+    let mut budget = limits.budget;
+    apply_callable_with_budget(callable, arguments, source, span, env, limits, &mut budget)
+}
+
+pub(crate) fn apply_callable_with_budget(
+    callable: &Value,
+    arguments: Vec<Value>,
+    source: &SourceFile,
+    span: Span,
+    env: &mut Environment,
+    limits: &EvalLimits,
+    budget: &mut ResourceBudget,
+) -> Result<Completion, RuntimeError> {
     let Value::Callable(callable) = callable else {
         return Err(RuntimeError::new(
             RuntimeErrorKind::NotCallable {
@@ -2040,18 +2175,16 @@ pub fn apply_callable(
             span,
         ));
     }
-
     let mut host = PureEvaluationHost {
         environment: env,
         policy: limits.policy,
     };
-    let mut budget = limits.budget;
     let mut evaluator = Evaluator {
         source: Arc::new(source.clone()),
         binding_types: Arc::clone(&function.binding_types),
         current_result_type: None,
         cancel: limits.cancel.clone(),
-        budget: &mut budget,
+        budget,
         host: &mut host,
     };
     // Cancellation is polled before entering the body, matching an ordinary call.
@@ -2075,6 +2208,75 @@ pub fn apply_callable(
         Err(Abort::Refused(_) | Abort::Exit(_) | Abort::Stopped(_) | Abort::Output(_)) => {
             unreachable!("the pure evaluation host cannot produce session outcomes")
         }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn apply_callable_with_controlled_host_and_budget(
+    callable: &Value,
+    arguments: Vec<Value>,
+    source: &SourceFile,
+    span: Span,
+    env: &mut Environment,
+    limits: &EvalLimits,
+    budget: &mut ResourceBudget,
+    operations: &mut dyn SourceOperationalHost,
+) -> Result<HostedEvaluationOutcome, HostedEvaluationFailure> {
+    let Value::Callable(callable) = callable else {
+        return Err(HostedEvaluationFailure::Runtime(RuntimeError::new(
+            RuntimeErrorKind::NotCallable {
+                actual: callable.family_name(),
+            },
+            span,
+        )));
+    };
+    let function = callable
+        .as_any()
+        .downcast_ref::<CallableValue>()
+        .expect("every runtime callable is a CallableValue");
+    if arguments.len() != function.parameters.len() {
+        return Err(HostedEvaluationFailure::Runtime(RuntimeError::new(
+            RuntimeErrorKind::ArityMismatch {
+                expected: function.parameters.len(),
+                actual: arguments.len(),
+            },
+            span,
+        )));
+    }
+    let mut host = ControlledEvaluationHost {
+        environment: env,
+        operations,
+    };
+    let mut evaluator = Evaluator {
+        source: Arc::new(source.clone()),
+        binding_types: Arc::clone(&function.binding_types),
+        current_result_type: None,
+        cancel: limits.cancel.clone(),
+        budget,
+        host: &mut host,
+    };
+    if let Err(abort) = evaluator.check_cancel(span) {
+        return match abort {
+            Abort::Cancelled(cancellation) => Ok(HostedEvaluationOutcome::Cancelled(cancellation)),
+            Abort::Refused(refusal) => Ok(HostedEvaluationOutcome::Refused(refusal)),
+            Abort::Exit(status) => Ok(HostedEvaluationOutcome::Exit(status)),
+            Abort::Stopped(status) => Ok(HostedEvaluationOutcome::Stopped(status)),
+            Abort::Error(error) => Err(HostedEvaluationFailure::Runtime(error)),
+            Abort::Output(error) => Err(HostedEvaluationFailure::Output(error)),
+        };
+    }
+    let arguments = arguments
+        .into_iter()
+        .map(|value| RuntimeArgument { value, span })
+        .collect();
+    match evaluator.run_call(callable, function, arguments, span, None, None) {
+        Ok(value) => Ok(HostedEvaluationOutcome::Value(value)),
+        Err(Abort::Cancelled(value)) => Ok(HostedEvaluationOutcome::Cancelled(value)),
+        Err(Abort::Refused(value)) => Ok(HostedEvaluationOutcome::Refused(value)),
+        Err(Abort::Exit(value)) => Ok(HostedEvaluationOutcome::Exit(value)),
+        Err(Abort::Stopped(value)) => Ok(HostedEvaluationOutcome::Stopped(value)),
+        Err(Abort::Error(value)) => Err(HostedEvaluationFailure::Runtime(value)),
+        Err(Abort::Output(value)) => Err(HostedEvaluationFailure::Output(value)),
     }
 }
 
@@ -3793,6 +3995,52 @@ impl Evaluator<'_, '_> {
         Abort::Error(RuntimeError::new(kind, span).with_source(Arc::clone(&self.source)))
     }
 
+    fn operational_abort(&self, error: OperationalModuleError, span: Span) -> Abort {
+        match error {
+            OperationalModuleError::Authority { verdict } => {
+                let reason = match verdict {
+                    crate::authority::AuthorityVerdict::Denied => RefusalReason::Denied,
+                    crate::authority::AuthorityVerdict::Unsupported => RefusalReason::Unsupported,
+                    crate::authority::AuthorityVerdict::Unknown => RefusalReason::Unknown,
+                    crate::authority::AuthorityVerdict::GrantedEnforced
+                    | crate::authority::AuthorityVerdict::GrantedUnenforced => {
+                        unreachable!("an executable verdict is not an authority error")
+                    }
+                };
+                Abort::Refused(Refusal::new(reason, "operational standard module", span))
+            }
+            OperationalModuleError::Cancelled(reason) => {
+                Abort::Cancelled(Cancellation::new(reason, span))
+            }
+            OperationalModuleError::Invalid {
+                code: "EXECUTE_STALE",
+                ..
+            } => Abort::Refused(Refusal::new(
+                RefusalReason::Unknown,
+                "stale accepted-plan input",
+                span,
+            )),
+            OperationalModuleError::Invalid {
+                code: "EXECUTE008" | "EXECUTE_UNUSED_SECRET",
+                ..
+            } => Abort::Refused(Refusal::new(
+                RefusalReason::Denied,
+                "invalid injected secret lifecycle",
+                span,
+            )),
+            error @ OperationalModuleError::Invalid { code, .. } if code.starts_with("JOURNAL") => {
+                Abort::Output(io::Error::other(error.to_string()))
+            }
+            error @ (OperationalModuleError::Invalid { .. }
+            | OperationalModuleError::Adapter(_)) => self.error(
+                RuntimeErrorKind::UserThrown {
+                    message: error.to_string(),
+                },
+                span,
+            ),
+        }
+    }
+
     fn binding_error(&self, error: ScopeError, span: Span) -> Abort {
         let kind = match error {
             ScopeError::TypeMismatch { expected, actual } => {
@@ -3971,6 +4219,25 @@ impl Evaluator<'_, '_> {
                 .iter()
                 .map(|segment| self.text(segment.span()))
                 .collect::<Vec<_>>();
+            if let Some((module, operation)) = self
+                .binding_types
+                .qualified_operational_call(self.source.id(), &segments)
+            {
+                let arguments = call
+                    .arguments
+                    .iter()
+                    .map(|argument| self.expression(argument, scope))
+                    .collect::<Eval<Vec<_>>>()?;
+                let Some(result) = self.host.invoke_operational(&module, &operation, arguments)
+                else {
+                    return Err(Abort::Refused(Refusal::new(
+                        RefusalReason::Unsupported,
+                        "operational standard module",
+                        span,
+                    )));
+                };
+                return result.map_err(|error| self.operational_abort(error, span));
+            }
             if let Some(operation) = self
                 .binding_types
                 .qualified_operation(self.source.id(), &segments)
@@ -4452,7 +4719,9 @@ impl Evaluator<'_, '_> {
         explicit_type_arguments: Option<Vec<ValueType>>,
         expected_result: Option<&ValueType>,
     ) -> Eval<Value> {
-        if action_has_declared_effects(&function.source, function.origin_span) {
+        if action_has_declared_effects(&function.source, function.origin_span)
+            && !self.host.permits_controlled_action()
+        {
             return Err(Abort::Refused(Refusal::new(
                 RefusalReason::Unsupported,
                 "effectful action execution",
@@ -4482,6 +4751,17 @@ impl Evaluator<'_, '_> {
         if !self.budget.enter_call() {
             return Err(self.error(RuntimeErrorKind::ResourceBudgetExceeded, span));
         }
+        let action = function
+            .binding_types
+            .function_signature(function.source.id(), function.origin_span)
+            .and_then(|signature| signature.downstream().action())
+            .cloned();
+        if let Some(action) = action.as_ref()
+            && let Some(Err(error)) = self.host.action_start(action)
+        {
+            self.budget.leave_call();
+            return Err(self.operational_abort(error, span));
+        }
 
         // The captured snapshot underlies a fresh self frame (recursion) and a
         // fresh parameter frame, so parameters shadow captured names by ordinary
@@ -4501,7 +4781,7 @@ impl Evaluator<'_, '_> {
         let caller_source = std::mem::replace(&mut self.source, Arc::clone(&function.source));
         let caller_binding_types =
             std::mem::replace(&mut self.binding_types, Arc::clone(&function.binding_types));
-        let result = (|| {
+        let mut result = (|| {
             for (parameter, argument) in function.parameters.iter().zip(arguments) {
                 let expected =
                     crate::module::substitute_type(&parameter.value_type, &substitutions);
@@ -4541,6 +4821,72 @@ impl Evaluator<'_, '_> {
             self.run_body_in_defining_source(function, result_type.as_ref(), &mut call_scope)
                 .map_err(|abort| abort.with_frame(frame))
         })();
+        if action.is_some() && result.as_ref().is_ok_and(contains_control_carrier) {
+            result = Err(self.error(
+                RuntimeErrorKind::Unsupported {
+                    feature: "control-only value escaping an action",
+                },
+                span,
+            ));
+        }
+        if let Some(action) = action.as_ref() {
+            let outcome = match &result {
+                Ok(value) => SourceActionOutcome::new(
+                    "success",
+                    "ACTION000",
+                    "action completed",
+                    crate::operational::data::json_encode(value)
+                        .ok()
+                        .map(|bytes| crate::workflow::digest_bytes(&bytes)),
+                    false,
+                ),
+                Err(Abort::Error(error)) => SourceActionOutcome::new(
+                    "error",
+                    "ACTION_ERROR",
+                    error.to_string(),
+                    None,
+                    false,
+                ),
+                Err(Abort::Cancelled(cancellation)) => SourceActionOutcome::new(
+                    "cancelled",
+                    "ACTION_CANCELLED",
+                    format!("action was cancelled: {:?}", cancellation.reason()),
+                    None,
+                    false,
+                ),
+                Err(Abort::Refused(refusal)) => SourceActionOutcome::new(
+                    "refused",
+                    "ACTION_REFUSED",
+                    refusal.to_string(),
+                    None,
+                    false,
+                ),
+                Err(Abort::Exit(code)) => SourceActionOutcome::new(
+                    "status",
+                    "ACTION_EXIT",
+                    format!("action requested exit {code}"),
+                    None,
+                    false,
+                ),
+                Err(Abort::Stopped(_)) => SourceActionOutcome::new(
+                    "refused",
+                    "ACTION_STOPPED",
+                    "action attempted to create a managed job",
+                    None,
+                    false,
+                ),
+                Err(Abort::Output(error)) => SourceActionOutcome::new(
+                    "error",
+                    "ACTION_OUTPUT",
+                    error.to_string(),
+                    None,
+                    false,
+                ),
+            };
+            if let Some(Err(error)) = self.host.action_end(action, outcome) {
+                result = Err(self.operational_abort(error, span));
+            }
+        }
         self.source = caller_source;
         self.binding_types = caller_binding_types;
         self.budget.leave_call();
@@ -4839,6 +5185,13 @@ pub(crate) fn snapshot_callable(callable: &Arc<dyn Callable>) -> Option<Callable
         location: callable.location.clone(),
         origin_span: callable.origin_span,
     })
+}
+
+pub(crate) fn callable_contains_control_carrier(callable: &Arc<dyn Callable>) -> bool {
+    callable
+        .as_any()
+        .downcast_ref::<CallableValue>()
+        .is_some_and(|callable| callable.captured.values().any(contains_control_carrier))
 }
 
 pub(crate) fn restore_callable(snapshot: CallableSnapshot) -> Result<Arc<dyn Callable>, String> {

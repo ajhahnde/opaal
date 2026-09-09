@@ -26,6 +26,7 @@ toml = { version = "=0.8.23", default-features = false, features = ["parse"] }
 # scalar values. Keep the small, host-free width table exactly pinned because
 # this dependency is part of the standalone OPAAL host runtime.
 unicode-width = "=0.2.2"
+unicode-normalization = "=0.1.24"
 
 [dev-dependencies]
 opaal-platform-posix = { path = "../opaal-platform-posix" }

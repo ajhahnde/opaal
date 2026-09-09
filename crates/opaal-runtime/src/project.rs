@@ -1617,6 +1617,18 @@ impl ProjectProgram {
             .get(name)
             .ok_or_else(|| ProjectError::new("TASK004", format!("unknown task `{name}`")))
     }
+
+    /// Bind one analyzed action's static requests to this project's identities.
+    pub fn action_effects(
+        &self,
+        action: &ActionSignature,
+    ) -> Result<Vec<ProjectEffect>, ProjectError> {
+        action
+            .effects()
+            .iter()
+            .map(|effect| bind_project_effect(&self.manifest, effect))
+            .collect()
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1764,7 +1776,6 @@ pub fn load_project_program(
     let modules = ModuleProgramLoader::for_project(canonicalizer, &sources)
         .load_for_frontend(&manifest.root_module)
         .map_err(ProjectProgramError::Module)?;
-    reject_project_value_references(&modules).map_err(ProjectProgramError::Contract)?;
     let tasks = collect_tasks(&manifest, &modules).map_err(ProjectProgramError::Contract)?;
     Ok(ProjectProgram {
         manifest,
@@ -1773,62 +1784,94 @@ pub fn load_project_program(
     })
 }
 
-fn reject_project_value_references(modules: &ModuleProgram) -> Result<(), ProjectError> {
-    for entry in modules.sources().entries() {
-        for reference in modules.names().references(entry.module()) {
-            if let crate::module::ModuleReferenceTarget::Imported { target_module, .. } =
-                reference.target()
-                && matches!(
-                    target_module.origin(),
-                    ModuleOrigin::Standard { namespace, .. } if namespace == "project"
-                )
-            {
-                return Err(ProjectError::new(
-                    "PROJECT027",
-                    format!(
-                        "declarative project identity `{}` cannot be used as an ordinary value",
-                        reference.name()
-                    ),
-                ));
-            }
-        }
-    }
-    Ok(())
-}
-
 fn generated_project_modules(manifest: &ProjectManifest) -> BTreeMap<String, Vec<u8>> {
     BTreeMap::from([
         (
             "context".to_owned(),
-            generated_binding_module(["root", "evidence"]),
+            generated_binding_module([("root", "Path"), ("evidence", "Path")]),
         ),
         (
             "tools".to_owned(),
-            generated_binding_module(manifest.tools.keys().map(String::as_str)),
+            generated_identity_module("ToolIdentity", manifest.tools.keys().map(String::as_str)),
         ),
         (
             "endpoints".to_owned(),
-            generated_binding_module(manifest.endpoints.keys().map(String::as_str)),
+            generated_identity_module(
+                "EndpointIdentity",
+                manifest.endpoints.keys().map(String::as_str),
+            ),
         ),
         (
             "secrets".to_owned(),
-            generated_binding_module(manifest.secrets.keys().map(String::as_str)),
+            generated_identity_module(
+                "SecretIdentity",
+                manifest.secrets.keys().map(String::as_str),
+            ),
         ),
     ])
 }
 
-fn generated_binding_module<'a>(names: impl IntoIterator<Item = &'a str>) -> Vec<u8> {
+fn generated_identity_module<'a>(
+    type_name: &str,
+    names: impl IntoIterator<Item = &'a str>,
+) -> Vec<u8> {
     let names = names.into_iter().collect::<Vec<_>>();
     let mut source = String::new();
+    source.push_str("export { ");
+    source.push_str(type_name);
     if !names.is_empty() {
-        source.push_str("export { ");
+        source.push_str(", ");
         source.push_str(&names.join(", "));
-        source.push_str(" }\n");
     }
+    source.push_str(" }\n");
+    source.push_str("type ");
+    source.push_str(type_name);
+    source.push_str(" = {}\n");
     for name in names {
         source.push_str("let ");
         source.push_str(name);
-        source.push_str(": String = \"\"\n");
+        source.push_str(": ");
+        source.push_str(type_name);
+        source.push_str(" = ");
+        source.push_str(type_name);
+        source.push_str(" {}\n");
+    }
+    source.into_bytes()
+}
+
+fn generated_binding_module<'a>(bindings: impl IntoIterator<Item = (&'a str, &'a str)>) -> Vec<u8> {
+    let bindings = bindings.into_iter().collect::<Vec<_>>();
+    let mut source = String::new();
+    if !bindings.is_empty() {
+        source.push_str("export { ");
+        source.push_str(
+            &bindings
+                .iter()
+                .map(|(name, _)| *name)
+                .collect::<Vec<_>>()
+                .join(", "),
+        );
+        source.push_str(" }\n");
+    }
+    for value_type in bindings
+        .iter()
+        .map(|(_, value_type)| *value_type)
+        .collect::<BTreeSet<_>>()
+    {
+        source.push_str("def __opaal_project_");
+        source.push_str(&value_type.to_ascii_lowercase());
+        source.push_str("() -> ");
+        source.push_str(value_type);
+        source.push_str(" { throw \"declarative project binding unavailable\" }\n");
+    }
+    for (name, value_type) in bindings {
+        source.push_str("let ");
+        source.push_str(name);
+        source.push_str(": ");
+        source.push_str(value_type);
+        source.push_str(" = __opaal_project_");
+        source.push_str(&value_type.to_ascii_lowercase());
+        source.push_str("()\n");
     }
     source.into_bytes()
 }
@@ -2035,7 +2078,27 @@ fn bind_project_effect(
 pub struct ProjectCheck {
     task: TaskSignature,
     inputs: BTreeMap<String, String>,
+    findings: Vec<ProjectCheckFinding>,
     downstream: crate::seam::DownstreamCallMetadata,
+}
+
+/// One deterministic static refusal discovered while checking a project task.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProjectCheckFinding {
+    code: &'static str,
+    message: String,
+}
+
+impl ProjectCheckFinding {
+    #[must_use]
+    pub const fn code(&self) -> &'static str {
+        self.code
+    }
+
+    #[must_use]
+    pub fn message(&self) -> &str {
+        &self.message
+    }
 }
 
 impl ProjectCheck {
@@ -2050,8 +2113,75 @@ impl ProjectCheck {
     }
 
     #[must_use]
+    pub fn findings(&self) -> &[ProjectCheckFinding] {
+        &self.findings
+    }
+
+    #[must_use]
+    pub fn is_executable(&self) -> bool {
+        self.findings.is_empty()
+    }
+
+    #[must_use]
     pub const fn downstream(&self) -> &crate::seam::DownstreamCallMetadata {
         &self.downstream
+    }
+
+    /// Convert the already validated canonical task inputs into runtime values
+    /// in parameter order.
+    pub fn argument_values(&self) -> Result<Vec<crate::Value>, ProjectError> {
+        use std::ffi::OsString;
+
+        use crate::{ByteSize, Duration, FiniteFloat, NativePath, Value as RuntimeValue};
+
+        self.task
+            .action
+            .callable()
+            .parameters()
+            .iter()
+            .map(|parameter| {
+                let text = self
+                    .inputs
+                    .get(parameter.name())
+                    .expect("project checking validated every task input");
+                let value = match parameter.value_type() {
+                    ValueType::Null => RuntimeValue::Null,
+                    ValueType::Bool => RuntimeValue::Bool(text == "true"),
+                    ValueType::Int => RuntimeValue::Int(text.parse().expect("validated integer")),
+                    ValueType::Float => FiniteFloat::new(
+                        text.parse()
+                            .expect("validated finite floating-point number"),
+                    )
+                    .map(RuntimeValue::from)
+                    .map_err(|error| ProjectError::new("CHECK008", error.to_string()))?,
+                    ValueType::String => RuntimeValue::string(text),
+                    ValueType::Bytes => RuntimeValue::bytes(
+                        decode_base64url_nopad(text)
+                            .expect("project checking validated canonical base64url"),
+                    ),
+                    ValueType::Path => RuntimeValue::from(NativePath::new(OsString::from(text))),
+                    ValueType::Duration => RuntimeValue::from(Duration::from_nanos(
+                        text.strip_suffix("ns")
+                            .expect("validated duration suffix")
+                            .parse()
+                            .expect("validated duration integer"),
+                    )),
+                    ValueType::ByteSize => RuntimeValue::from(ByteSize::new(
+                        text.strip_suffix('b')
+                            .expect("validated byte-size suffix")
+                            .parse()
+                            .expect("validated byte-size integer"),
+                    )),
+                    _ => {
+                        return Err(ProjectError::new(
+                            "CHECK008",
+                            "task parameter has no controlled-execution value representation",
+                        ));
+                    }
+                };
+                Ok(value)
+            })
+            .collect()
     }
 }
 
@@ -2129,6 +2259,7 @@ pub fn check_project(
             )
         })?;
     }
+    let mut findings = Vec::new();
     for effect in &task.effects {
         let matching = authority
             .rules
@@ -2137,31 +2268,48 @@ pub fn check_project(
         match matching {
             Some(AuthorityDocumentRule {
                 decision: AuthorityDecision::Grant,
+                required_enforcement,
                 ..
-            }) => {}
+            }) => {
+                let expected = if effect.capability == "process.run" {
+                    DocumentEnforcement::AcknowledgeUnenforced
+                } else {
+                    DocumentEnforcement::Enforced
+                };
+                if *required_enforcement != Some(expected) {
+                    findings.push(ProjectCheckFinding {
+                        code: "CHECK005",
+                        message: format!(
+                            "request `{}` `{}` has the wrong enforcement requirement",
+                            effect.capability, effect.scope
+                        ),
+                    });
+                }
+            }
             Some(_) => {
-                return Err(ProjectError::new(
-                    "CHECK005",
-                    format!(
+                findings.push(ProjectCheckFinding {
+                    code: "CHECK005",
+                    message: format!(
                         "request `{}` `{}` is explicitly denied",
                         effect.capability, effect.scope
                     ),
-                ));
+                });
             }
             None => {
-                return Err(ProjectError::new(
-                    "CHECK005",
-                    format!(
+                findings.push(ProjectCheckFinding {
+                    code: "CHECK005",
+                    message: format!(
                         "request `{}` `{}` has no exact grant",
                         effect.capability, effect.scope
                     ),
-                ));
+                });
             }
         }
     }
     Ok(ProjectCheck {
         task: task.clone(),
         inputs: supplied,
+        findings,
         downstream: crate::seam::DownstreamCallMetadata::foundation()
             .with_action(task.action.id().clone())
             .with_project_task(
