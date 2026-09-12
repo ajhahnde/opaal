@@ -232,7 +232,7 @@ pub struct ControlledSourceOperations<'a> {
     next_attempt: u64,
     next_secret_header: u64,
     secret_headers: BTreeMap<u64, (String, String)>,
-    secret_input_id: String,
+    secret_input_id: Option<String>,
     secret_input: Option<&'a mut dyn Read>,
     evidence: Vec<SourceOperationalEvidence>,
 }
@@ -252,10 +252,11 @@ impl<'a> ControlledSourceOperations<'a> {
         action_nodes: BTreeMap<ActionId, String>,
         planned_inputs: BTreeMap<PathBuf, String>,
         process_budget: process::ProcessBudget,
-        secret_input_id: String,
-        secret_input: &'a mut dyn Read,
+        secret_input: Option<(String, &'a mut dyn Read)>,
     ) -> Self {
         let next_attempt = process_budget.attempts().try_into().unwrap_or(u64::MAX);
+        let (secret_input_id, secret_input) =
+            secret_input.map_or((None, None), |(id, input)| (Some(id), Some(input)));
         Self {
             context,
             effects,
@@ -276,13 +277,13 @@ impl<'a> ControlledSourceOperations<'a> {
             next_secret_header: 0,
             secret_headers: BTreeMap::new(),
             secret_input_id,
-            secret_input: Some(secret_input),
+            secret_input,
             evidence: Vec::new(),
         }
     }
 
     fn materialize_secret(&mut self, secret_id: &SecretId) -> Result<(), ModuleError> {
-        if secret_id.as_str() != self.secret_input_id {
+        if self.secret_input_id.as_deref() != Some(secret_id.as_str()) {
             return Err(ModuleError::invalid(
                 "EXECUTE008",
                 "secret input identity differs from the requested sink",

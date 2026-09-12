@@ -1,12 +1,13 @@
 #![forbid(unsafe_code)]
 
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 use std::fs;
 #[cfg(target_os = "linux")]
 use std::io::Read as _;
 use std::io::Write as _;
 #[cfg(target_os = "linux")]
 use std::net::TcpListener;
+use std::os::unix::ffi::OsStringExt as _;
 #[cfg(target_os = "linux")]
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
@@ -79,7 +80,6 @@ fn host_platform_triple() -> &'static str {
     }
 }
 
-#[cfg(target_os = "linux")]
 fn encoded_native(value: &Path) -> String {
     opaal_runtime::workflow::native_path(value)["value"]
         .as_str()
@@ -116,6 +116,7 @@ effects {}
 {
     return candidate
 }
+
 ## Check one candidate without executing it.
 action ready(candidate: String) -> String
 effects {
@@ -167,6 +168,164 @@ digest = "sha256:000000000000000000000000000000000000000000000000000000000000000
     (project, manifest, authority, tools)
 }
 
+fn path_fixture() -> (TempProject, PathBuf) {
+    let project = TempProject::new();
+    let manifest = project.write(
+        "opaal.toml",
+        r#"schema_version = 1
+[project]
+name = "path_demo"
+root_module = "tasks.opaal"
+required_opaal = ">=1.0.0-alpha.1,<2.0.0"
+[paths]
+root = "."
+evidence = "evidence.json"
+[tools.git]
+adapter = "git"
+version = ">=2.39.0,<3.0.0"
+[environments.ci]
+authority = "authority.toml"
+tool_lock = "tools.toml"
+"#,
+    );
+    project.write(
+        "tasks.opaal",
+        r#"action inspect_path(repo: Path) -> Path
+effects {}
+{
+    repo
+}
+action inspect_pair(repo: Path, label: String) -> Path
+effects {}
+{
+    repo
+}
+task secretfree = inspect_path
+task pair = inspect_pair
+"#,
+    );
+    project.write(
+        "authority.toml",
+        r#"schema_version = 1
+project = "path_demo"
+environment = "ci"
+[[rules]]
+decision = "deny"
+effect = "clock.wall"
+scope = "evaluation"
+"#,
+    );
+    let locked = project.write("locked-tool", "unused tool bytes");
+    let encoded = encoded_native(&locked);
+    let digest = opaal_runtime::workflow::digest_bytes(&fs::read(&locked).unwrap());
+    project.write(
+        "tools.toml",
+        &format!(
+            r#"schema_version = 1
+project = "path_demo"
+environment = "ci"
+platform = "{}"
+[child_environment]
+inherit = []
+[[tools]]
+id = "git"
+adapter = "git"
+path = {{ encoding = "base64url-nopad", platform = "unix", value = "{encoded}" }}
+version = "2.50.0"
+digest = "{digest}"
+"#,
+            host_platform_triple()
+        ),
+    );
+    (project, manifest)
+}
+
+fn many_secret_fixture() -> (TempProject, PathBuf) {
+    let project = TempProject::new();
+    let manifest = project.write(
+        "opaal.toml",
+        r#"schema_version = 1
+[project]
+name = "many_secret_demo"
+root_module = "tasks.opaal"
+required_opaal = ">=1.0.0-alpha.1,<2.0.0"
+[paths]
+root = "."
+evidence = "evidence.json"
+[tools.git]
+adapter = "git"
+version = ">=2.39.0,<3.0.0"
+[endpoints.sink]
+url = "http://127.0.0.1:9/"
+methods = ["GET"]
+secret_headers = ["authorization"]
+tls = false
+[secrets.one]
+kind = "injected"
+[secrets.two]
+kind = "injected"
+[environments.ci]
+authority = "authority.toml"
+tool_lock = "tools.toml"
+"#,
+    );
+    project.write(
+        "tasks.opaal",
+        r#"import project::endpoints as endpoints
+import project::secrets as secrets
+action unsupported() -> Null
+effects {
+    secret.reveal(secrets::one, endpoints::sink);
+    secret.reveal(secrets::two, endpoints::sink);
+}
+{
+    null
+}
+task many = unsupported
+"#,
+    );
+    project.write(
+        "authority.toml",
+        r#"schema_version = 1
+project = "many_secret_demo"
+environment = "ci"
+[[rules]]
+decision = "grant"
+effect = "secret.reveal"
+scope = "secret.one@endpoint.sink"
+required_enforcement = "enforced"
+[[rules]]
+decision = "grant"
+effect = "secret.reveal"
+scope = "secret.two@endpoint.sink"
+required_enforcement = "enforced"
+"#,
+    );
+    let locked = project.write("locked-tool", "unused tool bytes");
+    let encoded = encoded_native(&locked);
+    let digest = opaal_runtime::workflow::digest_bytes(&fs::read(&locked).unwrap());
+    project.write(
+        "tools.toml",
+        &format!(
+            r#"schema_version = 1
+project = "many_secret_demo"
+environment = "ci"
+platform = "{}"
+[child_environment]
+inherit = []
+[[tools]]
+id = "git"
+adapter = "git"
+path = {{ encoding = "base64url-nopad", platform = "unix", value = "{encoded}" }}
+version = "2.50.0"
+digest = "{digest}"
+"#,
+            host_platform_triple()
+        ),
+    );
+    (project, manifest)
+}
+
 #[test]
 fn public_help_names_the_explicit_nonexecuting_project_forms() {
     let top = opaal([OsStr::new("--help")]);
@@ -211,8 +370,6 @@ fn checked_in_project_case_inspects_and_checks_without_execution() {
     let project =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/operational-core/project-cases");
     let manifest = project.join("opaal.toml");
-    let authority = project.join("authority-ci.toml");
-    let tools = project.join("tools-host.toml");
 
     let inspect = opaal([
         OsStr::new("task"),
@@ -236,10 +393,6 @@ fn checked_in_project_case_inspects_and_checks_without_execution() {
         OsStr::new("readiness"),
         OsStr::new("--environment"),
         OsStr::new("ci"),
-        OsStr::new("--authority"),
-        authority.as_os_str(),
-        OsStr::new("--tools"),
-        tools.as_os_str(),
         OsStr::new("--input"),
         OsStr::new("candidate=artifact.tar"),
     ]);
@@ -284,7 +437,7 @@ fn task_inspect_reports_the_shared_action_contract() {
 
 #[test]
 fn project_check_is_silent_and_performs_no_tool_or_action_execution() {
-    let (project, manifest, authority, tools) = fixture();
+    let (project, manifest, _authority, _tools) = fixture();
     let marker = project.0.join("marker");
     let output = opaal([
         OsStr::new("check"),
@@ -294,10 +447,6 @@ fn project_check_is_silent_and_performs_no_tool_or_action_execution() {
         OsStr::new("release"),
         OsStr::new("--environment"),
         OsStr::new("ci"),
-        OsStr::new("--authority"),
-        authority.as_os_str(),
-        OsStr::new("--tools"),
-        tools.as_os_str(),
         OsStr::new("--input"),
         OsStr::new("candidate=artifact.tar"),
     ]);
@@ -314,7 +463,7 @@ fn project_check_is_silent_and_performs_no_tool_or_action_execution() {
 
 #[test]
 fn project_check_json_is_canonical_and_preserves_non_path_input_text() {
-    let (project, manifest, authority, tools) = fixture();
+    let (project, manifest, _authority, _tools) = fixture();
     project.write("artifact.tar", "candidate-bytes");
     let output = opaal([
         OsStr::new("check"),
@@ -324,10 +473,6 @@ fn project_check_json_is_canonical_and_preserves_non_path_input_text() {
         OsStr::new("release"),
         OsStr::new("--environment"),
         OsStr::new("ci"),
-        OsStr::new("--authority"),
-        authority.as_os_str(),
-        OsStr::new("--tools"),
-        tools.as_os_str(),
         OsStr::new("--input"),
         OsStr::new("candidate=artifact.tar"),
         OsStr::new("--format"),
@@ -340,9 +485,10 @@ fn project_check_json_is_canonical_and_preserves_non_path_input_text() {
     );
     assert!(output.stderr.is_empty(), "{output:?}");
     let artifact = opaal_runtime::workflow::CheckArtifact::parse(&output.stdout).unwrap();
-    assert_eq!(artifact.value()["schema"], "opaal.check.v1");
+    assert_eq!(artifact.value()["schema"], "opaal.check.v2");
     assert_eq!(artifact.value()["inputs"][0]["name"], "candidate");
     assert_eq!(artifact.value()["inputs"][0]["type"], "String");
+    assert_eq!(artifact.value()["inputs"][0]["binding"], "value");
     assert_eq!(artifact.value()["inputs"][0]["value"], "artifact.tar");
     assert!(artifact.value()["inputs"][0]["path"].is_null());
     assert!(artifact.value()["inputs"][0]["digest"].is_null());
@@ -359,8 +505,479 @@ fn project_check_json_is_canonical_and_preserves_non_path_input_text() {
 }
 
 #[test]
+fn lexical_paths_do_not_read_and_file_bindings_snapshot_one_regular_file() {
+    use std::os::unix::fs::symlink;
+
+    let (project, manifest) = path_fixture();
+    let lexical = opaal([
+        OsStr::new("check"),
+        OsStr::new("--project"),
+        manifest.as_os_str(),
+        OsStr::new("--task"),
+        OsStr::new("secretfree"),
+        OsStr::new("--environment"),
+        OsStr::new("ci"),
+        OsStr::new("--input"),
+        OsStr::new("repo=missing-path"),
+        OsStr::new("--format"),
+        OsStr::new("json"),
+    ]);
+    assert!(lexical.status.success(), "{lexical:?}");
+    let lexical = opaal_runtime::workflow::CheckArtifact::parse(&lexical.stdout).unwrap();
+    let input = &lexical.value()["inputs"][0];
+    assert_eq!(input["binding"], "value");
+    assert!(input["value"].is_null());
+    assert!(input["path"].is_object());
+    assert!(input["digest"].is_null());
+    assert!(input["size"].is_null());
+
+    let native_path = OsString::from_vec(b"native-\xff-path".to_vec());
+    let mut native_binding = OsString::from("repo=");
+    native_binding.push(&native_path);
+    let native_plan_path = project.0.join("native.plan.json");
+    let native_plan = opaal([
+        OsString::from("plan"),
+        OsString::from("--project"),
+        manifest.as_os_str().to_os_string(),
+        OsString::from("--task"),
+        OsString::from("secretfree"),
+        OsString::from("--environment"),
+        OsString::from("ci"),
+        OsString::from("--input"),
+        native_binding,
+        OsString::from("--expires-in"),
+        OsString::from("900s"),
+        OsString::from("--out"),
+        native_plan_path.as_os_str().to_os_string(),
+    ]);
+    assert!(native_plan.status.success(), "{native_plan:?}");
+    let native_plan =
+        opaal_runtime::workflow::PlanArtifact::parse(&fs::read(&native_plan_path).unwrap())
+            .unwrap();
+    assert_eq!(
+        opaal_runtime::workflow::path_from_native_value(&native_plan.value()["inputs"][0]["path"])
+            .unwrap(),
+        PathBuf::from(&native_path)
+    );
+    let native_journal = project.0.join("native.run.jsonl");
+    let native_run = opaal([
+        OsStr::new("execute"),
+        OsStr::new("--plan"),
+        native_plan_path.as_os_str(),
+        OsStr::new("--accept"),
+        OsStr::new(native_plan.digest()),
+        OsStr::new("--run-id"),
+        OsStr::new("00000000000000000000000000000021"),
+        OsStr::new("--journal"),
+        native_journal.as_os_str(),
+    ]);
+    assert!(
+        native_run.status.success(),
+        "{native_run:?}\n{}",
+        fs::read_to_string(&native_journal).unwrap_or_default()
+    );
+
+    let ordered = opaal([
+        OsStr::new("check"),
+        OsStr::new("--project"),
+        manifest.as_os_str(),
+        OsStr::new("--task"),
+        OsStr::new("pair"),
+        OsStr::new("--environment"),
+        OsStr::new("ci"),
+        OsStr::new("--input"),
+        OsStr::new("repo=missing-path"),
+        OsStr::new("--input"),
+        OsStr::new("label=ready"),
+        OsStr::new("--format"),
+        OsStr::new("json"),
+    ]);
+    assert!(ordered.status.success(), "{ordered:?}");
+    let ordered = opaal_runtime::workflow::CheckArtifact::parse(&ordered.stdout).unwrap();
+    assert_eq!(ordered.value()["inputs"][0]["name"], "label");
+    assert_eq!(ordered.value()["inputs"][1]["name"], "repo");
+
+    let mut non_utf8_string = OsString::from("label=");
+    non_utf8_string.push(OsString::from_vec(vec![0xff]));
+    let invalid_string = opaal([
+        OsString::from("check"),
+        OsString::from("--project"),
+        manifest.as_os_str().to_os_string(),
+        OsString::from("--task"),
+        OsString::from("pair"),
+        OsString::from("--environment"),
+        OsString::from("ci"),
+        OsString::from("--input"),
+        OsString::from("repo=missing-path"),
+        OsString::from("--input"),
+        non_utf8_string,
+    ]);
+    assert_eq!(invalid_string.status.code(), Some(1), "{invalid_string:?}");
+    assert!(String::from_utf8_lossy(&invalid_string.stderr).contains("CHECK008"));
+
+    let snapshot = project.write("candidate.bin", "snapshot-bytes");
+    let file = opaal([
+        OsStr::new("check"),
+        OsStr::new("--project"),
+        manifest.as_os_str(),
+        OsStr::new("--task"),
+        OsStr::new("secretfree"),
+        OsStr::new("--environment"),
+        OsStr::new("ci"),
+        OsStr::new("--input-file"),
+        OsStr::new("repo=candidate.bin"),
+        OsStr::new("--format"),
+        OsStr::new("json"),
+    ]);
+    assert!(file.status.success(), "{file:?}");
+    let file = opaal_runtime::workflow::CheckArtifact::parse(&file.stdout).unwrap();
+    let input = &file.value()["inputs"][0];
+    assert_eq!(input["binding"], "file");
+    assert!(input["value"].is_null());
+    assert_eq!(
+        opaal_runtime::workflow::path_from_native_value(&input["path"]).unwrap(),
+        snapshot
+    );
+    assert_eq!(
+        input["digest"],
+        opaal_runtime::workflow::digest_bytes(b"snapshot-bytes")
+    );
+    assert_eq!(input["size"], 14);
+
+    let (_string_project, string_manifest, _authority, _tools) = fixture();
+    let wrong_type = opaal([
+        OsStr::new("check"),
+        OsStr::new("--project"),
+        string_manifest.as_os_str(),
+        OsStr::new("--task"),
+        OsStr::new("release"),
+        OsStr::new("--environment"),
+        OsStr::new("ci"),
+        OsStr::new("--input-file"),
+        OsStr::new("candidate=missing"),
+    ]);
+    assert_eq!(wrong_type.status.code(), Some(1), "{wrong_type:?}");
+    assert!(String::from_utf8_lossy(&wrong_type.stderr).contains("CHECK009"));
+
+    let plan_path = project.0.join("snapshot.plan.json");
+    let planned = opaal([
+        OsStr::new("plan"),
+        OsStr::new("--project"),
+        manifest.as_os_str(),
+        OsStr::new("--task"),
+        OsStr::new("secretfree"),
+        OsStr::new("--environment"),
+        OsStr::new("ci"),
+        OsStr::new("--input-file"),
+        OsStr::new("repo=candidate.bin"),
+        OsStr::new("--expires-in"),
+        OsStr::new("900s"),
+        OsStr::new("--out"),
+        plan_path.as_os_str(),
+    ]);
+    assert!(planned.status.success(), "{planned:?}");
+    let plan =
+        opaal_runtime::workflow::PlanArtifact::parse(&fs::read(&plan_path).unwrap()).unwrap();
+    fs::write(&snapshot, "changed-after-planning").unwrap();
+    let journal = project.0.join("stale-input.run.jsonl");
+    let stale = opaal([
+        OsStr::new("execute"),
+        OsStr::new("--plan"),
+        plan_path.as_os_str(),
+        OsStr::new("--accept"),
+        OsStr::new(plan.digest()),
+        OsStr::new("--run-id"),
+        OsStr::new("00000000000000000000000000000020"),
+        OsStr::new("--journal"),
+        journal.as_os_str(),
+    ]);
+    assert_eq!(stale.status.code(), Some(1), "{stale:?}");
+    assert!(String::from_utf8_lossy(&stale.stderr).contains("EXECUTE_STALE"));
+    assert!(!journal.exists());
+
+    let link_target = project.write("link-target.bin", "target");
+    let link = project.0.join("linked-input.bin");
+    symlink(link_target, &link).unwrap();
+    let linked = opaal([
+        OsStr::new("check"),
+        OsStr::new("--project"),
+        manifest.as_os_str(),
+        OsStr::new("--task"),
+        OsStr::new("secretfree"),
+        OsStr::new("--environment"),
+        OsStr::new("ci"),
+        OsStr::new("--input-file"),
+        OsStr::new("repo=linked-input.bin"),
+    ]);
+    assert_eq!(linked.status.code(), Some(1), "{linked:?}");
+    assert!(String::from_utf8_lossy(&linked.stderr).contains("PROJECT025"));
+}
+
+#[test]
+fn many_secret_requirements_produce_a_valid_refused_check_and_plan() {
+    let (project, manifest) = many_secret_fixture();
+    let checked = opaal([
+        OsStr::new("check"),
+        OsStr::new("--project"),
+        manifest.as_os_str(),
+        OsStr::new("--task"),
+        OsStr::new("many"),
+        OsStr::new("--environment"),
+        OsStr::new("ci"),
+        OsStr::new("--format"),
+        OsStr::new("json"),
+    ]);
+    assert_eq!(checked.status.code(), Some(1), "{checked:?}");
+    assert!(!checked.stdout.is_empty(), "{checked:?}");
+    let checked = opaal_runtime::workflow::CheckArtifact::parse(&checked.stdout).unwrap();
+    assert_eq!(checked.value()["secrets"].as_array().unwrap().len(), 2);
+    assert!(
+        checked.value()["findings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|finding| finding["code"] == "CHECK010")
+    );
+
+    let plan_path = project.0.join("many.plan.json");
+    let planned = opaal([
+        OsStr::new("plan"),
+        OsStr::new("--project"),
+        manifest.as_os_str(),
+        OsStr::new("--task"),
+        OsStr::new("many"),
+        OsStr::new("--environment"),
+        OsStr::new("ci"),
+        OsStr::new("--expires-in"),
+        OsStr::new("900s"),
+        OsStr::new("--out"),
+        plan_path.as_os_str(),
+    ]);
+    assert_eq!(planned.status.code(), Some(1), "{planned:?}");
+    assert!(String::from_utf8_lossy(&planned.stderr).contains("CHECK010"));
+    let plan = opaal_runtime::workflow::PlanArtifact::parse(&fs::read(plan_path).unwrap()).unwrap();
+    assert!(!plan.is_executable());
+    assert_eq!(plan.value()["secrets"].as_array().unwrap().len(), 2);
+}
+
+#[test]
+fn inherited_secret_declarations_are_one_requirement_not_a_repeated_reveal() {
+    let (project, manifest) = many_secret_fixture();
+    project.write(
+        "tasks.opaal",
+        r#"import project::endpoints as endpoints
+import project::secrets as secrets
+action leaf() -> Null
+effects {
+    secret.reveal(secrets::one, endpoints::sink);
+}
+{
+    null
+}
+action root() -> Null
+effects {
+    secret.reveal(secrets::one, endpoints::sink);
+}
+{
+    leaf()
+}
+task many = root
+"#,
+    );
+
+    let checked = opaal([
+        OsStr::new("check"),
+        OsStr::new("--project"),
+        manifest.as_os_str(),
+        OsStr::new("--task"),
+        OsStr::new("many"),
+        OsStr::new("--environment"),
+        OsStr::new("ci"),
+        OsStr::new("--format"),
+        OsStr::new("json"),
+    ]);
+    assert!(checked.status.success(), "{checked:?}");
+    let checked = opaal_runtime::workflow::CheckArtifact::parse(&checked.stdout).unwrap();
+    assert_eq!(checked.value()["secrets"].as_array().unwrap().len(), 1);
+
+    let plan_path = project.0.join("inherited.plan.json");
+    let planned = opaal([
+        OsStr::new("plan"),
+        OsStr::new("--project"),
+        manifest.as_os_str(),
+        OsStr::new("--task"),
+        OsStr::new("many"),
+        OsStr::new("--environment"),
+        OsStr::new("ci"),
+        OsStr::new("--expires-in"),
+        OsStr::new("900s"),
+        OsStr::new("--out"),
+        plan_path.as_os_str(),
+    ]);
+    assert!(planned.status.success(), "{planned:?}");
+    let plan = opaal_runtime::workflow::PlanArtifact::parse(&fs::read(plan_path).unwrap()).unwrap();
+    assert!(plan.is_executable());
+    assert_eq!(plan.value()["secrets"].as_array().unwrap().len(), 1);
+}
+
+#[test]
+fn repeated_reveal_and_multiple_sinks_are_valid_refused_artifacts() {
+    let (project, manifest) = many_secret_fixture();
+    let assert_refused = |label: &str| {
+        let checked = opaal([
+            OsStr::new("check"),
+            OsStr::new("--project"),
+            manifest.as_os_str(),
+            OsStr::new("--task"),
+            OsStr::new("many"),
+            OsStr::new("--environment"),
+            OsStr::new("ci"),
+            OsStr::new("--format"),
+            OsStr::new("json"),
+        ]);
+        assert_eq!(checked.status.code(), Some(1), "{label}: {checked:?}");
+        let checked = opaal_runtime::workflow::CheckArtifact::parse(&checked.stdout).unwrap();
+        assert_eq!(checked.value()["secrets"].as_array().unwrap().len(), 2);
+        assert!(
+            checked.value()["findings"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|finding| finding["code"] == "CHECK010")
+        );
+
+        let plan_path = project.0.join(format!("{label}.plan.json"));
+        let planned = opaal([
+            OsStr::new("plan"),
+            OsStr::new("--project"),
+            manifest.as_os_str(),
+            OsStr::new("--task"),
+            OsStr::new("many"),
+            OsStr::new("--environment"),
+            OsStr::new("ci"),
+            OsStr::new("--expires-in"),
+            OsStr::new("900s"),
+            OsStr::new("--out"),
+            plan_path.as_os_str(),
+        ]);
+        assert_eq!(planned.status.code(), Some(1), "{label}: {planned:?}");
+        let plan =
+            opaal_runtime::workflow::PlanArtifact::parse(&fs::read(plan_path).unwrap()).unwrap();
+        assert!(!plan.is_executable());
+        assert_eq!(plan.value()["secrets"].as_array().unwrap().len(), 2);
+        plan
+    };
+
+    let repeated_source = fs::read_to_string(project.0.join("tasks.opaal"))
+        .unwrap()
+        .replace("secrets::two", "secrets::one");
+    fs::write(project.0.join("tasks.opaal"), repeated_source).unwrap();
+    let repeated = assert_refused("repeated");
+    assert_eq!(
+        repeated.value()["secrets"][0],
+        repeated.value()["secrets"][1]
+    );
+
+    let manifest_text = fs::read_to_string(&manifest).unwrap().replace(
+        "secret_headers = [\"authorization\"]",
+        "secret_headers = [\"authorization\", \"x-token\"]",
+    );
+    fs::write(&manifest, manifest_text).unwrap();
+    project.write(
+        "tasks.opaal",
+        r#"import project::endpoints as endpoints
+import project::secrets as secrets
+action unsupported() -> Null
+effects {
+    secret.reveal(secrets::one, endpoints::sink);
+}
+{
+    null
+}
+task many = unsupported
+"#,
+    );
+    let multiple_sinks = assert_refused("multiple-sinks");
+    assert_ne!(
+        multiple_sinks.value()["secrets"][0]["header"],
+        multiple_sinks.value()["secrets"][1]["header"]
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn secret_free_execution_generates_a_run_id_and_rejects_an_extra_secret() {
+    let (project, manifest) = path_fixture();
+    let plan_path = project.0.join("secretfree.plan.json");
+    let planned = opaal([
+        OsStr::new("plan"),
+        OsStr::new("--project"),
+        manifest.as_os_str(),
+        OsStr::new("--task"),
+        OsStr::new("secretfree"),
+        OsStr::new("--environment"),
+        OsStr::new("ci"),
+        OsStr::new("--input"),
+        OsStr::new("repo=missing-path"),
+        OsStr::new("--expires-in"),
+        OsStr::new("900s"),
+        OsStr::new("--out"),
+        plan_path.as_os_str(),
+    ]);
+    assert!(planned.status.success(), "{planned:?}");
+    let plan =
+        opaal_runtime::workflow::PlanArtifact::parse(&fs::read(&plan_path).unwrap()).unwrap();
+    assert!(plan.value()["secrets"].as_array().unwrap().is_empty());
+
+    let journal = project.0.join("generated.run.jsonl");
+    let executed = opaal([
+        OsStr::new("execute"),
+        OsStr::new("--plan"),
+        plan_path.as_os_str(),
+        OsStr::new("--accept"),
+        OsStr::new(plan.digest()),
+        OsStr::new("--journal"),
+        journal.as_os_str(),
+    ]);
+    assert!(executed.status.success(), "{executed:?}");
+    let first = fs::read_to_string(&journal)
+        .unwrap()
+        .lines()
+        .next()
+        .unwrap()
+        .to_owned();
+    let header: serde_json::Value = serde_json::from_str(&first).unwrap();
+    let generated = header["run_id"].as_str().unwrap();
+    assert_eq!(generated.len(), 32);
+    assert!(
+        generated
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+    );
+
+    let extra_journal = project.0.join("extra.run.jsonl");
+    let extra = opaal_with_stdin(
+        [
+            OsStr::new("execute"),
+            OsStr::new("--plan"),
+            plan_path.as_os_str(),
+            OsStr::new("--accept"),
+            OsStr::new(plan.digest()),
+            OsStr::new("--secret-stdin"),
+            OsStr::new("unused"),
+            OsStr::new("--journal"),
+            extra_journal.as_os_str(),
+        ],
+        b"must-not-be-read",
+    );
+    assert_eq!(extra.status.code(), Some(1), "{extra:?}");
+    assert!(String::from_utf8_lossy(&extra.stderr).contains("EXECUTE008"));
+    assert!(!extra_journal.exists());
+}
+
+#[test]
 fn project_check_exposes_unknown_enforcement_for_an_unrecognized_target() {
-    let (_project, manifest, authority, tools) = fixture();
+    let (_project, manifest, _authority, tools) = fixture();
     let lock = fs::read_to_string(&tools)
         .unwrap()
         .replace(host_platform_triple(), "future-unknown-platform");
@@ -373,10 +990,6 @@ fn project_check_exposes_unknown_enforcement_for_an_unrecognized_target() {
         OsStr::new("release"),
         OsStr::new("--environment"),
         OsStr::new("ci"),
-        OsStr::new("--authority"),
-        authority.as_os_str(),
-        OsStr::new("--tools"),
-        tools.as_os_str(),
         OsStr::new("--input"),
         OsStr::new("candidate=artifact.tar"),
         OsStr::new("--format"),
@@ -452,10 +1065,6 @@ digest = "{executable_digest}"
         OsStr::new("release"),
         OsStr::new("--environment"),
         OsStr::new("ci"),
-        OsStr::new("--authority"),
-        authority.as_os_str(),
-        OsStr::new("--tools"),
-        tools.as_os_str(),
         OsStr::new("--input"),
         OsStr::new("candidate=artifact.tar"),
         OsStr::new("--expires-in"),
@@ -466,7 +1075,11 @@ digest = "{executable_digest}"
     let output = opaal(arguments);
     let process_supported = supports_exact_process_execution(platform);
     assert_eq!(output.status.success(), process_supported, "{output:?}");
-    assert!(output.stderr.is_empty(), "{output:?}");
+    if process_supported {
+        assert!(output.stderr.is_empty(), "{output:?}");
+    } else {
+        assert!(String::from_utf8_lossy(&output.stderr).contains("CHECK008"));
+    }
     let plan = opaal_runtime::workflow::PlanArtifact::parse(&fs::read(&out).unwrap()).unwrap();
     assert_eq!(plan.is_executable(), process_supported);
     assert_eq!(plan.value()["platform"]["triple"], platform);
@@ -509,8 +1122,6 @@ digest = "{executable_digest}"
                 OsStr::new(plan.digest()),
                 OsStr::new("--run-id"),
                 OsStr::new("0000000000000000000000000000000a"),
-                OsStr::new("--authority"),
-                authority.as_os_str(),
                 OsStr::new("--secret-stdin"),
                 OsStr::new("unused"),
                 OsStr::new("--journal"),
@@ -557,10 +1168,6 @@ digest = "{executable_digest}"
         OsStr::new("release"),
         OsStr::new("--environment"),
         OsStr::new("ci"),
-        OsStr::new("--authority"),
-        authority.as_os_str(),
-        OsStr::new("--tools"),
-        tools.as_os_str(),
         OsStr::new("--input"),
         OsStr::new("candidate=artifact.tar"),
         OsStr::new("--expires-in"),
@@ -569,7 +1176,7 @@ digest = "{executable_digest}"
         refused_out.as_os_str(),
     ]);
     assert_eq!(refused.status.code(), Some(1), "{refused:?}");
-    assert!(refused.stderr.is_empty(), "{refused:?}");
+    assert!(String::from_utf8_lossy(&refused.stderr).contains("CHECK005"));
     let refused_plan =
         opaal_runtime::workflow::PlanArtifact::parse(&fs::read(refused_out).unwrap()).unwrap();
     assert!(!refused_plan.is_executable());
@@ -600,7 +1207,7 @@ version = ">=2.39.0,<3.0.0"
 [endpoints.readiness]
 url = "http://127.0.0.1:43119/readiness"
 methods = ["GET", "POST"]
-secret_headers = ["authorization", "x-readiness-token"]
+secret_headers = ["authorization"]
 tls = false
 [secrets.token]
 kind = "injected"
@@ -748,10 +1355,6 @@ digest = "{}"
         OsStr::new("release"),
         OsStr::new("--environment"),
         OsStr::new("ci"),
-        OsStr::new("--authority"),
-        authority.as_os_str(),
-        OsStr::new("--tools"),
-        tools.as_os_str(),
         OsStr::new("--input"),
         OsStr::new("candidate=artifact.tar"),
         OsStr::new("--expires-in"),
@@ -778,11 +1381,6 @@ digest = "{}"
         requests
             .iter()
             .any(|request| request["scope"]["header"] == "authorization")
-    );
-    assert!(
-        requests
-            .iter()
-            .any(|request| request["scope"]["header"] == "x-readiness-token")
     );
 
     let substituted_authority = project.0.join("substituted-authority.toml");
@@ -814,8 +1412,6 @@ digest = "{}"
             OsStr::new(substituted_plan.digest()),
             OsStr::new("--run-id"),
             OsStr::new("00000000000000000000000000000000"),
-            OsStr::new("--authority"),
-            substituted_authority.as_os_str(),
             OsStr::new("--secret-stdin"),
             OsStr::new("token"),
             OsStr::new("--journal"),
@@ -841,8 +1437,6 @@ digest = "{}"
         OsStr::new(plan.digest()).to_os_string(),
         OsStr::new("--run-id").to_os_string(),
         OsStr::new("00000000000000000000000000000001").to_os_string(),
-        OsStr::new("--authority").to_os_string(),
-        authority.as_os_str().to_os_string(),
         OsStr::new("--secret-stdin").to_os_string(),
         OsStr::new("token").to_os_string(),
         OsStr::new("--journal").to_os_string(),
@@ -981,7 +1575,7 @@ effects {
 task recover = recover
 "#,
     );
-    let authority = project.write(
+    let _authority = project.write(
         "authority.toml",
         r#"schema_version = 1
 project = "caught_failure"
@@ -998,7 +1592,7 @@ scope = "secret.token@endpoint.failing"
 required_enforcement = "enforced"
 "#,
     );
-    let tools = project.write(
+    let _tools = project.write(
         "tools.toml",
         &format!(
             r#"schema_version = 1
@@ -1021,10 +1615,6 @@ inherit = []
         OsStr::new("recover"),
         OsStr::new("--environment"),
         OsStr::new("ci"),
-        OsStr::new("--authority"),
-        authority.as_os_str(),
-        OsStr::new("--tools"),
-        tools.as_os_str(),
         OsStr::new("--expires-in"),
         OsStr::new("900s"),
         OsStr::new("--out"),
@@ -1043,8 +1633,6 @@ inherit = []
             OsStr::new(plan.digest()),
             OsStr::new("--run-id"),
             OsStr::new("00000000000000000000000000000013"),
-            OsStr::new("--authority"),
-            authority.as_os_str(),
             OsStr::new("--secret-stdin"),
             OsStr::new("token"),
             OsStr::new("--journal"),
@@ -1338,11 +1926,7 @@ digest = "{}"
         OsStr::new("release_readiness"),
         OsStr::new("--environment"),
         OsStr::new("ci"),
-        OsStr::new("--authority"),
-        authority.as_os_str(),
-        OsStr::new("--tools"),
-        tools.as_os_str(),
-        OsStr::new("--input"),
+        OsStr::new("--input-file"),
         OsStr::new("candidate=artifact.tar"),
         OsStr::new("--expires-in"),
         OsStr::new("900s"),
@@ -1362,8 +1946,6 @@ digest = "{}"
             OsStr::new(plan.digest()),
             OsStr::new("--run-id"),
             OsStr::new("00000000000000000000000000000011"),
-            OsStr::new("--authority"),
-            authority.as_os_str(),
             OsStr::new("--secret-stdin"),
             OsStr::new("readiness_token"),
             OsStr::new("--journal"),
@@ -1491,8 +2073,6 @@ digest = "{}"
                 OsStr::new(plan.digest()).to_os_string(),
                 OsStr::new("--run-id").to_os_string(),
                 OsStr::new(&run_id).to_os_string(),
-                OsStr::new("--authority").to_os_string(),
-                authority.as_os_str().to_os_string(),
                 OsStr::new("--secret-stdin").to_os_string(),
                 OsStr::new("readiness_token").to_os_string(),
                 OsStr::new("--journal").to_os_string(),
@@ -1522,8 +2102,6 @@ digest = "{}"
             OsStr::new(plan.digest()),
             OsStr::new("--run-id"),
             OsStr::new("00000000000000000000000000000012"),
-            OsStr::new("--authority"),
-            authority.as_os_str(),
             OsStr::new("--secret-stdin"),
             OsStr::new("readiness_token"),
             OsStr::new("--journal"),
@@ -1614,7 +2192,7 @@ fn audit_publishes_an_incomplete_artifact_and_refuses_overwrite() {
 
 #[test]
 fn project_discovery_is_explicit_and_fail_closed() {
-    let (project, manifest, authority, tools) = fixture();
+    let (project, manifest, authority, _tools) = fixture();
     let wrong_name = project.0.join("project.toml");
     fs::copy(&manifest, &wrong_name).unwrap();
     let output = opaal([
@@ -1648,10 +2226,6 @@ fn project_discovery_is_explicit_and_fail_closed() {
         OsStr::new("release"),
         OsStr::new("--environment"),
         OsStr::new("ci"),
-        OsStr::new("--authority"),
-        authority.as_os_str(),
-        OsStr::new("--tools"),
-        tools.as_os_str(),
         OsStr::new("--input"),
         OsStr::new("candidate=x"),
     ]);
@@ -1670,10 +2244,6 @@ fn project_discovery_is_explicit_and_fail_closed() {
         OsStr::new("release"),
         OsStr::new("--environment"),
         OsStr::new("ci"),
-        OsStr::new("--authority"),
-        authority.as_os_str(),
-        OsStr::new("--tools"),
-        tools.as_os_str(),
         OsStr::new("--input"),
         OsStr::new("candidate=x"),
         OsStr::new("--format"),

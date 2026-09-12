@@ -20,8 +20,8 @@ use opaal_cli::interactive::{
 use opaal_cli::plan::inspect_source;
 use opaal_cli::project::{
     AuditRequest, CheckProjectRequest, ExecuteProjectRequest, InspectProjectRequest,
-    PlanProjectRequest, audit_explicit_journal, check_explicit_project, execute_explicit_plan,
-    inspect_project, plan_explicit_project,
+    PlanProjectRequest, ProjectInputBinding, audit_explicit_journal, check_explicit_project,
+    execute_explicit_plan, inspect_project, plan_explicit_project,
 };
 use opaal_cli::report::{HostReport, write_report};
 use opaal_cli::{RawLineEditor, ReedlineEditor};
@@ -41,14 +41,14 @@ Usage:
   opaal
   opaal SCRIPT [ARGUMENT]...
   opaal check [--] SOURCE
-  opaal check --project opaal.toml --task TASK --environment ID --authority PATH --tools PATH [--input NAME=VALUE]... [--format json]
+  opaal check --project opaal.toml --task TASK --environment ID [--input NAME=VALUE | --input-file NAME=PATH]... [--format json]
   opaal check --help
   opaal task inspect --project opaal.toml TASK
   opaal task --help
   opaal plan [--] SOURCE
-  opaal plan --project opaal.toml --task TASK --environment ID --authority PATH --tools PATH [--input NAME=VALUE]... --expires-in SECONDSs --out PATH
+  opaal plan --project opaal.toml --task TASK --environment ID [--input NAME=VALUE | --input-file NAME=PATH]... --expires-in SECONDSs --out PATH
   opaal plan --help
-  opaal execute --plan PATH --accept DIGEST --run-id ID --authority PATH --secret-stdin ID --journal PATH
+  opaal execute --plan PATH --accept DIGEST [--run-id ID] [--secret-stdin ID] --journal PATH
   opaal execute --help
   opaal audit --project opaal.toml --journal PATH --out PATH
   opaal audit --help
@@ -73,13 +73,15 @@ const CHECK_HELP: &str = "Analyze OPAAL source without executing it
 
 Usage:
   opaal check [--] SOURCE
-  opaal check --project opaal.toml --task TASK --environment ID --authority PATH --tools PATH [--input NAME=VALUE]... [--format json]
+  opaal check --project opaal.toml --task TASK --environment ID [--input NAME=VALUE | --input-file NAME=PATH]... [--format json]
   opaal check --help
 
 SOURCE and every static import must be regular .opaal files. Checking performs
 syntax, module, name, signature, and carrier analysis without ambient
 configuration, history, host discovery, or execution. Success is silent;
-diagnostics use stderr.
+diagnostics use stderr. The environment selects authority and tools. --input
+parses lexical values without I/O; --input-file snapshots one regular file for
+a Path parameter.
 ";
 
 const TASK_HELP: &str = "Inspect typed tasks without executing them
@@ -107,22 +109,25 @@ const PLAN_HELP: &str = "Inspect the OPAAL planning boundary without execution
 
 Usage:
   opaal plan [--] SOURCE
-  opaal plan --project opaal.toml --task TASK --environment ID --authority PATH --tools PATH [--input NAME=VALUE]... --expires-in SECONDSs --out PATH
+  opaal plan --project opaal.toml --task TASK --environment ID [--input NAME=VALUE | --input-file NAME=PATH]... --expires-in SECONDSs --out PATH
   opaal plan --help
 
 The source form remains a host-free refusal. The project form writes one
 identity-bound canonical plan without executing the task, probing a tool,
-materializing a secret, or contacting an endpoint.
+materializing a secret, or contacting an endpoint. The environment selects
+authority and tools, and input binding modes match project check.
 ";
 
 const EXECUTE_HELP: &str = "Execute one explicitly accepted OPAAL plan
 
 Usage:
-  opaal execute --plan PATH --accept sha256:DIGEST --run-id ID --authority PATH --secret-stdin ID --journal PATH
+  opaal execute --plan PATH --accept sha256:DIGEST [--run-id ID] [--secret-stdin ID] --journal PATH
   opaal execute --help
 
 Acceptance belongs only to this request. Execution revalidates every bound
 identity before affected work and writes an exclusive hash-chained journal.
+The run ID is generated when omitted. --secret-stdin is omitted for a
+secret-free plan and must name the exact requirement for a one-secret plan.
 ";
 
 const AUDIT_HELP: &str = "Audit one OPAAL run journal without execution
@@ -152,19 +157,9 @@ fn main() -> ExitCode {
             project,
             task,
             environment,
-            authority,
-            tools,
             inputs,
             format_json,
-        } => run_project_checker(
-            project,
-            task,
-            environment,
-            authority,
-            tools,
-            inputs,
-            format_json,
-        ),
+        } => run_project_checker(project, task, environment, inputs, format_json),
         Mode::TaskHelp => emit_report(HostReport::success(TASK_HELP.as_bytes())),
         Mode::TaskInspect { project, task } => run_task_inspect(project, task),
         Mode::PlanHelp => emit_report(HostReport::success(PLAN_HELP.as_bytes())),
@@ -173,30 +168,18 @@ fn main() -> ExitCode {
             project,
             task,
             environment,
-            authority,
-            tools,
             inputs,
             expires_in_seconds,
             out,
-        } => run_project_planner(
-            project,
-            task,
-            environment,
-            authority,
-            tools,
-            inputs,
-            expires_in_seconds,
-            out,
-        ),
+        } => run_project_planner(project, task, environment, inputs, expires_in_seconds, out),
         Mode::ExecuteHelp => emit_report(HostReport::success(EXECUTE_HELP.as_bytes())),
         Mode::Execute {
             plan,
             accept,
             run_id,
-            authority,
             secret_stdin,
             journal,
-        } => run_execute(plan, accept, run_id, authority, secret_stdin, journal),
+        } => run_execute(plan, accept, run_id, secret_stdin, journal),
         Mode::AuditHelp => emit_report(HostReport::success(AUDIT_HELP.as_bytes())),
         Mode::Audit {
             project,
@@ -257,12 +240,10 @@ fn run_project_checker(
     project: PathBuf,
     task: String,
     environment: String,
-    authority: PathBuf,
-    tools: PathBuf,
-    inputs: Vec<(String, String)>,
+    inputs: Vec<ProjectInputBinding>,
     format_json: bool,
 ) -> ExitCode {
-    let request = CheckProjectRequest::new(project, task, environment, authority, tools, inputs);
+    let request = CheckProjectRequest::with_bindings(project, task, environment, inputs);
     let request = if format_json {
         request.with_json()
     } else {
@@ -316,18 +297,14 @@ fn run_project_planner(
     project: PathBuf,
     task: String,
     environment: String,
-    authority: PathBuf,
-    tools: PathBuf,
-    inputs: Vec<(String, String)>,
+    inputs: Vec<ProjectInputBinding>,
     expires_in_seconds: u64,
     out: PathBuf,
 ) -> ExitCode {
-    let request = PlanProjectRequest::new(
+    let request = PlanProjectRequest::with_bindings(
         project,
         task,
         environment,
-        authority,
-        tools,
         inputs,
         expires_in_seconds,
         out,
@@ -362,13 +339,11 @@ fn run_audit(project: PathBuf, journal: PathBuf, out: PathBuf) -> ExitCode {
 fn run_execute(
     plan: PathBuf,
     accept: String,
-    run_id: String,
-    authority: PathBuf,
-    secret_stdin: String,
+    run_id: Option<String>,
+    secret_stdin: Option<String>,
     journal: PathBuf,
 ) -> ExitCode {
-    let request =
-        ExecuteProjectRequest::new(plan, accept, run_id, authority, secret_stdin, journal);
+    let request = ExecuteProjectRequest::new(plan, accept, run_id, secret_stdin, journal);
     let stdin = io::stdin();
     let is_terminal = stdin.is_terminal();
     let mut input = stdin.lock();

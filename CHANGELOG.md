@@ -6,6 +6,11 @@ All notable changes to OPAAL are documented here.
 
 ### Changed
 
+- Make every supported accepted project plan executable: distinguish lexical
+  `--input` from digest-bound `--input-file`, support zero or one run-local
+  secret while refusing larger cardinality before acceptance, derive execution
+  authority and tools from the plan, generate omitted run IDs, and replace v1
+  check/plan artifacts with closed v2 schemas.
 - Use one predictable value language: bare names for reads, assignment, and
   calls; final-expression block values; `{expression}` interpolation;
   `...{expression}` list spread; and explicit `^literal` external heads.

@@ -32,8 +32,10 @@ The supported capabilities are `filesystem.read`, `filesystem.write`,
 `process.run`, `network.http`, `secret.reveal`, `clock.wall`, and
 `clock.monotonic`. Effect arguments are static literals or qualified project
 identities; an exported task's scoped effects require explicitly imported
-project identities. Duplicate requests collapse to one semantic request while
-formatting preserves source order. Actions can call functions and statically named actions. The action
+project identities. Duplicate non-secret requests collapse to one semantic
+request while repeated secret reveals remain visible to the unsupported-
+cardinality check; formatting preserves source order. Actions can call
+functions and statically named actions. The action
 graph must be acyclic, no deeper than 64 calls, and contain no more than 1,024
 actions; every caller must declare each request made by its callees. Functions
 cannot call actions, and actions are not first-class values.
@@ -121,16 +123,22 @@ or run a version probe.
 
 Each declarative file is UTF-8 TOML no larger than 1 MiB, nests no deeper than
 16 aggregate tables/arrays, and accepts at most 256 collection entries. A task
-check accepts at most 64 unique inputs. Scalar values use type-directed text:
-plain text for `String` and `Path`, `true` or `false` for `Bool`, decimal text
-for `Int` and finite `Float`, `null`, canonical unpadded base64url for `Bytes`,
-and integer `ns` or `b` suffixes for `Duration` and `ByteSize`. Types without an
+check accepts at most 64 unique inputs across `--input` and `--input-file`.
+`--input name=value` parses only the declared lexical value and performs no
+filesystem access; a `Path` supplied this way need not exist. Scalar values use
+UTF-8 text for `String`, native path bytes for `Path`, `true` or `false` for
+`Bool`, decimal text for `Int` and finite `Float`, `null`, canonical unpadded
+base64url for `Bytes`, and integer `ns` or `b` suffixes for `Duration` and
+`ByteSize`. Types without an
 exact `name=value` representation cannot be exported as task parameters and are
-refused while the project is loaded.
+refused while the project is loaded. `--input-file name=PATH` is available only
+for a declared `Path` parameter: it opens one existing bounded regular file
+under the project root without following symlinks and records its native path,
+size, and content digest for execution-time stale revalidation.
 
 One check, plan, execute, or audit invocation also shares a 192 MiB aggregate
 control-read budget across every control input it reads, including the
-manifest, source closure, named path inputs, authority and tool-lock files, TLS
+manifest, source closure, file-snapshot inputs, authority and tool-lock files, TLS
 CA material, tool executables, and accepted or audited artifacts. The exact
 limit is admitted; the first byte beyond it refuses the invocation. The
 smaller per-file and per-family limits still apply independently.
@@ -147,13 +155,14 @@ Check the complete selected declaration set without execution:
 
 ```sh
 opaal check --project opaal.toml --task release --environment ci \
-  --authority authority-ci.toml --tools tools-host.toml \
-  --input candidate=artifact.tar
+  --input-file candidate=artifact.tar
 ```
 
-The supplied authority and tool paths must be the selected environment's exact
-normalized files. Success is silent by default; adding `--format json` writes
-one canonical `opaal.check.v1` artifact to standard output. A missing or
+The selected environment determines the exact authority and tool-lock files;
+they cannot be restated at the CLI. Success is silent by default; adding
+`--format json` writes one canonical `opaal.check.v2` artifact to standard
+output. It records each input's explicit `value` or `file` binding and the
+statically reachable secret requirements. A missing or
 explicitly denied request, malformed document, mismatched identity, invalid
 input, unknown task, or unsupported target capability exits nonzero. A task
 declaring `process.run` against a macOS tool lock receives a `CHECK008` finding
@@ -166,8 +175,7 @@ Create an expiring review artifact for the same checked task:
 
 ```sh
 opaal plan --project opaal.toml --task release --environment ci \
-  --authority authority-ci.toml --tools tools-host.toml \
-  --input candidate=artifact.tar --expires-in 900s \
+  --input-file candidate=artifact.tar --expires-in 900s \
   --out release.plan.json
 ```
 
@@ -176,7 +184,7 @@ authority and tool lock, child environment, platform and toolchain, TLS CA
 material, tool executables, and its creation and expiry instants. Planning
 performs bounded reads and one wall-clock observation, but does not probe a
 tool, invoke the action, read a secret, or contact an endpoint. It writes the
-canonical `opaal.plan.v1` file only when the project-contained destination does
+canonical `opaal.plan.v2` file only when the project-contained destination does
 not already exist, then prints its exact digest. A process-bearing plan on
 macOS is written with a `refused` outcome and cannot be executed.
 
@@ -194,19 +202,23 @@ request:
 ```sh
 opaal execute --plan release.plan.json \
   --accept sha256:EXACT_PLAN_DIGEST \
-  --run-id 00000000000000000000000000000001 \
-  --authority authority-ci.toml \
   --secret-stdin readiness_token \
   --journal release.run.jsonl < secret-input
 ```
 
 `--accept` must equal the plan's digest byte for byte and applies only to this
-request. A run ID is exactly 32 lowercase hexadecimal digits and is a
-correlation label local to the exact journal target. Exclusive journal creation
+request. Execution derives the environment, authority, tool lock, and input
+identity from that validated plan; attempts to restate them are CLI misuse.
+`--run-id` is optional. When omitted, OPAAL generates 128 bits with the operating
+system CSPRNG and renders 32 lowercase hexadecimal digits. A supplied or
+generated run ID is a correlation label local to the exact journal target. Exclusive journal creation
 prevents reuse at the same target, while a different journal may use the same
 label; correlate artifacts by journal identity plus run ID. Secret input must
-come from non-terminal standard input, names exactly one declared and used
-secret, and is read only after static identities and maintained tool probes
+come from non-terminal standard input and name the plan's exact one required
+secret. Secret-free plans reject `--secret-stdin` and read no stdin. Tasks with
+multiple secret IDs, repeated reveal, or multiple endpoint/header sinks produce
+a valid but refused check and plan before acceptance; they never read stdin.
+One-secret input is read only after static identities and maintained tool probes
 have been revalidated. Execution rejects an expired plan or any drift in its
 project root, manifest, source, input, authority, tool lock, child environment,
 TLS material, executable, platform, or toolchain identities.
@@ -215,6 +227,10 @@ Accepted execution of a process-bearing task is currently Linux-only. On
 macOS, refusal occurs during check and planning, before journal creation,
 secret consumption, a tool probe, or a pathname process spawn. Inspection,
 check artifacts, refused plans, and audit remain available there.
+
+Version-1 check and plan artifacts, future schemas, and unknown fields are
+rejected without execution or conversion. Regenerate them with the current
+toolchain; OPAAL never rewrites a persisted development artifact in place.
 
 The journal destination is project-contained, mode `0600`, and never
 overwritten. Its initial header is written and synced in an exclusive sibling,

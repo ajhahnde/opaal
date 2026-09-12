@@ -60,12 +60,13 @@ fn authority() -> Value {
 
 fn check_document() -> Value {
     json!({
-        "schema":"opaal.check.v1",
-        "schema_version":1,
+        "schema":"opaal.check.v2",
+        "schema_version":2,
         "toolchain":{"version":"1.0.0-alpha.1"},
         "project":project(),
         "task":task(),
         "inputs":[],
+        "secrets":[],
         "sources":[],
         "authority":authority(),
         "tools":[],
@@ -77,8 +78,8 @@ fn check_document() -> Value {
 fn plan_document() -> Value {
     let contract = digest('5');
     json!({
-        "schema":"opaal.plan.v1",
-        "schema_version":1,
+        "schema":"opaal.plan.v2",
+        "schema_version":2,
         "created_at":"2026-09-09T08:00:00.000000000Z",
         "expires_at":"2026-09-09T08:15:00.000000000Z",
         "toolchain":{"version":"1.0.0-alpha.1"},
@@ -86,6 +87,7 @@ fn plan_document() -> Value {
         "project":project(),
         "task":task(),
         "inputs":[],
+        "secrets":[],
         "sources":[],
         "authority":authority(),
         "tools":[],
@@ -182,6 +184,44 @@ fn check_and_plan_are_canonical_digest_bound_closed_artifacts() {
     unknown["extra"] = Value::Null;
     assert_eq!(
         PlanArtifact::seal(unknown).unwrap_err().code(),
+        "ARTIFACT007"
+    );
+}
+
+#[test]
+fn v1_future_and_unbound_secret_artifacts_are_rejected() {
+    let mut old_check = check_document();
+    old_check["schema"] = Value::String("opaal.check.v1".to_owned());
+    old_check["schema_version"] = Value::from(1_u64);
+    assert_eq!(
+        CheckArtifact::seal(old_check).unwrap_err().code(),
+        "ARTIFACT006"
+    );
+
+    let mut old_plan = plan_document();
+    old_plan["schema"] = Value::String("opaal.plan.v1".to_owned());
+    old_plan["schema_version"] = Value::from(1_u64);
+    assert_eq!(
+        PlanArtifact::seal(old_plan).unwrap_err().code(),
+        "ARTIFACT006"
+    );
+
+    let mut future_plan = plan_document();
+    future_plan["schema"] = Value::String("opaal.plan.v3".to_owned());
+    future_plan["schema_version"] = Value::from(3_u64);
+    assert_eq!(
+        PlanArtifact::seal(future_plan).unwrap_err().code(),
+        "ARTIFACT006"
+    );
+
+    let mut unbound = check_document();
+    unbound["secrets"] = json!([{
+        "id":"token",
+        "endpoint":"service",
+        "header":"authorization"
+    }]);
+    assert_eq!(
+        CheckArtifact::seal(unbound).unwrap_err().code(),
         "ARTIFACT007"
     );
 }
@@ -342,6 +382,7 @@ fn artifact_cross_fields_refuse_inconsistent_outcomes_and_observations() {
     check["inputs"] = json!([{
         "name":"count",
         "type":"Int",
+        "binding":"value",
         "value":"1",
         "path":native_path(),
         "digest":digest('1'),
@@ -456,7 +497,11 @@ fn truncated_last_line_is_incomplete_but_earlier_corruption_refuses() {
         .position(|window| window == b"sha256:")
         .unwrap()
         + 7;
-    journal[digest_position] = b'f';
+    journal[digest_position] = if journal[digest_position] == b'f' {
+        b'e'
+    } else {
+        b'f'
+    };
     assert_eq!(audit_journal(&journal).unwrap_err().code(), "JOURNAL003");
 
     let (_, mut journal) =
