@@ -488,6 +488,7 @@ version = "1.0.0-alpha.1"
 dependencies = [
  "opaal-runtime",
  "opaal-syntax",
+ "rustix",
  "serde",
  "serde_json",
 ]

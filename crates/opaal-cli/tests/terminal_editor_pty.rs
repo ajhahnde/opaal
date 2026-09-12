@@ -9,8 +9,8 @@
 //! The harness is a deliberate copy of the one in `tests/pty.rs` rather than a
 //! shared module: that suite qualifies the reedline host editor and this one
 //! qualifies another target's editor, and coupling them would make either free to
-//! break the other. The copy drops reedline's cursor-position responder, which
-//! this editor never provokes.
+//! break the other. The retained cursor-position responder is inert for the raw
+//! editor fixture and lets the shipped Reedline client share the same harness.
 
 use std::fs::{self, File};
 use std::io::{Read, Write};
@@ -27,6 +27,7 @@ use rustix::pty::{OpenptFlags, grantpt, openpt, ptsname, unlockpt};
 use rustix::termios::{Winsize, tcsetwinsize};
 
 const FIXTURE: &str = env!("CARGO_BIN_EXE_opaal-terminal-editor-fixture");
+const OPAAL: &str = env!("CARGO_BIN_EXE_opaal");
 const TIMEOUT: Duration = Duration::from_secs(10);
 static UNIQUE: AtomicU32 = AtomicU32::new(0);
 
@@ -89,15 +90,27 @@ impl Pty {
 
         let writer = File::from(controller);
         let reader_handle = writer.try_clone().expect("clone controller");
+        let mut cursor_responder = writer.try_clone().expect("clone cursor responder");
         let output = Arc::new(Mutex::new(Vec::new()));
         let sink = Arc::clone(&output);
         let reader = thread::spawn(move || {
             let mut handle = reader_handle;
             let mut buffer = [0u8; 4096];
+            let mut suffix = Vec::new();
             loop {
                 match handle.read(&mut buffer) {
                     Ok(0) | Err(_) => break,
-                    Ok(read) => sink.lock().unwrap().extend_from_slice(&buffer[..read]),
+                    Ok(read) => {
+                        let bytes = &buffer[..read];
+                        sink.lock().unwrap().extend_from_slice(bytes);
+                        suffix.extend_from_slice(bytes);
+                        if suffix.windows(4).any(|window| window == b"\x1b[6n") {
+                            let _ = cursor_responder.write_all(b"\x1b[1;1R");
+                            let _ = cursor_responder.flush();
+                        }
+                        let retain = suffix.len().min(3);
+                        suffix.drain(..suffix.len() - retain);
+                    }
                 }
             }
         });
@@ -366,6 +379,22 @@ fn the_two_terminal_ends_are_answered_from_their_own_descriptors() {
     let report = report_terminal_ends();
 
     assert_eq!(report.trim(), "stdin=true stdout=false");
+}
+
+#[test]
+fn interactive_project_spelling_is_a_language_error_not_a_project_command() {
+    let mut pty = Pty::spawn(OPAAL);
+    pty.wait_for(">> ");
+    pty.send(b":project /tmp/opaal.toml\r");
+    let rendered = pty.wait_for("error[RUN001]");
+    assert!(
+        rendered.contains("command `:project` is reserved"),
+        "{rendered}"
+    );
+    assert!(rendered.contains("use `^:project` for intentional external execution"));
+    pty.await_prompt_after("error[RUN001]");
+    pty.send(b"\x04");
+    assert_eq!(pty.wait_exit(), 0);
 }
 
 /// Leave the session through the fixture's own exit path.

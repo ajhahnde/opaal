@@ -12,8 +12,9 @@ use toml::{Table, Value};
 
 use crate::builtin::standard_registry;
 use crate::module::{
-    ActionSignature, ModuleCanonicalizer, ModuleId, ModuleOrigin, ModuleProgram,
-    ModuleProgramLoadError, ModuleProgramLoader, ModuleSourceError, ModuleSourceLoader, ValueType,
+    ActionSignature, AnalysisControl, ModuleAnalysisOutcome, ModuleCanonicalizer, ModuleId,
+    ModuleOrigin, ModuleProgram, ModuleProgramLoadError, ModuleProgramLoader, ModuleSourceError,
+    ModuleSourceLoader, ValueType,
 };
 
 /// Maximum encoded bytes accepted for each declarative document.
@@ -1759,17 +1760,7 @@ pub fn load_project_program(
     canonicalizer: &dyn ModuleCanonicalizer,
     source_loader: &dyn ModuleSourceLoader,
 ) -> Result<ProjectProgram, ProjectProgramError> {
-    let current =
-        Version::parse(crate::version()).expect("the package version is canonical SemVer");
-    if !manifest.required_opaal.matches(&current) {
-        return Err(ProjectProgramError::Contract(ProjectError::new(
-            "PROJECT022",
-            format!(
-                "project requires OPAAL `{}`, current version is `{current}`",
-                manifest.required_opaal
-            ),
-        )));
-    }
+    validate_project_compatibility(&manifest).map_err(ProjectProgramError::Contract)?;
     let sources = ProjectModuleSources {
         source_loader,
         generated: generated_project_modules(&manifest),
@@ -1784,6 +1775,63 @@ pub fn load_project_program(
         modules,
         tasks,
     })
+}
+
+/// Validates that the running OPAAL version satisfies one parsed project's
+/// declared compatibility requirement without reading source or executing it.
+pub fn validate_project_compatibility(manifest: &ProjectManifest) -> Result<(), ProjectError> {
+    let current =
+        Version::parse(crate::version()).expect("the package version is canonical SemVer");
+    if !manifest.required_opaal.matches(&current) {
+        return Err(ProjectError::new(
+            "PROJECT022",
+            format!(
+                "project requires OPAAL `{}`, current version is `{current}`",
+                manifest.required_opaal
+            ),
+        ));
+    }
+    Ok(())
+}
+
+/// Analyzes one explicitly selected project's source graph without executing
+/// source or adapters, while honoring the shared analysis cancellation and
+/// resource limits.
+#[must_use]
+pub fn analyze_project_modules_controlled(
+    manifest: &ProjectManifest,
+    canonicalizer: &dyn ModuleCanonicalizer,
+    source_loader: &dyn ModuleSourceLoader,
+    control: &AnalysisControl,
+) -> ModuleAnalysisOutcome {
+    analyze_project_source_controlled(
+        manifest,
+        manifest.root_module(),
+        canonicalizer,
+        source_loader,
+        control,
+    )
+}
+
+/// Analyzes one source root with the selected project's generated module
+/// identities, without executing source or adapters.
+#[must_use]
+pub fn analyze_project_source_controlled(
+    manifest: &ProjectManifest,
+    requested: &Path,
+    canonicalizer: &dyn ModuleCanonicalizer,
+    source_loader: &dyn ModuleSourceLoader,
+    control: &AnalysisControl,
+) -> ModuleAnalysisOutcome {
+    let sources = ProjectModuleSources {
+        source_loader,
+        generated: generated_project_modules(manifest),
+    };
+    ModuleProgramLoader::for_project(canonicalizer, &sources).analyze_with_commands_controlled(
+        requested,
+        &standard_registry(),
+        control,
+    )
 }
 
 fn generated_project_modules(manifest: &ProjectManifest) -> BTreeMap<String, Vec<u8>> {

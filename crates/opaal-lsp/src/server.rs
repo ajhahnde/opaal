@@ -279,6 +279,17 @@ impl Coordinator {
         let Some(params) = object.get("params").and_then(Value::as_object) else {
             return Action::response(error_response(id, INVALID_PARAMS, "Invalid params"));
         };
+        let project = match project_manifest_uri(params) {
+            Ok(project) => project,
+            Err(()) => {
+                return Action::response(error_response(id, INVALID_PARAMS, "Invalid params"));
+            }
+        };
+        if let Some(project) = project
+            && self.workspace.select_project(&project).is_err()
+        {
+            return Action::response(error_response(id, INVALID_PARAMS, "Invalid params"));
+        }
         let utf8 = offered_utf8(params);
         self.encoding = if utf8 {
             PositionEncoding::Utf8
@@ -305,7 +316,17 @@ impl Coordinator {
                 output.push(success_response(id, Value::Null));
                 Action { output, exit: None }
             }
-            "initialize" => request_error(id, INVALID_REQUEST, "Invalid Request"),
+            "initialize" => {
+                let repeats_project_selection = object
+                    .get("params")
+                    .and_then(Value::as_object)
+                    .is_some_and(|params| !matches!(project_manifest_uri(params), Ok(None)));
+                if repeats_project_selection {
+                    request_error(id, INVALID_PARAMS, "Invalid params")
+                } else {
+                    request_error(id, INVALID_REQUEST, "Invalid Request")
+                }
+            }
             "textDocument/didOpen" => {
                 if id.is_some() {
                     return request_error(id, INVALID_REQUEST, "Invalid Request");
@@ -722,6 +743,31 @@ fn supports_related_information(params: &Map<String, Value>) -> bool {
         .and_then(|diagnostics| diagnostics.get("relatedInformation"))
         .and_then(Value::as_bool)
         .unwrap_or(false)
+}
+
+fn project_manifest_uri(params: &Map<String, Value>) -> Result<Option<DocumentUri>, ()> {
+    let Some(options) = params.get("initializationOptions") else {
+        return Ok(None);
+    };
+    if options.is_null() {
+        return Ok(None);
+    }
+    let Some(options) = options.as_object() else {
+        return Ok(None);
+    };
+    let Some(opaal) = options.get("opaal") else {
+        return Ok(None);
+    };
+    let Some(opaal) = opaal.as_object() else {
+        return Ok(None);
+    };
+    let Some(manifest) = opaal.get("projectManifest") else {
+        return Ok(None);
+    };
+    let manifest = manifest.as_str().ok_or(())?;
+    DocumentUri::parse(manifest.to_owned())
+        .map(Some)
+        .map_err(|_| ())
 }
 
 fn valid_id(id: &Value) -> bool {

@@ -5,11 +5,12 @@ use std::path::{Path, PathBuf};
 
 use opaal_platform::operational::FakeOperationalAdapter;
 use opaal_runtime::module::{
-    ModuleCanonicalizer, ModuleId, ModuleOrigin, ModulePathError, ModuleSourceError,
-    ModuleSourceLoader, ValueType,
+    AnalysisControl, ModuleAnalysisOutcome, ModuleCanonicalizer, ModuleId, ModuleOrigin,
+    ModulePathError, ModuleSourceError, ModuleSourceLoader, ValueType,
 };
 use opaal_runtime::project::{
-    MAX_PROJECT_ENTRIES, MAX_PROJECT_INPUTS, check_project, load_project_program,
+    MAX_PROJECT_ENTRIES, MAX_PROJECT_INPUTS, ProjectProgramError,
+    analyze_project_modules_controlled, check_project, load_project_program,
     parse_authority_document, parse_project_manifest, parse_tool_lock, read_tool_lock,
 };
 
@@ -174,6 +175,59 @@ task release = ready
     assert_eq!(manifest.id().root(), Path::new("/project"));
     assert!(manifest.id().manifest_digest().starts_with("sha256:"));
     assert_eq!(manifest.id().manifest_digest().len(), 71);
+}
+
+#[test]
+fn controlled_project_analysis_shares_cli_modules_and_honors_cancellation() {
+    let manifest =
+        parse_project_manifest(Path::new("/project/opaal.toml"), MANIFEST.as_bytes()).unwrap();
+    let sources = MemorySources(BTreeMap::from([(
+        PathBuf::from("/project/tasks.opaal"),
+        br#"import project::context as project
+let root = project::root
+"#
+        .to_vec(),
+    )]));
+    let cli = load_project_program(manifest.clone(), &sources, &sources).unwrap();
+    let outcome = analyze_project_modules_controlled(
+        &manifest,
+        &sources,
+        &sources,
+        &AnalysisControl::never(),
+    );
+    let ModuleAnalysisOutcome::Complete(report) = outcome else {
+        panic!("shared project analysis should complete")
+    };
+    assert_eq!(report.program(), Some(cli.modules()));
+
+    let invalid_sources = MemorySources(BTreeMap::from([(
+        PathBuf::from("/project/tasks.opaal"),
+        b"let root = missing\n".to_vec(),
+    )]));
+    let ProjectProgramError::Module(cli_error) =
+        load_project_program(manifest.clone(), &invalid_sources, &invalid_sources).unwrap_err()
+    else {
+        panic!("invalid source should produce a module diagnostic")
+    };
+    let ModuleAnalysisOutcome::Complete(editor_report) = analyze_project_modules_controlled(
+        &manifest,
+        &invalid_sources,
+        &invalid_sources,
+        &AnalysisControl::never(),
+    ) else {
+        panic!("invalid source analysis should complete with diagnostics")
+    };
+    assert_eq!(
+        editor_report.issues()[0].error(),
+        cli_error.error(),
+        "saved CLI and editor analysis must retain the same semantic diagnostic"
+    );
+
+    let cancelled = AnalysisControl::cooperative(|| true);
+    assert!(matches!(
+        analyze_project_modules_controlled(&manifest, &sources, &sources, &cancelled),
+        ModuleAnalysisOutcome::Cancelled
+    ));
 }
 
 #[test]
