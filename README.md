@@ -58,14 +58,16 @@ command fallback are unsupported.
 - `opaal format --check|--write PATH...` checks or atomically rewrites source.
 - `opaal plan SOURCE` returns the structured `PLAN004` unsupported refusal;
   `opaal plan --project opaal.toml ... --out PATH` writes one canonical,
-  identity-bound, expiring plan without executing the task or probing tools.
+  identity-bound, expiring plan without executing the task or probing tools;
+  `opaal plan inspect PATH` validates and renders its bounded human view.
 - `opaal execute --plan PATH --accept DIGEST ... --journal PATH` revalidates
   and, on a supported execution host, runs exactly one accepted project plan
   under its plan-bound authority and writes a synced hash-chained journal; the
   run ID may be supplied or securely generated.
 - `opaal audit --project opaal.toml --journal PATH --out PATH` validates a
   journal without executing or resuming work and publishes a complete or
-  incomplete canonical audit.
+  incomplete canonical audit; `opaal audit inspect PATH` validates and renders
+  the recorded prefix identity and redacted operation evidence.
 - `opaal-language-server` provides stdio diagnostics, completion, hover,
   signature help, definitions, references, and whole-document formatting.
 

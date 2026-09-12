@@ -5,7 +5,7 @@
 
 use std::ffi::OsString;
 use std::os::unix::ffi::{OsStrExt as _, OsStringExt as _};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::project::ProjectInputBinding;
 
@@ -36,6 +36,9 @@ pub enum Mode {
         task: String,
     },
     PlanHelp,
+    PlanInspect {
+        path: PathBuf,
+    },
     Plan {
         source: PathBuf,
     },
@@ -56,6 +59,9 @@ pub enum Mode {
         journal: PathBuf,
     },
     AuditHelp,
+    AuditInspect {
+        path: PathBuf,
+    },
     Audit {
         project: PathBuf,
         journal: PathBuf,
@@ -185,6 +191,12 @@ where
     I: IntoIterator<Item = OsString>,
 {
     let arguments = arguments.into_iter().collect::<Vec<_>>();
+    if arguments
+        .first()
+        .is_some_and(|argument| argument == "inspect")
+    {
+        return parse_artifact_inspect(&arguments, true);
+    }
     if arguments.first().is_none_or(|argument| argument != "--")
         && arguments.iter().any(|argument| argument == "--project")
     {
@@ -382,6 +394,12 @@ where
             mode: Mode::AuditHelp,
         });
     }
+    if arguments
+        .first()
+        .is_some_and(|argument| argument == "inspect")
+    {
+        return parse_artifact_inspect(&arguments, false);
+    }
     let mut project = None;
     let mut journal = None;
     let mut out = None;
@@ -407,6 +425,28 @@ where
             project: required_option(project, "--project")?,
             journal: required_option(journal, "--journal")?,
             out: required_option(out, "--out")?,
+        },
+    })
+}
+
+fn parse_artifact_inspect(arguments: &[OsString], plan: bool) -> Result<Invocation, CliError> {
+    if arguments.len() != 2 {
+        return Err(CliError::InvalidProjectArgument(format!(
+            "{} inspect requires exactly one artifact path",
+            if plan { "plan" } else { "audit" }
+        )));
+    }
+    let path = PathBuf::from(&arguments[1]);
+    if path == Path::new("-") {
+        return Err(CliError::InvalidProjectArgument(
+            "artifact inspection requires a named file, not stdin".to_owned(),
+        ));
+    }
+    Ok(Invocation {
+        mode: if plan {
+            Mode::PlanInspect { path }
+        } else {
+            Mode::AuditInspect { path }
         },
     })
 }
@@ -814,6 +854,32 @@ mod tests {
                 source: PathBuf::from("--project")
             }
         );
+    }
+
+    #[test]
+    fn plan_and_audit_inspect_require_one_named_artifact() {
+        assert_eq!(
+            parse(&["plan", "inspect", "plan.json"]).unwrap().mode,
+            Mode::PlanInspect {
+                path: PathBuf::from("plan.json")
+            }
+        );
+        assert_eq!(
+            parse(&["audit", "inspect", "audit.json"]).unwrap().mode,
+            Mode::AuditInspect {
+                path: PathBuf::from("audit.json")
+            }
+        );
+        for arguments in [
+            &["plan", "inspect"][..],
+            &["audit", "inspect", "-"][..],
+            &["plan", "inspect", "one", "two"][..],
+        ] {
+            assert!(matches!(
+                parse(arguments),
+                Err(CliError::InvalidProjectArgument(_))
+            ));
+        }
     }
 
     #[test]

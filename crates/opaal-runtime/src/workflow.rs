@@ -8,7 +8,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsStr;
 use std::fmt;
 use std::os::unix::ffi::{OsStrExt as _, OsStringExt as _};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use opaal_platform::operational::supports_exact_process_execution;
 use serde_json::{Map, Value, json};
@@ -32,8 +32,8 @@ pub const MAX_ARTIFACT_DEPTH: usize = 64;
 
 const CHECK_SCHEMA: &str = "opaal.check.v2";
 const PLAN_SCHEMA: &str = "opaal.plan.v2";
-const JOURNAL_SCHEMA: &str = "opaal.run-journal.v1";
-const AUDIT_SCHEMA: &str = "opaal.audit.v1";
+const JOURNAL_SCHEMA: &str = "opaal.run-journal.v2";
+const AUDIT_SCHEMA: &str = "opaal.audit.v2";
 
 /// SHA-256 identity of exact bytes in the persisted artifact spelling.
 #[must_use]
@@ -253,7 +253,7 @@ impl PlanArtifact {
     }
 }
 
-/// One validated canonical `opaal.audit.v1` artifact.
+/// One validated canonical `opaal.audit.v2` artifact.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AuditArtifact(CanonicalArtifact);
 
@@ -317,8 +317,7 @@ impl ArtifactKind {
 
     const fn version(self) -> u64 {
         match self {
-            Self::Check | Self::Plan => 2,
-            Self::Audit => 1,
+            Self::Check | Self::Plan | Self::Audit => 2,
         }
     }
 }
@@ -428,6 +427,7 @@ struct OpenEffect {
     action_node_id: String,
     effect: String,
     scope: Value,
+    operation: Value,
     attempt: u64,
 }
 
@@ -613,6 +613,7 @@ impl JournalLifecycle {
                     action_node_id: node.to_owned(),
                     effect: required_string(object, "effect")?.to_owned(),
                     scope: required(object, "scope")?.clone(),
+                    operation: required(object, "operation")?.clone(),
                     attempt,
                 });
             }
@@ -623,6 +624,7 @@ impl JournalLifecycle {
                 if open.action_node_id != required_string(object, "action_node_id")?
                     || open.effect != required_string(object, "effect")?
                     || open.scope != *required(object, "scope")?
+                    || !same_operation_identity(&open.operation, required(object, "operation")?)?
                     || open.attempt != required_u64(object, "attempt")?
                 {
                     return Err(journal_corrupt("effect before/after identities disagree"));
@@ -702,6 +704,7 @@ pub fn audit_journal(bytes: &[u8]) -> Result<AuditArtifact, WorkflowArtifactErro
     let mut previous = None;
     let mut run_id = None;
     let mut header = None;
+    let mut header_digest = None;
     let mut events = Vec::new();
     let mut primary = Value::Null;
     let mut cleanup = Vec::new();
@@ -744,6 +747,7 @@ pub fn audit_journal(bytes: &[u8]) -> Result<AuditArtifact, WorkflowArtifactErro
         let payload = object.get("payload").expect("closed journal field exists");
         if kind == "header" {
             header = Some(payload.clone());
+            header_digest = Some(required_digest(object, "digest")?.to_owned());
         } else {
             let root_action_end = kind == "action-end" && lifecycle.action_stack.len() == 1;
             lifecycle.admit(kind, payload)?;
@@ -795,7 +799,7 @@ pub fn audit_journal(bytes: &[u8]) -> Result<AuditArtifact, WorkflowArtifactErro
     }
     let mut audit = Map::new();
     audit.insert("schema".to_owned(), Value::String(AUDIT_SCHEMA.to_owned()));
-    audit.insert("schema_version".to_owned(), Value::from(1_u64));
+    audit.insert("schema_version".to_owned(), Value::from(2_u64));
     audit.insert(
         "run_id".to_owned(),
         Value::String(run_id.expect("header supplies run id")),
@@ -803,6 +807,29 @@ pub fn audit_journal(bytes: &[u8]) -> Result<AuditArtifact, WorkflowArtifactErro
     for name in ["plan_digest", "accepted_plan_digest", "authority_digest"] {
         audit.insert(name.to_owned(), header[name].clone());
     }
+    audit.insert("started_at".to_owned(), header["started_at"].clone());
+    audit.insert(
+        "finished_at".to_owned(),
+        events
+            .last()
+            .filter(|event| event["kind"] == "terminal")
+            .map_or(Value::Null, |event| event["payload"]["finished_at"].clone()),
+    );
+    audit.insert(
+        "journal_header_digest".to_owned(),
+        Value::String(header_digest.expect("a validated header has a digest")),
+    );
+    audit.insert(
+        "validated_prefix_digest".to_owned(),
+        Value::String(previous.expect("a validated journal has a complete header")),
+    );
+    audit.insert(
+        "validated_line_count".to_owned(),
+        Value::from(
+            u64::try_from(events.len() + 1)
+                .map_err(|_| journal_corrupt("validated line count overflow"))?,
+        ),
+    );
     audit.insert("events".to_owned(), Value::Array(events));
     audit.insert("primary".to_owned(), primary);
     audit.insert("cleanup".to_owned(), Value::Array(cleanup));
@@ -2019,6 +2046,11 @@ fn validate_audit(object: &Map<String, Value>) -> Result<(), WorkflowArtifactErr
             "plan_digest",
             "accepted_plan_digest",
             "authority_digest",
+            "started_at",
+            "finished_at",
+            "journal_header_digest",
+            "validated_prefix_digest",
+            "validated_line_count",
             "events",
             "primary",
             "cleanup",
@@ -2032,6 +2064,17 @@ fn validate_audit(object: &Map<String, Value>) -> Result<(), WorkflowArtifactErr
     for name in ["plan_digest", "accepted_plan_digest", "authority_digest"] {
         required_digest(object, name)?;
     }
+    if object["plan_digest"] != object["accepted_plan_digest"] {
+        return Err(WorkflowArtifactError::new(
+            "ARTIFACT007",
+            "audit plan and accepted-plan digests disagree",
+        ));
+    }
+    validate_timestamp(required_string(object, "started_at")?)?;
+    nullable_timestamp(required(object, "finished_at")?)?;
+    required_digest(object, "journal_header_digest")?;
+    required_digest(object, "validated_prefix_digest")?;
+    required_u64(object, "validated_line_count")?;
     bounded_array_limit(
         object,
         "events",
@@ -2063,6 +2106,8 @@ fn validate_audit(object: &Map<String, Value>) -> Result<(), WorkflowArtifactErr
     let mut lifecycle = JournalLifecycle::default();
     let mut derived_primary = Value::Null;
     let mut terminal_digest = Value::Null;
+    let mut derived_finished_at = Value::Null;
+    let mut prefix_digest = required(object, "journal_header_digest")?.clone();
     for (index, event) in events.iter().enumerate() {
         let event = event
             .as_object()
@@ -2083,7 +2128,9 @@ fn validate_audit(object: &Map<String, Value>) -> Result<(), WorkflowArtifactErr
         if kind == "terminal" {
             derived_primary = payload["primary"].clone();
             terminal_digest = event["digest"].clone();
+            derived_finished_at = payload["finished_at"].clone();
         }
+        prefix_digest = event["digest"].clone();
     }
     if (completeness == "complete") != lifecycle.terminal {
         return Err(WorkflowArtifactError::new(
@@ -2094,11 +2141,34 @@ fn validate_audit(object: &Map<String, Value>) -> Result<(), WorkflowArtifactErr
     if required(object, "primary")? != &derived_primary
         || required(object, "cleanup")? != &Value::Array(lifecycle.cleanup)
         || required(object, "journal_terminal_digest")? != &terminal_digest
+        || required(object, "finished_at")? != &derived_finished_at
+        || required(object, "validated_prefix_digest")? != &prefix_digest
+        || required_u64(object, "validated_line_count")?
+            != u64::try_from(events.len() + 1).map_err(|_| {
+                WorkflowArtifactError::new("ARTIFACT007", "validated line count overflow")
+            })?
     {
         return Err(WorkflowArtifactError::new(
             "ARTIFACT007",
             "audit summary disagrees with its verified event lifecycle",
         ));
+    }
+    let finished_at = required(object, "finished_at")?;
+    if (completeness == "complete") != finished_at.is_string() {
+        return Err(WorkflowArtifactError::new(
+            "ARTIFACT007",
+            "audit completeness and finish time disagree",
+        ));
+    }
+    if let Some(finished_at) = finished_at.as_str() {
+        let started = unix_nanos_from_timestamp(required_string(object, "started_at")?)?;
+        let finished = unix_nanos_from_timestamp(finished_at)?;
+        if finished < started {
+            return Err(WorkflowArtifactError::new(
+                "ARTIFACT007",
+                "audit finish time precedes its start",
+            ));
+        }
     }
     Ok(())
 }
@@ -2148,6 +2218,11 @@ fn validate_journal_payload(kind: &str, value: &Value) -> Result<(), WorkflowArt
             ] {
                 required_digest(object, name)?;
             }
+            if object["plan_digest"] != object["accepted_plan_digest"] {
+                return Err(journal_corrupt(
+                    "journal plan and accepted-plan digests disagree",
+                ));
+            }
             validate_timestamp(required_string(object, "started_at")?)
         }
         "action-start" => {
@@ -2169,7 +2244,14 @@ fn validate_journal_payload(kind: &str, value: &Value) -> Result<(), WorkflowArt
         "effect-before" => {
             exact_keys(
                 object,
-                &["action_node_id", "effect", "scope", "verdict", "attempt"],
+                &[
+                    "action_node_id",
+                    "effect",
+                    "scope",
+                    "operation",
+                    "verdict",
+                    "attempt",
+                ],
                 "effect-before",
             )?;
             validate_id(required_string(object, "action_node_id")?)?;
@@ -2180,6 +2262,12 @@ fn validate_journal_payload(kind: &str, value: &Value) -> Result<(), WorkflowArt
                 required(object, "scope")?,
             )
             .map_err(|_| journal_corrupt("effect and scope families disagree"))?;
+            validate_operation(
+                required_string(object, "effect")?,
+                required(object, "operation")?,
+                false,
+            )?;
+            validate_operation_scope(required(object, "scope")?, required(object, "operation")?)?;
             one_of(
                 required_string(object, "verdict")?,
                 &[
@@ -2209,6 +2297,7 @@ fn validate_journal_payload(kind: &str, value: &Value) -> Result<(), WorkflowArt
                     "action_node_id",
                     "effect",
                     "scope",
+                    "operation",
                     "attempt",
                     "outcome",
                     "evidence_digest",
@@ -2223,9 +2312,26 @@ fn validate_journal_payload(kind: &str, value: &Value) -> Result<(), WorkflowArt
                 required(object, "scope")?,
             )
             .map_err(|_| journal_corrupt("effect and scope families disagree"))?;
+            validate_operation(
+                required_string(object, "effect")?,
+                required(object, "operation")?,
+                true,
+            )?;
+            validate_operation_scope(required(object, "scope")?, required(object, "operation")?)?;
             required_u64(object, "attempt")?;
             validate_outcome(required(object, "outcome")?)?;
-            nullable_digest(required(object, "evidence_digest")?)
+            if required(object, "outcome")?["class"] == "success" {
+                validate_successful_operation(required(object, "operation")?)?;
+            }
+            nullable_digest(required(object, "evidence_digest")?)?;
+            if required(object, "evidence_digest")?
+                != operation_evidence_digest(required(object, "operation")?)?
+            {
+                return Err(journal_corrupt(
+                    "effect evidence digest disagrees with its operation descriptor",
+                ));
+            }
+            Ok(())
         }
         "cleanup" => {
             exact_keys(
@@ -2262,6 +2368,333 @@ fn validate_journal_payload(kind: &str, value: &Value) -> Result<(), WorkflowArt
     }
 }
 
+fn validate_operation(
+    effect: &str,
+    value: &Value,
+    after: bool,
+) -> Result<(), WorkflowArtifactError> {
+    let object = as_object(value, "operation descriptor")?;
+    let kind = required_string(object, "kind")?;
+    let expected_kind = match effect {
+        "filesystem.read" | "filesystem.write" => "filesystem",
+        "process.run" => "process",
+        "network.http" => "http",
+        "clock.wall" | "clock.monotonic" => "clock",
+        "secret.reveal" => "secret-reveal",
+        _ => return Err(journal_corrupt("unknown effect operation family")),
+    };
+    if kind != expected_kind {
+        return Err(journal_corrupt(
+            "effect and operation descriptor families disagree",
+        ));
+    }
+    match kind {
+        "filesystem" => {
+            exact_keys(
+                object,
+                &[
+                    "kind",
+                    "operation",
+                    "relative_path",
+                    "bytes",
+                    "evidence_digest",
+                ],
+                "filesystem operation descriptor",
+            )?;
+            let expected = match effect {
+                "filesystem.read" => "std::filesystem::read",
+                "filesystem.write" => "std::filesystem::write_atomic",
+                _ => unreachable!("filesystem kind was derived from effect"),
+            };
+            require_operation_name(object, expected)?;
+            validate_native_path(required(object, "relative_path")?)?;
+            let relative = path_from_native_value(required(object, "relative_path")?)?;
+            if relative.is_absolute()
+                || relative.components().any(|component| {
+                    matches!(
+                        component,
+                        Component::ParentDir | Component::RootDir | Component::Prefix(_)
+                    )
+                })
+            {
+                return Err(journal_corrupt(
+                    "filesystem operation path must be project-root-relative",
+                ));
+            }
+            nullable_u64(required(object, "bytes")?)?;
+            nullable_digest(required(object, "evidence_digest")?)?;
+            require_empty_result(object, &["bytes", "evidence_digest"], after)?;
+        }
+        "process" => {
+            exact_keys(
+                object,
+                &[
+                    "kind",
+                    "operation",
+                    "tool",
+                    "argv_count",
+                    "argv_bytes",
+                    "argv_digest",
+                    "argv",
+                    "status",
+                    "stdout_bytes",
+                    "stderr_bytes",
+                    "evidence_digest",
+                ],
+                "process operation descriptor",
+            )?;
+            let operation = required_string(object, "operation")?;
+            if !matches!(operation, "std::process::run" | "std::process::probe") {
+                return Err(journal_corrupt("unknown process operation identity"));
+            }
+            validate_id(required_string(object, "tool")?)?;
+            let argv_count = required_u64(object, "argv_count")?;
+            let argv_bytes = required_u64(object, "argv_bytes")?;
+            required_digest(object, "argv_digest")?;
+            let argv = required_array(object, "argv")?;
+            if argv.is_empty()
+                || argv.len() > MAX_ARTIFACT_ENTRIES
+                || argv_count != argv.len() as u64
+            {
+                return Err(journal_corrupt("process argv count is invalid"));
+            }
+            let mut derived_bytes = 0_u64;
+            for (index, argument) in argv.iter().enumerate() {
+                let argument = as_object(argument, "process argument descriptor")?;
+                match required_string(argument, "kind")? {
+                    "public" => {
+                        exact_keys(argument, &["kind", "value"], "public process argument")?;
+                        let value = required_string(argument, "value")?;
+                        validate_id(value)?;
+                        let expected = match (operation, index) {
+                            ("std::process::probe", 1) => Some("--version"),
+                            ("std::process::probe", 2) => Some("--verbose"),
+                            _ => None,
+                        };
+                        if expected != Some(value) {
+                            return Err(journal_corrupt(
+                                "process public argument is not an adapter-owned probe token",
+                            ));
+                        }
+                        derived_bytes = derived_bytes
+                            .checked_add(value.len() as u64)
+                            .ok_or_else(|| journal_corrupt("process argv byte count overflow"))?;
+                    }
+                    "redacted" => {
+                        exact_keys(
+                            argument,
+                            &["kind", "bytes", "digest"],
+                            "redacted process argument",
+                        )?;
+                        derived_bytes = derived_bytes
+                            .checked_add(required_u64(argument, "bytes")?)
+                            .ok_or_else(|| journal_corrupt("process argv byte count overflow"))?;
+                        required_digest(argument, "digest")?;
+                    }
+                    _ => return Err(journal_corrupt("unknown process argument descriptor")),
+                }
+            }
+            if operation == "std::process::probe"
+                && !matches!(
+                    argv.as_slice(),
+                    [first, second]
+                        if first["kind"] == "redacted"
+                            && second["kind"] == "public"
+                            && second["value"] == "--version"
+                )
+                && !matches!(
+                    argv.as_slice(),
+                    [first, second, third]
+                        if first["kind"] == "redacted"
+                            && second["kind"] == "public"
+                            && second["value"] == "--version"
+                            && third["kind"] == "public"
+                            && third["value"] == "--verbose"
+                )
+            {
+                return Err(journal_corrupt(
+                    "process probe arguments do not match a maintained adapter",
+                ));
+            }
+            if derived_bytes != argv_bytes {
+                return Err(journal_corrupt("process argv byte count is inconsistent"));
+            }
+            nullable_u64(required(object, "status")?)?;
+            nullable_u64(required(object, "stdout_bytes")?)?;
+            nullable_u64(required(object, "stderr_bytes")?)?;
+            nullable_digest(required(object, "evidence_digest")?)?;
+            require_empty_result(
+                object,
+                &["status", "stdout_bytes", "stderr_bytes", "evidence_digest"],
+                after,
+            )?;
+        }
+        "http" => {
+            exact_keys(
+                object,
+                &[
+                    "kind",
+                    "operation",
+                    "endpoint",
+                    "method",
+                    "status",
+                    "body_bytes",
+                    "evidence_digest",
+                ],
+                "HTTP operation descriptor",
+            )?;
+            require_operation_name(object, "std::http::request")?;
+            validate_id(required_string(object, "endpoint")?)?;
+            validate_id(required_string(object, "method")?)?;
+            nullable_u64(required(object, "status")?)?;
+            if required(object, "status")?
+                .as_u64()
+                .is_some_and(|status| !(100..=599).contains(&status))
+            {
+                return Err(journal_corrupt("HTTP status is outside 100 through 599"));
+            }
+            nullable_u64(required(object, "body_bytes")?)?;
+            nullable_digest(required(object, "evidence_digest")?)?;
+            require_empty_result(object, &["status", "body_bytes", "evidence_digest"], after)?;
+        }
+        "clock" => {
+            exact_keys(
+                object,
+                &["kind", "operation", "clock", "evidence_digest"],
+                "clock operation descriptor",
+            )?;
+            let clock = required_string(object, "clock")?;
+            one_of(clock, &["wall", "monotonic"], "clock class")?;
+            let expected = match effect {
+                "clock.wall" => ("wall", "std::time::wall_now"),
+                "clock.monotonic" => ("monotonic", "std::time::monotonic_now"),
+                _ => unreachable!("clock kind was derived from effect"),
+            };
+            if clock != expected.0 {
+                return Err(journal_corrupt(
+                    "clock effect and descriptor class disagree",
+                ));
+            }
+            require_operation_name(object, expected.1)?;
+            nullable_digest(required(object, "evidence_digest")?)?;
+            require_empty_result(object, &["evidence_digest"], after)?;
+        }
+        "secret-reveal" => {
+            exact_keys(
+                object,
+                &["kind", "operation", "endpoint", "header", "evidence_digest"],
+                "secret-reveal operation descriptor",
+            )?;
+            require_operation_name(object, "std::http::secret_reveal")?;
+            validate_id(required_string(object, "endpoint")?)?;
+            validate_id(required_string(object, "header")?)?;
+            nullable_digest(required(object, "evidence_digest")?)?;
+            require_empty_result(object, &["evidence_digest"], after)?;
+        }
+        _ => return Err(journal_corrupt("unknown operation descriptor kind")),
+    }
+    Ok(())
+}
+
+fn validate_operation_scope(scope: &Value, operation: &Value) -> Result<(), WorkflowArtifactError> {
+    let scope = as_object(scope, "scope")?;
+    let operation = as_object(operation, "operation descriptor")?;
+    let agrees = match required_string(operation, "kind")? {
+        "filesystem" => true,
+        "process" => scope["tool"] == operation["tool"],
+        "http" => {
+            scope["endpoint"] == operation["endpoint"] && scope["method"] == operation["method"]
+        }
+        "clock" => scope["clock"] == operation["clock"],
+        "secret-reveal" => {
+            scope["endpoint"] == operation["endpoint"] && scope["header"] == operation["header"]
+        }
+        _ => unreachable!("operation kind was validated"),
+    };
+    if !agrees {
+        return Err(journal_corrupt(
+            "effect scope and operation descriptor identities disagree",
+        ));
+    }
+    Ok(())
+}
+
+fn require_operation_name(
+    object: &Map<String, Value>,
+    expected: &str,
+) -> Result<(), WorkflowArtifactError> {
+    if required_string(object, "operation")? != expected {
+        return Err(journal_corrupt("unknown operation identity"));
+    }
+    Ok(())
+}
+
+fn require_empty_result(
+    object: &Map<String, Value>,
+    fields: &[&str],
+    after: bool,
+) -> Result<(), WorkflowArtifactError> {
+    if !after && fields.iter().any(|field| !object[*field].is_null()) {
+        return Err(journal_corrupt(
+            "effect-before operation result fields must be null",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_successful_operation(value: &Value) -> Result<(), WorkflowArtifactError> {
+    let object = value
+        .as_object()
+        .expect("a validated operation descriptor is an object");
+    let required = match required_string(object, "kind")? {
+        "filesystem" => &["bytes", "evidence_digest"][..],
+        "process" => &["stdout_bytes", "stderr_bytes", "evidence_digest"][..],
+        "http" => &["status", "body_bytes", "evidence_digest"][..],
+        "clock" | "secret-reveal" => &[][..],
+        _ => unreachable!("operation kind was validated"),
+    };
+    if required.iter().any(|field| object[*field].is_null()) {
+        return Err(journal_corrupt(
+            "successful operation omits required result metadata",
+        ));
+    }
+    Ok(())
+}
+
+fn operation_evidence_digest(value: &Value) -> Result<&Value, WorkflowArtifactError> {
+    required(
+        value
+            .as_object()
+            .expect("a validated operation descriptor is an object"),
+        "evidence_digest",
+    )
+}
+
+fn same_operation_identity(before: &Value, after: &Value) -> Result<bool, WorkflowArtifactError> {
+    let mut before = before.clone();
+    let mut after = after.clone();
+    clear_operation_result(&mut before)?;
+    clear_operation_result(&mut after)?;
+    Ok(before == after)
+}
+
+fn clear_operation_result(value: &mut Value) -> Result<(), WorkflowArtifactError> {
+    let object = value
+        .as_object_mut()
+        .ok_or_else(|| journal_corrupt("operation descriptor must be an object"))?;
+    let fields = match object.get("kind").and_then(Value::as_str) {
+        Some("filesystem") => &["bytes", "evidence_digest"][..],
+        Some("process") => &["status", "stdout_bytes", "stderr_bytes", "evidence_digest"][..],
+        Some("http") => &["status", "body_bytes", "evidence_digest"][..],
+        Some("clock" | "secret-reveal") => &["evidence_digest"][..],
+        _ => return Err(journal_corrupt("unknown operation descriptor kind")),
+    };
+    for field in fields {
+        object.insert((*field).to_owned(), Value::Null);
+    }
+    Ok(())
+}
+
 fn seal_journal_line(
     run_id: &str,
     seq: u64,
@@ -2274,7 +2707,7 @@ fn seal_journal_line(
         "schema".to_owned(),
         Value::String(JOURNAL_SCHEMA.to_owned()),
     );
-    object.insert("schema_version".to_owned(), Value::from(1_u64));
+    object.insert("schema_version".to_owned(), Value::from(2_u64));
     object.insert("run_id".to_owned(), Value::String(run_id.to_owned()));
     object.insert("seq".to_owned(), Value::from(seq));
     object.insert("kind".to_owned(), Value::String(kind.to_owned()));
@@ -2313,7 +2746,7 @@ fn parse_journal_line(bytes: &[u8]) -> Result<Value, WorkflowArtifactError> {
         "journal line",
     )?;
     if required_string(object, "schema")? != JOURNAL_SCHEMA
-        || required_u64(object, "schema_version")? != 1
+        || required_u64(object, "schema_version")? != 2
     {
         return Err(journal_corrupt("wrong journal schema or version"));
     }

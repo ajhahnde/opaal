@@ -21,7 +21,8 @@ use opaal_cli::plan::inspect_source;
 use opaal_cli::project::{
     AuditRequest, CheckProjectRequest, ExecuteProjectRequest, InspectProjectRequest,
     PlanProjectRequest, ProjectInputBinding, audit_explicit_journal, check_explicit_project,
-    execute_explicit_plan, inspect_project, plan_explicit_project,
+    execute_explicit_plan, inspect_audit_artifact, inspect_plan_artifact, inspect_project,
+    plan_explicit_project,
 };
 use opaal_cli::report::{HostReport, write_report};
 use opaal_cli::{RawLineEditor, ReedlineEditor};
@@ -47,10 +48,12 @@ Usage:
   opaal task --help
   opaal plan [--] SOURCE
   opaal plan --project opaal.toml --task TASK --environment ID [--input NAME=VALUE | --input-file NAME=PATH]... --expires-in SECONDSs --out PATH
+  opaal plan inspect PATH
   opaal plan --help
   opaal execute --plan PATH --accept DIGEST [--run-id ID] [--secret-stdin ID] --journal PATH
   opaal execute --help
   opaal audit --project opaal.toml --journal PATH --out PATH
+  opaal audit inspect PATH
   opaal audit --help
   opaal format --check [--] PATH...
   opaal format --write [--] PATH...
@@ -110,12 +113,15 @@ const PLAN_HELP: &str = "Inspect the OPAAL planning boundary without execution
 Usage:
   opaal plan [--] SOURCE
   opaal plan --project opaal.toml --task TASK --environment ID [--input NAME=VALUE | --input-file NAME=PATH]... --expires-in SECONDSs --out PATH
+  opaal plan inspect PATH
   opaal plan --help
 
 The source form remains a host-free refusal. The project form writes one
 identity-bound canonical plan without executing the task, probing a tool,
 materializing a secret, or contacting an endpoint. The environment selects
 authority and tools, and input binding modes match project check.
+The inspect form validates one canonical plan and prints a bounded, deterministic,
+redacted human view. Invalid, old, future, or tampered artifacts are not rendered.
 ";
 
 const EXECUTE_HELP: &str = "Execute one explicitly accepted OPAAL plan
@@ -134,10 +140,13 @@ const AUDIT_HELP: &str = "Audit one OPAAL run journal without execution
 
 Usage:
   opaal audit --project opaal.toml --journal PATH --out PATH
+  opaal audit inspect PATH
   opaal audit --help
 
 Audit validates the closed schema, sequence, and hash chain and writes one
 exclusive complete or incomplete evidence artifact. It never resumes a run.
+The inspect form validates one canonical audit and prints only its recorded,
+redacted evidence; journal-byte validation belongs to audit generation.
 ";
 
 fn main() -> ExitCode {
@@ -163,6 +172,7 @@ fn main() -> ExitCode {
         Mode::TaskHelp => emit_report(HostReport::success(TASK_HELP.as_bytes())),
         Mode::TaskInspect { project, task } => run_task_inspect(project, task),
         Mode::PlanHelp => emit_report(HostReport::success(PLAN_HELP.as_bytes())),
+        Mode::PlanInspect { path } => run_plan_inspect(path),
         Mode::Plan { source } => run_planner(source),
         Mode::ProjectPlan {
             project,
@@ -181,6 +191,7 @@ fn main() -> ExitCode {
             journal,
         } => run_execute(plan, accept, run_id, secret_stdin, journal),
         Mode::AuditHelp => emit_report(HostReport::success(AUDIT_HELP.as_bytes())),
+        Mode::AuditInspect { path } => run_audit_inspect(path),
         Mode::Audit {
             project,
             journal,
@@ -332,6 +343,20 @@ fn run_audit(project: PathBuf, journal: PathBuf, out: PathBuf) -> ExitCode {
                 .expect("one is a valid incomplete-audit status");
             emit_report(HostReport::completed(&incomplete, run.output()))
         }
+        Err(error) => emit_report(HostReport::failure(error.rendered().as_bytes())),
+    }
+}
+
+fn run_plan_inspect(path: PathBuf) -> ExitCode {
+    match inspect_plan_artifact(&path) {
+        Ok(output) => emit_report(HostReport::success(&output)),
+        Err(error) => emit_report(HostReport::failure(error.rendered().as_bytes())),
+    }
+}
+
+fn run_audit_inspect(path: PathBuf) -> ExitCode {
+    match inspect_audit_artifact(&path) {
+        Ok(output) => emit_report(HostReport::success(&output)),
         Err(error) => emit_report(HostReport::failure(error.rendered().as_bytes())),
     }
 }

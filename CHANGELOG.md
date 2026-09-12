@@ -6,6 +6,10 @@ All notable changes to OPAAL are documented here.
 
 ### Changed
 
+- Add validating deterministic `plan inspect` and `audit inspect` views,
+  closed redacted filesystem/process/HTTP/clock/secret-reveal descriptors on
+  every effect boundary, and v2 journal/audit schemas whose audits bind the
+  independently validated complete-line prefix.
 - Make every supported accepted project plan executable: distinguish lexical
   `--input` from digest-bound `--input-file`, support zero or one run-local
   secret while refusing larger cardinality before acceptance, derive execution
