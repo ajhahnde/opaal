@@ -2,20 +2,19 @@ use crate::classification::classify_opaal_tokens;
 use crate::lexer::lex_opaal_with_control;
 use crate::{
     ActionDefinition, AndChain, AndOperator, Assignment, AstNode, BinaryExpression, BinaryOperator,
-    Block, CallExpression, CapabilityName, Closure, CommandCaptureKind, CommandHead,
-    CommandHeadKind, CommandItem, CommandItemKind, CommandStage, CommandSubstitution,
-    ConditionalChain, ConditionalOperator, ControlTransfer, Declaration, Delimiter, Diagnostic,
-    DocumentationBlock, EffectRequest, ElseBranch, EnvironmentStatement, Expression,
-    ExpressionKind, FileRedirection, ForStatement, FunctionDefinition, Identifier, IfStatement,
-    IncompleteInput, IncompleteReason, IndexExpression, IoNumber, JobStatement, Keyword,
-    ListPattern, Literal, LiteralKind, MatchArm, MatchStatement, MemberExpression,
-    ModuleAliasImport, ModuleExportStatement, ModuleImportSource, NominalRecordExpression,
-    NominalRecordFieldExpression, NominalRecordPattern, NominalTypeDeclaration, NominalTypeField,
-    NumberKind, Operator, OutputMode, Parameter, Pattern, PatternField, PipeOperator, Pipeline,
-    QualifiedName, RecordEntry, RecordKey, Redirection, RedirectionKind, Script, Severity,
-    SourceFile, Span, Stage, StageKind, Statement, StatementKind, StaticEffectArgument,
-    SyntaxClassification, TaskDefinition, Token, TokenKind, TryStatement, TypeConstraint,
-    TypeParameter, TypeReference, UnaryExpression, UnaryOperator, VariableReference,
+    Block, CallExpression, CapabilityName, Closure, CommandHead, CommandHeadKind, CommandItem,
+    CommandItemKind, CommandStage, ConditionalChain, ConditionalOperator, ControlTransfer,
+    Declaration, Delimiter, Diagnostic, DocumentationBlock, EffectRequest, ElseBranch,
+    EnvironmentStatement, Expression, ExpressionKind, FileRedirection, ForStatement,
+    FunctionDefinition, Identifier, IfStatement, IncompleteInput, IncompleteReason,
+    IndexExpression, IoNumber, JobStatement, Keyword, ListPattern, Literal, LiteralKind, MatchArm,
+    MatchStatement, MemberExpression, ModuleAliasImport, ModuleExportStatement, ModuleImportSource,
+    NameReference, NominalRecordExpression, NominalRecordFieldExpression, NominalRecordPattern,
+    NominalTypeDeclaration, NominalTypeField, NumberKind, Operator, OutputMode, Parameter, Pattern,
+    PatternField, PipeOperator, Pipeline, QualifiedName, RecordEntry, RecordKey, Redirection,
+    RedirectionKind, Script, Severity, SourceFile, Span, Stage, StageKind, Statement,
+    StatementKind, StaticEffectArgument, SyntaxClassification, TaskDefinition, Token, TokenKind,
+    TryStatement, TypeConstraint, TypeParameter, TypeReference, UnaryExpression, UnaryOperator,
     VariantDeclaration, VariantPattern, VariantTypeDeclaration, WhileStatement, Word, WordPart,
     WordPartKind,
 };
@@ -57,13 +56,31 @@ pub fn parse_opaal_with_control(
     let Some(tokens) = lex_opaal_with_control(source, is_cancelled) else {
         return ControlledParseOutcome::Cancelled;
     };
-    parse_tokens(source, tokens, is_cancelled)
+    let mut interpolation_spans = Vec::new();
+    parse_tokens(source, tokens, is_cancelled, &mut interpolation_spans)
+}
+
+pub(crate) fn parse_opaal_with_interpolation_spans(
+    source: &SourceFile,
+) -> (ParseOutcome, Vec<Span>) {
+    let is_cancelled = || false;
+    let tokens = lex_opaal_with_control(source, &is_cancelled)
+        .expect("the formatting parser never cancels during lexing");
+    let mut interpolation_spans = Vec::new();
+    let outcome = match parse_tokens(source, tokens, &is_cancelled, &mut interpolation_spans) {
+        ControlledParseOutcome::Parsed(outcome) => outcome,
+        ControlledParseOutcome::Cancelled => {
+            unreachable!("the formatting parser never cancels")
+        }
+    };
+    (outcome, interpolation_spans)
 }
 
 fn parse_tokens(
     source: &SourceFile,
     tokens: Vec<Token>,
     is_cancelled: &dyn Fn() -> bool,
+    interpolation_spans: &mut Vec<Span>,
 ) -> ControlledParseOutcome {
     if is_cancelled() {
         return ControlledParseOutcome::Cancelled;
@@ -82,7 +99,7 @@ fn parse_tokens(
         }
         SyntaxClassification::Complete => {}
     }
-    let parsed = Parser::new(source, tokens, is_cancelled).parse_script();
+    let parsed = Parser::new(source, tokens, is_cancelled, interpolation_spans).parse_script();
     if is_cancelled() {
         return ControlledParseOutcome::Cancelled;
     }
@@ -110,28 +127,35 @@ enum ParseError {
 
 type ParseResult<T> = Result<T, ParseError>;
 
-struct Parser<'source, 'control> {
+struct Parser<'source, 'control, 'metadata> {
     source: &'source SourceFile,
     tokens: Vec<Token>,
     position: usize,
     continuation_depth: usize,
+    control_condition_depth: usize,
+    value_chain_depth: usize,
     diagnostics: Vec<Diagnostic>,
     is_cancelled: &'control dyn Fn() -> bool,
+    interpolation_spans: &'metadata mut Vec<Span>,
 }
 
-impl<'source, 'control> Parser<'source, 'control> {
+impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
     fn new(
         source: &'source SourceFile,
         tokens: Vec<Token>,
         is_cancelled: &'control dyn Fn() -> bool,
+        interpolation_spans: &'metadata mut Vec<Span>,
     ) -> Self {
         Self {
             source,
             tokens,
             position: 0,
             continuation_depth: 0,
+            control_condition_depth: 0,
+            value_chain_depth: 0,
             diagnostics: Vec::new(),
             is_cancelled,
+            interpolation_spans,
         }
     }
 
@@ -262,7 +286,7 @@ impl<'source, 'control> Parser<'source, 'control> {
             Some(TokenKind::Keyword(Keyword::Catch)) => {
                 Err(self.invalid_here("catch requires a preceding try statement"))
             }
-            Some(TokenKind::Variable) if self.variable_is_assignment() => self.parse_assignment(),
+            Some(TokenKind::Identifier) if self.name_is_assignment() => self.parse_assignment(),
             Some(_) => self.parse_job_statement(),
             None => Err(self.incomplete_here(IncompleteReason::Expression)),
         }
@@ -479,7 +503,7 @@ impl<'source, 'control> Parser<'source, 'control> {
     }
 
     fn parse_assignment(&mut self) -> ParseResult<Statement> {
-        let target = self.parse_variable_reference()?;
+        let target = self.parse_name_reference()?;
         let start = target.span;
         self.skip_inline();
         self.expect_operator(Operator::Assign, "assignment requires `=`")?;
@@ -764,7 +788,7 @@ impl<'source, 'control> Parser<'source, 'control> {
     fn parse_if_node(&mut self) -> ParseResult<AstNode<IfStatement>> {
         let start = self.take().expect("if keyword is current").span();
         self.skip_inline();
-        let condition = self.parse_conditional_chain()?;
+        let condition = self.parse_control_condition()?;
         self.skip_inline();
         let then_block = self.parse_block()?;
         let mut end = then_block.span.end();
@@ -796,7 +820,7 @@ impl<'source, 'control> Parser<'source, 'control> {
     fn parse_while(&mut self) -> ParseResult<Statement> {
         let start = self.take().expect("while keyword is current").span();
         self.skip_inline();
-        let condition = self.parse_conditional_chain()?;
+        let condition = self.parse_control_condition()?;
         self.skip_inline();
         let body = self.parse_block()?;
         let span = self.span(start.start(), body.span.end());
@@ -1284,6 +1308,20 @@ impl<'source, 'control> Parser<'source, 'control> {
         ))
     }
 
+    fn parse_control_condition(&mut self) -> ParseResult<ConditionalChain> {
+        self.control_condition_depth += 1;
+        let condition = self.parse_conditional_chain();
+        self.control_condition_depth -= 1;
+        condition
+    }
+
+    fn parse_value_chain(&mut self) -> ParseResult<ConditionalChain> {
+        self.value_chain_depth += 1;
+        let chain = self.parse_conditional_chain();
+        self.value_chain_depth -= 1;
+        chain
+    }
+
     fn parse_and_chain(&mut self) -> ParseResult<AndChain> {
         self.check_cancelled()?;
         let first = self.parse_pipeline()?;
@@ -1440,16 +1478,22 @@ impl<'source, 'control> Parser<'source, 'control> {
 
     fn parse_spread_item(&mut self) -> ParseResult<CommandItem> {
         let spread = self.take().expect("spread operator is current");
-        let Some(variable) = self.current().copied() else {
+        let Some(open) = self.current().copied() else {
             return Err(self.incomplete_at(IncompleteReason::Expression, spread.span()));
         };
-        if variable.kind() != TokenKind::Variable || spread.span().end() != variable.span().start()
+        if open.kind() != TokenKind::Delimiter(Delimiter::LeftBrace)
+            || spread.span().end() != open.span().start()
         {
-            return Err(self.invalid_at(spread.span(), "spread requires an adjacent variable"));
+            return Err(
+                self.invalid_at(spread.span(), "spread requires an adjacent `{expression}`")
+            );
         }
-        let variable = self.parse_variable_reference()?;
-        let span = self.span(spread.span().start(), variable.span.end());
-        Ok(CommandItem::new(CommandItemKind::Spread(variable), span))
+        let interpolation = self.parse_interpolation()?;
+        let span = self.span(spread.span().start(), interpolation.span().end());
+        let WordPartKind::Interpolation(expression) = interpolation.into_kind() else {
+            unreachable!("interpolation parser returns its matching part")
+        };
+        Ok(CommandItem::new(CommandItemKind::Spread(*expression), span))
     }
 
     fn parse_redirection_item(&mut self) -> ParseResult<CommandItem> {
@@ -1572,6 +1616,21 @@ impl<'source, 'control> Parser<'source, 'control> {
         let Some(token) = self.current().copied() else {
             return Ok(None);
         };
+        if matches!(
+            token.kind(),
+            TokenKind::Delimiter(Delimiter::LeftBrace | Delimiter::RightBrace)
+        ) && self
+            .tokens
+            .get(self.position + 1)
+            .is_some_and(|next| next.kind() == token.kind() && token.is_adjacent_to(next))
+        {
+            let end = self.tokens[self.position + 1].span().end();
+            self.position += 2;
+            return Ok(Some(WordPart::new(
+                WordPartKind::EscapedBrace,
+                self.span(token.span().start(), end),
+            )));
+        }
         match token.kind() {
             TokenKind::BareEscape => {
                 self.position += 1;
@@ -1585,15 +1644,16 @@ impl<'source, 'control> Parser<'source, 'control> {
                 )))
             }
             TokenKind::DoubleQuoteStart => self.parse_double_quoted().map(Some),
-            TokenKind::Variable => {
-                let variable = self.parse_variable_reference()?;
+            TokenKind::InterpolationStart | TokenKind::Delimiter(Delimiter::LeftBrace) => {
+                self.parse_interpolation().map(Some)
+            }
+            TokenKind::EscapedBrace => {
+                self.position += 1;
                 Ok(Some(WordPart::new(
-                    WordPartKind::Variable(variable.name),
-                    variable.span,
+                    WordPartKind::EscapedBrace,
+                    token.span(),
                 )))
             }
-            TokenKind::BracedExpansionStart => self.parse_braced_interpolation().map(Some),
-            TokenKind::CommandSubstitutionStart => self.parse_command_substitution().map(Some),
             kind if is_bare_word_token(kind) => {
                 let start = token.span();
                 self.position += 1;
@@ -1633,12 +1693,11 @@ impl<'source, 'control> Parser<'source, 'control> {
                     self.position += 1;
                     WordPart::new(WordPartKind::DoubleEscape, token.span())
                 }
-                TokenKind::Variable => {
-                    let variable = self.parse_variable_reference()?;
-                    WordPart::new(WordPartKind::Variable(variable.name), variable.span)
+                TokenKind::EscapedBrace => {
+                    self.position += 1;
+                    WordPart::new(WordPartKind::EscapedBrace, token.span())
                 }
-                TokenKind::BracedExpansionStart => self.parse_braced_interpolation()?,
-                TokenKind::CommandSubstitutionStart => self.parse_command_substitution()?,
+                TokenKind::InterpolationStart => self.parse_interpolation()?,
                 _ => return Err(self.invalid_here("invalid double-quoted word part")),
             };
             parts.push(part);
@@ -1650,71 +1709,20 @@ impl<'source, 'control> Parser<'source, 'control> {
         ))
     }
 
-    fn parse_braced_interpolation(&mut self) -> ParseResult<WordPart> {
-        let open = self.take().expect("braced interpolation opener is current");
+    fn parse_interpolation(&mut self) -> ParseResult<WordPart> {
+        let open = self.take().expect("interpolation opener is current");
         self.continuation_depth += 1;
         self.skip_layout();
         let expression = self.parse_expression()?;
         self.skip_layout();
-        let close =
-            self.expect_delimiter(Delimiter::RightBrace, "braced interpolation is not closed")?;
+        let close = self.expect_delimiter(Delimiter::RightBrace, "interpolation is not closed")?;
         self.continuation_depth -= 1;
+        let span = self.span(open.span().start(), close.span().end());
+        self.interpolation_spans.push(span);
         Ok(WordPart::new(
-            WordPartKind::BracedInterpolation(Box::new(expression)),
-            self.span(open.span().start(), close.span().end()),
+            WordPartKind::Interpolation(Box::new(expression)),
+            span,
         ))
-    }
-
-    fn parse_command_substitution(&mut self) -> ParseResult<WordPart> {
-        let open = self.take().expect("command substitution opener is current");
-        self.skip_layout();
-        let (capture, modifier_span) = self.take_command_capture_modifier();
-        if modifier_span.is_some() {
-            self.skip_layout();
-        } else {
-            self.skip_separators();
-        }
-        self.continuation_depth += 1;
-        let chain = self.parse_conditional_chain()?;
-        self.skip_separators();
-        let close = self.expect_delimiter(
-            Delimiter::RightParenthesis,
-            "command substitution is not closed",
-        )?;
-        self.continuation_depth -= 1;
-        Ok(WordPart::new(
-            WordPartKind::CommandSubstitution(CommandSubstitution::new(
-                capture,
-                modifier_span,
-                Box::new(chain),
-            )),
-            self.span(open.span().start(), close.span().end()),
-        ))
-    }
-
-    fn take_command_capture_modifier(&mut self) -> (CommandCaptureKind, Option<Span>) {
-        let Some(identifier) = self.current().copied() else {
-            return (CommandCaptureKind::Text, None);
-        };
-        let Some(colon) = self.tokens.get(self.position + 1).copied() else {
-            return (CommandCaptureKind::Text, None);
-        };
-        if identifier.kind() != TokenKind::Identifier
-            || colon.kind() != TokenKind::Operator(Operator::Colon)
-            || !identifier.is_adjacent_to(&colon)
-        {
-            return (CommandCaptureKind::Text, None);
-        }
-        let capture = match identifier.text(self.source).ok() {
-            Some("text") => CommandCaptureKind::Text,
-            Some("bytes") => CommandCaptureKind::Bytes,
-            _ => return (CommandCaptureKind::Text, None),
-        };
-        self.position += 2;
-        (
-            capture,
-            Some(self.span(identifier.span().start(), colon.span().end())),
-        )
     }
 
     fn parse_closure(&mut self) -> ParseResult<Closure> {
@@ -1736,7 +1744,7 @@ impl<'source, 'control> Parser<'source, 'control> {
             None
         };
         self.skip_layout();
-        let body = self.parse_conditional_chain()?;
+        let body = self.parse_value_chain()?;
         self.skip_layout();
         let close = self.expect_delimiter(Delimiter::RightBrace, "closure body is not closed")?;
         self.continuation_depth -= 1;
@@ -1931,7 +1939,7 @@ impl<'source, 'control> Parser<'source, 'control> {
                 Some(TokenKind::Operator(Operator::Colon))
                     if matches!(
                         expression.kind(),
-                        ExpressionKind::Symbol(_) | ExpressionKind::Qualified(_)
+                        ExpressionKind::Name(_) | ExpressionKind::Qualified(_)
                     ) =>
                 {
                     let checkpoint = self.position;
@@ -1943,7 +1951,7 @@ impl<'source, 'control> Parser<'source, 'control> {
                     self.skip_inline();
                     let segment = self.parse_identifier()?;
                     let mut segments = match expression.into_kind() {
-                        ExpressionKind::Symbol(identifier) => vec![identifier],
+                        ExpressionKind::Name(reference) => vec![reference.name],
                         ExpressionKind::Qualified(name) => name.segments,
                         _ => unreachable!("qualified postfix starts from a name"),
                     };
@@ -1960,13 +1968,13 @@ impl<'source, 'control> Parser<'source, 'control> {
                 Some(TokenKind::Delimiter(Delimiter::LeftBrace))
                     if matches!(
                         expression.kind(),
-                        ExpressionKind::Symbol(_) | ExpressionKind::Qualified(_)
-                    ) =>
+                        ExpressionKind::Name(_) | ExpressionKind::Qualified(_)
+                    ) && self.starts_nominal_record() =>
                 {
                     let name = match expression.into_kind() {
-                        ExpressionKind::Symbol(identifier) => QualifiedName {
-                            segments: vec![identifier],
-                            span: identifier.span(),
+                        ExpressionKind::Name(reference) => QualifiedName {
+                            segments: vec![reference.name],
+                            span: reference.span,
                         },
                         ExpressionKind::Qualified(name) => name,
                         _ => unreachable!("record construction starts from a name"),
@@ -2037,7 +2045,7 @@ impl<'source, 'control> Parser<'source, 'control> {
                 Some(TokenKind::Delimiter(Delimiter::LeftBracket)) => {
                     let can_have_type_arguments = matches!(
                         expression.kind(),
-                        ExpressionKind::Symbol(_) | ExpressionKind::Qualified(_)
+                        ExpressionKind::Name(_) | ExpressionKind::Qualified(_)
                     ) && self.bracket_is_followed_by_call();
                     if can_have_type_arguments {
                         self.position += 1;
@@ -2139,19 +2147,9 @@ impl<'source, 'control> Parser<'source, 'control> {
                 let span = literal.span();
                 Ok(Expression::new(ExpressionKind::Literal(literal), span))
             }
-            TokenKind::Variable => {
-                let variable = self.parse_variable_reference()?;
-                Ok(Expression::new(
-                    ExpressionKind::Variable(variable),
-                    variable.span,
-                ))
-            }
             TokenKind::Identifier => {
-                let symbol = self.parse_identifier()?;
-                Ok(Expression::new(
-                    ExpressionKind::Symbol(symbol),
-                    symbol.span(),
-                ))
+                let name = self.parse_name_reference()?;
+                Ok(Expression::new(ExpressionKind::Name(name), name.span))
             }
             TokenKind::Delimiter(Delimiter::LeftBracket) => self.parse_list(),
             TokenKind::Delimiter(Delimiter::LeftBrace) if self.starts_closure() => {
@@ -2161,17 +2159,6 @@ impl<'source, 'control> Parser<'source, 'control> {
             }
             TokenKind::Delimiter(Delimiter::LeftBrace) => self.parse_record(),
             TokenKind::Delimiter(Delimiter::LeftParenthesis) => self.parse_grouped_job(),
-            TokenKind::CommandSubstitutionStart => {
-                let part = self.parse_command_substitution()?;
-                let span = part.span();
-                let WordPartKind::CommandSubstitution(substitution) = part.into_kind() else {
-                    unreachable!("command substitution parser returns its matching part")
-                };
-                Ok(Expression::new(
-                    ExpressionKind::CommandSubstitution(substitution),
-                    span,
-                ))
-            }
             _ => Err(self.invalid_here("expected an expression")),
         }
     }
@@ -2326,23 +2313,15 @@ impl<'source, 'control> Parser<'source, 'control> {
         }
     }
 
-    fn parse_variable_reference(&mut self) -> ParseResult<VariableReference> {
-        let token = match self.take() {
-            Some(token) if token.kind() == TokenKind::Variable => token,
-            Some(token) => return Err(self.invalid_at(token.span(), "expected a variable")),
-            None => return Err(self.incomplete_here(IncompleteReason::Expression)),
-        };
-        let name = self
-            .source
-            .span(token.span().start() + 1..token.span().end())
-            .expect("variable tokens contain `$` followed by an ASCII identifier");
-        Ok(VariableReference {
-            name: Identifier::new(name),
-            span: token.span(),
+    fn parse_name_reference(&mut self) -> ParseResult<NameReference> {
+        let name = self.parse_identifier()?;
+        Ok(NameReference {
+            name,
+            span: name.span(),
         })
     }
 
-    fn variable_is_assignment(&self) -> bool {
+    fn name_is_assignment(&self) -> bool {
         self.next_non_inline(self.position + 1)
             .is_some_and(|token| token.kind() == TokenKind::Operator(Operator::Assign))
     }
@@ -2350,9 +2329,72 @@ impl<'source, 'control> Parser<'source, 'control> {
     fn starts_expression_stage(&self) -> bool {
         match self.current_kind() {
             Some(TokenKind::Identifier) => {
-                let next = self.next_non_inline(self.position + 1);
+                let next_position = self.next_non_inline_position(self.position + 1);
+                let next = next_position.and_then(|position| self.tokens.get(position));
+                if self.value_chain_depth > 0
+                    && next.is_none_or(|token| {
+                        matches!(
+                            token.kind(),
+                            TokenKind::Newline
+                                | TokenKind::Operator(
+                                    Operator::Semicolon
+                                        | Operator::Pipe
+                                        | Operator::PipeBoth
+                                        | Operator::And
+                                        | Operator::Or
+                                        | Operator::Background
+                                )
+                                | TokenKind::Delimiter(
+                                    Delimiter::RightParenthesis
+                                        | Delimiter::RightBracket
+                                        | Delimiter::RightBrace
+                                )
+                        )
+                    })
+                {
+                    return true;
+                }
+                if self.control_condition_depth > 0
+                    && next.is_some_and(|token| {
+                        token.kind() == TokenKind::Delimiter(Delimiter::LeftBrace)
+                    })
+                {
+                    return true;
+                }
+                if let (Some(position), Some(next)) = (next_position, next)
+                    && next.kind() == TokenKind::Operator(Operator::Minus)
+                    && !self
+                        .current()
+                        .is_some_and(|current| current.is_adjacent_to(next))
+                    && self.tokens.get(position + 1).is_some_and(|second| {
+                        second.kind() == TokenKind::Operator(Operator::Minus)
+                            && next.is_adjacent_to(second)
+                    })
+                {
+                    return false;
+                }
                 next.is_some_and(|token| {
-                    token.kind() == TokenKind::Delimiter(Delimiter::LeftParenthesis)
+                    matches!(
+                        token.kind(),
+                        TokenKind::Delimiter(Delimiter::LeftParenthesis | Delimiter::LeftBracket)
+                            | TokenKind::Operator(
+                                Operator::Colon
+                                    | Operator::Dot
+                                    | Operator::Equal
+                                    | Operator::NotEqual
+                                    | Operator::Less
+                                    | Operator::LessEqual
+                                    | Operator::Greater
+                                    | Operator::GreaterEqual
+                                    | Operator::Plus
+                                    | Operator::Minus
+                                    | Operator::Star
+                                    | Operator::Slash
+                                    | Operator::Percent
+                                    | Operator::Range
+                                    | Operator::RangeInclusive
+                            )
+                    )
                 }) || (next
                     .is_some_and(|token| token.kind() == TokenKind::Operator(Operator::Colon))
                     && self
@@ -2360,8 +2402,7 @@ impl<'source, 'control> Parser<'source, 'control> {
                         .is_some_and(|token| token.kind() == TokenKind::Operator(Operator::Colon)))
             }
             Some(
-                TokenKind::Variable
-                | TokenKind::Number(_)
+                TokenKind::Number(_)
                 | TokenKind::SingleQuoted
                 | TokenKind::DoubleQuoteStart
                 | TokenKind::Keyword(Keyword::Null | Keyword::True | Keyword::False)
@@ -2398,6 +2439,30 @@ impl<'source, 'control> Parser<'source, 'control> {
                         TokenKind::Operator(Operator::Pipe | Operator::Or)
                     )
             })
+    }
+
+    fn starts_nominal_record(&self) -> bool {
+        if self.current_kind() != Some(TokenKind::Delimiter(Delimiter::LeftBrace)) {
+            return false;
+        }
+        let Some(first) = self.next_non_layout_position(self.position + 1) else {
+            return false;
+        };
+        match self.tokens[first].kind() {
+            TokenKind::Delimiter(Delimiter::RightBrace) => true,
+            TokenKind::Identifier => {
+                self.next_non_layout_position(first + 1)
+                    .is_some_and(|position| {
+                        let colon = &self.tokens[position];
+                        colon.kind() == TokenKind::Operator(Operator::Colon)
+                            && !self.tokens.get(position + 1).is_some_and(|second| {
+                                second.kind() == TokenKind::Operator(Operator::Colon)
+                                    && colon.is_adjacent_to(second)
+                            })
+                    })
+            }
+            _ => false,
+        }
     }
 
     fn starts_redirection(&self) -> bool {
@@ -2443,10 +2508,7 @@ impl<'source, 'control> Parser<'source, 'control> {
                         | Operator::Background
                 ))
                 | Some(TokenKind::Delimiter(
-                    Delimiter::RightParenthesis
-                        | Delimiter::RightBrace
-                        | Delimiter::RightBracket
-                        | Delimiter::LeftBrace
+                    Delimiter::RightParenthesis | Delimiter::RightBrace | Delimiter::RightBracket
                 ))
         )
     }
@@ -2691,7 +2753,12 @@ impl<'source, 'control> Parser<'source, 'control> {
         }
     }
 
-    fn next_non_inline(&self, mut position: usize) -> Option<&Token> {
+    fn next_non_inline(&self, position: usize) -> Option<&Token> {
+        self.next_non_inline_position(position)
+            .and_then(|position| self.tokens.get(position))
+    }
+
+    fn next_non_inline_position(&self, mut position: usize) -> Option<usize> {
         while let Some(token) = self.tokens.get(position) {
             if !matches!(
                 token.kind(),
@@ -2700,7 +2767,24 @@ impl<'source, 'control> Parser<'source, 'control> {
                     | TokenKind::DocumentationComment
                     | TokenKind::LineContinuation
             ) {
-                return Some(token);
+                return Some(position);
+            }
+            position += 1;
+        }
+        None
+    }
+
+    fn next_non_layout_position(&self, mut position: usize) -> Option<usize> {
+        while let Some(token) = self.tokens.get(position) {
+            if !matches!(
+                token.kind(),
+                TokenKind::Whitespace
+                    | TokenKind::Newline
+                    | TokenKind::Comment
+                    | TokenKind::DocumentationComment
+                    | TokenKind::LineContinuation
+            ) {
+                return Some(position);
             }
             position += 1;
         }
@@ -2825,9 +2909,7 @@ fn can_start_word(kind: TokenKind) -> bool {
             | TokenKind::BareEscape
             | TokenKind::SingleQuoted
             | TokenKind::DoubleQuoteStart
-            | TokenKind::Variable
-            | TokenKind::BracedExpansionStart
-            | TokenKind::CommandSubstitutionStart
+            | TokenKind::InterpolationStart
     ) || is_bare_word_token(kind)
 }
 

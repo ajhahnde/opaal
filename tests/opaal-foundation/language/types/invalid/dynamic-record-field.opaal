@@ -5,11 +5,11 @@ type Pair[T] = {
 }
 
 def dynamic(value) {
-    $value
+    value
 }
 
 let pair = Pair {
     left: dynamic("wrong"),
     right: 1,
 }
-$pair
+pair

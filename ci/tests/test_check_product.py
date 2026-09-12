@@ -144,6 +144,28 @@ publish = false
         findings = "\n".join(checker.source_problems(self.root, run=self.runner))
         self.assertIn("source-generation directive remains", findings)
 
+    def test_rejects_removed_language_syntax_and_handlers(self) -> None:
+        self.write("examples/stale.opaal", "echo $name\n")
+        self.write("docs/stale.md", "```opaal\necho ${name}\n```\n")
+        self.write(
+            "crates/opaal-cli/src/highlight.rs",
+            "enum TokenHandler { CommandSubstitutionStart }\n",
+        )
+        findings = "\n".join(checker.source_problems(self.root, run=self.runner))
+        self.assertIn("examples/stale.opaal:1: unquoted dollar syntax remains", findings)
+        self.assertIn("docs/stale.md:2: dollar syntax remains in an OPAAL example", findings)
+        self.assertIn(
+            "removed language handler remains: CommandSubstitutionStart", findings
+        )
+
+    def test_allows_literal_dollars_and_the_classified_negative_fixture(self) -> None:
+        self.write("examples/literal.opaal", "echo \"$name\" '$(literal)'\n")
+        self.write(
+            "tests/opaal-foundation/language/lexical/invalid/removed-command-substitution.opaal",
+            "echo $(removed)\n",
+        )
+        self.assertEqual(checker.source_problems(self.root, run=self.runner), [])
+
     def test_rejects_workflow_dependency_and_invocation_drift(self) -> None:
         self.write(
             ".github/workflows/ci.yml",

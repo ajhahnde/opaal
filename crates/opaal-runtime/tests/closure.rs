@@ -48,7 +48,7 @@ fn ints(values: &[i64]) -> ValueStream {
 
 #[test]
 fn each_maps_every_item() {
-    let (file, closure) = built("{|x| $x * 2}");
+    let (file, closure) = built("{|x| x * 2}");
     let limits = EvalLimits::default();
     let mut env = Environment::new();
     let mut mapper = each(
@@ -67,7 +67,7 @@ fn each_maps_every_item() {
 
 #[test]
 fn each_is_lazy_over_an_unbounded_source() {
-    let (file, closure) = built("{|x| $x + 1}");
+    let (file, closure) = built("{|x| x + 1}");
     let limits = EvalLimits::default();
     let mut env = Environment::new();
     let pulls = Rc::new(Cell::new(0_i64));
@@ -95,7 +95,7 @@ fn each_is_lazy_over_an_unbounded_source() {
 
 #[test]
 fn each_surfaces_a_closure_runtime_error() {
-    let (file, closure) = built("{|x| $missing}");
+    let (file, closure) = built("{|x| missing}");
     let limits = EvalLimits::default();
     let mut env = Environment::new();
     let mut mapper = each(
@@ -143,7 +143,7 @@ fn each_reports_a_non_callable_closure() {
 #[test]
 fn each_respects_the_resource_budget() {
     // A tiny budget is exhausted inside the closure body, so applying it fails.
-    let (file, closure) = built("{|x| $x + $x + $x}");
+    let (file, closure) = built("{|x| x + x + x}");
     let limits = EvalLimits::new(CancellationToken::never(), ResourceBudget::steps(1));
     let mut env = Environment::new();
     let mut mapper = each(
@@ -167,7 +167,7 @@ fn each_respects_the_resource_budget() {
 
 #[test]
 fn each_passes_an_upstream_failure_through() {
-    let (file, closure) = built("{|x| $x}");
+    let (file, closure) = built("{|x| x}");
     let limits = EvalLimits::default();
     let mut env = Environment::new();
     let mut produced = false;
@@ -202,7 +202,7 @@ fn each_passes_an_upstream_failure_through() {
 
 #[test]
 fn each_passes_an_upstream_cancellation_through() {
-    let (file, closure) = built("{|x| $x}");
+    let (file, closure) = built("{|x| x}");
     let limits = EvalLimits::default();
     let mut env = Environment::new();
     let source = ints(&[1, 2]).with_cancellation(CancellationToken::from_fn(|| true));
@@ -223,7 +223,7 @@ fn each_passes_an_upstream_cancellation_through() {
 #[test]
 fn each_reports_a_cancelled_closure() {
     // A tripped token in the limits cancels the closure application itself.
-    let (file, closure) = built("{|x| $x}");
+    let (file, closure) = built("{|x| x}");
     let limits = EvalLimits::new(
         CancellationToken::from_fn(|| true),
         ResourceBudget::unlimited(),
@@ -247,7 +247,7 @@ fn each_reports_a_cancelled_closure() {
 
 #[test]
 fn where_keeps_only_matching_items() {
-    let (file, closure) = built("{|x| $x > 2}");
+    let (file, closure) = built("{|x| x > 2}");
     let limits = EvalLimits::default();
     let mut env = Environment::new();
     let mut filter = r#where(
@@ -281,7 +281,7 @@ fn where_can_filter_everything_out() {
 
 #[test]
 fn where_reports_a_non_boolean_predicate() {
-    let (file, closure) = built("{|x| $x + 1}");
+    let (file, closure) = built("{|x| x + 1}");
     let limits = EvalLimits::default();
     let mut env = Environment::new();
     let mut filter = r#where(
@@ -302,7 +302,7 @@ fn where_reports_a_non_boolean_predicate() {
 
 #[test]
 fn where_surfaces_a_closure_runtime_error() {
-    let (file, closure) = built("{|x| $missing}");
+    let (file, closure) = built("{|x| missing}");
     let limits = EvalLimits::default();
     let mut env = Environment::new();
     match r#where(
@@ -386,7 +386,7 @@ fn update_replaces_a_field_with_a_static_value_preserving_order() {
 
 #[test]
 fn update_applies_a_closure_to_the_current_value() {
-    let (file, closure) = built("{|x| $x * 10}");
+    let (file, closure) = built("{|x| x * 10}");
     let limits = EvalLimits::default();
     let mut env = Environment::new();
     let stream = ValueStream::from_values(vec![record(&[("size", Value::Int(2))])]);
@@ -453,7 +453,7 @@ fn update_reports_a_non_record_item() {
 
 #[test]
 fn update_surfaces_a_closure_runtime_error() {
-    let (file, closure) = built("{|x| $missing}");
+    let (file, closure) = built("{|x| missing}");
     let limits = EvalLimits::default();
     let mut env = Environment::new();
     let stream = ValueStream::from_values(vec![record(&[("size", Value::Int(2))])]);

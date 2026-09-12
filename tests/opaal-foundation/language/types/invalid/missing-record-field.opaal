@@ -7,4 +7,4 @@ type Pair[T] = {
 let pair = Pair {
     left: 1,
 }
-$pair
+pair

@@ -10,11 +10,8 @@ pub enum CompletionContext {
     Command {
         forced_external: bool,
     },
-    CommandSubstitutionModifier,
     Expression,
-    Variable {
-        braced: bool,
-    },
+    Name,
     Flag {
         command: String,
     },
@@ -73,21 +70,22 @@ pub fn completion_target(source: &str, cursor: usize) -> Option<CompletionTarget
     let tokens = lex_opaal(&source_file);
     let active = ActiveWord::at(source, &tokens, cursor)?;
     let prior = significant_before(&tokens, active.range.start);
-    let stage = strip_command_substitution_modifier(source, current_stage(&prior));
-    let context = if prior
-        .last()
-        .is_some_and(|token| token.kind() == TokenKind::CommandSubstitutionStart)
-    {
-        CompletionContext::CommandSubstitutionModifier
+    let stage = current_stage(&prior);
+    let context = if prior.last().is_some_and(|token| {
+        matches!(
+            token.kind(),
+            TokenKind::InterpolationStart | TokenKind::Delimiter(Delimiter::LeftBrace)
+        )
+    }) {
+        CompletionContext::Name
     } else if prior
         .last()
-        .is_some_and(|token| token.kind() == TokenKind::BracedExpansionStart)
+        .is_some_and(|token| token.kind() == TokenKind::Operator(Operator::Assign))
+        || tokens.iter().any(|token| {
+            token.span().start() == active.range.end
+                && token.kind() == TokenKind::Delimiter(Delimiter::LeftParenthesis)
+        })
     {
-        CompletionContext::Variable { braced: true }
-    } else if tokens.iter().any(|token| {
-        token.span().start() == active.range.end
-            && token.kind() == TokenKind::Delimiter(Delimiter::LeftParenthesis)
-    }) {
         CompletionContext::Expression
     } else {
         classify_context(source, &tokens, stage, &active)
@@ -97,23 +95,6 @@ pub fn completion_target(source: &str, cursor: usize) -> Option<CompletionTarget
         replacement: active.range,
         prefix: active.text.to_owned(),
     })
-}
-
-fn strip_command_substitution_modifier<'tokens>(
-    source: &str,
-    stage: &'tokens [&'tokens Token],
-) -> &'tokens [&'tokens Token] {
-    let [identifier, colon, rest @ ..] = stage else {
-        return stage;
-    };
-    let contextual = identifier.kind() == TokenKind::Identifier
-        && colon.kind() == TokenKind::Operator(Operator::Colon)
-        && identifier.is_adjacent_to(colon)
-        && matches!(
-            source.get(identifier.span().start()..identifier.span().end()),
-            Some("text" | "bytes")
-        );
-    if contextual { rest } else { stage }
 }
 
 struct ActiveWord {
@@ -145,16 +126,6 @@ impl ActiveWord {
             });
         };
 
-        if tokens[index].kind() == TokenKind::Variable {
-            let prefix = tokens[index].span().start()..cursor;
-            return Some(Self {
-                text: source[prefix].to_owned(),
-                range: tokens[index].span().start()..tokens[index].span().end(),
-                style: PathCompletionStyle::Bare,
-                interpolated: false,
-            });
-        }
-
         let mut first = index;
         while first > 0
             && tokens[first - 1].span().end() == tokens[first].span().start()
@@ -170,20 +141,13 @@ impl ActiveWord {
             last += 1;
         }
         let mut interpolated = false;
-        if let Some(variable) = (first..index)
-            .rev()
-            .find(|position| tokens[*position].kind() == TokenKind::Variable)
-        {
-            first = variable + 1;
-            interpolated = true;
-        }
         let start = tokens[first].span().start();
         let end = tokens[last].span().end();
         if first > 0
             && tokens[first - 1].span().end() == start
             && matches!(
                 tokens[first - 1].kind(),
-                TokenKind::Delimiter(Delimiter::RightBrace | Delimiter::RightParenthesis)
+                TokenKind::Delimiter(Delimiter::RightBrace)
             )
         {
             interpolated = true;
@@ -228,9 +192,6 @@ fn classify_context(
     stage: &[&Token],
     active: &ActiveWord,
 ) -> CompletionContext {
-    if active.text.starts_with('$') {
-        return CompletionContext::Variable { braced: false };
-    }
     if stage
         .last()
         .is_some_and(|token| is_file_redirect(token.kind()))
@@ -362,16 +323,12 @@ fn decode_double(raw: &str, closed: bool) -> Option<String> {
     let mut characters = content.chars();
     while let Some(character) = characters.next() {
         if character != '\\' {
-            if character == '$' {
-                return None;
-            }
             decoded.push(character);
             continue;
         }
         match characters.next()? {
             '\\' => decoded.push('\\'),
             '"' => decoded.push('"'),
-            '$' => decoded.push('$'),
             'n' => decoded.push('\n'),
             'r' => decoded.push('\r'),
             't' => decoded.push('\t'),
@@ -439,7 +396,7 @@ fn is_command_boundary(kind: TokenKind) -> bool {
     matches!(
         kind,
         TokenKind::Newline
-            | TokenKind::CommandSubstitutionStart
+            | TokenKind::InterpolationStart
             | TokenKind::Operator(
                 Operator::Semicolon
                     | Operator::Pipe
@@ -471,8 +428,8 @@ fn is_word_component(kind: TokenKind) -> bool {
             | TokenKind::DoubleQuoteStart
             | TokenKind::DoubleText
             | TokenKind::DoubleEscape
+            | TokenKind::EscapedBrace
             | TokenKind::DoubleQuoteEnd
-            | TokenKind::Variable
             | TokenKind::Operator(
                 Operator::Assign
                     | Operator::Equal

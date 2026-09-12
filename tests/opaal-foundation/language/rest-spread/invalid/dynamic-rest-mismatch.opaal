@@ -1,7 +1,7 @@
 
 def tail(items) {
-    let [first, ...rest] = $items
-    return $rest
+    let [first, ...rest] = items
+    return rest
 }
 
 tail("not a list")

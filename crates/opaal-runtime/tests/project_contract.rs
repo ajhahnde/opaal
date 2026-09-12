@@ -189,9 +189,9 @@ import std::version as version
 action nominal_surface(input: String) -> String
 effects {}
 {
-    let parsed_version = version::parse($input)
+    let parsed_version = version::parse(input)
     let parsed_url = url::parse("https://example.com/")
-    return version::render($parsed_version)
+    return version::render(parsed_version)
 }
 
 task release = nominal_surface
@@ -517,6 +517,27 @@ task release = ready
         panic!("expected a task contract error");
     };
     assert_eq!(error.code(), "TASK005");
+}
+
+#[test]
+fn project_loading_rejects_unknown_bare_command_heads() {
+    let manifest =
+        parse_project_manifest(Path::new("/project/opaal.toml"), MANIFEST.as_bytes()).unwrap();
+    let source = br#"action ready() -> Status effects {} {
+    misspelled
+}
+task release = ready
+"#;
+    let sources = MemorySources(BTreeMap::from([(
+        PathBuf::from("/project/tasks.opaal"),
+        source.to_vec(),
+    )]));
+
+    let error = load_project_program(manifest, &sources, &sources).unwrap_err();
+    let opaal_runtime::project::ProjectProgramError::Module(error) = error else {
+        panic!("expected a command-aware module error");
+    };
+    assert!(error.render().contains("CMD007"), "{}", error.render());
 }
 
 #[test]

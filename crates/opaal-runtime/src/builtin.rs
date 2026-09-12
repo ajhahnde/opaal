@@ -8,13 +8,13 @@ use opaal_platform::{Platform, WorkingDirectoryRequest};
 
 use crate::command::{
     Carrier, CommandArgumentKind, CommandArgumentSchema, CommandClassification, CommandLifecycle,
-    CommandNamespaceEntry, CommandOptionSchema, CommandOptionTerminator, CommandRegistry,
-    CommandSignature, OPAAL_TOOLCHAIN_MAJOR,
+    CommandNamespaceEntry, CommandOptionSchema, CommandRegistry, CommandSignature,
+    OPAAL_TOOLCHAIN_MAJOR,
 };
 use crate::documentation::{CommandDocumentation, Documentation};
 use crate::eval::{RuntimeError, RuntimeErrorKind};
 use crate::plan::{PlannedArgument, PlannedResolution, PlannedStage};
-use crate::resolve::{ExecutableProbe, Resolution, ResolutionError, resolve_command};
+use crate::resolve::{ExecutableProbe, ResolutionError, resolve_external};
 use crate::{Duration, Environment, NativePath, Record, Status, Value};
 
 /// Mutable shell-session state shared by built-ins and later execution layers.
@@ -165,23 +165,6 @@ pub fn standard_registry() -> CommandRegistry {
             ),
             "which NAME...",
             "Resolve command names without executing them.",
-        ),
-        documented(
-            words(
-                CommandSignature::new(
-                    "command",
-                    [Carrier::Empty, Carrier::ByteStream],
-                    Carrier::ByteStream,
-                ),
-                1,
-                None,
-            )
-            .with_arguments(
-                CommandArgumentSchema::positional(1, None)
-                    .with_terminator(CommandOptionTerminator::Literal),
-            ),
-            "command NAME [ARG...]",
-            "Run a command through explicit external resolution.",
         ),
         documented(
             words(
@@ -548,7 +531,6 @@ pub fn execute_builtin(
         "cd" => execute_cd(stage, session, platform),
         "pwd" => execute_pwd(stage, session),
         "which" => execute_which(stage, session, registry, probe),
-        "command" => unreachable!("command stages are lowered to external stages while planning"),
         "exit" => execute_exit(stage, session),
         "check" => execute_check(stage, input, upstream_status, session),
         _ => unreachable!("standard_name returns only standard built-ins"),
@@ -632,8 +614,8 @@ fn execute_which(
                 )
             }
             Some(CommandClassification::Unknown) | None => {
-                match resolve_command(name, false, registry, &session.environment, probe) {
-                    Ok(Resolution::External(command)) => (
+                match resolve_external(name, &session.environment, probe) {
+                    Ok(command) => (
                         "external",
                         Value::Null,
                         Value::Path(NativePath::new(command.path().as_os_str().to_os_string())),
@@ -642,11 +624,9 @@ fn execute_which(
                         missing = true;
                         ("missing", Value::Null, Value::Null)
                     }
-                    Ok(Resolution::Internal { .. }) | Err(ResolutionError::Reserved { .. }) => {
-                        unreachable!(
-                            "unknown and native names cannot resolve through the namespace"
-                        )
-                    }
+                    Err(ResolutionError::Reserved { .. }) => unreachable!(
+                        "direct external resolution cannot observe namespace reservations"
+                    ),
                 }
             }
         };
@@ -770,7 +750,6 @@ fn standard_name(name: &str) -> Option<&'static str> {
         "cd" => Some("cd"),
         "pwd" => Some("pwd"),
         "which" => Some("which"),
-        "command" => Some("command"),
         "exit" => Some("exit"),
         "check" => Some("check"),
         _ => None,

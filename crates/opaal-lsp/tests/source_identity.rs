@@ -123,7 +123,7 @@ fn opaal_alias_reexport_and_nominal_type_queries_share_identity_and_provenance()
     let root = concat!(
         "import './facade.opaal' as api\n",
         "let item: api::model::Item = api::model::Item { value: 1 }\n",
-        "let api::model::Item { value: selected } = $item\n",
+        "let api::model::Item { value: selected } = item\n",
         "export { api }\n",
     );
     let facade = concat!("import './model.opaal' as model\n", "export { model }\n",);

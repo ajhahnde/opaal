@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
 
-//! Ordinary-word expansion of bare, single-quoted, double-quoted, `$name`, and
-//! `${expression}` parts into one platform-native command argument.
+//! Ordinary-word expansion of bare, single-quoted, double-quoted, and
+//! `{expression}` parts into one platform-native command argument.
 
 use std::ffi::{OsStr, OsString};
 
@@ -92,7 +92,7 @@ fn double_quotes_decode_escapes_and_join_adjacent_parts() {
     assert_eq!(value_of("show \"a\\tb\""), os("a\tb"));
     assert_eq!(value_of("show \"line\\nfeed\""), os("line\nfeed"));
     assert_eq!(value_of("show \"\\u{41}\\u{1F600}\""), os("A\u{1F600}"));
-    assert_eq!(value_of("show \"\\$name\""), os("$name"));
+    assert_eq!(value_of("show \"$name\""), os("$name"));
     assert_eq!(value_of("show \"x\"''\"y\""), os("xy"));
 }
 
@@ -131,37 +131,37 @@ fn scalar_interpolation_encodes_each_family_canonically() {
         .unwrap();
 
     assert_eq!(
-        expand_in("show pre${$count}post", &mut scope)
+        expand_in("show pre{count}post", &mut scope)
             .unwrap()
             .value(),
         OsStr::new("pre-7post")
     );
     assert_eq!(
-        expand_in("show $name", &mut scope).unwrap().value(),
+        expand_in("show {name}", &mut scope).unwrap().value(),
         OsStr::new("OPAAL")
     );
     assert_eq!(
-        expand_in("show $ratio", &mut scope).unwrap().value(),
+        expand_in("show {ratio}", &mut scope).unwrap().value(),
         OsStr::new("1.5")
     );
     assert_eq!(
-        expand_in("show $flag", &mut scope).unwrap().value(),
+        expand_in("show {flag}", &mut scope).unwrap().value(),
         OsStr::new("true")
     );
     assert_eq!(
-        expand_in("show $wait", &mut scope).unwrap().value(),
+        expand_in("show {wait}", &mut scope).unwrap().value(),
         OsStr::new("500ns")
     );
     assert_eq!(
-        expand_in("show $room", &mut scope).unwrap().value(),
+        expand_in("show {room}", &mut scope).unwrap().value(),
         OsStr::new("1024b")
     );
 }
 
 #[test]
-fn braced_interpolation_evaluates_an_expression_once() {
-    assert_eq!(value_of("show pre${1 + 1}post"), os("pre2post"));
-    assert_eq!(value_of("show ${'x'}"), os("x"));
+fn interpolation_evaluates_an_expression_once() {
+    assert_eq!(value_of("show pre{1 + 1}post"), os("pre2post"));
+    assert_eq!(value_of("show {'x'}"), os("x"));
 }
 
 #[test]
@@ -175,7 +175,7 @@ fn path_interpolation_preserves_native_units() {
         )
         .unwrap();
     assert_eq!(
-        expand_in("show $p", &mut scope).unwrap().value(),
+        expand_in("show {p}", &mut scope).unwrap().value(),
         OsStr::new("/etc/hosts")
     );
 }
@@ -195,16 +195,16 @@ fn ineligible_interpolated_values_are_word_errors() {
         .unwrap();
 
     assert_eq!(
-        expand_in("show $items", &mut scope).unwrap_err(),
+        expand_in("show {items}", &mut scope).unwrap_err(),
         RuntimeErrorKind::WordValueNotWordEligible { actual: "list" }
     );
     assert_eq!(
-        expand_in("show $nothing", &mut scope).unwrap_err(),
+        expand_in("show {nothing}", &mut scope).unwrap_err(),
         RuntimeErrorKind::WordValueNotWordEligible { actual: "null" }
     );
     // A bare literal `null` is also ineligible in word position.
     assert_eq!(
-        expand("show ${null}").unwrap_err(),
+        expand("show {null}").unwrap_err(),
         RuntimeErrorKind::WordValueNotWordEligible { actual: "null" }
     );
 }
@@ -212,29 +212,19 @@ fn ineligible_interpolated_values_are_word_errors() {
 #[test]
 fn an_unknown_binding_in_a_word_is_a_scope_error() {
     assert_eq!(
-        expand("show $missing").unwrap_err(),
+        expand("show {missing}").unwrap_err(),
         RuntimeErrorKind::Scope(ScopeError::UnknownBinding("missing".to_owned()))
     );
 }
 
 #[test]
-fn pure_word_expansion_keeps_command_substitution_deferred() {
-    assert_eq!(
-        expand("show pre$(emit)post").unwrap_err(),
-        RuntimeErrorKind::Unsupported {
-            feature: "command substitution in a word"
-        }
-    );
-}
-
-#[test]
 fn provenance_records_each_contributing_part() {
-    // `pre${$count}post` has three contributing parts once `count` is bound.
+    // `pre{count}post` has three contributing parts once `count` is bound.
     let mut scope = ScopeStack::new();
     scope
         .declare("count", BindingMutability::Immutable, Value::Int(2))
         .unwrap();
-    let file = source("show pre${$count}post");
+    let file = source("show pre{count}post");
     let stage = command(&file);
     let word = nth_arg_word(&stage, 0);
     let expanded = expand_word(&word, &file, &mut scope).unwrap();

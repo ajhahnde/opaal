@@ -6,6 +6,7 @@ OPAAL `1.0.0-alpha.1` is an unreleased standalone language and toolchain.
 | --- | --- |
 | Learn from a small pure program | [OPAAL by example](by-example.md) |
 | Understand source and semantic boundaries | [Language foundation](language-foundation.md) |
+| Update pre-1.0 source to the current language | [Language migration](migration.md) |
 | Author, check, plan, execute, and audit typed project actions | [Actions and explicit projects](actions-and-projects.md) |
 | Embed explicit authority and owned resources | [Authority and resource embedding](authority-and-resources.md) |
 | Use maintained bounded host operations | [Bounded operational modules](operational-modules.md) |

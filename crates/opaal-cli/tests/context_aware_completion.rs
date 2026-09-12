@@ -10,6 +10,7 @@ use opaal_runtime::command::{
     Carrier, CommandLifecycle, CommandNamespaceEntry, CommandRegistry, CommandSignature,
 };
 use opaal_runtime::{BindingMutability, Callable, ScopeStack, Value};
+use opaal_syntax::{ParseOutcome, SourceFile, SourceId, parse_opaal};
 
 #[derive(Debug)]
 struct NamedFunction;
@@ -44,6 +45,9 @@ fn command_heads_order_runtime_sources_and_deduplicate_first_wins() {
             Value::Callable(Arc::new(NamedFunction)),
         )
         .expect("unique function");
+    scope
+        .declare("amber", BindingMutability::Immutable, Value::Null)
+        .expect("unique value");
     let catalog = CompletionCatalog::from_runtime(&registry, &scope)
         .with_external_commands(["alpha", "awk", "zsh"]);
 
@@ -56,12 +60,20 @@ fn command_heads_order_runtime_sources_and_deduplicate_first_wins() {
         [
             ("alpha", CompletionKind::InternalCommand),
             ("alpine", CompletionKind::Function),
-            ("awk", CompletionKind::ExternalCommand),
+            ("amber", CompletionKind::Name),
         ]
     );
-    assert!(completions.iter().all(|completion| {
-        completion.replacement() == (0..1) && completion.append_whitespace()
-    }));
+    assert!(
+        completions
+            .iter()
+            .all(|completion| completion.replacement() == (0..1))
+    );
+    assert!(
+        completions[..2]
+            .iter()
+            .all(|completion| completion.append_whitespace())
+    );
+    assert!(!completions[2].append_whitespace());
 
     let middle = CompletionEngine::new(
         CompletionCatalog::from_runtime(&registry, &scope).with_external_commands(["awk"]),
@@ -72,7 +84,7 @@ fn command_heads_order_runtime_sources_and_deduplicate_first_wins() {
 }
 
 #[test]
-fn variable_completion_uses_visible_scope_and_replaces_the_dollar_word() {
+fn name_completion_uses_visible_scope_and_replaces_the_interpolation_name() {
     let registry = CommandRegistry::new();
     let mut scope = ScopeStack::new();
     scope
@@ -82,50 +94,43 @@ fn variable_completion_uses_visible_scope_and_replaces_the_dollar_word() {
         .declare("native", BindingMutability::Immutable, Value::Null)
         .expect("unique binding");
     let engine = CompletionEngine::new(CompletionCatalog::from_runtime(&registry, &scope));
-    let source = "echo λ $na";
+    let source = "^echo {na}";
+    let parsed = parse_opaal(&SourceFile::new(
+        SourceId::new(1),
+        "completion.opaal",
+        source,
+    ));
+    assert!(matches!(parsed, ParseOutcome::Complete(_)), "{parsed:?}");
 
-    let completions = engine.complete(source, source.len());
+    let completions = engine.complete(source, source.len() - 1);
     assert_eq!(
         completions
             .iter()
             .map(|completion| completion.value())
             .collect::<Vec<_>>(),
-        ["$name", "$native"]
+        ["name", "native"]
     );
     assert!(completions.iter().all(|completion| {
-        completion.kind() == CompletionKind::Variable
-            && completion.replacement() == ((source.len() - 3)..source.len())
+        completion.kind() == CompletionKind::Name
+            && completion.replacement() == ((source.len() - 3)..(source.len() - 1))
             && !completion.append_whitespace()
     }));
     assert!(engine.complete(source, 6).is_empty());
-    assert_eq!(engine.complete("echo $sta", 9)[0].value(), "$status");
+    assert_eq!(engine.complete("^echo {sta}", 10)[0].value(), "status");
 }
 
 #[test]
-fn command_substitution_modifier_completion_is_exact_and_contextual() {
+fn removed_dollar_syntax_has_no_compatibility_completion() {
+    let mut scope = ScopeStack::new();
+    scope
+        .declare("name", BindingMutability::Immutable, Value::Null)
+        .expect("unique binding");
     let engine = CompletionEngine::new(CompletionCatalog::from_runtime(
         &CommandRegistry::new(),
-        &ScopeStack::new(),
+        &scope,
     ));
 
-    let all = engine.complete("let value = $(", 14);
-    assert_eq!(
-        all.iter()
-            .map(|completion| (completion.value(), completion.kind()))
-            .collect::<Vec<_>>(),
-        [
-            ("bytes:", CompletionKind::CommandCaptureModifier),
-            ("text:", CompletionKind::CommandCaptureModifier),
-        ]
-    );
-    assert!(all.iter().all(|completion| completion.append_whitespace()));
-
-    let bytes = engine.complete("let value = $(by", 16);
-    assert_eq!(bytes.len(), 1);
-    assert_eq!(bytes[0].value(), "bytes:");
-    assert_eq!(bytes[0].replacement(), 14..16);
-
-    assert!(engine.complete("^tool by", 8).is_empty());
+    assert!(engine.complete("echo $na", 8).is_empty());
 }
 
 #[test]
@@ -172,11 +177,12 @@ fn expression_completion_uses_intrinsics_and_respects_lexical_shadowing() {
     value_shadow
         .declare("float", BindingMutability::Immutable, Value::Null)
         .expect("unique shadow");
-    assert!(
-        CompletionEngine::new(CompletionCatalog::from_runtime(&registry, &value_shadow))
-            .complete(source, cursor)
-            .is_empty()
-    );
+    let value = CompletionEngine::new(CompletionCatalog::from_runtime(&registry, &value_shadow))
+        .complete(source, cursor);
+    assert_eq!(value.len(), 1);
+    assert_eq!(value[0].value(), "float");
+    assert_eq!(value[0].kind(), CompletionKind::Name);
+    assert!(!value[0].append_whitespace());
 
     let mut function_shadow = ScopeStack::new();
     function_shadow
@@ -311,7 +317,7 @@ fn external_forcing_and_path_contexts_use_only_their_host_snapshots() {
             .all(|completion| completion.replacement() == (1..3))
     );
 
-    let redirect = "echo > out";
+    let redirect = "^echo > out";
     assert_eq!(
         engine
             .complete(redirect, redirect.len())
@@ -320,7 +326,7 @@ fn external_forcing_and_path_contexts_use_only_their_host_snapshots() {
             .collect::<Vec<_>>(),
         ["outbox/", "output.log"]
     );
-    let path = "cat ./do";
+    let path = "^cat ./do";
     assert_eq!(
         engine
             .complete(path, path.len())
@@ -339,32 +345,38 @@ fn path_completion_renders_reversible_bare_and_quoted_source() {
         "double\"name",
         "unicode/🚀.opaal",
         "line\nbreak",
+        "$dir/file",
     ]);
     let engine = CompletionEngine::new(catalog);
 
     assert_eq!(
         engine
-            .complete("cat ./two", 9)
+            .complete("^cat ./two", 10)
             .iter()
             .map(|completion| completion.value())
             .collect::<Vec<_>>(),
         ["./two\\ words"]
     );
     assert_eq!(
-        engine.complete("cat 'quote", 10)[0].value(),
+        engine.complete("^cat 'quote", 11)[0].value(),
         "'quote'\\''name'"
     );
     assert_eq!(
-        engine.complete("cat \"double", 11)[0].value(),
+        engine.complete("^cat \"double", 12)[0].value(),
         "\"double\\\"name\""
     );
     assert_eq!(
-        engine.complete("cat unicode/", 12)[0].value(),
+        engine.complete("^cat unicode/", 13)[0].value(),
         "unicode/🚀.opaal"
     );
     assert_eq!(
-        engine.complete("cat 'line", 9)[0].value(),
+        engine.complete("^cat 'line", 10)[0].value(),
         "\"line\\nbreak\""
+    );
+    let dollar = "^cat \"$dir/fi\"";
+    assert_eq!(
+        engine.complete(dollar, dollar.len() - 1)[0].value(),
+        "\"$dir/file\""
     );
 }
 
@@ -423,7 +435,7 @@ fn wildcard_completion_preserves_the_edited_pattern() {
 }
 
 #[test]
-fn braced_variables_and_interpolated_path_tails_complete_without_evaluation() {
+fn interpolated_names_and_path_tails_complete_without_evaluation() {
     let registry = CommandRegistry::new();
     let mut scope = ScopeStack::new();
     scope
@@ -436,10 +448,10 @@ fn braced_variables_and_interpolated_path_tails_complete_without_evaluation() {
     ]);
     let engine = CompletionEngine::new(catalog);
 
-    assert_eq!(engine.complete("cat ${na}", 8)[0].value(), "native");
+    assert_eq!(engine.complete("^cat {na}", 8)[0].value(), "native");
     assert_eq!(
         engine
-            .complete("cat $dir/fi", 11)
+            .complete("^cat {dir}/fi", 13)
             .iter()
             .map(|completion| completion.value())
             .collect::<Vec<_>>(),
@@ -447,14 +459,14 @@ fn braced_variables_and_interpolated_path_tails_complete_without_evaluation() {
     );
     assert_eq!(
         engine
-            .complete("cat $dir/nested/fi", 18)
+            .complete("^cat {dir}/nested/fi", 20)
             .iter()
             .map(|completion| completion.value())
             .collect::<Vec<_>>(),
         ["/nested/file"]
     );
 
-    let quoted = "cat \"${dir}/fi\"";
+    let quoted = "^cat \"{dir}/fi\"";
     let cursor = quoted.rfind('"').unwrap();
     assert!(
         engine

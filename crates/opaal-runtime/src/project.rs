@@ -10,6 +10,7 @@ use semver::{Version, VersionReq};
 use sha2::{Digest, Sha256};
 use toml::{Table, Value};
 
+use crate::builtin::standard_registry;
 use crate::module::{
     ActionSignature, ModuleCanonicalizer, ModuleId, ModuleOrigin, ModuleProgram,
     ModuleProgramLoadError, ModuleProgramLoader, ModuleSourceError, ModuleSourceLoader, ValueType,
@@ -1773,8 +1774,9 @@ pub fn load_project_program(
         source_loader,
         generated: generated_project_modules(&manifest),
     };
+    let commands = standard_registry();
     let modules = ModuleProgramLoader::for_project(canonicalizer, &sources)
-        .load_for_frontend(&manifest.root_module)
+        .load_for_frontend_with_commands(&manifest.root_module, &commands)
         .map_err(ProjectProgramError::Module)?;
     let tasks = collect_tasks(&manifest, &modules).map_err(ProjectProgramError::Contract)?;
     Ok(ProjectProgram {

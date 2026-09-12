@@ -4,12 +4,12 @@ type EqualBox[T: Equal] = {
 }
 
 def dynamic(value) {
-    $value
+    value
 }
 
-let callable = {|value| $value}
+let callable = {|value| value}
 
 let box = EqualBox {
-    value: dynamic($callable),
+    value: dynamic(callable),
 }
-$box
+box

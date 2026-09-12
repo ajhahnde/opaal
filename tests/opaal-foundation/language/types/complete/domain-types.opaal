@@ -10,7 +10,7 @@ enum Selection[T] {
 }
 
 def first[T: Equal](Pair { left: left, right: right }: Pair[T]) -> T {
-    return $left
+    return left
 }
 
 let pair = Pair {
@@ -18,11 +18,11 @@ let pair = Pair {
     right: 2,
 }
 
-let inferred = first($pair)
-let selection = Selection::Selected(first[Int]($pair))
+let inferred = first(pair)
+let selection = Selection::Selected(first[Int](pair))
 
-match $selection {
-    Selection::Selected(value) if true => { $value }
+match selection {
+    Selection::Selected(value) if true => { value }
     Selection::Selected(_) => { 0 }
-    Selection::Empty => { $inferred }
+    Selection::Empty => { inferred }
 }

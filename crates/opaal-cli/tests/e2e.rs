@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 use std::fs;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -91,14 +92,19 @@ fn empty_and_declaration_first_sources_are_silent_successes() {
 }
 
 #[test]
-fn a_former_header_receives_only_ordinary_execution_refusal() {
+fn a_former_header_receives_only_an_ordinary_unknown_name_error() {
     let temp = TempDir::new("former-header");
     let script = temp.script("former-header.opaal", "language 1\nlet value = 1\n");
     let output = run(&script, &[]);
     assert_eq!(output.status.code(), Some(1), "{output:?}");
     assert!(output.stdout.is_empty());
     let stderr = String::from_utf8(output.stderr).unwrap();
-    assert!(stderr.contains("refused"), "{stderr}");
+    assert!(stderr.contains("error[CMD007]"), "{stderr}");
+    assert!(
+        stderr.contains("unknown bare command or callable `language`"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("cannot fall back to external process lookup"));
     assert!(!stderr.contains("OP200"), "{stderr}");
     assert!(!stderr.contains("directive"), "{stderr}");
 
@@ -138,6 +144,35 @@ fn effectful_source_is_refused_before_process_access() {
     assert!(!marker.exists());
     let stderr = String::from_utf8(output.stderr).unwrap();
     assert!(stderr.contains("refused"), "{stderr}");
+}
+
+#[test]
+fn an_unknown_bare_head_never_falls_back_to_a_path_executable() {
+    let temp = TempDir::new("unknown-bare-head");
+    let marker = temp.0.join("must-not-exist");
+    let executable = temp.script(
+        "misspelled",
+        &format!("#!/bin/sh\nprintf ran > '{}'\n", marker.display()),
+    );
+    let mut permissions = fs::metadata(&executable).unwrap().permissions();
+    permissions.set_mode(0o700);
+    fs::set_permissions(&executable, permissions).unwrap();
+    let script = temp.script("main.opaal", "misspelled\n");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_opaal"))
+        .arg(&script)
+        .env("PATH", &temp.0)
+        .output()
+        .expect("opaal should start");
+
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert!(output.stdout.is_empty());
+    assert!(!marker.exists(), "the PATH executable must not run");
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.contains("unknown bare command or callable"),
+        "{stderr}"
+    );
 }
 
 #[test]

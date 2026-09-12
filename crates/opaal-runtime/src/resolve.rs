@@ -77,14 +77,11 @@ pub enum Resolution<'a> {
     External(ResolvedCommand),
 }
 
-/// Resolves a command name against the registry and, on a miss, `PATH`.
+/// Resolves a command name against the registry or the explicit external seam.
 ///
-/// A bare name (`force_external` is `false`) is looked up in `registry` first;
-/// only an unknown spelling falls back to [`resolve_external`], giving internal
-/// commands and reservations precedence. An `^external` name (`force_external`
-/// is `true`) never consults the registry and resolves externally only. A name
-/// whose native bytes are not valid UTF-8 cannot equal an identifier and always
-/// resolves externally.
+/// A bare name (`force_external` is `false`) must be a registered internal
+/// command. Unknown names never reach `PATH`. An `^external` name
+/// (`force_external` is `true`) resolves externally only.
 pub fn resolve_command<'a>(
     name: &OsStr,
     force_external: bool,
@@ -94,7 +91,13 @@ pub fn resolve_command<'a>(
 ) -> Result<Resolution<'a>, ResolutionError> {
     if !force_external && let Some(name) = name.to_str() {
         match registry.classify(name) {
-            CommandClassification::Unknown => {}
+            CommandClassification::Unknown => {
+                return Err(ResolutionError::Reserved {
+                    name: name.to_owned(),
+                    purpose: "unknown bare name cannot start an external process".to_owned(),
+                    replacement: Some(format!("^{name}")),
+                });
+            }
             CommandClassification::Core { signature, .. } => {
                 return Ok(Resolution::Internal {
                     source_name: name.to_owned(),
@@ -126,7 +129,15 @@ pub fn resolve_command<'a>(
             }
         }
     }
-    resolve_external(name, environment, probe).map(Resolution::External)
+    if force_external {
+        resolve_external(name, environment, probe).map(Resolution::External)
+    } else {
+        Err(ResolutionError::Reserved {
+            name: name.to_string_lossy().into_owned(),
+            purpose: "a bare command head must be a UTF-8 registered name".to_owned(),
+            replacement: None,
+        })
+    }
 }
 
 /// Resolves an `^external` command name to an executable path.

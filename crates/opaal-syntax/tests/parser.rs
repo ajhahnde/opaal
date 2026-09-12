@@ -3,8 +3,8 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use opaal_syntax::{
-    BinaryOperator, CommandCaptureKind, CommandItemKind, ControlledParseOutcome, Expression,
-    ExpressionKind, ParseOutcome, SourceFile, SourceId, StageKind, StatementKind, parse_opaal,
+    BinaryOperator, CommandItemKind, ControlledParseOutcome, Expression, ExpressionKind,
+    ParseOutcome, SourceFile, SourceId, StageKind, StatementKind, parse_opaal,
     parse_opaal_with_control,
 };
 
@@ -26,7 +26,7 @@ fn controlled_parsing_cancels_without_exposing_a_partial_parse_outcome() {
 
 #[test]
 fn structured_error_statements_retain_blocks_bindings_and_operands() {
-    let text = "try { throw \"boom\" } catch error { throw $error }\n";
+    let text = "try { throw \"boom\" } catch error { throw error }\n";
     let script = complete(text);
     let StatementKind::Try(statement) = script.statements()[0].kind() else {
         panic!("expected try statement");
@@ -40,7 +40,7 @@ fn structured_error_statements_retain_blocks_bindings_and_operands() {
     let StatementKind::Throw(expression) = statement.catch_block.statements[0].kind() else {
         panic!("expected rethrow statement");
     };
-    assert_eq!(source_text(text, expression.span()), "$error");
+    assert_eq!(source_text(text, expression.span()), "error");
 }
 
 #[test]
@@ -75,51 +75,8 @@ fn command_control_precedence_has_distinct_ast_layers() {
 }
 
 #[test]
-fn command_substitution_modifiers_select_capture_only_in_the_leading_slot() {
-    let text = concat!(
-        "let binary = $(bytes: ^tool)\n",
-        "let explicit_text = $(text: ^tool)\n",
-        "let shorthand = $(^tool)\n",
-        "let ordinary = $(; bytes: ^tool)\n",
-        "^bytes bytes: text:\n",
-    );
-    let script = complete(text);
-
-    for (index, expected) in [
-        (0, CommandCaptureKind::Bytes),
-        (1, CommandCaptureKind::Text),
-        (2, CommandCaptureKind::Text),
-        (3, CommandCaptureKind::Text),
-    ] {
-        let StatementKind::Declaration(declaration) = script.statements()[index].kind() else {
-            panic!("expected declaration");
-        };
-        let ExpressionKind::CommandSubstitution(substitution) = declaration.value.kind() else {
-            panic!("expected command substitution");
-        };
-        assert_eq!(substitution.capture(), expected);
-        assert_eq!(
-            substitution
-                .modifier_span()
-                .map(|span| source_text(text, span)),
-            match index {
-                0 => Some("bytes:"),
-                1 => Some("text:"),
-                _ => None,
-            }
-        );
-        assert_eq!(substitution.chain().or_terms().len(), 1);
-    }
-
-    assert!(matches!(
-        script.statements()[4].kind(),
-        StatementKind::Job(_)
-    ));
-}
-
-#[test]
 fn expression_precedence_builds_postfix_unary_and_binary_shapes() {
-    let script = complete("let value = -compute($items)[0].size + 2 * 3 == 5\n");
+    let script = complete("let value = -compute(items)[0].size + 2 * 3 == 5\n");
     let StatementKind::Declaration(declaration) = script.statements()[0].kind() else {
         panic!("expected declaration");
     };
@@ -172,8 +129,29 @@ fn parsed_command_items_retain_argument_and_redirection_order() {
 }
 
 #[test]
+fn a_bare_command_head_with_a_long_option_is_not_parsed_as_subtraction() {
+    let script = complete("kill --kill %1\n");
+    let StatementKind::Job(job) = script.statements()[0].kind() else {
+        panic!("expected a job statement");
+    };
+    let StageKind::Command(command) = job.chain.or_terms()[0].and_terms()[0].stages()[0].kind()
+    else {
+        panic!("expected a command stage");
+    };
+    assert_eq!(command.items.len(), 2);
+}
+
+#[test]
+fn bare_name_conditions_stop_before_control_flow_blocks() {
+    complete(
+        "def invalid(flag: Bool) -> String {\n    if flag { return 'flagged' }\n    return 'done'\n}\n",
+    );
+    complete("let value = 1\nmatch value {\n    selected => { selected }\n}\n");
+}
+
+#[test]
 fn mode_boundaries_and_newline_continuation_are_syntax_driven() {
-    let script = complete("let value = (1\n    + 2)\nlet call = compute(\n    $value,\n)\n");
+    let script = complete("let value = (1\n    + 2)\nlet call = compute(\n    value,\n)\n");
     assert_eq!(script.statements().len(), 2);
 
     for invalid in ["$(let value = 1)\n", "^ spaced\n"] {
@@ -229,7 +207,7 @@ fn recovery_respects_block_and_match_arm_boundaries() {
         "    echo valid\n",
         "    | broken\n",
         "}\n",
-        "match $value {\n",
+        "match value {\n",
         "    bad if => { echo no }\n",
         "    ok => { echo yes }\n",
         "    broken => echo no\n",
@@ -261,10 +239,10 @@ fn binary(expression: &Expression, operator: BinaryOperator) -> &opaal_syntax::B
 
 fn complete(text: &str) -> opaal_syntax::Script {
     let source = SourceFile::new(SourceId::new(900), "parser.opaal", text);
-    let ParseOutcome::Complete(script) = parse_opaal(&source) else {
-        panic!("expected complete parse for {text:?}");
-    };
-    script
+    match parse_opaal(&source) {
+        ParseOutcome::Complete(script) => script,
+        other => panic!("expected complete parse for {text:?}, got {other:#?}"),
+    }
 }
 
 fn source_text(text: &str, span: opaal_syntax::Span) -> &str {

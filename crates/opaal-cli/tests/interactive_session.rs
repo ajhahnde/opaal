@@ -134,7 +134,7 @@ impl LineEditor for ScriptedEditor {
         }
         self.completion_values.push(
             CompletionEngine::new(catalog)
-                .complete("$la", 3)
+                .complete("^echo {la}", 9)
                 .into_iter()
                 .map(|completion| completion.value().to_owned())
                 .collect(),
@@ -493,7 +493,7 @@ fn completion_is_refreshed_from_live_state_before_every_prompt() {
     assert_eq!(exit, InteractiveExit::EndOfInput);
     assert_eq!(
         editor.completion_values,
-        [Vec::<String>::new(), vec!["$later".to_owned()]]
+        [Vec::<String>::new(), vec!["later".to_owned()]]
     );
     assert_eq!(
         calls.borrow().as_slice(),

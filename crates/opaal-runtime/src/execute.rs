@@ -215,69 +215,6 @@ pub fn capture_foreground_text(
     decode_text_capture(captured, plan.span())
 }
 
-/// Execute the conditional-chain body of a command substitution and capture all
-/// stdout from every reached pipeline as exact bytes.
-///
-/// `&&` and `||` retain their ordinary status short-circuit behavior. The one
-/// session capture limit spans the complete chain rather than resetting for
-/// each reached pipeline.
-#[allow(clippy::too_many_arguments)]
-pub fn capture_command_substitution_bytes(
-    chain: &ConditionalChain,
-    cwd: &Path,
-    source: &SourceFile,
-    scope: &mut ScopeStack,
-    environment: &Environment,
-    registry: &CommandRegistry,
-    probe: &dyn ExecutableProbe,
-    options: &SessionOptions,
-    platform: &dyn Platform,
-    clock: &dyn Clock,
-) -> Result<CommandCapture<Vec<u8>>, RuntimeError> {
-    crate::session::capture_command_substitution(
-        chain,
-        cwd,
-        source,
-        scope,
-        environment,
-        registry,
-        probe,
-        options,
-        platform,
-        clock,
-    )
-}
-
-/// Execute the conditional-chain body of a command substitution and capture all
-/// reached stdout as strict UTF-8 text with trailing line endings removed.
-#[allow(clippy::too_many_arguments)]
-pub fn capture_command_substitution_text(
-    chain: &ConditionalChain,
-    cwd: &Path,
-    source: &SourceFile,
-    scope: &mut ScopeStack,
-    environment: &Environment,
-    registry: &CommandRegistry,
-    probe: &dyn ExecutableProbe,
-    options: &SessionOptions,
-    platform: &dyn Platform,
-    clock: &dyn Clock,
-) -> Result<CommandCapture<String>, RuntimeError> {
-    let captured = capture_command_substitution_bytes(
-        chain,
-        cwd,
-        source,
-        scope,
-        environment,
-        registry,
-        probe,
-        options,
-        platform,
-        clock,
-    )?;
-    decode_text_capture(captured, chain.span())
-}
-
 pub(crate) fn decode_text_capture(
     captured: CommandCapture<Vec<u8>>,
     span: opaal_syntax::Span,

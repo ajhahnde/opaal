@@ -3,9 +3,9 @@ import '../complete/support/model.opaal' as model
 import '../complete/support/shadow.opaal' as shadow
 
 def dynamic(value) {
-    $value
+    value
 }
 
 let shadowed = shadow::Box { value: 1 }
-let model::Box { value: value } = dynamic($shadowed)
-$value
+let model::Box { value: value } = dynamic(shadowed)
+value

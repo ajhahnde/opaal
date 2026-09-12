@@ -92,10 +92,10 @@ fn a_live_snapshot_combines_scope_path_executables_and_cwd_paths() {
             .collect::<Vec<_>>(),
         [("alpha-tool", CompletionKind::ExternalCommand)]
     );
-    assert_eq!(engine.complete("$la", 3)[0].value(), "$later");
+    assert_eq!(engine.complete("^echo {la}", 9)[0].value(), "later");
     assert_eq!(
         engine
-            .complete("echo > out", 10)
+            .complete("^echo > out", 11)
             .iter()
             .map(|completion| completion.value())
             .collect::<Vec<_>>(),
@@ -103,13 +103,13 @@ fn a_live_snapshot_combines_scope_path_executables_and_cwd_paths() {
     );
     assert_eq!(
         engine
-            .complete("cat ./out", 9)
+            .complete("^cat ./out", 10)
             .iter()
             .map(|completion| completion.value())
             .collect::<Vec<_>>(),
         ["./outbox/", "./output.log"]
     );
-    assert!(engine.complete("cat space", 9).is_empty());
+    assert!(engine.complete("^cat space", 10).is_empty());
 }
 
 #[test]
@@ -140,7 +140,7 @@ fn crossing_a_snapshot_ceiling_discards_the_host_family() {
     let engine = CompletionEngine::new(catalog);
 
     assert!(engine.complete("^alpha", 6).is_empty());
-    assert!(engine.complete("echo > path", 11).is_empty());
+    assert!(engine.complete("^echo > path", 12).is_empty());
 
     environment.set(
         "PATH",
@@ -181,9 +181,12 @@ fn recursive_snapshots_are_bounded_exact_and_do_not_follow_symlinks() {
     );
     let engine = CompletionEngine::new(catalog);
 
-    assert_eq!(engine.complete("cat 'space", 10)[0].value(), "'space name'");
     assert_eq!(
-        engine.complete("cat 'quote", 10)[0].value(),
+        engine.complete("^cat 'space", 11)[0].value(),
+        "'space name'"
+    );
+    assert_eq!(
+        engine.complete("^cat 'quote", 11)[0].value(),
         "'quote'\\''name'"
     );
     let unicode = "cat './🚀";
@@ -192,11 +195,11 @@ fn recursive_snapshots_are_bounded_exact_and_do_not_follow_symlinks() {
         "'./🚀.opaal'"
     );
     assert_eq!(
-        engine.complete("cat scripts/nested/d", 20)[0].value(),
+        engine.complete("^cat scripts/nested/d", 21)[0].value(),
         "scripts/nested/deep/"
     );
-    assert_eq!(engine.complete("cat './.se", 10)[0].value(), "'./.secret'");
-    assert!(engine.complete("cat linked/a", 12).is_empty());
+    assert_eq!(engine.complete("^cat './.se", 11)[0].value(), "'./.secret'");
+    assert!(engine.complete("^cat linked/a", 13).is_empty());
 }
 
 #[test]
@@ -221,7 +224,7 @@ fn provider_generations_reject_stale_results_and_collection_can_cancel() {
 
     let mut engine = CompletionEngine::new(second);
     assert!(!engine.install_catalog(first));
-    assert_eq!(engine.complete("cat ./se", 8)[0].value(), "./second");
+    assert_eq!(engine.complete("^cat ./se", 9)[0].value(), "./second");
 
     let checks = Cell::new(0_u8);
     assert!(
@@ -241,7 +244,7 @@ fn provider_generations_reject_stale_results_and_collection_can_cancel() {
         .unwrap();
     assert!(
         CompletionEngine::new(empty)
-            .complete("cat ./", 6)
+            .complete("^cat ./", 7)
             .is_empty()
     );
 }

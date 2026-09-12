@@ -60,6 +60,20 @@ REMOVED_IDENTIFIERS = {
     "language_major",
     "parse_opaal_submission",
 }
+REMOVED_LANGUAGE_IDENTIFIERS = {
+    "BracedExpansion",
+    "BracedExpansionStart",
+    "CommandSubstitution",
+    "CommandSubstitutionModifier",
+    "CommandSubstitutionStart",
+    "Expansion",
+    "UnmatchedCommandSubstitution",
+    "VariableReference",
+}
+CLASSIFIED_LEGACY_OPAAL = {
+    "tests/opaal-foundation/language/lexical/invalid/removed-command-substitution.opaal",
+}
+OPAAL_FENCE = re.compile(r"```opaal[^\n]*\n(.*?)```", re.DOTALL)
 TEXT_SUFFIXES = {
     "",
     ".json",
@@ -131,6 +145,47 @@ def command_json(
     except json.JSONDecodeError as error:
         problems.append(f"{label}: command returned invalid JSON: {error}")
         return None
+
+
+def unquoted_dollar_lines(text: str) -> list[int]:
+    lines: list[int] = []
+    quote: str | None = None
+    escaped = False
+    for offset, character in enumerate(text):
+        if quote == '"' and escaped:
+            escaped = False
+            continue
+        if quote == '"' and character == "\\":
+            escaped = True
+            continue
+        if quote is None and character in {"'", '"'}:
+            quote = character
+            continue
+        if quote == character:
+            quote = None
+            continue
+        if quote is None and character == "$":
+            lines.append(text.count("\n", 0, offset) + 1)
+    return lines
+
+
+def removed_language_syntax_problems(path: Path, text: str) -> list[str]:
+    relative = path.as_posix()
+    if path.suffix == ".opaal" and relative not in CLASSIFIED_LEGACY_OPAAL:
+        return [
+            f"{relative}:{line}: unquoted dollar syntax remains"
+            for line in unquoted_dollar_lines(text)
+        ]
+    if path.suffix == ".md" and relative != "docs/migration.md":
+        problems: list[str] = []
+        for fence in OPAAL_FENCE.finditer(text):
+            fence_line = text.count("\n", 0, fence.start(1)) + 1
+            problems.extend(
+                f"{relative}:{fence_line + line - 1}: dollar syntax remains in an OPAAL example"
+                for line in unquoted_dollar_lines(fence.group(1))
+            )
+        return problems
+    return []
 
 
 def source_problems(root: Path, *, run: Run = run_command) -> list[str]:
@@ -239,12 +294,19 @@ def source_problems(root: Path, *, run: Run = run_command) -> list[str]:
             continue
         if path.suffix == ".opaal" and SOURCE_DIRECTIVE.search(text):
             problems.append(f"{path.as_posix()}: source-generation directive remains")
+        problems.extend(removed_language_syntax_problems(path, text))
         if predecessor.search(text):
             problems.append(f"{path.as_posix()}: predecessor product surface remains")
         if path.parts[:1] == ("crates",):
             for identifier in sorted(REMOVED_IDENTIFIERS):
                 if re.search(rf"\b{re.escape(identifier)}\b", text):
                     problems.append(f"{path.as_posix()}: removed API remains: {identifier}")
+        if len(path.parts) >= 3 and path.parts[0] == "crates" and path.parts[2] == "src":
+            for identifier in sorted(REMOVED_LANGUAGE_IDENTIFIERS):
+                if re.search(rf"\b{re.escape(identifier)}\b", text):
+                    problems.append(
+                        f"{path.as_posix()}: removed language handler remains: {identifier}"
+                    )
         is_product_source = len(path.parts) >= 3 and path.parts[0] == "crates" and path.parts[2] == "src"
         if path.parts[:1] == ("docs",) or is_product_source or path.name in {
             "README.md",

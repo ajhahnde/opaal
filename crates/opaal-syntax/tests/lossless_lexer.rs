@@ -4,7 +4,8 @@ use std::fs;
 use std::path::Path;
 
 use opaal_syntax::{
-    Delimiter, Keyword, NumberKind, Operator, SourceFile, SourceId, TokenKind, lex_opaal,
+    Delimiter, InvalidTokenKind, Keyword, NumberKind, Operator, SourceFile, SourceId, TokenKind,
+    lex_opaal,
 };
 
 #[test]
@@ -77,7 +78,7 @@ fn word_parts_comments_and_continuations_remain_distinct_and_adjacent() {
     let word_parts = lex_fixture("complete/word-parts.opaal");
     assert_token(&word_parts, "pre", TokenKind::Identifier);
     assert_token(&word_parts, "\"", TokenKind::DoubleQuoteStart);
-    assert_token(&word_parts, "$name", TokenKind::Variable);
+    assert_token(&word_parts, "{", TokenKind::InterpolationStart);
     assert_token(&word_parts, "'post'", TokenKind::SingleQuoted);
     assert_token(&word_parts, "\\ ", TokenKind::BareEscape);
     assert_token(&word_parts, "''", TokenKind::SingleQuoted);
@@ -110,12 +111,35 @@ fn word_parts_comments_and_continuations_remain_distinct_and_adjacent() {
 }
 
 #[test]
-fn expansions_operators_numbers_keywords_and_delimiters_have_stable_kinds() {
+fn interpolation_operators_numbers_keywords_and_delimiters_have_stable_kinds() {
     let interpolation = lex_fixture("complete/interpolation.opaal");
-    assert_token(&interpolation, "$name", TokenKind::Variable);
-    assert_token(&interpolation, "${", TokenKind::BracedExpansionStart);
-    assert_token(&interpolation, "$(", TokenKind::CommandSubstitutionStart);
-    assert_token(&interpolation, "\\$", TokenKind::DoubleEscape);
+    assert_token(
+        &interpolation,
+        "{",
+        TokenKind::Delimiter(Delimiter::LeftBrace),
+    );
+    assert!(interpolation.tokens.iter().any(|token| {
+        token.text(&interpolation.source).unwrap() == "{"
+            && token.kind() == TokenKind::InterpolationStart
+    }));
+    assert_token(&interpolation, "{{", TokenKind::EscapedBrace);
+    assert_token(&interpolation, "}}", TokenKind::EscapedBrace);
+    assert_token(&interpolation, "$name", TokenKind::DoubleText);
+
+    let removed = source_text("removed-dollar.opaal", "$name");
+    assert_token_in(
+        &removed,
+        &lex_opaal(&removed),
+        "$",
+        TokenKind::Invalid(InvalidTokenKind::DollarSyntax),
+    );
+    let escaped = source_text("removed-escaped-dollar.opaal", "\\$name");
+    assert_token_in(
+        &escaped,
+        &lex_opaal(&escaped),
+        "\\$",
+        TokenKind::Invalid(InvalidTokenKind::DollarSyntax),
+    );
 
     let reserved = lex_fixture("complete/reserved-words.opaal");
     assert_token(&reserved, "let", TokenKind::Keyword(Keyword::Let));
@@ -154,7 +178,7 @@ fn expansions_operators_numbers_keywords_and_delimiters_have_stable_kinds() {
 
     let operators = source_text(
         "operators.opaal",
-        "let range = 0..=10\nlet same = $left == $right\n",
+        "let range = 0..=10\nlet same = left == right\n",
     );
     let tokens = lex_opaal(&operators);
     assert_token_in(

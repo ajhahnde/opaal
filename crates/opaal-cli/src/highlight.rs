@@ -16,7 +16,7 @@ pub enum HighlightKind {
     Literal,
     String,
     Escape,
-    Expansion,
+    Interpolation,
     Operator,
     Delimiter,
     Invalid,
@@ -120,9 +120,10 @@ fn token_highlight_kind(kind: TokenKind) -> HighlightKind {
         | TokenKind::Newline
         | TokenKind::Identifier
         | TokenKind::WordText => HighlightKind::Plain,
-        TokenKind::LineContinuation | TokenKind::BareEscape | TokenKind::DoubleEscape => {
-            HighlightKind::Escape
-        }
+        TokenKind::LineContinuation
+        | TokenKind::BareEscape
+        | TokenKind::DoubleEscape
+        | TokenKind::EscapedBrace => HighlightKind::Escape,
         TokenKind::Comment | TokenKind::DocumentationComment => HighlightKind::Comment,
         TokenKind::Keyword(Keyword::True | Keyword::False | Keyword::Null)
         | TokenKind::Number(_) => HighlightKind::Literal,
@@ -131,9 +132,7 @@ fn token_highlight_kind(kind: TokenKind) -> HighlightKind {
         | TokenKind::DoubleQuoteStart
         | TokenKind::DoubleText
         | TokenKind::DoubleQuoteEnd => HighlightKind::String,
-        TokenKind::Variable
-        | TokenKind::BracedExpansionStart
-        | TokenKind::CommandSubstitutionStart => HighlightKind::Expansion,
+        TokenKind::InterpolationStart => HighlightKind::Interpolation,
         TokenKind::Operator(_) => HighlightKind::Operator,
         TokenKind::Delimiter(_) => HighlightKind::Delimiter,
         TokenKind::Invalid(_) => HighlightKind::Invalid,

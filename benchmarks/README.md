@@ -24,8 +24,9 @@ qualification profile discards three warmups and retains fifteen samples for
 warm cases; cold cases retain one sample.
 
 Startup uses a minimal directive-free `.opaal` file. Structured-stream
-measurement calls the pure carrier fixture. Completion sees only the temporary
-candidate directory through `PATH` and never executes a candidate.
+measurement calls the pure carrier fixture. Completion uses an explicit
+`^ben` external head, sees only the temporary candidate directory through
+`PATH`, and never executes a candidate.
 
 ## Run and validate
 

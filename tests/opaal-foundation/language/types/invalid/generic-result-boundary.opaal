@@ -1,6 +1,6 @@
 
 def dynamic(value) {
-    $value
+    value
 }
 
 def identity[T](value: T) -> T {

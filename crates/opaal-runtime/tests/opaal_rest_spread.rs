@@ -165,7 +165,7 @@ fn pure_list_rest_then_explicit_spread_preserves_every_argument_exactly() {
         spread_scope
             .declare("forwarded", BindingMutability::Immutable, tail)
             .unwrap();
-        let words = expand_submission("builder ...$forwarded", &mut spread_scope).unwrap();
+        let words = expand_submission("builder ...{forwarded}", &mut spread_scope).unwrap();
         assert_eq!(
             words.iter().map(|word| word.value()).collect::<Vec<_>>(),
             expected
@@ -187,7 +187,7 @@ fn explicit_spread_never_flattens_a_nested_list() {
         )
         .unwrap();
     assert_eq!(
-        expand_submission("builder ...$forwarded", &mut scope)
+        expand_submission("builder ...{forwarded}", &mut scope)
             .unwrap_err()
             .kind(),
         &RuntimeErrorKind::SpreadElementNotWordEligible {

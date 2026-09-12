@@ -8,8 +8,8 @@ complete	complete/reserved-words.opaal	the reserved-word spellings are lexically
 incomplete	incomplete/single-quote.opaal	unmatched single quote
 incomplete	incomplete/double-quote.opaal	unmatched double quote
 incomplete	incomplete/trailing-backslash.opaal	explicit continuation requires more source
-incomplete	incomplete/braced-interpolation.opaal	unmatched braced interpolation
-incomplete	incomplete/command-substitution.opaal	unmatched command substitution
+incomplete	incomplete/braced-interpolation.opaal	unmatched interpolation
+invalid	invalid/removed-command-substitution.opaal	removed command substitution uses invalid dollar syntax
 invalid	invalid/unknown-double-escape.opaal	unknown double-quoted escape
 invalid	invalid/empty-unicode-escape.opaal	Unicode escape requires hexadecimal digits
 invalid	invalid/surrogate-unicode-escape.opaal	Unicode escape cannot encode a surrogate

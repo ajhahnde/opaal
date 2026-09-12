@@ -1,10 +1,10 @@
 
 def build_arguments(items: List[String]) -> List[String] {
-    match $items {
+    match items {
         [] => { return [] }
-        [first, ...rest] => { return $rest }
+        [first, ...rest] => { return rest }
     }
 }
 
-let transformed = build_arguments($args)
-$transformed
+let transformed = build_arguments(args)
+transformed

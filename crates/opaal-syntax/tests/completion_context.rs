@@ -3,7 +3,7 @@
 use opaal_syntax::{CompletionContext, PathCompletionStyle, completion_target};
 
 #[test]
-fn command_variable_flag_and_path_contexts_are_source_spanned() {
+fn command_name_flag_and_path_contexts_are_source_spanned() {
     let command = completion_target("ec", 2).expect("an incomplete head remains classifiable");
     assert_eq!(
         command.context(),
@@ -24,13 +24,10 @@ fn command_variable_flag_and_path_contexts_are_source_spanned() {
     assert_eq!(forced.replacement(), 1..3);
     assert_eq!(forced.prefix(), "gi");
 
-    let variable = completion_target("echo $na", 8).expect("a variable is classifiable");
-    assert_eq!(
-        variable.context(),
-        &CompletionContext::Variable { braced: false }
-    );
-    assert_eq!(variable.replacement(), 5..8);
-    assert_eq!(variable.prefix(), "$na");
+    let name = completion_target("echo {na}", 8).expect("an interpolated name is classifiable");
+    assert_eq!(name.context(), &CompletionContext::Name);
+    assert_eq!(name.replacement(), 6..8);
+    assert_eq!(name.prefix(), "na");
 
     let flag = completion_target("inspect --a", 11).expect("a flag is classifiable");
     assert_eq!(
@@ -58,6 +55,12 @@ fn command_variable_flag_and_path_contexts_are_source_spanned() {
     assert_eq!(expression.context(), &CompletionContext::Expression);
     assert_eq!(expression.replacement(), 12..15);
     assert_eq!(expression.prefix(), "int");
+
+    let value = completion_target("let copy = val", 14)
+        .expect("a bare value read is an expression completion context");
+    assert_eq!(value.context(), &CompletionContext::Expression);
+    assert_eq!(value.replacement(), 11..14);
+    assert_eq!(value.prefix(), "val");
 }
 
 #[test]
@@ -84,6 +87,18 @@ fn quoted_and_glob_paths_retain_decoded_prefixes_and_source_styles() {
         }
     );
     assert_eq!(double.prefix(), "quo\"");
+
+    let literal_dollar = completion_target("echo \"$dir/file", 15)
+        .expect("a dollar sign in a quoted path is ordinary data");
+    assert_eq!(
+        literal_dollar.context(),
+        &CompletionContext::Path {
+            style: PathCompletionStyle::DoubleQuoted,
+            glob_pattern: false,
+            interpolated: false,
+        }
+    );
+    assert_eq!(literal_dollar.prefix(), "$dir/file");
 
     let glob_source = "let files = glob('scripts/**/*.fs')";
     let glob_cursor = glob_source.find("')").unwrap();
@@ -113,7 +128,7 @@ fn executable_and_interpolated_paths_keep_their_grammar_boundaries() {
     );
     assert_eq!(executable.replacement(), 1..5);
 
-    let interpolated = completion_target("cat $dir/fi", 11).unwrap();
+    let interpolated = completion_target("cat {dir}/fi", 12).unwrap();
     assert_eq!(
         interpolated.context(),
         &CompletionContext::Path {
@@ -122,18 +137,15 @@ fn executable_and_interpolated_paths_keep_their_grammar_boundaries() {
             interpolated: true,
         }
     );
-    assert_eq!(interpolated.replacement(), 8..11);
+    assert_eq!(interpolated.replacement(), 9..12);
     assert_eq!(interpolated.prefix(), "/fi");
 
-    let braced = completion_target("cat ${na}", 8).unwrap();
-    assert_eq!(
-        braced.context(),
-        &CompletionContext::Variable { braced: true }
-    );
-    assert_eq!(braced.replacement(), 6..8);
+    let braced = completion_target("cat {na}", 7).unwrap();
+    assert_eq!(braced.context(), &CompletionContext::Name);
+    assert_eq!(braced.replacement(), 5..7);
     assert_eq!(braced.prefix(), "na");
 
-    let quoted_source = "cat \"${dir}/fi\"";
+    let quoted_source = "cat \"{dir}/fi\"";
     let quoted_cursor = quoted_source.rfind('"').unwrap();
     let quoted = completion_target(quoted_source, quoted_cursor).unwrap();
     assert_eq!(
@@ -166,21 +178,8 @@ fn classification_is_checked_but_does_not_require_a_complete_ast() {
         &CompletionContext::None
     );
 
-    let modifier = completion_target("let value = $(by", 16)
-        .expect("an incomplete modifier remains classifiable");
-    assert_eq!(
-        modifier.context(),
-        &CompletionContext::CommandSubstitutionModifier
-    );
-    assert_eq!(modifier.prefix(), "by");
-
-    let incomplete = completion_target("echo $(text: ec", 15)
-        .expect("a command after a modifier still has a token context");
-    assert_eq!(
-        incomplete.context(),
-        &CompletionContext::Command {
-            forced_external: false,
-        }
-    );
-    assert_eq!(incomplete.prefix(), "ec");
+    let incomplete = completion_target("let value = {na", 15)
+        .expect("an incomplete interpolation remains classifiable");
+    assert_eq!(incomplete.context(), &CompletionContext::Name);
+    assert_eq!(incomplete.prefix(), "na");
 }

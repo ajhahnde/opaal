@@ -114,15 +114,16 @@ fn semantic_completion_hover_and_signature_help_use_shared_program_data() {
         "let whole = int(3.9)\n",
         "let home = env('HOME')\n",
         "let files = glob('*.opaal')\n",
-        "let latest = $status\n",
+        "let latest = status\n",
+        "copied\n",
         "pwd\n",
-        "command tool\n",
-        "kill --kill 1\n",
+        "^tool\n",
+        "kill --kill %1\n",
     );
     let library = concat!(
         "",
         "## Imported greeting\n",
-        "def greet(name: String) -> String { $name }\n",
+        "def greet(name: String) -> String { name }\n",
         "export { greet }\n",
         "cd '/tmp'\n",
     );
@@ -141,6 +142,23 @@ fn semantic_completion_hover_and_signature_help_use_shared_program_data() {
         "{analysis:#?}"
     );
     let control = RequestControl::new();
+
+    let bare_value_cursor = root.find("copied\npwd").unwrap() + "cop".len();
+    let bare_value_completion = request(
+        &workspace,
+        PositionEncoding::Utf16,
+        &control,
+        "textDocument/completion",
+        positional(&root_uri, root, bare_value_cursor, PositionEncoding::Utf16),
+    )
+    .unwrap();
+    assert!(
+        bare_value_completion
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|candidate| { candidate["label"] == "copied" && candidate["kind"] == 6 })
+    );
 
     let variable_cursor = root.find("library::greet").unwrap() + "library::gr".len();
     let completion = request(
@@ -271,7 +289,7 @@ fn semantic_completion_hover_and_signature_help_use_shared_program_data() {
         "glob(pattern: String | Path) -> List[Path]"
     );
 
-    let status_read = root.find("$status").unwrap() + 2;
+    let status_read = root.find("status").unwrap() + 2;
     let status_hover = request(
         &workspace,
         PositionEncoding::Utf16,
@@ -284,7 +302,7 @@ fn semantic_completion_hover_and_signature_help_use_shared_program_data() {
         status_hover["contents"]["value"]
             .as_str()
             .unwrap()
-            .contains("dynamic $status: Any")
+            .contains("dynamic status: Any")
     );
 
     let command = root.find("pwd\n").unwrap() + 1;
@@ -300,34 +318,18 @@ fn semantic_completion_hover_and_signature_help_use_shared_program_data() {
     assert!(command_hover.contains("pwd"));
     assert!(command_hover.contains("Positionals: 0..=0"));
 
-    let dynamic_command = root.find("command tool").unwrap() + 2;
-    let dynamic_command_hover = request(
+    let explicit_external = root.find("^tool").unwrap() + 2;
+    let explicit_external_hover = request(
         &workspace,
         PositionEncoding::Utf16,
         &control,
         "textDocument/hover",
-        positional(&root_uri, root, dynamic_command, PositionEncoding::Utf16),
+        positional(&root_uri, root, explicit_external, PositionEncoding::Utf16),
     )
     .unwrap();
-    let dynamic_command_hover = dynamic_command_hover["contents"]["value"].as_str().unwrap();
-    assert!(
-        dynamic_command_hover.contains("command NAME [ARG...]"),
-        "{dynamic_command_hover}"
-    );
-    assert!(
-        dynamic_command_hover.contains("explicit external resolution"),
-        "{dynamic_command_hover}"
-    );
-    assert!(
-        dynamic_command_hover.contains("Positionals: 1..=unbounded"),
-        "{dynamic_command_hover}"
-    );
-    assert!(
-        dynamic_command_hover.contains("`--`: literal"),
-        "{dynamic_command_hover}"
-    );
+    assert_eq!(explicit_external_hover, Value::Null);
 
-    let kill_argument = root.find("--kill 1").unwrap() + "--kill ".len();
+    let kill_argument = root.find("--kill %1").unwrap() + "--kill ".len();
     let command_signature = request(
         &workspace,
         PositionEncoding::Utf16,
@@ -378,55 +380,56 @@ fn semantic_completion_hover_and_signature_help_use_shared_program_data() {
 }
 
 #[test]
-fn typed_command_capture_is_shared_by_completion_hover_and_signature_help() {
+fn interpolation_is_shared_by_completion_hover_and_signature_help() {
     let directory = TestDirectory::new();
     let uri = directory.uri("main.opaal");
     let text = concat!(
         "",
-        "def accept(value: Bytes) -> Bytes { $value }\n",
-        "let binary = $(bytes: ^tool)\n",
-        "let text = $(text: ^tool)\n",
-        "accept($(bytes: ^tool))\n",
-        "let copy = $binary\n",
-        "let label = $text\n",
+        "def accept(value: String) -> String { value }\n",
+        "let text: String = 'value'\n",
+        "let label: String = \"prefix-{text}\"\n",
+        "accept(\"{text}\")\n",
+        "which ...{[accept(text)]}\n",
+        "let copy = label\n",
     );
     let mut workspace = Workspace::new();
     workspace.open(uri.clone(), 1, text.into()).unwrap();
     let control = RequestControl::new();
 
-    let byte_reference = text.rfind("$binary").unwrap() + 2;
-    let byte_hover = request(
+    let interpolation_reference = text.find("{text}").unwrap() + 2;
+    let interpolation_hover = request(
         &workspace,
         PositionEncoding::Utf16,
         &control,
         "textDocument/hover",
-        positional(&uri, text, byte_reference, PositionEncoding::Utf16),
+        positional(&uri, text, interpolation_reference, PositionEncoding::Utf16),
     )
     .unwrap();
     assert!(
-        byte_hover["contents"]["value"]
+        interpolation_hover["contents"]["value"]
             .as_str()
             .unwrap()
-            .contains("let binary: Bytes")
+            .contains("let text: String"),
+        "{interpolation_hover:#}"
     );
 
-    let text_reference = text.rfind("$text").unwrap() + 2;
-    let text_hover = request(
+    let label_reference = text.rfind("label").unwrap() + 2;
+    let label_hover = request(
         &workspace,
         PositionEncoding::Utf16,
         &control,
         "textDocument/hover",
-        positional(&uri, text, text_reference, PositionEncoding::Utf16),
+        positional(&uri, text, label_reference, PositionEncoding::Utf16),
     )
     .unwrap();
     assert!(
-        text_hover["contents"]["value"]
+        label_hover["contents"]["value"]
             .as_str()
             .unwrap()
-            .contains("let text: String")
+            .contains("let label: String")
     );
 
-    let argument = text.find("$(bytes: ^tool))").unwrap() + 10;
+    let argument = text.find("accept(\"{text}\")").unwrap() + "accept(\"{te".len();
     let signature = request(
         &workspace,
         PositionEncoding::Utf16,
@@ -437,22 +440,56 @@ fn typed_command_capture_is_shared_by_completion_hover_and_signature_help() {
     .unwrap();
     assert_eq!(
         signature["signatures"][0]["label"],
-        "accept(value: Bytes) -> Bytes"
+        "accept(value: String) -> String"
     );
 
-    let incomplete = "let binary = $(by";
-    workspace.change(&uri, Some(2), incomplete.into()).unwrap();
+    let spread_reference = text.find("accept(text)").unwrap() + "accept(te".len();
+    let spread_hover = request(
+        &workspace,
+        PositionEncoding::Utf16,
+        &control,
+        "textDocument/hover",
+        positional(&uri, text, spread_reference, PositionEncoding::Utf16),
+    )
+    .unwrap();
+    assert!(
+        spread_hover["contents"]["value"]
+            .as_str()
+            .unwrap()
+            .contains("let text: String"),
+        "{spread_hover:#}"
+    );
+
+    let completion_text = concat!(
+        "def accept(value: String) -> String { value }\n",
+        "let text: String = 'value'\n",
+        "let label: String = \"{text}\"\n",
+    );
+    workspace
+        .change(&uri, Some(2), completion_text.into())
+        .unwrap();
+    let completion_cursor = completion_text.find("{text}").unwrap() + "{te".len();
     let completion = request(
         &workspace,
         PositionEncoding::Utf16,
         &control,
         "textDocument/completion",
-        positional(&uri, incomplete, incomplete.len(), PositionEncoding::Utf16),
+        positional(
+            &uri,
+            completion_text,
+            completion_cursor,
+            PositionEncoding::Utf16,
+        ),
     )
     .unwrap();
-    assert_eq!(completion.as_array().unwrap().len(), 1);
-    assert_eq!(completion[0]["label"], "bytes:");
-    assert_eq!(completion[0]["textEdit"]["newText"], "bytes:");
+    assert!(
+        completion
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| { item["label"] == "text" && item["textEdit"]["newText"] == "text" }),
+        "{completion:#}"
+    );
 }
 
 #[test]
@@ -464,14 +501,14 @@ fn structured_error_catch_binding_is_shared_by_completion_and_hover() {
         "try {\n",
         "    throw \"boom\"\n",
         "} catch error {\n",
-        "    let copy: Error = $error\n",
+        "    let copy: Error = error\n",
         "}\n",
     );
     let mut workspace = Workspace::new();
     workspace.open(uri.clone(), 1, text.into()).unwrap();
     let control = RequestControl::new();
 
-    let reference = text.find("$error").unwrap();
+    let reference = text.rfind("error").unwrap();
     let completion = request(
         &workspace,
         PositionEncoding::Utf16,
@@ -485,7 +522,8 @@ fn structured_error_catch_binding_is_shared_by_completion_and_hover() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|item| { item["label"] == "$error" && item["textEdit"]["newText"] == "$error" })
+            .any(|item| { item["label"] == "error" && item["textEdit"]["newText"] == "error" }),
+        "{completion:#}"
     );
 
     let hover = request(
@@ -516,7 +554,7 @@ fn definition_and_references_project_canonical_cross_file_locations() {
     );
     let library = concat!(
         "",
-        "def greet(name: String) -> String { $name }\n",
+        "def greet(name: String) -> String { name }\n",
         "export { greet }\n",
     );
     let mut workspace = Workspace::new();

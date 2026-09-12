@@ -2,4 +2,4 @@
 import './support/private.opaal' as private
 
 let hidden = private::HiddenChoice::Some(1)
-$hidden
+hidden

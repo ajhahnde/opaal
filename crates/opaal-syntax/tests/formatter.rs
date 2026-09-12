@@ -7,26 +7,26 @@ fn horizontal_trivia_and_block_indentation_are_canonical() {
     let source = SourceFile::new(
         SourceId::new(3_000),
         "spacing.opaal",
-        "def demo(name: string) {\n\techo   \"$name\"   >   output # kept\n}\n",
+        "def demo(name: string) {\n\techo   \"{name}\"   >   output # kept\n}\n",
     );
 
     assert_eq!(
         complete_format(&source),
-        "def demo(name: string) {\n    echo \"$name\" > output # kept\n}\n"
+        "def demo(name: string) {\n    echo \"{name}\" > output # kept\n}\n"
     );
 }
 
 #[test]
-fn typed_command_capture_modifiers_keep_their_grammar_slot() {
+fn interpolation_spacing_is_canonical() {
     let source = SourceFile::new(
         SourceId::new(3_005),
-        "capture.opaal",
-        "let binary = $(bytes:   ^tool)\nlet text = $(text:^tool)\n",
+        "interpolation.opaal",
+        "echo \"pre{  name   }post\" ...{  [\"a\", \"b\"]   }\n",
     );
 
     assert_eq!(
         complete_format(&source),
-        "let binary = $(bytes: ^tool)\nlet text = $(text:^tool)\n"
+        "echo \"pre{name}post\" ...{[\"a\", \"b\"]}\n"
     );
 }
 

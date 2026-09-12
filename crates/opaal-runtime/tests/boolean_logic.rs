@@ -44,7 +44,7 @@ fn logical_not_negates_a_bool() {
     assert_eq!(ok("!false"), boolean(true));
     assert_eq!(ok("!!true"), boolean(true));
     // As an ordinary expression it can bind.
-    assert_eq!(ok("let flip = !true\n$flip"), boolean(false));
+    assert_eq!(ok("let flip = !true\nflip"), boolean(false));
 }
 
 #[test]
@@ -63,7 +63,7 @@ fn and_returns_a_bool_and_short_circuits() {
 
     // A `false` left operand skips the right entirely, so an unbound name there
     // never raises an unknown-binding error.
-    assert_eq!(ok("false && $never"), boolean(false));
+    assert_eq!(ok("false && never"), boolean(false));
 }
 
 #[test]
@@ -73,7 +73,7 @@ fn or_returns_a_bool_and_short_circuits() {
     assert_eq!(ok("true || false"), boolean(true));
 
     // A `true` left operand skips the right entirely.
-    assert_eq!(ok("true || $never"), boolean(true));
+    assert_eq!(ok("true || never"), boolean(true));
 }
 
 #[test]
@@ -105,13 +105,13 @@ fn boolean_logic_drives_conditions_and_grouped_values() {
     let source = "\
 mut result = 'no'
 if true && (false || true) {
-    $result = 'yes'
+    result = 'yes'
 }
-$result";
+result";
     assert_eq!(ok(source), Value::string("yes"));
 
     // A grouped chain used as an expression value.
-    assert_eq!(ok("let both = (true && true)\n$both"), boolean(true));
+    assert_eq!(ok("let both = (true && true)\nboth"), boolean(true));
 }
 
 #[test]
@@ -135,16 +135,16 @@ fn status_values_drive_chains_and_conditions_without_losing_identity() {
         .unwrap();
 
     assert_eq!(
-        run_with_scope("$failed || $succeeded", &mut scope).unwrap(),
+        run_with_scope("failed || succeeded", &mut scope).unwrap(),
         Value::from(succeeded)
     );
     assert_eq!(
-        run_with_scope("$failed && $never", &mut scope).unwrap(),
+        run_with_scope("failed && never", &mut scope).unwrap(),
         Value::from(failed)
     );
     assert_eq!(
         run_with_scope(
-            "mut result = 'no'\nif $succeeded { $result = 'yes' }\n$result",
+            "mut result = 'no'\nif succeeded { result = 'yes' }\nresult",
             &mut scope,
         )
         .unwrap(),

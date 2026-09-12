@@ -215,7 +215,7 @@ impl fmt::Debug for Declaration {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Assignment {
-    pub target: VariableReference,
+    pub target: NameReference,
     pub value: Expression,
 }
 
@@ -470,72 +470,26 @@ pub struct JobStatement {
     pub background_span: Option<Span>,
 }
 
-/// One `$name` reference, including both its complete and name-only spans.
+/// One bare name reference. The wrapper keeps reference sites distinct from
+/// declarations even though both spans are identical in the canonical syntax.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub struct VariableReference {
+pub struct NameReference {
     pub name: Identifier,
     pub span: Span,
 }
 
 pub type Expression = AstNode<ExpressionKind>;
 
-/// The exact value family produced by one command substitution.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub enum CommandCaptureKind {
-    Text,
-    Bytes,
-}
-
-/// One command substitution and its explicit or shorthand capture contract.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct CommandSubstitution {
-    capture: CommandCaptureKind,
-    modifier_span: Option<Span>,
-    chain: Box<ConditionalChain>,
-}
-
-impl CommandSubstitution {
-    #[must_use]
-    pub const fn new(
-        capture: CommandCaptureKind,
-        modifier_span: Option<Span>,
-        chain: Box<ConditionalChain>,
-    ) -> Self {
-        Self {
-            capture,
-            modifier_span,
-            chain,
-        }
-    }
-
-    #[must_use]
-    pub const fn capture(&self) -> CommandCaptureKind {
-        self.capture
-    }
-
-    #[must_use]
-    pub const fn modifier_span(&self) -> Option<Span> {
-        self.modifier_span
-    }
-
-    #[must_use]
-    pub const fn chain(&self) -> &ConditionalChain {
-        &self.chain
-    }
-}
-
 /// Expression syntax before name resolution or evaluation.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ExpressionKind {
     Literal(Literal),
-    Variable(VariableReference),
-    Symbol(Identifier),
+    Name(NameReference),
     Qualified(QualifiedName),
     List(Vec<Expression>),
     Record(Vec<RecordEntry>),
     NominalRecord(NominalRecordExpression),
     Closure(Closure),
-    CommandSubstitution(CommandSubstitution),
     GroupedJob(Box<ConditionalChain>),
     Call(CallExpression),
     Index(IndexExpression),
@@ -914,7 +868,7 @@ pub type CommandItem = AstNode<CommandItemKind>;
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum CommandItemKind {
     Word(Word),
-    Spread(VariableReference),
+    Spread(Expression),
     Closure(Closure),
     Redirection(Redirection),
 }
@@ -954,9 +908,8 @@ pub enum WordPartKind {
     DoubleQuoted(Vec<WordPart>),
     DoubleText,
     DoubleEscape,
-    Variable(Identifier),
-    BracedInterpolation(Box<Expression>),
-    CommandSubstitution(CommandSubstitution),
+    EscapedBrace,
+    Interpolation(Box<Expression>),
 }
 
 pub type Redirection = AstNode<RedirectionKind>;

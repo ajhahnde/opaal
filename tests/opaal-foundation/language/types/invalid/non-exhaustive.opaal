@@ -6,6 +6,6 @@ enum Choice {
 
 let choice = Choice::Yes
 
-match $choice {
+match choice {
     Choice::Yes => { true }
 }

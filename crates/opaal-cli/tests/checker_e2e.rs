@@ -66,7 +66,7 @@ fn directive_free_module_closure_checks_silently() {
     temp.source("dependency.opaal", "let answer = 42\n");
     let root = temp.source(
         "main.opaal",
-        "import './dependency.opaal' as dependency\necho ready\n",
+        "import './dependency.opaal' as dependency\nlet ready = true\nready\n",
     );
 
     let output = opaal([OsString::from("check"), root.into_os_string()]);
@@ -76,15 +76,17 @@ fn directive_free_module_closure_checks_silently() {
 }
 
 #[test]
-fn a_former_header_in_an_import_has_no_special_checking_diagnostic() {
+fn a_former_header_in_an_import_is_only_an_unknown_bare_name() {
     let temp = TempDir::new("ordinary-former-header");
     temp.source("dependency.opaal", "language 1\nlet answer = 42\n");
     let root = temp.source("main.opaal", "import './dependency.opaal' as dependency\n");
 
     let output = opaal([OsString::from("check"), root.into_os_string()]);
-    assert!(output.status.success(), "{output:?}");
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
     assert!(output.stdout.is_empty());
-    assert!(output.stderr.is_empty());
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("error[CMD007]: unknown bare command or callable `language`"));
+    assert!(!stderr.contains("source generation"));
 }
 
 #[test]
@@ -94,7 +96,7 @@ fn checker_analyzes_effects_without_executing_them() {
     let root = temp.source(
         "main.opaal",
         &format!(
-            "echo changed > '{}'\n^touch '{}'\n",
+            "^echo changed > '{}'\n^touch '{}'\n",
             marker.display(),
             marker.display()
         ),

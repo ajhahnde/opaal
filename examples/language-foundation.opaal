@@ -7,13 +7,13 @@ enum Selection[T] {
 }
 
 def tail[T](items: List[T]) -> Selection[List[T]] {
-    match $items {
+    match items {
         [] => { return Selection::Empty }
-        [first, ...rest] => { return Selection::Selected($rest) }
+        [first, ...rest] => { return Selection::Selected(rest) }
     }
 }
 
 match tail(["build", "test", "review"]) {
-    Selection::Selected(rest) => { value::length($rest) }
+    Selection::Selected(rest) => { value::length(rest) }
     Selection::Empty => { 0 }
 }

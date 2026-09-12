@@ -3,8 +3,8 @@
 use opaal_syntax::{
     AstNode, BinaryExpression, BinaryOperator, CommandHead, CommandHeadKind, CommandItem,
     CommandItemKind, CommandStage, Expression, ExpressionKind, FileRedirection, Identifier,
-    IoNumber, Literal, LiteralKind, OutputMode, Redirection, RedirectionKind, Script, SourceFile,
-    SourceId, Statement, StatementKind, Word, WordPart, WordPartKind,
+    IoNumber, Literal, LiteralKind, NameReference, OutputMode, Redirection, RedirectionKind,
+    Script, SourceFile, SourceId, Statement, StatementKind, Word, WordPart, WordPartKind,
 };
 
 #[test]
@@ -12,7 +12,7 @@ fn nodes_and_word_parts_retain_exact_source_spans() {
     let source = SourceFile::new(
         SourceId::new(70),
         "ast.opaal",
-        "let total = 1 + 2\necho pre\"$name\"post\n",
+        "let total = 1 + 2\necho pre\"{name}\"post\n",
     );
 
     let addition = Expression::new(
@@ -36,18 +36,24 @@ fn nodes_and_word_parts_retain_exact_source_spans() {
 
     let double_quoted = WordPart::new(
         WordPartKind::DoubleQuoted(vec![WordPart::new(
-            WordPartKind::Variable(Identifier::new(span(&source, 28..32))),
-            span(&source, 27..32),
+            WordPartKind::Interpolation(Box::new(Expression::new(
+                ExpressionKind::Name(NameReference {
+                    name: Identifier::new(span(&source, 28..32)),
+                    span: span(&source, 28..32),
+                }),
+                span(&source, 28..32),
+            ))),
+            span(&source, 27..33),
         )]),
-        span(&source, 26..33),
+        span(&source, 26..34),
     );
     let argument = Word::new(
         vec![
             WordPart::new(WordPartKind::Bare, span(&source, 23..26)),
             double_quoted,
-            WordPart::new(WordPartKind::Bare, span(&source, 33..37)),
+            WordPart::new(WordPartKind::Bare, span(&source, 34..38)),
         ],
-        span(&source, 23..37),
+        span(&source, 23..38),
     );
     let command = Statement::new(
         StatementKind::Job(opaal_syntax::JobStatement {
@@ -64,19 +70,19 @@ fn nodes_and_word_parts_retain_exact_source_spans() {
                         ),
                         items: vec![CommandItem::new(
                             CommandItemKind::Word(argument),
-                            span(&source, 23..37),
+                            span(&source, 23..38),
                         )],
                     }),
-                    span(&source, 18..37),
+                    span(&source, 18..38),
                 )),
             ),
             background_span: None,
         }),
-        span(&source, 18..37),
+        span(&source, 18..38),
     );
-    let script = Script::new(vec![declaration, command], span(&source, 0..38));
+    let script = Script::new(vec![declaration, command], span(&source, 0..39));
 
-    assert_eq!(source.slice(script.span()).unwrap(), &source.text()[0..38]);
+    assert_eq!(source.slice(script.span()).unwrap(), &source.text()[0..39]);
     let StatementKind::Declaration(declaration) = script.statements()[0].kind() else {
         panic!("expected declaration");
     };
@@ -97,11 +103,11 @@ fn nodes_and_word_parts_retain_exact_source_spans() {
         panic!("expected word argument");
     };
     assert_eq!(word.parts().len(), 3);
-    assert_eq!(source.slice(word.parts()[1].span()).unwrap(), "\"$name\"");
+    assert_eq!(source.slice(word.parts()[1].span()).unwrap(), "\"{name}\"");
     let WordPartKind::DoubleQuoted(parts) = word.parts()[1].kind() else {
         panic!("expected double-quoted part");
     };
-    assert_eq!(source.slice(parts[0].span()).unwrap(), "$name");
+    assert_eq!(source.slice(parts[0].span()).unwrap(), "{name}");
 }
 
 #[test]

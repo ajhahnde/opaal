@@ -32,13 +32,12 @@ use crate::command::{
 };
 use crate::eval::{
     ExpandedWord, ReservedCommandDetails, RuntimeError, RuntimeErrorKind,
-    evaluate_closure_argument_with_binding_types, expand_spread, expand_word_with_environment,
+    evaluate_closure_argument_with_binding_types, expand_spread_with_context,
+    expand_word_with_context,
 };
 use crate::help::{HelpCatalog, HelpSnapshot, render_help};
 use crate::module::RuntimeBindingTypes;
-use crate::resolve::{
-    ExecutableProbe, Resolution, ResolutionError, resolve_command, resolve_external,
-};
+use crate::resolve::{ExecutableProbe, Resolution, ResolutionError, resolve_command};
 use crate::{Environment, ScopeStack, Value};
 
 /// A complete, inspectable plan for one command pipeline.
@@ -986,14 +985,15 @@ fn plan_stage(
 
     // argv[0] is the expanded command word; the head marker only steers
     // resolution and is never part of the name.
-    let head = expand_word_with_environment(
+    let head = expand_word_with_context(
         command.head.word(),
         context.source,
         scope,
         context.environment,
+        Arc::clone(&context.binding_types),
     )?;
     let force_external = command.head.kind() == opaal_syntax::CommandHeadKind::ForcedExternal;
-    let (mut resolution, mut input_carriers, mut output_carrier) =
+    let (resolution, input_carriers, output_carrier) =
         resolve(head.value(), force_external, command.head.span(), context)?;
     if matches!(
         &resolution,
@@ -1007,47 +1007,35 @@ fn plan_stage(
             command.head.span(),
         ));
     }
-    let lower_command = matches!(
-        &resolution,
-        PlannedResolution::Internal { canonical_name, .. } if canonical_name == "command"
-    );
-    let mut command_path = None;
-
     let mut argv = vec![head];
     let mut arguments = Vec::new();
     let mut redirections = Vec::new();
     for item in &command.items {
         match item.kind() {
             CommandItemKind::Word(word) => {
-                let word =
-                    expand_word_with_environment(word, context.source, scope, context.environment)?;
-                if lower_command && command_path.is_none() {
-                    command_path = Some(resolve_dynamic_external(&word, context)?);
-                }
+                let word = expand_word_with_context(
+                    word,
+                    context.source,
+                    scope,
+                    context.environment,
+                    Arc::clone(&context.binding_types),
+                )?;
                 argv.push(word.clone());
                 arguments.push(PlannedArgument::Word(word));
             }
-            CommandItemKind::Spread(variable) => {
-                let words = expand_spread(variable, item.span(), context.source, scope)?;
-                if lower_command
-                    && command_path.is_none()
-                    && let Some(word) = words.first()
-                {
-                    command_path = Some(resolve_dynamic_external(word, context)?);
-                }
+            CommandItemKind::Spread(expression) => {
+                let words = expand_spread_with_context(
+                    expression,
+                    item.span(),
+                    context.source,
+                    scope,
+                    context.environment,
+                    Arc::clone(&context.binding_types),
+                )?;
                 argv.extend(words.iter().cloned());
                 arguments.extend(words.into_iter().map(PlannedArgument::Word));
             }
             CommandItemKind::Closure(closure) => {
-                if lower_command {
-                    return Err(RuntimeError::new(
-                        RuntimeErrorKind::BuiltinArgument {
-                            command: "command",
-                            message: "expected a word argument, found a typed value".to_owned(),
-                        },
-                        item.span(),
-                    ));
-                }
                 if matches!(resolution, PlannedResolution::External { .. }) {
                     return Err(RuntimeError::new(
                         // opaal-foundation-boundary(carrier-refusal): Closures are typed values and never native argv.
@@ -1073,6 +1061,7 @@ fn plan_stage(
                     context.source,
                     scope,
                     context.environment,
+                    Arc::clone(&context.binding_types),
                 )?;
                 redirections.push(PlannedRedirection {
                     action,
@@ -1096,25 +1085,6 @@ fn plan_stage(
                 PlannedArgument::Value { .. } => None,
             }));
         }
-    }
-
-    if lower_command {
-        let Some(path) = command_path else {
-            return Err(RuntimeError::new(
-                RuntimeErrorKind::BuiltinArity {
-                    command: "command",
-                    minimum: 1,
-                    maximum: None,
-                    actual: 0,
-                },
-                span,
-            ));
-        };
-        resolution = PlannedResolution::External { path };
-        input_carriers = BTreeSet::from([Carrier::ByteStream]);
-        output_carrier = Carrier::ByteStream;
-        argv.remove(0);
-        arguments.clear();
     }
 
     Ok(PlannedStage {
@@ -1231,7 +1201,6 @@ fn standard_command_name(name: &str) -> &'static str {
         "cd" => "cd",
         "pwd" => "pwd",
         "which" => "which",
-        "command" => "command",
         "exit" => "exit",
         "check" => "check",
         "decode" => "decode",
@@ -1262,20 +1231,6 @@ fn standard_command_name(name: &str) -> &'static str {
     }
 }
 
-fn resolve_dynamic_external(
-    target: &ExpandedWord,
-    context: &StagePlanningContext<'_>,
-) -> Result<PathBuf, RuntimeError> {
-    let resolved =
-        resolve_external(target.value(), context.environment, context.probe).map_err(|error| {
-            let ResolutionError::NotFound { name } = error else {
-                unreachable!("direct external resolution cannot observe namespace reservations");
-            };
-            RuntimeError::new(RuntimeErrorKind::CommandNotFound { name }, target.span())
-        })?;
-    Ok(resolved.path().to_owned())
-}
-
 fn plan_help_stage(
     command: &CommandStage,
     span: Span,
@@ -1287,11 +1242,12 @@ fn plan_help_stage(
         .lookup("help")
         .expect("the standard help command is registered");
     let mut head_scope = scope.clone();
-    let head = expand_word_with_environment(
+    let head = expand_word_with_context(
         command.head.word(),
         context.source,
         &mut head_scope,
         context.environment,
+        Arc::clone(&context.binding_types),
     )?;
     let mut argv = vec![head];
     let mut arguments = Vec::new();
@@ -1329,11 +1285,12 @@ fn plan_help_stage(
                 }
                 query_span = item.span();
                 let mut query_scope = scope.clone();
-                let expanded = expand_word_with_environment(
+                let expanded = expand_word_with_context(
                     word,
                     context.source,
                     &mut query_scope,
                     context.environment,
+                    Arc::clone(&context.binding_types),
                 )?;
                 let name = expanded.value().to_str().ok_or_else(|| {
                     RuntimeError::new(
@@ -1364,6 +1321,7 @@ fn plan_help_stage(
                     context.source,
                     &mut redirection_scope,
                     context.environment,
+                    Arc::clone(&context.binding_types),
                 )?;
                 redirections.push(PlannedRedirection {
                     action,
@@ -1405,18 +1363,19 @@ fn plan_help_stage(
 
 fn is_static_word(word: &Word) -> bool {
     word.parts().iter().all(|part| match part.kind() {
-        WordPartKind::Bare | WordPartKind::BareEscape | WordPartKind::SingleQuoted => true,
+        WordPartKind::Bare
+        | WordPartKind::BareEscape
+        | WordPartKind::SingleQuoted
+        | WordPartKind::EscapedBrace => true,
         WordPartKind::DoubleQuoted(parts) => parts.iter().all(|part| {
             matches!(
                 part.kind(),
-                WordPartKind::DoubleText | WordPartKind::DoubleEscape
+                WordPartKind::DoubleText | WordPartKind::DoubleEscape | WordPartKind::EscapedBrace
             )
         }),
-        WordPartKind::DoubleText
-        | WordPartKind::DoubleEscape
-        | WordPartKind::Variable(_)
-        | WordPartKind::BracedInterpolation(_)
-        | WordPartKind::CommandSubstitution(_) => false,
+        WordPartKind::DoubleText | WordPartKind::DoubleEscape | WordPartKind::Interpolation(_) => {
+            false
+        }
     })
 }
 
@@ -1491,6 +1450,7 @@ fn plan_redirection(
     source: &SourceFile,
     scope: &mut ScopeStack,
     environment: &Environment,
+    binding_types: Arc<RuntimeBindingTypes>,
 ) -> Result<RedirectionAction, RuntimeError> {
     match kind {
         RedirectionKind::Input {
@@ -1500,7 +1460,13 @@ fn plan_redirection(
         } => Ok(RedirectionAction::Input {
             descriptor: descriptor_or(descriptor.as_ref(), 0, source)?,
             operator_span: *operator_span,
-            target: expand_word_with_environment(target, source, scope, environment)?,
+            target: expand_word_with_context(
+                target,
+                source,
+                scope,
+                environment,
+                Arc::clone(&binding_types),
+            )?,
         }),
         RedirectionKind::File(FileRedirection {
             descriptor,
@@ -1511,7 +1477,7 @@ fn plan_redirection(
             descriptor: descriptor_or(descriptor.as_ref(), 1, source)?,
             mode: *mode,
             operator_span: *operator_span,
-            target: expand_word_with_environment(target, source, scope, environment)?,
+            target: expand_word_with_context(target, source, scope, environment, binding_types)?,
         }),
         RedirectionKind::Duplicate {
             descriptor,
@@ -1773,7 +1739,80 @@ fn check_descriptor_ownership(stage: &PlannedStage) -> Result<(), RuntimeError> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use opaal_syntax::SourceId;
+    use crate::builtin::standard_registry;
+    use crate::module::{
+        ModuleCanonicalizer, ModuleId, ModulePathError, ModuleProgramLoader, ModuleSourceError,
+        ModuleSourceLoader,
+    };
+    use opaal_syntax::{SourceId, StatementKind};
+
+    struct OneModule(Vec<u8>);
+
+    impl ModuleCanonicalizer for OneModule {
+        fn canonicalize(&self, candidate: &Path) -> Result<PathBuf, ModulePathError> {
+            Ok(candidate.to_path_buf())
+        }
+    }
+
+    impl ModuleSourceLoader for OneModule {
+        fn load(&self, _module: &ModuleId) -> Result<Vec<u8>, ModuleSourceError> {
+            Ok(self.0.clone())
+        }
+    }
+
+    struct NoExecutables;
+
+    impl ExecutableProbe for NoExecutables {
+        fn is_executable(&self, _path: &OsStr) -> bool {
+            false
+        }
+    }
+
+    #[test]
+    fn interpolation_and_spread_retain_module_binding_types() {
+        let loader = OneModule(
+            b"import std::value as value\nwhich \"{value::length([1, 2])}\" ...{[value::length([1])]}\n"
+                .to_vec(),
+        );
+        let root = Path::new("/predictable/qualified-command-expression.opaal");
+        let registry = standard_registry();
+        let report =
+            ModuleProgramLoader::new(&loader, &loader).analyze_with_commands(root, &registry);
+        assert!(report.issues().is_empty(), "{:?}", report.issues());
+        let program = report.program().expect("the qualified source must check");
+        let source = program
+            .sources()
+            .source(program.graph().root())
+            .expect("the root source is retained");
+        let script = program
+            .sources()
+            .script(program.graph().root())
+            .expect("the root syntax is retained");
+        let StatementKind::Job(job) = script.statements()[1].kind() else {
+            panic!("the second statement is a command job");
+        };
+        let pipeline = &job.chain.or_terms()[0].and_terms()[0];
+        let plan = plan_pipeline_with_options_and_binding_types(
+            pipeline,
+            "/predictable",
+            source,
+            &mut ScopeStack::new(),
+            &Environment::from_snapshot([("PATH", "/missing")]),
+            &registry,
+            &NoExecutables,
+            &SessionOptions::default(),
+            Arc::new(program.runtime_binding_types()),
+        )
+        .expect("qualified expressions must plan with module identity");
+        assert_eq!(
+            plan.stages()[0]
+                .argv()
+                .iter()
+                .map(|word| word.value())
+                .collect::<Vec<_>>(),
+            [OsStr::new("which"), OsStr::new("2"), OsStr::new("1")]
+        );
+    }
 
     fn topology_plan(kinds: &str) -> ExecutionPlan {
         let source = SourceFile::new(SourceId::new(1), "topology.opaal", kinds);

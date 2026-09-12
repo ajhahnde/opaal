@@ -6,6 +6,9 @@ All notable changes to OPAAL are documented here.
 
 ### Changed
 
+- Use one predictable value language: bare names for reads, assignment, and
+  calls; final-expression block values; `{expression}` interpolation;
+  `...{expression}` list spread; and explicit `^literal` external heads.
 - Add canonical project check and expiring plan artifacts, exact request-local
   acceptance, stale-revalidated task execution, exclusive hash-chained run
   journals with paired secret-reveal evidence, and read-only complete or
@@ -36,6 +39,9 @@ All notable changes to OPAAL are documented here.
 
 ### Removed
 
+- Remove dollar-prefixed references, braced dollar expansion, command
+  substitution, dynamic external-command forms, and unknown-name process
+  fallback without a compatibility mode.
 - Remove all alternate source-selection, conversion, and compatibility paths
   from the shipped product tree.
 - Remove obsolete package, binary, feature, fixture, fuzz, and documentation

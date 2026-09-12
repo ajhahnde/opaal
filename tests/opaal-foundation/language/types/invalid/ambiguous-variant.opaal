@@ -5,4 +5,4 @@ enum Maybe[T] {
 }
 
 let value = Maybe::None
-$value
+value

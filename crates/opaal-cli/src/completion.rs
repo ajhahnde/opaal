@@ -19,8 +19,6 @@ use opaal_syntax::{
 /// The semantic source of one completion candidate.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum CompletionKind {
-    /// A typed command-substitution capture modifier.
-    CommandCaptureModifier,
     /// A built-in callable available in expression position.
     Intrinsic,
     /// A command registered inside the host-independent runtime catalog.
@@ -32,7 +30,7 @@ pub enum CompletionKind {
     /// An executable supplied by a host snapshot.
     ExternalCommand,
     /// A visible lexical binding.
-    Variable,
+    Name,
     /// A flag advertised by an internal command signature.
     Flag,
     /// A UTF-8 path spelling supplied by a host snapshot.
@@ -495,17 +493,9 @@ impl CompletionEngine {
         let mut completions = Vec::new();
         let mut seen = HashSet::new();
         let replacement = target.replacement();
-        let mut add = |values: &BTreeSet<String>,
-                       kind,
-                       prefix: &str,
-                       decorate: bool,
-                       append_whitespace: bool| {
+        let mut add = |values: &BTreeSet<String>, kind, prefix: &str, append_whitespace: bool| {
             for value in values.iter().filter(|value| value.starts_with(prefix)) {
-                let replacement_value = if decorate {
-                    format!("${value}")
-                } else {
-                    value.clone()
-                };
+                let replacement_value = value.clone();
                 if seen.insert(replacement_value.clone()) {
                     completions.push(Completion {
                         value: replacement_value,
@@ -518,16 +508,6 @@ impl CompletionEngine {
         };
 
         match target.context() {
-            CompletionContext::CommandSubstitutionModifier => {
-                let modifiers = BTreeSet::from(["bytes:".to_owned(), "text:".to_owned()]);
-                add(
-                    &modifiers,
-                    CompletionKind::CommandCaptureModifier,
-                    target.prefix(),
-                    false,
-                    true,
-                );
-            }
             CompletionContext::Command { forced_external } => {
                 if !*forced_external {
                     let names = self.catalog.internal.keys().cloned().collect();
@@ -535,14 +515,12 @@ impl CompletionEngine {
                         &names,
                         CompletionKind::InternalCommand,
                         target.prefix(),
-                        false,
                         true,
                     );
                     add(
                         &self.catalog.functions,
                         CompletionKind::Function,
                         target.prefix(),
-                        false,
                         true,
                     );
                     add(
@@ -550,16 +528,23 @@ impl CompletionEngine {
                         CompletionKind::Operation,
                         target.prefix(),
                         false,
-                        false,
+                    );
+                    if !target.prefix().is_empty() {
+                        add(
+                            &self.catalog.variables,
+                            CompletionKind::Name,
+                            target.prefix(),
+                            false,
+                        );
+                    }
+                } else {
+                    add(
+                        &self.catalog.external,
+                        CompletionKind::ExternalCommand,
+                        target.prefix(),
+                        true,
                     );
                 }
-                add(
-                    &self.catalog.external,
-                    CompletionKind::ExternalCommand,
-                    target.prefix(),
-                    false,
-                    true,
-                );
             }
             CompletionContext::Expression => {
                 add(
@@ -567,13 +552,11 @@ impl CompletionEngine {
                     CompletionKind::Function,
                     target.prefix(),
                     false,
-                    false,
                 );
                 add(
                     &self.catalog.intrinsics,
                     CompletionKind::Intrinsic,
                     target.prefix(),
-                    false,
                     false,
                 );
                 add(
@@ -581,19 +564,23 @@ impl CompletionEngine {
                     CompletionKind::Operation,
                     target.prefix(),
                     false,
+                );
+                add(
+                    &self.catalog.variables,
+                    CompletionKind::Name,
+                    target.prefix(),
                     false,
                 );
             }
-            CompletionContext::Variable { braced } => add(
+            CompletionContext::Name => add(
                 &self.catalog.variables,
-                CompletionKind::Variable,
-                target.prefix().strip_prefix('$').unwrap_or(target.prefix()),
-                !*braced,
+                CompletionKind::Name,
+                target.prefix(),
                 false,
             ),
             CompletionContext::Flag { command } => {
                 if let Some(flags) = self.catalog.internal.get(command.as_str()) {
-                    add(flags, CompletionKind::Flag, target.prefix(), false, true);
+                    add(flags, CompletionKind::Flag, target.prefix(), true);
                 }
             }
             CompletionContext::Path {
@@ -750,6 +737,7 @@ fn literal_pattern_tail(component: &str) -> String {
 
 fn render_path(value: &str, style: PathCompletionStyle, expression_literal: bool) -> String {
     if (value.chars().any(char::is_control)
+        || (style == PathCompletionStyle::Bare && value.contains('$'))
         || (expression_literal
             && style == PathCompletionStyle::SingleQuoted
             && value.contains('\'')))
@@ -789,7 +777,6 @@ fn render_bare_path(value: &str) -> String {
                     | '}'
                     | '['
                     | ']'
-                    | '$'
                     | '\''
                     | '"'
                     | '\\'
@@ -809,7 +796,6 @@ fn render_double_path(value: &str) -> String {
         match character {
             '\\' => rendered.push_str("\\\\"),
             '"' => rendered.push_str("\\\""),
-            '$' => rendered.push_str("\\$"),
             '\n' => rendered.push_str("\\n"),
             '\r' => rendered.push_str("\\r"),
             '\t' => rendered.push_str("\\t"),

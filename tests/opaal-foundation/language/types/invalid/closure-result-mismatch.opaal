@@ -1,2 +1,2 @@
 
-let invalid = {|value: Int| -> String $value}
+let invalid = {|value: Int| -> String value}

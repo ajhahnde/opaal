@@ -32,9 +32,9 @@ fn a_never_token_runs_to_a_value() {
     let source = "\
 mut total = 0
 for n in [1, 2, 3] {
-    $total = $total + $n
+    total = total + n
 }
-$total";
+total";
     let (_file, completion) = run(source, &CancellationToken::never());
     match completion {
         Completion::Value(value) => assert_eq!(value, Value::Int(6)),

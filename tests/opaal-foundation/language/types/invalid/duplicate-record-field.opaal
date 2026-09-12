@@ -9,4 +9,4 @@ let pair = Pair {
     left: 2,
     right: 3,
 }
-$pair
+pair

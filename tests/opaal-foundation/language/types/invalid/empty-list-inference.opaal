@@ -1,6 +1,6 @@
 
 def first[T](values: List[T]) -> T {
-    return $values[0]
+    return values[0]
 }
 
 first([])

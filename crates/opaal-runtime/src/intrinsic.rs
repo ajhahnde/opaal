@@ -140,7 +140,7 @@ impl DynamicBinding {
         }
     }
 
-    /// The exact language spelling, without the `$` read sigil.
+    /// The exact bare-name language spelling.
     #[must_use]
     pub const fn name(self) -> &'static str {
         match self {

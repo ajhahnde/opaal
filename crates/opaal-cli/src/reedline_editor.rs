@@ -352,7 +352,7 @@ fn highlight_style(kind: HighlightKind) -> Style {
         HighlightKind::Literal => Style::new().fg(Color::Yellow),
         HighlightKind::String => Style::new().fg(Color::Green),
         HighlightKind::Escape => Style::new().fg(Color::LightYellow),
-        HighlightKind::Expansion => Style::new().fg(Color::Cyan),
+        HighlightKind::Interpolation => Style::new().fg(Color::Cyan),
         HighlightKind::Operator => Style::new().fg(Color::LightBlue),
         HighlightKind::Delimiter => Style::new().fg(Color::Blue),
         HighlightKind::Invalid => Style::new().fg(Color::Red).underline(),
@@ -469,7 +469,7 @@ mod tests {
 
     #[test]
     fn reedline_highlighter_preserves_source_and_maps_semantic_styles() {
-        let source = "let name = \"$value\" # note";
+        let source = "let name = \"{value}\" # note";
         let styled = ReedlineSyntaxHighlighter.highlight(source, source.len());
 
         assert_eq!(styled.raw_string(), source);
@@ -477,7 +477,7 @@ mod tests {
             == highlight_style(HighlightKind::Keyword)
             && text == "let"));
         assert!(styled.buffer.iter().any(|(style, text)| {
-            *style == highlight_style(HighlightKind::Expansion) && text == "$value"
+            *style == highlight_style(HighlightKind::Interpolation) && text == "{"
         }));
         assert!(styled.buffer.iter().any(|(style, text)| {
             *style == highlight_style(HighlightKind::Comment) && text == "# note"

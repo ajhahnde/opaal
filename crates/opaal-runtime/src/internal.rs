@@ -209,7 +209,7 @@ pub(crate) fn execute_stage(
     closure_context: &OwnedClosureContext,
 ) -> Result<StageOutcome, RuntimeError> {
     match name {
-        "cd" | "pwd" | "which" | "command" | "exit" | "check" => {
+        "cd" | "pwd" | "which" | "exit" | "check" => {
             execute_session_builtin(stage, input, upstream, state, registry, probe, platform)
         }
         "first" => execute_first(stage, input),

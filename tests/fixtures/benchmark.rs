@@ -143,7 +143,7 @@ fn completion(warmups: usize, samples: usize) -> Result<(), String> {
             .snapshot(&registry, &scope, &cwd, &environment, &|| false)
             .ok_or_else(|| "completion snapshot was cancelled or overflowed".to_owned())?;
         let engine = CompletionEngine::new(catalog);
-        let completions = engine.complete("ben", 3);
+        let completions = engine.complete("^ben", 4);
         let elapsed = started.elapsed().as_nanos();
         if completions.is_empty() {
             return Err("completion fixture produced no candidate".to_owned());

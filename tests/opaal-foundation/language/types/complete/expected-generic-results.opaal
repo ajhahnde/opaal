@@ -9,11 +9,11 @@ def empty[T]() -> List[T] {
 }
 
 def identity[T: Equal](value: T) -> T {
-    return $value
+    return value
 }
 
 def accept[T](values: List[T]) -> List[T] {
-    return $values
+    return values
 }
 
 def empty_equal[T: Equal]() -> List[T] {
@@ -21,7 +21,7 @@ def empty_equal[T: Equal]() -> List[T] {
 }
 
 def combine[T: Equal](value: T, values: List[T]) -> List[T] {
-    return $values
+    return values
 }
 
 def nothing[T: Equal]() -> Maybe[T] {
@@ -36,7 +36,7 @@ let explicit = Maybe::None[String]()
 let returned = nothing[Int]()
 let selected = Maybe::Some(7)
 
-match $selected {
-    Maybe::Some(value) => { identity($value) }
-    Maybe::None => { $numbers[0] }
+match selected {
+    Maybe::Some(value) => { identity(value) }
+    Maybe::None => { numbers[0] }
 }
