@@ -1,8 +1,10 @@
 //! Controlled source bridge for the maintained operational modules.
 
 use std::collections::BTreeMap;
+use std::ffi::OsString;
 use std::fs::File;
 use std::io::Read;
+use std::os::unix::ffi::OsStrExt as _;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -12,7 +14,7 @@ use opaal_platform::operational::{HttpHeader, OperationalAdapter};
 use crate::authority::{AuthorityVerdict, CapabilityRequest, EffectSet};
 use crate::context::OperationalContext;
 use crate::module::{ActionId, ModuleId, ModuleOrigin, NominalTypeId};
-use crate::project::{ProjectManifest, ToolLock};
+use crate::project::{MaintainedAdapter, ProjectManifest, ToolLock};
 use crate::security::{MAX_SECRET_BYTES, Secret, SecretId};
 use crate::{NativePath, NominalRecordValue, Record, Status, Value};
 
@@ -25,6 +27,7 @@ const MAX_JOURNAL_MESSAGE_BYTES: usize = 4 * 1024;
 pub struct SourceEffectEvent {
     action_node_id: String,
     request: CapabilityRequest,
+    operation: SourceOperation,
     attempt: u64,
 }
 
@@ -40,8 +43,130 @@ impl SourceEffectEvent {
     }
 
     #[must_use]
+    pub const fn operation(&self) -> &SourceOperation {
+        &self.operation
+    }
+
+    #[must_use]
     pub const fn attempt(&self) -> u64 {
         self.attempt
+    }
+}
+
+/// Closed, redaction-safe identity for one controlled source operation.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum SourceOperation {
+    Filesystem {
+        operation: String,
+        relative_path: PathBuf,
+    },
+    Process {
+        operation: String,
+        tool: String,
+        argv_count: u64,
+        argv_bytes: u64,
+        argv_digest: String,
+        argv: Vec<SourceProcessArgument>,
+    },
+    Http {
+        operation: String,
+        endpoint: String,
+        method: String,
+    },
+    Clock {
+        operation: String,
+        clock: SourceClock,
+    },
+    SecretReveal {
+        operation: String,
+        endpoint: String,
+        header: String,
+    },
+}
+
+/// One allowlisted process argument representation in operation evidence.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum SourceProcessArgument {
+    Public(String),
+    Redacted { bytes: u64, digest: String },
+}
+
+/// The clock class exposed by a redacted clock operation descriptor.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SourceClock {
+    Wall,
+    Monotonic,
+}
+
+/// Result metadata which may safely complete an operation descriptor.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum SourceEffectResult {
+    Filesystem {
+        bytes: Option<u64>,
+        evidence_digest: Option<String>,
+    },
+    Process {
+        status: Option<i64>,
+        stdout_bytes: Option<u64>,
+        stderr_bytes: Option<u64>,
+        evidence_digest: Option<String>,
+    },
+    Http {
+        status: Option<u16>,
+        body_bytes: Option<u64>,
+        evidence_digest: Option<String>,
+    },
+    Clock {
+        evidence_digest: Option<String>,
+    },
+    SecretReveal {
+        evidence_digest: Option<String>,
+    },
+}
+
+impl SourceOperation {
+    fn empty_result(&self) -> SourceEffectResult {
+        match self {
+            Self::Filesystem { .. } => SourceEffectResult::Filesystem {
+                bytes: None,
+                evidence_digest: None,
+            },
+            Self::Process { .. } => SourceEffectResult::Process {
+                status: None,
+                stdout_bytes: None,
+                stderr_bytes: None,
+                evidence_digest: None,
+            },
+            Self::Http { .. } => SourceEffectResult::Http {
+                status: None,
+                body_bytes: None,
+                evidence_digest: None,
+            },
+            Self::Clock { .. } => SourceEffectResult::Clock {
+                evidence_digest: None,
+            },
+            Self::SecretReveal { .. } => SourceEffectResult::SecretReveal {
+                evidence_digest: None,
+            },
+        }
+    }
+}
+
+impl SourceEffectResult {
+    fn evidence_digest(&self) -> Option<&str> {
+        match self {
+            Self::Filesystem {
+                evidence_digest, ..
+            }
+            | Self::Process {
+                evidence_digest, ..
+            }
+            | Self::Http {
+                evidence_digest, ..
+            }
+            | Self::Clock { evidence_digest }
+            | Self::SecretReveal { evidence_digest } => evidence_digest.as_deref(),
+        }
     }
 }
 
@@ -53,6 +178,7 @@ pub struct SourceEffectOutcome {
     message: String,
     status: Option<i64>,
     value_digest: Option<String>,
+    result: Option<SourceEffectResult>,
     partial: bool,
 }
 
@@ -74,6 +200,7 @@ impl SourceActionOutcome {
             message: message.into(),
             status: None,
             value_digest,
+            result: None,
             partial,
         })
     }
@@ -104,6 +231,10 @@ impl SourceEffectOutcome {
     #[must_use]
     pub fn value_digest(&self) -> Option<&str> {
         self.value_digest.as_deref()
+    }
+    #[must_use]
+    pub const fn result(&self) -> Option<&SourceEffectResult> {
+        self.result.as_ref()
     }
     #[must_use]
     pub const fn partial(&self) -> bool {
@@ -316,7 +447,8 @@ impl<'a> ControlledSourceOperations<'a> {
         &mut self,
         request: CapabilityRequest,
         operation: &str,
-        invoke: impl FnOnce(&mut Self) -> Result<(T, Option<Status>, Option<String>), ModuleError>,
+        descriptor: SourceOperation,
+        invoke: impl FnOnce(&mut Self) -> Result<(T, Option<Status>, SourceEffectResult), ModuleError>,
     ) -> Result<T, ModuleError> {
         if let Some(reason) = self.context.poll_cancellation() {
             return Err(ModuleError::Cancelled(reason));
@@ -344,6 +476,7 @@ impl<'a> ControlledSourceOperations<'a> {
         let event = SourceEffectEvent {
             action_node_id,
             request,
+            operation: descriptor,
             attempt,
         };
         self.journal
@@ -351,13 +484,14 @@ impl<'a> ControlledSourceOperations<'a> {
             .map_err(|message| ModuleError::invalid("JOURNAL005", message))?;
 
         match invoke(self) {
-            Ok((value, status, digest)) => {
+            Ok((value, status, result)) => {
                 let outcome = SourceEffectOutcome {
                     class: "success",
                     code: "EFFECT000".to_owned(),
                     message: "effect completed".to_owned(),
                     status: status.as_ref().and_then(Status::code),
-                    value_digest: digest,
+                    value_digest: result.evidence_digest().map(str::to_owned),
+                    result: Some(result),
                     partial: false,
                 };
                 if let Err(message) = self.journal.after(&event, &outcome) {
@@ -390,6 +524,7 @@ impl<'a> ControlledSourceOperations<'a> {
                     message: bounded_message(&self.context.redact_text(&error.to_string())),
                     status: None,
                     value_digest: None,
+                    result: Some(event.operation.empty_result()),
                     partial,
                 };
                 self.journal
@@ -441,7 +576,9 @@ impl<'a> ControlledSourceOperations<'a> {
                 let maximum = usize_value(&arguments, 1)?;
                 let request = CapabilityRequest::filesystem_read(self.manifest.root())
                     .map_err(invalid_request)?;
-                self.effect(request, "std::filesystem::read", |this| {
+                let descriptor =
+                    filesystem_descriptor("std::filesystem::read", self.manifest.root(), &target)?;
+                self.effect(request, "std::filesystem::read", descriptor, |this| {
                     let value = filesystem::read(
                         this.context,
                         this.effects,
@@ -467,7 +604,17 @@ impl<'a> ControlledSourceOperations<'a> {
                             "bound input bytes changed before use",
                         ));
                     }
-                    Ok((Value::bytes(value), None, Some(digest)))
+                    let bytes = u64::try_from(value.len()).map_err(|_| {
+                        ModuleError::invalid("OPERATION005", "filesystem byte count overflow")
+                    })?;
+                    Ok((
+                        Value::bytes(value),
+                        None,
+                        SourceEffectResult::Filesystem {
+                            bytes: Some(bytes),
+                            evidence_digest: Some(digest),
+                        },
+                    ))
                 })
             }
             ("filesystem", "write_atomic") => {
@@ -475,23 +622,47 @@ impl<'a> ControlledSourceOperations<'a> {
                 let payload = bytes(&arguments, 1)?.to_vec();
                 let request = CapabilityRequest::filesystem_write(self.manifest.evidence())
                     .map_err(invalid_request)?;
-                self.effect(request, "std::filesystem::write_atomic", |this| {
-                    filesystem::write_atomic(
-                        this.context,
-                        this.effects,
-                        this.platform,
-                        this.adapter,
-                        this.manifest.evidence(),
-                        this.manifest.root(),
-                        &target,
-                        &payload,
-                    )?;
-                    Ok((Value::Null, None, Some(integrity::sha256(&payload))))
-                })
+                let descriptor = filesystem_descriptor(
+                    "std::filesystem::write_atomic",
+                    self.manifest.root(),
+                    &target,
+                )?;
+                self.effect(
+                    request,
+                    "std::filesystem::write_atomic",
+                    descriptor,
+                    |this| {
+                        filesystem::write_atomic(
+                            this.context,
+                            this.effects,
+                            this.platform,
+                            this.adapter,
+                            this.manifest.evidence(),
+                            this.manifest.root(),
+                            &target,
+                            &payload,
+                        )?;
+                        let bytes = u64::try_from(payload.len()).map_err(|_| {
+                            ModuleError::invalid("OPERATION005", "filesystem byte count overflow")
+                        })?;
+                        Ok((
+                            Value::Null,
+                            None,
+                            SourceEffectResult::Filesystem {
+                                bytes: Some(bytes),
+                                evidence_digest: Some(integrity::sha256(&payload)),
+                            },
+                        ))
+                    },
+                )
             }
             ("time", "wall_now") => {
                 let request = CapabilityRequest::clock_wall();
-                self.effect(request, "std::time::wall_now", |this| {
+                let descriptor = SourceOperation::Clock {
+                    operation: "std::time::wall_now".to_owned(),
+                    clock: SourceClock::Wall,
+                };
+                self.effect(request, "std::time::wall_now", descriptor, |this| {
                     let value =
                         time::wall_now(this.context, this.effects, this.platform, this.adapter)?
                             .to_string();
@@ -499,13 +670,19 @@ impl<'a> ControlledSourceOperations<'a> {
                     Ok((
                         nominal_record("time", "Timestamp", vec![("_value", Value::string(value))]),
                         None,
-                        Some(digest),
+                        SourceEffectResult::Clock {
+                            evidence_digest: Some(digest),
+                        },
                     ))
                 })
             }
             ("time", "monotonic_now") => {
                 let request = CapabilityRequest::clock_monotonic();
-                self.effect(request, "std::time::monotonic_now", |this| {
+                let descriptor = SourceOperation::Clock {
+                    operation: "std::time::monotonic_now".to_owned(),
+                    clock: SourceClock::Monotonic,
+                };
+                self.effect(request, "std::time::monotonic_now", descriptor, |this| {
                     let value = time::monotonic_now(
                         this.context,
                         this.effects,
@@ -516,7 +693,13 @@ impl<'a> ControlledSourceOperations<'a> {
                     let value = i64::try_from(value).map_err(|_| {
                         ModuleError::invalid("TIME002", "monotonic instant exceeds Int")
                     })?;
-                    Ok((Value::Int(value), None, None))
+                    Ok((
+                        Value::Int(value),
+                        None,
+                        SourceEffectResult::Clock {
+                            evidence_digest: None,
+                        },
+                    ))
                 })
             }
             ("version", "parse") => version::Version::parse(string(&arguments, 0)?)
@@ -559,7 +742,8 @@ impl<'a> ControlledSourceOperations<'a> {
                 let argv = string_list(&arguments, 1)?;
                 let request =
                     CapabilityRequest::process_run(tool.clone()).map_err(invalid_request)?;
-                self.effect(request, "std::process::run", |this| {
+                let descriptor = process_descriptor(self.tools, &tool, &argv)?;
+                self.effect(request, "std::process::run", descriptor, |this| {
                     let refs = argv.iter().map(String::as_str).collect::<Vec<_>>();
                     let executable_file = this.executable_files.get(&tool).ok_or_else(|| {
                         ModuleError::invalid(
@@ -584,6 +768,12 @@ impl<'a> ControlledSourceOperations<'a> {
                     )?;
                     let status = result.status().clone();
                     let digest = integrity::sha256(&[result.stdout(), result.stderr()].concat());
+                    let stdout_bytes = u64::try_from(result.stdout().len()).map_err(|_| {
+                        ModuleError::invalid("OPERATION005", "process stdout byte count overflow")
+                    })?;
+                    let stderr_bytes = u64::try_from(result.stderr().len()).map_err(|_| {
+                        ModuleError::invalid("OPERATION005", "process stderr byte count overflow")
+                    })?;
                     let value = nominal_record(
                         "process",
                         "ToolResult",
@@ -593,7 +783,16 @@ impl<'a> ControlledSourceOperations<'a> {
                             ("stderr", Value::bytes(result.stderr().to_vec())),
                         ],
                     );
-                    Ok((value, Some(status), Some(digest)))
+                    Ok((
+                        value,
+                        Some(status.clone()),
+                        SourceEffectResult::Process {
+                            status: status.code(),
+                            stdout_bytes: Some(stdout_bytes),
+                            stderr_bytes: Some(stderr_bytes),
+                            evidence_digest: Some(digest),
+                        },
+                    ))
                 })
             }
             ("http", "secret_header") => {
@@ -673,11 +872,29 @@ impl<'a> ControlledSourceOperations<'a> {
                 let maximum = usize_value(&arguments, 5)?;
                 let request = CapabilityRequest::network_http(endpoint_id.clone(), method.clone())
                     .map_err(invalid_request)?;
+                let descriptor = SourceOperation::Http {
+                    operation: "std::http::request".to_owned(),
+                    endpoint: endpoint_id.clone(),
+                    method: method.clone(),
+                };
                 let ca = self.tls_ca.get(&endpoint_id).map(Vec::as_slice);
-                self.effect(request, "std::http::request", |this| {
+                self.effect(request, "std::http::request", descriptor, |this| {
                     let response = match secret {
                         Some((secret, reveal, secret_id)) => {
-                            this.effect(reveal, "std::http::secret_reveal", |this| {
+                            let (sink_endpoint, header) = match reveal.scope() {
+                                crate::authority::CapabilityScope::SecretSink {
+                                    endpoint,
+                                    header,
+                                    ..
+                                } => (endpoint.clone(), header.clone()),
+                                _ => unreachable!("secret reveal has one closed scope"),
+                            };
+                            let descriptor = SourceOperation::SecretReveal {
+                                operation: "std::http::secret_reveal".to_owned(),
+                                endpoint: sink_endpoint,
+                                header,
+                            };
+                            this.effect(reveal, "std::http::secret_reveal", descriptor, |this| {
                                 this.materialize_secret(&secret_id)?;
                                 let response = http::request(
                                     this.context,
@@ -695,7 +912,13 @@ impl<'a> ControlledSourceOperations<'a> {
                                     &mut this.http_budget,
                                 )?;
                                 let digest = integrity::sha256(response.body());
-                                Ok((response, None, Some(digest)))
+                                Ok((
+                                    response,
+                                    None,
+                                    SourceEffectResult::SecretReveal {
+                                        evidence_digest: Some(digest),
+                                    },
+                                ))
                             })?
                         }
                         None => http::request(
@@ -715,6 +938,10 @@ impl<'a> ControlledSourceOperations<'a> {
                         )?,
                     };
                     let digest = integrity::sha256(response.body());
+                    let status = response.status();
+                    let body_bytes = u64::try_from(response.body().len()).map_err(|_| {
+                        ModuleError::invalid("OPERATION005", "HTTP body byte count overflow")
+                    })?;
                     let headers = Record::new(
                         response
                             .headers()
@@ -737,7 +964,15 @@ impl<'a> ControlledSourceOperations<'a> {
                             ("body", Value::bytes(response.body().to_vec())),
                         ],
                     );
-                    Ok((value, None, Some(digest)))
+                    Ok((
+                        value,
+                        None,
+                        SourceEffectResult::Http {
+                            status: Some(status),
+                            body_bytes: Some(body_bytes),
+                            evidence_digest: Some(digest),
+                        },
+                    ))
                 })
             }
             _ => Err(ModuleError::invalid(
@@ -832,6 +1067,131 @@ impl SourceOperationalHost for ControlledSourceOperations<'_> {
     fn take_evidence(&mut self) -> Vec<SourceOperationalEvidence> {
         std::mem::take(&mut self.evidence)
     }
+}
+
+fn filesystem_descriptor(
+    operation: &str,
+    root: &Path,
+    target: &Path,
+) -> Result<SourceOperation, ModuleError> {
+    let root = path::normalize(root)?;
+    let target = path::contained(&root, target)?;
+    let relative_path = target
+        .strip_prefix(&root)
+        .map_err(|_| ModuleError::invalid("FS004", "filesystem target escapes project root"))?
+        .to_path_buf();
+    Ok(SourceOperation::Filesystem {
+        operation: operation.to_owned(),
+        relative_path,
+    })
+}
+
+fn process_descriptor(
+    tools: &ToolLock,
+    tool_id: &str,
+    arguments: &[String],
+) -> Result<SourceOperation, ModuleError> {
+    let tool = tools.tools().get(tool_id).ok_or_else(|| {
+        ModuleError::invalid("PROCESS004", format!("unknown locked tool `{tool_id}`"))
+    })?;
+    let mut native_argv = Vec::with_capacity(arguments.len() + 1);
+    native_argv.push(process::locked_path(tool).into_os_string());
+    native_argv.extend(arguments.iter().map(OsString::from));
+    let argv_count = u64::try_from(native_argv.len())
+        .map_err(|_| ModuleError::invalid("OPERATION005", "process argv count overflow"))?;
+    let argv_bytes = native_argv.iter().try_fold(0_u64, |total, argument| {
+        let bytes = u64::try_from(argument.as_os_str().as_bytes().len())
+            .map_err(|_| ModuleError::invalid("OPERATION005", "process argv byte overflow"))?;
+        total
+            .checked_add(bytes)
+            .ok_or_else(|| ModuleError::invalid("OPERATION005", "process argv byte overflow"))
+    })?;
+    let argv_digest = digest_native_argv(&native_argv)?;
+    let argv = native_argv
+        .iter()
+        .map(|argument| {
+            let bytes = argument.as_os_str().as_bytes();
+            Ok(SourceProcessArgument::Redacted {
+                bytes: u64::try_from(bytes.len()).map_err(|_| {
+                    ModuleError::invalid("OPERATION005", "process argument byte overflow")
+                })?,
+                digest: integrity::sha256(bytes),
+            })
+        })
+        .collect::<Result<Vec<_>, ModuleError>>()?;
+    Ok(SourceOperation::Process {
+        operation: "std::process::run".to_owned(),
+        tool: tool_id.to_owned(),
+        argv_count,
+        argv_bytes,
+        argv_digest,
+        argv,
+    })
+}
+
+/// Build the descriptor for one maintained adapter-owned version probe.
+pub fn maintained_probe_operation(
+    tools: &ToolLock,
+    tool_id: &str,
+) -> Result<SourceOperation, ModuleError> {
+    let tool = tools.tools().get(tool_id).ok_or_else(|| {
+        ModuleError::invalid("PROCESS004", format!("unknown locked tool `{tool_id}`"))
+    })?;
+    let fixed = match tool.adapter() {
+        MaintainedAdapter::Git => &["--version"][..],
+        MaintainedAdapter::Cargo => &["--version", "--verbose"][..],
+    };
+    let mut native_argv = Vec::with_capacity(fixed.len() + 1);
+    native_argv.push(process::locked_path(tool).into_os_string());
+    native_argv.extend(fixed.iter().map(OsString::from));
+    let argv_count = u64::try_from(native_argv.len())
+        .map_err(|_| ModuleError::invalid("OPERATION005", "process argv count overflow"))?;
+    let argv_bytes = native_argv.iter().try_fold(0_u64, |total, argument| {
+        let bytes = u64::try_from(argument.as_os_str().as_bytes().len())
+            .map_err(|_| ModuleError::invalid("OPERATION005", "process argv byte overflow"))?;
+        total
+            .checked_add(bytes)
+            .ok_or_else(|| ModuleError::invalid("OPERATION005", "process argv byte overflow"))
+    })?;
+    let executable = native_argv[0].as_os_str().as_bytes();
+    let mut argv = Vec::with_capacity(native_argv.len());
+    argv.push(SourceProcessArgument::Redacted {
+        bytes: u64::try_from(executable.len())
+            .map_err(|_| ModuleError::invalid("OPERATION005", "process argument overflow"))?,
+        digest: integrity::sha256(executable),
+    });
+    argv.extend(
+        fixed
+            .iter()
+            .map(|argument| SourceProcessArgument::Public((*argument).to_owned())),
+    );
+    Ok(SourceOperation::Process {
+        operation: "std::process::probe".to_owned(),
+        tool: tool_id.to_owned(),
+        argv_count,
+        argv_bytes,
+        argv_digest: digest_native_argv(&native_argv)?,
+        argv,
+    })
+}
+
+fn digest_native_argv(arguments: &[OsString]) -> Result<String, ModuleError> {
+    let mut canonical = Vec::new();
+    canonical.extend_from_slice(
+        &u64::try_from(arguments.len())
+            .map_err(|_| ModuleError::invalid("OPERATION005", "process argv count overflow"))?
+            .to_be_bytes(),
+    );
+    for argument in arguments {
+        let bytes = argument.as_os_str().as_bytes();
+        canonical.extend_from_slice(
+            &u64::try_from(bytes.len())
+                .map_err(|_| ModuleError::invalid("OPERATION005", "process argv byte overflow"))?
+                .to_be_bytes(),
+        );
+        canonical.extend_from_slice(bytes);
+    }
+    Ok(integrity::sha256(&canonical))
 }
 
 fn argument(arguments: &[Value], index: usize) -> Result<&Value, ModuleError> {

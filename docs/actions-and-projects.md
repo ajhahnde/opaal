@@ -177,6 +177,7 @@ Create an expiring review artifact for the same checked task:
 opaal plan --project opaal.toml --task release --environment ci \
   --input-file candidate=artifact.tar --expires-in 900s \
   --out release.plan.json
+opaal plan inspect release.plan.json
 ```
 
 The plan binds the canonical check, project and source closure, typed inputs,
@@ -235,12 +236,16 @@ toolchain; OPAAL never rewrites a persisted development artifact in place.
 The journal destination is project-contained, mode `0600`, and never
 overwritten. Its initial header is written and synced in an exclusive sibling,
 atomically published to the exact absent target without replacement, and
-followed by a parent-directory sync. Later canonical `opaal.run-journal.v1`
+followed by a parent-directory sync. Later canonical `opaal.run-journal.v2`
 lines are synced in hash-chain order: action boundaries, paired effect
 boundaries, cleanup, and one terminal record. A secret-bearing HTTP request
 nests its own paired `secret.reveal` records inside the surrounding
 `network.http` records; journal payloads contain only the secret identity and
 sink scope, never secret bytes.
+Every paired effect also carries one closed operation descriptor. Filesystem
+paths are project-root-relative; source-derived process arguments are lengths
+and SHA-256 digests; HTTP bodies, header values, secrets, environment values,
+observed clock values, and absolute project roots are never descriptors.
 Completed and partial external facts remain evidence even when the action later
 fails, and no effect is retried implicitly.
 
@@ -249,13 +254,18 @@ Validate and project that evidence without granting authority or resuming work:
 ```sh
 opaal audit --project opaal.toml --journal release.run.jsonl \
   --out release.audit.json
+opaal audit inspect release.audit.json
 ```
 
 Audit checks the closed journal schema, contiguous sequence, digests, hash
-chain, and terminal state, then exclusively publishes `opaal.audit.v1` under
+chain, and terminal state, then exclusively publishes `opaal.audit.v2` under
 the same explicit project root. A valid complete-line prefix with no terminal
 record becomes an `incomplete` audit and exits 1; earlier parse, schema,
 sequence, or hash corruption refuses without publishing success.
+The audit records the journal header digest, last validated complete-line
+digest, inclusive validated line count, start time, nullable finish time, and
+nullable terminal digest. Inspection validates the audit and its own digest;
+only audit generation revalidates the source journal bytes.
 
 All plan, journal, and audit outputs refuse pre-existing files, symlinks,
 non-regular paths, and paths outside the explicit project root. Ordinary

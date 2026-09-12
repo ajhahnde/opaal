@@ -44,9 +44,10 @@ processes.
 
 ## Project workflow artifacts
 
-Current project checks and plans use `opaal.check.v2` and `opaal.plan.v2`.
-Version-1 and future artifacts are rejected without execution, rendering, or
-in-place conversion; regenerate them with the current toolchain. Use `--input`
+Current project checks, plans, journals, and audits use `opaal.check.v2`,
+`opaal.plan.v2`, `opaal.run-journal.v2`, and `opaal.audit.v2`. Version-1 and
+future artifacts are rejected without execution, rendering, or in-place
+conversion; regenerate them with the current toolchain. Use `--input`
 for lexical values, including paths that need not exist, and `--input-file` for
 one digest-bound regular-file snapshot. Authority and tool-lock paths are now
 selected by `--environment` and cannot be restated during check, plan, or

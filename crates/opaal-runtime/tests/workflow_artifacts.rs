@@ -159,6 +159,47 @@ fn header(plan_digest: &str) -> Value {
     })
 }
 
+fn clock_operation(evidence_digest: Option<String>) -> Value {
+    json!({
+        "kind":"clock",
+        "operation":"std::time::wall_now",
+        "clock":"wall",
+        "evidence_digest":evidence_digest
+    })
+}
+
+fn process_operation(
+    status: Option<u64>,
+    stdout_bytes: Option<u64>,
+    stderr_bytes: Option<u64>,
+    evidence_digest: Option<String>,
+) -> Value {
+    json!({
+        "kind":"process",
+        "operation":"std::process::run",
+        "tool":"git",
+        "argv_count":1,
+        "argv_bytes":4,
+        "argv_digest":digest('7'),
+        "argv":[{"kind":"redacted","bytes":4,"digest":digest('6')}],
+        "status":status,
+        "stdout_bytes":stdout_bytes,
+        "stderr_bytes":stderr_bytes,
+        "evidence_digest":evidence_digest
+    })
+}
+
+fn effect_before(effect: &str, scope: Value, operation: Value) -> Value {
+    json!({
+        "action_node_id":format!("{}#000000", digest('5')),
+        "effect":effect,
+        "scope":scope,
+        "operation":operation,
+        "verdict":"granted-enforced",
+        "attempt":0
+    })
+}
+
 #[test]
 fn check_and_plan_are_canonical_digest_bound_closed_artifacts() {
     let check = CheckArtifact::seal(check_document()).unwrap();
@@ -213,6 +254,29 @@ fn v1_future_and_unbound_secret_artifacts_are_rejected() {
         PlanArtifact::seal(future_plan).unwrap_err().code(),
         "ARTIFACT006"
     );
+
+    let (chain, journal) =
+        JournalChain::begin("00000000000000000000000000000009", header(&digest('5'))).unwrap();
+    assert!(!chain.is_terminal());
+    for unsupported in ["opaal.run-journal.v1", "opaal.run-journal.v3"] {
+        let bytes = String::from_utf8(journal.clone())
+            .unwrap()
+            .replace("opaal.run-journal.v2", unsupported)
+            .into_bytes();
+        assert_eq!(audit_journal(&bytes).unwrap_err().code(), "JOURNAL003");
+    }
+
+    let audit = audit_journal(&journal).unwrap();
+    for unsupported in ["opaal.audit.v1", "opaal.audit.v3"] {
+        let bytes = String::from_utf8(audit.bytes().to_vec())
+            .unwrap()
+            .replace("opaal.audit.v2", unsupported)
+            .into_bytes();
+        assert_eq!(
+            AuditArtifact::parse(&bytes).unwrap_err().code(),
+            "ARTIFACT006"
+        );
+    }
 
     let mut unbound = check_document();
     unbound["secrets"] = json!([{
@@ -399,6 +463,188 @@ fn artifact_cross_fields_refuse_inconsistent_outcomes_and_observations() {
 }
 
 #[test]
+fn journal_descriptors_are_scope_bound_and_redaction_closed() {
+    let mut mismatched_header = header(&digest('5'));
+    mismatched_header["accepted_plan_digest"] = Value::String(digest('6'));
+    assert_eq!(
+        JournalChain::begin("00000000000000000000000000000008", mismatched_header)
+            .unwrap_err()
+            .code(),
+        "JOURNAL003"
+    );
+
+    let new_chain = || {
+        JournalChain::begin("00000000000000000000000000000008", header(&digest('5')))
+            .unwrap()
+            .0
+    };
+
+    let mut wrong_tool = process_operation(None, None, None, None);
+    wrong_tool["tool"] = Value::String("cargo".to_owned());
+    assert_eq!(
+        new_chain()
+            .append(
+                "effect-before",
+                effect_before(
+                    "process.run",
+                    json!({"kind":"tool","tool":"git"}),
+                    wrong_tool,
+                ),
+            )
+            .unwrap_err()
+            .code(),
+        "JOURNAL003"
+    );
+
+    let mut exposed_source_argument = process_operation(None, None, None, None);
+    exposed_source_argument["argv"] = json!([{"kind":"public","value":"canary"}]);
+    exposed_source_argument["argv_bytes"] = Value::from(6_u64);
+    assert_eq!(
+        new_chain()
+            .append(
+                "effect-before",
+                effect_before(
+                    "process.run",
+                    json!({"kind":"tool","tool":"git"}),
+                    exposed_source_argument,
+                ),
+            )
+            .unwrap_err()
+            .code(),
+        "JOURNAL003"
+    );
+
+    let hostile_probe = json!({
+        "kind":"process",
+        "operation":"std::process::probe",
+        "tool":"git",
+        "argv_count":2,
+        "argv_bytes":10,
+        "argv_digest":digest('7'),
+        "argv":[
+            {"kind":"redacted","bytes":4,"digest":digest('6')},
+            {"kind":"public","value":"canary"}
+        ],
+        "status":null,
+        "stdout_bytes":null,
+        "stderr_bytes":null,
+        "evidence_digest":null
+    });
+    assert_eq!(
+        new_chain()
+            .append(
+                "effect-before",
+                effect_before(
+                    "process.run",
+                    json!({"kind":"tool","tool":"git"}),
+                    hostile_probe,
+                ),
+            )
+            .unwrap_err()
+            .code(),
+        "JOURNAL003"
+    );
+
+    let wrong_http_endpoint = json!({
+        "kind":"http",
+        "operation":"std::http::request",
+        "endpoint":"other",
+        "method":"GET",
+        "status":null,
+        "body_bytes":null,
+        "evidence_digest":null
+    });
+    assert_eq!(
+        new_chain()
+            .append(
+                "effect-before",
+                effect_before(
+                    "network.http",
+                    json!({"kind":"endpoint","endpoint":"service","method":"GET"}),
+                    wrong_http_endpoint,
+                ),
+            )
+            .unwrap_err()
+            .code(),
+        "JOURNAL003"
+    );
+
+    let wrong_secret_header = json!({
+        "kind":"secret-reveal",
+        "operation":"std::http::secret_reveal",
+        "endpoint":"service",
+        "header":"x-other",
+        "evidence_digest":null
+    });
+    assert_eq!(
+        new_chain()
+            .append(
+                "effect-before",
+                effect_before(
+                    "secret.reveal",
+                    json!({
+                        "kind":"secret-sink",
+                        "secret":"token",
+                        "endpoint":"service",
+                        "header":"authorization"
+                    }),
+                    wrong_secret_header,
+                ),
+            )
+            .unwrap_err()
+            .code(),
+        "JOURNAL003"
+    );
+}
+
+#[test]
+fn journal_after_requires_matching_identity_evidence_and_success_metadata() {
+    let new_chain = || {
+        JournalChain::begin("0000000000000000000000000000000a", header(&digest('5')))
+            .unwrap()
+            .0
+    };
+    let scope = json!({"kind":"tool","tool":"git"});
+    let before = process_operation(None, None, None, None);
+    let assert_after_refused = |after: Value, evidence_digest: String| {
+        let mut chain = new_chain();
+        chain
+            .append(
+                "effect-before",
+                effect_before("process.run", scope.clone(), before.clone()),
+            )
+            .unwrap();
+        let error = chain
+            .append(
+                "effect-after",
+                json!({
+                    "action_node_id":format!("{}#000000", digest('5')),
+                    "effect":"process.run",
+                    "scope":scope,
+                    "operation":after,
+                    "attempt":0,
+                    "outcome":outcome("success", "EFFECT000", "effect completed"),
+                    "evidence_digest":evidence_digest
+                }),
+            )
+            .unwrap_err();
+        assert_eq!(error.code(), "JOURNAL003");
+    };
+
+    let mut mismatched_identity = process_operation(Some(0), Some(12), Some(0), Some(digest('8')));
+    mismatched_identity["argv_digest"] = Value::String(digest('9'));
+    assert_after_refused(mismatched_identity, digest('8'));
+    assert_after_refused(
+        process_operation(Some(0), None, Some(0), Some(digest('8'))),
+        digest('8'),
+    );
+    assert_after_refused(
+        process_operation(Some(0), Some(12), Some(0), Some(digest('9'))),
+        digest('8'),
+    );
+}
+
+#[test]
 fn journal_chain_projects_complete_redacted_evidence() {
     let plan = PlanArtifact::seal(plan_document()).unwrap();
     let run_id = "00000000000000000000000000000001";
@@ -426,6 +672,7 @@ fn journal_chain_projects_complete_redacted_evidence() {
                     "action_node_id":action_node,
                     "effect":"clock.wall",
                     "scope":scope,
+                    "operation":clock_operation(None),
                     "verdict":"granted-enforced",
                     "attempt":0
                 }),
@@ -440,6 +687,7 @@ fn journal_chain_projects_complete_redacted_evidence() {
                     "action_node_id":action_node,
                     "effect":"clock.wall",
                     "scope":scope,
+                    "operation":clock_operation(Some(digest('8'))),
                     "attempt":0,
                     "outcome":outcome("success", "EFFECT000", "effect completed"),
                     "evidence_digest":digest('8')
@@ -479,6 +727,20 @@ fn journal_chain_projects_complete_redacted_evidence() {
     assert_eq!(audit.value()["run_id"], run_id);
     assert_eq!(audit.value()["events"].as_array().unwrap().len(), 5);
     assert_eq!(audit.value()["primary"]["code"], "RUN000");
+    assert_eq!(audit.value()["schema"], "opaal.audit.v2");
+    assert_eq!(
+        audit.value()["started_at"],
+        "2026-09-09T08:01:00.000000000Z"
+    );
+    assert_eq!(
+        audit.value()["finished_at"],
+        "2026-09-09T08:02:00.000000000Z"
+    );
+    assert_eq!(audit.value()["validated_line_count"], 6);
+    assert_eq!(
+        audit.value()["journal_terminal_digest"],
+        audit.value()["validated_prefix_digest"]
+    );
 }
 
 #[test]
@@ -557,6 +819,7 @@ fn journal_lifecycle_refuses_bad_attempts_nodes_and_open_boundaries() {
                 "action_node_id":action_node,
                 "effect":"process.run",
                 "scope":scope,
+                "operation":process_operation(None, None, None, None),
                 "verdict":"granted-unenforced",
                 "attempt":1
             }),
@@ -572,6 +835,7 @@ fn journal_lifecycle_refuses_bad_attempts_nodes_and_open_boundaries() {
                 "action_node_id":action_node,
                 "effect":"clock.wall",
                 "scope":scope,
+                "operation":process_operation(None, None, None, None),
                 "verdict":"granted-enforced",
                 "attempt":0
             }),
@@ -587,6 +851,7 @@ fn journal_lifecycle_refuses_bad_attempts_nodes_and_open_boundaries() {
                 "action_node_id":action_node,
                 "effect":"process.run",
                 "scope":scope,
+                "operation":process_operation(None, None, None, None),
                 "verdict":"denied",
                 "attempt":0
             }),
@@ -602,6 +867,7 @@ fn journal_lifecycle_refuses_bad_attempts_nodes_and_open_boundaries() {
                 "action_node_id":action_node,
                 "effect":"process.run",
                 "scope":scope,
+                "operation":process_operation(None, None, None, None),
                 "verdict":"granted-unenforced",
                 "attempt":0
             }),
@@ -628,6 +894,12 @@ fn journal_lifecycle_refuses_bad_attempts_nodes_and_open_boundaries() {
                 "action_node_id":action_node,
                 "effect":"process.run",
                 "scope":scope,
+                "operation":process_operation(
+                    Some(0),
+                    Some(12),
+                    Some(0),
+                    Some(digest('8')),
+                ),
                 "attempt":0,
                 "outcome":outcome("success", "EFFECT000", "probe completed"),
                 "evidence_digest":digest('8')

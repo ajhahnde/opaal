@@ -27,8 +27,9 @@ use opaal_runtime::module::{
     ModuleSourceError, ModuleSourceLoader, ValueType,
 };
 use opaal_runtime::operational::source::{
-    ControlledSourceOperations, SourceActionOutcome, SourceEffectEvent, SourceEffectJournal,
-    SourceEffectOutcome,
+    ControlledSourceOperations, SourceActionOutcome, SourceClock, SourceEffectEvent,
+    SourceEffectJournal, SourceEffectOutcome, SourceEffectResult, SourceOperation,
+    SourceProcessArgument, maintained_probe_operation,
 };
 use opaal_runtime::operational::{data, process};
 use opaal_runtime::outcome::{OutcomeEvidence, PrimaryOutcome};
@@ -353,6 +354,792 @@ impl std::fmt::Display for ProjectFrontendError {
 }
 
 impl std::error::Error for ProjectFrontendError {}
+
+const MAX_INSPECT_OUTPUT_BYTES: usize = 32 * 1024 * 1024;
+
+/// Validate and render one canonical plan without executing or granting it.
+pub fn inspect_plan_artifact(path: &Path) -> Result<Vec<u8>, ProjectFrontendError> {
+    let bytes = read_inspection_artifact(path, opaal_runtime::workflow::MAX_ARTIFACT_BYTES)?;
+    let artifact = PlanArtifact::parse(&bytes).map_err(workflow_contract)?;
+    render_plan_artifact(&artifact)
+}
+
+/// Validate and render one canonical audit without reopening its source journal.
+pub fn inspect_audit_artifact(path: &Path) -> Result<Vec<u8>, ProjectFrontendError> {
+    let bytes = read_inspection_artifact(path, MAX_AUDIT_BYTES)?;
+    let artifact =
+        opaal_runtime::workflow::AuditArtifact::parse(&bytes).map_err(workflow_contract)?;
+    render_audit_artifact(&artifact)
+}
+
+fn read_inspection_artifact(path: &Path, maximum: usize) -> Result<Vec<u8>, ProjectFrontendError> {
+    let path = absolute_lexical(path).map_err(frontend_contract)?;
+    let (_, file) = open_absolute_file_with_parent_nofollow(&path).map_err(frontend_contract)?;
+    read_bounded(file, maximum).map_err(frontend_contract)
+}
+
+struct BoundedText {
+    value: String,
+}
+
+impl BoundedText {
+    fn new() -> Self {
+        Self {
+            value: String::new(),
+        }
+    }
+
+    fn line(&mut self, value: impl AsRef<str>) -> Result<(), ProjectFrontendError> {
+        let value = value.as_ref();
+        let proposed = self
+            .value
+            .len()
+            .checked_add(value.len())
+            .and_then(|length| length.checked_add(1))
+            .ok_or_else(inspect_limit)?;
+        if proposed > MAX_INSPECT_OUTPUT_BYTES {
+            return Err(inspect_limit());
+        }
+        self.value.push_str(value);
+        self.value.push('\n');
+        Ok(())
+    }
+
+    fn finish(self) -> Vec<u8> {
+        self.value.into_bytes()
+    }
+}
+
+fn inspect_limit() -> ProjectFrontendError {
+    execute_error("INSPECT001", "human artifact view exceeds its output limit")
+}
+
+fn render_plan_artifact(artifact: &PlanArtifact) -> Result<Vec<u8>, ProjectFrontendError> {
+    let value = artifact.value();
+    let project = &value["project"];
+    let task = &value["task"];
+    let outcome = &value["outcome"];
+    let mut output = BoundedText::new();
+    output.line("OPAAL plan")?;
+    output.line(format!("digest: {}", artifact.digest()))?;
+    output.line(format!(
+        "schema: {} (version {})",
+        value["schema"].as_str().expect("validated schema"),
+        value["schema_version"].as_u64().expect("validated version")
+    ))?;
+    output.line(format!(
+        "toolchain: {}",
+        escaped_text(
+            value["toolchain"]["version"]
+                .as_str()
+                .expect("validated toolchain version")
+        )
+    ))?;
+    output.line(format!(
+        "outcome: {} {} — {}",
+        outcome["class"].as_str().expect("validated outcome class"),
+        outcome["code"].as_str().expect("validated outcome code"),
+        escaped_text(
+            outcome["message"]
+                .as_str()
+                .expect("validated outcome message")
+        )
+    ))?;
+    output.line(format!(
+        "validity: {} through {}",
+        value["created_at"]
+            .as_str()
+            .expect("validated creation time"),
+        value["expires_at"].as_str().expect("validated expiry time")
+    ))?;
+    output.line("")?;
+    output.line("Project")?;
+    output.line(format!(
+        "name: {}",
+        escaped_text(project["name"].as_str().expect("validated project name"))
+    ))?;
+    output.line(format!("root: {}", rendered_native_path(&project["root"])?))?;
+    output.line(format!(
+        "manifest: {}",
+        rendered_native_path(&project["manifest_path"])?
+    ))?;
+    output.line(format!(
+        "manifest digest: {}",
+        project["manifest_digest"]
+            .as_str()
+            .expect("validated manifest digest")
+    ))?;
+    output.line(format!(
+        "environment: {} ({})",
+        escaped_text(
+            project["environment"]
+                .as_str()
+                .expect("validated environment")
+        ),
+        project["environment_digest"]
+            .as_str()
+            .expect("validated environment digest")
+    ))?;
+    output.line(format!(
+        "tool lock digest: {}",
+        project["tool_lock_digest"]
+            .as_str()
+            .expect("validated tool-lock digest")
+    ))?;
+    output.line(format!(
+        "child environment digest: {}",
+        project["child_environment_digest"]
+            .as_str()
+            .expect("validated child-environment digest")
+    ))?;
+    output.line(format!(
+        "platform: {}",
+        escaped_text(
+            value["platform"]["triple"]
+                .as_str()
+                .expect("validated platform")
+        )
+    ))?;
+    output.line("")?;
+    output.line("Task")?;
+    output.line(format!(
+        "id: {}",
+        escaped_text(task["id"].as_str().expect("validated task id"))
+    ))?;
+    output.line(format!(
+        "action: {}",
+        escaped_text(task["action_id"].as_str().expect("validated action id"))
+    ))?;
+    output.line(format!(
+        "contract: {}",
+        task["contract_digest"]
+            .as_str()
+            .expect("validated contract digest")
+    ))?;
+    render_plan_tls(&mut output, &project["tls"])?;
+    render_plan_inputs(&mut output, &value["inputs"])?;
+    render_plan_secrets(&mut output, &value["secrets"])?;
+    render_plan_sources(&mut output, &value["sources"])?;
+    render_plan_authority(&mut output, &value["authority"])?;
+    render_plan_tools(&mut output, &value["tools"])?;
+    render_plan_observations(&mut output, &value["observations"])?;
+    render_plan_actions(&mut output, &value["actions"])?;
+    Ok(output.finish())
+}
+
+fn render_plan_tls(output: &mut BoundedText, value: &Value) -> Result<(), ProjectFrontendError> {
+    let bindings = value.as_array().expect("validated TLS bindings");
+    output.line("")?;
+    output.line(format!("TLS bindings ({})", bindings.len()))?;
+    if bindings.is_empty() {
+        return output.line("(none)");
+    }
+    for binding in bindings {
+        output.line(format!(
+            "- {} origin={} methods={} secret-headers={} server={} ca={} digest={}",
+            escaped_text(
+                binding["endpoint"]
+                    .as_str()
+                    .expect("validated TLS endpoint")
+            ),
+            escaped_text(binding["origin"].as_str().expect("validated TLS origin")),
+            rendered_text_array(&binding["methods"]),
+            rendered_text_array(&binding["secret_headers"]),
+            escaped_text(
+                binding["server_name"]
+                    .as_str()
+                    .expect("validated TLS server name")
+            ),
+            rendered_native_path(&binding["ca_path"])?,
+            binding["ca_digest"]
+                .as_str()
+                .expect("validated TLS CA digest")
+        ))?;
+    }
+    Ok(())
+}
+
+fn render_plan_inputs(output: &mut BoundedText, value: &Value) -> Result<(), ProjectFrontendError> {
+    let inputs = value.as_array().expect("validated inputs");
+    output.line("")?;
+    output.line(format!("Inputs ({})", inputs.len()))?;
+    if inputs.is_empty() {
+        return output.line("(none)");
+    }
+    for input in inputs {
+        let name = escaped_text(input["name"].as_str().expect("validated input name"));
+        let kind = escaped_text(input["type"].as_str().expect("validated input type"));
+        let binding = input["binding"].as_str().expect("validated input binding");
+        let detail = match binding {
+            "value" if input["path"].is_object() => {
+                format!("path {}", rendered_native_path(&input["path"])?)
+            }
+            "value" => format!(
+                "value \"{}\"",
+                escaped_text(input["value"].as_str().expect("validated lexical input"))
+            ),
+            "file" => format!(
+                "file {} bytes={} digest={}",
+                rendered_native_path(&input["path"])?,
+                input["size"].as_u64().expect("validated input size"),
+                input["digest"].as_str().expect("validated input digest")
+            ),
+            _ => unreachable!("validated input binding"),
+        };
+        output.line(format!("- {name}: {kind} [{binding}] {detail}"))?;
+    }
+    Ok(())
+}
+
+fn render_plan_secrets(
+    output: &mut BoundedText,
+    value: &Value,
+) -> Result<(), ProjectFrontendError> {
+    let secrets = value.as_array().expect("validated secrets");
+    output.line("")?;
+    output.line(format!("Secret requirements ({})", secrets.len()))?;
+    if secrets.is_empty() {
+        return output.line("(none)");
+    }
+    for secret in secrets {
+        output.line(format!(
+            "- {} -> endpoint={} header={}",
+            escaped_text(secret["id"].as_str().expect("validated secret id")),
+            escaped_text(secret["endpoint"].as_str().expect("validated endpoint")),
+            escaped_text(secret["header"].as_str().expect("validated header"))
+        ))?;
+    }
+    Ok(())
+}
+
+fn render_plan_sources(
+    output: &mut BoundedText,
+    value: &Value,
+) -> Result<(), ProjectFrontendError> {
+    let sources = value.as_array().expect("validated sources");
+    output.line("")?;
+    output.line(format!("Sources ({})", sources.len()))?;
+    if sources.is_empty() {
+        return output.line("(none)");
+    }
+    for source in sources {
+        output.line(format!(
+            "- {} path={} bytes={} digest={}",
+            escaped_text(source["module"].as_str().expect("validated source module")),
+            rendered_native_path(&source["path"])?,
+            source["size"].as_u64().expect("validated source size"),
+            source["digest"].as_str().expect("validated source digest")
+        ))?;
+    }
+    Ok(())
+}
+
+fn render_plan_authority(
+    output: &mut BoundedText,
+    value: &Value,
+) -> Result<(), ProjectFrontendError> {
+    let rules = value["rules"]
+        .as_array()
+        .expect("validated authority rules");
+    let requests = value["requests"]
+        .as_array()
+        .expect("validated authority requests");
+    output.line("")?;
+    output.line(format!(
+        "Authority policy: {}",
+        rendered_native_path(&value["path"])?
+    ))?;
+    output.line(format!("Authority rules ({})", rules.len()))?;
+    if rules.is_empty() {
+        output.line("(none)")?;
+    }
+    for rule in rules {
+        output.line(format!(
+            "- {} {}: {} enforcement={}",
+            escaped_text(rule["effect"].as_str().expect("validated effect")),
+            rendered_scope(&rule["scope"])?,
+            rule["decision"]
+                .as_str()
+                .expect("validated authority decision"),
+            nullable_text(&rule["required_enforcement"])
+        ))?;
+    }
+    output.line(format!("Authority requests ({})", requests.len()))?;
+    if requests.is_empty() {
+        output.line("(none)")?;
+    }
+    for request in requests {
+        output.line(format!(
+            "- {} {}: {}",
+            escaped_text(request["effect"].as_str().expect("validated effect")),
+            rendered_scope(&request["scope"])?,
+            request["verdict"].as_str().expect("validated verdict")
+        ))?;
+    }
+    output.line(format!(
+        "authority digest: {}",
+        value["digest"]
+            .as_str()
+            .expect("validated authority digest")
+    ))
+}
+
+fn render_plan_tools(output: &mut BoundedText, value: &Value) -> Result<(), ProjectFrontendError> {
+    let tools = value.as_array().expect("validated tools");
+    output.line("")?;
+    output.line(format!("Tools ({})", tools.len()))?;
+    if tools.is_empty() {
+        return output.line("(none)");
+    }
+    for tool in tools {
+        output.line(format!(
+            "- {} adapter={} path={} required={} locked={} platform={} digest={} child-environment={} verified={}",
+            escaped_text(tool["id"].as_str().expect("validated tool id")),
+            tool["adapter"].as_str().expect("validated adapter"),
+            rendered_native_path(&tool["path"])?,
+            escaped_text(
+                tool["required_version"]
+                    .as_str()
+                    .expect("validated required tool version")
+            ),
+            escaped_text(
+                tool["locked_version"]
+                    .as_str()
+                    .expect("validated tool version")
+            ),
+            escaped_text(tool["platform"].as_str().expect("validated tool platform")),
+            tool["digest"].as_str().expect("validated tool digest"),
+            tool["child_environment_digest"]
+                .as_str()
+                .expect("validated tool child-environment digest"),
+            tool["version_verified"]
+                .as_bool()
+                .expect("validated tool verification state")
+        ))?;
+    }
+    Ok(())
+}
+
+fn render_plan_observations(
+    output: &mut BoundedText,
+    value: &Value,
+) -> Result<(), ProjectFrontendError> {
+    let observations = value.as_array().expect("validated observations");
+    output.line("")?;
+    output.line(format!("Observations ({})", observations.len()))?;
+    if observations.is_empty() {
+        return output.line("(none)");
+    }
+    for observation in observations {
+        let path = if observation["path"].is_null() {
+            "none".to_owned()
+        } else {
+            rendered_native_path(&observation["path"])?
+        };
+        output.line(format!(
+            "- {} {} path={} bytes={} digest={} observed={}",
+            observation["kind"]
+                .as_str()
+                .expect("validated observation kind"),
+            escaped_text(
+                observation["id"]
+                    .as_str()
+                    .expect("validated observation id")
+            ),
+            path,
+            nullable_number(&observation["size"]),
+            nullable_text(&observation["digest"]),
+            nullable_text(&observation["observed_at"])
+        ))?;
+    }
+    Ok(())
+}
+
+fn render_plan_actions(
+    output: &mut BoundedText,
+    value: &Value,
+) -> Result<(), ProjectFrontendError> {
+    let actions = value.as_array().expect("validated actions");
+    output.line("")?;
+    output.line(format!("Actions ({})", actions.len()))?;
+    for action in actions {
+        output.line(format!(
+            "- {} ordinal={} action={} contract={} dependencies={} outcome={} {} — {}",
+            escaped_text(action["id"].as_str().expect("validated action node")),
+            action["ordinal"]
+                .as_u64()
+                .expect("validated action ordinal"),
+            escaped_text(action["action_id"].as_str().expect("validated action id")),
+            action["contract_digest"]
+                .as_str()
+                .expect("validated action contract"),
+            rendered_text_array(&action["dependencies"]),
+            action["outcome"]["class"]
+                .as_str()
+                .expect("validated action outcome"),
+            action["outcome"]["code"]
+                .as_str()
+                .expect("validated action outcome code"),
+            escaped_text(
+                action["outcome"]["message"]
+                    .as_str()
+                    .expect("validated action outcome message")
+            )
+        ))?;
+        let requests = action["requests"]
+            .as_array()
+            .expect("validated action requests");
+        output.line(format!("  requests ({})", requests.len()))?;
+        if requests.is_empty() {
+            output.line("  (none)")?;
+        }
+        for request in requests {
+            output.line(format!(
+                "  - {} {}: {}",
+                escaped_text(request["effect"].as_str().expect("validated effect")),
+                rendered_scope(&request["scope"])?,
+                request["verdict"].as_str().expect("validated verdict")
+            ))?;
+        }
+    }
+    Ok(())
+}
+
+fn render_audit_artifact(
+    artifact: &opaal_runtime::workflow::AuditArtifact,
+) -> Result<Vec<u8>, ProjectFrontendError> {
+    let value = artifact.value();
+    let mut output = BoundedText::new();
+    output.line("OPAAL audit")?;
+    output.line(format!("digest: {}", artifact.digest()))?;
+    output.line(format!(
+        "schema: {} (version {})",
+        value["schema"].as_str().expect("validated schema"),
+        value["schema_version"].as_u64().expect("validated version")
+    ))?;
+    output.line(format!(
+        "run: {}",
+        value["run_id"].as_str().expect("validated run id")
+    ))?;
+    output.line(format!(
+        "plan: {}",
+        value["plan_digest"]
+            .as_str()
+            .expect("validated plan digest")
+    ))?;
+    output.line(format!(
+        "accepted plan: {}",
+        value["accepted_plan_digest"]
+            .as_str()
+            .expect("validated accepted plan")
+    ))?;
+    output.line(format!(
+        "authority: {}",
+        value["authority_digest"]
+            .as_str()
+            .expect("validated authority digest")
+    ))?;
+    output.line(format!(
+        "time: {} through {}",
+        value["started_at"].as_str().expect("validated start time"),
+        value["finished_at"].as_str().unwrap_or("incomplete")
+    ))?;
+    output.line("")?;
+    output.line("Validated journal prefix")?;
+    output.line(format!(
+        "header digest: {}",
+        value["journal_header_digest"]
+            .as_str()
+            .expect("validated header digest")
+    ))?;
+    output.line(format!(
+        "prefix digest: {}",
+        value["validated_prefix_digest"]
+            .as_str()
+            .expect("validated prefix digest")
+    ))?;
+    output.line(format!(
+        "complete lines: {}",
+        value["validated_line_count"]
+            .as_u64()
+            .expect("validated line count")
+    ))?;
+    output.line(format!(
+        "terminal digest: {}",
+        value["journal_terminal_digest"].as_str().unwrap_or("none")
+    ))?;
+    output.line(format!(
+        "completeness: {}",
+        value["completeness"]
+            .as_str()
+            .expect("validated completeness")
+    ))?;
+    output.line("")?;
+    let primary = &value["primary"];
+    output.line("Primary outcome")?;
+    if primary.is_null() {
+        output.line("(none)")?;
+    } else {
+        output.line(format!(
+            "{} {} — {}{}",
+            primary["class"].as_str().expect("validated primary class"),
+            primary["code"].as_str().expect("validated primary code"),
+            escaped_text(
+                primary["message"]
+                    .as_str()
+                    .expect("validated primary message")
+            ),
+            if primary["partial"].as_bool().expect("validated partial") {
+                " [partial]"
+            } else {
+                ""
+            }
+        ))?;
+    }
+    render_audit_operations(&mut output, &value["events"])?;
+    Ok(output.finish())
+}
+
+fn render_audit_operations(
+    output: &mut BoundedText,
+    value: &Value,
+) -> Result<(), ProjectFrontendError> {
+    let operations = value
+        .as_array()
+        .expect("validated events")
+        .iter()
+        .filter(|event| {
+            matches!(
+                event["kind"].as_str(),
+                Some("effect-before" | "effect-after")
+            )
+        })
+        .collect::<Vec<_>>();
+    output.line("")?;
+    output.line(format!("Operation events ({})", operations.len()))?;
+    if operations.is_empty() {
+        return output.line("(none)");
+    }
+    for event in operations {
+        let payload = &event["payload"];
+        let phase = event["kind"].as_str().expect("validated event kind");
+        let mut detail = rendered_operation(&payload["operation"])?;
+        if phase == "effect-after" {
+            let outcome = &payload["outcome"];
+            detail.push_str(&format!(
+                " outcome={}{}",
+                outcome["class"].as_str().expect("validated effect outcome"),
+                if outcome["partial"].as_bool().expect("validated partial") {
+                    "/partial"
+                } else {
+                    ""
+                }
+            ));
+        }
+        output.line(format!(
+            "- seq={} {} action={} attempt={} {}",
+            event["seq"].as_u64().expect("validated sequence"),
+            phase.strip_prefix("effect-").expect("effect event phase"),
+            escaped_text(
+                payload["action_node_id"]
+                    .as_str()
+                    .expect("validated action node")
+            ),
+            payload["attempt"].as_u64().expect("validated attempt"),
+            detail
+        ))?;
+    }
+    Ok(())
+}
+
+fn rendered_operation(value: &Value) -> Result<String, ProjectFrontendError> {
+    let kind = value["kind"].as_str().expect("validated operation kind");
+    let operation = escaped_text(value["operation"].as_str().expect("validated operation id"));
+    Ok(match kind {
+        "filesystem" => format!(
+            "{operation} path={} bytes={} evidence={}",
+            rendered_native_path(&value["relative_path"])?,
+            nullable_number(&value["bytes"]),
+            nullable_text(&value["evidence_digest"])
+        ),
+        "process" => format!(
+            "{operation} tool={} argv-count={} argv-bytes={} argv-digest={} argv={} status={} stdout-bytes={} stderr-bytes={} evidence={}",
+            escaped_text(value["tool"].as_str().expect("validated tool")),
+            value["argv_count"].as_u64().expect("validated argv count"),
+            value["argv_bytes"].as_u64().expect("validated argv bytes"),
+            value["argv_digest"]
+                .as_str()
+                .expect("validated argv digest"),
+            rendered_argv(&value["argv"]),
+            nullable_number(&value["status"]),
+            nullable_number(&value["stdout_bytes"]),
+            nullable_number(&value["stderr_bytes"]),
+            nullable_text(&value["evidence_digest"])
+        ),
+        "http" => format!(
+            "{operation} endpoint={} method={} status={} body-bytes={} evidence={}",
+            escaped_text(value["endpoint"].as_str().expect("validated endpoint")),
+            escaped_text(value["method"].as_str().expect("validated method")),
+            nullable_number(&value["status"]),
+            nullable_number(&value["body_bytes"]),
+            nullable_text(&value["evidence_digest"])
+        ),
+        "clock" => format!(
+            "{operation} clock={} evidence={}",
+            value["clock"].as_str().expect("validated clock"),
+            nullable_text(&value["evidence_digest"])
+        ),
+        "secret-reveal" => format!(
+            "{operation} endpoint={} header={} evidence={}",
+            escaped_text(value["endpoint"].as_str().expect("validated endpoint")),
+            escaped_text(value["header"].as_str().expect("validated header")),
+            nullable_text(&value["evidence_digest"])
+        ),
+        _ => unreachable!("validated operation kind"),
+    })
+}
+
+fn rendered_argv(value: &Value) -> String {
+    let values = value.as_array().expect("validated argv");
+    let mut rendered = String::from("[");
+    for (index, argument) in values.iter().enumerate() {
+        if index > 0 {
+            rendered.push_str(", ");
+        }
+        if argument["kind"] == "public" {
+            rendered.push('"');
+            rendered.push_str(&escaped_text(
+                argument["value"]
+                    .as_str()
+                    .expect("validated public argument"),
+            ));
+            rendered.push('"');
+        } else {
+            rendered.push_str(&format!(
+                "<redacted bytes={} digest={}>",
+                argument["bytes"]
+                    .as_u64()
+                    .expect("validated argument bytes"),
+                argument["digest"]
+                    .as_str()
+                    .expect("validated argument digest")
+            ));
+        }
+    }
+    rendered.push(']');
+    rendered
+}
+
+fn rendered_text_array(value: &Value) -> String {
+    let values = value.as_array().expect("validated text array");
+    let mut rendered = String::from("[");
+    for (index, value) in values.iter().enumerate() {
+        if index > 0 {
+            rendered.push_str(", ");
+        }
+        rendered.push('"');
+        rendered.push_str(&escaped_text(
+            value.as_str().expect("validated text-array value"),
+        ));
+        rendered.push('"');
+    }
+    rendered.push(']');
+    rendered
+}
+
+fn rendered_scope(value: &Value) -> Result<String, ProjectFrontendError> {
+    Ok(
+        match value["kind"].as_str().expect("validated scope kind") {
+            "project-path" => format!("path={}", rendered_native_path(&value["path"])?),
+            "tool" => format!(
+                "tool={}",
+                escaped_text(value["tool"].as_str().expect("validated tool scope"))
+            ),
+            "endpoint" => format!(
+                "endpoint={} method={}",
+                escaped_text(
+                    value["endpoint"]
+                        .as_str()
+                        .expect("validated endpoint scope")
+                ),
+                escaped_text(value["method"].as_str().expect("validated method scope"))
+            ),
+            "secret-sink" => format!(
+                "secret={} endpoint={} header={}",
+                escaped_text(value["secret"].as_str().expect("validated secret scope")),
+                escaped_text(
+                    value["endpoint"]
+                        .as_str()
+                        .expect("validated endpoint scope")
+                ),
+                escaped_text(value["header"].as_str().expect("validated header scope"))
+            ),
+            "clock" => format!(
+                "clock={}",
+                value["clock"].as_str().expect("validated clock scope")
+            ),
+            _ => unreachable!("validated scope kind"),
+        },
+    )
+}
+
+fn rendered_native_path(value: &Value) -> Result<String, ProjectFrontendError> {
+    let path = path_from_native_value(value).map_err(workflow_contract)?;
+    let mut rendered = String::from("unix:b\"");
+    for byte in path.as_os_str().as_bytes() {
+        match byte {
+            b'\\' => rendered.push_str("\\\\"),
+            b'\"' => rendered.push_str("\\\""),
+            0x20..=0x7e => rendered.push(char::from(*byte)),
+            byte => rendered.push_str(&format!("\\x{byte:02x}")),
+        }
+    }
+    rendered.push('"');
+    Ok(rendered)
+}
+
+fn escaped_text(value: &str) -> String {
+    let mut escaped = String::new();
+    for character in value.chars() {
+        match character {
+            '\\' => escaped.push_str("\\\\"),
+            '"' => escaped.push_str("\\\""),
+            '\n' => escaped.push_str("\\n"),
+            '\r' => escaped.push_str("\\r"),
+            '\t' => escaped.push_str("\\t"),
+            character if character.is_control() || is_terminal_format_control(character) => {
+                escaped.push_str(&format!("\\u{{{:x}}}", u32::from(character)));
+            }
+            character => escaped.push(character),
+        }
+    }
+    escaped
+}
+
+fn is_terminal_format_control(character: char) -> bool {
+    matches!(
+        character,
+        '\u{061c}'
+            | '\u{200b}'
+            | '\u{200e}'
+            | '\u{200f}'
+            | '\u{2028}'
+            | '\u{2029}'
+            | '\u{202a}'..='\u{202e}'
+            | '\u{2060}'..='\u{206f}'
+            | '\u{feff}'
+    )
+}
+
+fn nullable_number(value: &Value) -> String {
+    value
+        .as_u64()
+        .map_or_else(|| "none".to_owned(), |value| value.to_string())
+}
+
+fn nullable_text(value: &Value) -> &str {
+    value.as_str().unwrap_or("none")
+}
 
 pub fn inspect_project(
     request: &InspectProjectRequest,
@@ -1115,12 +1902,15 @@ pub fn execute_explicit_plan(
     {
         let attempt = process_budget.attempts();
         let scope = json!({"kind":"tool","tool":tool_id});
+        let operation = maintained_probe_operation(&tools, tool_id)
+            .map_err(|error| execute_error(error.code(), error.to_string()))?;
         journal.append(
             "effect-before",
             json!({
                 "action_node_id":action_node_id,
                 "effect":"process.run",
                 "scope":scope,
+                "operation":source_operation_value(&operation, None),
                 "verdict":"granted-unenforced",
                 "attempt":attempt
             }),
@@ -1146,12 +1936,23 @@ pub fn execute_explicit_plan(
                     "stderr":digest_bytes(result.stderr())
                 }))
                 .map_err(workflow_contract)?;
+                let result_metadata = SourceEffectResult::Process {
+                    status: result.status().code(),
+                    stdout_bytes: Some(u64::try_from(result.stdout().len()).map_err(|_| {
+                        execute_error("OPERATION005", "process stdout byte count overflow")
+                    })?),
+                    stderr_bytes: Some(u64::try_from(result.stderr().len()).map_err(|_| {
+                        execute_error("OPERATION005", "process stderr byte count overflow")
+                    })?),
+                    evidence_digest: Some(evidence.clone()),
+                };
                 journal.append(
                     "effect-after",
                     json!({
                         "action_node_id":action_node_id,
                         "effect":"process.run",
                         "scope":scope,
+                        "operation":source_operation_value(&operation, Some(&result_metadata)),
                         "attempt":attempt,
                         "outcome":success_outcome("EXECUTE_PROBE", "maintained tool probe succeeded"),
                         "evidence_digest":evidence
@@ -1174,6 +1975,7 @@ pub fn execute_explicit_plan(
                         "action_node_id":action_node_id,
                         "effect":"process.run",
                         "scope":scope,
+                        "operation":source_operation_value(&operation, None),
                         "attempt":attempt,
                         "outcome":outcome,
                         "evidence_digest":null
@@ -1874,6 +2676,7 @@ impl SourceEffectJournal for RuntimeEffectJournal<'_> {
                     "action_node_id":event.action_node_id(),
                     "effect":authority_effect_name(event.request().effect()),
                     "scope":runtime_scope_value(event.request()),
+                    "operation":source_operation_value(event.operation(), None),
                     "verdict":authority_verdict_name(verdict),
                     "attempt":event.attempt()
                 }),
@@ -1893,6 +2696,7 @@ impl SourceEffectJournal for RuntimeEffectJournal<'_> {
                     "action_node_id":event.action_node_id(),
                     "effect":authority_effect_name(event.request().effect()),
                     "scope":runtime_scope_value(event.request()),
+                    "operation":source_operation_value(event.operation(), outcome.result()),
                     "attempt":event.attempt(),
                     "outcome":outcome_value(
                         outcome.class(),
@@ -1906,6 +2710,134 @@ impl SourceEffectJournal for RuntimeEffectJournal<'_> {
                 }),
             )
             .map_err(|error| error.rendered)
+    }
+}
+
+fn source_operation_value(
+    operation: &SourceOperation,
+    result: Option<&SourceEffectResult>,
+) -> Value {
+    match operation {
+        SourceOperation::Filesystem {
+            operation,
+            relative_path,
+        } => {
+            let (bytes, evidence_digest) = match result {
+                Some(SourceEffectResult::Filesystem {
+                    bytes,
+                    evidence_digest,
+                }) => (*bytes, evidence_digest.clone()),
+                _ => (None, None),
+            };
+            json!({
+                "kind":"filesystem",
+                "operation":operation,
+                "relative_path":native_path(relative_path),
+                "bytes":bytes,
+                "evidence_digest":evidence_digest
+            })
+        }
+        SourceOperation::Process {
+            operation,
+            tool,
+            argv_count,
+            argv_bytes,
+            argv_digest,
+            argv,
+        } => {
+            let (status, stdout_bytes, stderr_bytes, evidence_digest) = match result {
+                Some(SourceEffectResult::Process {
+                    status,
+                    stdout_bytes,
+                    stderr_bytes,
+                    evidence_digest,
+                }) => (
+                    *status,
+                    *stdout_bytes,
+                    *stderr_bytes,
+                    evidence_digest.clone(),
+                ),
+                _ => (None, None, None, None),
+            };
+            let argv = argv
+                .iter()
+                .map(|argument| match argument {
+                    SourceProcessArgument::Public(value) => {
+                        json!({"kind":"public","value":value})
+                    }
+                    SourceProcessArgument::Redacted { bytes, digest } => {
+                        json!({"kind":"redacted","bytes":bytes,"digest":digest})
+                    }
+                })
+                .collect::<Vec<_>>();
+            json!({
+                "kind":"process",
+                "operation":operation,
+                "tool":tool,
+                "argv_count":argv_count,
+                "argv_bytes":argv_bytes,
+                "argv_digest":argv_digest,
+                "argv":argv,
+                "status":status,
+                "stdout_bytes":stdout_bytes,
+                "stderr_bytes":stderr_bytes,
+                "evidence_digest":evidence_digest
+            })
+        }
+        SourceOperation::Http {
+            operation,
+            endpoint,
+            method,
+        } => {
+            let (status, body_bytes, evidence_digest) = match result {
+                Some(SourceEffectResult::Http {
+                    status,
+                    body_bytes,
+                    evidence_digest,
+                }) => (*status, *body_bytes, evidence_digest.clone()),
+                _ => (None, None, None),
+            };
+            json!({
+                "kind":"http",
+                "operation":operation,
+                "endpoint":endpoint,
+                "method":method,
+                "status":status,
+                "body_bytes":body_bytes,
+                "evidence_digest":evidence_digest
+            })
+        }
+        SourceOperation::Clock { operation, clock } => {
+            let evidence_digest = match result {
+                Some(SourceEffectResult::Clock { evidence_digest }) => evidence_digest.clone(),
+                _ => None,
+            };
+            json!({
+                "kind":"clock",
+                "operation":operation,
+                "clock":match clock { SourceClock::Wall => "wall", SourceClock::Monotonic => "monotonic" },
+                "evidence_digest":evidence_digest
+            })
+        }
+        SourceOperation::SecretReveal {
+            operation,
+            endpoint,
+            header,
+        } => {
+            let evidence_digest = match result {
+                Some(SourceEffectResult::SecretReveal { evidence_digest }) => {
+                    evidence_digest.clone()
+                }
+                _ => None,
+            };
+            json!({
+                "kind":"secret-reveal",
+                "operation":operation,
+                "endpoint":endpoint,
+                "header":header,
+                "evidence_digest":evidence_digest
+            })
+        }
     }
 }
 
@@ -3469,6 +4401,112 @@ mod tests {
         budget.charge(MAX_CONTROL_READ_BYTES).unwrap();
         let error = budget.charge(1).unwrap_err();
         assert_eq!(error.code(), "PROJECT027");
+    }
+
+    #[test]
+    fn human_views_escape_quotes_lines_and_terminal_direction_controls() {
+        assert_eq!(
+            escaped_text("a\"b\\c\n\u{2028}\u{202e}\u{2069}"),
+            "a\\\"b\\\\c\\n\\u{2028}\\u{202e}\\u{2069}"
+        );
+    }
+
+    #[test]
+    fn human_view_output_accepts_its_exact_limit_and_refuses_the_first_excess() {
+        let mut exact = BoundedText::new();
+        exact
+            .line("x".repeat(MAX_INSPECT_OUTPUT_BYTES - 1))
+            .unwrap();
+        assert_eq!(exact.finish().len(), MAX_INSPECT_OUTPUT_BYTES);
+
+        let mut excess = BoundedText::new();
+        let error = excess
+            .line("x".repeat(MAX_INSPECT_OUTPUT_BYTES))
+            .unwrap_err();
+        assert!(error.rendered().contains("INSPECT001"));
+    }
+
+    #[test]
+    fn maximum_legal_plan_artifact_renders_and_the_first_excess_byte_refuses() {
+        let digest = |byte: char| format!("sha256:{}", byte.to_string().repeat(64));
+        let native_path = opaal_runtime::workflow::native_path(Path::new("/project"));
+        let contract = digest('5');
+        let outcome = |message: String| {
+            json!({
+                "class":"success",
+                "code":"PLAN000",
+                "message":message,
+                "status":null,
+                "value_digest":null,
+                "partial":false
+            })
+        };
+        let mut document = json!({
+            "schema":"opaal.plan.v2",
+            "schema_version":2,
+            "created_at":"2026-09-09T08:00:00.000000000Z",
+            "expires_at":"2026-09-09T08:15:00.000000000Z",
+            "toolchain":{"version":"1.0.0-alpha.1"},
+            "platform":{"triple":"aarch64-apple-darwin"},
+            "project":{
+                "name":"demo",
+                "root":native_path,
+                "manifest_path":opaal_runtime::workflow::native_path(Path::new("/project/opaal.toml")),
+                "manifest_digest":digest('1'),
+                "environment":"ci",
+                "environment_digest":digest('2'),
+                "tool_lock_digest":digest('3'),
+                "child_environment_digest":digest('4'),
+                "tls":[]
+            },
+            "task":{
+                "id":"demo::ready",
+                "action_id":"/project/tasks.opaal::ready",
+                "contract_digest":contract
+            },
+            "inputs":[],
+            "secrets":[],
+            "sources":[],
+            "authority":{
+                "path":opaal_runtime::workflow::native_path(Path::new("/project/authority.toml")),
+                "digest":digest('6'),
+                "rules":[],
+                "requests":[]
+            },
+            "tools":[],
+            "observations":[
+                {"kind":"manifest","id":"demo","path":opaal_runtime::workflow::native_path(Path::new("/project/opaal.toml")),"digest":digest('1'),"size":0,"observed_at":null},
+                {"kind":"authority","id":"ci","path":opaal_runtime::workflow::native_path(Path::new("/project/authority.toml")),"digest":digest('6'),"size":0,"observed_at":null},
+                {"kind":"tool-lock","id":"ci","path":opaal_runtime::workflow::native_path(Path::new("/project/tools.toml")),"digest":digest('3'),"size":0,"observed_at":null},
+                {"kind":"child-environment","id":"ci","path":null,"digest":digest('4'),"size":null,"observed_at":null},
+                {"kind":"wall-clock","id":"created-at","path":null,"digest":null,"size":null,"observed_at":"2026-09-09T08:00:00.000000000Z"}
+            ],
+            "actions":[{
+                "id":format!("{contract}#000000"),
+                "ordinal":0,
+                "action_id":"/project/tasks.opaal::ready",
+                "contract_digest":contract,
+                "requests":[],
+                "dependencies":[],
+                "outcome":outcome("action is executable".to_owned())
+            }],
+            "outcome":outcome(String::new())
+        });
+        let minimal = PlanArtifact::seal(document.clone()).unwrap();
+        let padding = opaal_runtime::workflow::MAX_ARTIFACT_BYTES - minimal.bytes().len();
+        document["outcome"]["message"] = Value::String("x".repeat(padding));
+        let maximum = PlanArtifact::seal(document.clone()).unwrap();
+        assert_eq!(
+            maximum.bytes().len(),
+            opaal_runtime::workflow::MAX_ARTIFACT_BYTES
+        );
+        assert!(render_plan_artifact(&maximum).unwrap().len() <= MAX_INSPECT_OUTPUT_BYTES);
+
+        document["outcome"]["message"] = Value::String("x".repeat(padding + 1));
+        assert_eq!(
+            PlanArtifact::seal(document).unwrap_err().code(),
+            "ARTIFACT001"
+        );
     }
 
     #[test]

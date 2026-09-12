@@ -1,10 +1,8 @@
 #![forbid(unsafe_code)]
 
 use std::ffi::{OsStr, OsString};
-use std::fs;
-#[cfg(target_os = "linux")]
-use std::io::Read as _;
-use std::io::Write as _;
+use std::fs::{self, File};
+use std::io::{Read as _, Write as _};
 #[cfg(target_os = "linux")]
 use std::net::TcpListener;
 use std::os::unix::ffi::OsStringExt as _;
@@ -13,8 +11,12 @@ use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::thread;
+use std::time::{Duration, Instant};
 
 use opaal_platform::operational::supports_exact_process_execution;
+use rustix::fs::{Mode, OFlags, fcntl_getfl, fcntl_setfl, open};
+use rustix::pty::{OpenptFlags, grantpt, openpt, ptsname, unlockpt};
 
 static NEXT: AtomicU64 = AtomicU64::new(0);
 
@@ -49,6 +51,70 @@ fn opaal(arguments: impl IntoIterator<Item = impl AsRef<OsStr>>) -> Output {
         .args(arguments)
         .output()
         .unwrap()
+}
+
+fn opaal_with_tty_stdout(arguments: impl IntoIterator<Item = impl AsRef<OsStr>>) -> Output {
+    let controller = openpt(OpenptFlags::RDWR | OpenptFlags::NOCTTY).unwrap();
+    let flags = fcntl_getfl(&controller).unwrap();
+    fcntl_setfl(&controller, flags | OFlags::NONBLOCK).unwrap();
+    grantpt(&controller).unwrap();
+    unlockpt(&controller).unwrap();
+    let name = ptsname(&controller, Vec::new()).unwrap();
+    let user = File::from(
+        open(
+            name.as_c_str(),
+            OFlags::RDWR | OFlags::NOCTTY,
+            Mode::empty(),
+        )
+        .unwrap(),
+    );
+    let mut child = Command::new(env!("CARGO_BIN_EXE_opaal"))
+        .args(arguments)
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(user))
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut controller = File::from(controller);
+    let mut stdout = Vec::new();
+    let mut buffer = [0_u8; 4096];
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let status = loop {
+        loop {
+            match controller.read(&mut buffer) {
+                Ok(0) => break,
+                Err(_) => break,
+                Ok(read) => stdout.extend_from_slice(&buffer[..read]),
+            }
+        }
+        if let Some(status) = child.try_wait().unwrap() {
+            break status;
+        }
+        assert!(Instant::now() < deadline, "TTY inspector child timed out");
+        thread::sleep(Duration::from_millis(1));
+    };
+    for _ in 0..10 {
+        match controller.read(&mut buffer) {
+            Ok(0) => break,
+            Ok(read) => stdout.extend_from_slice(&buffer[..read]),
+            Err(ref error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                thread::sleep(Duration::from_millis(1));
+            }
+            Err(_) => break,
+        }
+    }
+    let mut stderr = Vec::new();
+    child
+        .stderr
+        .take()
+        .unwrap()
+        .read_to_end(&mut stderr)
+        .unwrap();
+    Output {
+        status,
+        stdout,
+        stderr,
+    }
 }
 
 fn opaal_with_stdin(
@@ -678,6 +744,113 @@ fn lexical_paths_do_not_read_and_file_bindings_snapshot_one_regular_file() {
     assert!(planned.status.success(), "{planned:?}");
     let plan =
         opaal_runtime::workflow::PlanArtifact::parse(&fs::read(&plan_path).unwrap()).unwrap();
+    let inspected = opaal([
+        OsStr::new("plan"),
+        OsStr::new("inspect"),
+        plan_path.as_os_str(),
+    ]);
+    assert!(inspected.status.success(), "{inspected:?}");
+    assert!(inspected.stderr.is_empty(), "{inspected:?}");
+    let plan_view = String::from_utf8(inspected.stdout).unwrap();
+    assert!(plan_view.starts_with("OPAAL plan\ndigest: sha256:"));
+    assert!(plan_view.contains("toolchain: 1.0.0-alpha.1"));
+    assert!(plan_view.contains("Inputs (1)\n- repo: Path [file]"));
+    assert!(plan_view.contains("Secret requirements (0)\n(none)"));
+    assert!(plan_view.contains(&format!(
+        "Sources ({})",
+        plan.value()["sources"].as_array().unwrap().len()
+    )));
+    assert!(plan_view.contains(&format!(
+        "Observations ({})",
+        plan.value()["observations"].as_array().unwrap().len()
+    )));
+    for source in plan.value()["sources"].as_array().unwrap() {
+        assert!(
+            plan_view.contains(source["digest"].as_str().unwrap()),
+            "{plan_view}"
+        );
+    }
+    assert!(plan_view.contains("Authority policy: unix:b\""));
+    assert!(plan_view.contains(&format!(
+        "Authority rules ({})",
+        plan.value()["authority"]["rules"].as_array().unwrap().len()
+    )));
+    assert!(plan_view.contains(&format!(
+        "contract={}",
+        plan.value()["actions"][0]["contract_digest"]
+            .as_str()
+            .unwrap()
+    )));
+    assert!(plan_view.contains("requests ("));
+    assert_eq!(
+        opaal([
+            OsStr::new("plan"),
+            OsStr::new("inspect"),
+            plan_path.as_os_str(),
+        ])
+        .stdout,
+        plan_view.as_bytes()
+    );
+    let tty_inspected = opaal_with_tty_stdout([
+        OsStr::new("plan"),
+        OsStr::new("inspect"),
+        plan_path.as_os_str(),
+    ]);
+    assert!(tty_inspected.status.success(), "{tty_inspected:?}");
+    assert!(tty_inspected.stderr.is_empty(), "{tty_inspected:?}");
+    assert_eq!(
+        tty_inspected.stdout,
+        plan_view.replace('\n', "\r\n").as_bytes()
+    );
+    let linked_plan_path = project.0.join("linked.plan.json");
+    std::os::unix::fs::symlink(&plan_path, &linked_plan_path).unwrap();
+    let linked_inspection = opaal([
+        OsStr::new("plan"),
+        OsStr::new("inspect"),
+        linked_plan_path.as_os_str(),
+    ]);
+    assert_eq!(linked_inspection.status.code(), Some(1));
+    assert!(linked_inspection.stdout.is_empty(), "{linked_inspection:?}");
+
+    let oversized_plan_path = project.0.join("oversized.plan.json");
+    fs::write(
+        &oversized_plan_path,
+        vec![b' '; opaal_runtime::workflow::MAX_ARTIFACT_BYTES + 1],
+    )
+    .unwrap();
+    let oversized_inspection = opaal([
+        OsStr::new("plan"),
+        OsStr::new("inspect"),
+        oversized_plan_path.as_os_str(),
+    ]);
+    assert_eq!(oversized_inspection.status.code(), Some(1));
+    assert!(
+        oversized_inspection.stdout.is_empty(),
+        "{oversized_inspection:?}"
+    );
+    assert!(
+        String::from_utf8_lossy(&oversized_inspection.stderr).contains("PROJECT002"),
+        "{oversized_inspection:?}"
+    );
+    let future_plan_path = project.0.join("future.plan.json");
+    let future_plan = String::from_utf8(fs::read(&plan_path).unwrap())
+        .unwrap()
+        .replace("opaal.plan.v2", "opaal.plan.v3");
+    fs::write(&future_plan_path, future_plan).unwrap();
+    let refused_inspection = opaal([
+        OsStr::new("plan"),
+        OsStr::new("inspect"),
+        future_plan_path.as_os_str(),
+    ]);
+    assert_eq!(refused_inspection.status.code(), Some(1));
+    assert!(
+        refused_inspection.stdout.is_empty(),
+        "{refused_inspection:?}"
+    );
+    assert!(
+        String::from_utf8_lossy(&refused_inspection.stderr).contains("ARTIFACT006"),
+        "{refused_inspection:?}"
+    );
     fs::write(&snapshot, "changed-after-planning").unwrap();
     let journal = project.0.join("stale-input.run.jsonl");
     let stale = opaal([
@@ -1664,6 +1837,26 @@ inherit = []
             .iter()
             .all(|outcome| outcome["class"] == "error" && outcome["partial"] == true)
     );
+    let audit_path = project.0.join("caught.audit.json");
+    fs::write(&audit_path, audit.bytes()).unwrap();
+    let inspected = opaal([
+        OsStr::new("audit"),
+        OsStr::new("inspect"),
+        audit_path.as_os_str(),
+    ]);
+    assert!(inspected.status.success(), "{inspected:?}");
+    assert!(inspected.stderr.is_empty(), "{inspected:?}");
+    let view = String::from_utf8(inspected.stdout).unwrap();
+    assert!(
+        view.contains("std::http::secret_reveal endpoint=failing header=authorization"),
+        "{view}"
+    );
+    assert!(
+        view.contains("std::http::request endpoint=failing method=GET"),
+        "{view}"
+    );
+    assert!(!view.contains("token"), "{view}");
+    assert!(!view.contains("canary-caught-secret"), "{view}");
 }
 
 #[cfg(target_os = "linux")]
@@ -2174,9 +2367,54 @@ fn audit_publishes_an_incomplete_artifact_and_refuses_overwrite() {
     let artifact =
         opaal_runtime::workflow::AuditArtifact::parse(&fs::read(&audit_path).unwrap()).unwrap();
     assert!(!artifact.is_complete());
+    assert_eq!(artifact.value()["schema"], "opaal.audit.v2");
+    assert_eq!(artifact.value()["validated_line_count"], 1);
+    assert_eq!(
+        artifact.value()["journal_header_digest"],
+        artifact.value()["validated_prefix_digest"]
+    );
     assert_eq!(
         String::from_utf8(output.stdout).unwrap(),
         format!("audit {} incomplete\n", artifact.digest())
+    );
+    let inspected = opaal([
+        OsStr::new("audit"),
+        OsStr::new("inspect"),
+        audit_path.as_os_str(),
+    ]);
+    assert!(inspected.status.success(), "{inspected:?}");
+    assert!(inspected.stderr.is_empty(), "{inspected:?}");
+    let view = String::from_utf8(inspected.stdout).unwrap();
+    assert!(view.contains("Validated journal prefix"));
+    assert!(view.contains("completeness: incomplete"));
+    assert!(view.contains("Operation events (0)\n(none)"));
+    let tty_inspected = opaal_with_tty_stdout([
+        OsStr::new("audit"),
+        OsStr::new("inspect"),
+        audit_path.as_os_str(),
+    ]);
+    assert!(tty_inspected.status.success(), "{tty_inspected:?}");
+    assert!(tty_inspected.stderr.is_empty(), "{tty_inspected:?}");
+    assert_eq!(tty_inspected.stdout, view.replace('\n', "\r\n").as_bytes());
+
+    let future_audit_path = project.0.join("future.audit.json");
+    let future_audit = String::from_utf8(fs::read(&audit_path).unwrap())
+        .unwrap()
+        .replace("opaal.audit.v2", "opaal.audit.v3");
+    fs::write(&future_audit_path, future_audit).unwrap();
+    let refused_inspection = opaal([
+        OsStr::new("audit"),
+        OsStr::new("inspect"),
+        future_audit_path.as_os_str(),
+    ]);
+    assert_eq!(refused_inspection.status.code(), Some(1));
+    assert!(
+        refused_inspection.stdout.is_empty(),
+        "{refused_inspection:?}"
+    );
+    assert!(
+        String::from_utf8_lossy(&refused_inspection.stderr).contains("ARTIFACT006"),
+        "{refused_inspection:?}"
     );
 
     let original = fs::read(&audit_path).unwrap();
