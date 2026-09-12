@@ -50,9 +50,9 @@ command fallback are unsupported.
 - `opaal [SCRIPT [ARG...]]` runs one explicit `.opaal` root.
 - `opaal check SOURCE` analyzes a source graph without executing it.
 - `opaal check --project opaal.toml ...` validates one explicit task,
-  environment, authority document, tool lock, and typed input set without
-  executing an action or adapter; `--format json` emits its canonical check
-  artifact.
+  environment-derived authority/tool lock, explicit lexical or file-snapshot
+  inputs, and zero-or-one executable secret requirement without executing an
+  action or adapter; `--format json` emits its canonical check artifact.
 - `opaal task inspect --project opaal.toml TASK` reports the task's shared
   action signature, declared effects, tools, and environments.
 - `opaal format --check|--write PATH...` checks or atomically rewrites source.
@@ -61,7 +61,8 @@ command fallback are unsupported.
   identity-bound, expiring plan without executing the task or probing tools.
 - `opaal execute --plan PATH --accept DIGEST ... --journal PATH` revalidates
   and, on a supported execution host, runs exactly one accepted project plan
-  under its explicit authority and writes a synced hash-chained journal.
+  under its plan-bound authority and writes a synced hash-chained journal; the
+  run ID may be supplied or securely generated.
 - `opaal audit --project opaal.toml --journal PATH --out PATH` validates a
   journal without executing or resuming work and publishes a complete or
   incomplete canonical audit.

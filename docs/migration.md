@@ -42,4 +42,15 @@ Former dollar forms receive an actionable syntax diagnostic. Unknown bare
 heads receive a static name/command diagnostic and are never retried as host
 processes.
 
+## Project workflow artifacts
+
+Current project checks and plans use `opaal.check.v2` and `opaal.plan.v2`.
+Version-1 and future artifacts are rejected without execution, rendering, or
+in-place conversion; regenerate them with the current toolchain. Use `--input`
+for lexical values, including paths that need not exist, and `--input-file` for
+one digest-bound regular-file snapshot. Authority and tool-lock paths are now
+selected by `--environment` and cannot be restated during check, plan, or
+execute. `--run-id` is optional during execute, and `--secret-stdin` is omitted
+for a secret-free plan.
+
 [← Documentation index](README.md) · [Language foundation](language-foundation.md)

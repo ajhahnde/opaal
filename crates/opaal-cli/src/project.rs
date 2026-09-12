@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::{OsStr, OsString};
 use std::fs::File;
 use std::io::{Read, Write};
-use std::os::unix::ffi::OsStringExt as _;
+use std::os::unix::ffi::{OsStrExt as _, OsStringExt as _};
 use std::os::unix::fs::MetadataExt as _;
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -96,10 +96,45 @@ pub struct CheckProjectRequest {
     manifest: PathBuf,
     task: String,
     environment: String,
-    authority: PathBuf,
-    tools: PathBuf,
-    inputs: Vec<(String, String)>,
+    inputs: Vec<ProjectInputBinding>,
     format_json: bool,
+}
+
+/// One explicit lexical-value or regular-file project input binding.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ProjectInputBinding {
+    Value { name: String, value: OsString },
+    File { name: String, path: PathBuf },
+}
+
+impl ProjectInputBinding {
+    #[must_use]
+    pub fn value(name: String, value: String) -> Self {
+        Self::native_value(name, OsString::from(value))
+    }
+
+    #[must_use]
+    pub fn native_value(name: String, value: OsString) -> Self {
+        Self::Value { name, value }
+    }
+
+    #[must_use]
+    pub fn file(name: String, path: PathBuf) -> Self {
+        Self::File { name, path }
+    }
+
+    #[must_use]
+    pub fn name(&self) -> &str {
+        match self {
+            Self::Value { name, .. } | Self::File { name, .. } => name,
+        }
+    }
+}
+
+impl From<(String, String)> for ProjectInputBinding {
+    fn from((name, value): (String, String)) -> Self {
+        Self::value(name, value)
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -107,9 +142,7 @@ pub struct PlanProjectRequest {
     manifest: PathBuf,
     task: String,
     environment: String,
-    authority: PathBuf,
-    tools: PathBuf,
-    inputs: Vec<(String, String)>,
+    inputs: Vec<ProjectInputBinding>,
     expires_in_seconds: u64,
     out: PathBuf,
 }
@@ -121,9 +154,26 @@ impl PlanProjectRequest {
         manifest: PathBuf,
         task: String,
         environment: String,
-        authority: PathBuf,
-        tools: PathBuf,
         inputs: Vec<(String, String)>,
+        expires_in_seconds: u64,
+        out: PathBuf,
+    ) -> Self {
+        Self::with_bindings(
+            manifest,
+            task,
+            environment,
+            inputs.into_iter().map(Into::into).collect(),
+            expires_in_seconds,
+            out,
+        )
+    }
+
+    #[must_use]
+    pub fn with_bindings(
+        manifest: PathBuf,
+        task: String,
+        environment: String,
+        inputs: Vec<ProjectInputBinding>,
         expires_in_seconds: u64,
         out: PathBuf,
     ) -> Self {
@@ -131,8 +181,6 @@ impl PlanProjectRequest {
             manifest,
             task,
             environment,
-            authority,
-            tools,
             inputs,
             expires_in_seconds,
             out,
@@ -144,9 +192,8 @@ impl PlanProjectRequest {
 pub struct ExecuteProjectRequest {
     plan: PathBuf,
     accept: String,
-    run_id: String,
-    authority: PathBuf,
-    secret_stdin: String,
+    run_id: Option<String>,
+    secret_stdin: Option<String>,
     journal: PathBuf,
 }
 
@@ -155,16 +202,14 @@ impl ExecuteProjectRequest {
     pub fn new(
         plan: PathBuf,
         accept: String,
-        run_id: String,
-        authority: PathBuf,
-        secret_stdin: String,
+        run_id: Option<String>,
+        secret_stdin: Option<String>,
         journal: PathBuf,
     ) -> Self {
         Self {
             plan,
             accept,
             run_id,
-            authority,
             secret_stdin,
             journal,
         }
@@ -231,22 +276,33 @@ impl CheckProjectRequest {
         manifest: PathBuf,
         task: String,
         environment: String,
-        authority: PathBuf,
-        tools: PathBuf,
         inputs: Vec<(String, String)>,
+    ) -> Self {
+        Self::with_bindings(
+            manifest,
+            task,
+            environment,
+            inputs.into_iter().map(Into::into).collect(),
+        )
+    }
+
+    #[must_use]
+    pub fn with_bindings(
+        manifest: PathBuf,
+        task: String,
+        environment: String,
+        inputs: Vec<ProjectInputBinding>,
     ) -> Self {
         Self {
             manifest,
             task,
             environment,
-            authority,
-            tools,
             inputs,
             format_json: false,
         }
     }
 
-    /// Request the canonical `opaal.check.v1` representation on stdout.
+    /// Request the canonical `opaal.check.v2` representation on stdout.
     #[must_use]
     pub const fn with_json(mut self) -> Self {
         self.format_json = true;
@@ -373,18 +429,8 @@ pub fn check_explicit_project(
         .manifest()
         .environment(&request.environment)
         .map_err(frontend_contract)?;
-    let authority_path = filesystem
-        .resolve_existing_file(&request.authority)
-        .map_err(frontend_contract)?;
-    let tools_path = filesystem
-        .resolve_existing_file(&request.tools)
-        .map_err(frontend_contract)?;
-    if authority_path != environment.authority() || tools_path != environment.tool_lock() {
-        return Err(frontend_contract(ProjectError::new(
-            "CHECK006",
-            "--authority and --tools must name the selected environment's exact files",
-        )));
-    }
+    let authority_path = environment.authority().to_path_buf();
+    let tools_path = environment.tool_lock().to_path_buf();
     let authority_bytes = filesystem
         .read_existing_bounded(&authority_path, MAX_PROJECT_DOCUMENT_BYTES)
         .map_err(frontend_contract)?;
@@ -396,13 +442,15 @@ pub fn check_explicit_project(
             .map_err(frontend_contract)?;
     let tools = parse_tool_lock(project.manifest(), &request.environment, &tools_bytes)
         .map_err(frontend_contract)?;
+    validate_input_binding_modes(&project, &request.task, &request.inputs)?;
+    let runtime_inputs = runtime_input_text(&project, &request.task, &request.inputs)?;
     let check = check_project(
         &project,
         &request.task,
         &request.environment,
         &authority,
         &tools,
-        request.inputs.clone(),
+        runtime_inputs,
     )
     .map_err(frontend_contract)?;
     let artifact = build_check_artifact(
@@ -415,6 +463,7 @@ pub fn check_explicit_project(
         &authority,
         &tools_bytes,
         &tools,
+        &request.inputs,
     )?;
     let executable = artifact.artifact.is_executable();
     let output = if request.format_json {
@@ -449,18 +498,8 @@ pub fn plan_explicit_project(
         .manifest()
         .environment(&request.environment)
         .map_err(frontend_contract)?;
-    let authority_path = filesystem
-        .resolve_existing_file(&request.authority)
-        .map_err(frontend_contract)?;
-    let tools_path = filesystem
-        .resolve_existing_file(&request.tools)
-        .map_err(frontend_contract)?;
-    if authority_path != environment.authority() || tools_path != environment.tool_lock() {
-        return Err(frontend_contract(ProjectError::new(
-            "CHECK006",
-            "--authority and --tools must name the selected environment's exact files",
-        )));
-    }
+    let authority_path = environment.authority().to_path_buf();
+    let tools_path = environment.tool_lock().to_path_buf();
     let authority_bytes = filesystem
         .read_existing_bounded(&authority_path, MAX_PROJECT_DOCUMENT_BYTES)
         .map_err(frontend_contract)?;
@@ -472,13 +511,15 @@ pub fn plan_explicit_project(
             .map_err(frontend_contract)?;
     let tools = parse_tool_lock(project.manifest(), &request.environment, &tools_bytes)
         .map_err(frontend_contract)?;
+    validate_input_binding_modes(&project, &request.task, &request.inputs)?;
+    let runtime_inputs = runtime_input_text(&project, &request.task, &request.inputs)?;
     let check = check_project(
         &project,
         &request.task,
         &request.environment,
         &authority,
         &tools,
-        request.inputs.clone(),
+        runtime_inputs,
     )
     .map_err(frontend_contract)?;
     if tools.platform() != host_platform_triple() {
@@ -501,6 +542,7 @@ pub fn plan_explicit_project(
         &authority,
         &tools_bytes,
         &tools,
+        &request.inputs,
     )?;
     let mut executable_observations = Vec::new();
     let mut total_executable_bytes = 0usize;
@@ -590,7 +632,7 @@ pub fn plan_explicit_project(
         .as_array()
         .expect("validated check inputs are an array")
         .iter()
-        .filter(|input| input["path"].is_object())
+        .filter(|input| input["binding"] == "file")
     {
         observations.push(json!({
             "kind":"input",
@@ -650,8 +692,8 @@ pub fn plan_explicit_project(
         refused_outcome("PLAN001", "static project check refused execution")
     };
     let document = json!({
-        "schema":"opaal.plan.v1",
-        "schema_version":1,
+        "schema":"opaal.plan.v2",
+        "schema_version":2,
         "created_at":created_at,
         "expires_at":expires_at,
         "toolchain":check_value["toolchain"],
@@ -659,6 +701,7 @@ pub fn plan_explicit_project(
         "project":check_value["project"],
         "task":task,
         "inputs":check_value["inputs"],
+        "secrets":check_value["secrets"],
         "sources":check_value["sources"],
         "authority":check_value["authority"],
         "tools":check_value["tools"],
@@ -675,7 +718,11 @@ pub fn plan_explicit_project(
             if executable { "" } else { " refused" }
         )
         .into_bytes(),
-        diagnostic: Vec::new(),
+        diagnostic: if executable {
+            Vec::new()
+        } else {
+            render_check_artifact_findings(&check_artifact.artifact)
+        },
         successful: executable,
     })
 }
@@ -768,6 +815,7 @@ fn build_action_records(
                 .flatten()
                 .collect::<Vec<_>>();
             sort_values_canonical(&mut requests);
+            requests.dedup();
             let mut dependencies = action
                 .dependencies()
                 .iter()
@@ -818,12 +866,6 @@ pub fn execute_explicit_plan(
     secret_input_is_terminal: bool,
     secret_input: &mut dyn Read,
 ) -> Result<ExecuteFrontendRun, ProjectFrontendError> {
-    if secret_input_is_terminal {
-        return Err(execute_error(
-            "EXECUTE001",
-            "secret stdin must not be a terminal",
-        ));
-    }
     let control_reads = ControlReadBudget::default();
     let plan_path = absolute_lexical(&request.plan).map_err(frontend_contract)?;
     let (_, plan_file) =
@@ -886,14 +928,11 @@ pub fn execute_explicit_plan(
             || required_plan_string(&plan_value["task"], "id").map(str::to_owned),
             |(_, name)| Ok(name.to_owned()),
         )?;
-    let authority_path = filesystem
-        .resolve_existing_file(&request.authority)
-        .map_err(frontend_contract)?;
     let planned_authority_path =
         path_from_native_value(&plan_value["authority"]["path"]).map_err(workflow_contract)?;
-    if authority_path != planned_authority_path {
-        return Err(stale("authority path changed"));
-    }
+    let authority_path = filesystem
+        .resolve_existing_file(&planned_authority_path)
+        .map_err(frontend_contract)?;
     let tool_lock_observation = plan_value["observations"]
         .as_array()
         .and_then(|values| values.iter().find(|value| value["kind"] == "tool-lock"))
@@ -924,14 +963,15 @@ pub fn execute_explicit_plan(
             .map_err(frontend_contract)?;
     let tools = parse_tool_lock(project.manifest(), environment_name, &tools_bytes)
         .map_err(frontend_contract)?;
-    let inputs = plan_inputs(plan_value)?;
+    let input_bindings = plan_input_bindings(plan_value)?;
+    let runtime_inputs = runtime_input_text(&project, &task_name, &input_bindings)?;
     let check = check_project(
         &project,
         &task_name,
         environment_name,
         &authority,
         &tools,
-        inputs,
+        runtime_inputs,
     )
     .map_err(frontend_contract)?;
     let current_check = build_check_artifact(
@@ -944,6 +984,7 @@ pub fn execute_explicit_plan(
         &authority,
         &tools_bytes,
         &tools,
+        &input_bindings,
     )?;
     let executable_files = verify_plan_identity(
         &plan,
@@ -978,9 +1019,9 @@ pub fn execute_explicit_plan(
         return Err(stale("toolchain or platform changed"));
     }
     validate_secret_binding(
-        project.manifest(),
-        check.task().effects(),
-        &request.secret_stdin,
+        plan_value,
+        request.secret_stdin.as_deref(),
+        secret_input_is_terminal,
     )?;
     let tls_ca = current_check.tls_ca;
     let expected_actions = build_action_records(
@@ -1008,6 +1049,8 @@ pub fn execute_explicit_plan(
         .collect::<Result<BTreeMap<_, _>, ProjectFrontendError>>()?;
     let action_node_id = required_plan_string(&planned_actions[0], "id")?;
 
+    let run_id = request.run_id.clone().map_or_else(generate_run_id, Ok)?;
+    evaluation_id(&run_id)?;
     let project_digest = digest_value(project_value).map_err(workflow_contract)?;
     let started_nanos = adapter
         .wall_time_unix_nanos()
@@ -1029,12 +1072,12 @@ pub fn execute_explicit_plan(
         "child_environment_digest":project_value["child_environment_digest"],
         "started_at":started_at
     });
-    let mut journal = filesystem.create_journal(&journal_path, &request.run_id, header)?;
+    let mut journal = filesystem.create_journal(&journal_path, &run_id, header)?;
     let mut runtime_rules = Vec::new();
     for rule in authority.rules() {
         runtime_rules.extend(runtime_authority_rules(project.manifest(), rule)?);
     }
-    let evaluation = evaluation_id(&request.run_id)?;
+    let evaluation = evaluation_id(&run_id)?;
     let execution_clock = SystemClock::new();
     let execution_deadline = Instant::from_nanos(10 * 60 * 1_000_000_000);
     let cancellation = CancellationToken::deadline(execution_clock.clone(), execution_deadline);
@@ -1146,7 +1189,7 @@ pub fn execute_explicit_plan(
         .as_array()
         .expect("validated plan inputs are an array")
         .iter()
-        .filter(|input| input["path"].is_object())
+        .filter(|input| input["binding"] == "file")
         .map(|input| {
             Ok((
                 path_from_native_value(&input["path"]).map_err(workflow_contract)?,
@@ -1160,6 +1203,10 @@ pub fn execute_explicit_plan(
         let mut effect_journal = RuntimeEffectJournal {
             journal: &mut journal,
         };
+        let secret_binding = request
+            .secret_stdin
+            .clone()
+            .map(|id| (id, &mut *secret_input as &mut dyn Read));
         let mut operations = ControlledSourceOperations::new(
             &mut operational,
             &effects,
@@ -1173,8 +1220,7 @@ pub fn execute_explicit_plan(
             action_nodes,
             planned_inputs,
             process_budget,
-            request.secret_stdin.clone(),
-            secret_input,
+            secret_binding,
         );
         execute_project_task_outcome(
             &project,
@@ -1206,6 +1252,24 @@ pub fn execute_explicit_plan(
     finish_execution_journal(&mut journal, primary_value, cleanup, &adapter)
 }
 
+fn verify_plan_check_identity(plan: &Value, check: &Value) -> Result<(), ProjectFrontendError> {
+    for field in [
+        "toolchain",
+        "project",
+        "task",
+        "inputs",
+        "secrets",
+        "sources",
+        "authority",
+        "tools",
+    ] {
+        if plan[field] != check[field] {
+            return Err(stale(format!("bound {field} identity changed")));
+        }
+    }
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 fn verify_plan_identity(
     plan: &PlanArtifact,
@@ -1219,19 +1283,7 @@ fn verify_plan_identity(
     control_reads: &ControlReadBudget,
 ) -> Result<BTreeMap<String, File>, ProjectFrontendError> {
     let value = plan.value();
-    for field in [
-        "toolchain",
-        "project",
-        "task",
-        "inputs",
-        "sources",
-        "authority",
-        "tools",
-    ] {
-        if value[field] != check[field] {
-            return Err(stale(format!("bound {field} identity changed")));
-        }
-    }
+    verify_plan_check_identity(value, check)?;
     let project = &check["project"];
     let mut expected = vec![observation(
         "manifest",
@@ -1274,7 +1326,7 @@ fn verify_plan_identity(
         .as_array()
         .expect("validated check inputs are an array")
         .iter()
-        .filter(|input| input["path"].is_object())
+        .filter(|input| input["binding"] == "file")
     {
         expected.push(json!({
             "kind":"input",
@@ -1357,15 +1409,31 @@ fn verify_plan_identity(
     Ok(executable_files)
 }
 
-fn plan_inputs(plan: &Value) -> Result<Vec<(String, String)>, ProjectFrontendError> {
+fn plan_input_bindings(plan: &Value) -> Result<Vec<ProjectInputBinding>, ProjectFrontendError> {
     plan["inputs"]
         .as_array()
         .expect("validated plan inputs are an array")
         .iter()
         .map(|input| {
             let name = required_plan_string(input, "name")?.to_owned();
-            let value = required_plan_string(input, "value")?.to_owned();
-            Ok((name, value))
+            match required_plan_string(input, "binding")? {
+                "value" if input["path"].is_object() => {
+                    let path = path_from_native_value(&input["path"]).map_err(workflow_contract)?;
+                    Ok(ProjectInputBinding::native_value(
+                        name,
+                        path.into_os_string(),
+                    ))
+                }
+                "value" => Ok(ProjectInputBinding::value(
+                    name,
+                    required_plan_string(input, "value")?.to_owned(),
+                )),
+                "file" => Ok(ProjectInputBinding::file(
+                    name,
+                    path_from_native_value(&input["path"]).map_err(workflow_contract)?,
+                )),
+                _ => Err(stale("plan input has an unsupported binding mode")),
+            }
         })
         .collect()
 }
@@ -1489,26 +1557,56 @@ fn runtime_requests(
 }
 
 fn validate_secret_binding(
-    manifest: &ProjectManifest,
-    effects: &[ProjectEffect],
-    supplied: &str,
+    plan: &Value,
+    supplied: Option<&str>,
+    secret_input_is_terminal: bool,
 ) -> Result<(), ProjectFrontendError> {
-    let required = effects
-        .iter()
-        .filter_map(|effect| {
-            (effect.capability() == "secret.reveal")
-                .then(|| effect.scope().strip_prefix("secret."))
-                .flatten()
-                .and_then(|scope| scope.split_once("@endpoint.").map(|(secret, _)| secret))
-        })
-        .collect::<Vec<_>>();
-    if required.as_slice() != [supplied] || !manifest.secrets().contains_key(supplied) {
-        return Err(execute_error(
+    let required = plan["secrets"]
+        .as_array()
+        .expect("validated plan secrets are an array");
+    match (required.as_slice(), supplied) {
+        ([], None) => Ok(()),
+        ([], Some(_)) => Err(execute_error(
+            "EXECUTE008",
+            "--secret-stdin is not accepted for a secret-free plan",
+        )),
+        ([requirement], Some(supplied)) if requirement["id"].as_str() != Some(supplied) => {
+            Err(execute_error(
+                "EXECUTE008",
+                "--secret-stdin must name the plan's one injected secret",
+            ))
+        }
+        ([_], Some(_)) if secret_input_is_terminal => Err(execute_error(
+            "EXECUTE001",
+            "secret stdin must not be a terminal",
+        )),
+        ([_], Some(_)) => Ok(()),
+        ([_], _) => Err(execute_error(
             "EXECUTE008",
             "--secret-stdin must name the plan's one injected secret",
-        ));
+        )),
+        _ => Err(execute_error(
+            "EXECUTE008",
+            "a plan with unsupported secret cardinality cannot execute",
+        )),
     }
-    Ok(())
+}
+
+fn generate_run_id() -> Result<String, ProjectFrontendError> {
+    let mut random = File::open("/dev/urandom").map_err(run_id_generation_error)?;
+    generate_run_id_from(&mut random)
+}
+
+fn generate_run_id_from(random: &mut dyn Read) -> Result<String, ProjectFrontendError> {
+    let mut bytes = [0_u8; 16];
+    random
+        .read_exact(&mut bytes)
+        .map_err(run_id_generation_error)?;
+    Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
+}
+
+fn run_id_generation_error(error: std::io::Error) -> ProjectFrontendError {
+    execute_error("EXECUTE010", format!("run id generation failed: {error}"))
 }
 
 fn evaluation_id(run_id: &str) -> Result<EvaluationContextId, ProjectFrontendError> {
@@ -1993,6 +2091,7 @@ fn build_check_artifact(
     authority: &AuthorityDocument,
     tools_bytes: &[u8],
     tools: &ToolLock,
+    input_bindings: &[ProjectInputBinding],
 ) -> Result<BuiltCheckArtifact, ProjectFrontendError> {
     let manifest = project.manifest();
     let child_environment = tools
@@ -2037,7 +2136,8 @@ fn build_check_artifact(
         "action_id":task.action().id().qualified_name(),
         "contract_digest":qualified_digest(task.action().id().contract_digest())
     });
-    let inputs = build_input_records(check, filesystem)?;
+    let inputs = build_input_records(check, filesystem, input_bindings)?;
+    let secrets = build_secret_requirements(project, task.action())?;
     let mut sources = project
         .modules()
         .sources()
@@ -2053,15 +2153,19 @@ fn build_check_artifact(
         })
         .collect::<Vec<_>>();
     sources.sort_by(|left, right| left["module"].as_str().cmp(&right["module"].as_str()));
-    let mut requests = task
-        .effects()
-        .iter()
-        .map(|effect| artifact_requests(manifest, authority, effect, tools.platform()))
+    let mut requests = reachable_action_closure(project, task.action())?
+        .into_iter()
+        .map(|action| project.action_effects(action).map_err(frontend_contract))
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .flatten()
+        .map(|effect| artifact_requests(manifest, authority, &effect, tools.platform()))
         .collect::<Result<Vec<_>, ProjectFrontendError>>()?
         .into_iter()
         .flatten()
         .collect::<Vec<_>>();
     sort_values_canonical(&mut requests);
+    requests.dedup();
     let requests_executable = requests.iter().all(|request| {
         matches!(
             request["verdict"].as_str(),
@@ -2116,6 +2220,17 @@ fn build_check_artifact(
             })
         })
         .collect::<Vec<_>>();
+    if secrets.len() > 1 {
+        findings.push(json!({
+            "severity":"error",
+            "code":"CHECK010",
+            "message":"task requires unsupported secret cardinality; zero or one exact secret sink is supported",
+            "source":null,
+            "path":null,
+            "start_byte":null,
+            "end_byte":null
+        }));
+    }
     if task
         .effects()
         .iter()
@@ -2162,12 +2277,13 @@ fn build_check_artifact(
         refused_outcome("CHECK005", "project task authority check refused execution")
     };
     let document = json!({
-        "schema":"opaal.check.v1",
-        "schema_version":1,
+        "schema":"opaal.check.v2",
+        "schema_version":2,
         "toolchain":{"version":opaal_runtime::version()},
         "project":project_value,
         "task":task_value,
         "inputs":inputs,
+        "secrets":secrets,
         "sources":sources,
         "authority":authority_value,
         "tools":tool_values,
@@ -2181,18 +2297,26 @@ fn build_check_artifact(
 fn build_input_records(
     check: &ProjectCheck,
     filesystem: &HostProjectFilesystem,
+    bindings: &[ProjectInputBinding],
 ) -> Result<Vec<Value>, ProjectFrontendError> {
     let parameters = check.task().action().callable().parameters();
     let mut total_path_bytes = 0usize;
-    let mut records = Vec::with_capacity(check.inputs().len());
-    for (name, value) in check.inputs() {
+    let mut records = Vec::with_capacity(bindings.len());
+    for binding in bindings {
+        let name = binding.name();
         let parameter = parameters
             .iter()
             .find(|parameter| parameter.name() == name)
             .expect("project checking validated every input name");
-        if parameter.value_type() == &ValueType::Path {
+        if let ProjectInputBinding::File { path: value, .. } = binding {
+            if parameter.value_type() != &ValueType::Path {
+                return Err(frontend_contract(ProjectError::new(
+                    "CHECK009",
+                    format!("--input-file `{name}` requires a Path task parameter"),
+                )));
+            }
             let path = filesystem
-                .resolve_existing_file(Path::new(value))
+                .resolve_existing_file(value)
                 .map_err(frontend_contract)?;
             let bytes = filesystem
                 .read_existing_bounded(&path, opaal_runtime::operational::MAX_FILE_BYTES)
@@ -2209,23 +2333,156 @@ fn build_input_records(
             records.push(json!({
                 "name":name,
                 "type":parameter.value_type().to_string(),
-                "value":value,
+                "binding":"file",
+                "value":null,
                 "path":native_path(&path),
                 "digest":digest_bytes(&bytes),
                 "size":bytes.len()
             }));
+            continue;
+        }
+        let ProjectInputBinding::Value { value, .. } = binding else {
+            unreachable!("file bindings were handled above")
+        };
+        let (value_field, path_field) = if parameter.value_type() == &ValueType::Path {
+            (Value::Null, native_path(Path::new(value)))
         } else {
-            records.push(json!({
-                "name":name,
-                "type":parameter.value_type().to_string(),
-                "value":value,
-                "path":null,
-                "digest":null,
-                "size":null
-            }));
+            let value = value.to_str().ok_or_else(|| {
+                frontend_contract(ProjectError::new(
+                    "CHECK008",
+                    format!("input `{name}` must be valid UTF-8 for its declared type"),
+                ))
+            })?;
+            (Value::String(value.to_owned()), Value::Null)
+        };
+        records.push(json!({
+            "name":name,
+            "type":parameter.value_type().to_string(),
+            "binding":"value",
+            "value":value_field,
+            "path":path_field,
+            "digest":null,
+            "size":null
+        }));
+    }
+    records.sort_by(|left, right| left["name"].as_str().cmp(&right["name"].as_str()));
+    Ok(records)
+}
+
+fn runtime_input_text(
+    project: &ProjectProgram,
+    task_name: &str,
+    bindings: &[ProjectInputBinding],
+) -> Result<Vec<(String, String)>, ProjectFrontendError> {
+    let task = project.task(task_name).map_err(frontend_contract)?;
+    bindings
+        .iter()
+        .map(|binding| {
+            let name = binding.name();
+            let parameter_type = task
+                .action()
+                .callable()
+                .parameters()
+                .iter()
+                .find(|parameter| parameter.name() == name)
+                .map(|parameter| parameter.value_type());
+            match binding {
+                ProjectInputBinding::Value { value, .. }
+                    if parameter_type == Some(&ValueType::Path) =>
+                {
+                    if value.as_bytes().contains(&0) {
+                        return Err(frontend_contract(ProjectError::new(
+                            "CHECK008",
+                            format!("input `{name}` is not an exact Path value: path contains NUL"),
+                        )));
+                    }
+                    Ok((name.to_owned(), value.to_string_lossy().into_owned()))
+                }
+                ProjectInputBinding::Value { value, .. } => value
+                    .to_str()
+                    .map(|value| (name.to_owned(), value.to_owned()))
+                    .ok_or_else(|| {
+                        frontend_contract(ProjectError::new(
+                            "CHECK008",
+                            format!("input `{name}` must be valid UTF-8 for its declared type"),
+                        ))
+                    }),
+                ProjectInputBinding::File { path, .. } => {
+                    Ok((name.to_owned(), path.to_string_lossy().into_owned()))
+                }
+            }
+        })
+        .collect()
+}
+
+fn validate_input_binding_modes(
+    project: &ProjectProgram,
+    task_name: &str,
+    bindings: &[ProjectInputBinding],
+) -> Result<(), ProjectFrontendError> {
+    let task = project.task(task_name).map_err(frontend_contract)?;
+    for binding in bindings {
+        let ProjectInputBinding::File { name, .. } = binding else {
+            continue;
+        };
+        if let Some(parameter) = task
+            .action()
+            .callable()
+            .parameters()
+            .iter()
+            .find(|parameter| parameter.name() == name)
+            && parameter.value_type() != &ValueType::Path
+        {
+            return Err(frontend_contract(ProjectError::new(
+                "CHECK009",
+                format!("--input-file `{name}` requires a Path task parameter"),
+            )));
         }
     }
-    Ok(records)
+    Ok(())
+}
+
+fn build_secret_requirements(
+    project: &ProjectProgram,
+    root: &ActionSignature,
+) -> Result<Vec<Value>, ProjectFrontendError> {
+    let mut requirements = Vec::new();
+    let mut seen = BTreeSet::new();
+    for (index, action) in reachable_action_closure(project, root)?
+        .into_iter()
+        .enumerate()
+    {
+        let mut seen_in_action = BTreeSet::new();
+        for effect in project.action_effects(action).map_err(frontend_contract)? {
+            if effect.capability() != "secret.reveal" {
+                continue;
+            }
+            let binding = effect.scope().strip_prefix("secret.").ok_or_else(|| {
+                frontend_contract(ProjectError::new("CHECK010", "invalid secret requirement"))
+            })?;
+            let (secret, endpoint) = binding.split_once("@endpoint.").ok_or_else(|| {
+                frontend_contract(ProjectError::new("CHECK010", "invalid secret requirement"))
+            })?;
+            let endpoint = project
+                .manifest()
+                .endpoints()
+                .get(endpoint)
+                .ok_or_else(|| {
+                    frontend_contract(ProjectError::new("CHECK010", "unknown secret endpoint"))
+                })?;
+            for header in endpoint.secret_headers() {
+                let requirement = json!({"id":secret,"endpoint":endpoint.id(),"header":header});
+                let key = serde_json::to_vec(&requirement)
+                    .expect("secret requirement values are serializable");
+                let repeated_in_action = !seen_in_action.insert(key.clone());
+                if seen.insert(key) || index == 0 || repeated_in_action {
+                    requirements.push(requirement);
+                }
+            }
+        }
+    }
+    sort_values_canonical(&mut requirements);
+    Ok(requirements)
 }
 
 fn build_tls_bindings(
@@ -3144,6 +3401,7 @@ fn frontend_contract(error: ProjectError) -> ProjectFrontendError {
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use std::io::{self, Cursor};
     use std::sync::atomic::{AtomicU64, Ordering};
 
     use super::*;
@@ -3211,5 +3469,60 @@ mod tests {
         budget.charge(MAX_CONTROL_READ_BYTES).unwrap();
         let error = budget.charge(1).unwrap_err();
         assert_eq!(error.code(), "PROJECT027");
+    }
+
+    #[test]
+    fn plan_identity_includes_secret_requirements() {
+        let plan = json!({
+            "toolchain":{},
+            "project":{},
+            "task":{},
+            "inputs":[],
+            "secrets":[{"id":"planned","endpoint":"sink","header":"authorization"}],
+            "sources":[],
+            "authority":{},
+            "tools":[]
+        });
+        let mut check = plan.clone();
+        check["secrets"][0]["id"] = Value::String("current".to_owned());
+
+        let error = verify_plan_check_identity(&plan, &check).unwrap_err();
+        assert!(error.rendered().contains("bound secrets identity changed"));
+    }
+
+    #[test]
+    fn wrong_secret_identity_precedes_terminal_validation() {
+        let plan = json!({
+            "secrets":[{"id":"token","endpoint":"sink","header":"authorization"}]
+        });
+
+        let wrong = validate_secret_binding(&plan, Some("other"), true).unwrap_err();
+        assert!(wrong.rendered().contains("EXECUTE008"));
+        let matching = validate_secret_binding(&plan, Some("token"), true).unwrap_err();
+        assert!(matching.rendered().contains("EXECUTE001"));
+    }
+
+    #[test]
+    fn injected_run_id_entropy_is_exact_and_fail_closed() {
+        struct FailedEntropy;
+
+        impl Read for FailedEntropy {
+            fn read(&mut self, _buffer: &mut [u8]) -> io::Result<usize> {
+                Err(io::Error::other("entropy unavailable"))
+            }
+        }
+
+        let mut complete = Cursor::new((0_u8..16).collect::<Vec<_>>());
+        assert_eq!(
+            generate_run_id_from(&mut complete).unwrap(),
+            "000102030405060708090a0b0c0d0e0f"
+        );
+
+        let mut short = Cursor::new(vec![0_u8; 15]);
+        let short_error = generate_run_id_from(&mut short).unwrap_err();
+        assert!(short_error.rendered().contains("EXECUTE010"));
+
+        let failure = generate_run_id_from(&mut FailedEntropy).unwrap_err();
+        assert!(failure.rendered().contains("EXECUTE010"));
     }
 }

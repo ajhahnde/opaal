@@ -30,8 +30,8 @@ pub const MAX_ARTIFACT_ENTRIES: usize = 1_024;
 /// Maximum accepted JSON nesting.
 pub const MAX_ARTIFACT_DEPTH: usize = 64;
 
-const CHECK_SCHEMA: &str = "opaal.check.v1";
-const PLAN_SCHEMA: &str = "opaal.plan.v1";
+const CHECK_SCHEMA: &str = "opaal.check.v2";
+const PLAN_SCHEMA: &str = "opaal.plan.v2";
 const JOURNAL_SCHEMA: &str = "opaal.run-journal.v1";
 const AUDIT_SCHEMA: &str = "opaal.audit.v1";
 
@@ -157,7 +157,7 @@ impl fmt::Display for WorkflowArtifactError {
 
 impl std::error::Error for WorkflowArtifactError {}
 
-/// One validated canonical `opaal.check.v1` artifact.
+/// One validated canonical `opaal.check.v2` artifact.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CheckArtifact(CanonicalArtifact);
 
@@ -197,7 +197,7 @@ impl CheckArtifact {
     }
 }
 
-/// One validated canonical `opaal.plan.v1` artifact.
+/// One validated canonical `opaal.plan.v2` artifact.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PlanArtifact(CanonicalArtifact);
 
@@ -312,6 +312,13 @@ impl ArtifactKind {
         match self {
             Self::Audit => MAX_AUDIT_BYTES,
             Self::Check | Self::Plan => MAX_ARTIFACT_BYTES,
+        }
+    }
+
+    const fn version(self) -> u64 {
+        match self {
+            Self::Check | Self::Plan => 2,
+            Self::Audit => 1,
         }
     }
 }
@@ -823,11 +830,15 @@ fn validate_artifact(kind: ArtifactKind, value: &Value) -> Result<(), WorkflowAr
         ArtifactKind::Audit => validate_audit(object)?,
     }
     if required_string(object, "schema")? != kind.schema()
-        || required_u64(object, "schema_version")? != 1
+        || required_u64(object, "schema_version")? != kind.version()
     {
         return Err(WorkflowArtifactError::new(
             "ARTIFACT006",
-            format!("artifact must use {} schema version 1", kind.schema()),
+            format!(
+                "artifact must use {} schema version {}",
+                kind.schema(),
+                kind.version()
+            ),
         ));
     }
     Ok(())
@@ -843,6 +854,7 @@ fn validate_check(object: &Map<String, Value>) -> Result<(), WorkflowArtifactErr
             "project",
             "task",
             "inputs",
+            "secrets",
             "sources",
             "authority",
             "tools",
@@ -872,14 +884,15 @@ fn validate_check(object: &Map<String, Value>) -> Result<(), WorkflowArtifactErr
                 Some("granted-enforced" | "granted-unenforced")
             )
         });
+    let secrets_executable = required_array(object, "secrets")?.len() <= 1;
     let class = required_string(
         object["outcome"]
             .as_object()
             .expect("validated outcome is an object"),
         "class",
     )?;
-    if ((has_error || !requests_executable) && class != "refused")
-        || (!has_error && requests_executable && class != "success")
+    if ((has_error || !requests_executable || !secrets_executable) && class != "refused")
+        || (!has_error && requests_executable && secrets_executable && class != "success")
     {
         return Err(WorkflowArtifactError::new(
             "ARTIFACT007",
@@ -902,6 +915,7 @@ fn validate_plan(object: &Map<String, Value>) -> Result<(), WorkflowArtifactErro
             "project",
             "task",
             "inputs",
+            "secrets",
             "sources",
             "authority",
             "tools",
@@ -942,6 +956,7 @@ fn validate_shared(object: &Map<String, Value>, plan: bool) -> Result<(), Workfl
     validate_project(required(object, "project")?)?;
     validate_task(required(object, "task")?)?;
     bounded_array(object, "inputs", validate_input)?;
+    bounded_array(object, "secrets", validate_secret_requirement)?;
     bounded_array(object, "sources", validate_source)?;
     validate_authority(required(object, "authority")?)?;
     bounded_array(object, "tools", |value| validate_tool(value, plan))?;
@@ -978,6 +993,11 @@ fn validate_shared_cross_fields(
             .as_bytes()
             .to_vec())
     })?;
+    require_ordered(
+        required_array(object, "secrets")?,
+        "secret requirements",
+        canonical_bytes,
+    )?;
     require_ordered_unique(required_array(object, "sources")?, "sources", |value| {
         Ok(required_string(as_object(value, "source")?, "module")?
             .as_bytes()
@@ -1084,7 +1104,55 @@ fn validate_shared_cross_fields(
             ));
         }
     }
+    let secret_requests = object.get("actions").and_then(Value::as_array).map_or_else(
+        || requests.iter().collect::<Vec<_>>(),
+        |actions| {
+            actions
+                .iter()
+                .flat_map(|action| {
+                    action["requests"]
+                        .as_array()
+                        .expect("validated action requests are an array")
+                })
+                .collect::<Vec<_>>()
+        },
+    );
+    let mut expected_secrets = secret_requests
+        .into_iter()
+        .filter(|request| request["effect"] == "secret.reveal")
+        .map(secret_requirement_from_request)
+        .collect::<Result<Vec<_>, _>>()?;
+    expected_secrets.sort_by(|left, right| {
+        canonical_bytes(left)
+            .expect("validated secret requirement is canonical")
+            .cmp(&canonical_bytes(right).expect("validated secret requirement is canonical"))
+    });
+    expected_secrets.dedup();
+    let mut actual_secrets = required_array(object, "secrets")?.to_vec();
+    actual_secrets.dedup();
+    if actual_secrets != expected_secrets {
+        return Err(WorkflowArtifactError::new(
+            "ARTIFACT007",
+            "secret requirements disagree with the reachable authority requests",
+        ));
+    }
     Ok(())
+}
+
+fn secret_requirement_from_request(request: &Value) -> Result<Value, WorkflowArtifactError> {
+    let request = as_object(request, "authority request")?;
+    let scope = required_object(request, "scope")?;
+    if required_string(scope, "kind")? != "secret-sink" {
+        return Err(WorkflowArtifactError::new(
+            "ARTIFACT007",
+            "secret request has a non-secret scope",
+        ));
+    }
+    Ok(json!({
+        "id":required_string(scope, "secret")?,
+        "endpoint":required_string(scope, "endpoint")?,
+        "header":required_string(scope, "header")?
+    }))
 }
 
 fn validate_plan_observations(object: &Map<String, Value>) -> Result<(), WorkflowArtifactError> {
@@ -1144,7 +1212,7 @@ fn validate_plan_observations(object: &Map<String, Value>) -> Result<(), Workflo
     index += 1;
     for input in required_array(object, "inputs")?
         .iter()
-        .filter(|input| input["path"].is_object())
+        .filter(|input| input["binding"] == "file")
     {
         expect_observation(
             observations,
@@ -1394,7 +1462,8 @@ fn validate_plan_actions(object: &Map<String, Value>) -> Result<(), WorkflowArti
         )
     }) && actions
         .iter()
-        .all(|action| action["outcome"]["class"] == "success");
+        .all(|action| action["outcome"]["class"] == "success")
+        && required_array(object, "secrets")?.len() <= 1;
     let class = required_string(
         object["outcome"]
             .as_object()
@@ -1528,6 +1597,28 @@ fn require_ordered_unique(
     Ok(())
 }
 
+fn require_ordered(
+    values: &[Value],
+    context: &str,
+    key: impl Fn(&Value) -> Result<Vec<u8>, WorkflowArtifactError>,
+) -> Result<(), WorkflowArtifactError> {
+    let mut previous: Option<Vec<u8>> = None;
+    for value in values {
+        let current = key(value)?;
+        if previous
+            .as_ref()
+            .is_some_and(|previous| previous > &current)
+        {
+            return Err(WorkflowArtifactError::new(
+                "ARTIFACT007",
+                format!("{context} are not sorted"),
+            ));
+        }
+        previous = Some(current);
+    }
+    Ok(())
+}
+
 fn validate_project(value: &Value) -> Result<(), WorkflowArtifactError> {
     let object = as_object(value, "project")?;
     exact_keys(
@@ -1608,24 +1699,44 @@ fn validate_input(value: &Value) -> Result<(), WorkflowArtifactError> {
     let object = as_object(value, "input")?;
     exact_keys(
         object,
-        &["name", "type", "value", "path", "digest", "size"],
+        &["name", "type", "binding", "value", "path", "digest", "size"],
         "input",
     )?;
     validate_id(required_string(object, "name")?)?;
     let value_type = required_string(object, "type")?;
     validate_id(value_type)?;
-    required_string(object, "value")?;
+    let binding = required_string(object, "binding")?;
+    one_of(binding, &["value", "file"], "input binding")?;
+    if !required(object, "value")?.is_null() {
+        required_string(object, "value")?;
+    }
     nullable_native_path(required(object, "path")?)?;
     nullable_digest(required(object, "digest")?)?;
     nullable_u64(required(object, "size")?)?;
+    let has_value = required(object, "value")?.is_string();
     let has_path = required(object, "path")?.is_object();
     let has_digest = required(object, "digest")?.is_string();
     let has_size = required(object, "size")?.is_u64();
-    if (value_type == "Path") != has_path || has_path != has_digest || has_path != has_size {
+    let valid = match binding {
+        "value" if value_type == "Path" => !has_value && has_path && !has_digest && !has_size,
+        "value" => has_value && !has_path && !has_digest && !has_size,
+        "file" => value_type == "Path" && !has_value && has_path && has_digest && has_size,
+        _ => false,
+    };
+    if !valid {
         return Err(WorkflowArtifactError::new(
             "ARTIFACT007",
-            "only Path inputs carry a path, digest, and size observation",
+            "input fields disagree with the declared binding mode and type",
         ));
+    }
+    Ok(())
+}
+
+fn validate_secret_requirement(value: &Value) -> Result<(), WorkflowArtifactError> {
+    let object = as_object(value, "secret requirement")?;
+    exact_keys(object, &["id", "endpoint", "header"], "secret requirement")?;
+    for name in ["id", "endpoint", "header"] {
+        validate_id(required_string(object, name)?)?;
     }
     Ok(())
 }

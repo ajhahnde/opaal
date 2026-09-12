@@ -1886,7 +1886,7 @@ impl ActionSignature {
         &self.callable
     }
 
-    /// Deduplicated requests in their first source-declaration order.
+    /// Requests in source order, with repeated secret reveals retained for cardinality checks.
     #[must_use]
     pub fn effects(&self) -> &[DeclaredEffect] {
         &self.effects
@@ -1971,7 +1971,8 @@ impl ModuleActionRegistry {
                     }
                     match normalize_declared_effect(entry, request, aliases) {
                         Ok(effect) => {
-                            if seen.insert(effect.canonical()) {
+                            let first_declaration = seen.insert(effect.canonical());
+                            if first_declaration || effect.capability() == "secret.reveal" {
                                 effects.push(effect);
                             }
                         }

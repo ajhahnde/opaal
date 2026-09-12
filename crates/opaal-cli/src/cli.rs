@@ -4,7 +4,10 @@
 //! startup so no option can silently select another source mode.
 
 use std::ffi::OsString;
+use std::os::unix::ffi::{OsStrExt as _, OsStringExt as _};
 use std::path::PathBuf;
+
+use crate::project::ProjectInputBinding;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FormatOperation {
@@ -24,9 +27,7 @@ pub enum Mode {
         project: PathBuf,
         task: String,
         environment: String,
-        authority: PathBuf,
-        tools: PathBuf,
-        inputs: Vec<(String, String)>,
+        inputs: Vec<ProjectInputBinding>,
         format_json: bool,
     },
     TaskHelp,
@@ -42,9 +43,7 @@ pub enum Mode {
         project: PathBuf,
         task: String,
         environment: String,
-        authority: PathBuf,
-        tools: PathBuf,
-        inputs: Vec<(String, String)>,
+        inputs: Vec<ProjectInputBinding>,
         expires_in_seconds: u64,
         out: PathBuf,
     },
@@ -52,9 +51,8 @@ pub enum Mode {
     Execute {
         plan: PathBuf,
         accept: String,
-        run_id: String,
-        authority: PathBuf,
-        secret_stdin: String,
+        run_id: Option<String>,
+        secret_stdin: Option<String>,
         journal: PathBuf,
     },
     AuditHelp,
@@ -214,8 +212,6 @@ fn parse_project_check_args(arguments: &[OsString]) -> Result<Invocation, CliErr
     let mut project = None;
     let mut task = None;
     let mut environment = None;
-    let mut authority = None;
-    let mut tools = None;
     let mut inputs = Vec::new();
     let mut format_json = false;
     let mut index = 0;
@@ -230,27 +226,8 @@ fn parse_project_check_args(arguments: &[OsString]) -> Result<Invocation, CliErr
             "--environment" => {
                 set_text_option(&mut environment, "--environment", arguments, &mut index)?;
             }
-            "--authority" => {
-                set_path_option(&mut authority, "--authority", arguments, &mut index)?;
-            }
-            "--tools" => set_path_option(&mut tools, "--tools", arguments, &mut index)?,
-            "--input" => {
-                let value = text_option_value("--input", arguments, &mut index)?;
-                let (name, value) = value.split_once('=').ok_or_else(|| {
-                    CliError::InvalidProjectArgument("--input requires name=value".to_owned())
-                })?;
-                if name.is_empty() {
-                    return Err(CliError::InvalidProjectArgument(
-                        "--input name cannot be empty".to_owned(),
-                    ));
-                }
-                if inputs.iter().any(|(existing, _)| existing == name) {
-                    return Err(CliError::InvalidProjectArgument(format!(
-                        "duplicate --input name '{name}'"
-                    )));
-                }
-                inputs.push((name.to_owned(), value.to_owned()));
-            }
+            "--input" => push_binding(&mut inputs, "--input", arguments, &mut index)?,
+            "--input-file" => push_binding(&mut inputs, "--input-file", arguments, &mut index)?,
             "--format" => {
                 let value = text_option_value("--format", arguments, &mut index)?;
                 if value != "json" {
@@ -280,8 +257,6 @@ fn parse_project_check_args(arguments: &[OsString]) -> Result<Invocation, CliErr
             project: required_option(project, "--project")?,
             task: required_option(task, "--task")?,
             environment: required_option(environment, "--environment")?,
-            authority: required_option(authority, "--authority")?,
-            tools: required_option(tools, "--tools")?,
             inputs,
             format_json,
         },
@@ -292,8 +267,6 @@ fn parse_project_plan_args(arguments: &[OsString]) -> Result<Invocation, CliErro
     let mut project = None;
     let mut task = None;
     let mut environment = None;
-    let mut authority = None;
-    let mut tools = None;
     let mut inputs = Vec::new();
     let mut expires_in_seconds = None;
     let mut out = None;
@@ -309,9 +282,8 @@ fn parse_project_plan_args(arguments: &[OsString]) -> Result<Invocation, CliErro
             "--environment" => {
                 set_text_option(&mut environment, "--environment", arguments, &mut index)?
             }
-            "--authority" => set_path_option(&mut authority, "--authority", arguments, &mut index)?,
-            "--tools" => set_path_option(&mut tools, "--tools", arguments, &mut index)?,
             "--input" => push_binding(&mut inputs, "--input", arguments, &mut index)?,
+            "--input-file" => push_binding(&mut inputs, "--input-file", arguments, &mut index)?,
             "--expires-in" => {
                 if expires_in_seconds.is_some() {
                     return Err(CliError::DuplicateOption("--expires-in"));
@@ -346,8 +318,6 @@ fn parse_project_plan_args(arguments: &[OsString]) -> Result<Invocation, CliErro
             project: required_option(project, "--project")?,
             task: required_option(task, "--task")?,
             environment: required_option(environment, "--environment")?,
-            authority: required_option(authority, "--authority")?,
-            tools: required_option(tools, "--tools")?,
             inputs,
             expires_in_seconds: required_option(expires_in_seconds, "--expires-in")?,
             out: required_option(out, "--out")?,
@@ -368,7 +338,6 @@ where
     let mut plan = None;
     let mut accept = None;
     let mut run_id = None;
-    let mut authority = None;
     let mut secret_stdin = None;
     let mut journal = None;
     let mut index = 0;
@@ -381,9 +350,6 @@ where
             "--plan" => set_path_option(&mut plan, "--plan", &arguments, &mut index)?,
             "--accept" => set_text_option(&mut accept, "--accept", &arguments, &mut index)?,
             "--run-id" => set_text_option(&mut run_id, "--run-id", &arguments, &mut index)?,
-            "--authority" => {
-                set_path_option(&mut authority, "--authority", &arguments, &mut index)?
-            }
             "--secret-stdin" => {
                 set_text_option(&mut secret_stdin, "--secret-stdin", &arguments, &mut index)?
             }
@@ -399,9 +365,8 @@ where
         mode: Mode::Execute {
             plan: required_option(plan, "--plan")?,
             accept: required_option(accept, "--accept")?,
-            run_id: required_option(run_id, "--run-id")?,
-            authority: required_option(authority, "--authority")?,
-            secret_stdin: required_option(secret_stdin, "--secret-stdin")?,
+            run_id,
+            secret_stdin,
             journal: required_option(journal, "--journal")?,
         },
     })
@@ -447,26 +412,44 @@ where
 }
 
 fn push_binding(
-    bindings: &mut Vec<(String, String)>,
+    bindings: &mut Vec<ProjectInputBinding>,
     option: &'static str,
     arguments: &[OsString],
     index: &mut usize,
 ) -> Result<(), CliError> {
-    let value = text_option_value(option, arguments, index)?;
-    let (name, value) = value
-        .split_once('=')
+    let argument = arguments
+        .get(*index)
+        .ok_or_else(|| CliError::InvalidProjectArgument(format!("{option} requires a value")))?;
+    *index += 1;
+    let bytes = argument.as_os_str().as_bytes();
+    let separator = bytes
+        .iter()
+        .position(|byte| *byte == b'=')
         .ok_or_else(|| CliError::InvalidProjectArgument(format!("{option} requires name=value")))?;
+    let name = std::str::from_utf8(&bytes[..separator])
+        .map_err(|_| CliError::InvalidProjectArgument(format!("{option} name must be UTF-8")))?;
     if name.is_empty() {
         return Err(CliError::InvalidProjectArgument(format!(
             "{option} name cannot be empty"
         )));
     }
-    if bindings.iter().any(|(existing, _)| existing == name) {
+    if bindings.iter().any(|existing| existing.name() == name) {
         return Err(CliError::InvalidProjectArgument(format!(
-            "duplicate {option} name '{name}'"
+            "duplicate input name '{name}'"
         )));
     }
-    bindings.push((name.to_owned(), value.to_owned()));
+    let value = &bytes[separator + 1..];
+    if option == "--input-file" {
+        bindings.push(ProjectInputBinding::file(
+            name.to_owned(),
+            PathBuf::from(OsString::from_vec(value.to_vec())),
+        ));
+    } else {
+        bindings.push(ProjectInputBinding::native_value(
+            name.to_owned(),
+            OsString::from_vec(value.to_vec()),
+        ));
+    }
     Ok(())
 }
 
@@ -747,6 +730,63 @@ mod tests {
     }
 
     #[test]
+    fn input_file_paths_preserve_native_bytes() {
+        use std::os::unix::ffi::OsStringExt as _;
+
+        let path = OsString::from_vec(b"candidate-\xff.bin".to_vec());
+        let mut binding = OsString::from("candidate=");
+        binding.push(&path);
+        let invocation = parse_args([
+            OsString::from("check"),
+            OsString::from("--project"),
+            OsString::from("opaal.toml"),
+            OsString::from("--task"),
+            OsString::from("release"),
+            OsString::from("--environment"),
+            OsString::from("ci"),
+            OsString::from("--input-file"),
+            binding,
+        ])
+        .unwrap();
+
+        let Mode::ProjectCheck { inputs, .. } = invocation.mode else {
+            panic!("expected project check mode");
+        };
+        assert_eq!(
+            inputs,
+            vec![ProjectInputBinding::file(
+                "candidate".to_owned(),
+                PathBuf::from(path.clone())
+            )]
+        );
+
+        let mut binding = OsString::from("candidate=");
+        binding.push(&path);
+        let invocation = parse_args([
+            OsString::from("check"),
+            OsString::from("--project"),
+            OsString::from("opaal.toml"),
+            OsString::from("--task"),
+            OsString::from("release"),
+            OsString::from("--environment"),
+            OsString::from("ci"),
+            OsString::from("--input"),
+            binding,
+        ])
+        .unwrap();
+        let Mode::ProjectCheck { inputs, .. } = invocation.mode else {
+            panic!("expected project check mode");
+        };
+        assert_eq!(
+            inputs,
+            vec![ProjectInputBinding::native_value(
+                "candidate".to_owned(),
+                path
+            )]
+        );
+    }
+
+    #[test]
     fn check_and_plan_require_one_explicit_source() {
         assert_eq!(parse(&["check"]), Err(CliError::MissingCheckSource));
         assert_eq!(parse(&["plan"]), Err(CliError::MissingPlanSource));
@@ -805,10 +845,6 @@ mod tests {
                 "release",
                 "--environment",
                 "ci",
-                "--authority",
-                "authority.toml",
-                "--tools",
-                "tools.toml",
                 "--input",
                 "candidate=artifact.tar",
             ])
@@ -818,9 +854,10 @@ mod tests {
                 project: PathBuf::from("opaal.toml"),
                 task: "release".to_owned(),
                 environment: "ci".to_owned(),
-                authority: PathBuf::from("authority.toml"),
-                tools: PathBuf::from("tools.toml"),
-                inputs: vec![("candidate".to_owned(), "artifact.tar".to_owned())],
+                inputs: vec![ProjectInputBinding::value(
+                    "candidate".to_owned(),
+                    "artifact.tar".to_owned(),
+                )],
                 format_json: false,
             }
         );
@@ -866,7 +903,7 @@ mod tests {
                 "candidate=two",
             ]),
             Err(CliError::InvalidProjectArgument(
-                "duplicate --input name 'candidate'".to_owned()
+                "duplicate input name 'candidate'".to_owned()
             ))
         );
     }
@@ -882,10 +919,6 @@ mod tests {
                 "release",
                 "--environment",
                 "ci",
-                "--authority",
-                "authority.toml",
-                "--tools",
-                "tools.toml",
                 "--input",
                 "candidate=artifact.tar",
                 "--expires-in",
@@ -899,9 +932,10 @@ mod tests {
                 project: PathBuf::from("opaal.toml"),
                 task: "release".to_owned(),
                 environment: "ci".to_owned(),
-                authority: PathBuf::from("authority.toml"),
-                tools: PathBuf::from("tools.toml"),
-                inputs: vec![("candidate".to_owned(), "artifact.tar".to_owned())],
+                inputs: vec![ProjectInputBinding::value(
+                    "candidate".to_owned(),
+                    "artifact.tar".to_owned(),
+                )],
                 expires_in_seconds: 900,
                 out: PathBuf::from("release.plan.json"),
             }
@@ -915,8 +949,6 @@ mod tests {
                 "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                 "--run-id",
                 "00000000000000000000000000000001",
-                "--authority",
-                "authority.toml",
                 "--secret-stdin",
                 "token",
                 "--journal",
@@ -928,9 +960,8 @@ mod tests {
                 plan: PathBuf::from("release.plan.json"),
                 accept: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
                     .to_owned(),
-                run_id: "00000000000000000000000000000001".to_owned(),
-                authority: PathBuf::from("authority.toml"),
-                secret_stdin: "token".to_owned(),
+                run_id: Some("00000000000000000000000000000001".to_owned()),
+                secret_stdin: Some("token".to_owned()),
                 journal: PathBuf::from("run.jsonl"),
             }
         );
@@ -958,5 +989,37 @@ mod tests {
                 "--expires-in requires 1s through 900s".to_owned()
             ))
         );
+        assert!(matches!(
+            parse(&[
+                "execute",
+                "--plan",
+                "release.plan.json",
+                "--accept",
+                "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "--authority",
+                "authority.toml",
+                "--journal",
+                "run.jsonl",
+            ]),
+            Err(CliError::InvalidProjectArgument(message))
+                if message.contains("unexpected execute argument '--authority'")
+        ));
+        assert!(matches!(
+            parse(&[
+                "check",
+                "--project",
+                "opaal.toml",
+                "--task",
+                "release",
+                "--environment",
+                "ci",
+                "--input",
+                "candidate=value",
+                "--input-file",
+                "candidate=file",
+            ]),
+            Err(CliError::InvalidProjectArgument(message))
+                if message == "duplicate input name 'candidate'"
+        ));
     }
 }
