@@ -6,6 +6,10 @@ All notable changes to OPAAL are documented here.
 
 ### Changed
 
+- Let an editor select exactly one project through an absolute manifest URI at
+  language-server initialization, reuse bounded project analysis for saved
+  modules, keep open source as editor-local overlays, and leave omitted or
+  outside-project documents in explicit standalone mode.
 - Add validating deterministic `plan inspect` and `audit inspect` views,
   closed redacted filesystem/process/HTTP/clock/secret-reveal descriptors on
   every effect boundary, and v2 journal/audit schemas whose audits bind the

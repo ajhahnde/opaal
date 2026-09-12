@@ -83,11 +83,16 @@ boundary cannot activate an effectful source route. See
 `opaal-language-server` supports initialize, shutdown, exit, full-document
 open/change/close, diagnostics, completion, hover, signature help, definition,
 references, and whole-document formatting over standard input/output. It does
-not execute open source, discover projects, accept incremental edits, or expose
-TCP transport.
+not execute open source, discover projects implicitly, accept incremental edits,
+or expose TCP transport.
 
+The optional `initializationOptions.opaal.projectManifest` selector names one
+immutable absolute manifest `file:` URI. The runtime's bounded project analyzer
+loads its saved graph while the LSP source adapter overlays matching open
+modules. Control documents remain disk-bound, files outside the project remain
+standalone, and no project is inferred from protocol roots or parent paths.
 Request cancellation and document-generation checks prevent stale semantic
-results from being returned as current.
+results from being returned as current. See [Editor and project analysis](editor.md).
 
 ## Validation and support boundaries
 

@@ -37,7 +37,8 @@ behavior. Runtime tests own modules, types, operations, outcomes, streams,
 resources, cancellation, and refusal. CLI tests exercise binaries, silent
 success, status channels, no-write checking, atomic formatting, and input
 negatives. LSP tests exercise framing, lifecycle, snapshots, queries,
-cancellation, and stale-result behavior.
+cancellation, stale-result behavior, explicit project selection, disk-backed
+module loading, editor-local overlays, and standalone fallbacks.
 
 ## Documentation example
 

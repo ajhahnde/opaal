@@ -1,15 +1,21 @@
 //! Versioned open-document ownership and overlay-first module source access.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::ffi::OsStr;
 use std::fmt;
 use std::fs::{self, File};
 use std::io::Read;
 use std::path::{Component, Path, PathBuf};
+use std::sync::Arc;
 
 use opaal_runtime::builtin::standard_registry;
 use opaal_runtime::module::{
     AnalysisControl, ModuleAnalysisOutcome, ModuleAnalysisReport, ModuleCanonicalizer, ModuleId,
     ModulePathError, ModuleProgramLoader, ModuleSourceError, ModuleSourceLoader,
+};
+use opaal_runtime::project::{
+    MAX_PROJECT_DOCUMENT_BYTES, ProjectManifest, analyze_project_source_controlled,
+    parse_project_manifest, validate_project_compatibility,
 };
 use opaal_syntax::{
     Diagnostic, LabelStyle, PositionEncoding, PositionError, Severity, SourceFile, SourceId,
@@ -328,6 +334,29 @@ struct PublishedDocument {
 
 impl std::error::Error for DocumentError {}
 
+/// A requested immutable LSP project selection that cannot be established.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ProjectSelectionError {
+    AlreadySelected,
+    WrongManifestName,
+    InvalidManifest(String),
+    Host(String),
+}
+
+impl fmt::Display for ProjectSelectionError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::AlreadySelected => formatter.write_str("a project is already selected"),
+            Self::WrongManifestName => {
+                formatter.write_str("project manifest must be named opaal.toml")
+            }
+            Self::InvalidManifest(message) | Self::Host(message) => formatter.write_str(message),
+        }
+    }
+}
+
+impl std::error::Error for ProjectSelectionError {}
+
 /// One accepted transition from a provisional or stale path identity.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct IdentityChange {
@@ -404,12 +433,88 @@ impl ModuleSourceLoader for HostFileSystem {
     }
 }
 
+#[derive(Clone, Debug)]
+struct SelectedProject {
+    manifest: ProjectManifest,
+    root_directory: Arc<File>,
+}
+
+impl SelectedProject {
+    fn load(uri: &DocumentUri) -> Result<Self, ProjectSelectionError> {
+        let manifest_path = normalize_absolute(
+            &uri.to_file_path()
+                .map_err(|error| ProjectSelectionError::Host(error.to_string()))?,
+        )
+        .map_err(|error| ProjectSelectionError::Host(error.to_string()))?;
+        if manifest_path.file_name().and_then(OsStr::to_str) != Some("opaal.toml") {
+            return Err(ProjectSelectionError::WrongManifestName);
+        }
+        let (manifest_parent, manifest_file) = open_absolute_file_nofollow(&manifest_path)?;
+        let manifest_bytes = read_regular_bounded(manifest_file, MAX_PROJECT_DOCUMENT_BYTES)?;
+        let manifest = parse_project_manifest(&manifest_path, &manifest_bytes)
+            .map_err(|error| ProjectSelectionError::InvalidManifest(error.to_string()))?;
+        validate_project_compatibility(&manifest)
+            .map_err(|error| ProjectSelectionError::InvalidManifest(error.to_string()))?;
+        let manifest_directory = manifest_path
+            .parent()
+            .expect("an absolute manifest path has a parent");
+        let root_relative = manifest
+            .root()
+            .strip_prefix(manifest_directory)
+            .map_err(|_| {
+                ProjectSelectionError::InvalidManifest(
+                    "project root escapes the retained manifest directory".to_owned(),
+                )
+            })?;
+        let root_directory =
+            open_relative_directory_nofollow(manifest_parent, root_relative, manifest.root())?;
+        Ok(Self {
+            manifest,
+            root_directory: Arc::new(root_directory),
+        })
+    }
+
+    fn contains(&self, path: &Path) -> bool {
+        normalize_absolute(path).is_ok_and(|path| path.starts_with(self.manifest.root()))
+    }
+
+    fn resolve_existing_file(&self, candidate: &Path) -> Result<PathBuf, ModulePathError> {
+        let candidate = normalize_absolute(candidate)?;
+        let relative = candidate
+            .strip_prefix(self.manifest.root())
+            .map_err(|_| ModulePathError::new("module path escapes the explicit project root"))?;
+        open_relative_file_nofollow(&self.root_directory, relative, &candidate)
+            .map_err(|error| ModulePathError::new(error.to_string()))?;
+        Ok(candidate)
+    }
+
+    fn read_existing_bounded(
+        &self,
+        candidate: &Path,
+        maximum: usize,
+    ) -> Result<Vec<u8>, ModuleSourceError> {
+        let candidate = normalize_absolute(candidate)
+            .map_err(|error| ModuleSourceError::new(error.to_string()))?;
+        let relative = candidate
+            .strip_prefix(self.manifest.root())
+            .map_err(|_| ModuleSourceError::new("module path escapes the explicit project root"))?;
+        let file = open_relative_file_nofollow(&self.root_directory, relative, &candidate)
+            .map_err(|error| ModuleSourceError::new(error.to_string()))?;
+        let mut bytes = Vec::new();
+        file.take(maximum as u64)
+            .read_to_end(&mut bytes)
+            .map_err(|error| ModuleSourceError::new(error.to_string()))?;
+        Ok(bytes)
+    }
+}
+
 /// The sole versioned document table and module source overlay.
 #[derive(Debug, Default)]
 pub struct Workspace {
     documents: BTreeMap<DocumentUri, OpenDocument>,
     owners: BTreeMap<PathBuf, DocumentUri>,
     host: HostFileSystem,
+    project: Option<SelectedProject>,
     generation: u64,
     published: BTreeMap<DocumentUri, PublishedDocument>,
 }
@@ -437,6 +542,15 @@ impl Workspace {
     #[must_use]
     pub const fn generation(&self) -> u64 {
         self.generation
+    }
+
+    /// Selects one immutable, explicit project manifest for this server.
+    pub fn select_project(&mut self, uri: &DocumentUri) -> Result<(), ProjectSelectionError> {
+        if self.project.is_some() {
+            return Err(ProjectSelectionError::AlreadySelected);
+        }
+        self.project = Some(SelectedProject::load(uri)?);
+        Ok(())
     }
 
     /// Returns the current editor-owned document for `uri`.
@@ -598,6 +712,7 @@ impl Workspace {
             owners: self.owners.clone(),
             roots,
             host: self.host,
+            project: self.project.clone(),
         }
     }
 
@@ -678,6 +793,7 @@ pub struct WorkspaceSnapshot {
     owners: BTreeMap<PathBuf, DocumentUri>,
     roots: Vec<SnapshotRoot>,
     host: HostFileSystem,
+    project: Option<SelectedProject>,
 }
 
 impl WorkspaceSnapshot {
@@ -722,9 +838,99 @@ impl WorkspaceSnapshot {
         control: &AnalysisControl,
     ) -> Result<Option<DiagnosticAnalysis>, DiagnosticProjectionError> {
         let commands = standard_registry();
-        let loader = ModuleProgramLoader::new(self, self);
         let mut by_uri = BTreeMap::<DocumentUri, Vec<WorkspaceDiagnostic>>::new();
+        let mut project_documents = BTreeSet::new();
+
+        if let Some(project) = &self.project {
+            let sources = ProjectWorkspaceSources {
+                snapshot: self,
+                project,
+            };
+            let mut project_roots = vec![SnapshotRoot {
+                uri: DocumentUri::from_absolute_path(project.manifest.root_module()).map_err(
+                    |error| DiagnosticProjectionError::InvalidFileUri(error.to_string()),
+                )?,
+                module_path: project.manifest.root_module().to_path_buf(),
+            }];
+            for document in self
+                .documents
+                .values()
+                .filter(|document| project.contains(document.native_path()))
+            {
+                project_documents.insert(document.uri().clone());
+                project_roots.push(SnapshotRoot {
+                    uri: document.uri().clone(),
+                    module_path: document.native_path().to_path_buf(),
+                });
+            }
+            project_roots.sort_by(|left, right| {
+                left.module_path
+                    .cmp(&right.module_path)
+                    .then_with(|| left.uri.cmp(&right.uri))
+            });
+            project_roots.dedup_by(|left, right| left.module_path == right.module_path);
+
+            let mut project_modules = BTreeSet::new();
+            for root in project_roots {
+                if project_modules.contains(root.module_path()) {
+                    by_uri.entry(root.uri().clone()).or_default();
+                    continue;
+                }
+                match analyze_project_source_controlled(
+                    &project.manifest,
+                    root.module_path(),
+                    &sources,
+                    &sources,
+                    control,
+                ) {
+                    ModuleAnalysisOutcome::Complete(report) => {
+                        project_modules.extend(
+                            report
+                                .sources()
+                                .iter()
+                                .filter(|entry| {
+                                    matches!(
+                                        entry.module().origin(),
+                                        opaal_runtime::module::ModuleOrigin::Local
+                                    )
+                                })
+                                .map(|entry| entry.module().path().to_path_buf()),
+                        );
+                        for document in self
+                            .documents
+                            .values()
+                            .filter(|document| project_modules.contains(document.native_path()))
+                        {
+                            by_uri.entry(document.uri().clone()).or_default();
+                        }
+                        self.normalize_report(&root, &report, encoding, &mut by_uri)?;
+                    }
+                    ModuleAnalysisOutcome::Cancelled => return Ok(None),
+                    ModuleAnalysisOutcome::BudgetExceeded(exceeded) => {
+                        by_uri
+                            .entry(root.uri().clone())
+                            .or_default()
+                            .push(WorkspaceDiagnostic {
+                                range: zero_range(),
+                                severity: Severity::Error,
+                                code: Some("ANL001".to_owned()),
+                                message: exceeded.to_string(),
+                                primary_annotation: None,
+                                related_information: Vec::new(),
+                                notes: vec![
+                                    "analysis produced no partial executable program".to_owned(),
+                                ],
+                            });
+                    }
+                }
+            }
+        }
+
+        let loader = ModuleProgramLoader::new(self, self);
         for root in &self.roots {
+            if project_documents.contains(root.uri()) {
+                continue;
+            }
             by_uri.entry(root.uri.clone()).or_default();
             let report = match loader.analyze_with_commands_controlled(
                 root.module_path(),
@@ -765,6 +971,37 @@ impl WorkspaceSnapshot {
             generation: self.generation,
             documents,
         }))
+    }
+
+    pub(crate) fn analyze_project_controlled(
+        &self,
+        requested: &Path,
+        control: &AnalysisControl,
+    ) -> Option<ModuleAnalysisOutcome> {
+        let project = self.project.as_ref()?;
+        let sources = ProjectWorkspaceSources {
+            snapshot: self,
+            project,
+        };
+        Some(analyze_project_source_controlled(
+            &project.manifest,
+            requested,
+            &sources,
+            &sources,
+            control,
+        ))
+    }
+
+    pub(crate) fn document_may_belong_to_project(&self, document: &OpenDocument) -> bool {
+        self.project
+            .as_ref()
+            .is_some_and(|project| project.contains(document.native_path()))
+    }
+
+    pub(crate) fn project_root_module(&self) -> Option<&Path> {
+        self.project
+            .as_ref()
+            .map(|project| project.manifest.root_module())
     }
 
     fn normalize_report(
@@ -911,6 +1148,47 @@ impl ModuleSourceLoader for WorkspaceSnapshot {
     }
 }
 
+struct ProjectWorkspaceSources<'a> {
+    snapshot: &'a WorkspaceSnapshot,
+    project: &'a SelectedProject,
+}
+
+impl ModuleCanonicalizer for ProjectWorkspaceSources<'_> {
+    fn canonicalize(&self, candidate: &Path) -> Result<PathBuf, ModulePathError> {
+        let candidate = normalize_absolute(candidate)?;
+        if let Some(document) = self.snapshot.overlay_for_native_path(&candidate) {
+            if !self.project.contains(document.native_path()) {
+                return Err(ModulePathError::new(
+                    "module path escapes the explicit project root",
+                ));
+            }
+            if !document.is_provisional() {
+                self.project.resolve_existing_file(&candidate)?;
+            }
+            return Ok(candidate);
+        }
+        self.project.resolve_existing_file(&candidate)
+    }
+}
+
+impl ModuleSourceLoader for ProjectWorkspaceSources<'_> {
+    fn load(&self, module: &ModuleId) -> Result<Vec<u8>, ModuleSourceError> {
+        self.load_bounded(module, usize::MAX)
+    }
+
+    fn load_bounded(
+        &self,
+        module: &ModuleId,
+        maximum: usize,
+    ) -> Result<Vec<u8>, ModuleSourceError> {
+        if let Some(document) = self.snapshot.overlay_for_native_path(module.path()) {
+            let bytes = document.text.as_bytes();
+            return Ok(bytes[..bytes.len().min(maximum)].to_vec());
+        }
+        self.project.read_existing_bounded(module.path(), maximum)
+    }
+}
+
 fn push_unique(
     by_uri: &mut BTreeMap<DocumentUri, Vec<WorkspaceDiagnostic>>,
     uri: DocumentUri,
@@ -959,6 +1237,194 @@ impl ModuleSourceLoader for Workspace {
             return Ok(bytes[..bytes.len().min(maximum)].to_vec());
         }
         self.host.load_bounded(module, maximum)
+    }
+}
+
+fn read_regular_bounded(file: File, maximum: usize) -> Result<Vec<u8>, ProjectSelectionError> {
+    let metadata = file
+        .metadata()
+        .map_err(|error| ProjectSelectionError::Host(error.to_string()))?;
+    if !metadata.file_type().is_file() {
+        return Err(ProjectSelectionError::Host(
+            "project manifest is not a regular file".to_owned(),
+        ));
+    }
+    let mut bytes = Vec::new();
+    file.take(maximum.saturating_add(1) as u64)
+        .read_to_end(&mut bytes)
+        .map_err(|error| ProjectSelectionError::Host(error.to_string()))?;
+    if bytes.len() > maximum {
+        return Err(ProjectSelectionError::Host(format!(
+            "project manifest exceeds its {maximum}-byte read limit"
+        )));
+    }
+    Ok(bytes)
+}
+
+fn open_absolute_file_nofollow(path: &Path) -> Result<(File, File), ProjectSelectionError> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| ProjectSelectionError::Host("manifest path has no parent".to_owned()))?;
+    let name = path
+        .file_name()
+        .ok_or_else(|| ProjectSelectionError::Host("manifest path has no file name".to_owned()))?;
+    let directory = open_absolute_directory_nofollow(parent)?;
+    let file = open_file_at_nofollow(&directory, name, path)?;
+    Ok((directory, file))
+}
+
+fn open_absolute_directory_nofollow(path: &Path) -> Result<File, ProjectSelectionError> {
+    if !path.is_absolute() {
+        return Err(ProjectSelectionError::Host(
+            "project directory path is not absolute".to_owned(),
+        ));
+    }
+    let descriptor = rustix::fs::open(
+        Path::new("/"),
+        rustix::fs::OFlags::RDONLY
+            | rustix::fs::OFlags::DIRECTORY
+            | rustix::fs::OFlags::NOFOLLOW
+            | rustix::fs::OFlags::CLOEXEC,
+        rustix::fs::Mode::empty(),
+    )
+    .map_err(|error| project_open_error(error, Path::new("/")))?;
+    let mut directory = File::from(descriptor);
+    let mut traversed = PathBuf::from("/");
+    for component in path.components() {
+        match component {
+            Component::RootDir | Component::CurDir => {}
+            Component::Normal(name) => {
+                traversed.push(name);
+                directory = open_directory_at_nofollow(&directory, name, &traversed)?;
+            }
+            Component::ParentDir | Component::Prefix(_) => {
+                return Err(ProjectSelectionError::Host(
+                    "project directory path is not lexically normalized".to_owned(),
+                ));
+            }
+        }
+    }
+    Ok(directory)
+}
+
+fn open_relative_directory_nofollow(
+    mut directory: File,
+    relative: &Path,
+    display_path: &Path,
+) -> Result<File, ProjectSelectionError> {
+    let mut traversed = PathBuf::new();
+    for component in relative.components() {
+        match component {
+            Component::CurDir => {}
+            Component::Normal(name) => {
+                traversed.push(name);
+                directory = open_directory_at_nofollow(&directory, name, &traversed)?;
+            }
+            Component::RootDir | Component::ParentDir | Component::Prefix(_) => {
+                return Err(ProjectSelectionError::Host(format!(
+                    "{} is not relative to the manifest",
+                    display_path.display()
+                )));
+            }
+        }
+    }
+    Ok(directory)
+}
+
+fn open_relative_file_nofollow(
+    root: &File,
+    relative: &Path,
+    display_path: &Path,
+) -> Result<File, ProjectSelectionError> {
+    let components = relative.components().collect::<Vec<_>>();
+    let Some((final_component, parent_components)) = components.split_last() else {
+        return Err(ProjectSelectionError::Host(
+            "project path is not a regular file".to_owned(),
+        ));
+    };
+    let Component::Normal(file_name) = final_component else {
+        return Err(ProjectSelectionError::Host(
+            "project file path is not lexically normalized".to_owned(),
+        ));
+    };
+    let mut directory = None;
+    let mut traversed = PathBuf::new();
+    for component in parent_components {
+        let Component::Normal(name) = component else {
+            return Err(ProjectSelectionError::Host(
+                "project file path is not lexically normalized".to_owned(),
+            ));
+        };
+        traversed.push(name);
+        let parent = directory.as_ref().unwrap_or(root);
+        directory = Some(open_directory_at_nofollow(parent, name, &traversed)?);
+    }
+    open_file_at_nofollow(directory.as_ref().unwrap_or(root), file_name, display_path)
+}
+
+fn open_directory_at_nofollow(
+    parent: &File,
+    name: &OsStr,
+    display_path: &Path,
+) -> Result<File, ProjectSelectionError> {
+    let descriptor = rustix::fs::openat(
+        parent,
+        name,
+        rustix::fs::OFlags::RDONLY
+            | rustix::fs::OFlags::DIRECTORY
+            | rustix::fs::OFlags::NOFOLLOW
+            | rustix::fs::OFlags::CLOEXEC,
+        rustix::fs::Mode::empty(),
+    )
+    .map_err(|error| project_open_error(error, display_path))?;
+    let directory = File::from(descriptor);
+    if !directory
+        .metadata()
+        .map_err(|error| ProjectSelectionError::Host(error.to_string()))?
+        .is_dir()
+    {
+        return Err(ProjectSelectionError::Host(format!(
+            "{} is not a directory",
+            display_path.display()
+        )));
+    }
+    Ok(directory)
+}
+
+fn open_file_at_nofollow(
+    parent: &File,
+    name: &OsStr,
+    display_path: &Path,
+) -> Result<File, ProjectSelectionError> {
+    let descriptor = rustix::fs::openat(
+        parent,
+        name,
+        rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::CLOEXEC,
+        rustix::fs::Mode::empty(),
+    )
+    .map_err(|error| project_open_error(error, display_path))?;
+    let file = File::from(descriptor);
+    if !file
+        .metadata()
+        .map_err(|error| ProjectSelectionError::Host(error.to_string()))?
+        .is_file()
+    {
+        return Err(ProjectSelectionError::Host(format!(
+            "{} is not a regular file",
+            display_path.display()
+        )));
+    }
+    Ok(file)
+}
+
+fn project_open_error(error: rustix::io::Errno, path: &Path) -> ProjectSelectionError {
+    if error == rustix::io::Errno::LOOP {
+        ProjectSelectionError::Host(format!(
+            "project path contains symbolic link `{}`",
+            path.display()
+        ))
+    } else {
+        ProjectSelectionError::Host(format!("cannot open `{}`: {error}", path.display()))
     }
 }
 

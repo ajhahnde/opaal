@@ -37,7 +37,8 @@ cargo run --locked -p opaal-cli --bin opaal -- format --check examples/language-
 
 Successful non-interactive execution is silent; the embedding API retains the
 final value. Running `opaal` without a script in a terminal starts the
-interactive client, which presents completed values.
+interactive client, which presents completed values. The interactive client is
+a language evaluator; project-management commands are not part of its surface.
 
 OPAAL uses one value language throughout: bare names read bindings, the final
 expression is a block's value, `{expression}` interpolates into a command word,
@@ -69,7 +70,10 @@ command fallback are unsupported.
   incomplete canonical audit; `opaal audit inspect PATH` validates and renders
   the recorded prefix identity and redacted operation evidence.
 - `opaal-language-server` provides stdio diagnostics, completion, hover,
-  signature help, definitions, references, and whole-document formatting.
+  signature help, definitions, references, and whole-document formatting. An
+  editor may select exactly one project with the absolute manifest `file:` URI
+  in `initializationOptions.opaal.projectManifest`; omission is standalone
+  mode. See [Editor and project analysis](docs/editor.md).
 
 Effectful action declarations are statically analyzed everywhere. Ordinary
 script and interactive evaluation still refuse them before host access; only

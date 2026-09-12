@@ -272,4 +272,4 @@ non-regular paths, and paths outside the explicit project root. Ordinary
 `opaal SCRIPT`, interactive evaluation, and `opaal plan SOURCE` still refuse
 effectful source before host access.
 
-[← Documentation index](README.md) · [Language foundation](language-foundation.md) · [Authority and resources](authority-and-resources.md) · [Bounded operational modules](operational-modules.md)
+[← Documentation index](README.md) · [Editor and project analysis](editor.md) · [Language foundation](language-foundation.md) · [Authority and resources](authority-and-resources.md) · [Bounded operational modules](operational-modules.md)

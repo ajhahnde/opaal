@@ -634,18 +634,19 @@ fn references(
         return Ok(json!([]));
     };
     let commands = standard_registry();
-    let reports = analyze_all(snapshot, &commands, control)?;
+    let reports = analyze_all(snapshot, document, &commands, control)?;
     let Some(requested_index) = reports.iter().position(|report| {
         report
             .program()
-            .is_some_and(|program| program.graph().root().path() == document.module_path())
+            .is_some_and(|program| module_for_document(program, document).is_some())
     }) else {
         return Ok(json!([]));
     };
     let requested = reports[requested_index]
         .program()
         .expect("the selected request report has a complete program");
-    let module = requested.graph().root();
+    let module = module_for_document(requested, document)
+        .expect("the selected request report contains the requested document");
     let Some(definition) = requested
         .semantic_queries(&commands)
         .definition_at(module, cursor)
@@ -798,6 +799,18 @@ fn analyze(
     commands: &opaal_runtime::command::CommandRegistry,
     control: &RequestControl,
 ) -> Result<Option<Box<opaal_runtime::module::ModuleAnalysisReport>>, RequestError> {
+    if snapshot.document_may_belong_to_project(document)
+        && let Some(outcome) =
+            snapshot.analyze_project_controlled(document.native_path(), &control.analysis_control())
+    {
+        match outcome {
+            ModuleAnalysisOutcome::Complete(report) => return Ok(Some(report)),
+            ModuleAnalysisOutcome::Cancelled => return Err(RequestError::RequestCancelled),
+            ModuleAnalysisOutcome::BudgetExceeded(_) => {
+                return Err(RequestError::AnalysisLimitExceeded);
+            }
+        }
+    }
     let loader = ModuleProgramLoader::new(snapshot, snapshot);
     match loader.analyze_with_commands_controlled(
         document.module_path(),
@@ -812,12 +825,64 @@ fn analyze(
 
 fn analyze_all(
     snapshot: &WorkspaceSnapshot,
+    requested: &OpenDocument,
     commands: &opaal_runtime::command::CommandRegistry,
     control: &RequestControl,
 ) -> Result<Vec<opaal_runtime::module::ModuleAnalysisReport>, RequestError> {
     let loader = ModuleProgramLoader::new(snapshot, snapshot);
     let mut reports = Vec::with_capacity(snapshot.roots().len());
+    let mut project_modules = BTreeSet::new();
+    let target_is_project = snapshot.document_may_belong_to_project(requested);
+    if target_is_project {
+        let mut roots = snapshot
+            .project_root_module()
+            .into_iter()
+            .map(ToOwned::to_owned)
+            .chain(snapshot.roots().iter().filter_map(|root| {
+                snapshot
+                    .document(root.uri())
+                    .filter(|document| snapshot.document_may_belong_to_project(document))
+                    .map(|document| document.native_path().to_path_buf())
+            }))
+            .collect::<Vec<_>>();
+        roots.sort();
+        roots.dedup();
+        for root in roots {
+            if project_modules.contains(&root) {
+                continue;
+            }
+            let outcome = snapshot
+                .analyze_project_controlled(&root, &control.analysis_control())
+                .expect("a project root exists only with a selected project");
+            match outcome {
+                ModuleAnalysisOutcome::Complete(report) => {
+                    if report.program().is_some() {
+                        project_modules.extend(
+                            report
+                                .sources()
+                                .iter()
+                                .filter(|entry| {
+                                    matches!(entry.module().origin(), ModuleOrigin::Local)
+                                })
+                                .map(|entry| entry.module().path().to_path_buf()),
+                        );
+                    }
+                    reports.push(*report);
+                }
+                ModuleAnalysisOutcome::Cancelled => return Err(RequestError::RequestCancelled),
+                ModuleAnalysisOutcome::BudgetExceeded(_) => {
+                    return Err(RequestError::AnalysisLimitExceeded);
+                }
+            }
+        }
+    }
     for root in snapshot.roots() {
+        let Some(document) = snapshot.document(root.uri()) else {
+            continue;
+        };
+        if snapshot.document_may_belong_to_project(document) {
+            continue;
+        }
         match loader.analyze_with_commands_controlled(
             root.module_path(),
             commands,
@@ -840,7 +905,10 @@ fn module_for_document<'a>(
     program
         .sources()
         .entries()
-        .find(|entry| entry.module().path() == document.module_path())
+        .find(|entry| {
+            entry.module().path() == document.module_path()
+                || entry.module().path() == document.native_path()
+        })
         .map(|entry| entry.module())
 }
 
