@@ -29,6 +29,41 @@ closed `project::context`, `project::tools`, `project::endpoints`, and
 ordinary values or a route to ambient configuration. See
 [Actions and explicit projects](actions-and-projects.md).
 
+## Names, blocks, and commands
+
+A bare identifier always denotes a visible value, callable, registered core
+command, or known operation. Reads, assignments, and calls use the same lexical
+and qualified-name resolution. Unknown names, assignments to immutable or
+unknown bindings, and calls of non-callable values are diagnosed; an unknown
+bare command head is never treated as a host executable.
+
+Every block returns its final non-terminated expression. An empty block, a
+declaration, or a terminated expression returns `Null`. Function and action
+bodies use the same fallthrough value, while `return` exits immediately.
+Selected `if` and `match` blocks preserve their values; loops discard body
+values and return `Null`.
+
+Command words use the ordinary expression grammar inside braces:
+
+```opaal
+let greeting = "hello"
+let labels = ["--label", "stable"]
+^printf "{greeting}\n" ...{labels}
+```
+
+`{expression}` evaluates once and converts one bounded scalar value into a
+word fragment. `...{expression}` evaluates once, requires a `List`, and emits
+one argument per eligible element without recursively flattening nested lists.
+Only `^literal` enters external-program resolution; the program name cannot be
+computed dynamically. Direct external execution remains subject to the
+existing authority and host refusal boundary. Qualified names continue to use
+`::` unchanged.
+
+Dollar characters inside quoted user data are ordinary text. Dollar-prefixed
+references, braced dollar expansion, command substitution, dynamic command
+forms, and implicit unknown-name process fallback have no supported syntax or
+compatibility mode. See [Language migration](migration.md).
+
 ## Types, patterns, operations, and streams
 
 Nominal records and variants are immutable. Construction supplies every field
@@ -56,7 +91,7 @@ Actions may declare the closed static effect taxonomy. Analysis rejects
 undeclared callee effects, cycles, action values, function-to-action calls, and
 invalid project scopes. Invoking an action with a declared effect is refused
 before platform access. Other known filesystem, process, environment, network,
-terminal, random, substitution, redirection, and background routes retain
+terminal, random, redirection, and background routes retain
 their existing refusal boundary.
 `opaal plan` returns `PLAN004` after reading the explicit root but before
 capturing ambient launcher or executable state.
@@ -78,4 +113,4 @@ instantiations, overload candidates, diagnostics, and work units. Evaluation
 bounds steps, calls, retained collection items, and retained bytes. Exact limits
 succeed; the first excess returns structured failure without a partial program.
 
-[← Documentation index](README.md) · [Actions and explicit projects](actions-and-projects.md) · [Architecture](architecture.md) · [Development](development.md)
+[← Documentation index](README.md) · [Language migration](migration.md) · [Actions and explicit projects](actions-and-projects.md) · [Architecture](architecture.md) · [Development](development.md)

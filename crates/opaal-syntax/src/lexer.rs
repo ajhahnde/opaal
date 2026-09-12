@@ -93,6 +93,8 @@ pub enum InvalidTokenKind {
     UnicodeSurrogate,
     UnicodeOutOfRange,
     MalformedUnicodeEscape,
+    DollarSyntax,
+    UnmatchedInterpolationBrace,
 }
 
 /// The lexical role of an exact source range.
@@ -112,10 +114,9 @@ pub enum TokenKind {
     DoubleQuoteStart,
     DoubleText,
     DoubleEscape,
+    EscapedBrace,
     DoubleQuoteEnd,
-    Variable,
-    BracedExpansionStart,
-    CommandSubstitutionStart,
+    InterpolationStart,
     Operator(Operator),
     Delimiter(Delimiter),
     Invalid(InvalidTokenKind),
@@ -166,8 +167,7 @@ pub(crate) fn lex_opaal_with_control(
 enum Context {
     Normal,
     DoubleQuoted,
-    BracedExpansion { nested: usize },
-    CommandSubstitution { nested: usize },
+    Interpolation { nested: usize },
 }
 
 struct Lexer<'source> {
@@ -200,9 +200,7 @@ impl<'source> Lexer<'source> {
             let before = self.position;
             match self.contexts.last().copied().unwrap_or(Context::Normal) {
                 Context::DoubleQuoted => self.lex_double_quoted(),
-                Context::Normal
-                | Context::BracedExpansion { .. }
-                | Context::CommandSubstitution { .. } => self.lex_normal(),
+                Context::Normal | Context::Interpolation { .. } => self.lex_normal(),
             }
             assert!(
                 self.position > before,
@@ -220,7 +218,7 @@ impl<'source> Lexer<'source> {
             || self.lex_comment()
             || self.lex_single_quoted()
             || self.lex_double_quote_start()
-            || self.lex_expansion_start()
+            || self.lex_removed_dollar_syntax()
             || self.lex_operator_or_delimiter()
             || self.lex_identifier()
             || self.lex_number()
@@ -241,7 +239,7 @@ impl<'source> Lexer<'source> {
         if self.lex_invalid_source_character() || self.lex_double_escape() {
             return;
         }
-        if self.lex_expansion_start() {
+        if self.lex_double_quoted_brace() {
             return;
         }
 
@@ -249,7 +247,8 @@ impl<'source> Lexer<'source> {
         while self.position < self.source.len() {
             if self.starts_with("\"")
                 || self.starts_with("\\")
-                || self.is_expansion_start()
+                || self.starts_with("{")
+                || self.starts_with("}")
                 || self.starts_with("\0")
                 || self.is_lone_carriage_return()
             {
@@ -313,13 +312,21 @@ impl<'source> Lexer<'source> {
             self.position += 1;
             self.push(TokenKind::LineContinuation, start);
         } else {
+            let dollar = self.starts_with("$");
             if self.position < self.source.len()
                 && !self.starts_with("\0")
                 && !self.is_lone_carriage_return()
             {
                 self.advance_scalar();
             }
-            self.push(TokenKind::BareEscape, start);
+            self.push(
+                if dollar {
+                    TokenKind::Invalid(InvalidTokenKind::DollarSyntax)
+                } else {
+                    TokenKind::BareEscape
+                },
+                start,
+            );
         }
         true
     }
@@ -422,7 +429,7 @@ impl<'source> Lexer<'source> {
         }
 
         let kind = match self.current_byte() {
-            Some(b'\\' | b'"' | b'$' | b'n' | b'r' | b't' | b'0') => {
+            Some(b'\\' | b'"' | b'n' | b'r' | b't' | b'0') => {
                 self.position += 1;
                 TokenKind::DoubleEscape
             }
@@ -436,36 +443,37 @@ impl<'source> Lexer<'source> {
         true
     }
 
-    fn lex_expansion_start(&mut self) -> bool {
+    fn lex_removed_dollar_syntax(&mut self) -> bool {
         if !self.starts_with("$") {
             return false;
         }
         let start = self.position;
-        if self.starts_with("${") {
+        self.position += 1;
+        self.push(TokenKind::Invalid(InvalidTokenKind::DollarSyntax), start);
+        true
+    }
+
+    fn lex_double_quoted_brace(&mut self) -> bool {
+        if self.starts_with("{{") || self.starts_with("}}") {
+            let start = self.position;
             self.position += 2;
-            self.push(TokenKind::BracedExpansionStart, start);
-            self.contexts.push(Context::BracedExpansion { nested: 0 });
+            self.push(TokenKind::EscapedBrace, start);
             return true;
         }
-        if self.starts_with("$(") {
-            self.position += 2;
-            self.push(TokenKind::CommandSubstitutionStart, start);
-            self.contexts
-                .push(Context::CommandSubstitution { nested: 0 });
+        if self.starts_with("{") {
+            let start = self.position;
+            self.position += 1;
+            self.push(TokenKind::InterpolationStart, start);
+            self.contexts.push(Context::Interpolation { nested: 0 });
             return true;
         }
-        if self
-            .source
-            .text()
-            .get(self.position + 1..)
-            .and_then(|rest| rest.as_bytes().first())
-            .is_some_and(|byte| is_identifier_start(*byte))
-        {
-            self.position += 2;
-            while self.current_byte().is_some_and(is_identifier_continue) {
-                self.position += 1;
-            }
-            self.push(TokenKind::Variable, start);
+        if self.starts_with("}") {
+            let start = self.position;
+            self.position += 1;
+            self.push(
+                TokenKind::Invalid(InvalidTokenKind::UnmatchedInterpolationBrace),
+                start,
+            );
             return true;
         }
         false
@@ -537,17 +545,12 @@ impl<'source> Lexer<'source> {
     fn close_interpolation_if_needed(&mut self) -> bool {
         let closes = matches!(
             (self.contexts.last(), self.current_byte()),
-            (Some(Context::BracedExpansion { nested: 0 }), Some(b'}'))
-                | (Some(Context::CommandSubstitution { nested: 0 }), Some(b')'))
+            (Some(Context::Interpolation { nested: 0 }), Some(b'}'))
         );
         if !closes {
             return false;
         }
-        let delimiter = if self.current_byte() == Some(b'}') {
-            Delimiter::RightBrace
-        } else {
-            Delimiter::RightParenthesis
-        };
+        let delimiter = Delimiter::RightBrace;
         let start = self.position;
         self.position += 1;
         self.push(TokenKind::Delimiter(delimiter), start);
@@ -560,14 +563,10 @@ impl<'source> Lexer<'source> {
             return;
         };
         match (context, delimiter) {
-            (Context::BracedExpansion { nested }, Delimiter::LeftBrace)
-            | (Context::CommandSubstitution { nested }, Delimiter::LeftParenthesis) => {
+            (Context::Interpolation { nested }, Delimiter::LeftBrace) => {
                 *nested += 1;
             }
-            (Context::BracedExpansion { nested }, Delimiter::RightBrace)
-            | (Context::CommandSubstitution { nested }, Delimiter::RightParenthesis)
-                if *nested > 0 =>
-            {
+            (Context::Interpolation { nested }, Delimiter::RightBrace) if *nested > 0 => {
                 *nested -= 1;
             }
             _ => {}
@@ -642,7 +641,6 @@ impl<'source> Lexer<'source> {
         while self.position < self.source.len() {
             let byte = self.current_byte().expect("position is in bounds");
             if matches!(byte, b' ' | b'\t' | b'\n' | b'\r' | b'\\' | b'\'' | b'"')
-                || self.is_expansion_start()
                 || self.operator_or_delimiter_starts_here()
                 || (byte == b'#' && self.is_token_boundary())
                 || byte == b'\0'
@@ -673,15 +671,6 @@ impl<'source> Lexer<'source> {
         }
         self.peek_byte(offset)
             .is_some_and(|byte| byte.is_ascii_digit())
-    }
-
-    fn is_expansion_start(&self) -> bool {
-        if !self.starts_with("$") {
-            return false;
-        }
-        self.starts_with("${")
-            || self.starts_with("$(")
-            || self.peek_byte(1).is_some_and(is_identifier_start)
     }
 
     fn operator_or_delimiter_starts_here(&self) -> bool {
@@ -730,8 +719,7 @@ impl<'source> Lexer<'source> {
                         | TokenKind::Operator(Operator::Greater)
                         | TokenKind::Operator(Operator::Append)
                         | TokenKind::Operator(Operator::Duplicate)
-                        | TokenKind::BracedExpansionStart
-                        | TokenKind::CommandSubstitutionStart
+                        | TokenKind::InterpolationStart
                         | TokenKind::Delimiter(_)
                 )
             })

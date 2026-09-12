@@ -47,8 +47,7 @@ pub enum IncompleteReason {
     UnmatchedSingleQuote,
     UnmatchedDoubleQuote,
     TrailingBackslash,
-    UnmatchedBracedInterpolation,
-    UnmatchedCommandSubstitution,
+    UnmatchedInterpolation,
     PipelineStage,
     RedirectionTarget,
     FunctionBlock,
@@ -69,8 +68,7 @@ impl IncompleteReason {
             Self::UnmatchedSingleQuote => "unmatched single quote",
             Self::UnmatchedDoubleQuote => "unmatched double quote",
             Self::TrailingBackslash => "explicit continuation requires more source",
-            Self::UnmatchedBracedInterpolation => "unmatched braced interpolation",
-            Self::UnmatchedCommandSubstitution => "unmatched command substitution",
+            Self::UnmatchedInterpolation => "unmatched interpolation",
             Self::PipelineStage => "pipeline operator requires another stage",
             Self::RedirectionTarget => "redirection operator requires one target word",
             Self::FunctionBlock => "function block requires a closing brace",
@@ -95,8 +93,7 @@ impl fmt::Display for IncompleteReason {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum FrameKind {
     DoubleQuote,
-    BracedExpansion,
-    CommandSubstitution,
+    Interpolation,
     Parenthesis { call: bool },
     Bracket,
     Brace { closure: bool, function: bool },
@@ -145,12 +142,8 @@ pub fn classify_opaal_tokens(
                     return Ok(unexpected_closer(token.span()));
                 }
             }
-            TokenKind::BracedExpansionStart => frames.push(Frame {
-                kind: FrameKind::BracedExpansion,
-                span: token.span(),
-            }),
-            TokenKind::CommandSubstitutionStart => frames.push(Frame {
-                kind: FrameKind::CommandSubstitution,
+            TokenKind::InterpolationStart => frames.push(Frame {
+                kind: FrameKind::Interpolation,
                 span: token.span(),
             }),
             TokenKind::Delimiter(delimiter) => {
@@ -217,12 +210,7 @@ fn classify_delimiter(
             });
         }
         Delimiter::RightParenthesis => {
-            if !pop_where(frames, |kind| {
-                matches!(
-                    kind,
-                    FrameKind::Parenthesis { .. } | FrameKind::CommandSubstitution
-                )
-            }) {
+            if !pop_where(frames, |kind| matches!(kind, FrameKind::Parenthesis { .. })) {
                 return Some(unexpected_closer(token.span()));
             }
         }
@@ -233,7 +221,7 @@ fn classify_delimiter(
         }
         Delimiter::RightBrace => {
             if !pop_where(frames, |kind| {
-                matches!(kind, FrameKind::Brace { .. } | FrameKind::BracedExpansion)
+                matches!(kind, FrameKind::Brace { .. } | FrameKind::Interpolation)
             }) {
                 return Some(unexpected_closer(token.span()));
             }
@@ -272,7 +260,6 @@ fn can_end_callee(kind: TokenKind) -> bool {
     matches!(
         kind,
         TokenKind::Identifier
-            | TokenKind::Variable
             | TokenKind::Delimiter(Delimiter::RightParenthesis | Delimiter::RightBracket)
     )
 }
@@ -290,8 +277,7 @@ fn is_significant(kind: TokenKind) -> bool {
 fn frame_reason(kind: FrameKind) -> IncompleteReason {
     match kind {
         FrameKind::DoubleQuote => IncompleteReason::UnmatchedDoubleQuote,
-        FrameKind::BracedExpansion => IncompleteReason::UnmatchedBracedInterpolation,
-        FrameKind::CommandSubstitution => IncompleteReason::UnmatchedCommandSubstitution,
+        FrameKind::Interpolation => IncompleteReason::UnmatchedInterpolation,
         FrameKind::Parenthesis { call: true } => IncompleteReason::Call,
         FrameKind::Parenthesis { call: false } => IncompleteReason::Parenthesis,
         FrameKind::Bracket => IncompleteReason::Bracket,
@@ -328,6 +314,12 @@ fn invalid_token_diagnostic(token: &Token, kind: InvalidTokenKind) -> Diagnostic
         InvalidTokenKind::UnicodeSurrogate => "Unicode escape cannot encode a surrogate",
         InvalidTokenKind::UnicodeOutOfRange => "Unicode escape exceeds the scalar range",
         InvalidTokenKind::MalformedUnicodeEscape => "malformed Unicode escape",
+        InvalidTokenKind::DollarSyntax => {
+            "dollar syntax is unsupported; use a bare name or `{expression}` interpolation"
+        }
+        InvalidTokenKind::UnmatchedInterpolationBrace => {
+            "unmatched interpolation brace; use `}}` for a literal brace"
+        }
     };
     Diagnostic::new(Severity::Error, "OP0001", message).with_primary(token.span(), message)
 }

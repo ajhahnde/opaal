@@ -33,13 +33,13 @@ fn error(source: &str) -> (SourceFile, RuntimeError) {
 fn top_level_error_has_no_frames() {
     // An unknown variable read at the top level never entered a call, so its
     // trace is empty and its primary span still points at the failing read.
-    let (file, error) = error("$missing");
+    let (file, error) = error("missing");
     assert!(matches!(
         error.kind(),
         RuntimeErrorKind::Scope(ScopeError::UnknownBinding(name)) if name == "missing"
     ));
     assert_eq!(error.frames(), &[]);
-    assert_eq!(file.slice(error.span()).unwrap(), "$missing");
+    assert_eq!(file.slice(error.span()).unwrap(), "missing");
 }
 
 #[test]
@@ -48,7 +48,7 @@ fn a_single_call_attaches_one_named_frame() {
     // read while one frame names `boom` and points at the call site.
     let source = "\
 def boom() {
-    $missing
+    missing
 }
 boom()";
     let (file, error) = error(source);
@@ -56,7 +56,7 @@ boom()";
         error.kind(),
         RuntimeErrorKind::Scope(ScopeError::UnknownBinding(name)) if name == "missing"
     ));
-    assert_eq!(file.slice(error.span()).unwrap(), "$missing");
+    assert_eq!(file.slice(error.span()).unwrap(), "missing");
 
     let frames = error.frames();
     assert_eq!(frames.len(), 1);
@@ -73,7 +73,7 @@ fn nested_calls_stack_innermost_first() {
     // failure (inner) outward to the outermost call (outer).
     let source = "\
 def inner() {
-    $missing
+    missing
 }
 def outer() {
     inner()
@@ -100,13 +100,13 @@ outer()";
 fn a_closure_call_attaches_an_anonymous_frame() {
     // A closure body failure attaches an anonymous frame carrying its call site.
     let source = "\
-let boom = {|x| $missing}
-$boom(1)";
+let boom = {|x| missing}
+boom(1)";
     let (file, error) = error(source);
     let frames = error.frames();
     assert_eq!(frames.len(), 1);
     assert_eq!(frames[0].callee(), &FrameCallee::Closure);
-    assert_eq!(file.slice(frames[0].call_site()).unwrap(), "$boom(1)");
+    assert_eq!(file.slice(frames[0].call_site()).unwrap(), "boom(1)");
 }
 
 #[test]
@@ -115,7 +115,7 @@ fn errors_raised_before_body_entry_carry_no_frame() {
     // entered, so no frame is attributed to the attempted call.
     let source = "\
 def one(a) {
-    $a
+    a
 }
 one(1, 2)";
     let (_file, arity_error) = error(source);
@@ -129,7 +129,7 @@ one(1, 2)";
     assert_eq!(arity_error.frames(), &[]);
 
     // An error while evaluating an argument is likewise in the caller's context.
-    let (_file, argument_error) = error("def id(x) {\n    $x\n}\nid($missing)");
+    let (_file, argument_error) = error("def id(x) {\n    x\n}\nid(missing)");
     assert!(matches!(
         argument_error.kind(),
         RuntimeErrorKind::Scope(ScopeError::UnknownBinding(name)) if name == "missing"
@@ -142,21 +142,21 @@ fn catch_exposes_structured_error_fields_and_call_frames() {
     let source = "\
 mut observed = []
 def boom() {
-    $missing
+    missing
 }
 try {
     boom()
 } catch error {
-    $observed = [
-        $error.category,
-        $error.message,
-        $error.source.name,
-        $error.frames[0].callee,
-        $error.cause,
-        $error.status,
+    observed = [
+        error.category,
+        error.message,
+        error.source.name,
+        error.frames[0].callee,
+        error.cause,
+        error.status,
     ]
 }
-$observed";
+observed";
     assert_eq!(
         run(source).1.expect("runtime error should be caught"),
         Value::list(vec![
@@ -174,16 +174,16 @@ $observed";
 fn catch_preserves_nested_closure_and_function_frames() {
     let source = "\
 mut observed = []
-let fail = {|| $missing}
+let fail = {|| missing}
 def outer(callable) {
-    $callable()
+    callable()
 }
 try {
-    outer($fail)
+    outer(fail)
 } catch error {
-    $observed = [$error.frames[0].callee, $error.frames[1].callee]
+    observed = [error.frames[0].callee, error.frames[1].callee]
 }
-$observed";
+observed";
     assert_eq!(
         run(source)
             .1
@@ -199,13 +199,13 @@ mut value = 1
 mut observed = []
 export SAMPLE = \"before\"
 try {
-    $value = 2
+    value = 2
     export SAMPLE = \"inside\"
     throw \"stop\"
 } catch error {
-    $observed = [$value, env(\"SAMPLE\"), $error.message]
+    observed = [value, env(\"SAMPLE\"), error.message]
 }
-$observed";
+observed";
     assert_eq!(
         run(source).1.expect("thrown string should be caught"),
         Value::list(vec![
@@ -224,12 +224,12 @@ try {
     try {
         throw \"preserved\"
     } catch inner {
-        throw $inner
+        throw inner
     }
 } catch outer {
-    $observed = [$outer.category, $outer.message, $outer.source.name, $outer == $outer]
+    observed = [outer.category, outer.message, outer.source.name, outer == outer]
 }
-$observed";
+observed";
     assert_eq!(
         run(source).1.expect("rethrow should reach outer catch"),
         Value::list(vec![
@@ -243,13 +243,13 @@ $observed";
 
 #[test]
 fn catch_binding_is_immutable_and_does_not_escape_its_block() {
-    let (_file, immutable) = error("try { throw \"x\" } catch error { $error = null }");
+    let (_file, immutable) = error("try { throw \"x\" } catch error { error = null }");
     assert!(matches!(
         immutable.kind(),
         RuntimeErrorKind::Scope(ScopeError::ImmutableBinding(name)) if name == "error"
     ));
 
-    let (_file, missing) = error("try { throw \"x\" } catch error { null }\n$error");
+    let (_file, missing) = error("try { throw \"x\" } catch error { null }\nerror");
     assert!(matches!(
         missing.kind(),
         RuntimeErrorKind::Scope(ScopeError::UnknownBinding(name)) if name == "error"

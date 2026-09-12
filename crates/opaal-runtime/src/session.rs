@@ -38,18 +38,17 @@ use opaal_syntax::{
 use crate::background::{BackgroundJobs, ForegroundJobOutcome, QuarantinePolicy, escape_job_label};
 use crate::builtin::{SessionState, standard_registry};
 use crate::closure::OwnedClosureContext;
-use crate::command::CommandRegistry;
+use crate::command::{CommandClassification, CommandRegistry};
 use crate::eval::{
-    Abort, CancellationToken, CapturePosition, CapturedChain, Clock, EvalLimits, EvaluationContext,
-    EvaluationHost, EvaluationPolicy, ExpandedWord, HostedEvaluationFailure,
-    HostedEvaluationOutcome, ResourceBudget, RuntimeError, RuntimeErrorKind,
+    Abort, CancellationToken, Clock, EvalLimits, EvaluationContext, EvaluationHost,
+    EvaluationPolicy, ExpandedWord, HostedEvaluationFailure, HostedEvaluationOutcome,
+    ReservedCommandDetails, ResourceBudget, RuntimeError, RuntimeErrorKind,
     evaluate_with_host_and_budget, expand_word_with_environment,
 };
 use crate::execute::{
-    BoundedCapture, CommandCapture, MixedPipelineControl, MixedSegment, aggregate_statuses,
-    execute_foreground_status, execute_foreground_with_stdout_drain, start_mixed_pipeline,
+    MixedPipelineControl, MixedSegment, aggregate_statuses, execute_foreground_status,
+    start_mixed_pipeline,
 };
-use crate::format::{ToTextStep, to_text};
 use crate::help::render_module_operation_help;
 use crate::internal::{
     DEFAULT_MATERIALIZATION_LIMIT, InternalPayload, InternalPipelineOutcome, StageOutcome,
@@ -655,6 +654,88 @@ fn chain_is_pure_opaal_host_control(chain: &ConditionalChain, source: &SourceFil
         && chain_standalone_command_has_effect_free_arguments(chain)
 }
 
+fn validate_bare_command_heads(
+    chain: &ConditionalChain,
+    source: &SourceFile,
+    scope: &mut ScopeStack,
+    environment: &Environment,
+    registry: &CommandRegistry,
+) -> Result<(), RuntimeError> {
+    for and_chain in chain.or_terms() {
+        for pipeline in and_chain.and_terms() {
+            for stage in pipeline.stages() {
+                let StageKind::Command(command) = stage.kind() else {
+                    continue;
+                };
+                if command.head.kind() == CommandHeadKind::ForcedExternal {
+                    continue;
+                }
+                let word = command.head.word();
+                if !word_has_effect_free_parts(word) {
+                    let name = source
+                        .slice(word.span())
+                        .unwrap_or("<non-static command head>")
+                        .to_owned();
+                    return Err(RuntimeError::new(
+                        RuntimeErrorKind::ReservedCommand(Box::new(ReservedCommandDetails::new(
+                            name,
+                            "a bare command head must resolve statically".to_owned(),
+                            None,
+                        ))),
+                        command.head.span(),
+                    ));
+                }
+                let expanded = expand_word_with_environment(word, source, scope, environment)?;
+                let Some(name) = expanded.value().to_str() else {
+                    return Err(RuntimeError::new(
+                        RuntimeErrorKind::ReservedCommand(Box::new(ReservedCommandDetails::new(
+                            expanded.value().to_string_lossy().into_owned(),
+                            "a bare command head must be a UTF-8 registered name".to_owned(),
+                            None,
+                        ))),
+                        command.head.span(),
+                    ));
+                };
+                if scope.get(name).is_some() {
+                    continue;
+                }
+                match registry.classify(name) {
+                    CommandClassification::Unknown => {
+                        return Err(RuntimeError::new(
+                            RuntimeErrorKind::ReservedCommand(Box::new(
+                                ReservedCommandDetails::new(
+                                    name.to_owned(),
+                                    "unknown bare name cannot start an external process".to_owned(),
+                                    Some(format!("^{name}")),
+                                ),
+                            )),
+                            command.head.span(),
+                        ));
+                    }
+                    CommandClassification::Reserved {
+                        purpose,
+                        replacement,
+                        ..
+                    } => {
+                        return Err(RuntimeError::new(
+                            RuntimeErrorKind::ReservedCommand(Box::new(
+                                ReservedCommandDetails::new(
+                                    name.to_owned(),
+                                    purpose.to_owned(),
+                                    replacement.map(str::to_owned),
+                                ),
+                            )),
+                            command.head.span(),
+                        ));
+                    }
+                    CommandClassification::Core { .. } | CommandClassification::Alias { .. } => {}
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 fn chain_is_standalone_bare_command(
     chain: &ConditionalChain,
     source: &SourceFile,
@@ -691,7 +772,7 @@ fn chain_standalone_command_has_effect_free_arguments(chain: &ConditionalChain) 
     };
     command.items.iter().all(|item| match item.kind() {
         CommandItemKind::Word(word) => word_has_effect_free_parts(word),
-        CommandItemKind::Spread(_) => true,
+        CommandItemKind::Spread(_) => false,
         CommandItemKind::Closure(_) | CommandItemKind::Redirection(_) => false,
     })
 }
@@ -703,14 +784,14 @@ fn word_has_effect_free_parts(word: &Word) -> bool {
         | WordPartKind::SingleQuoted
         | WordPartKind::DoubleText
         | WordPartKind::DoubleEscape
-        | WordPartKind::Variable(_) => true,
+        | WordPartKind::EscapedBrace => true,
         WordPartKind::DoubleQuoted(parts) => parts.iter().all(|part| {
             matches!(
                 part.kind(),
-                WordPartKind::DoubleText | WordPartKind::DoubleEscape | WordPartKind::Variable(_)
+                WordPartKind::DoubleText | WordPartKind::DoubleEscape | WordPartKind::EscapedBrace
             )
         }),
-        WordPartKind::BracedInterpolation(_) | WordPartKind::CommandSubstitution(_) => false,
+        WordPartKind::Interpolation(_) => false,
     })
 }
 
@@ -730,23 +811,6 @@ enum Interrupt {
 /// Final stdout selected for every reached pipeline in one chain.
 enum ChainOutput<'output> {
     Session(&'output mut dyn Write),
-    Capture {
-        collector: &'output mut BoundedCapture,
-        span: Span,
-    },
-}
-
-impl ChainOutput<'_> {
-    const fn is_capture(&self) -> bool {
-        matches!(self, Self::Capture { .. })
-    }
-
-    fn ensure_capture_within_limit(&self) -> Result<(), RuntimeError> {
-        match self {
-            Self::Session(_) => Ok(()),
-            Self::Capture { collector, span } => collector.ensure_within_limit(*span),
-        }
-    }
 }
 
 /// Session-owned evaluator host for reached command pipelines.
@@ -777,6 +841,10 @@ impl EvaluationHost for SessionEvaluationHost<'_> {
 
     fn policy(&self) -> EvaluationPolicy {
         self.policy
+    }
+
+    fn resolves_bare_commands(&self) -> bool {
+        true
     }
 
     fn manages_foreground_jobs(&self) -> bool {
@@ -811,6 +879,15 @@ impl EvaluationHost for SessionEvaluationHost<'_> {
         context: EvaluationContext,
     ) -> Result<Status, Abort> {
         let inspection_only = chain_is_standalone_help(chain, &context.source);
+        let error_source = Arc::clone(&context.source);
+        validate_bare_command_heads(
+            chain,
+            &context.source,
+            scope,
+            self.state.environment(),
+            self.registry,
+        )
+        .map_err(|error| Abort::Error(error.with_source(Arc::clone(&error_source))))?;
         if self.policy == EvaluationPolicy::PureOpaal
             && !chain_is_pure_opaal_host_control(chain, &context.source)
         {
@@ -820,7 +897,6 @@ impl EvaluationHost for SessionEvaluationHost<'_> {
                 chain.span(),
             )));
         }
-        let error_source = Arc::clone(&context.source);
         let _ = &context.cancel;
         if context.manage_foreground
             && self
@@ -897,112 +973,6 @@ impl EvaluationHost for SessionEvaluationHost<'_> {
             ChainStep::Stopped(job) => Err(Abort::Stopped(job)),
         }
     }
-
-    fn capture_chain(
-        &mut self,
-        chain: &ConditionalChain,
-        scope: &mut ScopeStack,
-        span: Span,
-        _position: CapturePosition,
-        context: EvaluationContext,
-    ) -> Result<CapturedChain, Abort> {
-        if self.policy == EvaluationPolicy::PureOpaal {
-            return Err(Abort::Refused(Refusal::new(
-                RefusalReason::Unsupported,
-                "process execution",
-                chain.span(),
-            )));
-        }
-        let error_source = Arc::clone(&context.source);
-        let mut collector = BoundedCapture::new(self.options.capture_limit());
-        let mut output = ChainOutput::Capture {
-            collector: &mut collector,
-            span,
-        };
-        let step = run_chain(
-            chain,
-            self.state,
-            scope,
-            self.options,
-            self.registry,
-            &context.source,
-            &context.binding_types,
-            self.probe,
-            self.platform,
-            self.clock,
-            self.jobs,
-            false,
-            &mut output,
-        )
-        .map_err(|interrupt| interrupt.into_abort(error_source))?;
-        let ChainStep::Status(status) = step else {
-            return match step {
-                ChainStep::Exit(code) => Err(Abort::Exit(code)),
-                ChainStep::Stopped(job) => Err(Abort::Stopped(job)),
-                ChainStep::Status(_) => unreachable!(),
-            };
-        };
-        self.state.set_current_status(Some(status.clone()));
-        let captured = collector
-            .finish(status, span)
-            .map_err(|error| Abort::Error(error.with_source(context.source)))?;
-        let (bytes, status) = captured.into_parts();
-        Ok(CapturedChain { bytes, status })
-    }
-}
-
-/// Capture a command substitution through the canonical session chain runner.
-///
-/// This entry keeps conditional traversal and pipeline topology singular for
-/// the public capture API and evaluator-hosted substitution.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn capture_command_substitution(
-    chain: &ConditionalChain,
-    cwd: &Path,
-    source: &SourceFile,
-    scope: &mut ScopeStack,
-    environment: &Environment,
-    registry: &CommandRegistry,
-    probe: &dyn ExecutableProbe,
-    options: &SessionOptions,
-    platform: &dyn Platform,
-    clock: &dyn Clock,
-) -> Result<CommandCapture<Vec<u8>>, RuntimeError> {
-    let mut state = SessionState::new(cwd, environment.clone());
-    let mut jobs = None;
-    let mut collector = BoundedCapture::new(options.capture_limit());
-    let mut output = ChainOutput::Capture {
-        collector: &mut collector,
-        span: chain.span(),
-    };
-    let step = run_chain(
-        chain,
-        &mut state,
-        scope,
-        options,
-        registry,
-        source,
-        &Arc::new(RuntimeBindingTypes::default()),
-        probe,
-        platform,
-        clock,
-        &mut jobs,
-        false,
-        &mut output,
-    )
-    .map_err(|interrupt| match interrupt {
-        Interrupt::Runtime(error) => error,
-        Interrupt::Output(error) => {
-            unreachable!("bounded command capture cannot raise sink error: {error}")
-        }
-    })?;
-    let status = match step {
-        ChainStep::Status(status) => status,
-        ChainStep::Exit(code) => Status::exit(i64::from(code), Duration::ZERO)
-            .expect("an exit request code is a valid status"),
-        ChainStep::Stopped(_) => unreachable!("compatibility capture does not manage jobs"),
-    };
-    collector.finish(status, chain.span())
 }
 
 fn one_background_pipeline(
@@ -1414,7 +1384,7 @@ fn run_pipeline_checked(
     manage_foreground: bool,
     output: &mut ChainOutput<'_>,
 ) -> Result<ChainStep, Interrupt> {
-    let step = run_pipeline(
+    run_pipeline(
         pipeline,
         state,
         scope,
@@ -1428,9 +1398,7 @@ fn run_pipeline_checked(
         jobs,
         manage_foreground,
         output,
-    )?;
-    output.ensure_capture_within_limit()?;
-    Ok(step)
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1476,17 +1444,11 @@ fn run_pipeline(
             .stages()
             .last()
             .expect("a parsed pipeline contains at least one stage");
-        let presentation = match output {
-            ChainOutput::Session(_) => {
-                let destination = output_destination(final_stage, platform)?;
-                select_terminal_presentation(final_stage.output_carrier(), destination).map_err(
-                    |error| {
-                        RuntimeError::new(RuntimeErrorKind::Presentation(error), final_stage.span())
-                    },
-                )?
-            }
-            ChainOutput::Capture { .. } => None,
-        };
+        let destination = output_destination(final_stage, platform)?;
+        let presentation = select_terminal_presentation(final_stage.output_carrier(), destination)
+            .map_err(|error| {
+                RuntimeError::new(RuntimeErrorKind::Presentation(error), final_stage.span())
+            })?;
         // Internal execution is transactional through final lazy rendering. A
         // producer can fail only when the sink pulls it, so committing session
         // state before presentation would leave a successful status behind a
@@ -1561,13 +1523,7 @@ fn run_pipeline(
             .map_err(Interrupt::from);
     }
 
-    let status = match output {
-        ChainOutput::Session(_) => execute_foreground_status(&plan, platform, clock)?,
-        ChainOutput::Capture { collector, .. } => {
-            let mut collect = |chunk: &[u8]| collector.push(chunk);
-            execute_foreground_with_stdout_drain(&plan, platform, clock, &mut collect)?
-        }
-    };
+    let status = execute_foreground_status(&plan, platform, clock)?;
     Ok(ChainStep::Status(status))
 }
 
@@ -2111,7 +2067,7 @@ fn run_mixed_pipeline(
         .expect("an internal segment is nonempty");
 
     let final_is_internal = last_internal + 1 == plan.stages().len();
-    let presentation = if final_is_internal && !output.is_capture() {
+    let presentation = if final_is_internal {
         let final_stage = &plan.stages()[last_internal];
         let destination = output_destination(final_stage, platform)?;
         select_terminal_presentation(final_stage.output_carrier(), destination).map_err(
@@ -2123,7 +2079,7 @@ fn run_mixed_pipeline(
 
     let closure_environment = state.environment().clone();
     let preparation = Arc::new(MixedPreparation::new(state.clone()));
-    let mut mixed = start_mixed_pipeline(plan, platform, clock, output.is_capture())?;
+    let mut mixed = start_mixed_pipeline(plan, platform, clock, false)?;
     let control = mixed.control();
     let mut segments = mixed.take_segments();
     let final_segment = final_is_internal.then(|| {
@@ -2132,95 +2088,17 @@ fn run_mixed_pipeline(
             .expect("the final internal segment has resources")
     });
 
-    let captured_output = mixed.take_captured_output();
-    let mut segment_results = if let Some(reader) = captured_output {
-        let ChainOutput::Capture { collector, .. } = output else {
-            unreachable!("only capture installs a mixed final-output reader")
-        };
-        let producer_span = plan
-            .stages()
-            .last()
-            .expect("a mixed pipeline has a final stage")
-            .span();
-        let (results, drain_result) = thread::scope(|scope| {
-            let drain_control = control.clone();
-            let drain = scope.spawn(move || {
-                let result = drain_capture_endpoint(platform, reader, collector, producer_span);
-                if result.is_err() {
-                    drain_control.cancel_and_reap();
-                }
-                result
-            });
-            let mut workers = Vec::with_capacity(segments.len());
-            for segment in segments {
-                let preparation = Arc::clone(&preparation);
-                let closure_environment = closure_environment.clone();
-                let control = control.clone();
-                workers.push(scope.spawn(move || {
-                    let result = run_mixed_segment(
-                        segment,
-                        plan,
-                        registry,
-                        source,
-                        probe,
-                        platform,
-                        preparation,
-                        closure_environment,
-                        control.clone(),
-                        None,
-                        None,
-                    );
-                    if result.as_ref().is_err_and(|failure| !failure.triggered) {
-                        control.cancel_and_reap();
-                    }
-                    result
-                }));
-            }
-            let results = workers
-                .into_iter()
-                .map(|worker| {
-                    worker
-                        .join()
-                        .expect("a mixed segment worker must not panic")
-                })
-                .collect::<Vec<_>>();
-            let drain_result = drain.join().expect("a mixed capture drain must not panic");
-            (results, drain_result)
-        });
-        if let Err(error) = drain_result {
-            mixed.terminate();
-            return Err(Interrupt::Runtime(error));
-        }
-        results
-    } else {
-        thread::scope(|scope| {
-            let mut workers = Vec::with_capacity(segments.len());
-            for segment in segments {
-                let preparation = Arc::clone(&preparation);
-                let closure_environment = closure_environment.clone();
-                let control = control.clone();
-                workers.push(scope.spawn(move || {
-                    let result = run_mixed_segment(
-                        segment,
-                        plan,
-                        registry,
-                        source,
-                        probe,
-                        platform,
-                        preparation,
-                        closure_environment,
-                        control.clone(),
-                        None,
-                        None,
-                    );
-                    if result.as_ref().is_err_and(|failure| !failure.triggered) {
-                        control.cancel_and_reap();
-                    }
-                    result
-                }));
-            }
-
-            let final_result = final_segment.map(|segment| {
+    assert!(
+        mixed.take_captured_output().is_none(),
+        "ordinary session execution does not capture mixed-pipeline output"
+    );
+    let mut segment_results = thread::scope(|scope| {
+        let mut workers = Vec::with_capacity(segments.len());
+        for segment in segments {
+            let preparation = Arc::clone(&preparation);
+            let closure_environment = closure_environment.clone();
+            let control = control.clone();
+            workers.push(scope.spawn(move || {
                 let result = run_mixed_segment(
                     segment,
                     plan,
@@ -2228,32 +2106,52 @@ fn run_mixed_pipeline(
                     source,
                     probe,
                     platform,
-                    Arc::clone(&preparation),
-                    closure_environment.clone(),
+                    preparation,
+                    closure_environment,
                     control.clone(),
-                    presentation.as_ref(),
-                    Some(output),
+                    None,
+                    None,
                 );
                 if result.as_ref().is_err_and(|failure| !failure.triggered) {
                     control.cancel_and_reap();
                 }
                 result
-            });
+            }));
+        }
 
-            let mut results = workers
-                .into_iter()
-                .map(|worker| {
-                    worker
-                        .join()
-                        .expect("a mixed segment worker must not panic")
-                })
-                .collect::<Vec<_>>();
-            if let Some(result) = final_result {
-                results.push(result);
+        let final_result = final_segment.map(|segment| {
+            let result = run_mixed_segment(
+                segment,
+                plan,
+                registry,
+                source,
+                probe,
+                platform,
+                Arc::clone(&preparation),
+                closure_environment.clone(),
+                control.clone(),
+                presentation.as_ref(),
+                Some(output),
+            );
+            if result.as_ref().is_err_and(|failure| !failure.triggered) {
+                control.cancel_and_reap();
             }
-            results
-        })
-    };
+            result
+        });
+
+        let mut results = workers
+            .into_iter()
+            .map(|worker| {
+                worker
+                    .join()
+                    .expect("a mixed segment worker must not panic")
+            })
+            .collect::<Vec<_>>();
+        if let Some(result) = final_result {
+            results.push(result);
+        }
+        results
+    });
 
     segment_results.sort_by_key(|result| match result {
         Ok(result) => result.ordinal(),
@@ -2764,25 +2662,6 @@ fn pipe_byte_stream(
     })
 }
 
-fn drain_capture_endpoint(
-    platform: &dyn Platform,
-    reader: Box<dyn DescriptorEndpoint>,
-    collector: &mut BoundedCapture,
-    span: Span,
-) -> Result<(), RuntimeError> {
-    const CHUNK_SIZE: usize = 64 * 1024;
-    let mut chunk = [0; CHUNK_SIZE];
-    loop {
-        let amount = platform
-            .read_descriptor(reader.as_ref(), &mut chunk)
-            .map_err(|error| RuntimeError::new(RuntimeErrorKind::CaptureRead(error), span))?;
-        if amount == 0 {
-            return Ok(());
-        }
-        collector.push(&chunk[..amount]);
-    }
-}
-
 fn drain_payload_to_pipe(
     payload: InternalPayload,
     mut writer: Box<dyn DescriptorEndpoint>,
@@ -2968,74 +2847,8 @@ fn route_final_payload(
     platform: &dyn Platform,
     output: &mut ChainOutput<'_>,
 ) -> Result<(), Interrupt> {
-    match output {
-        ChainOutput::Session(sink) => {
-            render_payload_with_redirection(payload, presentation, stage, cwd, platform, *sink)
-        }
-        ChainOutput::Capture { collector, .. } => match internal_stdout_route(stage, false) {
-            InternalStdoutRoute::Default => {
-                capture_internal_payload(payload, stage.span(), collector)
-            }
-            InternalStdoutRoute::File { target, mode } => {
-                drain_payload_to_redirected_file(payload, target, mode, stage, cwd, platform)
-            }
-            InternalStdoutRoute::Unsupported => Err(Interrupt::Runtime(RuntimeError::new(
-                // opaal-foundation-boundary(carrier-refusal): Structured stdout requires an explicit byte conversion.
-                RuntimeErrorKind::Unsupported {
-                    feature: "this resolved stdout route on an internal byte stream",
-                },
-                stage.span(),
-            ))),
-        },
-    }
-}
-
-fn capture_internal_payload(
-    payload: InternalPayload,
-    span: Span,
-    collector: &mut BoundedCapture,
-) -> Result<(), Interrupt> {
-    match payload {
-        InternalPayload::Empty | InternalPayload::ByteStream(_) => {
-            render_payload(payload, None, span, collector)
-        }
-        InternalPayload::Value(value) => {
-            capture_text_values(ValueStream::from_values(vec![value]), span, collector)
-        }
-        InternalPayload::ValueStream(values) => capture_text_values(values, span, collector),
-    }
-}
-
-fn capture_text_values(
-    values: ValueStream,
-    span: Span,
-    collector: &mut BoundedCapture,
-) -> Result<(), Interrupt> {
-    let mut writer = to_text(values);
-    loop {
-        match writer.pull() {
-            ToTextStep::Chunk(chunk) => collector.push(&chunk),
-            ToTextStep::End => return Ok(()),
-            ToTextStep::NotEncodable { actual } => {
-                return Err(Interrupt::Runtime(RuntimeError::new(
-                    RuntimeErrorKind::StructuredCommand {
-                        command: "command substitution",
-                        message: format!(
-                            "text cannot encode {actual}; add an explicit `to`/`encode` boundary"
-                        ),
-                    },
-                    span,
-                )));
-            }
-            ToTextStep::Failed(error) => return Err(Interrupt::Runtime(error)),
-            ToTextStep::Cancelled(reason) => {
-                return Err(Interrupt::Runtime(RuntimeError::new(
-                    RuntimeErrorKind::StreamCancelled { reason },
-                    span,
-                )));
-            }
-        }
-    }
+    let ChainOutput::Session(sink) = output;
+    render_payload_with_redirection(payload, presentation, stage, cwd, platform, *sink)
 }
 
 fn render_payload_with_redirection(

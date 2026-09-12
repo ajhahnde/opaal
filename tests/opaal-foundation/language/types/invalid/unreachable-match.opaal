@@ -6,7 +6,7 @@ enum Choice {
 
 let choice = Choice::A
 
-match $choice {
+match choice {
     Choice::A => { 1 }
     Choice::A => { 2 }
     Choice::B => { 3 }

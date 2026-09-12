@@ -3,9 +3,9 @@ import '../complete/support/model.opaal' as model
 import '../complete/support/shadow.opaal' as shadow
 
 def inspect(box: model::Box[Int]) -> Int {
-    let model::Box { value: value } = $box
-    return $value
+    let model::Box { value: value } = box
+    return value
 }
 
 let shadowed = shadow::Box { value: 1 }
-inspect($shadowed)
+inspect(shadowed)

@@ -920,11 +920,11 @@ impl SemanticQueries<'_> {
         {
             return None;
         }
-        let ExpressionKind::Symbol(identifier) = call.callee.kind() else {
+        let ExpressionKind::Name(reference) = call.callee.kind() else {
             return None;
         };
         let source = self.program.sources().source(module)?;
-        ExpressionIntrinsic::lookup(source.slice(identifier.span()).ok()?)
+        ExpressionIntrinsic::lookup(source.slice(reference.name.span()).ok()?)
     }
 
     fn command_metadata(&self, name: &str) -> Option<CommandMetadata> {
@@ -1138,7 +1138,9 @@ impl<'a> CallFinder<'a> {
                                     CommandItemKind::Redirection(redirection) => {
                                         self.redirection(redirection.kind());
                                     }
-                                    CommandItemKind::Spread(_) => {}
+                                    CommandItemKind::Spread(expression) => {
+                                        self.expression(expression);
+                                    }
                                 }
                             }
                         }
@@ -1154,7 +1156,7 @@ impl<'a> CallFinder<'a> {
         }
         match expression.kind() {
             ExpressionKind::Literal(literal) => self.literal(literal),
-            ExpressionKind::Variable(_) | ExpressionKind::Symbol(_) => {}
+            ExpressionKind::Name(_) => {}
             ExpressionKind::Qualified(name) => {
                 if contains(name.span, self.offset)
                     && self
@@ -1183,9 +1185,6 @@ impl<'a> CallFinder<'a> {
                 }
             }
             ExpressionKind::Closure(closure) => self.chain(&closure.body),
-            ExpressionKind::CommandSubstitution(substitution) => {
-                self.chain(substitution.chain());
-            }
             ExpressionKind::GroupedJob(chain) => self.chain(chain),
             ExpressionKind::Call(call) => {
                 self.expression(&call.callee);
@@ -1233,14 +1232,13 @@ impl<'a> CallFinder<'a> {
                     self.word_part(part);
                 }
             }
-            WordPartKind::BracedInterpolation(expression) => self.expression(expression),
-            WordPartKind::CommandSubstitution(substitution) => self.chain(substitution.chain()),
+            WordPartKind::Interpolation(expression) => self.expression(expression),
             WordPartKind::Bare
             | WordPartKind::BareEscape
             | WordPartKind::SingleQuoted
             | WordPartKind::DoubleText
             | WordPartKind::DoubleEscape
-            | WordPartKind::Variable(_) => {}
+            | WordPartKind::EscapedBrace => {}
         }
     }
 

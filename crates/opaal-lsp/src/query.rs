@@ -192,13 +192,6 @@ fn completion(
     let mut candidates = Vec::new();
 
     match target.context() {
-        CompletionContext::CommandSubstitutionModifier => {
-            for modifier in ["bytes:", "text:"] {
-                if modifier.starts_with(target.prefix()) {
-                    candidates.push(CompletionCandidate::new(modifier, modifier, 0, 14));
-                }
-            }
-        }
         CompletionContext::Command {
             forced_external: false,
         } => {
@@ -225,7 +218,7 @@ fn completion(
             forced_external: true,
         }
         | CompletionContext::Expression
-        | CompletionContext::Variable { .. }
+        | CompletionContext::Name
         | CompletionContext::Path { .. }
         | CompletionContext::None => {}
     }
@@ -235,7 +228,7 @@ fn completion(
         CompletionContext::Command {
             forced_external: false
         } | CompletionContext::Expression
-            | CompletionContext::Variable { .. }
+            | CompletionContext::Name
     ) && let Some(report) = analyze(snapshot, document, &commands, control)?
         && let Some(program) = report.program()
         && let Some(module) = module_for_document(program, document)
@@ -253,37 +246,45 @@ fn completion(
             candidates.push(CompletionCandidate::new(name.name(), name.name(), 1, 3));
         }
         if let Some(names) = queries.visible_names(module, cursor) {
-            let prefix = target.prefix().strip_prefix('$').unwrap_or(target.prefix());
+            let prefix = target.prefix();
             for name in names
                 .into_iter()
                 .filter(|name| name.name().starts_with(prefix))
             {
                 match target.context() {
-                    CompletionContext::Command { .. }
+                    CompletionContext::Command { .. } => candidates.push(CompletionCandidate::new(
+                        name.name(),
+                        name.name(),
+                        1,
                         if matches!(
                             name.kind(),
                             NameKind::Intrinsic | NameKind::Function | NameKind::ImportedFunction
-                        ) =>
-                    {
-                        candidates.push(CompletionCandidate::new(name.name(), name.name(), 1, 3));
-                    }
-                    CompletionContext::Expression
-                        if matches!(
-                            name.kind(),
-                            NameKind::Intrinsic | NameKind::Function | NameKind::ImportedFunction
-                        ) =>
-                    {
-                        candidates.push(CompletionCandidate::new(name.name(), name.name(), 1, 3));
-                    }
-                    CompletionContext::Variable { braced }
-                        if name.kind() != NameKind::Intrinsic =>
-                    {
+                        ) {
+                            3
+                        } else {
+                            6
+                        },
+                    )),
+                    CompletionContext::Expression => {
                         candidates.push(CompletionCandidate::new(
-                            if *braced {
-                                name.name().to_owned()
+                            name.name(),
+                            name.name(),
+                            1,
+                            if matches!(
+                                name.kind(),
+                                NameKind::Intrinsic
+                                    | NameKind::Function
+                                    | NameKind::ImportedFunction
+                            ) {
+                                3
                             } else {
-                                format!("${}", name.name())
+                                6
                             },
+                        ));
+                    }
+                    CompletionContext::Name if name.kind() != NameKind::Intrinsic => {
+                        candidates.push(CompletionCandidate::new(
+                            name.name(),
                             name.name(),
                             1,
                             if matches!(
@@ -409,7 +410,7 @@ fn hover(
             Some(SemanticHover::DynamicBinding(hover)) => {
                 let binding = hover.binding();
                 format!(
-                    "```opaal\ndynamic ${}: {}\n```\n\n{}",
+                    "```opaal\ndynamic {}: {}\n```\n\n{}",
                     binding.name(),
                     binding.result_type(),
                     binding.documentation(),

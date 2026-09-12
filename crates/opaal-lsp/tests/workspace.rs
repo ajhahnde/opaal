@@ -302,7 +302,7 @@ fn diagnostics_are_normalized_deduplicated_versioned_and_published_atomically() 
         .open(
             library_uri.clone(),
             9,
-            "def echo(value: String) -> String { $value }\nexport { echo }\n".into(),
+            "def echo(value: String) -> String { value }\nexport { echo }\n".into(),
         )
         .unwrap();
 

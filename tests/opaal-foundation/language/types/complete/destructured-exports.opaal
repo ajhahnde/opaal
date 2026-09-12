@@ -2,4 +2,4 @@
 import './support/bindings.opaal' as bindings
 
 let selected: Int = bindings::right
-$selected
+selected

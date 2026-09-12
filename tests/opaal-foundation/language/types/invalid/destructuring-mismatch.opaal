@@ -1,7 +1,7 @@
 
 def dynamic(value) {
-    $value
+    value
 }
 
 let [first] = dynamic(1)
-$first
+first

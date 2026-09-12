@@ -212,7 +212,7 @@ fn executable_serves_overlays_diagnostics_queries_and_clean_shutdown() {
         "method": "textDocument/didChange",
         "params": {
             "textDocument": {"uri": uri.as_str(), "version": 2},
-            "contentChanges": [{"text": "let answer = 42\n$answer\n"}]
+            "contentChanges": [{"text": "let answer = 42\nanswer\n"}]
         }
     }));
     let cleared = wait_for_diagnostics(&mut server, &uri, 2);

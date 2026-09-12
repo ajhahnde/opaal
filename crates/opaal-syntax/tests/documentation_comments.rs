@@ -19,7 +19,7 @@ fn documentation_comments_attach_by_physical_adjacency_and_preserve_exact_spans(
         "def documented(value: String) -> String {\n",
         "    ## Nested summary\n",
         "    def nested() { null }\n",
-        "    $value\n",
+        "    value\n",
         "}\n",
         "\n",
         "## detached\n",

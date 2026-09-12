@@ -223,7 +223,7 @@ const fn ansi_style(kind: HighlightKind) -> &'static str {
         HighlightKind::Literal => "\x1b[33m",
         HighlightKind::String => "\x1b[32m",
         HighlightKind::Escape => "\x1b[93m",
-        HighlightKind::Expansion => "\x1b[36;1m",
+        HighlightKind::Interpolation => "\x1b[36;1m",
         HighlightKind::Operator => "\x1b[34m",
         HighlightKind::Delimiter => "\x1b[37;1m",
         HighlightKind::Invalid => "\x1b[31;4m",

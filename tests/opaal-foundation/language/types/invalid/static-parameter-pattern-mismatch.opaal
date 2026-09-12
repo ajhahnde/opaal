@@ -8,5 +8,5 @@ type Other = {
 }
 
 def inspect(Box { value: value }: Other) -> Int {
-    return $value
+    return value
 }

@@ -81,9 +81,9 @@ fn an_exhausted_budget_is_a_runtime_error_not_a_cancellation() {
     let source = "\
 mut total = 0
 for n in [1, 2, 3, 4, 5] {
-    $total = $total + $n
+    total = total + n
 }
-$total";
+total";
     let limits = EvalLimits::new(CancellationToken::never(), ResourceBudget::steps(4));
     let error = run(source, &limits).expect_err("a tight budget must fail");
     assert!(matches!(

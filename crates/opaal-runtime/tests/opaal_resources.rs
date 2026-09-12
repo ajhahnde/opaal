@@ -90,7 +90,7 @@ fn resource_sources(root_source: &str) -> Sources {
             concat!(
                 "\n",
                 "def identity[T: Equal](value: T) -> T {\n",
-                "    return $value\n",
+                "    return value\n",
                 "}\n\n",
                 "export { identity }\n",
             ),
@@ -103,7 +103,7 @@ fn analysis_source() -> &'static str {
         "import './support.opaal' as support\n",
         "import std::value as value\n\n",
         "let chosen: List[List[Int]] = [[support::identity[Int](1)]]\n",
-        "value::length($chosen)\n",
+        "value::length(chosen)\n",
     )
 }
 
@@ -291,7 +291,7 @@ fn one_runtime_step_budget_crosses_statement_and_module_boundaries() {
         "import './support.opaal' as support\n",
         "let first = support::identity(1)\n",
         "let second = support::identity(2)\n",
-        "[$first, $second]\n",
+        "[first, second]\n",
     ));
     let used = (0..10_000)
         .find(|steps| {
@@ -355,10 +355,10 @@ fn collection_and_call_depth_limits_refuse_the_first_excess() {
         "type Pair = { left: Int, right: Int }\n",
         "enum Choice { Some(Int, Int), None }\n",
         "let values = [1, 2, 3]\n",
-        "let [first, ...rest] = $values\n",
-        "let record = { left: $first, right: $rest[0] }\n",
-        "let pair = Pair { left: $record.left, right: $record.right }\n",
-        "Choice::Some($pair.left, $pair.right)\n",
+        "let [first, ...rest] = values\n",
+        "let record = { left: first, right: rest[0] }\n",
+        "let pair = Pair { left: record.left, right: record.right }\n",
+        "Choice::Some(pair.left, pair.right)\n",
     ));
     let retained_items = 3 + 2 + 2 + 2 + 2;
     assert!(matches!(
@@ -384,8 +384,8 @@ fn collection_and_call_depth_limits_refuse_the_first_excess() {
     let recursive = program(concat!(
         "",
         "def descend(value: Int) -> Int {\n",
-        "    if $value == 0 { return 0 }\n",
-        "    return descend($value - 1)\n",
+        "    if value == 0 { return 0 }\n",
+        "    return descend(value - 1)\n",
         "}\n",
         "descend(8)\n",
     ));
@@ -428,7 +428,7 @@ fn interpolated_collection_bytes_refuse_before_the_first_excess_copy() {
     fn assert_copy<T: Copy>() {}
     assert_copy::<ResourceBudget>();
 
-    let strings = program(concat!("", "let seed = 'abcd'\n", "\"$seed$seed\"\n",));
+    let strings = program(concat!("", "let seed = 'abcd'\n", "\"{seed}{seed}\"\n",));
     assert!(matches!(
         execute(
             &strings,
@@ -453,8 +453,8 @@ fn cancellation_wins_at_each_polled_schedule_without_becoming_a_budget_error() {
         "",
         "let values = [1, 2, 3, 4, 5, 6, 7, 8]\n",
         "let total = 0\n",
-        "for value in $values { let total = $total + $value }\n",
-        "$total\n",
+        "for value in values { let total = total + value }\n",
+        "total\n",
     ));
 
     for schedule in 0..8 {

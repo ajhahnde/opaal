@@ -4,9 +4,9 @@ type Box[T] = {
 }
 
 def integer(box: Box[Int]) -> Int {
-    let Box { value: value } = $box
-    return $value
+    let Box { value: value } = box
+    return value
 }
 
 let text = Box { value: "value" }
-integer($text)
+integer(text)

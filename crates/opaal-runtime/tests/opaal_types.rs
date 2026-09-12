@@ -179,7 +179,7 @@ fn constructors_and_patterns_share_nominal_semantic_queries_through_reexports() 
 
     for needle in [
         "api::model::Box { value: 11 }",
-        "api::model::Maybe::Some($value)",
+        "api::model::Maybe::Some(value)",
         "api::model::Maybe::Some(selected)",
     ] {
         let cursor = source.text().find(needle).unwrap() + needle.find("model").unwrap() + 8;

@@ -58,7 +58,7 @@ Usage:
 
 Arguments:
   SCRIPT        .opaal source file to execute
-  [ARGUMENT]... Ordered UTF-8 strings exposed to the root module as $args
+  [ARGUMENT]... Ordered UTF-8 strings exposed to the root module as args
   SOURCE        .opaal source root to analyze without execution
 
 Options:
@@ -388,7 +388,10 @@ fn run_script(path: &Path, arguments: &[String]) -> ExitCode {
         return exit;
     }
     let filesystem = HostCheckFilesystem;
-    let program = match ModuleProgramLoader::new(&filesystem, &filesystem).load_for_frontend(path) {
+    let registry = opaal_runtime::builtin::standard_registry();
+    let program = match ModuleProgramLoader::new(&filesystem, &filesystem)
+        .load_for_frontend_with_commands(path, &registry)
+    {
         Ok(program) => program,
         Err(error) => {
             let rendered = if error.error().diagnostics().is_empty() {
@@ -400,7 +403,6 @@ fn run_script(path: &Path, arguments: &[String]) -> ExitCode {
         }
     };
     let mut environment = Environment::new();
-    let registry = opaal_runtime::builtin::standard_registry();
     let mut output = io::stdout().lock();
     let outcome = execute_module_program_outcome(
         &program,

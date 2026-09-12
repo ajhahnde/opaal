@@ -79,14 +79,14 @@ impl ModuleSourceLoader for FakeFilesystem {
 fn a_clean_program_is_silent_with_only_module_filesystem_capabilities() {
     let filesystem = FakeFilesystem::default()
         .resolves("/project/main.opaal", "/project/main.opaal")
-        .contains("/project/main.opaal", "echo ready\n");
+        .contains("/project/main.opaal", "let ready = true\nready\n");
 
     let run = check_source(
         &CheckRequest::new(PathBuf::from("/project/main.opaal")),
         &filesystem,
     );
 
-    assert!(run.is_success());
+    assert!(run.is_success(), "{:?}", run.rendered_issues());
     assert!(!run.has_errors());
     assert!(run.rendered_issues().is_empty());
     assert_eq!(

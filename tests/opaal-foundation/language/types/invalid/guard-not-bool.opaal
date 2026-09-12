@@ -6,7 +6,7 @@ enum Choice {
 
 let choice = Choice::Yes
 
-match $choice {
+match choice {
     Choice::Yes if 1 => { true }
     Choice::No => { false }
 }

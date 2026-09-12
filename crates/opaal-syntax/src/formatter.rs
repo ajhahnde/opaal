@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 
 use crate::{
     Delimiter, Diagnostic, IncompleteInput, Operator, ParseOutcome, Script, SourceFile,
-    StatementKind, Token, TokenKind, lex_opaal, parse_opaal,
+    StatementKind, Token, TokenKind, lex_opaal, parser::parse_opaal_with_interpolation_spans,
 };
 
 /// The result of formatting one source file through the shared parser.
@@ -16,10 +16,11 @@ pub enum FormatOutcome {
 /// Canonically formats one complete OPAAL source.
 #[must_use]
 pub fn format_source_opaal(source: &SourceFile) -> FormatOutcome {
-    match parse_opaal(source) {
+    let (outcome, interpolation_spans) = parse_opaal_with_interpolation_spans(source);
+    match outcome {
         ParseOutcome::Complete(script) => {
             let tokens = lex_opaal(source);
-            let layout = FormatLayout::for_script(&script, &tokens);
+            let layout = FormatLayout::for_script(&script, &tokens, &interpolation_spans);
             FormatOutcome::Complete(format_tokens(source, &tokens, &layout))
         }
         ParseOutcome::Incomplete(incomplete) => FormatOutcome::Incomplete(incomplete),
@@ -30,7 +31,7 @@ pub fn format_source_opaal(source: &SourceFile) -> FormatOutcome {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum OpenDelimiter {
     IndentingBrace,
-    ExpansionBrace,
+    InterpolationBrace,
     Parenthesis,
     Bracket,
 }
@@ -43,12 +44,20 @@ struct FormatLayout {
     space_after: BTreeSet<usize>,
     no_space_before: BTreeSet<usize>,
     no_space_after: BTreeSet<usize>,
+    interpolation_open: BTreeSet<usize>,
+    interpolation_close: BTreeSet<usize>,
     suppress_source_newline: BTreeSet<usize>,
 }
 
 impl FormatLayout {
-    fn for_script(script: &Script, tokens: &[Token]) -> Self {
+    fn for_script(script: &Script, tokens: &[Token], interpolation_spans: &[crate::Span]) -> Self {
         let mut layout = Self::default();
+        for span in interpolation_spans {
+            layout.interpolation_open.insert(span.start());
+            layout.interpolation_close.insert(span.end() - 1);
+            layout.no_space_after.insert(span.start() + 1);
+            layout.no_space_before.insert(span.end() - 1);
+        }
         for statement in script.statements() {
             match statement.kind() {
                 StatementKind::Action(action) => {
@@ -174,7 +183,10 @@ fn format_tokens(source: &SourceFile, tokens: &[Token], layout: &FormatLayout) -
     for token in tokens {
         match token.kind() {
             TokenKind::Whitespace => {
-                if !at_line_start {
+                if !at_line_start
+                    && !previous_syntax_token_end
+                        .is_some_and(|end| layout.no_space_after.contains(&end))
+                {
                     pending_space = true;
                 }
             }
@@ -210,7 +222,8 @@ fn format_tokens(source: &SourceFile, tokens: &[Token], layout: &FormatLayout) -
             }
             kind => {
                 suppress_source_newline = false;
-                if closes_indenting_brace(kind, &mut open_delimiters) {
+                if closes_indenting_brace(kind, token.span().start(), layout, &mut open_delimiters)
+                {
                     indent = indent.saturating_sub(1);
                 }
 
@@ -224,7 +237,6 @@ fn format_tokens(source: &SourceFile, tokens: &[Token], layout: &FormatLayout) -
                 } else if layout.space_before.contains(&token.span().start()) && !at_line_start {
                     pending_space = true;
                 }
-
                 write_prefix(&mut output, indent, &mut at_line_start, &mut pending_space);
                 output.push_str(
                     token
@@ -233,7 +245,7 @@ fn format_tokens(source: &SourceFile, tokens: &[Token], layout: &FormatLayout) -
                 );
                 previous_syntax_token_end = Some(token.span().end());
 
-                if let Some(open) = opening_delimiter(kind) {
+                if let Some(open) = opening_delimiter(kind, token.span().start(), layout) {
                     open_delimiters.push(open);
                     if open == OpenDelimiter::IndentingBrace {
                         indent += 1;
@@ -278,23 +290,38 @@ fn write_prefix(
     *pending_space = false;
 }
 
-fn opening_delimiter(kind: TokenKind) -> Option<OpenDelimiter> {
+fn opening_delimiter(
+    kind: TokenKind,
+    start: usize,
+    layout: &FormatLayout,
+) -> Option<OpenDelimiter> {
     match kind {
-        TokenKind::Delimiter(Delimiter::LeftBrace) => Some(OpenDelimiter::IndentingBrace),
-        TokenKind::BracedExpansionStart => Some(OpenDelimiter::ExpansionBrace),
-        TokenKind::Delimiter(Delimiter::LeftParenthesis) | TokenKind::CommandSubstitutionStart => {
-            Some(OpenDelimiter::Parenthesis)
+        TokenKind::Delimiter(Delimiter::LeftBrace)
+            if layout.interpolation_open.contains(&start) =>
+        {
+            Some(OpenDelimiter::InterpolationBrace)
         }
+        TokenKind::Delimiter(Delimiter::LeftBrace) => Some(OpenDelimiter::IndentingBrace),
+        TokenKind::InterpolationStart => Some(OpenDelimiter::InterpolationBrace),
+        TokenKind::Delimiter(Delimiter::LeftParenthesis) => Some(OpenDelimiter::Parenthesis),
         TokenKind::Delimiter(Delimiter::LeftBracket) => Some(OpenDelimiter::Bracket),
         _ => None,
     }
 }
 
-fn closes_indenting_brace(kind: TokenKind, open: &mut Vec<OpenDelimiter>) -> bool {
+fn closes_indenting_brace(
+    kind: TokenKind,
+    start: usize,
+    layout: &FormatLayout,
+    open: &mut Vec<OpenDelimiter>,
+) -> bool {
     let expected = match kind {
-        TokenKind::Delimiter(Delimiter::RightBrace) => {
-            Some((OpenDelimiter::IndentingBrace, OpenDelimiter::ExpansionBrace))
+        TokenKind::Delimiter(Delimiter::RightBrace)
+            if layout.interpolation_close.contains(&start) =>
+        {
+            Some(OpenDelimiter::InterpolationBrace)
         }
+        TokenKind::Delimiter(Delimiter::RightBrace) => Some(OpenDelimiter::IndentingBrace),
         TokenKind::Delimiter(Delimiter::RightParenthesis) => {
             pop_expected(open, OpenDelimiter::Parenthesis);
             return false;
@@ -306,12 +333,11 @@ fn closes_indenting_brace(kind: TokenKind, open: &mut Vec<OpenDelimiter>) -> boo
         _ => None,
     };
 
-    let Some((block, expansion)) = expected else {
+    let Some(expected) = expected else {
         return false;
     };
     match open.pop() {
-        Some(actual) if actual == block => true,
-        Some(actual) if actual == expansion => false,
+        Some(actual) if actual == expected => expected == OpenDelimiter::IndentingBrace,
         Some(actual) => {
             open.push(actual);
             false

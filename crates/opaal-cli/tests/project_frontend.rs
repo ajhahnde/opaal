@@ -114,7 +114,7 @@ import project::tools as tools
 action normalize(candidate: String) -> String
 effects {}
 {
-    return $candidate
+    return candidate
 }
 ## Check one candidate without executing it.
 action ready(candidate: String) -> String
@@ -123,7 +123,7 @@ effects {
     process.run(tools::git);
 }
 {
-    return normalize($candidate)
+    return normalize(candidate)
 }
 task release = ready
 "#,
@@ -618,7 +618,7 @@ import project::secrets as secrets
 action normalize(candidate: String) -> String
 effects {}
 {
-    return $candidate
+    return candidate
 }
 action ready(candidate: String) -> String
 effects {
@@ -630,7 +630,7 @@ effects {
 
 
 {
-    return normalize($candidate)
+    return normalize(candidate)
 }
 task release = ready
 "#,
@@ -971,7 +971,7 @@ effects {
 {
     let authorization = http::secret_header("authorization", secrets::token)
     try {
-        http::request(endpoints::failing, "GET", {}, $authorization, null, 1024)
+        http::request(endpoints::failing, "GET", {}, authorization, null, 1024)
         return "unexpected"
     } catch error {
         return "recovered"
@@ -1173,36 +1173,36 @@ effects {
 {
     let manifest_path = path::join(project::root, "Cargo.toml")
     let lock_path = path::join(project::root, "Cargo.lock")
-    let candidate_bytes = fs::read($candidate, 16777216)
-    let manifest_bytes = fs::read($manifest_path, 1048576)
-    let lock_bytes = fs::read($lock_path, 8388608)
-    let manifest = data::toml_decode($manifest_bytes)
-    let package_version = data::get($manifest, ["workspace", "package", "version"])
+    let candidate_bytes = fs::read(candidate, 16777216)
+    let manifest_bytes = fs::read(manifest_path, 1048576)
+    let lock_bytes = fs::read(lock_path, 8388608)
+    let manifest = data::toml_decode(manifest_bytes)
+    let package_version = data::get(manifest, ["workspace", "package", "version"])
     let expected = version::parse("1.0.0-alpha.1")
-    let rendered_expected = version::render($expected)
-    if $package_version != $rendered_expected {
+    let rendered_expected = version::render(expected)
+    if package_version != rendered_expected {
         throw "workspace version differs from the readiness contract"
     }
     let git_result = process::run(tools::git, ["diff", "--quiet", "--", "Cargo.toml", "Cargo.lock"])
     let authorization = http::secret_header("authorization", secrets::readiness_token)
-    let response = http::request(endpoints::readiness, "GET", {}, $authorization, null, 8388608)
-    if !$git_result.status.ok {
+    let response = http::request(endpoints::readiness, "GET", {}, authorization, null, 8388608)
+    if !git_result.status.ok {
         throw "tracked readiness inputs are dirty"
     }
-    if $response.status != 200 {
+    if response.status != 200 {
         throw "readiness endpoint returned an unsuccessful status"
     }
     let report = Readiness {
-        candidate: $candidate,
-        candidate_digest: integrity::sha256($candidate_bytes),
-        manifest_digest: integrity::sha256($manifest_bytes),
-        lock_digest: integrity::sha256($lock_bytes),
-        git_status: $git_result.status,
-        service_status: $response.status,
+        candidate: candidate,
+        candidate_digest: integrity::sha256(candidate_bytes),
+        manifest_digest: integrity::sha256(manifest_bytes),
+        lock_digest: integrity::sha256(lock_bytes),
+        git_status: git_result.status,
+        service_status: response.status,
         checked_at: time::wall_now(),
     }
-    fs::write_atomic(project::evidence, data::json_encode($report))
-    return $report
+    fs::write_atomic(project::evidence, data::json_encode(report))
+    return report
 }
 
 task release_readiness = release_readiness

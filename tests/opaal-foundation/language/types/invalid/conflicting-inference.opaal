@@ -1,6 +1,6 @@
 
 def choose[T](left: T, right: T) -> T {
-    return $left
+    return left
 }
 
 choose(1, "two")

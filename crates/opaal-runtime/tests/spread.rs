@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-//! Explicit list spread (`...$name`) expands one bound `List` into zero or more
+//! Explicit list spread (`...{expression}`) expands one `List` into zero or more
 //! command arguments, and every ineligible spread value or element is a
 //! source-spanned runtime error. Ordinary-word list rejection is covered by
 //! `expansion.rs`; this file covers the spread item.
@@ -10,8 +10,8 @@ use std::ffi::OsStr;
 use opaal_runtime::eval::{ExpandedWord, RuntimeErrorKind, expand_spread};
 use opaal_runtime::{BindingMutability, ScopeError, ScopeStack, Table, Value};
 use opaal_syntax::{
-    CommandItemKind, CommandStage, ParseOutcome, SourceFile, SourceId, Span, StageKind,
-    StatementKind, VariableReference, parse_opaal,
+    CommandItemKind, CommandStage, Expression, ParseOutcome, SourceFile, SourceId, Span, StageKind,
+    StatementKind, parse_opaal,
 };
 
 fn source(text: &str) -> SourceFile {
@@ -34,12 +34,11 @@ fn command(file: &SourceFile) -> CommandStage {
     stage.clone()
 }
 
-/// The first spread item of a bare command: its variable reference and the whole
-/// `...$name` item span.
-fn spread_item(stage: &CommandStage) -> (VariableReference, Span) {
+/// The first spread item of a bare command: its expression and whole item span.
+fn spread_item(stage: &CommandStage) -> (Expression, Span) {
     for item in &stage.items {
-        if let CommandItemKind::Spread(variable) = item.kind() {
-            return (*variable, item.span());
+        if let CommandItemKind::Spread(expression) = item.kind() {
+            return (expression.clone(), item.span());
         }
     }
     panic!("command has no spread item");
@@ -49,8 +48,8 @@ fn spread_item(stage: &CommandStage) -> (VariableReference, Span) {
 fn expand_in(text: &str, scope: &mut ScopeStack) -> Result<Vec<ExpandedWord>, RuntimeErrorKind> {
     let file = source(text);
     let stage = command(&file);
-    let (variable, item_span) = spread_item(&stage);
-    expand_spread(&variable, item_span, &file, scope).map_err(|error| error.kind().clone())
+    let (expression, item_span) = spread_item(&stage);
+    expand_spread(&expression, item_span, &file, scope).map_err(|error| error.kind().clone())
 }
 
 fn bind(scope: &mut ScopeStack, name: &str, value: Value) {
@@ -71,7 +70,7 @@ fn spread_expands_a_list_into_multiple_arguments() {
         "args",
         Value::list(vec![Value::string("status"), Value::string("--short")]),
     );
-    let words = expand_in("git ...$args", &mut scope).unwrap();
+    let words = expand_in("git ...{args}", &mut scope).unwrap();
     assert_eq!(
         values(&words),
         [OsStr::new("status"), OsStr::new("--short")]
@@ -82,7 +81,7 @@ fn spread_expands_a_list_into_multiple_arguments() {
 fn an_empty_list_spread_contributes_no_arguments() {
     let mut scope = ScopeStack::new();
     bind(&mut scope, "none", Value::list(vec![]));
-    let words = expand_in("git ...$none", &mut scope).unwrap();
+    let words = expand_in("git ...{none}", &mut scope).unwrap();
     assert!(words.is_empty());
 }
 
@@ -98,7 +97,7 @@ fn each_element_uses_its_canonical_word_encoding() {
             Value::Path(opaal_runtime::NativePath::new("/etc/hosts")),
         ]),
     );
-    let words = expand_in("show ...$mix", &mut scope).unwrap();
+    let words = expand_in("show ...{mix}", &mut scope).unwrap();
     assert_eq!(
         values(&words),
         [
@@ -113,7 +112,7 @@ fn each_element_uses_its_canonical_word_encoding() {
 fn an_empty_element_is_one_argument_without_provenance() {
     let mut scope = ScopeStack::new();
     bind(&mut scope, "args", Value::list(vec![Value::string("")]));
-    let words = expand_in("show ...$args", &mut scope).unwrap();
+    let words = expand_in("show ...{args}", &mut scope).unwrap();
     assert_eq!(words.len(), 1);
     assert_eq!(words[0].value(), OsStr::new(""));
     assert!(words[0].parts().is_empty());
@@ -123,10 +122,10 @@ fn an_empty_element_is_one_argument_without_provenance() {
 fn a_non_list_spread_value_is_an_error_at_the_item() {
     let mut scope = ScopeStack::new();
     bind(&mut scope, "one", Value::string("solo"));
-    let file = source("git ...$one");
+    let file = source("git ...{one}");
     let stage = command(&file);
-    let (variable, item_span) = spread_item(&stage);
-    let error = expand_spread(&variable, item_span, &file, &mut scope).unwrap_err();
+    let (expression, item_span) = spread_item(&stage);
+    let error = expand_spread(&expression, item_span, &file, &mut scope).unwrap_err();
     assert_eq!(
         error.kind(),
         &RuntimeErrorKind::SpreadValueNotList { actual: "string" }
@@ -143,7 +142,7 @@ fn an_ineligible_element_reports_its_zero_based_index() {
         Value::list(vec![Value::Int(1), Value::Null]),
     );
     assert_eq!(
-        expand_in("show ...$args", &mut scope).unwrap_err(),
+        expand_in("show ...{args}", &mut scope).unwrap_err(),
         RuntimeErrorKind::SpreadElementNotWordEligible {
             index: 1,
             actual: "null",
@@ -160,7 +159,7 @@ fn spread_never_recursively_flattens_a_nested_list() {
         Value::list(vec![Value::list(vec![Value::Int(1)])]),
     );
     assert_eq!(
-        expand_in("show ...$args", &mut scope).unwrap_err(),
+        expand_in("show ...{args}", &mut scope).unwrap_err(),
         RuntimeErrorKind::SpreadElementNotWordEligible {
             index: 0,
             actual: "list",
@@ -182,7 +181,7 @@ fn a_table_is_never_word_eligible_so_rendering_cannot_become_serialization() {
     let mut scope = ScopeStack::new();
     bind(&mut scope, "args", Value::list(vec![Value::from(table)]));
     assert_eq!(
-        expand_in("show ...$args", &mut scope).unwrap_err(),
+        expand_in("show ...{args}", &mut scope).unwrap_err(),
         RuntimeErrorKind::SpreadElementNotWordEligible {
             index: 0,
             actual: "table",
@@ -194,7 +193,7 @@ fn a_table_is_never_word_eligible_so_rendering_cannot_become_serialization() {
 fn an_unknown_spread_binding_is_a_scope_error() {
     let mut scope = ScopeStack::new();
     assert_eq!(
-        expand_in("git ...$missing", &mut scope).unwrap_err(),
+        expand_in("git ...{missing}", &mut scope).unwrap_err(),
         RuntimeErrorKind::Scope(ScopeError::UnknownBinding("missing".to_owned()))
     );
 }
@@ -203,10 +202,10 @@ fn an_unknown_spread_binding_is_a_scope_error() {
 fn each_spread_word_carries_the_whole_item_span() {
     let mut scope = ScopeStack::new();
     bind(&mut scope, "args", Value::list(vec![Value::string("x")]));
-    let file = source("git ...$args");
+    let file = source("git ...{args}");
     let stage = command(&file);
-    let (variable, item_span) = spread_item(&stage);
-    let words = expand_spread(&variable, item_span, &file, &mut scope).unwrap();
+    let (expression, item_span) = spread_item(&stage);
+    let words = expand_spread(&expression, item_span, &file, &mut scope).unwrap();
     assert_eq!(words[0].span(), item_span);
     assert_eq!(words[0].parts(), [item_span]);
 }

@@ -5,5 +5,5 @@ type Pair = {
 }
 
 let Pair { left: left, right: right } = Pair { left: 1, right: 2 }
-let [first, ...rest] = [$left, $right]
-$first
+let [first, ...rest] = [left, right]
+first

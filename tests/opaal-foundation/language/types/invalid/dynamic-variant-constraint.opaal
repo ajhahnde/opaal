@@ -5,10 +5,10 @@ enum EqualMaybe[T: Equal] {
 }
 
 def dynamic(value) {
-    $value
+    value
 }
 
-let callable = {|value| $value}
+let callable = {|value| value}
 
-let maybe = EqualMaybe::Some(dynamic($callable))
-$maybe
+let maybe = EqualMaybe::Some(dynamic(callable))
+maybe

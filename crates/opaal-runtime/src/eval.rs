@@ -26,8 +26,8 @@ use opaal_syntax::{
     ConditionalChain, ControlTransfer, Declaration, ElseBranch, EnvironmentStatement, Expression,
     ExpressionKind, ForStatement, FunctionDefinition, IfStatement, Literal, LiteralKind, MatchArm,
     MatchStatement, Parameter, Pattern, Pipeline, RecordKey, RedirectionKind, Script, SourceFile,
-    Span, StageKind, Statement, StatementKind, TryStatement, UnaryOperator, VariableReference,
-    WhileStatement, Word, WordPart, WordPartKind,
+    Span, StageKind, Statement, StatementKind, TryStatement, UnaryOperator, WhileStatement, Word,
+    WordPart, WordPartKind,
 };
 
 use crate::glob::{DEFAULT_GLOB_ENTRY_LIMIT, GlobPattern};
@@ -294,8 +294,6 @@ pub enum FrameCallee {
 pub enum RestrictedCapability {
     /// Starting or composing commands and pipelines.
     ProcessExecution,
-    /// Capturing the output of a command substitution.
-    CommandSubstitution,
     /// Reading directories for explicit filesystem matching.
     FilesystemRead,
     /// Loading or exporting a source module during automatic configuration.
@@ -308,7 +306,6 @@ impl RestrictedCapability {
     pub const fn name(self) -> &'static str {
         match self {
             Self::ProcessExecution => "process execution",
-            Self::CommandSubstitution => "command substitution",
             Self::FilesystemRead => "filesystem reads",
             Self::ModuleLoad => "module loading",
         }
@@ -451,10 +448,10 @@ pub enum RuntimeErrorKind {
     /// An ordinary word interpolation produced a value that cannot become an
     /// argument. `actual` names the offending value family.
     WordValueNotWordEligible { actual: &'static str },
-    /// A `...$name` spread whose binding did not hold a `List`. `actual` names the
+    /// A `...{expression}` spread whose value did not hold a `List`. `actual` names the
     /// offending value family.
     SpreadValueNotList { actual: &'static str },
-    /// A `...$name` spread element that cannot become an argument. `index` is the
+    /// A `...{expression}` spread element that cannot become an argument. `index` is the
     /// zero-based list position and `actual` names the offending value family.
     SpreadElementNotWordEligible { index: usize, actual: &'static str },
     /// An `export` whose value cannot become a native environment string.
@@ -873,7 +870,7 @@ impl fmt::Display for RuntimeErrorKind {
                 }
                 write!(
                     formatter,
-                    "; use `^{0}` or `command {0}` for intentional external execution",
+                    "; use `^{0}` for intentional external execution",
                     details.name
                 )
             }
@@ -1003,7 +1000,7 @@ impl fmt::Display for RuntimeErrorKind {
                 if let Some(length) = error_len {
                     write!(formatter, " (invalid sequence length {length})")?;
                 }
-                formatter.write_str("; use `$(bytes: ...)` to preserve arbitrary output")
+                formatter.write_str("; request bytes from the typed process operation instead")
             }
             Self::RedirectionSetup(error) => error.fmt(formatter),
             Self::ProcessSpawn(error) => error.fmt(formatter),
@@ -1642,23 +1639,14 @@ pub(crate) struct EvaluationContext {
     pub(crate) manage_foreground: bool,
 }
 
-/// Successful bounded output captured from one reached conditional chain.
-pub(crate) struct CapturedChain {
-    pub(crate) bytes: Vec<u8>,
-    pub(crate) status: Status,
-}
-
-#[derive(Clone, Copy)]
-pub(crate) enum CapturePosition {
-    Expression,
-    Word,
-}
-
 /// The effect boundary used by recursive language evaluation.
 pub(crate) trait EvaluationHost {
     fn environment(&mut self) -> &mut Environment;
     fn current_status(&self) -> Option<&Status>;
     fn policy(&self) -> EvaluationPolicy;
+    fn resolves_bare_commands(&self) -> bool {
+        false
+    }
 
     fn permits_controlled_action(&self) -> bool {
         false
@@ -1713,15 +1701,6 @@ pub(crate) trait EvaluationHost {
         scope: &mut ScopeStack,
         context: EvaluationContext,
     ) -> Result<Status, Abort>;
-
-    fn capture_chain(
-        &mut self,
-        chain: &ConditionalChain,
-        scope: &mut ScopeStack,
-        span: Span,
-        position: CapturePosition,
-        context: EvaluationContext,
-    ) -> Result<CapturedChain, Abort>;
 }
 
 /// Host used by the public evaluator APIs that deliberately cannot run jobs.
@@ -1792,21 +1771,6 @@ impl EvaluationHost for ControlledEvaluationHost<'_, '_> {
             chain.span(),
         )))
     }
-
-    fn capture_chain(
-        &mut self,
-        _chain: &ConditionalChain,
-        _scope: &mut ScopeStack,
-        span: Span,
-        _position: CapturePosition,
-        _context: EvaluationContext,
-    ) -> Result<CapturedChain, Abort> {
-        Err(Abort::Refused(Refusal::new(
-            RefusalReason::Unsupported,
-            "process capture outside std::process",
-            span,
-        )))
-    }
 }
 
 impl EvaluationHost for PureEvaluationHost<'_> {
@@ -1841,32 +1805,6 @@ impl EvaluationHost for PureEvaluationHost<'_> {
             // opaal-foundation-boundary(embedding-refusal): Pure evaluator entry points cannot execute jobs.
             RuntimeError::new(RuntimeErrorKind::ExecutionUnsupported, chain.span())
                 .with_source(context.source),
-        ))
-    }
-
-    fn capture_chain(
-        &mut self,
-        _chain: &ConditionalChain,
-        _scope: &mut ScopeStack,
-        span: Span,
-        position: CapturePosition,
-        context: EvaluationContext,
-    ) -> Result<CapturedChain, Abort> {
-        let _ = (&context.binding_types, &context.cancel);
-        let kind = match position {
-            CapturePosition::Expression => {
-                // opaal-foundation-boundary(embedding-refusal): Pure evaluator entry points cannot capture jobs.
-                RuntimeErrorKind::ExecutionUnsupported
-            }
-            CapturePosition::Word => {
-                // opaal-foundation-boundary(embedding-refusal): Pure word expansion has no session capture host.
-                RuntimeErrorKind::Unsupported {
-                    feature: "command substitution in a word",
-                }
-            }
-        };
-        Err(Abort::Error(
-            RuntimeError::new(kind, span).with_source(context.source),
         ))
     }
 }
@@ -2037,8 +1975,10 @@ pub(crate) fn evaluate_with_host_and_budget(
             Err(Abort::Output(error)) => return Err(HostedEvaluationFailure::Output(error)),
         };
         match flow {
-            Flow::Fallthrough(Some(result)) => last = result.value,
-            Flow::Fallthrough(None) => {}
+            Flow::Fallthrough(Some(result)) if !evaluator.statement_is_terminated(statement) => {
+                last = result.value;
+            }
+            Flow::Fallthrough(Some(_) | None) => last = Value::Null,
             Flow::Break(span) => {
                 return Err(HostedEvaluationFailure::Runtime(RuntimeError::new(
                     RuntimeErrorKind::ControlOutsideLoop {
@@ -2328,10 +2268,10 @@ impl ExpandedWord {
 /// Expands one ordinary command word into a single native argument.
 ///
 /// Bare, single-quoted, and double-quoted parts contribute their decoded text;
-/// each `$name` or `${expression}` part is evaluated once and must produce a
+/// each `{expression}` part is evaluated once and must produce a
 /// word-eligible scalar encoded with its canonical word encoding. An ineligible
 /// value, an unknown binding, or a deferred part is a [`RuntimeError`]. Spread,
-/// command substitution, NUL rejection, and argv planning belong to later slices.
+/// NUL rejection and argv planning belong to later layers.
 pub fn expand_word(
     word: &Word,
     source: &SourceFile,
@@ -2346,6 +2286,22 @@ pub(crate) fn expand_word_with_environment(
     scope: &mut ScopeStack,
     environment: &Environment,
 ) -> Result<ExpandedWord, RuntimeError> {
+    expand_word_with_context(
+        word,
+        source,
+        scope,
+        environment,
+        Arc::new(RuntimeBindingTypes::default()),
+    )
+}
+
+pub(crate) fn expand_word_with_context(
+    word: &Word,
+    source: &SourceFile,
+    scope: &mut ScopeStack,
+    environment: &Environment,
+    binding_types: Arc<RuntimeBindingTypes>,
+) -> Result<ExpandedWord, RuntimeError> {
     let limits = EvalLimits::default();
     let mut env = environment.clone();
     let mut host = PureEvaluationHost {
@@ -2355,7 +2311,7 @@ pub(crate) fn expand_word_with_environment(
     let mut budget = limits.budget;
     let mut evaluator = Evaluator {
         source: Arc::new(source.clone()),
-        binding_types: Arc::new(RuntimeBindingTypes::default()),
+        binding_types,
         current_result_type: None,
         cancel: limits.cancel.clone(),
         budget: &mut budget,
@@ -2373,24 +2329,40 @@ pub(crate) fn expand_word_with_environment(
     }
 }
 
-/// Expands a standalone `...$name` spread item into zero or more command
-/// arguments.
+/// Expands a standalone `...{expression}` spread item into command arguments.
 ///
-/// `variable` is the spread's binding and `item_span` is the whole `...$name`
-/// source item, used to anchor diagnostics. The binding is read once and must
+/// The expression is evaluated once and `item_span` is the whole spread source
+/// item, used to anchor diagnostics. The result must
 /// hold a finite `List`; each element is validated in list order against the
 /// word-eligible scalar families and encoded with its canonical word encoding.
 /// A non-list value, an ineligible element, or an unknown binding is a
 /// [`RuntimeError`]. Spread never recursively flattens a nested list.
 pub fn expand_spread(
-    variable: &VariableReference,
+    expression: &Expression,
     item_span: Span,
     source: &SourceFile,
     scope: &mut ScopeStack,
 ) -> Result<Vec<ExpandedWord>, RuntimeError> {
+    expand_spread_with_context(
+        expression,
+        item_span,
+        source,
+        scope,
+        &Environment::new(),
+        Arc::new(RuntimeBindingTypes::default()),
+    )
+}
+
+pub(crate) fn expand_spread_with_context(
+    expression: &Expression,
+    item_span: Span,
+    source: &SourceFile,
+    scope: &mut ScopeStack,
+    environment: &Environment,
+    binding_types: Arc<RuntimeBindingTypes>,
+) -> Result<Vec<ExpandedWord>, RuntimeError> {
     let limits = EvalLimits::default();
-    // Spread expansion never touches the environment; a throwaway is sufficient.
-    let mut env = Environment::new();
+    let mut env = environment.clone();
     let mut host = PureEvaluationHost {
         environment: &mut env,
         policy: limits.policy,
@@ -2398,13 +2370,13 @@ pub fn expand_spread(
     let mut budget = limits.budget;
     let mut evaluator = Evaluator {
         source: Arc::new(source.clone()),
-        binding_types: Arc::new(RuntimeBindingTypes::default()),
+        binding_types,
         current_result_type: None,
         cancel: limits.cancel.clone(),
         budget: &mut budget,
         host: &mut host,
     };
-    match evaluator.expand_spread(variable, item_span, scope) {
+    match evaluator.expand_spread(expression, item_span, scope) {
         Ok(expanded) => Ok(expanded),
         Err(Abort::Error(error)) => Err(error),
         Err(Abort::Cancelled(_)) => {
@@ -2529,6 +2501,15 @@ impl Evaluator<'_, '_> {
         span: Span,
         expected: Option<&ValueType>,
     ) -> Eval<Flow> {
+        if job.background_span.is_none()
+            && let Some((name, name_span)) = self.standalone_name_read(&job.chain, scope)
+        {
+            let value = self.binding_value(&name, scope, name_span)?;
+            return Ok(Flow::Fallthrough(Some(FlowValue {
+                value,
+                span: name_span,
+            })));
+        }
         if self.host.policy() == EvaluationPolicy::Startup {
             return Err(self.error(
                 RuntimeErrorKind::RestrictedStartup {
@@ -2551,6 +2532,44 @@ impl Evaluator<'_, '_> {
             value,
             span: job.chain.span(),
         })))
+    }
+
+    fn standalone_name_read(
+        &self,
+        chain: &ConditionalChain,
+        scope: &ScopeStack,
+    ) -> Option<(String, Span)> {
+        let [and_chain] = chain.or_terms() else {
+            return None;
+        };
+        let [pipeline] = and_chain.and_terms() else {
+            return None;
+        };
+        self.standalone_pipeline_name(pipeline)
+            .and_then(|(name, span)| {
+                (scope.get(&name).is_some() || DynamicBinding::lookup(&name).is_some())
+                    .then_some((name, span))
+            })
+    }
+
+    fn standalone_pipeline_name(&self, pipeline: &Pipeline) -> Option<(String, Span)> {
+        let [stage] = pipeline.stages() else {
+            return None;
+        };
+        let StageKind::Command(command) = stage.kind() else {
+            return None;
+        };
+        if command.head.kind() != opaal_syntax::CommandHeadKind::Bare || !command.items.is_empty() {
+            return None;
+        }
+        let [part] = command.head.word().parts() else {
+            return None;
+        };
+        if !matches!(part.kind(), WordPartKind::Bare) {
+            return None;
+        }
+        let name = self.text(part.span());
+        Some((name.to_owned(), part.span()))
     }
 
     fn declaration(&mut self, declaration: &Declaration, scope: &mut ScopeStack) -> Eval<()> {
@@ -2805,7 +2824,7 @@ impl Evaluator<'_, '_> {
                                 statement.catch_binding.span(),
                             )
                         })?;
-                    self.statements(&statement.catch_block.statements, scope)
+                    self.body_statements(&statement.catch_block.statements, scope)
                 })();
                 scope.pop().expect("a catch block pushes exactly one frame");
                 outcome
@@ -2858,7 +2877,7 @@ impl Evaluator<'_, '_> {
                 return Ok(None);
             }
         }
-        self.statements(&arm.body.statements, scope).map(Some)
+        self.body_statements(&arm.body.statements, scope).map(Some)
     }
 
     /// Decides whether a pattern matches the subject, binding an identifier
@@ -3058,7 +3077,7 @@ impl Evaluator<'_, '_> {
 
     fn block(&mut self, block: &Block, scope: &mut ScopeStack) -> Eval<Flow> {
         scope.push();
-        let outcome = self.statements(&block.statements, scope);
+        let outcome = self.body_statements(&block.statements, scope);
         scope.pop().expect("a block pushes exactly one frame");
         outcome
     }
@@ -3128,29 +3147,6 @@ impl Evaluator<'_, '_> {
     ) -> Eval<Status> {
         let context = self.context(manage_foreground);
         self.host.execute_chain(chain, scope, context)
-    }
-
-    fn capture_chain(
-        &mut self,
-        chain: &ConditionalChain,
-        scope: &mut ScopeStack,
-        span: Span,
-        position: CapturePosition,
-        capture: opaal_syntax::CommandCaptureKind,
-    ) -> Eval<Value> {
-        let context = self.context(false);
-        let CapturedChain { bytes, status } = self
-            .host
-            .capture_chain(chain, scope, span, position, context)?;
-        let _ = status;
-        match capture {
-            opaal_syntax::CommandCaptureKind::Text => {
-                crate::execute::decode_text_bytes(bytes, span)
-                    .map(Value::string)
-                    .map_err(Abort::Error)
-            }
-            opaal_syntax::CommandCaptureKind::Bytes => Ok(Value::bytes(bytes)),
-        }
     }
 
     /// Evaluates a conditional chain to a value.
@@ -3236,6 +3232,13 @@ impl Evaluator<'_, '_> {
         manage_foreground: bool,
         expected: Option<&ValueType>,
     ) -> Eval<Value> {
+        if let Some((name, name_span)) = self.standalone_pipeline_name(pipeline)
+            && (scope.get(&name).is_some()
+                || DynamicBinding::lookup(&name).is_some()
+                || !self.host.resolves_bare_commands())
+        {
+            return self.binding_value(&name, scope, name_span);
+        }
         if let [stage] = pipeline.stages()
             && let StageKind::Expression(expression) = stage.kind()
         {
@@ -3351,13 +3354,9 @@ impl Evaluator<'_, '_> {
         self.charge(span)?;
         match expression.kind() {
             ExpressionKind::Literal(literal) => self.literal(literal, scope),
-            ExpressionKind::Variable(variable) => {
-                let name = self.text(variable.name.span());
+            ExpressionKind::Name(reference) => {
+                let name = self.text(reference.name.span());
                 self.binding_value(name, scope, span)
-            }
-            ExpressionKind::Symbol(_) => {
-                // opaal-foundation-boundary(carrier-refusal): Bare symbols are patterns and names rather than runtime values.
-                Err(self.unsupported("bare symbol", span))
             }
             ExpressionKind::Qualified(name) => {
                 let binding = name
@@ -3409,9 +3408,7 @@ impl Evaluator<'_, '_> {
                 self.nominal_record(record, scope, span, expected)
             }
             ExpressionKind::Closure(closure) => self.make_closure(closure, scope),
-            ExpressionKind::CommandSubstitution(_) | ExpressionKind::GroupedJob(_) => {
-                self.grouped_or_substitution(expression, scope)
-            }
+            ExpressionKind::GroupedJob(chain) => self.eval_chain(chain, scope),
             ExpressionKind::Call(call) => self.call(call, scope, span, expected),
             ExpressionKind::Index(index) => {
                 let target = self.expression(&index.target, scope)?;
@@ -3661,36 +3658,6 @@ impl Evaluator<'_, '_> {
         Ok(())
     }
 
-    fn grouped_or_substitution(
-        &mut self,
-        expression: &Expression,
-        scope: &mut ScopeStack,
-    ) -> Eval<Value> {
-        let span = expression.span();
-        match expression.kind() {
-            // A parenthesized pure expression is evaluated; a grouped command is not.
-            ExpressionKind::GroupedJob(chain) => self.eval_chain(chain, scope),
-            ExpressionKind::CommandSubstitution(_)
-                if self.host.policy() == EvaluationPolicy::Startup =>
-            {
-                Err(self.error(
-                    RuntimeErrorKind::RestrictedStartup {
-                        capability: RestrictedCapability::CommandSubstitution,
-                    },
-                    span,
-                ))
-            }
-            ExpressionKind::CommandSubstitution(substitution) => self.capture_chain(
-                substitution.chain(),
-                scope,
-                span,
-                CapturePosition::Expression,
-                substitution.capture(),
-            ),
-            _ => unreachable!("caller restricts this to grouped jobs and substitutions"),
-        }
-    }
-
     fn binary(
         &self,
         operator: BinaryOperator,
@@ -3857,39 +3824,13 @@ impl Evaluator<'_, '_> {
                 self.retain_collection_bytes(retained, span)?;
                 value.push(decode_double_escape(self.text(span)));
             }
-            WordPartKind::Variable(identifier) => {
-                let name = self.text(identifier.span());
-                let resolved = self.binding_value(name, scope, span)?;
-                value.push(self.encode_scalar(&resolved, span)?);
+            WordPartKind::EscapedBrace => {
+                self.retain_collection_bytes(1, span)?;
+                value.push(&self.text(span)[..1]);
             }
-            WordPartKind::BracedInterpolation(expression) => {
+            WordPartKind::Interpolation(expression) => {
                 let resolved = self.expression(expression, scope)?;
                 value.push(self.encode_scalar(&resolved, span)?);
-            }
-            WordPartKind::CommandSubstitution(substitution) => {
-                if self.host.policy() == EvaluationPolicy::PureOpaal {
-                    return Err(Abort::Refused(Refusal::new(
-                        RefusalReason::Unsupported,
-                        "process execution",
-                        span,
-                    )));
-                }
-                if self.host.policy() == EvaluationPolicy::Startup {
-                    return Err(self.error(
-                        RuntimeErrorKind::RestrictedStartup {
-                            capability: RestrictedCapability::CommandSubstitution,
-                        },
-                        span,
-                    ));
-                }
-                let captured = self.capture_chain(
-                    substitution.chain(),
-                    scope,
-                    span,
-                    CapturePosition::Word,
-                    substitution.capture(),
-                )?;
-                value.push(self.encode_scalar(&captured, span)?);
             }
             WordPartKind::DoubleQuoted(_) => unreachable!("handled before provenance tracking"),
         }
@@ -3933,18 +3874,17 @@ impl Evaluator<'_, '_> {
         }
     }
 
-    /// Expands a `...$name` spread into zero or more native arguments. The binding
-    /// is read once and must hold a `List`; each element is encoded with its
+    /// Expands a `...{expression}` spread into zero or more native arguments.
+    /// The expression is evaluated once and must hold a `List`; each element is encoded with its
     /// canonical word encoding in list order. Diagnostics anchor on `item_span`.
     fn expand_spread(
         &mut self,
-        variable: &VariableReference,
+        expression: &Expression,
         item_span: Span,
         scope: &mut ScopeStack,
     ) -> Eval<Vec<ExpandedWord>> {
         self.charge(item_span)?;
-        let name = self.text(variable.name.span());
-        let resolved = self.binding_value(name, scope, item_span)?;
+        let resolved = self.expression(expression, scope)?;
         let elements = match resolved {
             Value::List(elements) => elements,
             other => {
@@ -4282,8 +4222,8 @@ impl Evaluator<'_, '_> {
             }
         }
 
-        if let ExpressionKind::Symbol(identifier) = call.callee.kind() {
-            let name = self.text(identifier.span());
+        if let ExpressionKind::Name(reference) = call.callee.kind() {
+            let name = self.text(reference.name.span());
             if let Some(intrinsic) = ExpressionIntrinsic::lookup(name)
                 && scope.get(name).is_none()
             {
@@ -4956,10 +4896,10 @@ impl Evaluator<'_, '_> {
     }
 
     /// Resolves a callee. A bare name resolves in scope; any other form is an
-    /// ordinary expression. This keeps `$name` the only value-position read.
+    /// ordinary expression.
     fn callee_value(&mut self, callee: &Expression, scope: &mut ScopeStack) -> Eval<Value> {
-        if let ExpressionKind::Symbol(identifier) = callee.kind() {
-            let name = self.text(identifier.span());
+        if let ExpressionKind::Name(reference) = callee.kind() {
+            let name = self.text(reference.name.span());
             return self.binding_value(name, scope, callee.span());
         }
         if let ExpressionKind::Qualified(name) = callee.kind() {
@@ -4990,12 +4930,21 @@ impl Evaluator<'_, '_> {
                 self.statement(statement, scope)?
             };
             match flow {
-                Flow::Fallthrough(Some(result)) => last = Some(result),
-                Flow::Fallthrough(None) => {}
+                Flow::Fallthrough(Some(result)) if !self.statement_is_terminated(statement) => {
+                    last = Some(result);
+                }
+                Flow::Fallthrough(Some(_) | None) => last = None,
                 transfer => return Ok(transfer),
             }
         }
         Ok(Flow::Fallthrough(last))
+    }
+
+    fn statement_is_terminated(&self, statement: &Statement) -> bool {
+        self.source.text()[statement.span().end()..]
+            .chars()
+            .find(|character| !matches!(character, ' ' | '\t'))
+            == Some(';')
     }
 
     /// Formats a callable's `source:line:column` origin for display.
@@ -5390,7 +5339,9 @@ fn find_callable_in_chain(
                                         | RedirectionKind::Close { .. } => None,
                                     }
                                 }
-                                CommandItemKind::Spread(_) => None,
+                                CommandItemKind::Spread(expression) => {
+                                    find_callable_in_expression(expression, snapshot)
+                                }
                             })
                         })
                     }
@@ -5419,9 +5370,7 @@ fn find_callable_in_expression(
                 .find_map(|part| find_callable_in_word_part(part, snapshot)),
             _ => None,
         },
-        ExpressionKind::Variable(_) | ExpressionKind::Symbol(_) | ExpressionKind::Qualified(_) => {
-            None
-        }
+        ExpressionKind::Name(_) | ExpressionKind::Qualified(_) => None,
         ExpressionKind::List(elements) => elements
             .iter()
             .find_map(|element| find_callable_in_expression(element, snapshot)),
@@ -5437,9 +5386,6 @@ fn find_callable_in_expression(
             .iter()
             .find_map(|field| find_callable_in_expression(&field.value, snapshot)),
         ExpressionKind::Closure(closure) => find_callable_in_closure(closure, snapshot),
-        ExpressionKind::CommandSubstitution(substitution) => {
-            find_callable_in_chain(substitution.chain(), snapshot)
-        }
         ExpressionKind::GroupedJob(chain) => find_callable_in_chain(chain, snapshot),
         ExpressionKind::Call(call) => {
             find_callable_in_expression(&call.callee, snapshot).or_else(|| {
@@ -5471,18 +5417,15 @@ fn find_callable_in_word_part(
         WordPartKind::DoubleQuoted(parts) => parts
             .iter()
             .find_map(|part| find_callable_in_word_part(part, snapshot)),
-        WordPartKind::BracedInterpolation(expression) => {
+        WordPartKind::Interpolation(expression) => {
             find_callable_in_expression(expression, snapshot)
-        }
-        WordPartKind::CommandSubstitution(substitution) => {
-            find_callable_in_chain(substitution.chain(), snapshot)
         }
         WordPartKind::Bare
         | WordPartKind::BareEscape
         | WordPartKind::SingleQuoted
         | WordPartKind::DoubleText
         | WordPartKind::DoubleEscape
-        | WordPartKind::Variable(_) => None,
+        | WordPartKind::EscapedBrace => None,
     }
 }
 
@@ -5558,7 +5501,6 @@ fn decode_double_escape(raw: &str) -> String {
     match marker {
         '\\' => "\\".to_owned(),
         '"' => "\"".to_owned(),
-        '$' => "$".to_owned(),
         'n' => "\n".to_owned(),
         'r' => "\r".to_owned(),
         't' => "\t".to_owned(),
@@ -5626,69 +5568,6 @@ mod tests {
         ) -> Result<Status, Abort> {
             unreachable!("glob tests do not execute commands")
         }
-
-        fn capture_chain(
-            &mut self,
-            _chain: &ConditionalChain,
-            _scope: &mut ScopeStack,
-            _span: Span,
-            _position: CapturePosition,
-            _context: EvaluationContext,
-        ) -> Result<CapturedChain, Abort> {
-            unreachable!("glob tests do not capture commands")
-        }
-    }
-
-    struct CancellingCaptureHost {
-        environment: Environment,
-    }
-
-    impl EvaluationHost for CancellingCaptureHost {
-        fn environment(&mut self) -> &mut Environment {
-            &mut self.environment
-        }
-
-        fn current_status(&self) -> Option<&Status> {
-            None
-        }
-
-        fn policy(&self) -> EvaluationPolicy {
-            EvaluationPolicy::General
-        }
-
-        fn read_directory(
-            &mut self,
-            _path: &Path,
-        ) -> Result<Box<dyn DirectoryStream>, RuntimeErrorKind> {
-            unreachable!("capture cancellation does not read directories")
-        }
-
-        fn execute_chain(
-            &mut self,
-            _chain: &ConditionalChain,
-            _scope: &mut ScopeStack,
-            _context: EvaluationContext,
-        ) -> Result<Status, Abort> {
-            unreachable!("capture cancellation does not execute an uncaptured chain")
-        }
-
-        fn capture_chain(
-            &mut self,
-            _chain: &ConditionalChain,
-            _scope: &mut ScopeStack,
-            span: Span,
-            _position: CapturePosition,
-            context: EvaluationContext,
-        ) -> Result<CapturedChain, Abort> {
-            assert!(
-                context.cancel.is_cancelled(),
-                "the active evaluator token reaches recursive capture"
-            );
-            Err(Abort::Cancelled(Cancellation::new(
-                context.cancel.reason(),
-                span,
-            )))
-        }
     }
 
     struct StoppedHost {
@@ -5708,6 +5587,10 @@ mod tests {
             EvaluationPolicy::General
         }
 
+        fn resolves_bare_commands(&self) -> bool {
+            true
+        }
+
         fn read_directory(
             &mut self,
             _path: &Path,
@@ -5724,17 +5607,6 @@ mod tests {
             Err(Abort::Stopped(
                 crate::job::JobId::new(1).expect("test job identity is nonzero"),
             ))
-        }
-
-        fn capture_chain(
-            &mut self,
-            _chain: &ConditionalChain,
-            _scope: &mut ScopeStack,
-            _span: Span,
-            _position: CapturePosition,
-            _context: EvaluationContext,
-        ) -> Result<CapturedChain, Abort> {
-            unreachable!("stopped control test does not capture commands")
         }
     }
 
@@ -5793,47 +5665,6 @@ mod tests {
             Ok(HostedEvaluationOutcome::Cancelled(_))
         ));
         assert_eq!(advances.load(Ordering::SeqCst), 1);
-    }
-
-    #[test]
-    fn recursive_capture_cancellation_remains_a_distinct_hosted_outcome() {
-        let source = Arc::new(SourceFile::new(
-            SourceId::new(1),
-            "capture.opaal",
-            "def capture() { return $(^tool) }\ncapture()",
-        ));
-        let script = match parse_opaal(&source) {
-            ParseOutcome::Complete(script) => script,
-            other => panic!("capture fixture did not parse: {other:?}"),
-        };
-        let polls = Arc::new(AtomicUsize::new(0));
-        let token_polls = Arc::clone(&polls);
-        let limits = EvalLimits::new(
-            CancellationToken::from_fn(move || token_polls.fetch_add(1, Ordering::SeqCst) >= 1),
-            ResourceBudget::unlimited(),
-        );
-        let mut scope = ScopeStack::new();
-        let mut host = CancellingCaptureHost {
-            environment: Environment::new(),
-        };
-
-        let outcome = match evaluate_with_host(
-            &script,
-            Arc::clone(&source),
-            &mut scope,
-            &limits,
-            Arc::new(RuntimeBindingTypes::default()),
-            &mut host,
-        ) {
-            Ok(outcome) => outcome,
-            Err(_) => panic!("cancellation must not become a hosted evaluation failure"),
-        };
-        let HostedEvaluationOutcome::Cancelled(cancellation) = outcome else {
-            panic!("recursive capture should preserve cancellation");
-        };
-        assert_eq!(cancellation.reason(), CancelReason::Requested);
-        assert_eq!(source.slice(cancellation.span()).unwrap(), "$(^tool)");
-        assert_eq!(polls.load(Ordering::SeqCst), 2);
     }
 
     #[test]

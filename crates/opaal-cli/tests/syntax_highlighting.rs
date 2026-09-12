@@ -6,7 +6,7 @@ use opaal_syntax::{ParseOutcome, SourceFile, SourceId, parse_opaal};
 
 #[test]
 fn complete_source_uses_stable_semantic_categories_without_changing_text() {
-    let source = "## documented\nlet cafe = 42\n^echo \"hello 💡 $name\" | check # note";
+    let source = "## documented\nlet cafe = 42\n^echo \"hello 💡 {name}\" | check # note";
     let segments = SyntaxHighlighter::new().highlight(source);
 
     assert_lossless(source, &segments);
@@ -15,7 +15,7 @@ fn complete_source_uses_stable_semantic_categories_without_changing_text() {
     assert_segment(&segments, "42", HighlightKind::Literal);
     assert_segment(&segments, "^", HighlightKind::Operator);
     assert_segment(&segments, "\"", HighlightKind::String);
-    assert_segment(&segments, "$name", HighlightKind::Expansion);
+    assert_segment(&segments, "{", HighlightKind::Interpolation);
     assert_segment(&segments, "|", HighlightKind::Operator);
     assert_segment(&segments, "# note", HighlightKind::Comment);
     assert!(
@@ -27,7 +27,7 @@ fn complete_source_uses_stable_semantic_categories_without_changing_text() {
 
 #[test]
 fn incomplete_multiline_source_keeps_token_styles_without_error_coloring() {
-    let source = "if true {\n    echo \"💡 $name";
+    let source = "if true {\n    echo \"💡 {name";
     let parsed = SourceFile::new(SourceId::new(1), "<test>", source);
     assert!(matches!(parse_opaal(&parsed), ParseOutcome::Incomplete(_)));
 
@@ -36,7 +36,7 @@ fn incomplete_multiline_source_keeps_token_styles_without_error_coloring() {
     assert_segment(&segments, "if", HighlightKind::Keyword);
     assert_segment(&segments, "true", HighlightKind::Literal);
     assert_segment(&segments, "{", HighlightKind::Delimiter);
-    assert_segment(&segments, "$name", HighlightKind::Expansion);
+    assert_segment(&segments, "{", HighlightKind::Interpolation);
     assert!(
         segments
             .iter()
@@ -68,13 +68,13 @@ fn empty_and_escape_heavy_unicode_buffers_are_ansi_free_and_exact() {
     let highlighter = SyntaxHighlighter::new();
     assert!(highlighter.highlight("").is_empty());
 
-    let source = "echo 'λ' \\ space \"💡\\n${value}\"\n";
+    let source = "echo 'λ' \\ space \"💡\\n{value}\"\n";
     let segments = highlighter.highlight(source);
     assert_lossless(source, &segments);
     assert_segment(&segments, "'λ'", HighlightKind::String);
     assert_segment(&segments, "\\ ", HighlightKind::Escape);
     assert_segment(&segments, "\\n", HighlightKind::Escape);
-    assert_segment(&segments, "${", HighlightKind::Expansion);
+    assert_segment(&segments, "{", HighlightKind::Interpolation);
     assert!(
         segments
             .iter()

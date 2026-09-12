@@ -25,7 +25,7 @@ const FRAGMENTS: &[&str] = &[
     "1.5",
     "0xff",
     "_",
-    "$x",
+    "x",
     "$",
     "${",
     "$(",
@@ -245,9 +245,9 @@ impl<'source> SpanChecker<'source> {
         self.span(identifier.span());
     }
 
-    fn variable(&self, variable: VariableReference) {
-        self.span(variable.span);
-        self.identifier(variable.name);
+    fn name_reference(&self, reference: NameReference) {
+        self.span(reference.span);
+        self.identifier(reference.name);
     }
 
     fn type_reference(&self, reference: &TypeReference) {
@@ -333,7 +333,7 @@ impl<'source> SpanChecker<'source> {
                 self.expression(&declaration.value);
             }
             StatementKind::Assignment(assignment) => {
-                self.variable(assignment.target);
+                self.name_reference(assignment.target);
                 self.expression(&assignment.value);
             }
             StatementKind::Environment(environment) => match environment {
@@ -503,8 +503,7 @@ impl<'source> SpanChecker<'source> {
         self.span(expression.span());
         match expression.kind() {
             ExpressionKind::Literal(literal) => self.literal(literal),
-            ExpressionKind::Variable(variable) => self.variable(*variable),
-            ExpressionKind::Symbol(identifier) => self.identifier(*identifier),
+            ExpressionKind::Name(reference) => self.name_reference(*reference),
             ExpressionKind::Qualified(name) => self.qualified_name(name),
             ExpressionKind::List(items) => {
                 for item in items {
@@ -527,7 +526,6 @@ impl<'source> SpanChecker<'source> {
                 }
             }
             ExpressionKind::Closure(closure) => self.closure(closure),
-            ExpressionKind::CommandSubstitution(substitution) => self.chain(substitution.chain()),
             ExpressionKind::GroupedJob(chain) => self.chain(chain),
             ExpressionKind::Call(call) => {
                 self.expression(&call.callee);
@@ -634,7 +632,7 @@ impl<'source> SpanChecker<'source> {
             self.span(item.span());
             match item.kind() {
                 CommandItemKind::Word(word) => self.word(word),
-                CommandItemKind::Spread(variable) => self.variable(*variable),
+                CommandItemKind::Spread(expression) => self.expression(expression),
                 CommandItemKind::Closure(closure) => self.closure(closure),
                 CommandItemKind::Redirection(redirection) => self.redirection(redirection),
             }
@@ -656,14 +654,13 @@ impl<'source> SpanChecker<'source> {
                     self.word_part(part);
                 }
             }
-            WordPartKind::Variable(identifier) => self.identifier(*identifier),
-            WordPartKind::BracedInterpolation(expression) => self.expression(expression),
-            WordPartKind::CommandSubstitution(substitution) => self.chain(substitution.chain()),
+            WordPartKind::Interpolation(expression) => self.expression(expression),
             WordPartKind::Bare
             | WordPartKind::BareEscape
             | WordPartKind::SingleQuoted
             | WordPartKind::DoubleText
-            | WordPartKind::DoubleEscape => {}
+            | WordPartKind::DoubleEscape
+            | WordPartKind::EscapedBrace => {}
         }
     }
 

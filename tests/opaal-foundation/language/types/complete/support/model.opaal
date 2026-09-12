@@ -9,7 +9,7 @@ enum Maybe[T: Equal] {
 }
 
 def unwrap[T: Equal](Box { value: value }: Box[T]) -> T {
-    return $value
+    return value
 }
 
 export { Box, Maybe, unwrap }

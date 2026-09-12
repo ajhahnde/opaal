@@ -22,7 +22,7 @@ effects {
     process.run(tools::git);
 }
 {
-    return $candidate
+    return candidate
 }
 
 task release = prepare

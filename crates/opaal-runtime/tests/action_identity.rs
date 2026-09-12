@@ -98,7 +98,8 @@ fn action_call_graph_is_static_acyclic_and_effect_closed() {
 #[test]
 fn invalid_action_contracts_are_source_diagnostics() {
     let path = PathBuf::from("/project/main.opaal");
-    let text = b"action broken(candidate) -> String effects { unknown.work; } {}\n".to_vec();
+    let text = b"action broken(candidate) -> String effects { unknown.work; } { return 'done' }\n"
+        .to_vec();
     let sources = MemorySources(BTreeMap::from([(path.clone(), text)]));
     let report = ModuleProgramLoader::new(&sources, &sources).analyze(&path);
     let codes = report
@@ -111,12 +112,12 @@ fn invalid_action_contracts_are_source_diagnostics() {
     assert!(codes.contains(&"ACT002".to_owned()), "{codes:?}");
 
     let dynamic = action_diagnostic_codes(
-        "let suffix = 'wall'\naction broken() -> String effects { filesystem.read(\"$suffix\"); } { return 'done' }\n",
+        "let suffix = 'wall'\naction broken() -> String effects { filesystem.read(\"{suffix}\"); } { return 'done' }\n",
     );
     assert!(dynamic.contains(&"ACT011".to_owned()), "{dynamic:?}");
 
     let value = action_diagnostic_codes(
-        "action leaf() -> String effects {} { return 'ok' }\nlet saved = $leaf\n",
+        "action leaf() -> String effects {} { return 'ok' }\nlet saved = leaf\n",
     );
     assert!(value.contains(&"ACT006".to_owned()), "{value:?}");
 }

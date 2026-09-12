@@ -17,9 +17,9 @@ OPAAL modules are UTF-8 `.opaal` files containing ordinary program text:
 import std::value as value
 
 def remaining[T](items: List[T]) -> Int {
-    match $items {
+    match items {
         [] => { return 0 }
-        [first, ...rest] => { return value::length($rest) }
+        [first, ...rest] => { return value::length(rest) }
     }
 }
 
@@ -38,6 +38,12 @@ cargo run --locked -p opaal-cli --bin opaal -- format --check examples/language-
 Successful non-interactive execution is silent; the embedding API retains the
 final value. Running `opaal` without a script in a terminal starts the
 interactive client, which presents completed values.
+
+OPAAL uses one value language throughout: bare names read bindings, the final
+expression is a block's value, `{expression}` interpolates into a command word,
+`...{expression}` spreads a list, and only a literal head prefixed with `^`
+denotes an external program. Dollar-prefixed forms and implicit external
+command fallback are unsupported.
 
 ## Current surfaces
 
@@ -108,6 +114,7 @@ claim packaging by another operating system, Redox support, or physical
 hardware qualification.
 
 See the [documentation index](docs/README.md), [language foundation](docs/language-foundation.md),
+[pre-1.0 language migration](docs/migration.md),
 [actions and explicit projects](docs/actions-and-projects.md),
 [bounded operational modules](docs/operational-modules.md),
 [architecture](docs/architecture.md), [development guide](docs/development.md),

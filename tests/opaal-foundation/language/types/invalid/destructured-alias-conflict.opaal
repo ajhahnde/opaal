@@ -1,4 +1,4 @@
 
 let [first, model] = [1, 2]
 import '../complete/support/model.opaal' as model
-$first
+first

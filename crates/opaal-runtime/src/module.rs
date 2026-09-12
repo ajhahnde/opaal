@@ -1094,7 +1094,7 @@ impl ModuleNameReference {
         &self.name
     }
 
-    /// The complete syntactic read, such as `$name` or `...$name`.
+    /// The complete syntactic read, such as `name` or `...{name}`.
     #[must_use]
     pub const fn reference_span(&self) -> Span {
         self.reference_span
@@ -2645,11 +2645,8 @@ impl<'a> CallableReadCollector<'a> {
                                         RedirectionKind::Duplicate { .. }
                                         | RedirectionKind::Close { .. } => {}
                                     },
-                                    CommandItemKind::Spread(variable) => {
-                                        self.reads.push(CallableRead {
-                                            span: variable.span,
-                                            is_callee: false,
-                                        })
+                                    CommandItemKind::Spread(expression) => {
+                                        self.expression(expression)
                                     }
                                 }
                             }
@@ -2666,12 +2663,12 @@ impl<'a> CallableReadCollector<'a> {
         }
         match expression.kind() {
             ExpressionKind::Literal(literal) => self.literal(literal),
-            ExpressionKind::Variable(_)
-            | ExpressionKind::Symbol(_)
-            | ExpressionKind::Qualified(_) => self.reads.push(CallableRead {
-                span: expression.span(),
-                is_callee: false,
-            }),
+            ExpressionKind::Name(_) | ExpressionKind::Qualified(_) => {
+                self.reads.push(CallableRead {
+                    span: expression.span(),
+                    is_callee: false,
+                })
+            }
             ExpressionKind::List(elements) => {
                 elements.iter().for_each(|element| self.expression(element))
             }
@@ -2688,14 +2685,11 @@ impl<'a> CallableReadCollector<'a> {
                 .iter()
                 .for_each(|field| self.expression(&field.value)),
             ExpressionKind::Closure(closure) => self.chain(&closure.body),
-            ExpressionKind::CommandSubstitution(substitution) => self.chain(substitution.chain()),
             ExpressionKind::GroupedJob(chain) => self.chain(chain),
             ExpressionKind::Call(call) => {
                 if matches!(
                     call.callee.kind(),
-                    ExpressionKind::Variable(_)
-                        | ExpressionKind::Symbol(_)
-                        | ExpressionKind::Qualified(_)
+                    ExpressionKind::Name(_) | ExpressionKind::Qualified(_)
                 ) {
                     self.reads.push(CallableRead {
                         span: call.callee.span(),
@@ -2744,17 +2738,13 @@ impl<'a> CallableReadCollector<'a> {
         }
         match part.kind() {
             WordPartKind::DoubleQuoted(parts) => parts.iter().for_each(|part| self.word_part(part)),
-            WordPartKind::Variable(_) => self.reads.push(CallableRead {
-                span: part.span(),
-                is_callee: false,
-            }),
-            WordPartKind::BracedInterpolation(expression) => self.expression(expression),
-            WordPartKind::CommandSubstitution(substitution) => self.chain(substitution.chain()),
+            WordPartKind::Interpolation(expression) => self.expression(expression),
             WordPartKind::Bare
             | WordPartKind::BareEscape
             | WordPartKind::SingleQuoted
             | WordPartKind::DoubleText
-            | WordPartKind::DoubleEscape => {}
+            | WordPartKind::DoubleEscape
+            | WordPartKind::EscapedBrace => {}
         }
     }
 }
@@ -3961,16 +3951,7 @@ impl<'a> TypeCollector<'a> {
                 let value_type = declaration
                     .type_annotation
                     .as_ref()
-                    .map(|annotation| self.resolve_type(annotation))
-                    .or_else(|| match declaration.value.kind() {
-                        ExpressionKind::CommandSubstitution(substitution) => {
-                            Some(match substitution.capture() {
-                                opaal_syntax::CommandCaptureKind::Text => ValueType::String,
-                                opaal_syntax::CommandCaptureKind::Bytes => ValueType::Bytes,
-                            })
-                        }
-                        _ => None,
-                    });
+                    .map(|annotation| self.resolve_type(annotation));
                 if let Some(value_type) = value_type {
                     self.collect_pattern_bindings(&declaration.pattern, &value_type);
                 }
@@ -4113,7 +4094,9 @@ impl<'a> TypeCollector<'a> {
                                     CommandItemKind::Redirection(redirection) => {
                                         self.redirection(redirection.kind())?;
                                     }
-                                    CommandItemKind::Spread(_) => {}
+                                    CommandItemKind::Spread(expression) => {
+                                        self.expression(expression)?;
+                                    }
                                 }
                             }
                         }
@@ -4130,7 +4113,7 @@ impl<'a> TypeCollector<'a> {
         }
         match expression.kind() {
             ExpressionKind::Literal(literal) => self.literal(literal),
-            ExpressionKind::Variable(_) | ExpressionKind::Symbol(_) => Ok(()),
+            ExpressionKind::Name(_) => Ok(()),
             ExpressionKind::Qualified(name) => {
                 self.record_nominal_reference(name, true);
                 Ok(())
@@ -4158,7 +4141,6 @@ impl<'a> TypeCollector<'a> {
                 Ok(())
             }
             ExpressionKind::Closure(closure) => self.closure(closure),
-            ExpressionKind::CommandSubstitution(substitution) => self.chain(substitution.chain()),
             ExpressionKind::GroupedJob(chain) => self.chain(chain),
             ExpressionKind::Call(call) => {
                 self.expression(&call.callee)?;
@@ -4424,17 +4406,7 @@ impl<'a> TypeCollector<'a> {
         }
         match part.kind() {
             WordPartKind::DoubleQuoted(parts) => self.word_parts(parts),
-            WordPartKind::BracedInterpolation(expression) => self.expression(expression),
-            WordPartKind::CommandSubstitution(substitution) => {
-                self.chain(substitution.chain())?;
-                if substitution.capture() == opaal_syntax::CommandCaptureKind::Bytes {
-                    self.errors.push(ModuleTypeError::ByteCaptureInWord {
-                        module: self.entry.module().clone(),
-                        span: substitution.modifier_span().unwrap_or_else(|| part.span()),
-                    });
-                }
-                Ok(())
-            }
+            WordPartKind::Interpolation(expression) => self.expression(expression),
             _ => Ok(()),
         }
     }
@@ -4670,18 +4642,7 @@ impl<'a> SignatureValidator<'a> {
                 self.validate_pattern(&parameter.pattern, resolved.value_type());
             }
             self.function_statements(&function.body.statements, signature)?;
-
-            let Some(StatementKind::Job(job)) =
-                function.body.statements.last().map(Statement::kind)
-            else {
-                return Ok(());
-            };
-            let Some((span, actual)) =
-                self.chain_value_with_expected(&job.chain, Some(signature.result()))?
-            else {
-                return Ok(());
-            };
-            self.check_result(signature, span, Some(actual))
+            self.function_block_result(&function.body, signature)
         })();
         self.type_parameter_scopes
             .borrow_mut()
@@ -4786,6 +4747,107 @@ impl<'a> SignatureValidator<'a> {
             Some(ElseBranch::If(nested)) => self.function_if_statement(nested.kind(), signature),
             None => Ok(()),
         }
+    }
+
+    fn function_block_result(
+        &self,
+        block: &Block,
+        signature: &FunctionSignature,
+    ) -> Result<(), Box<ModuleTypeError>> {
+        let Some(statement) = block.statements.last() else {
+            return self.check_result(signature, block.span, Some(ValueType::Null));
+        };
+        self.function_statement_result(statement, signature)
+    }
+
+    fn function_statement_result(
+        &self,
+        statement: &Statement,
+        signature: &FunctionSignature,
+    ) -> Result<(), Box<ModuleTypeError>> {
+        if matches!(
+            statement.kind(),
+            StatementKind::Throw(_) | StatementKind::Control(_)
+        ) {
+            return Ok(());
+        }
+        if self.statement_is_terminated(statement) {
+            return self.check_result(signature, statement.span(), Some(ValueType::Null));
+        }
+        match statement.kind() {
+            StatementKind::Job(job) => {
+                let Some((span, actual)) =
+                    self.chain_value_with_expected(&job.chain, Some(signature.result()))?
+                else {
+                    return Ok(());
+                };
+                self.check_result(signature, span, Some(actual))
+            }
+            StatementKind::If(statement) => {
+                self.function_block_result(&statement.then_block, signature)?;
+                match &statement.else_branch {
+                    Some(ElseBranch::Block(block)) => self.function_block_result(block, signature),
+                    Some(ElseBranch::If(nested)) => {
+                        self.function_if_result(nested.kind(), nested.span(), signature)
+                    }
+                    None => self.check_result(
+                        signature,
+                        statement.then_block.span,
+                        Some(ValueType::Null),
+                    ),
+                }
+            }
+            StatementKind::Match(statement) => {
+                for arm in &statement.arms {
+                    self.function_block_result(&arm.body, signature)?;
+                }
+                Ok(())
+            }
+            StatementKind::Try(statement) => {
+                self.function_block_result(&statement.try_block, signature)?;
+                self.function_block_result(&statement.catch_block, signature)
+            }
+            StatementKind::ModuleImport(_)
+            | StatementKind::ModuleExport(_)
+            | StatementKind::NominalType(_)
+            | StatementKind::VariantType(_)
+            | StatementKind::Declaration(_)
+            | StatementKind::Assignment(_)
+            | StatementKind::Environment(_)
+            | StatementKind::Function(_)
+            | StatementKind::Action(_)
+            | StatementKind::Task(_)
+            | StatementKind::While(_)
+            | StatementKind::For(_) => {
+                self.check_result(signature, statement.span(), Some(ValueType::Null))
+            }
+            StatementKind::Throw(_) | StatementKind::Control(_) => {
+                unreachable!("control transfers return before implicit fallthrough validation")
+            }
+        }
+    }
+
+    fn function_if_result(
+        &self,
+        statement: &opaal_syntax::IfStatement,
+        span: Span,
+        signature: &FunctionSignature,
+    ) -> Result<(), Box<ModuleTypeError>> {
+        self.function_block_result(&statement.then_block, signature)?;
+        match &statement.else_branch {
+            Some(ElseBranch::Block(block)) => self.function_block_result(block, signature),
+            Some(ElseBranch::If(nested)) => {
+                self.function_if_result(nested.kind(), nested.span(), signature)
+            }
+            None => self.check_result(signature, span, Some(ValueType::Null)),
+        }
+    }
+
+    fn statement_is_terminated(&self, statement: &Statement) -> bool {
+        self.entry.source().text()[statement.span().end()..]
+            .chars()
+            .find(|character| !matches!(character, ' ' | '\t'))
+            == Some(';')
     }
 
     fn check_result(
@@ -5023,8 +5085,8 @@ impl<'a> SignatureValidator<'a> {
                                     CommandItemKind::Redirection(redirection) => {
                                         self.redirection(redirection.kind())?;
                                     }
-                                    CommandItemKind::Spread(_) => {
-                                        self.validate_spread(item.span());
+                                    CommandItemKind::Spread(expression) => {
+                                        self.validate_spread(expression, item.span())?;
                                     }
                                 }
                             }
@@ -5036,12 +5098,13 @@ impl<'a> SignatureValidator<'a> {
         Ok(())
     }
 
-    fn validate_spread(&self, span: Span) {
-        let Some(reference) = self.names.reference(self.entry.module(), span) else {
-            return;
-        };
-        let Some(actual) = self.reference_type(reference.target()) else {
-            return;
+    fn validate_spread(
+        &self,
+        expression: &Expression,
+        span: Span,
+    ) -> Result<(), Box<ModuleTypeError>> {
+        let Some(actual) = self.expression(expression)? else {
+            return Ok(());
         };
         match actual {
             ValueType::Any | ValueType::TypeParameter(_) => {}
@@ -5077,6 +5140,7 @@ impl<'a> SignatureValidator<'a> {
                     });
             }
         }
+        Ok(())
     }
 
     fn chain_value_with_expected(
@@ -5101,15 +5165,27 @@ impl<'a> SignatureValidator<'a> {
         let Some(first) = pipeline.stages().first() else {
             return Ok(None);
         };
+        if pipeline.stages().len() == 1
+            && let StageKind::Command(command) = first.kind()
+            && command.head.kind() == CommandHeadKind::Bare
+            && command.items.is_empty()
+            && let Some(reference) = self
+                .names
+                .reference(self.entry.module(), command.head.span())
+        {
+            return Ok(self
+                .reference_type(reference.target())
+                .map(|value_type| (command.head.span(), value_type)));
+        }
         let StageKind::Expression(expression) = first.kind() else {
-            return Ok(None);
+            return Ok(Some((pipeline.span(), ValueType::Status)));
         };
         let first_expected = (pipeline.stages().len() == 1).then_some(expected).flatten();
         let mut value_type = self.expression_with_expected(expression, first_expected)?;
         let mut result_span = expression.span();
         for stage in &pipeline.stages()[1..] {
             let StageKind::Expression(stage_expression) = stage.kind() else {
-                return Ok(None);
+                return Ok(Some((pipeline.span(), ValueType::Status)));
             };
             let ExpressionKind::Qualified(name) = stage_expression.kind() else {
                 self.errors
@@ -5214,11 +5290,10 @@ impl<'a> SignatureValidator<'a> {
         }
         match expression.kind() {
             ExpressionKind::Literal(literal) => self.literal(literal),
-            ExpressionKind::Variable(_) => Ok(self
+            ExpressionKind::Name(_) => Ok(self
                 .names
                 .reference(self.entry.module(), expression.span())
                 .and_then(|reference| self.reference_type(reference.target()))),
-            ExpressionKind::Symbol(_) => Ok(None),
             ExpressionKind::Qualified(name) => Ok(self.qualified_value_type(name, expected)),
             ExpressionKind::List(elements) => {
                 let mut element_type = None;
@@ -5283,13 +5358,6 @@ impl<'a> SignatureValidator<'a> {
                     }
                 }
                 Ok(Some(ValueType::Closure))
-            }
-            ExpressionKind::CommandSubstitution(substitution) => {
-                self.chain(substitution.chain())?;
-                Ok(Some(match substitution.capture() {
-                    opaal_syntax::CommandCaptureKind::Text => ValueType::String,
-                    opaal_syntax::CommandCaptureKind::Bytes => ValueType::Bytes,
-                }))
             }
             ExpressionKind::GroupedJob(chain) => {
                 self.chain(chain)?;
@@ -5986,12 +6054,14 @@ impl<'a> SignatureValidator<'a> {
         if self.control.is_cancelled() {
             return Ok(None);
         }
-        if !matches!(
+        let prechecked_callee = if !matches!(
             call.callee.kind(),
-            ExpressionKind::Symbol(_) | ExpressionKind::Qualified(_)
+            ExpressionKind::Name(_) | ExpressionKind::Qualified(_)
         ) {
-            self.expression(&call.callee)?;
-        }
+            self.expression(&call.callee)?
+        } else {
+            None
+        };
         if let ExpressionKind::Qualified(name) = call.callee.kind()
             && let Some(value_type) =
                 self.variant_call_type(name, call_span, call, expected_result)?
@@ -6026,9 +6096,9 @@ impl<'a> SignatureValidator<'a> {
                 .names
                 .reference(self.entry.module(), call.callee.span())
             else {
-                if let ExpressionKind::Symbol(identifier) = call.callee.kind()
+                if let ExpressionKind::Name(reference) = call.callee.kind()
                     && let Some(intrinsic) =
-                        ExpressionIntrinsic::lookup(self.text(identifier.span()))
+                        ExpressionIntrinsic::lookup(self.text(reference.name.span()))
                 {
                     let mut argument_types = Vec::with_capacity(call.arguments.len());
                     for argument in &call.arguments {
@@ -6043,27 +6113,46 @@ impl<'a> SignatureValidator<'a> {
                 }
                 return Ok(None);
             };
-            let (target_module, declaration_span) = match reference.target() {
-                ModuleReferenceTarget::DynamicStatus | ModuleReferenceTarget::ScriptArguments => {
-                    return Ok(None);
-                }
+            let target = match reference.target() {
                 ModuleReferenceTarget::Local {
                     module,
                     declaration_span,
-                } => (module, *declaration_span),
+                } => Some((module, *declaration_span)),
                 ModuleReferenceTarget::Imported {
                     target_module,
                     declaration_span,
                     ..
-                } => (target_module, *declaration_span),
+                } => Some((target_module, *declaration_span)),
+                ModuleReferenceTarget::DynamicStatus | ModuleReferenceTarget::ScriptArguments => {
+                    None
+                }
             };
-            self.types
-                .function(target_module, declaration_span)
-                .map(|signature| (target_module, signature))
+            target.and_then(|(target_module, declaration_span)| {
+                self.types
+                    .function(target_module, declaration_span)
+                    .map(|signature| (target_module, signature))
+            })
         };
         let Some((signature_module, signature)) = resolved else {
+            let actual = if matches!(
+                call.callee.kind(),
+                ExpressionKind::Name(_) | ExpressionKind::Qualified(_)
+            ) {
+                self.expression(&call.callee)?
+            } else {
+                prechecked_callee
+            };
             for argument in &call.arguments {
                 self.expression(argument)?;
+            }
+            if let Some(actual) = actual
+                && !matches!(actual, ValueType::Any | ValueType::Closure)
+            {
+                self.errors.borrow_mut().push(ModuleTypeError::NonCallable {
+                    module: self.entry.module().clone(),
+                    call_span: call.callee.span(),
+                    actual,
+                });
             }
             return Ok(None);
         };
@@ -6829,10 +6918,7 @@ impl<'a> SignatureValidator<'a> {
         }
         match part.kind() {
             WordPartKind::DoubleQuoted(parts) => self.word_parts(parts),
-            WordPartKind::BracedInterpolation(expression) => {
-                self.expression(expression).map(|_| ())
-            }
-            WordPartKind::CommandSubstitution(substitution) => self.chain(substitution.chain()),
+            WordPartKind::Interpolation(expression) => self.expression(expression).map(|_| ()),
             _ => Ok(()),
         }
     }
@@ -7156,13 +7242,20 @@ impl<'a> ReferenceResolver<'a> {
         for stage in pipeline.stages() {
             match stage.kind() {
                 StageKind::Command(command) => {
-                    self.word(command.head.word())?;
+                    if command.head.kind() == CommandHeadKind::Bare
+                        && command.items.is_empty()
+                        && let [part] = command.head.word().parts()
+                        && matches!(part.kind(), WordPartKind::Bare)
+                        && self.visible_target(self.text(part.span())).is_some()
+                    {
+                        self.variable(part.span(), command.head.span())?;
+                    } else {
+                        self.word(command.head.word())?;
+                    }
                     for item in &command.items {
                         match item.kind() {
                             CommandItemKind::Word(word) => self.word(word)?,
-                            CommandItemKind::Spread(variable) => {
-                                self.variable(variable.name.span(), item.span())?;
-                            }
+                            CommandItemKind::Spread(expression) => self.expression(expression)?,
                             CommandItemKind::Closure(closure) => self.closure(closure)?,
                             CommandItemKind::Redirection(redirection) => {
                                 self.redirection(redirection.kind())?;
@@ -7182,10 +7275,7 @@ impl<'a> ReferenceResolver<'a> {
         }
         match expression.kind() {
             ExpressionKind::Literal(literal) => self.literal(literal),
-            ExpressionKind::Variable(variable) => {
-                self.variable(variable.name.span(), variable.span)
-            }
-            ExpressionKind::Symbol(_) => Ok(()),
+            ExpressionKind::Name(reference) => self.variable(reference.name.span(), reference.span),
             ExpressionKind::Qualified(name) => self.qualified(name),
             ExpressionKind::List(elements) => {
                 for element in elements {
@@ -7209,15 +7299,14 @@ impl<'a> ReferenceResolver<'a> {
                 Ok(())
             }
             ExpressionKind::Closure(closure) => self.closure(closure),
-            ExpressionKind::CommandSubstitution(substitution) => self.chain(substitution.chain()),
             ExpressionKind::GroupedJob(chain) => self.chain(chain),
             ExpressionKind::Call(call) => {
-                if let ExpressionKind::Symbol(identifier) = call.callee.kind() {
-                    let name = self.text(identifier.span());
+                if let ExpressionKind::Name(reference) = call.callee.kind() {
+                    let name = self.text(reference.name.span());
                     if ExpressionIntrinsic::lookup(name).is_none()
                         || self.visible_target(name).is_some()
                     {
-                        self.variable(identifier.span(), call.callee.span())?;
+                        self.variable(reference.name.span(), call.callee.span())?;
                     }
                 } else {
                     self.expression(&call.callee)?;
@@ -7289,15 +7378,14 @@ impl<'a> ReferenceResolver<'a> {
             return Ok(());
         }
         match part.kind() {
-            WordPartKind::Variable(identifier) => self.variable(identifier.span(), part.span()),
             WordPartKind::DoubleQuoted(parts) => self.word_parts(parts),
-            WordPartKind::BracedInterpolation(expression) => self.expression(expression),
-            WordPartKind::CommandSubstitution(substitution) => self.chain(substitution.chain()),
+            WordPartKind::Interpolation(expression) => self.expression(expression),
             WordPartKind::Bare
             | WordPartKind::BareEscape
             | WordPartKind::SingleQuoted
             | WordPartKind::DoubleText
-            | WordPartKind::DoubleEscape => Ok(()),
+            | WordPartKind::DoubleEscape
+            | WordPartKind::EscapedBrace => Ok(()),
         }
     }
 
@@ -8032,7 +8120,7 @@ impl<'a> StaticEffectAnalyzer<'a> {
         for item in &command.items {
             match item.kind() {
                 CommandItemKind::Word(word) => self.word(word),
-                CommandItemKind::Spread(_) => {}
+                CommandItemKind::Spread(expression) => self.expression(expression),
                 CommandItemKind::Closure(closure) => self.chain(&closure.body),
                 CommandItemKind::Redirection(redirection) => {
                     redirects_output |= self.redirection(redirection.kind(), redirection.span());
@@ -8081,10 +8169,6 @@ impl<'a> StaticEffectAnalyzer<'a> {
             }
             "jobs" => self.summary.push(ModuleEffect::Job, span),
             "exit" => self.summary.push(ModuleEffect::ProgramExit, span),
-            "command" => {
-                self.external(span, is_last && !redirects_output);
-                return;
-            }
             _ => {}
         }
         if is_last
@@ -8135,7 +8219,7 @@ impl<'a> StaticEffectAnalyzer<'a> {
         }
         match expression.kind() {
             ExpressionKind::Literal(literal) => self.literal(literal),
-            ExpressionKind::Variable(_) => {
+            ExpressionKind::Name(_) => {
                 if self
                     .semantics
                     .names
@@ -8147,7 +8231,7 @@ impl<'a> StaticEffectAnalyzer<'a> {
                     self.summary.push(ModuleEffect::Status, expression.span());
                 }
             }
-            ExpressionKind::Symbol(_) | ExpressionKind::Qualified(_) => {}
+            ExpressionKind::Qualified(_) => {}
             ExpressionKind::List(items) => {
                 for item in items {
                     self.expression(item);
@@ -8167,7 +8251,6 @@ impl<'a> StaticEffectAnalyzer<'a> {
                 }
             }
             ExpressionKind::Closure(_) => {}
-            ExpressionKind::CommandSubstitution(substitution) => self.chain(substitution.chain()),
             ExpressionKind::GroupedJob(chain) => self.chain(chain),
             ExpressionKind::Call(call) => {
                 for argument in &call.arguments {
@@ -8198,10 +8281,10 @@ impl<'a> StaticEffectAnalyzer<'a> {
             {
                 return;
             }
-            if let ExpressionKind::Symbol(identifier) = callee.kind()
+            if let ExpressionKind::Name(reference) = callee.kind()
                 && let Some(intrinsic) = self
                     .source
-                    .slice(identifier.span())
+                    .slice(reference.name.span())
                     .ok()
                     .and_then(ExpressionIntrinsic::lookup)
             {
@@ -8295,14 +8378,13 @@ impl<'a> StaticEffectAnalyzer<'a> {
                     self.word_part(part);
                 }
             }
-            WordPartKind::BracedInterpolation(expression) => self.expression(expression),
-            WordPartKind::CommandSubstitution(substitution) => self.chain(substitution.chain()),
+            WordPartKind::Interpolation(expression) => self.expression(expression),
             WordPartKind::Bare
             | WordPartKind::BareEscape
             | WordPartKind::SingleQuoted
             | WordPartKind::DoubleText
             | WordPartKind::DoubleEscape
-            | WordPartKind::Variable(_) => {}
+            | WordPartKind::EscapedBrace => {}
         }
     }
 }
@@ -8360,6 +8442,7 @@ impl std::error::Error for ModulePipelineError {}
 struct StaticPipelineAnalyzer<'a> {
     module: &'a ModuleId,
     source: &'a SourceFile,
+    names: &'a ModuleNameRegistry,
     commands: &'a CommandRegistry,
     errors: Vec<ModulePipelineError>,
     control: &'a AnalysisControl,
@@ -8370,12 +8453,14 @@ impl<'a> StaticPipelineAnalyzer<'a> {
         module: &'a ModuleId,
         source: &'a SourceFile,
         script: &'a Script,
+        names: &'a ModuleNameRegistry,
         commands: &'a CommandRegistry,
         control: &'a AnalysisControl,
     ) -> Vec<ModulePipelineError> {
         let mut analyzer = Self {
             module,
             source,
+            names,
             commands,
             errors: Vec::new(),
             control,
@@ -8527,7 +8612,7 @@ impl<'a> StaticPipelineAnalyzer<'a> {
                             CommandItemKind::Redirection(redirection) => {
                                 self.redirection(redirection.kind());
                             }
-                            CommandItemKind::Spread(_) => {}
+                            CommandItemKind::Spread(expression) => self.expression(expression),
                         }
                     }
                 }
@@ -8544,6 +8629,21 @@ impl<'a> StaticPipelineAnalyzer<'a> {
             return StageCarrierContract::unknown();
         }
         if command.head.kind() == CommandHeadKind::ForcedExternal {
+            if static_word_text(command.head.word(), self.source).is_none() {
+                self.errors.push(ModulePipelineError {
+                    module: self.module.clone(),
+                    diagnostic: Diagnostic::new(
+                        Severity::Error,
+                        "CMD007",
+                        "an explicit external command head must be literal",
+                    )
+                    .with_primary(
+                        command.head.word().span(),
+                        "interpolation is not allowed here",
+                    ),
+                });
+                return StageCarrierContract::unknown();
+            }
             return StageCarrierContract::known(
                 self.source
                     .slice(command.head.word().span())
@@ -8552,7 +8652,27 @@ impl<'a> StaticPipelineAnalyzer<'a> {
                 CommandOutput::Fixed(Carrier::ByteStream),
             );
         }
+        if command.items.is_empty()
+            && self
+                .names
+                .reference(self.module, command.head.span())
+                .is_some()
+        {
+            return StageCarrierContract::unknown();
+        }
         let Some(name) = static_word_text(command.head.word(), self.source) else {
+            self.errors.push(ModulePipelineError {
+                module: self.module.clone(),
+                diagnostic: Diagnostic::new(
+                    Severity::Error,
+                    "CMD007",
+                    "a bare command head must resolve statically",
+                )
+                .with_primary(
+                    command.head.word().span(),
+                    "bind a value and call it explicitly",
+                ),
+            });
             return StageCarrierContract::unknown();
         };
         match self.commands.classify(&name) {
@@ -8588,11 +8708,24 @@ impl<'a> StaticPipelineAnalyzer<'a> {
                 ));
                 StageCarrierContract::unknown()
             }
-            CommandClassification::Unknown => StageCarrierContract::known(
-                name,
-                [Carrier::ByteStream],
-                CommandOutput::Fixed(Carrier::ByteStream),
-            ),
+            CommandClassification::Unknown => {
+                self.errors.push(ModulePipelineError {
+                    module: self.module.clone(),
+                    diagnostic: Diagnostic::new(
+                        Severity::Error,
+                        "CMD007",
+                        format!("unknown bare command or callable `{name}`"),
+                    )
+                    .with_primary(
+                        command.head.word().span(),
+                        "this name cannot fall back to external process lookup",
+                    )
+                    .with_note(format!(
+                        "use `^{name}` for a literal external command or call a declared value"
+                    )),
+                });
+                StageCarrierContract::unknown()
+            }
         }
     }
 
@@ -8757,9 +8890,8 @@ impl<'a> StaticPipelineAnalyzer<'a> {
         if let Some(replacement) = replacement {
             diagnostic = diagnostic.with_note(format!("use `{replacement}` instead"));
         }
-        diagnostic = diagnostic.with_note(format!(
-            "use `^{name}` or `command {name}` for intentional external execution"
-        ));
+        diagnostic =
+            diagnostic.with_note(format!("use `^{name}` for intentional external execution"));
         ModulePipelineError {
             module: self.module.clone(),
             diagnostic,
@@ -8841,9 +8973,7 @@ impl<'a> StaticPipelineAnalyzer<'a> {
         }
         match expression.kind() {
             ExpressionKind::Literal(literal) => self.literal(literal),
-            ExpressionKind::Variable(_)
-            | ExpressionKind::Symbol(_)
-            | ExpressionKind::Qualified(_) => {}
+            ExpressionKind::Name(_) | ExpressionKind::Qualified(_) => {}
             ExpressionKind::List(elements) => {
                 for element in elements {
                     self.expression(element);
@@ -8863,7 +8993,6 @@ impl<'a> StaticPipelineAnalyzer<'a> {
                 }
             }
             ExpressionKind::Closure(closure) => self.closure(closure),
-            ExpressionKind::CommandSubstitution(substitution) => self.chain(substitution.chain()),
             ExpressionKind::GroupedJob(chain) => self.chain(chain),
             ExpressionKind::Call(call) => {
                 self.expression(&call.callee);
@@ -8922,14 +9051,13 @@ impl<'a> StaticPipelineAnalyzer<'a> {
         }
         match part.kind() {
             WordPartKind::DoubleQuoted(parts) => self.word_parts(parts),
-            WordPartKind::BracedInterpolation(expression) => self.expression(expression),
-            WordPartKind::CommandSubstitution(substitution) => self.chain(substitution.chain()),
+            WordPartKind::Interpolation(expression) => self.expression(expression),
             WordPartKind::Bare
             | WordPartKind::BareEscape
             | WordPartKind::SingleQuoted
             | WordPartKind::DoubleText
             | WordPartKind::DoubleEscape
-            | WordPartKind::Variable(_) => {}
+            | WordPartKind::EscapedBrace => {}
         }
     }
 
@@ -8968,14 +9096,13 @@ fn append_static_parts(parts: &[WordPart], source: &SourceFile, text: &mut Strin
             WordPartKind::SingleQuoted => text.push_str(&raw[1..raw.len() - 1]),
             WordPartKind::BareEscape => text.push_str(&raw[1..]),
             WordPartKind::DoubleEscape => text.push_str(&decode_static_double_escape(raw)),
+            WordPartKind::EscapedBrace => text.push_str(&raw[..1]),
             WordPartKind::DoubleQuoted(inner) => {
                 if !append_static_parts(inner, source, text) {
                     return false;
                 }
             }
-            WordPartKind::Variable(_)
-            | WordPartKind::BracedInterpolation(_)
-            | WordPartKind::CommandSubstitution(_) => return false,
+            WordPartKind::Interpolation(_) => return false,
         }
     }
     true
@@ -8989,7 +9116,6 @@ fn decode_static_double_escape(raw: &str) -> String {
     match body.chars().next().expect("a validated escape has a body") {
         '\\' => "\\".to_owned(),
         '"' => "\"".to_owned(),
-        '$' => "$".to_owned(),
         'n' => "\n".to_owned(),
         'r' => "\r".to_owned(),
         't' => "\t".to_owned(),
@@ -9381,6 +9507,28 @@ impl<'a> ModuleProgramLoader<'a> {
         }
     }
 
+    /// Loads one command-aware module program while retaining source context
+    /// for frontend diagnostics.
+    pub fn load_for_frontend_with_commands(
+        &self,
+        requested: &Path,
+        commands: &CommandRegistry,
+    ) -> Result<ModuleProgram, ModuleProgramLoadError> {
+        let report = self.analyze_with_commands(requested, commands);
+        match report.program {
+            Some(program) => Ok(program),
+            None => {
+                let error = report
+                    .issues
+                    .into_iter()
+                    .next()
+                    .expect("an incomplete module analysis has an issue")
+                    .error;
+                Err(ModuleProgramLoadError::new(error, &report.sources))
+            }
+        }
+    }
+
     /// Analyzes one root and every reachable static import without executing
     /// source. Discovery accumulates independent branch failures while
     /// retaining every decoded source available for later diagnostics. On a
@@ -9435,7 +9583,7 @@ impl<'a> ModuleProgramLoader<'a> {
     ///
     /// Pipeline checking walks every retained parsed source even when an earlier
     /// graph, name, or signature phase failed. It never expands a word or probes
-    /// an executable. The legacy execution loaders continue to use [`Self::analyze`]
+    /// an executable. The execution loaders continue to use [`Self::analyze`]
     /// so runtime preflight retains its established error surface.
     #[must_use]
     pub fn analyze_with_commands(
@@ -9576,38 +9724,10 @@ impl<'a> ModuleProgramLoader<'a> {
             return Self::stopped_outcome(&control);
         }
         let mut pipeline_issues = Vec::new();
-        if let Some(commands) = commands {
-            for entry in &retained {
-                if control.is_cancelled() {
-                    return Self::stopped_outcome(&control);
-                }
-                if let Some(script) = entry.script() {
-                    pipeline_issues.extend(
-                        StaticPipelineAnalyzer::analyze(
-                            entry.module(),
-                            entry.source(),
-                            script,
-                            commands,
-                            &control,
-                        )
-                        .into_iter()
-                        .map(|error| {
-                            ModuleAnalysisIssue::new(ModuleProgramError::Pipelines(Box::new(error)))
-                        }),
-                    );
-                }
-            }
-        }
-        if control.is_cancelled() {
-            return Self::stopped_outcome(&control);
-        }
 
         if !control.charge(
             AnalysisLimitKind::Diagnostics,
             analysis_issue_count(&issues),
-        ) || !control.charge(
-            AnalysisLimitKind::Diagnostics,
-            analysis_issue_count(&pipeline_issues),
         ) {
             return Self::stopped_outcome(&control);
         }
@@ -9674,6 +9794,35 @@ impl<'a> ModuleProgramLoader<'a> {
         };
         if control.is_cancelled() {
             return Self::stopped_outcome(&control);
+        }
+        if let Some(commands) = commands {
+            for entry in &retained {
+                if control.is_cancelled() {
+                    return Self::stopped_outcome(&control);
+                }
+                if let Some(script) = entry.script() {
+                    pipeline_issues.extend(
+                        StaticPipelineAnalyzer::analyze(
+                            entry.module(),
+                            entry.source(),
+                            script,
+                            &names,
+                            commands,
+                            &control,
+                        )
+                        .into_iter()
+                        .map(|error| {
+                            ModuleAnalysisIssue::new(ModuleProgramError::Pipelines(Box::new(error)))
+                        }),
+                    );
+                }
+            }
+            if !control.charge(
+                AnalysisLimitKind::Diagnostics,
+                analysis_issue_count(&pipeline_issues),
+            ) {
+                return Self::stopped_outcome(&control);
+            }
         }
         let types_result = ModuleTypeRegistry::analyze(&sources, &aliases, &names, &control);
         if control.is_cancelled() {
@@ -10421,10 +10570,6 @@ impl SyntaxMetrics {
                 self.chain(&closure.body);
                 1
             }
-            ExpressionKind::CommandSubstitution(substitution) => {
-                self.chain(substitution.chain());
-                1
-            }
             ExpressionKind::GroupedJob(chain) => {
                 self.chain(chain);
                 1
@@ -10457,9 +10602,7 @@ impl SyntaxMetrics {
                 self.expression(&binary.right);
                 1
             }
-            ExpressionKind::Variable(_)
-            | ExpressionKind::Symbol(_)
-            | ExpressionKind::Qualified(_) => 1,
+            ExpressionKind::Name(_) | ExpressionKind::Qualified(_) => 1,
         }
     }
 
@@ -10496,7 +10639,9 @@ impl SyntaxMetrics {
                                     CommandItemKind::Redirection(redirection) => {
                                         self.redirection(redirection.kind())
                                     }
-                                    CommandItemKind::Spread(_) => {}
+                                    CommandItemKind::Spread(expression) => {
+                                        self.expression(expression);
+                                    }
                                 }
                             }
                         }
@@ -10521,16 +10666,15 @@ impl SyntaxMetrics {
         self.nodes += 1;
         match part.kind() {
             WordPartKind::DoubleQuoted(parts) => self.word_parts(parts),
-            WordPartKind::BracedInterpolation(expression) => {
+            WordPartKind::Interpolation(expression) => {
                 self.expression(expression);
             }
-            WordPartKind::CommandSubstitution(substitution) => self.chain(substitution.chain()),
             WordPartKind::Bare
             | WordPartKind::BareEscape
             | WordPartKind::SingleQuoted
             | WordPartKind::DoubleText
             | WordPartKind::DoubleEscape
-            | WordPartKind::Variable(_) => {}
+            | WordPartKind::EscapedBrace => {}
         }
     }
 
@@ -10827,6 +10971,11 @@ pub enum ModuleTypeError {
         actual: usize,
         declaration_span: Span,
     },
+    NonCallable {
+        module: ModuleId,
+        call_span: Span,
+        actual: ValueType,
+    },
     IntrinsicCallArity {
         module: ModuleId,
         name: &'static str,
@@ -10915,10 +11064,6 @@ pub enum ModuleTypeError {
         actual: ValueType,
         annotation_span: Span,
     },
-    ByteCaptureInWord {
-        module: ModuleId,
-        span: Span,
-    },
     SpreadValueMismatch {
         module: ModuleId,
         span: Span,
@@ -11005,6 +11150,7 @@ impl ModuleTypeError {
             Self::UnknownType { module, .. }
             | Self::InvalidTypeArity { module, .. }
             | Self::CallArity { module, .. }
+            | Self::NonCallable { module, .. }
             | Self::IntrinsicCallArity { module, .. }
             | Self::OperationCallArity { module, .. }
             | Self::OperationGenericArity { module, .. }
@@ -11018,7 +11164,6 @@ impl ModuleTypeError {
             | Self::UnknownOperation { module, .. }
             | Self::AmbiguousOperationGeneric { module, .. }
             | Self::ResultMismatch { module, .. }
-            | Self::ByteCaptureInWord { module, .. }
             | Self::SpreadValueMismatch { module, .. }
             | Self::SpreadElementMismatch { module, .. }
             | Self::ThrowMismatch { module, .. }
@@ -11038,6 +11183,7 @@ impl ModuleTypeError {
         match self {
             Self::UnknownType { span, .. } | Self::InvalidTypeArity { span, .. } => *span,
             Self::CallArity { call_span, .. }
+            | Self::NonCallable { call_span, .. }
             | Self::IntrinsicCallArity { call_span, .. }
             | Self::OperationCallArity { call_span, .. }
             | Self::OperationGenericArity { call_span, .. } => *call_span,
@@ -11053,8 +11199,7 @@ impl ModuleTypeError {
                 construction_span, ..
             } => *construction_span,
             Self::ResultMismatch { result_span, .. } => *result_span,
-            Self::ByteCaptureInWord { span, .. }
-            | Self::SpreadValueMismatch { span, .. }
+            Self::SpreadValueMismatch { span, .. }
             | Self::SpreadElementMismatch { span, .. }
             | Self::ThrowMismatch { span, .. } => *span,
             Self::AssignmentMismatch {
@@ -11099,6 +11244,12 @@ impl ModuleTypeError {
                     format!("expected {expected} arguments, found {actual}"),
                 )
                 .with_secondary(*declaration_span, "function declared here"),
+            Self::NonCallable {
+                call_span, actual, ..
+            } => Diagnostic::new(Severity::Error, "SIG022", self.to_string()).with_primary(
+                *call_span,
+                format!("this value is `{actual}` and cannot be called"),
+            ),
             Self::IntrinsicCallArity {
                 call_span,
                 expected,
@@ -11215,12 +11366,6 @@ impl ModuleTypeError {
                     format!("this result is `{actual}`, expected `{expected}`"),
                 )
                 .with_secondary(*annotation_span, "function result type declared here"),
-            Self::ByteCaptureInWord { span, .. } => {
-                Diagnostic::new(Severity::Error, "SIG006", self.to_string()).with_primary(
-                    *span,
-                    "byte capture is a `Bytes` value and cannot be inserted into a command word",
-                )
-            }
             Self::SpreadValueMismatch { span, actual, .. } => {
                 Diagnostic::new(Severity::Error, "SIG020", self.to_string()).with_primary(
                     *span,
@@ -11364,6 +11509,11 @@ impl fmt::Display for ModuleTypeError {
                 "module `{}` calls `{name}` with {actual} arguments; expected {expected}",
                 module.path().display()
             ),
+            Self::NonCallable { module, actual, .. } => write!(
+                formatter,
+                "module `{}` calls a non-callable `{actual}` value",
+                module.path().display()
+            ),
             Self::IntrinsicCallArity {
                 module,
                 name,
@@ -11490,11 +11640,6 @@ impl fmt::Display for ModuleTypeError {
             } => write!(
                 formatter,
                 "module `{}` returns `{actual}` from `{name}`; expected `{expected}`",
-                module.path().display()
-            ),
-            Self::ByteCaptureInWord { module, .. } => write!(
-                formatter,
-                "module `{}` inserts a `Bytes` capture into a command word; decode it explicitly or bind it as a value",
                 module.path().display()
             ),
             Self::SpreadValueMismatch { module, actual, .. } => write!(

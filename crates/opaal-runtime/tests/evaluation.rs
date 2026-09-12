@@ -56,11 +56,11 @@ fn literals_and_operators_produce_the_last_expression_value() {
 #[test]
 fn double_quoted_values_interpolate_scalars_and_record_keys() {
     assert_eq!(
-        ok("let project = \"OPAAL\"\nlet major = 1\n\"$project ${$major}.0\""),
+        ok("let project = \"OPAAL\"\nlet major = 1\n\"{project} {major}.0\""),
         Value::string("OPAAL 1.0")
     );
     assert_eq!(
-        ok("let record = {\"display name\": \"OPAAL\"}\n$record[\"display name\"]"),
+        ok("let record = {\"display name\": \"OPAAL\"}\nrecord[\"display name\"]"),
         Value::string("OPAAL")
     );
 }
@@ -76,13 +76,13 @@ fn ratified_numeric_conversions_are_callable_expressions() {
 
 #[test]
 fn current_status_is_dynamic_and_reserved_from_lexical_declaration() {
-    assert_eq!(ok("$status"), Value::Null);
+    assert_eq!(ok("status"), Value::Null);
     assert!(matches!(
         err("let status = 1"),
         RuntimeErrorKind::Scope(ScopeError::ReservedBinding(name)) if name == "status"
     ));
     assert!(matches!(
-        err("$status = null"),
+        err("status = null"),
         RuntimeErrorKind::Scope(ScopeError::ImmutableBinding(name)) if name == "status"
     ));
 }
@@ -90,20 +90,20 @@ fn current_status_is_dynamic_and_reserved_from_lexical_declaration() {
 #[test]
 fn bindings_and_assignment_follow_scope_rules() {
     assert_eq!(
-        ok("let base = 10\nmut total = $base\n$total = $total + 5\n$total"),
+        ok("let base = 10\nmut total = base\ntotal = total + 5\ntotal"),
         int(15)
     );
 
     assert!(matches!(
-        err("let x = 1\n$x = 2"),
+        err("let x = 1\nx = 2"),
         RuntimeErrorKind::Scope(ScopeError::ImmutableBinding(_))
     ));
     assert!(matches!(
-        err("$missing = 1"),
+        err("missing = 1"),
         RuntimeErrorKind::Scope(ScopeError::UnknownBinding(_))
     ));
     assert!(matches!(
-        err("$missing"),
+        err("missing"),
         RuntimeErrorKind::Scope(ScopeError::UnknownBinding(_))
     ));
 }
@@ -111,15 +111,15 @@ fn bindings_and_assignment_follow_scope_rules() {
 #[test]
 fn if_else_selects_the_matching_block() {
     assert_eq!(
-        ok("mut r = 0\nif 1 < 2 { $r = 1 } else { $r = 2 }\n$r"),
+        ok("mut r = 0\nif 1 < 2 { r = 1 } else { r = 2 }\nr"),
         int(1)
     );
     assert_eq!(
-        ok("mut r = 0\nif 5 < 2 { $r = 1 } else { $r = 2 }\n$r"),
+        ok("mut r = 0\nif 5 < 2 { r = 1 } else { r = 2 }\nr"),
         int(2)
     );
     assert_eq!(
-        ok("mut r = 0\nif false { $r = 1 } else if 3 > 1 { $r = 2 } else { $r = 3 }\n$r"),
+        ok("mut r = 0\nif false { r = 1 } else if 3 > 1 { r = 2 } else { r = 3 }\nr"),
         int(2)
     );
 
@@ -134,13 +134,13 @@ fn while_loops_honor_break_and_continue() {
     let program = "\
 mut i = 0
 mut sum = 0
-while $i < 100 {
-    $i = $i + 1
-    if $i == 3 { continue }
-    if $i == 5 { break }
-    $sum = $sum + $i
+while i < 100 {
+    i = i + 1
+    if i == 3 { continue }
+    if i == 5 { break }
+    sum = sum + i
 }
-$sum";
+sum";
     // i = 1,2,(3 skip),4,(5 break) -> 1 + 2 + 4
     assert_eq!(ok(program), int(7));
 }
@@ -148,15 +148,15 @@ $sum";
 #[test]
 fn for_loops_iterate_lists_and_ranges() {
     assert_eq!(
-        ok("mut acc = 0\nfor n in [1, 2, 3, 4] {\n    $acc = $acc + $n\n}\n$acc"),
+        ok("mut acc = 0\nfor n in [1, 2, 3, 4] {\n    acc = acc + n\n}\nacc"),
         int(10)
     );
     assert_eq!(
-        ok("mut acc = 0\nfor i in 0..4 {\n    $acc = $acc + $i\n}\n$acc"),
+        ok("mut acc = 0\nfor i in 0..4 {\n    acc = acc + i\n}\nacc"),
         int(6)
     );
     assert_eq!(
-        ok("mut acc = 0\nfor i in 0..=4 {\n    $acc = $acc + $i\n}\n$acc"),
+        ok("mut acc = 0\nfor i in 0..=4 {\n    acc = acc + i\n}\nacc"),
         int(10)
     );
 
@@ -169,22 +169,22 @@ fn for_loops_iterate_lists_and_ranges() {
 #[test]
 fn blocks_open_child_scopes() {
     // Inner shadow does not leak out of the block.
-    assert_eq!(ok("let x = 1\nif true { let x = 99 }\n$x"), int(1));
+    assert_eq!(ok("let x = 1\nif true { let x = 99 }\nx"), int(1));
     // Assignment from inside a block reaches the outer mutable binding.
-    assert_eq!(ok("mut x = 1\nif true { $x = 42 }\n$x"), int(42));
+    assert_eq!(ok("mut x = 1\nif true { x = 42 }\nx"), int(42));
 }
 
 #[test]
 fn collections_support_indexing_and_member_access() {
-    assert_eq!(ok("let xs = [10, 20, 30]\n$xs[1]"), int(20));
-    assert_eq!(ok("let r = {name: 'opaal', count: 2}\n$r.count"), int(2));
+    assert_eq!(ok("let xs = [10, 20, 30]\nxs[1]"), int(20));
+    assert_eq!(ok("let r = {name: 'opaal', count: 2}\nr.count"), int(2));
     assert_eq!(
-        ok("let r = {name: 'opaal', count: 2}\n$r['name']"),
+        ok("let r = {name: 'opaal', count: 2}\nr['name']"),
         Value::string("opaal")
     );
 
     assert!(matches!(
-        err("let xs = [10, 20]\n$xs[5]"),
+        err("let xs = [10, 20]\nxs[5]"),
         RuntimeErrorKind::Operation(OperationError::IndexOutOfRange { .. })
     ));
     assert!(matches!(
@@ -197,10 +197,6 @@ fn collections_support_indexing_and_member_access() {
 fn deferred_forms_report_precise_errors_with_spans() {
     assert!(matches!(
         err("echo hi"),
-        RuntimeErrorKind::ExecutionUnsupported
-    ));
-    assert!(matches!(
-        err("let x = $(echo hi)"),
         RuntimeErrorKind::ExecutionUnsupported
     ));
     assert!(matches!(
