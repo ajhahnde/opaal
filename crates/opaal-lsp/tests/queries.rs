@@ -340,7 +340,7 @@ fn semantic_completion_hover_and_signature_help_use_shared_program_data() {
     .unwrap();
     assert_eq!(
         command_signature["signatures"][0]["label"],
-        "kill [SIGNAL] %JOB"
+        "kill [SIGNAL] %JOB..."
     );
     assert_eq!(
         command_signature["signatures"][0]["parameters"][0]["label"],
