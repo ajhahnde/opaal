@@ -34,6 +34,9 @@ jobs:
       - name: Build
         run: cargo build --workspace --locked
 
+      - name: Check documented CLI help
+        run: python3 ci/check_docs.py --cli target/debug/opaal
+
       - name: Tests
         run: cargo test --workspace --locked --no-fail-fast
 
@@ -63,6 +66,9 @@ jobs:
         env:
           PYTHONDONTWRITEBYTECODE: "1"
         run: python3 -m unittest discover -s ci/tests -p 'test_*.py'
+
+      - name: Check public documentation
+        run: python3 ci/check_docs.py
 
       - name: Enforce the public boundary
         run: python3 ci/check_public_boundary.py

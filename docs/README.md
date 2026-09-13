@@ -1,33 +1,31 @@
 # OPAAL documentation
 
-OPAAL `1.0.0-alpha.1` is an unreleased standalone language and toolchain.
+OPAAL 1.0 is a language and toolchain for source programs and explicitly
+selected project tasks. A plain `.opaal` file can be analyzed and evaluated
+without project authority. An
+explicit project adds typed tasks that can be checked, planned, reviewed,
+executed under bound authority, and audited. Which operations run depends on
+the task, its authority document, and the host.
 
-| Goal | Document |
+Choose the path that matches what you need:
+
+| If you want to… | Go to… |
 | --- | --- |
-| Learn from a small pure program | [OPAAL by example](by-example.md) |
-| Understand source and semantic boundaries | [Language foundation](language-foundation.md) |
-| Update pre-1.0 source to the current language | [Language migration](migration.md) |
-| Author, check, plan, execute, and audit typed project actions | [Actions and explicit projects](actions-and-projects.md) |
-| Configure standalone or explicit project-aware editor analysis | [Editor and project analysis](editor.md) |
-| Embed explicit authority and owned resources | [Authority and resource embedding](authority-and-resources.md) |
-| Use maintained bounded host operations | [Bounded operational modules](operational-modules.md) |
-| Qualify the complete non-publishing workflow | [Operational-core qualification](release-readiness.md) |
-| Understand crate and execution boundaries | [Architecture](architecture.md) |
-| Build, test, fuzz, and benchmark the repository | [Development](development.md) |
-| Inspect performance methodology | [Performance benchmarks](../benchmarks/README.md) |
-| Prepare a contribution | [Contributing](../CONTRIBUTING.md) |
-| Report a vulnerability privately | [Security policy](../SECURITY.md) |
-| Inspect unreleased changes | [Changelog](../CHANGELOG.md) |
+| Run your first source file and learn the syntax | [Learn OPAAL](learn/README.md) |
+| Complete a specific command or project task | [How-to guides](how-to/README.md) |
+| Look up syntax, standard modules, formats, commands, or limits | [Reference](reference/README.md) |
+| Understand authority, planning, resources, or reproducibility | [Concepts](concepts/README.md) |
+| Check the normative 1.0 language and operational contract | [Specification](specification/README.md) |
 
-Every frontend consumes the same directive-free `.opaal` source model. Typed
-actions and explicitly selected project tasks can be formatted, inspected,
-checked, rendered as an identity-bound plan, explicitly accepted, executed,
-journaled, and audited. The accepted-plan route uses the same fail-closed
-authority, owned-resource context, and maintained bounded adapters as the
-embedding API. Ordinary source execution remains non-operational, and packages
-remain unavailable. Process-bearing accepted execution is Linux-only; macOS
-supports inspection, check, refused planning, and audit for those tasks.
+The [CLI reference](reference/tooling/cli.md) lists command forms. Start with
+[getting started](learn/getting-started.md) for pure source, or follow
+[first project](learn/first-project.md) for the complete project lifecycle.
+[Platform support](reference/platform-support.md) explains why a
+process-bearing plan can run on Linux but is refused on macOS.
 
-Host tests establish only the explicitly exercised host surfaces.
+For repository work, use the [development guide](development.md),
+[feedback policy](../CONTRIBUTING.md), and
+[security policy](../SECURITY.md). The [release-readiness guide](release-readiness.md)
+describes the non-publishing qualification harness.
 
-[← OPAAL overview](../README.md)
+[OPAAL repository](../README.md)

@@ -4,12 +4,13 @@ OPAAL is the Operational Programming & Automation Language. This repository
 contains its standalone syntax, runtime, command-line client, platform
 contracts, POSIX adapter, and Language Server Protocol implementation.
 
-> Project status: `1.0.0-alpha.1` is an unreleased development version. The
-> explicit project surface can inspect, check, render, explicitly accept,
+> OPAAL 1.0's explicit project surface can inspect, check, render, explicitly accept,
 > execute, journal, and audit one typed task under bound authority. Standalone
-> source remains non-operational, and packages remain absent. A permanent
-> non-publishing qualification workflow gates release eligibility separately
-> from any operator-controlled publication decision.
+> source remains non-operational. A non-publishing qualification workflow
+> checks release eligibility separately from publication.
+
+The current checkout builds `1.0.0-alpha.1`. The product documentation states
+the OPAAL 1.0 contract.
 
 ## Try OPAAL
 
@@ -45,8 +46,7 @@ a language evaluator; project-management commands are not part of its surface.
 OPAAL uses one value language throughout: bare names read bindings, the final
 expression is a block's value, `{expression}` interpolates into a command word,
 `...{expression}` spreads a list, and only a literal head prefixed with `^`
-denotes an external program. Dollar-prefixed forms and implicit external
-command fallback are unsupported.
+denotes an external program. An unknown name never launches a host process.
 
 ## Current surfaces
 
@@ -75,7 +75,7 @@ command fallback are unsupported.
   signature help, definitions, references, and whole-document formatting. An
   editor may select exactly one project with the absolute manifest `file:` URI
   in `initializationOptions.opaal.projectManifest`; omission is standalone
-  mode. See [Editor and project analysis](docs/editor.md).
+  mode. See the [language server reference](docs/reference/tooling/lsp.md).
 
 Effectful action declarations are statically analyzed everywhere. Ordinary
 script and interactive evaluation still refuse them before host access; only
@@ -123,14 +123,13 @@ Host success establishes only the exercised macOS/Linux surfaces. It does not
 claim packaging by another operating system, Redox support, or physical
 hardware qualification.
 
-See the [documentation index](docs/README.md), [language foundation](docs/language-foundation.md),
-[pre-1.0 language migration](docs/migration.md),
-[actions and explicit projects](docs/actions-and-projects.md),
-[bounded operational modules](docs/operational-modules.md),
-[operational-core qualification](docs/release-readiness.md),
-[architecture](docs/architecture.md), [development guide](docs/development.md),
-[contribution guide](CONTRIBUTING.md), [security policy](SECURITY.md), and
-[changelog](CHANGELOG.md).
+Read the [documentation index](docs/README.md), [getting started](docs/learn/getting-started.md),
+[first project](docs/learn/first-project.md), [language reference](docs/reference/language/README.md),
+[operational lifecycle](docs/reference/operational/lifecycle.md), and
+[platform support](docs/reference/platform-support.md). Repository guides cover
+[release qualification](docs/release-readiness.md),
+[development](docs/development.md), [feedback policy](CONTRIBUTING.md),
+[security](SECURITY.md), and the [changelog](CHANGELOG.md).
 
 ## License
 

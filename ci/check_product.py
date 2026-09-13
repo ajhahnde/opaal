@@ -190,7 +190,7 @@ def removed_language_syntax_problems(path: Path, text: str) -> list[str]:
             f"{relative}:{line}: unquoted dollar syntax remains"
             for line in unquoted_dollar_lines(text)
         ]
-    if path.suffix == ".md" and relative != "docs/migration.md":
+    if path.suffix == ".md":
         problems: list[str] = []
         for fence in OPAAL_FENCE.finditer(text):
             fence_line = text.count("\n", 0, fence.start(1)) + 1
