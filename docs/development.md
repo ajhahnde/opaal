@@ -102,8 +102,8 @@ Do not use a host pass to claim external image, target, Redox, or hardware
 qualification.
 
 Every package is non-publishable. The manual release-policy workflow performs
-only read-only validation. Pull requests must pass the stable `required` and
+only read-only validation. Maintainer pull requests must pass the stable `required` and
 `security-required` aggregates; third-party actions are pinned to full commit
 identifiers.
 
-[← Documentation index](README.md) · [Architecture](architecture.md)
+[← Documentation index](README.md) · [Source and project references](reference/README.md)

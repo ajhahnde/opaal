@@ -73,4 +73,4 @@ operator-controlled release review. It does not change the development version,
 publish a crate, package a binary, create a tag or release, qualify another
 operating-system image, or establish downstream hardware support.
 
-[← Documentation index](README.md) · [Actions and explicit projects](actions-and-projects.md) · [Development](development.md)
+[← Documentation index](README.md) · [Project lifecycle](reference/operational/lifecycle.md) · [Development](development.md)
