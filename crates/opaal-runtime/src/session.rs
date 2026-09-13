@@ -2994,3 +2994,57 @@ pub(crate) fn render_runtime_diagnostic(
     opaal_syntax::render_diagnostic_sources(sources.iter(), &diagnostic)
         .expect("runtime diagnostics retain every referenced evaluation source")
 }
+
+#[cfg(test)]
+mod core_command_usage_tests {
+    use super::*;
+    use std::ffi::OsStr;
+
+    struct NoExecutables;
+
+    impl ExecutableProbe for NoExecutables {
+        fn is_executable(&self, _path: &OsStr) -> bool {
+            false
+        }
+    }
+
+    fn plan_job_command(text: &str) -> ExecutionPlan {
+        let source = SourceFile::new(SourceId::new(1), "job-command-usage.opaal", text);
+        let ParseOutcome::Complete(script) = parse_opaal(&source) else {
+            panic!("test command must parse");
+        };
+        let StatementKind::Job(job) = script.statements()[0].kind() else {
+            panic!("test source must contain one command job");
+        };
+        let pipeline = &job.chain.or_terms()[0].and_terms()[0];
+        crate::plan::plan_pipeline(
+            pipeline,
+            Path::new("/core-command-usage"),
+            &source,
+            &mut ScopeStack::new(),
+            &Environment::new(),
+            &standard_registry(),
+            &NoExecutables,
+        )
+        .unwrap_or_else(|error| {
+            panic!("the registry must accept documented form {text:?}: {error}")
+        })
+    }
+
+    #[test]
+    fn optional_and_variadic_job_forms_pass_session_runtime_validation() {
+        for source in [
+            "fg\n",
+            "fg '%1'\n",
+            "bg\n",
+            "bg '%1'\n",
+            "wait\n",
+            "wait '%1' '%2'\n",
+            "kill '%1' '%2'\n",
+            "kill --kill %1 %2\n",
+        ] {
+            validate_job_builtin_arguments(&plan_job_command(source))
+                .unwrap_or_else(|error| panic!("{source:?} must be accepted: {error}"));
+        }
+    }
+}

@@ -213,7 +213,7 @@ pub fn standard_registry() -> CommandRegistry {
                 1,
                 Some(2),
             ),
-            "from FORMAT",
+            "from FORMAT [MODE]",
             "Parse formatted bytes into structured values.",
         ),
         documented(
@@ -406,7 +406,7 @@ pub fn standard_registry() -> CommandRegistry {
                 0,
                 Some(1),
             ),
-            "fg %JOB",
+            "fg [%JOB]",
             "Resume a job in the foreground.",
         ),
         documented(
@@ -415,7 +415,7 @@ pub fn standard_registry() -> CommandRegistry {
                 0,
                 Some(1),
             ),
-            "bg %JOB",
+            "bg [%JOB]",
             "Resume a stopped job in the background.",
         ),
         documented(
@@ -424,7 +424,7 @@ pub fn standard_registry() -> CommandRegistry {
                 0,
                 None,
             ),
-            "wait [%JOB]",
+            "wait [%JOB...]",
             "Wait for one job or all jobs.",
         ),
         documented(
@@ -433,7 +433,7 @@ pub fn standard_registry() -> CommandRegistry {
                     .with_options(kill_signal_options())
                     .options_before_positionals(),
             ),
-            "kill [SIGNAL] %JOB",
+            "kill [SIGNAL] %JOB...",
             "Send a signal to an addressable job.",
         ),
         documented(
