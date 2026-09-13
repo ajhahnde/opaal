@@ -361,11 +361,13 @@ def source_problems(root: Path, *, run: Run = run_command) -> list[str]:
             ci,
         ):
             problems.append("CI does not pin the operational-core Apple-silicon host")
-        if (
-            "python3 benchmarks/run.py --profile qualification "
-            "--budget-environment host-darwin-arm64"
-        ) not in ci:
-            problems.append("CI does not enforce the macOS performance budget")
+        if not re.search(
+            r"(?m)^\s*run: python3 benchmarks/run\.py --profile qualification\s*$",
+            ci,
+        ):
+            problems.append("CI does not validate the full macOS performance profile")
+        if "--budget-environment host-darwin-arm64" in ci:
+            problems.append("CI applies a retained host budget to the shared macOS runner")
         if not re.search(
             r"needs:\s*\[foundation, policy, fuzz, operational-core-linux, operational-core-macos\]",
             ci,

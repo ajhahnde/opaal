@@ -60,8 +60,10 @@ workspace and are removed after the run.
 
 Pull-request CI runs the full workflow on Linux and the unsupported-process
 boundary on Apple-silicon macOS. Linux also exercises the performance smoke;
-macOS runs the full retained qualification profile against its checked host
-budget. The stable `required` aggregate also requires workspace
+macOS validates the full retained qualification profile without treating the
+shared runner as the retained evidence host. Repository policy separately
+enforces the checked host evidence against its unchanged budgets. The stable
+`required` aggregate also requires workspace
 build/test/lint/docs, repository policy, fuzz smoke, and both host jobs.
 `security-required` independently retains dependency, repository, license,
 advisory, ban, and source-policy checks.

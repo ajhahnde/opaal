@@ -46,6 +46,26 @@ class OperationalCoreQualifierTests(unittest.TestCase):
         self.assertTrue(qualifier.contains_canary(percent_encoded))
         self.assertFalse(qualifier.contains_canary(b"ordinary qualification output"))
 
+    def test_requires_the_exact_successful_execution_acknowledgement(self) -> None:
+        expected = qualifier.CommandResult(
+            ("execute",),
+            0,
+            f"run {qualifier.RUN_ID_READINESS} success\n".encode(),
+            b"",
+        )
+        qualifier.assert_accepted_execution(expected, qualifier.RUN_ID_READINESS)
+        for stdout, stderr in (
+            (b"", b""),
+            (f"run {qualifier.RUN_ID_READINESS} failed\n".encode(), b""),
+            (expected.stdout, b"unexpected\n"),
+        ):
+            with self.subTest(stdout=stdout, stderr=stderr):
+                with self.assertRaises(qualifier.QualificationError):
+                    qualifier.assert_accepted_execution(
+                        qualifier.CommandResult(("execute",), 0, stdout, stderr),
+                        qualifier.RUN_ID_READINESS,
+                    )
+
     def test_qualification_commands_use_only_the_closed_environment(self) -> None:
         environment = {"HOME": "/fixture/home", "PATH": "/fixture/bin"}
         qualification = qualifier.Qualification(

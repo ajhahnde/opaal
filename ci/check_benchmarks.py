@@ -555,7 +555,9 @@ def validate_result(
             f"unknown={sorted(set(resource_by_key) - RESOURCE_METRICS)}"
         )
 
-    if profile_name == "qualification":
+    if selected_environment is not None:
+        if profile_name != "qualification":
+            fail("budget evaluation requires the qualification profile")
         environment_id = matching_environment(environment, environments, selected_environment)
         for case_id, measurement in by_id.items():
             for statistic in cases[case_id]["budget_statistics"]:
@@ -650,7 +652,10 @@ def parse_args() -> argparse.Namespace:
     selection = parser.add_mutually_exclusive_group(required=True)
     selection.add_argument("--contract-only", action="store_true")
     selection.add_argument("--result", type=Path)
-    parser.add_argument("--environment")
+    parser.add_argument(
+        "--environment",
+        help="Evaluate a qualification result against one retained host budget",
+    )
     return parser.parse_args()
 
 

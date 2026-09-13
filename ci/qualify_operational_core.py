@@ -101,6 +101,12 @@ def parse_version(output: bytes, prefix: str) -> str:
     return version
 
 
+def assert_accepted_execution(result: CommandResult, run_id: str) -> None:
+    expected = f"run {run_id} success\n".encode("ascii")
+    if result.stdout != expected or result.stderr:
+        fail("successful accepted execution did not report the exact run outcome")
+
+
 def run_raw(
     arguments: Sequence[os.PathLike[str] | str],
     *,
@@ -463,8 +469,7 @@ class Qualification:
         ]
         if observations != [("/readiness", True)]:
             fail(f"readiness endpoint observations differ: {observations!r}")
-        if execute.stdout or execute.stderr:
-            fail("successful accepted execution was not silent")
+        assert_accepted_execution(execute, RUN_ID_READINESS)
         evidence_path = self.project / "target/opaal-golden/readiness.json"
         evidence = json.loads(evidence_path.read_bytes())
         if evidence.get("candidate_digest") != sha256_file(self.project / "target/opaal"):

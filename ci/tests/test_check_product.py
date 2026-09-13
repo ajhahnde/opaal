@@ -72,8 +72,7 @@ publish = false
             "  operational-core-macos:\n"
             "    name: operational-core-macos\n"
             "    runs-on: macos-15\n"
-            "python3 benchmarks/run.py --profile qualification "
-            "--budget-environment host-darwin-arm64\n"
+            "run: python3 benchmarks/run.py --profile qualification\n"
             "name: required\n"
             "needs: [foundation, policy, fuzz, operational-core-linux, operational-core-macos]\n",
         )
@@ -188,7 +187,7 @@ publish = false
         self.assertIn("does not run operational-core qualification", findings)
         self.assertIn("does not pin the operational-core Linux host", findings)
         self.assertIn("does not pin the operational-core Apple-silicon host", findings)
-        self.assertIn("does not enforce the macOS performance budget", findings)
+        self.assertIn("does not validate the full macOS performance profile", findings)
         self.assertIn("required aggregate", findings)
         self.assertIn("removed transition checker", findings)
 
@@ -197,6 +196,19 @@ publish = false
         (self.root / missing).unlink()
         findings = "\n".join(checker.source_problems(self.root, run=self.runner))
         self.assertIn(f"operational-core qualification file is missing: {missing}", findings)
+
+    def test_rejects_applying_retained_host_budget_to_shared_macos_ci(self) -> None:
+        path = self.root / ".github/workflows/ci.yml"
+        self.write(
+            ".github/workflows/ci.yml",
+            path.read_text(encoding="utf-8").replace(
+                "run: python3 benchmarks/run.py --profile qualification",
+                "run: python3 benchmarks/run.py --profile qualification "
+                "--budget-environment host-darwin-arm64",
+            ),
+        )
+        findings = "\n".join(checker.source_problems(self.root, run=self.runner))
+        self.assertIn("retained host budget", findings)
 
     def test_unpublished_mode_fails_closed_on_network_or_positive_state(self) -> None:
         def unavailable(_url: str) -> int:

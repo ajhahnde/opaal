@@ -138,8 +138,8 @@ jobs:
       - name: Qualify the macOS process boundary
         run: python3 ci/qualify_operational_core.py --profile qualification
 
-      - name: Enforce the permanent macOS performance ceilings
-        run: python3 benchmarks/run.py --profile qualification --budget-environment host-darwin-arm64
+      - name: Validate the full macOS performance profile
+        run: python3 benchmarks/run.py --profile qualification
 
   required:
     name: required

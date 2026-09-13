@@ -39,6 +39,7 @@ retains separate exact-limit and first-excess line properties.
 ```sh
 python3 benchmarks/run.py --profile smoke
 python3 benchmarks/run.py --profile qualification \
+  --budget-environment host-darwin-arm64 \
   --output benchmarks/evidence/host-darwin-arm64-candidate.json
 python3 -m unittest discover -s ci/tests -p 'test_check_benchmarks.py'
 python3 ci/check_benchmarks.py --contract-only
@@ -49,7 +50,10 @@ python3 ci/check_benchmarks.py \
 
 The runner builds the optimized CLI and benchmark fixture, creates isolated
 temporary inputs, retains raw integer samples, records a versioned JSON result,
-and invokes the checker before success.
+and invokes the checker before success. A result is compared with a retained
+host budget only when `--budget-environment` explicitly selects it; an
+unselected run validates the complete profile and result contract without
+claiming equivalence to that retained host.
 
 The standard-library checker validates schemas, exact case coverage, unique
 measurements, units, sample counts, raw summaries, contract and binary digests,
