@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate the current OPAAL product shape and unpublished release boundary."""
+"""Validate the current OPAAL product shape and release candidate boundary."""
 
 from __future__ import annotations
 
@@ -10,14 +10,12 @@ import re
 import subprocess
 import sys
 import tomllib
-import urllib.error
-import urllib.request
 from pathlib import Path
 from typing import Callable, Sequence
 
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "1.0.0-alpha.1"
+VERSION = "1.0.0"
 REPOSITORY = "https://github.com/ajhahnde/opaal"
 WORKSPACE_PACKAGES = {
     "crates/opaal-syntax": "opaal-syntax",
@@ -29,6 +27,7 @@ WORKSPACE_PACKAGES = {
 }
 PRIMARY_BINARIES = {"opaal", "opaal-language-server"}
 FUZZ_TARGETS = {"lexer", "parser", "expander", "resources", "secret_sinks"}
+FUZZ_PATH_PACKAGES = {"opaal-platform", "opaal-runtime", "opaal-syntax"}
 QUALIFICATION_FILES = {
     "ci/qualify_operational_core.py",
     "ci/tests/test_qualify_operational_core.py",
@@ -103,7 +102,6 @@ TEXT_SUFFIXES = {
     ".yml",
 }
 Run = Callable[[Sequence[str], Path], subprocess.CompletedProcess[bytes]]
-UrlStatus = Callable[[str], int]
 
 
 def run_command(command: Sequence[str], root: Path) -> subprocess.CompletedProcess[bytes]:
@@ -275,6 +273,29 @@ def source_problems(root: Path, *, run: Run = run_command) -> list[str]:
     if observed_fuzz != FUZZ_TARGETS:
         problems.append(f"fuzz targets differ: {sorted(observed_fuzz)!r}")
 
+    fuzz_lock = load_toml(root / "fuzz/Cargo.lock", problems)
+    fuzz_lock_packages = fuzz_lock.get("package", []) if isinstance(fuzz_lock, dict) else []
+    observed_fuzz_versions = (
+        {
+            name: [
+                package.get("version")
+                for package in fuzz_lock_packages
+                if isinstance(package, dict)
+                and package.get("name") == name
+                and package.get("source") is None
+            ]
+            for name in FUZZ_PATH_PACKAGES
+        }
+        if isinstance(fuzz_lock_packages, list)
+        else {}
+    )
+    expected_fuzz_versions = {name: [VERSION] for name in FUZZ_PATH_PACKAGES}
+    if observed_fuzz_versions != expected_fuzz_versions:
+        problems.append(
+            "fuzz lock OPAAL package versions differ: "
+            f"{observed_fuzz_versions!r}"
+        )
+
     metadata = command_json(
         "cargo metadata",
         ["cargo", "metadata", "--no-deps", "--format-version", "1", "--locked"],
@@ -375,8 +396,8 @@ def source_problems(root: Path, *, run: Run = run_command) -> list[str]:
             problems.append(
                 "CI required aggregate does not require foundation, policy, fuzz, and both operational-core hosts"
             )
-        if "python3 ci/check_product.py unpublished" not in release:
-            problems.append("release workflow does not run the unpublished validator")
+        if "python3 ci/check_product.py release-candidate" not in release:
+            problems.append("release workflow does not run the release-candidate validator")
         if not re.search(
             r"needs:\s*\[dependency-review, cargo-policy, repository-policy\]",
             security,
@@ -397,27 +418,14 @@ def source_problems(root: Path, *, run: Run = run_command) -> list[str]:
     readme = (root / "README.md").read_text(encoding="utf-8", errors="replace")
     changelog = (root / "CHANGELOG.md").read_text(encoding="utf-8", errors="replace")
     if VERSION not in readme or "[Unreleased]" not in changelog:
-        problems.append("README and changelog must identify the unreleased development line")
+        problems.append("README and changelog must identify the current release line")
     return sorted(set(problems))
 
 
-def url_status(url: str) -> int:
-    request = urllib.request.Request(
-        url,
-        headers={"User-Agent": f"opaal-product-validator/{VERSION} (+{REPOSITORY})"},
-    )
-    try:
-        with urllib.request.urlopen(request, timeout=20) as response:
-            return response.status
-    except urllib.error.HTTPError as error:
-        return error.code
-
-
-def unpublished_problems(
+def release_candidate_problems(
     root: Path,
     *,
     run: Run = run_command,
-    get_status: UrlStatus = url_status,
 ) -> list[str]:
     problems = source_problems(root, run=run)
 
@@ -437,42 +445,18 @@ def unpublished_problems(
         root,
     )
     if version.returncode != 0 or version.stdout.strip() != f"opaal {VERSION}".encode():
-        problems.append("CLI version does not match the unreleased workspace version")
-
-    tags = run(["git", "tag", "--list"], root)
-    if tags.returncode != 0 or tags.stdout.strip():
-        problems.append("local release tags exist or could not be inspected")
-
-    for label, endpoint in (
-        ("tags", "repos/ajhahnde/opaal/tags"),
-        ("releases", "repos/ajhahnde/opaal/releases"),
-    ):
-        value = command_json(
-            f"remote {label}", ["gh", "api", endpoint], root, run, problems
-        )
-        if value != []:
-            problems.append(f"remote {label} are present or unavailable")
-
-    for package in [*WORKSPACE_PACKAGES.values(), "opaal-fuzz"]:
-        url = f"https://crates.io/api/v1/crates/{package}/{VERSION}"
-        try:
-            status = get_status(url)
-        except Exception as error:  # Network absence is evidence absence, not success.
-            problems.append(f"crates.io {package}: unavailable: {error}")
-            continue
-        if status != 404:
-            problems.append(f"crates.io {package}: expected 404, observed {status}")
+        problems.append("CLI version does not match the release-candidate workspace version")
     return sorted(set(problems))
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("mode", choices=("source", "unpublished"))
+    parser.add_argument("mode", choices=("source", "release-candidate"))
     arguments = parser.parse_args()
     problems = (
         source_problems(ROOT)
         if arguments.mode == "source"
-        else unpublished_problems(ROOT)
+        else release_candidate_problems(ROOT)
     )
     if problems:
         for problem in problems:

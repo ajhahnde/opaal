@@ -467,7 +467,7 @@ checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
 
 [[package]]
 name = "opaal-cli"
-version = "1.0.0-alpha.1"
+version = "1.0.0"
 dependencies = [
  "fd-lock",
  "nu-ansi-term",
@@ -484,7 +484,7 @@ dependencies = [
 
 [[package]]
 name = "opaal-lsp"
-version = "1.0.0-alpha.1"
+version = "1.0.0"
 dependencies = [
  "opaal-runtime",
  "opaal-syntax",
@@ -495,11 +495,11 @@ dependencies = [
 
 [[package]]
 name = "opaal-platform"
-version = "1.0.0-alpha.1"
+version = "1.0.0"
 
 [[package]]
 name = "opaal-platform-posix"
-version = "1.0.0-alpha.1"
+version = "1.0.0"
 dependencies = [
  "httparse",
  "libc",
@@ -510,7 +510,7 @@ dependencies = [
 
 [[package]]
 name = "opaal-runtime"
-version = "1.0.0-alpha.1"
+version = "1.0.0"
 dependencies = [
  "opaal-platform",
  "opaal-platform-posix",
@@ -526,7 +526,7 @@ dependencies = [
 
 [[package]]
 name = "opaal-syntax"
-version = "1.0.0-alpha.1"
+version = "1.0.0"
 
 [[package]]
 name = "parking_lot"

@@ -1,20 +1,41 @@
-name: Release policy
+name: Release binaries
 
 on:
-  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/release.yml
+      - ci/package_release.py
+      - Cargo.toml
+      - Cargo.lock
+      - crates/**
+      - README.md
+      - LICENSE
+  push:
+    tags: [v1.0.0]
 
 permissions:
   contents: read
 
 concurrency:
-  group: release-policy-${{ github.ref }}
+  group: release-binaries-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
-  unpublished-boundary:
-    name: unpublished-boundary
-    runs-on: ubuntu-24.04
-    timeout-minutes: 20
+  release-binaries:
+    name: release-binaries-${{ matrix.platform }}
+    if: github.event_name == 'push' || github.head_ref == 'release/opaal-1.0.0'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            platform: linux-x86_64
+            arch: x86_64
+          - runner: macos-15
+            platform: macos-arm64
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -25,13 +46,34 @@ jobs:
           rustup show active-toolchain || rustup toolchain install
           rustc --version
 
-      - name: Build the unpublished workspace
-        run: cargo build --workspace --locked
+      - name: Verify the release tag
+        if: github.event_name == 'push'
+        run: test "${GITHUB_REF_NAME}" = "v1.0.0"
 
-      - name: Verify the prerelease and publication boundary
-        run: python3 ci/check_product.py unpublished
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Verify the release host
+        run: test "$(uname -m)" = "${{ matrix.arch }}"
 
-      - name: Record the non-publishing result
-        run: echo "OPAAL remains an unpublished development project; no tag, package, artifact, or release was created." >> "${GITHUB_STEP_SUMMARY}"
+      - name: Build the tagged programs
+        run: cargo build --release --locked -p opaal-cli -p opaal-lsp
+
+      - name: Verify the CLI release identity
+        run: test "$(target/release/opaal --version)" = "opaal 1.0.0"
+
+      - name: Verify the release candidate boundary
+        run: python3 ci/check_product.py release-candidate
+
+      - name: Package both programs and their checksum
+        run: python3 ci/package_release.py --platform "${{ matrix.platform }}"
+
+      - name: Upload the exact archive and checksum
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: opaal-v1.0.0-${{ matrix.platform }}-${{ github.sha }}
+          path: |
+            dist/opaal-v1.0.0-${{ matrix.platform }}.tar.gz
+            dist/opaal-v1.0.0-${{ matrix.platform }}.tar.gz.sha256
+          if-no-files-found: error
+          compression-level: 0
+
+      - name: Record the binary result
+        run: echo "Built and archived OPAAL 1.0.0 for ${{ matrix.platform }} from ${{ github.sha }}. The operator publishes the checked archive and checksum after both tag jobs pass." >> "${GITHUB_STEP_SUMMARY}"

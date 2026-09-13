@@ -33,6 +33,7 @@ CA, secret bytes can enter only the one-use `SecretHeader` sink, and maintained
 children receive an explicit environment with no ambient inheritance. Process
 internals are reported as unenforced and require explicit acknowledgement.
 
-Repository automation uses read-only tokens for ordinary checks. Package
-publication is disabled, and successful workflows create no tag, package,
-artifact, or release.
+Repository automation uses read-only tokens for ordinary checks. Crate
+publication is disabled. The release workflow stores binary archives as
+workflow artifacts but does not create a tag or GitHub release; the maintainer
+publishes the exact checked files.

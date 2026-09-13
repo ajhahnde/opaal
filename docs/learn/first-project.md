@@ -12,7 +12,7 @@ schema_version = 1
 [project]
 name = "demo"
 root_module = "tasks.opaal"
-required_opaal = ">=1.0.0-alpha.1,<2.0.0"
+required_opaal = ">=1.0.0,<2.0.0"
 
 [paths]
 root = "."
@@ -23,7 +23,7 @@ authority = "authority.toml"
 tool_lock = "tools.toml"
 ```
 
-The range also admits the current validation build. A deployed 1.0 project may narrow it. In `tasks.opaal`, the task exports an action whose effect set is empty:
+The range admits compatible 1.x toolchains. A deployed project may narrow it. In `tasks.opaal`, the task exports an action whose effect set is empty:
 
 ```opaal
 action greet(name: String) -> String

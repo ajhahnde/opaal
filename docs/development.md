@@ -19,7 +19,7 @@ python3 ci/check_public_boundary.py
 git diff --check
 ```
 
-The workspace has exactly six packages at `1.0.0-alpha.1`. A new dependency,
+The workspace has exactly six packages at `1.0.0`. A new dependency,
 feature, crate, binary, environment protocol, source extension, diagnostic
 namespace, or source identity is a public contract change.
 
