@@ -7,6 +7,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsStr;
 use std::fmt;
+use std::io::{self, Write};
 use std::os::unix::ffi::{OsStrExt as _, OsStringExt as _};
 use std::path::{Component, Path, PathBuf};
 
@@ -2774,11 +2775,23 @@ fn canonical_bytes(value: &Value) -> Result<Vec<u8>, WorkflowArtifactError> {
     Ok(bytes)
 }
 
-fn write_canonical_json(value: &Value, bytes: &mut Vec<u8>) -> Result<(), WorkflowArtifactError> {
+fn write_canonical_bytes<W: Write>(
+    writer: &mut W,
+    bytes: &[u8],
+) -> Result<(), WorkflowArtifactError> {
+    writer
+        .write_all(bytes)
+        .map_err(|error| WorkflowArtifactError::new("ARTIFACT002", error.to_string()))
+}
+
+fn write_canonical_json<W: Write>(
+    value: &Value,
+    writer: &mut W,
+) -> Result<(), WorkflowArtifactError> {
     match value {
-        Value::Null => bytes.extend_from_slice(b"null"),
-        Value::Bool(true) => bytes.extend_from_slice(b"true"),
-        Value::Bool(false) => bytes.extend_from_slice(b"false"),
+        Value::Null => write_canonical_bytes(writer, b"null")?,
+        Value::Bool(true) => write_canonical_bytes(writer, b"true")?,
+        Value::Bool(false) => write_canonical_bytes(writer, b"false")?,
         Value::Number(number) => {
             let value = number.as_u64().ok_or_else(|| {
                 WorkflowArtifactError::new(
@@ -2786,51 +2799,73 @@ fn write_canonical_json(value: &Value, bytes: &mut Vec<u8>) -> Result<(), Workfl
                     "artifact numbers must be non-negative integers",
                 )
             })?;
-            bytes.extend_from_slice(value.to_string().as_bytes());
+            write_canonical_bytes(writer, value.to_string().as_bytes())?;
         }
-        Value::String(value) => serde_json::to_writer(bytes, value)
+        Value::String(value) => serde_json::to_writer(writer, value)
             .map_err(|error| WorkflowArtifactError::new("ARTIFACT002", error.to_string()))?,
         Value::Array(values) => {
-            bytes.push(b'[');
+            write_canonical_bytes(writer, b"[")?;
             for (index, value) in values.iter().enumerate() {
                 if index != 0 {
-                    bytes.push(b',');
+                    write_canonical_bytes(writer, b",")?;
                 }
-                write_canonical_json(value, bytes)?;
+                write_canonical_json(value, writer)?;
             }
-            bytes.push(b']');
+            write_canonical_bytes(writer, b"]")?;
         }
-        Value::Object(values) => {
-            let mut fields = values.iter().collect::<Vec<_>>();
-            fields.sort_by(|(left, _), (right, _)| left.encode_utf16().cmp(right.encode_utf16()));
-            bytes.push(b'{');
-            for (index, (name, value)) in fields.into_iter().enumerate() {
-                if index != 0 {
-                    bytes.push(b',');
-                }
-                serde_json::to_writer(&mut *bytes, name).map_err(|error| {
-                    WorkflowArtifactError::new("ARTIFACT002", error.to_string())
-                })?;
-                bytes.push(b':');
-                write_canonical_json(value, bytes)?;
-            }
-            bytes.push(b'}');
-        }
+        Value::Object(values) => write_canonical_object(values, false, writer)?,
     }
     Ok(())
 }
 
+fn write_canonical_object<W: Write>(
+    object: &Map<String, Value>,
+    omit_digest: bool,
+    writer: &mut W,
+) -> Result<(), WorkflowArtifactError> {
+    let mut fields = object
+        .iter()
+        .filter(|(name, _)| !omit_digest || name.as_str() != "digest")
+        .collect::<Vec<_>>();
+    fields.sort_by(|(left, _), (right, _)| left.encode_utf16().cmp(right.encode_utf16()));
+    write_canonical_bytes(writer, b"{")?;
+    for (index, (name, value)) in fields.into_iter().enumerate() {
+        if index != 0 {
+            write_canonical_bytes(writer, b",")?;
+        }
+        serde_json::to_writer(&mut *writer, name)
+            .map_err(|error| WorkflowArtifactError::new("ARTIFACT002", error.to_string()))?;
+        write_canonical_bytes(writer, b":")?;
+        write_canonical_json(value, writer)?;
+    }
+    write_canonical_bytes(writer, b"}")
+}
+
+struct DigestWriter(Sha256);
+
+impl Write for DigestWriter {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.0.update(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
 fn digest_object(object: &Map<String, Value>) -> Result<String, WorkflowArtifactError> {
-    let bytes = canonical_bytes(&Value::Object(object.clone()))?;
-    Ok(format!("sha256:{:x}", Sha256::digest(bytes)))
+    let mut writer = DigestWriter(Sha256::new());
+    write_canonical_object(object, false, &mut writer)?;
+    Ok(format!("sha256:{:x}", writer.0.finalize()))
 }
 
 fn digest_object_without_digest(
     object: &Map<String, Value>,
 ) -> Result<String, WorkflowArtifactError> {
-    let mut unsigned = object.clone();
-    unsigned.remove("digest");
-    digest_object(&unsigned)
+    let mut writer = DigestWriter(Sha256::new());
+    write_canonical_object(object, true, &mut writer)?;
+    Ok(format!("sha256:{:x}", writer.0.finalize()))
 }
 
 fn validate_depth(value: &Value, depth: usize) -> Result<(), WorkflowArtifactError> {
