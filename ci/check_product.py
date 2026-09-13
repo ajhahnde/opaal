@@ -29,6 +29,20 @@ WORKSPACE_PACKAGES = {
 }
 PRIMARY_BINARIES = {"opaal", "opaal-language-server"}
 FUZZ_TARGETS = {"lexer", "parser", "expander", "resources", "secret_sinks"}
+QUALIFICATION_FILES = {
+    "ci/qualify_operational_core.py",
+    "ci/tests/test_qualify_operational_core.py",
+    "docs/release-readiness.md",
+    "tests/golden/release-readiness/Cargo.lock",
+    "tests/golden/release-readiness/Cargo.toml",
+    "tests/golden/release-readiness/authority-ci.toml",
+    "tests/golden/release-readiness/ca.pem",
+    "tests/golden/release-readiness/opaal.toml",
+    "tests/golden/release-readiness/readiness-probe/Cargo.toml",
+    "tests/golden/release-readiness/readiness-probe/src/lib.rs",
+    "tests/golden/release-readiness/release-readiness.opaal",
+    "tests/golden/release-readiness/tasks.opaal",
+}
 SOURCE_DIRECTIVE = re.compile(
     r"^[ \t]*language[ \t]+[0-9]+(?=[ \t]*(?:[;#\r\n]|$))", re.MULTILINE
 )
@@ -193,6 +207,9 @@ def source_problems(root: Path, *, run: Run = run_command) -> list[str]:
     files = repository_files(root)
     observed_paths = {path.as_posix() for path in files}
 
+    for missing in sorted(QUALIFICATION_FILES - observed_paths):
+        problems.append(f"operational-core qualification file is missing: {missing}")
+
     for forbidden in sorted(FORBIDDEN_PATHS):
         if forbidden in observed_paths or any(
             path.startswith(f"{forbidden}/") for path in observed_paths
@@ -332,8 +349,32 @@ def source_problems(root: Path, *, run: Run = run_command) -> list[str]:
             problems.append("CI does not run the product source validator")
         if "fuzz/run-smoke.sh" not in ci:
             problems.append("CI does not run the supported fuzz smoke")
-        if not re.search(r"needs:\s*\[foundation, policy, fuzz\]", ci):
-            problems.append("CI required aggregate does not require foundation, policy, and fuzz")
+        if "python3 ci/qualify_operational_core.py --profile qualification" not in ci:
+            problems.append("CI does not run operational-core qualification")
+        if not re.search(
+            r"(?m)^  operational-core-linux:\n    name: operational-core-linux\n    runs-on: ubuntu-24\.04$",
+            ci,
+        ):
+            problems.append("CI does not pin the operational-core Linux host")
+        if not re.search(
+            r"(?m)^  operational-core-macos:\n    name: operational-core-macos\n    runs-on: macos-15$",
+            ci,
+        ):
+            problems.append("CI does not pin the operational-core Apple-silicon host")
+        if not re.search(
+            r"(?m)^\s*run: python3 benchmarks/run\.py --profile qualification\s*$",
+            ci,
+        ):
+            problems.append("CI does not validate the full macOS performance profile")
+        if "--budget-environment host-darwin-arm64" in ci:
+            problems.append("CI applies a retained host budget to the shared macOS runner")
+        if not re.search(
+            r"needs:\s*\[foundation, policy, fuzz, operational-core-linux, operational-core-macos\]",
+            ci,
+        ):
+            problems.append(
+                "CI required aggregate does not require foundation, policy, fuzz, and both operational-core hosts"
+            )
         if "python3 ci/check_product.py unpublished" not in release:
             problems.append("release workflow does not run the unpublished validator")
         if not re.search(

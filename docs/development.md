@@ -58,11 +58,28 @@ python3 -m unittest discover -s ci/tests -p 'test_check_benchmarks.py'
 python3 ci/check_benchmarks.py --contract-only
 python3 benchmarks/run.py --profile smoke
 python3 benchmarks/run.py --profile qualification \
+  --budget-environment host-darwin-arm64 \
   --output benchmarks/evidence/host-darwin-arm64-candidate.json
 ```
 
-The runner measures exactly seven host cases and invokes the checker before
-reporting success. Evidence is bound to the candidate binary and matching host.
+The runner measures exactly eleven host cases, including the four operational
+artifact cases, and invokes the checker before reporting success. Evidence is
+bound to the candidate binary and matching host. Budget comparison is explicit
+because a different host, including a shared CI runner, may validate the full
+profile without claiming equivalence to the retained evidence host.
+
+## Operational-core qualification
+
+```sh
+python3 ci/qualify_operational_core.py --profile qualification
+```
+
+This creates an isolated temporary project and proves the complete
+non-publishing check, plan, accepted-execution, journal, and audit path on Linux.
+On macOS arm64 it proves secret-free execution/audit plus the explicit refused
+process boundary. The harness uses only synthetic inputs and a TLS loopback
+server. See [Qualifying the operational core](release-readiness.md) for the
+scenario and evidence boundary.
 
 ## Fuzzing
 

@@ -95,10 +95,56 @@ jobs:
       - name: Exercise the supported fuzz targets
         run: fuzz/run-smoke.sh 1000
 
+  operational-core-linux:
+    name: operational-core-linux
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Activate the pinned Rust toolchain
+        run: |
+          rustup show active-toolchain || rustup toolchain install
+          rustc --version
+
+      - name: Build the optimized non-publishing candidate
+        run: cargo build --release --locked -p opaal-cli --bin opaal
+
+      - name: Qualify the complete Linux workflow
+        run: python3 ci/qualify_operational_core.py --profile qualification
+
+      - name: Exercise the permanent performance lane
+        run: python3 benchmarks/run.py --profile smoke
+
+  operational-core-macos:
+    name: operational-core-macos
+    runs-on: macos-15
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Activate the pinned Rust toolchain
+        run: |
+          rustup show active-toolchain || rustup toolchain install
+          rustc --version
+
+      - name: Build the optimized non-publishing candidate
+        run: cargo build --release --locked -p opaal-cli --bin opaal
+
+      - name: Qualify the macOS process boundary
+        run: python3 ci/qualify_operational_core.py --profile qualification
+
+      - name: Validate the full macOS performance profile
+        run: python3 benchmarks/run.py --profile qualification
+
   required:
     name: required
     if: always()
-    needs: [foundation, policy, fuzz]
+    needs: [foundation, policy, fuzz, operational-core-linux, operational-core-macos]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -107,10 +153,14 @@ jobs:
           FOUNDATION_RESULT: ${{ needs.foundation.result }}
           POLICY_RESULT: ${{ needs.policy.result }}
           FUZZ_RESULT: ${{ needs.fuzz.result }}
+          OPERATIONAL_CORE_LINUX_RESULT: ${{ needs.operational-core-linux.result }}
+          OPERATIONAL_CORE_MACOS_RESULT: ${{ needs.operational-core-macos.result }}
         run: |
           if [ "${FOUNDATION_RESULT}" != "success" ] ||
              [ "${POLICY_RESULT}" != "success" ] ||
-             [ "${FUZZ_RESULT}" != "success" ]; then
-            echo "foundation=${FOUNDATION_RESULT} policy=${POLICY_RESULT} fuzz=${FUZZ_RESULT}"
+             [ "${FUZZ_RESULT}" != "success" ] ||
+             [ "${OPERATIONAL_CORE_LINUX_RESULT}" != "success" ] ||
+             [ "${OPERATIONAL_CORE_MACOS_RESULT}" != "success" ]; then
+            echo "foundation=${FOUNDATION_RESULT} policy=${POLICY_RESULT} fuzz=${FUZZ_RESULT} operational-core-linux=${OPERATIONAL_CORE_LINUX_RESULT} operational-core-macos=${OPERATIONAL_CORE_MACOS_RESULT}"
             exit 1
           fi

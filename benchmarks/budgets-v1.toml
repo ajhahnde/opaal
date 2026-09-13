@@ -1,6 +1,6 @@
 schema_version = 1
 suite_version = 1
-contract_sha256 = "585ce612378a04a966bc1906c89caabcece85a12161a3b0abcb5581faca31adb"
+contract_sha256 = "8c758363fc0990aec5e9bad152aa4442231d6927add65e24696cfb5994d984ec"
 
 [[environments]]
 id = "host-darwin-arm64"
@@ -69,3 +69,85 @@ baseline = 942416
 factor_numerator = 3
 factor_denominator = 1
 limit = 2827248
+
+[[budgets]]
+environment = "host-darwin-arm64"
+case_id = "operational-task-inspect-warm"
+statistic = "p95"
+baseline = 25000000
+factor_numerator = 1
+factor_denominator = 1
+limit = 25000000
+
+[[budgets]]
+environment = "host-darwin-arm64"
+case_id = "operational-task-inspect-warm"
+statistic = "maximum"
+baseline = 50000000
+factor_numerator = 1
+factor_denominator = 1
+limit = 50000000
+
+[[budgets]]
+environment = "host-darwin-arm64"
+case_id = "operational-project-check-warm"
+statistic = "p95"
+baseline = 100000000
+factor_numerator = 1
+factor_denominator = 1
+limit = 100000000
+
+[[budgets]]
+environment = "host-darwin-arm64"
+case_id = "operational-project-check-warm"
+statistic = "maximum"
+baseline = 250000000
+factor_numerator = 1
+factor_denominator = 1
+limit = 250000000
+
+[[budgets]]
+environment = "host-darwin-arm64"
+case_id = "operational-plan-build-render-warm"
+statistic = "p95"
+baseline = 250000000
+factor_numerator = 1
+factor_denominator = 1
+limit = 250000000
+
+[[budgets]]
+environment = "host-darwin-arm64"
+case_id = "operational-plan-build-render-warm"
+statistic = "maximum"
+baseline = 500000000
+factor_numerator = 1
+factor_denominator = 1
+limit = 500000000
+
+[[budgets]]
+environment = "host-darwin-arm64"
+case_id = "operational-journal-audit-render-warm"
+statistic = "p95"
+baseline = 500000000
+factor_numerator = 1
+factor_denominator = 1
+limit = 500000000
+
+[[budgets]]
+environment = "host-darwin-arm64"
+case_id = "operational-journal-audit-render-warm"
+statistic = "maximum"
+baseline = 1000000000
+factor_numerator = 1
+factor_denominator = 1
+limit = 1000000000
+
+[[resource_budgets]]
+environment = "host-darwin-arm64"
+case_id = "operational-journal-audit-render-warm"
+metric = "peak_rss_bytes"
+statistic = "maximum"
+baseline = 100663296
+factor_numerator = 1
+factor_denominator = 1
+limit = 100663296

@@ -48,6 +48,22 @@ class BenchmarkCheckerTests(unittest.TestCase):
                     "summary": checker.expected_summary(samples),
                 }
             )
+        resource_measurements = []
+        for resource in contract["resource_metrics"]:
+            cold = resource["sample_class"] == "cold"
+            sample_count = 1 if cold else settings["samples"]
+            warmup_count = 0 if cold else settings["warmups"]
+            samples = [10] * sample_count
+            resource_measurements.append(
+                {
+                    "case_id": resource["case_id"],
+                    "metric": resource["metric"],
+                    "unit": resource["unit"],
+                    "warmup_samples": [11] * warmup_count,
+                    "samples": samples,
+                    "summary": checker.expected_summary(samples),
+                }
+            )
         return {
             "schema": checker.RESULT_SCHEMA,
             "suite_version": 1,
@@ -69,14 +85,30 @@ class BenchmarkCheckerTests(unittest.TestCase):
             },
             "noise_controls": {"isolated": True},
             "parameters": settings,
+            "operational_artifacts": {
+                "plan_bytes": 1024 * 1024,
+                "plan_action_nodes": 1024,
+                "journal_bytes": 16 * 1024 * 1024,
+                "journal_lines": 20_000,
+                "journal_line_limit": 100_000,
+                "journal_byte_first_excess": "JOURNAL001",
+                "journal_line_exact_limit": "admitted",
+                "journal_line_first_excess": "refused",
+            },
             "measurements": measurements,
+            "resource_measurements": resource_measurements,
         }
 
     def write_result(self) -> None:
         self.result.write_text(json.dumps(self.document) + "\n", encoding="utf-8")
 
-    def validate(self) -> None:
-        checker.validate_bundle(self.contract, self.budgets, self.result)
+    def validate(self, *, environment: str | None = None) -> None:
+        checker.validate_bundle(
+            self.contract,
+            self.budgets,
+            self.result,
+            selected_environment=environment,
+        )
 
     def assert_invalid(self, pattern: str) -> None:
         self.write_result()
@@ -85,6 +117,7 @@ class BenchmarkCheckerTests(unittest.TestCase):
 
     def test_valid_host_contract_result_and_budget_bundle(self) -> None:
         self.validate()
+        self.validate(environment="host-darwin-arm64")
 
     def test_unknown_result_schema_is_rejected(self) -> None:
         self.document["schema"] = "opaal-performance-result-v2"
@@ -107,6 +140,10 @@ class BenchmarkCheckerTests(unittest.TestCase):
     def test_missing_measurement_is_rejected(self) -> None:
         self.document["measurements"].pop()
         self.assert_invalid("case set differs")
+
+    def test_missing_resource_measurement_is_rejected(self) -> None:
+        self.document["resource_measurements"].pop()
+        self.assert_invalid("resource metric set differs")
 
     def test_contract_digest_drift_is_rejected(self) -> None:
         self.document["contract_sha256"] = "f" * 64
@@ -143,7 +180,43 @@ class BenchmarkCheckerTests(unittest.TestCase):
         measurement = self.document["measurements"][0]
         measurement["samples"] = [4_000_000_001]
         measurement["summary"] = checker.expected_summary(measurement["samples"])
-        self.assert_invalid("fails maximum budget")
+        self.write_result()
+        with self.assertRaisesRegex(checker.ValidationError, "fails maximum budget"):
+            self.validate(environment="host-darwin-arm64")
+
+    def test_unselected_qualification_result_does_not_claim_a_retained_host_budget(self) -> None:
+        measurement = self.document["measurements"][0]
+        measurement["samples"] = [4_000_000_001]
+        measurement["summary"] = checker.expected_summary(measurement["samples"])
+        self.write_result()
+        self.validate()
+
+    def test_operational_p95_and_resource_limits_are_enforced(self) -> None:
+        measurement = next(
+            item
+            for item in self.document["measurements"]
+            if item["case_id"] == "operational-task-inspect-warm"
+        )
+        measurement["samples"] = [25_000_001] * 15
+        measurement["summary"] = checker.expected_summary(measurement["samples"])
+        self.write_result()
+        with self.assertRaisesRegex(checker.ValidationError, "fails maximum budget"):
+            self.validate(environment="host-darwin-arm64")
+
+        self.document = self.valid_result("qualification")
+        resource = self.document["resource_measurements"][0]
+        resource["samples"] = [100_663_297] * 15
+        resource["summary"] = checker.expected_summary(resource["samples"])
+        self.write_result()
+        with self.assertRaisesRegex(
+            checker.ValidationError,
+            "resource measurement.*fails maximum budget",
+        ):
+            self.validate(environment="host-darwin-arm64")
+
+    def test_operational_artifact_method_is_exact_and_byte_bound(self) -> None:
+        self.document["operational_artifacts"]["journal_lines"] = 100_000
+        self.assert_invalid("not byte-bound")
 
 
 if __name__ == "__main__":

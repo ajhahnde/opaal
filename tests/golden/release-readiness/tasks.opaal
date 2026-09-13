@@ -1,0 +1,5 @@
+import './release-readiness.opaal' as release
+
+task release_readiness = release::release_readiness
+task secretfree = release::inspect_path
+task manysecrets = release::unsupported_many

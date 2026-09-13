@@ -65,8 +65,16 @@ publish = false
             ".github/workflows/ci.yml",
             "python3 ci/check_product.py source\n"
             "fuzz/run-smoke.sh\n"
+            "python3 ci/qualify_operational_core.py --profile qualification\n"
+            "  operational-core-linux:\n"
+            "    name: operational-core-linux\n"
+            "    runs-on: ubuntu-24.04\n"
+            "  operational-core-macos:\n"
+            "    name: operational-core-macos\n"
+            "    runs-on: macos-15\n"
+            "run: python3 benchmarks/run.py --profile qualification\n"
             "name: required\n"
-            "needs: [foundation, policy, fuzz]\n",
+            "needs: [foundation, policy, fuzz, operational-core-linux, operational-core-macos]\n",
         )
         self.write(
             ".github/workflows/release.yml",
@@ -78,6 +86,8 @@ publish = false
             "needs: [dependency-review, cargo-policy, repository-policy]\n",
         )
         self.write("ci/check_benchmarks.py", "# fixture\n")
+        for path in checker.QUALIFICATION_FILES:
+            self.write(path, "fixture\n")
         self.write("README.md", f"OPAAL {checker.VERSION} is unreleased.\n")
         self.write("CHANGELOG.md", "# Changelog\n\n## [Unreleased]\n")
         self.write("SECURITY.md", "# Security\n")
@@ -174,8 +184,31 @@ publish = false
         findings = "\n".join(checker.source_problems(self.root, run=self.runner))
         self.assertIn("does not run the product source validator", findings)
         self.assertIn("does not run the supported fuzz smoke", findings)
+        self.assertIn("does not run operational-core qualification", findings)
+        self.assertIn("does not pin the operational-core Linux host", findings)
+        self.assertIn("does not pin the operational-core Apple-silicon host", findings)
+        self.assertIn("does not validate the full macOS performance profile", findings)
         self.assertIn("required aggregate", findings)
         self.assertIn("removed transition checker", findings)
+
+    def test_requires_every_operational_core_qualification_file(self) -> None:
+        missing = "tests/golden/release-readiness/tasks.opaal"
+        (self.root / missing).unlink()
+        findings = "\n".join(checker.source_problems(self.root, run=self.runner))
+        self.assertIn(f"operational-core qualification file is missing: {missing}", findings)
+
+    def test_rejects_applying_retained_host_budget_to_shared_macos_ci(self) -> None:
+        path = self.root / ".github/workflows/ci.yml"
+        self.write(
+            ".github/workflows/ci.yml",
+            path.read_text(encoding="utf-8").replace(
+                "run: python3 benchmarks/run.py --profile qualification",
+                "run: python3 benchmarks/run.py --profile qualification "
+                "--budget-environment host-darwin-arm64",
+            ),
+        )
+        findings = "\n".join(checker.source_problems(self.root, run=self.runner))
+        self.assertIn("retained host budget", findings)
 
     def test_unpublished_mode_fails_closed_on_network_or_positive_state(self) -> None:
         def unavailable(_url: str) -> int:
