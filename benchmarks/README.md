@@ -1,6 +1,6 @@
 # Performance benchmarks
 
-The OPAAL performance suite measures seven host-only surfaces from an optimized
+The OPAAL performance suite measures eleven host-only surfaces from an optimized
 candidate. It contains no external-command, pipeline, operating-system image,
 or alternate-runtime validation path.
 
@@ -17,6 +17,10 @@ or alternate-runtime validation path.
 | `host-structured-stream-memory-warm` | Peak RSS while a fixture lazily pulls typed values | maximum bytes |
 | `host-completion-cold` | First completion snapshot/query over isolated candidates | maximum elapsed ns |
 | `host-completion-warm` | Completion snapshots/queries after discarded warmups | p95 elapsed ns |
+| `operational-task-inspect-warm` | Release-readiness task inspection | p95 and maximum elapsed ns |
+| `operational-project-check-warm` | Release-readiness project check | p95 and maximum elapsed ns |
+| `operational-plan-build-render-warm` | Build and inspect an exact 1 MiB, 1,024-action plan | p95 and maximum elapsed ns |
+| `operational-journal-audit-render-warm` | Audit and inspect an exact 16 MiB journal | p95 and maximum elapsed ns; maximum peak RSS |
 
 Cold is the first observation in a fresh benchmark workspace and process
 sequence; it does not claim flushed system caches or power-on state. The
@@ -26,7 +30,9 @@ warm cases; cold cases retain one sample.
 Startup uses a minimal directive-free `.opaal` file. Structured-stream
 measurement calls the pure carrier fixture. Completion uses an explicit
 `^ben` external head, sees only the temporary candidate directory through
-`PATH`, and never executes a candidate.
+`PATH`, and never executes a candidate. The maximum journal remains below the
+independent 100,000-line ceiling, proves refusal at the first excess byte, and
+retains separate exact-limit and first-excess line properties.
 
 ## Run and validate
 

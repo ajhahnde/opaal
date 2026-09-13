@@ -11,6 +11,7 @@ OPAAL `1.0.0-alpha.1` is an unreleased standalone language and toolchain.
 | Configure standalone or explicit project-aware editor analysis | [Editor and project analysis](editor.md) |
 | Embed explicit authority and owned resources | [Authority and resource embedding](authority-and-resources.md) |
 | Use maintained bounded host operations | [Bounded operational modules](operational-modules.md) |
+| Qualify the complete non-publishing workflow | [Operational-core qualification](release-readiness.md) |
 | Understand crate and execution boundaries | [Architecture](architecture.md) |
 | Build, test, fuzz, and benchmark the repository | [Development](development.md) |
 | Inspect performance methodology | [Performance benchmarks](../benchmarks/README.md) |

@@ -4,6 +4,14 @@ result_schema = "opaal-performance-result-v1"
 supported_host_os = ["linux", "macos"]
 statistics = "median and nearest-rank p95 over retained raw samples"
 
+[operational_artifacts]
+plan_bytes = 1048576
+plan_action_nodes = 1024
+journal_bytes = 16777216
+journal_line_limit = 100000
+journal_terminal_reserve_bytes = 65536
+journal_method = "maximum legal byte-bound journal; line ceiling retained as an exact-limit and first-excess property"
+
 [profiles.smoke]
 warmups = 0
 samples = 1
@@ -22,6 +30,7 @@ metric = "elapsed_ns"
 unit = "ns"
 direction = "maximum"
 sample_class = "cold"
+budget_statistics = ["maximum"]
 
 [[cases]]
 id = "host-startup-warm"
@@ -31,6 +40,7 @@ metric = "elapsed_ns"
 unit = "ns"
 direction = "maximum"
 sample_class = "warm"
+budget_statistics = ["p95"]
 
 [[cases]]
 id = "host-first-prompt-cold"
@@ -40,6 +50,7 @@ metric = "elapsed_ns"
 unit = "ns"
 direction = "maximum"
 sample_class = "cold"
+budget_statistics = ["maximum"]
 
 [[cases]]
 id = "host-first-prompt-warm"
@@ -49,6 +60,7 @@ metric = "elapsed_ns"
 unit = "ns"
 direction = "maximum"
 sample_class = "warm"
+budget_statistics = ["p95"]
 
 [[cases]]
 id = "host-structured-stream-memory-warm"
@@ -58,6 +70,7 @@ metric = "peak_rss_bytes"
 unit = "bytes"
 direction = "maximum"
 sample_class = "warm"
+budget_statistics = ["maximum"]
 
 [[cases]]
 id = "host-completion-cold"
@@ -67,6 +80,7 @@ metric = "elapsed_ns"
 unit = "ns"
 direction = "maximum"
 sample_class = "cold"
+budget_statistics = ["maximum"]
 
 [[cases]]
 id = "host-completion-warm"
@@ -76,3 +90,52 @@ metric = "elapsed_ns"
 unit = "ns"
 direction = "maximum"
 sample_class = "warm"
+budget_statistics = ["p95"]
+
+[[cases]]
+id = "operational-task-inspect-warm"
+surface = "project_task_inspect"
+environment = "host"
+metric = "elapsed_ns"
+unit = "ns"
+direction = "maximum"
+sample_class = "warm"
+budget_statistics = ["p95", "maximum"]
+
+[[cases]]
+id = "operational-project-check-warm"
+surface = "project_check"
+environment = "host"
+metric = "elapsed_ns"
+unit = "ns"
+direction = "maximum"
+sample_class = "warm"
+budget_statistics = ["p95", "maximum"]
+
+[[cases]]
+id = "operational-plan-build-render-warm"
+surface = "plan_build_render"
+environment = "host"
+metric = "elapsed_ns"
+unit = "ns"
+direction = "maximum"
+sample_class = "warm"
+budget_statistics = ["p95", "maximum"]
+
+[[cases]]
+id = "operational-journal-audit-render-warm"
+surface = "journal_audit_render"
+environment = "host"
+metric = "elapsed_ns"
+unit = "ns"
+direction = "maximum"
+sample_class = "warm"
+budget_statistics = ["p95", "maximum"]
+
+[[resource_metrics]]
+case_id = "operational-journal-audit-render-warm"
+metric = "peak_rss_bytes"
+unit = "bytes"
+direction = "maximum"
+sample_class = "warm"
+budget_statistics = ["maximum"]

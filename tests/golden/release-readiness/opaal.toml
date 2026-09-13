@@ -1,0 +1,36 @@
+schema_version = 1
+
+[project]
+name = "opaal_golden_readiness"
+root_module = "tasks.opaal"
+required_opaal = ">=1.0.0-alpha.1,<2.0.0"
+
+[paths]
+root = "."
+evidence = "target/opaal-golden/readiness.json"
+
+[tools.git]
+adapter = "git"
+version = ">=2.39.0,<3.0.0"
+
+[tools.cargo]
+adapter = "cargo"
+version = ">=1.90.0,<2.0.0"
+
+[endpoints.readiness]
+url = "https://127.0.0.1:43119/readiness"
+methods = ["GET"]
+secret_headers = ["authorization"]
+tls = true
+tls_server_name = "opaal-golden.invalid"
+ca = "ca.pem"
+
+[secrets.readiness_token]
+kind = "injected"
+
+[secrets.secondary_token]
+kind = "injected"
+
+[environments.ci]
+authority = "authority-ci.toml"
+tool_lock = "tools-host.toml"

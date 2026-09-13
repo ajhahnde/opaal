@@ -61,8 +61,22 @@ python3 benchmarks/run.py --profile qualification \
   --output benchmarks/evidence/host-darwin-arm64-candidate.json
 ```
 
-The runner measures exactly seven host cases and invokes the checker before
-reporting success. Evidence is bound to the candidate binary and matching host.
+The runner measures exactly eleven host cases, including the four operational
+artifact cases, and invokes the checker before reporting success. Evidence is
+bound to the candidate binary and matching host.
+
+## Operational-core qualification
+
+```sh
+python3 ci/qualify_operational_core.py --profile qualification
+```
+
+This creates an isolated temporary project and proves the complete
+non-publishing check, plan, accepted-execution, journal, and audit path on Linux.
+On macOS arm64 it proves secret-free execution/audit plus the explicit refused
+process boundary. The harness uses only synthetic inputs and a TLS loopback
+server. See [Qualifying the operational core](release-readiness.md) for the
+scenario and evidence boundary.
 
 ## Fuzzing
 

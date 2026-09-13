@@ -1,0 +1,8 @@
+[workspace]
+members = ["readiness-probe"]
+resolver = "2"
+
+[workspace.package]
+version = "1.0.0-alpha.1"
+edition = "2024"
+publish = false

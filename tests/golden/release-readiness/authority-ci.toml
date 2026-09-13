@@ -1,0 +1,51 @@
+schema_version = 1
+project = "opaal_golden_readiness"
+environment = "ci"
+
+[[rules]]
+decision = "grant"
+effect = "filesystem.read"
+scope = "project.root"
+required_enforcement = "enforced"
+
+[[rules]]
+decision = "grant"
+effect = "filesystem.write"
+scope = "project.evidence"
+required_enforcement = "enforced"
+
+[[rules]]
+decision = "grant"
+effect = "process.run"
+scope = "tool.git"
+required_enforcement = "acknowledge-unenforced"
+
+[[rules]]
+decision = "grant"
+effect = "process.run"
+scope = "tool.cargo"
+required_enforcement = "acknowledge-unenforced"
+
+[[rules]]
+decision = "grant"
+effect = "network.http"
+scope = "endpoint.readiness"
+required_enforcement = "enforced"
+
+[[rules]]
+decision = "grant"
+effect = "secret.reveal"
+scope = "secret.readiness_token@endpoint.readiness"
+required_enforcement = "enforced"
+
+[[rules]]
+decision = "grant"
+effect = "secret.reveal"
+scope = "secret.secondary_token@endpoint.readiness"
+required_enforcement = "enforced"
+
+[[rules]]
+decision = "grant"
+effect = "clock.wall"
+scope = "evaluation"
+required_enforcement = "enforced"

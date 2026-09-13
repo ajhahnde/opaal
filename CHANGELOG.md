@@ -62,6 +62,10 @@ All notable changes to OPAAL are documented here.
 
 ### Validation
 
+- Add a permanent non-publishing release-readiness project and independent
+  qualification harness covering secret-free execution, many-secret refusal,
+  deterministic plan/audit views, incomplete evidence, full Linux Git/Cargo/TLS
+  execution, explicit macOS process refusal, and synthetic-secret absence.
 - Add permanent source-product and fail-closed unpublished-release validators.
 - Preserve stable `required` and `security-required` workflow aggregates,
   public-boundary checks, benchmark validation, and five-target fuzz smoke.

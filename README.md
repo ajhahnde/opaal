@@ -7,7 +7,9 @@ contracts, POSIX adapter, and Language Server Protocol implementation.
 > Project status: `1.0.0-alpha.1` is an unreleased development version. The
 > explicit project surface can inspect, check, render, explicitly accept,
 > execute, journal, and audit one typed task under bound authority. Standalone
-> source remains non-operational, and packages remain absent.
+> source remains non-operational, and packages remain absent. A permanent
+> non-publishing qualification workflow gates release eligibility separately
+> from any operator-controlled publication decision.
 
 ## Try OPAAL
 
@@ -110,6 +112,7 @@ cargo deny check
 python3 -m unittest discover -s ci/tests -p 'test_*.py'
 python3 ci/check_product.py source
 python3 ci/check_public_boundary.py
+python3 ci/qualify_operational_core.py --profile qualification
 python3 benchmarks/run.py --profile smoke
 ```
 
@@ -124,6 +127,7 @@ See the [documentation index](docs/README.md), [language foundation](docs/langua
 [pre-1.0 language migration](docs/migration.md),
 [actions and explicit projects](docs/actions-and-projects.md),
 [bounded operational modules](docs/operational-modules.md),
+[operational-core qualification](docs/release-readiness.md),
 [architecture](docs/architecture.md), [development guide](docs/development.md),
 [contribution guide](CONTRIBUTING.md), [security policy](SECURITY.md), and
 [changelog](CHANGELOG.md).

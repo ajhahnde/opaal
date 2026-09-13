@@ -20,6 +20,7 @@ import tempfile
 import time
 import tomllib
 from pathlib import Path
+from typing import Callable
 
 ROOT = Path(__file__).resolve().parents[1]
 CONTRACT_PATH = Path(__file__).with_name("contract-v1.toml")
@@ -79,7 +80,11 @@ def summary(values: list[int]) -> dict[str, int]:
 
 
 def timed_run(
-    command: list[str], *, cwd: Path, env: dict[str, str]
+    command: list[str],
+    *,
+    cwd: Path,
+    env: dict[str, str],
+    expected_returncodes: set[int] | None = None,
 ) -> tuple[int, bytes]:
     started = time.perf_counter_ns()
     run = subprocess.run(
@@ -90,12 +95,67 @@ def timed_run(
         check=False,
     )
     elapsed = time.perf_counter_ns() - started
-    if run.returncode != 0:
+    expected = expected_returncodes or {0}
+    if run.returncode not in expected:
         raise RuntimeError(
             f"command failed ({run.returncode}): {' '.join(command)}\n"
             + run.stderr.decode(errors="replace")
         )
     return elapsed, run.stdout
+
+
+def warm_command_samples(
+    command: list[str],
+    warmups: int,
+    samples: int,
+    *,
+    cwd: Path,
+    env: dict[str, str],
+    expected_returncodes: set[int] | None = None,
+    validator: Callable[[bytes], None] | None = None,
+) -> tuple[list[int], list[int]]:
+    measured: list[int] = []
+    discarded: list[int] = []
+    for index in range(warmups + samples):
+        elapsed, output = timed_run(
+            command,
+            cwd=cwd,
+            env=env,
+            expected_returncodes=expected_returncodes,
+        )
+        if validator is not None:
+            validator(output)
+        (discarded if index < warmups else measured).append(elapsed)
+    return discarded, measured
+
+
+def fixture_timing_samples(
+    fixture: Path,
+    mode: str,
+    warmups: int,
+    samples: int,
+    output: Path,
+    *,
+    cwd: Path,
+    env: dict[str, str],
+) -> tuple[list[int], list[int]]:
+    run = subprocess.run(
+        [fixture, mode, str(warmups), str(samples), str(output.resolve())],
+        cwd=cwd,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if run.returncode != 0:
+        raise RuntimeError(f"{mode} fixture failed: {run.stderr}")
+    classes: dict[str, list[int]] = {"warmup": [], "sample": []}
+    for line in run.stdout.splitlines():
+        name, value = line.split("=", 1)
+        classes[name.removesuffix("_ns")].append(int(value))
+    if len(classes["warmup"]) != warmups or len(classes["sample"]) != samples:
+        raise RuntimeError(f"{mode} fixture returned an incomplete sample set")
+    return classes["warmup"], classes["sample"]
 
 
 def first_prompt(binary: Path, *, cwd: Path, env: dict[str, str]) -> int:
@@ -236,6 +296,167 @@ def completion_samples(
     if len(classes["cold"]) != 1 or len(classes["sample"]) != samples:
         raise RuntimeError("completion fixture returned an incomplete sample set")
     return classes["cold"][0], classes["warmup"], classes["sample"]
+
+
+def prepare_operational_project(
+    binary: Path, destination: Path
+) -> tuple[Path, str, dict[str, str]]:
+    sys.path.insert(0, str(ROOT))
+    from ci import qualify_operational_core as qualification
+
+    project, triple, environment, _ = qualification.prepare_workspace(
+        binary, destination
+    )
+    return project, triple, environment
+
+
+def validate_task_inspect(output: bytes) -> None:
+    if b"task opaal_golden_readiness::release_readiness\n" not in output:
+        raise RuntimeError("task inspection omitted the readiness task identity")
+
+
+def validate_project_check(output: bytes) -> None:
+    try:
+        document = json.loads(output)
+    except (UnicodeError, json.JSONDecodeError) as error:
+        raise RuntimeError(f"project check returned invalid JSON: {error}") from error
+    if document.get("schema") != "opaal.check.v2":
+        raise RuntimeError("project check returned the wrong artifact schema")
+
+
+def generate_maximum_journal(
+    fixture: Path, output: Path, *, cwd: Path, env: dict[str, str]
+) -> dict[str, int | str]:
+    run = subprocess.run(
+        [fixture, "maximum-journal", str(output)],
+        cwd=cwd,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if run.returncode != 0:
+        raise RuntimeError(f"maximum-journal fixture failed: {run.stderr}")
+    metadata: dict[str, int | str] = {}
+    for line in run.stdout.splitlines():
+        name, value = line.split("=", 1)
+        metadata[name] = int(value) if value.isdecimal() else value
+    expected = {"journal_bytes", "journal_lines", "journal_byte_first_excess"}
+    if set(metadata) != expected:
+        raise RuntimeError("maximum-journal fixture returned incomplete metadata")
+    return metadata
+
+
+def journal_audit_render(
+    binary: Path,
+    project: Path,
+    journal: Path,
+    audit: Path,
+    *,
+    env: dict[str, str],
+) -> int:
+    started = time.perf_counter_ns()
+    generated = subprocess.run(
+        [
+            binary,
+            "audit",
+            "--project",
+            "opaal.toml",
+            "--journal",
+            str(journal.relative_to(project)),
+            "--out",
+            str(audit.relative_to(project)),
+        ],
+        cwd=project,
+        env=env,
+        capture_output=True,
+        check=False,
+    )
+    if generated.returncode != 0:
+        raise RuntimeError(
+            "maximum journal audit failed: " + generated.stderr.decode(errors="replace")
+        )
+    rendered = subprocess.run(
+        [binary, "audit", "inspect", str(audit.relative_to(project))],
+        cwd=project,
+        env=env,
+        capture_output=True,
+        check=False,
+    )
+    elapsed = time.perf_counter_ns() - started
+    if rendered.returncode != 0 or b"completeness: complete\n" not in rendered.stdout:
+        raise RuntimeError(
+            "maximum journal audit rendering failed: "
+            + rendered.stderr.decode(errors="replace")
+        )
+    return elapsed
+
+
+def journal_samples(
+    binary: Path,
+    project: Path,
+    journal: Path,
+    output_directory: Path,
+    warmups: int,
+    samples: int,
+    *,
+    env: dict[str, str],
+) -> tuple[list[int], list[int]]:
+    discarded: list[int] = []
+    measured: list[int] = []
+    for index in range(warmups + samples):
+        audit = output_directory / f"maximum-{index:04}.audit.json"
+        elapsed = journal_audit_render(
+            binary, project, journal, audit, env=env
+        )
+        (discarded if index < warmups else measured).append(elapsed)
+    return discarded, measured
+
+
+def peak_journal_rss(
+    binary: Path,
+    project: Path,
+    journal: Path,
+    audit: Path,
+    *,
+    cwd: Path,
+    env: dict[str, str],
+) -> int:
+    run = subprocess.run(
+        [
+            sys.executable,
+            __file__,
+            "--operational-rss-worker",
+            str(binary),
+            str(project),
+            str(journal),
+            str(audit),
+        ],
+        cwd=cwd,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if run.returncode != 0:
+        raise RuntimeError(f"maximum journal RSS worker failed: {run.stderr}")
+    return int(run.stdout.strip())
+
+
+def operational_rss_worker(
+    binary: Path, project: Path, journal: Path, audit: Path
+) -> int:
+    journal_audit_render(
+        binary,
+        project,
+        journal,
+        audit,
+        env=dict(os.environ),
+    )
+    peak = resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss
+    peak_bytes = int(peak) if sys.platform == "darwin" else int(peak) * 1024
+    print(peak_bytes)
+    return 0
 
 
 def record(
@@ -395,6 +616,132 @@ def main() -> int:
             )
         )
 
+        operational_project, operational_triple, operational_environment = (
+            prepare_operational_project(binary, work / "operational")
+        )
+        inspect_command = [
+            str(binary),
+            "task",
+            "inspect",
+            "--project",
+            "opaal.toml",
+            "release_readiness",
+        ]
+        inspect_warmups, inspect_samples = warm_command_samples(
+            inspect_command,
+            warmups,
+            samples,
+            cwd=operational_project,
+            env=operational_environment,
+            validator=validate_task_inspect,
+        )
+        measurements.append(
+            record(
+                "operational-task-inspect-warm",
+                "ns",
+                inspect_samples,
+                warmups=inspect_warmups,
+            )
+        )
+
+        check_command = [
+            str(binary),
+            "check",
+            "--project",
+            "opaal.toml",
+            "--task",
+            "release_readiness",
+            "--environment",
+            "ci",
+            "--input-file",
+            "candidate=target/opaal",
+            "--format",
+            "json",
+        ]
+        check_warmups, check_samples = warm_command_samples(
+            check_command,
+            warmups,
+            samples,
+            cwd=operational_project,
+            env=operational_environment,
+            expected_returncodes={1} if sys.platform == "darwin" else {0},
+            validator=validate_project_check,
+        )
+        measurements.append(
+            record(
+                "operational-project-check-warm",
+                "ns",
+                check_samples,
+                warmups=check_warmups,
+            )
+        )
+
+        plan_output = run_dir / "one-mib.plan.json"
+        plan_warmups, plan_samples = fixture_timing_samples(
+            fixture,
+            "plan-build-render",
+            warmups,
+            samples,
+            plan_output,
+            cwd=run_dir,
+            env=environment,
+        )
+        measurements.append(
+            record(
+                "operational-plan-build-render-warm",
+                "ns",
+                plan_samples,
+                warmups=plan_warmups,
+            )
+        )
+
+        operational_output = operational_project / "target/opaal-golden"
+        maximum_journal = operational_output / "maximum.run.jsonl"
+        journal_metadata = generate_maximum_journal(
+            fixture,
+            maximum_journal,
+            cwd=operational_project,
+            env=operational_environment,
+        )
+        journal_warmups, journal_measured = journal_samples(
+            binary,
+            operational_project,
+            maximum_journal,
+            operational_output,
+            warmups,
+            samples,
+            env=operational_environment,
+        )
+        measurements.append(
+            record(
+                "operational-journal-audit-render-warm",
+                "ns",
+                journal_measured,
+                warmups=journal_warmups,
+            )
+        )
+        rss_values = [
+            peak_journal_rss(
+                binary,
+                operational_project,
+                maximum_journal,
+                operational_output / f"maximum-rss-{index:04}.audit.json",
+                cwd=operational_project,
+                env=operational_environment,
+            )
+            for index in range(warmups + samples)
+        ]
+        resource_measurements = [
+            {
+                "case_id": "operational-journal-audit-render-warm",
+                "metric": "peak_rss_bytes",
+                "unit": "bytes",
+                "warmup_samples": rss_values[:warmups],
+                "samples": rss_values[warmups:],
+                "summary": summary(rss_values[warmups:]),
+            }
+        ]
+
     result = {
         "schema": RESULT_SCHEMA,
         "suite_version": contract["suite_version"],
@@ -425,7 +772,18 @@ def main() -> int:
             "sample_order": "surface-grouped; cold first; warmups discarded",
         },
         "parameters": settings,
+        "operational_artifacts": {
+            "plan_bytes": contract["operational_artifacts"]["plan_bytes"],
+            "plan_action_nodes": contract["operational_artifacts"]["plan_action_nodes"],
+            "journal_bytes": journal_metadata["journal_bytes"],
+            "journal_lines": journal_metadata["journal_lines"],
+            "journal_line_limit": contract["operational_artifacts"]["journal_line_limit"],
+            "journal_byte_first_excess": journal_metadata["journal_byte_first_excess"],
+            "journal_line_exact_limit": "admitted",
+            "journal_line_first_excess": "refused",
+        },
         "measurements": measurements,
+        "resource_measurements": resource_measurements,
     }
     output = args.output
     if output is None:
@@ -453,4 +811,13 @@ def main() -> int:
 if __name__ == "__main__":
     if len(sys.argv) == 4 and sys.argv[1] == "--rss-worker":
         raise SystemExit(rss_worker(Path(sys.argv[2]), int(sys.argv[3])))
+    if len(sys.argv) == 6 and sys.argv[1] == "--operational-rss-worker":
+        raise SystemExit(
+            operational_rss_worker(
+                Path(sys.argv[2]),
+                Path(sys.argv[3]),
+                Path(sys.argv[4]),
+                Path(sys.argv[5]),
+            )
+        )
     raise SystemExit(main())

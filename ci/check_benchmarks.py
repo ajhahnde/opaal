@@ -25,6 +25,24 @@ CASE_IDS = {
     "host-structured-stream-memory-warm",
     "host-completion-cold",
     "host-completion-warm",
+    "operational-task-inspect-warm",
+    "operational-project-check-warm",
+    "operational-plan-build-render-warm",
+    "operational-journal-audit-render-warm",
+}
+RESOURCE_METRICS = {
+    ("operational-journal-audit-render-warm", "peak_rss_bytes"),
+}
+OPERATIONAL_ARTIFACTS = {
+    "plan_bytes": 1024 * 1024,
+    "plan_action_nodes": 1024,
+    "journal_bytes": 16 * 1024 * 1024,
+    "journal_line_limit": 100_000,
+    "journal_terminal_reserve_bytes": 64 * 1024,
+    "journal_method": (
+        "maximum legal byte-bound journal; line ceiling retained as an "
+        "exact-limit and first-excess property"
+    ),
 }
 
 
@@ -80,8 +98,10 @@ def validate_contract(contract: dict[str, Any]) -> dict[str, dict[str, Any]]:
             "result_schema",
             "supported_host_os",
             "statistics",
+            "operational_artifacts",
             "profiles",
             "cases",
+            "resource_metrics",
         },
         "contract",
     )
@@ -93,6 +113,8 @@ def validate_contract(contract: dict[str, Any]) -> dict[str, dict[str, Any]]:
         fail("contract must support exactly Linux and macOS hosts")
     if contract["statistics"] != "median and nearest-rank p95 over retained raw samples":
         fail("contract statistics definition drifted")
+    if contract["operational_artifacts"] != OPERATIONAL_ARTIFACTS:
+        fail("contract operational artifact method drifted")
 
     profiles = contract["profiles"]
     if not isinstance(profiles, dict) or set(profiles) != {"smoke", "qualification"}:
@@ -117,6 +139,7 @@ def validate_contract(contract: dict[str, Any]) -> dict[str, dict[str, Any]]:
         "unit",
         "direction",
         "sample_class",
+        "budget_statistics",
     }
     for case in cases:
         if not isinstance(case, dict):
@@ -131,6 +154,14 @@ def validate_contract(contract: dict[str, Any]) -> dict[str, dict[str, Any]]:
             fail(f"case {case_id} has an unknown direction")
         if case["sample_class"] not in {"cold", "warm"}:
             fail(f"case {case_id} has an unknown sample class")
+        statistics = case["budget_statistics"]
+        if (
+            not isinstance(statistics, list)
+            or not statistics
+            or len(set(statistics)) != len(statistics)
+            or any(value not in {"minimum", "median", "p95", "maximum"} for value in statistics)
+        ):
+            fail(f"case {case_id} has invalid budget statistics")
         by_id[case_id] = case
     if set(by_id) != CASE_IDS:
         fail(
@@ -138,6 +169,43 @@ def validate_contract(contract: dict[str, Any]) -> dict[str, dict[str, Any]]:
             f"unknown={sorted(set(by_id) - CASE_IDS)}"
         )
     return by_id
+
+
+def validate_resource_metrics(
+    contract: dict[str, Any], cases: dict[str, dict[str, Any]]
+) -> dict[tuple[str, str], dict[str, Any]]:
+    resources = contract["resource_metrics"]
+    if not isinstance(resources, list):
+        fail("contract resource_metrics must be an array")
+    by_key: dict[tuple[str, str], dict[str, Any]] = {}
+    expected_keys = {
+        "case_id",
+        "metric",
+        "unit",
+        "direction",
+        "sample_class",
+        "budget_statistics",
+    }
+    for resource in resources:
+        if not isinstance(resource, dict):
+            fail("each resource metric must be a table")
+        exact_keys(resource, expected_keys, "resource metric")
+        key = (resource["case_id"], resource["metric"])
+        if key in by_key or key[0] not in cases:
+            fail(f"duplicate or invalid resource metric {key!r}")
+        if resource["unit"] != "bytes" or resource["direction"] != "maximum":
+            fail(f"resource metric {key!r} must be a maximum byte measurement")
+        if resource["sample_class"] != cases[key[0]]["sample_class"]:
+            fail(f"resource metric {key!r} sample class disagrees with its case")
+        if resource["budget_statistics"] != ["maximum"]:
+            fail(f"resource metric {key!r} must enforce its maximum")
+        by_key[key] = resource
+    if set(by_key) != RESOURCE_METRICS:
+        fail(
+            f"resource metric set differs: missing={sorted(RESOURCE_METRICS - set(by_key))} "
+            f"unknown={sorted(set(by_key) - RESOURCE_METRICS)}"
+        )
+    return by_key
 
 
 def derived_limit(budget: dict[str, Any], direction: str) -> int:
@@ -152,11 +220,25 @@ def derived_limit(budget: dict[str, Any], direction: str) -> int:
 
 
 def validate_budgets(
-    budgets: dict[str, Any], contract_path: Path, cases: dict[str, dict[str, Any]]
-) -> tuple[dict[str, dict[str, Any]], dict[tuple[str, str], dict[str, Any]]]:
+    budgets: dict[str, Any],
+    contract_path: Path,
+    cases: dict[str, dict[str, Any]],
+    resources: dict[tuple[str, str], dict[str, Any]],
+) -> tuple[
+    dict[str, dict[str, Any]],
+    dict[tuple[str, str, str], dict[str, Any]],
+    dict[tuple[str, str, str, str], dict[str, Any]],
+]:
     exact_keys(
         budgets,
-        {"schema_version", "suite_version", "contract_sha256", "environments", "budgets"},
+        {
+            "schema_version",
+            "suite_version",
+            "contract_sha256",
+            "environments",
+            "budgets",
+            "resource_budgets",
+        },
         "budgets",
     )
     if budgets["schema_version"] != 1 or budgets["suite_version"] != 1:
@@ -188,7 +270,7 @@ def validate_budgets(
     if set(environments) != {"host-darwin-arm64"}:
         fail("budgets must define exactly the candidate host-darwin-arm64 environment")
 
-    by_key: dict[tuple[str, str], dict[str, Any]] = {}
+    by_key: dict[tuple[str, str, str], dict[str, Any]] = {}
     required_budget_keys = {
         "environment",
         "case_id",
@@ -202,12 +284,12 @@ def validate_budgets(
         if not isinstance(budget, dict):
             fail("each budget must be a table")
         exact_keys(budget, required_budget_keys, "budget")
-        key = (budget["environment"], budget["case_id"])
+        key = (budget["environment"], budget["case_id"], budget["statistic"])
         if key in by_key:
             fail(f"duplicate budget {key!r}")
         if key[0] not in environments or key[1] not in cases:
             fail(f"budget references an unknown environment or case: {key!r}")
-        statistic = budget["statistic"]
+        statistic = key[2]
         if statistic not in {"minimum", "median", "p95", "maximum"}:
             fail(f"budget {key!r} has an unknown statistic")
         expected_limit = derived_limit(budget, cases[key[1]]["direction"])
@@ -217,13 +299,56 @@ def validate_budgets(
                 f"does not equal derived limit {expected_limit}"
             )
         by_key[key] = budget
-    expected_keys = {(environment, case_id) for environment in environments for case_id in CASE_IDS}
+    expected_keys = {
+        (environment, case_id, statistic)
+        for environment in environments
+        for case_id, case in cases.items()
+        for statistic in case["budget_statistics"]
+    }
     if set(by_key) != expected_keys:
         fail(
             f"budget set differs: missing={sorted(expected_keys - set(by_key))} "
             f"unknown={sorted(set(by_key) - expected_keys)}"
         )
-    return environments, by_key
+    resource_by_key: dict[tuple[str, str, str, str], dict[str, Any]] = {}
+    required_resource_keys = required_budget_keys | {"metric"}
+    for budget in budgets["resource_budgets"]:
+        if not isinstance(budget, dict):
+            fail("each resource budget must be a table")
+        exact_keys(budget, required_resource_keys, "resource budget")
+        key = (
+            budget["environment"],
+            budget["case_id"],
+            budget["metric"],
+            budget["statistic"],
+        )
+        resource_key = (key[1], key[2])
+        if key in resource_by_key:
+            fail(f"duplicate resource budget {key!r}")
+        if key[0] not in environments or resource_key not in resources:
+            fail(f"resource budget references an unknown environment or metric: {key!r}")
+        if key[3] not in {"minimum", "median", "p95", "maximum"}:
+            fail(f"resource budget {key!r} has an unknown statistic")
+        expected_limit = derived_limit(budget, resources[resource_key]["direction"])
+        if budget["limit"] != expected_limit:
+            fail(
+                f"resource budget {key!r} limit {budget['limit']!r} "
+                f"does not equal derived limit {expected_limit}"
+            )
+        resource_by_key[key] = budget
+    expected_resource_keys = {
+        (environment, case_id, metric, statistic)
+        for environment in environments
+        for (case_id, metric), resource in resources.items()
+        for statistic in resource["budget_statistics"]
+    }
+    if set(resource_by_key) != expected_resource_keys:
+        fail(
+            "resource budget set differs: "
+            f"missing={sorted(expected_resource_keys - set(resource_by_key))} "
+            f"unknown={sorted(set(resource_by_key) - expected_resource_keys)}"
+        )
+    return environments, by_key, resource_by_key
 
 
 def nearest_rank(values: list[int], percentile: int) -> int:
@@ -267,8 +392,10 @@ def validate_result(
     contract: dict[str, Any],
     contract_path: Path,
     cases: dict[str, dict[str, Any]],
+    resources: dict[tuple[str, str], dict[str, Any]],
     environments: dict[str, dict[str, Any]],
-    budgets: dict[tuple[str, str], dict[str, Any]],
+    budgets: dict[tuple[str, str, str], dict[str, Any]],
+    resource_budgets: dict[tuple[str, str, str, str], dict[str, Any]],
     *,
     selected_environment: str | None = None,
     binary_path: Path | None = None,
@@ -284,7 +411,9 @@ def validate_result(
         "environment",
         "noise_controls",
         "parameters",
+        "operational_artifacts",
         "measurements",
+        "resource_measurements",
     }
     exact_keys(result, required, "result")
     if result["schema"] != RESULT_SCHEMA or result["suite_version"] != 1:
@@ -301,6 +430,37 @@ def validate_result(
         fail("result binary digest does not match target/release/opaal")
     if result["parameters"] != profiles[profile_name]:
         fail("result parameters do not exactly match the selected contract profile")
+    artifacts = result["operational_artifacts"]
+    exact_keys(
+        artifacts,
+        {
+            "plan_bytes",
+            "plan_action_nodes",
+            "journal_bytes",
+            "journal_lines",
+            "journal_line_limit",
+            "journal_byte_first_excess",
+            "journal_line_exact_limit",
+            "journal_line_first_excess",
+        },
+        "result operational artifacts",
+    )
+    expected_artifacts = contract["operational_artifacts"]
+    for name in ["plan_bytes", "plan_action_nodes", "journal_bytes", "journal_line_limit"]:
+        if artifacts[name] != expected_artifacts[name]:
+            fail(f"result operational artifact {name} drifted")
+    if (
+        not isinstance(artifacts["journal_lines"], int)
+        or isinstance(artifacts["journal_lines"], bool)
+        or not 1 <= artifacts["journal_lines"] < artifacts["journal_line_limit"]
+    ):
+        fail("result maximum journal is not byte-bound before the line ceiling")
+    if artifacts["journal_byte_first_excess"] != "JOURNAL001":
+        fail("result does not prove refusal at the first excess journal byte")
+    if artifacts["journal_line_exact_limit"] != "admitted":
+        fail("result does not retain the exact journal line limit property")
+    if artifacts["journal_line_first_excess"] != "refused":
+        fail("result does not retain the first-excess journal line property")
     environment = result["environment"]
     if not isinstance(environment, dict) or environment.get("kind") != "host":
         fail("result environment must be a host object")
@@ -350,18 +510,84 @@ def validate_result(
             f"unknown={sorted(set(by_id) - CASE_IDS)}"
         )
 
+    resource_measurements = result["resource_measurements"]
+    if not isinstance(resource_measurements, list):
+        fail("result resource_measurements must be an array")
+    resource_by_key: dict[tuple[str, str], dict[str, Any]] = {}
+    for measurement in resource_measurements:
+        if not isinstance(measurement, dict):
+            fail("each resource measurement must be an object")
+        exact_keys(
+            measurement,
+            {"case_id", "metric", "unit", "warmup_samples", "samples", "summary"},
+            "resource measurement",
+        )
+        key = (measurement["case_id"], measurement["metric"])
+        if key in resource_by_key or key not in resources:
+            fail(f"duplicate or invalid resource measurement {key!r}")
+        resource = resources[key]
+        if measurement["unit"] != resource["unit"]:
+            fail(f"resource measurement {key!r} uses the wrong unit")
+        samples = measurement["samples"]
+        warmups = measurement["warmup_samples"]
+        if not isinstance(samples, list) or not isinstance(warmups, list):
+            fail(f"resource measurement {key!r} samples must be arrays")
+        if any(
+            isinstance(value, bool) or not isinstance(value, int) or value <= 0
+            for value in samples + warmups
+        ):
+            fail(f"resource measurement {key!r} samples must be positive integers")
+        profile = profiles[profile_name]
+        expected_samples = 1 if resource["sample_class"] == "cold" else profile["samples"]
+        expected_warmups = 0 if resource["sample_class"] == "cold" else profile["warmups"]
+        if len(samples) != expected_samples or len(warmups) != expected_warmups:
+            fail(
+                f"resource measurement {key!r} has {len(samples)} samples/{len(warmups)} warmups; "
+                f"expected {expected_samples}/{expected_warmups}"
+            )
+        if measurement["summary"] != expected_summary(samples):
+            fail(f"resource measurement {key!r} summary does not match its raw samples")
+        resource_by_key[key] = measurement
+    if set(resource_by_key) != RESOURCE_METRICS:
+        fail(
+            "result resource metric set differs: "
+            f"missing={sorted(RESOURCE_METRICS - set(resource_by_key))} "
+            f"unknown={sorted(set(resource_by_key) - RESOURCE_METRICS)}"
+        )
+
     if profile_name == "qualification":
         environment_id = matching_environment(environment, environments, selected_environment)
         for case_id, measurement in by_id.items():
-            budget = budgets[(environment_id, case_id)]
-            observed = measurement["summary"][budget["statistic"]]
-            direction = cases[case_id]["direction"]
-            passes = observed <= budget["limit"] if direction == "maximum" else observed >= budget["limit"]
-            if not passes:
-                fail(
-                    f"measurement {case_id} {budget['statistic']}={observed} "
-                    f"fails {direction} budget {budget['limit']}"
+            for statistic in cases[case_id]["budget_statistics"]:
+                budget = budgets[(environment_id, case_id, statistic)]
+                observed = measurement["summary"][statistic]
+                direction = cases[case_id]["direction"]
+                passes = (
+                    observed <= budget["limit"]
+                    if direction == "maximum"
+                    else observed >= budget["limit"]
                 )
+                if not passes:
+                    fail(
+                        f"measurement {case_id} {statistic}={observed} "
+                        f"fails {direction} budget {budget['limit']}"
+                    )
+        for (case_id, metric), measurement in resource_by_key.items():
+            resource = resources[(case_id, metric)]
+            for statistic in resource["budget_statistics"]:
+                budget = resource_budgets[(environment_id, case_id, metric, statistic)]
+                observed = measurement["summary"][statistic]
+                direction = resource["direction"]
+                passes = (
+                    observed <= budget["limit"]
+                    if direction == "maximum"
+                    else observed >= budget["limit"]
+                )
+                if not passes:
+                    fail(
+                        f"resource measurement {case_id}/{metric} {statistic}={observed} "
+                        f"fails {direction} budget {budget['limit']}"
+                    )
 
 
 def re_full_sha256(value: Any) -> bool:
@@ -381,16 +607,21 @@ def validate_bundle(
 ) -> None:
     contract = load_toml(contract_path)
     cases = validate_contract(contract)
+    resources = validate_resource_metrics(contract, cases)
     budget_document = load_toml(budgets_path)
-    environments, budgets = validate_budgets(budget_document, contract_path, cases)
+    environments, budgets, resource_budgets = validate_budgets(
+        budget_document, contract_path, cases, resources
+    )
     if result_path is not None:
         validate_result(
             load_json(result_path),
             contract,
             contract_path,
             cases,
+            resources,
             environments,
             budgets,
+            resource_budgets,
             selected_environment=selected_environment,
             binary_path=binary_path,
         )
@@ -404,8 +635,10 @@ def validate_bundle(
                 contract,
                 contract_path,
                 cases,
+                resources,
                 environments,
                 budgets,
+                resource_budgets,
                 selected_environment=identifier,
             )
 

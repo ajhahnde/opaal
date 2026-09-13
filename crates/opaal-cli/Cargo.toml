@@ -50,7 +50,7 @@ doc = false
 [[bin]]
 name = "opaal-benchmark-fixture"
 path = "../../tests/fixtures/benchmark.rs"
-test = false
+test = true
 bench = false
 doc = false
 
