@@ -9,8 +9,21 @@ contracts, POSIX adapter, and Language Server Protocol implementation.
 > source remains non-operational. A non-publishing qualification workflow
 > checks release eligibility separately from publication.
 
-The current checkout builds `1.0.0-alpha.1`. The product documentation states
-the OPAAL 1.0 contract.
+The current checkout builds `1.0.0`. The product documentation states the
+OPAAL 1.0 contract. The `v1.0.0` GitHub release provides tagged source and
+binary archives for Linux x86_64 and macOS arm64. Each archive contains
+`opaal`, `opaal-language-server`, the license, and this README, with an
+accompanying SHA-256 checksum. The tagged source includes the pinned Rust
+toolchain; support claims remain limited to the qualified Linux and macOS
+surfaces below.
+
+For a binary install, download the archive and matching `.sha256` file from the
+GitHub release into the same directory. From that directory, verify with
+`sha256sum -c FILE.tar.gz.sha256` on Linux or
+`shasum -a 256 -c FILE.tar.gz.sha256` on macOS, then unpack with
+`tar -xzf FILE.tar.gz`.
+Run `./opaal-v1.0.0-PLATFORM/opaal --version` before placing the programs on
+your `PATH`, replacing `PLATFORM` with the archive's platform suffix.
 
 ## Try OPAAL
 
@@ -116,8 +129,10 @@ python3 ci/qualify_operational_core.py --profile qualification
 python3 benchmarks/run.py --profile smoke
 ```
 
-The manual release-policy workflow runs the read-only, fail-closed
-`python3 ci/check_product.py unpublished` check. No workflow can publish.
+The release workflow builds both programs on the supported Linux and macOS
+hosts and stores checked archives and checksums as workflow artifacts. The
+operator attaches those exact files to the GitHub release after both jobs pass.
+No workflow publishes crates or creates a GitHub release.
 
 Host success establishes only the exercised macOS/Linux surfaces. It does not
 claim packaging by another operating system, Redox support, or physical

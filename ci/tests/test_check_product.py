@@ -61,6 +61,11 @@ publish = false
 {fuzz_bins}
 """,
         )
+        fuzz_lock_packages = "\n\n".join(
+            f'[[package]]\nname = "{name}"\nversion = "{checker.VERSION}"'
+            for name in sorted(checker.FUZZ_PATH_PACKAGES)
+        )
+        self.write("fuzz/Cargo.lock", f"version = 4\n\n{fuzz_lock_packages}\n")
         self.write(
             ".github/workflows/ci.yml",
             "python3 ci/check_product.py source\n"
@@ -78,7 +83,7 @@ publish = false
         )
         self.write(
             ".github/workflows/release.yml",
-            "python3 ci/check_product.py unpublished\n",
+            "python3 ci/check_product.py release-candidate\n",
         )
         self.write(
             ".github/workflows/security.yml",
@@ -116,20 +121,14 @@ publish = false
             return subprocess.CompletedProcess(
                 command, 0, f"opaal {checker.VERSION}\n".encode(), b""
             )
-        if list(command[:3]) == ["git", "tag", "--list"]:
-            return subprocess.CompletedProcess(command, 0, b"", b"")
-        if list(command[:2]) == ["gh", "api"]:
-            return subprocess.CompletedProcess(command, 0, b"[]\n", b"")
         if command[-2:] == ["ci/check_benchmarks.py", "--contract-only"]:
             return subprocess.CompletedProcess(command, 0, b"benchmark: ok\n", b"")
         return subprocess.CompletedProcess(command, 1, b"", b"unexpected command")
 
-    def test_accepts_exact_current_product_and_unpublished_boundaries(self) -> None:
+    def test_accepts_exact_current_product_and_release_candidate(self) -> None:
         self.assertEqual(checker.source_problems(self.root, run=self.runner), [])
         self.assertEqual(
-            checker.unpublished_problems(
-                self.root, run=self.runner, get_status=lambda _url: 404
-            ),
+            checker.release_candidate_problems(self.root, run=self.runner),
             [],
         )
 
@@ -197,6 +196,19 @@ publish = false
         findings = "\n".join(checker.source_problems(self.root, run=self.runner))
         self.assertIn(f"operational-core qualification file is missing: {missing}", findings)
 
+    def test_rejects_stale_opaal_versions_in_the_fuzz_lock(self) -> None:
+        path = self.root / "fuzz/Cargo.lock"
+        self.write(
+            "fuzz/Cargo.lock",
+            path.read_text(encoding="utf-8").replace(
+                f'version = "{checker.VERSION}"',
+                'version = "1.0.0-alpha.1"',
+                1,
+            ),
+        )
+        findings = "\n".join(checker.source_problems(self.root, run=self.runner))
+        self.assertIn("fuzz lock OPAAL package versions differ", findings)
+
     def test_rejects_applying_retained_host_budget_to_shared_macos_ci(self) -> None:
         path = self.root / ".github/workflows/ci.yml"
         self.write(
@@ -210,23 +222,18 @@ publish = false
         findings = "\n".join(checker.source_problems(self.root, run=self.runner))
         self.assertIn("retained host budget", findings)
 
-    def test_unpublished_mode_fails_closed_on_network_or_positive_state(self) -> None:
-        def unavailable(_url: str) -> int:
-            raise OSError("offline")
+    def test_release_candidate_rejects_wrong_cli_version(self) -> None:
+        def wrong_version(
+            command: Sequence[str], root: Path
+        ) -> subprocess.CompletedProcess[bytes]:
+            if list(command[:2]) == ["cargo", "run"]:
+                return subprocess.CompletedProcess(command, 0, b"opaal 1.0.0-alpha.1\n", b"")
+            return self.runner(command, root)
 
         findings = "\n".join(
-            checker.unpublished_problems(
-                self.root, run=self.runner, get_status=unavailable
-            )
+            checker.release_candidate_problems(self.root, run=wrong_version)
         )
-        self.assertIn("unavailable: offline", findings)
-
-        findings = "\n".join(
-            checker.unpublished_problems(
-                self.root, run=self.runner, get_status=lambda _url: 200
-            )
-        )
-        self.assertIn("expected 404, observed 200", findings)
+        self.assertIn("CLI version does not match", findings)
 
 
 if __name__ == "__main__":

@@ -753,7 +753,7 @@ fn lexical_paths_do_not_read_and_file_bindings_snapshot_one_regular_file() {
     assert!(inspected.stderr.is_empty(), "{inspected:?}");
     let plan_view = String::from_utf8(inspected.stdout).unwrap();
     assert!(plan_view.starts_with("OPAAL plan\ndigest: sha256:"));
-    assert!(plan_view.contains("toolchain: 1.0.0-alpha.1"));
+    assert!(plan_view.contains("toolchain: 1.0.0"));
     assert!(plan_view.contains("Inputs (1)\n- repo: Path [file]"));
     assert!(plan_view.contains("Secret requirements (0)\n(none)"));
     assert!(plan_view.contains(&format!(

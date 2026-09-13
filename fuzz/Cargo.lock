@@ -164,11 +164,11 @@ dependencies = [
 
 [[package]]
 name = "opaal-platform"
-version = "1.0.0-alpha.1"
+version = "1.0.0"
 
 [[package]]
 name = "opaal-runtime"
-version = "1.0.0-alpha.1"
+version = "1.0.0"
 dependencies = [
  "opaal-platform",
  "opaal-syntax",
@@ -183,7 +183,7 @@ dependencies = [
 
 [[package]]
 name = "opaal-syntax"
-version = "1.0.0-alpha.1"
+version = "1.0.0"
 
 [[package]]
 name = "proc-macro2"

@@ -4,6 +4,8 @@ All notable changes to OPAAL are documented here.
 
 ## [Unreleased]
 
+## [1.0.0]
+
 ### Changed
 
 - Let an editor select exactly one project through an absolute manifest URI at
@@ -66,8 +68,9 @@ All notable changes to OPAAL are documented here.
   qualification harness covering secret-free execution, many-secret refusal,
   deterministic plan/audit views, incomplete evidence, full Linux Git/Cargo/TLS
   execution, explicit macOS process refusal, and synthetic-secret absence.
-- Add permanent source-product and fail-closed unpublished-release validators.
+- Add permanent source-product and release-candidate validators.
 - Preserve stable `required` and `security-required` workflow aggregates,
   public-boundary checks, benchmark validation, and five-target fuzz smoke.
 
-`1.0.0-alpha.1` remains an unreleased, non-publishable development version.
+The first stable release includes tagged source and Linux x86_64 and macOS
+arm64 archives containing the CLI and language server. Crates are not published.

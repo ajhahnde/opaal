@@ -30,7 +30,8 @@ Every commit includes a `Signed-off-by` trailer certifying the
 Use `git commit -s` to add it. Do not include credentials or machine-specific
 state in a commit or pull request.
 
-The repository does not currently publish crates, tags, binaries, packages,
-or releases. A change cannot add publishing authority or claim support for
-another operating system, image, target, or physical device without a
-separately reviewed release or integration contract.
+The repository does not publish crates. The maintainer alone creates release
+tags and attaches checked Linux and macOS binary archives to a GitHub release.
+A change cannot add automated publishing authority or claim support for another
+operating system, image, target, or physical device without a separately
+reviewed release or integration contract.

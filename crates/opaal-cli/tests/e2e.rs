@@ -49,10 +49,7 @@ fn run(path: &Path, arguments: &[&str]) -> Output {
 fn help_and_version_expose_only_opaal_identity() {
     let version = opaal(&["--version"]);
     assert!(version.status.success());
-    assert_eq!(
-        String::from_utf8(version.stdout).unwrap(),
-        "opaal 1.0.0-alpha.1\n"
-    );
+    assert_eq!(String::from_utf8(version.stdout).unwrap(), "opaal 1.0.0\n");
     assert!(version.stderr.is_empty());
 
     let help = opaal(&["--help"]);

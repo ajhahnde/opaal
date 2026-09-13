@@ -10,7 +10,7 @@ schema_version = 1
 [project]
 name = "demo"
 root_module = "tasks.opaal"
-required_opaal = ">=1.0.0-alpha.1,<2.0.0"
+required_opaal = ">=1.0.0,<2.0.0"
 
 [paths]
 root = "."
