@@ -20,7 +20,7 @@ opaal-syntax = { path = "../opaal-syntax" }
 serde = { version = "=1.0.229", default-features = false, features = ["std"] }
 serde_json = { version = "=1.0.151", default-features = false, features = ["std"] }
 semver = "=1.0.28"
-sha2 = "=0.10.9"
+sha2 = "=0.11.0"
 toml = { version = "=0.8.23", default-features = false, features = ["parse"] }
 # Terminal presentation measures display cells rather than bytes or Unicode
 # scalar values. Keep the small, host-free width table exactly pinned because
