@@ -1128,7 +1128,11 @@ fn run_terminal_interrupt_case(ignored: bool) {
     // exec. Standard input already refers to the PTY slave.
     unsafe {
         command.pre_exec(|| {
-            if libc::setsid() == -1 || libc::ioctl(0, libc::TIOCSCTTY.into(), 0) == -1 {
+            #[cfg(target_os = "linux")]
+            let controlling_terminal_request = libc::TIOCSCTTY;
+            #[cfg(target_os = "macos")]
+            let controlling_terminal_request = libc::c_ulong::from(libc::TIOCSCTTY);
+            if libc::setsid() == -1 || libc::ioctl(0, controlling_terminal_request, 0) == -1 {
                 return Err(io::Error::last_os_error());
             }
             Ok(())
