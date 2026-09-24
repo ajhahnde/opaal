@@ -19,10 +19,14 @@ assess the boundary, and coordinate disclosure after a correction is available.
 
 ## Current security boundary
 
-Ordinary script and interactive source is intentionally non-operational.
-Declaring an action or importing a project identity grants no filesystem,
-process, network, secret, or clock authority. An explicitly selected project
-task can execute only after check, review of an identity-bound plan, and
+The OPAAL 1.1 source contract permits standalone and interactive clients to
+start an explicit foreground `^program`. The child inherits the session's
+native environment, including possible credentials, and can perform any effect
+its OS user permits. OPAAL does not sandbox or audit that child. Unrelated host
+effects remain refused. Declaring an action or importing a project identity
+grants no additional filesystem, process, network, secret, or clock authority. An
+explicitly selected project task can execute only after check, review of an
+identity-bound plan, and
 request-local acceptance of its exact digest under matching authority and host
 enforcement. Crossing either boundary unexpectedly is security relevant even
 without memory corruption.

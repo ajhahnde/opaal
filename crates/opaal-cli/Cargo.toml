@@ -54,6 +54,13 @@ test = true
 bench = false
 doc = false
 
+[[bin]]
+name = "opaal-e2e-direct-probe-fixture"
+path = "../../tests/golden/direct-external-execution/probe.rs"
+test = false
+bench = false
+doc = false
+
 [dependencies]
 opaal-platform = { path = "../opaal-platform" }
 opaal-platform-posix = { path = "../opaal-platform-posix" }

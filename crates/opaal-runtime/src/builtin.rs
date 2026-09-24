@@ -614,7 +614,7 @@ fn execute_which(
                 )
             }
             Some(CommandClassification::Unknown) | None => {
-                match resolve_external(name, &session.environment, probe) {
+                match resolve_external(name, &session.cwd, &session.environment, probe) {
                     Ok(command) => (
                         "external",
                         Value::Null,
@@ -623,6 +623,12 @@ fn execute_which(
                     Err(ResolutionError::NotFound { .. }) => {
                         missing = true;
                         ("missing", Value::Null, Value::Null)
+                    }
+                    Err(ResolutionError::PathSearchLimitExceeded { kind, limit }) => {
+                        return Err(RuntimeError::new(
+                            RuntimeErrorKind::PathSearchLimitExceeded { kind, limit },
+                            stage.span(),
+                        ));
                     }
                     Err(ResolutionError::Reserved { .. }) => unreachable!(
                         "direct external resolution cannot observe namespace reservations"

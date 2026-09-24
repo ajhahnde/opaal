@@ -8,8 +8,8 @@ use std::sync::Arc;
 
 use crate::command::CommandRegistry;
 use crate::eval::{
-    CancellationToken, Clock, EvalLimits, HostedEvaluationFailure, HostedEvaluationOutcome,
-    ResourceBudget, apply_callable_with_controlled_host_and_budget,
+    CancellationToken, Clock, EvalLimits, EvaluationPolicy, HostedEvaluationFailure,
+    HostedEvaluationOutcome, ResourceBudget, apply_callable_with_controlled_host_and_budget,
 };
 use crate::module::{ModuleId, ModuleOrigin, ModuleProgram, ModuleSourceRegistry, NominalTypeId};
 use crate::operational::source::{
@@ -19,13 +19,16 @@ use crate::outcome::{
     CompletedEvidence, ExecutionOutcome, FatalHostFailure, FatalHostFailureKind, OutcomeEvidence,
     PartialEffectEvidence, PrimaryOutcome,
 };
-use crate::plan::SessionOptions;
+use crate::plan::{ChildStartBudget, SessionOptions};
 use crate::project::{ProjectProgram, TaskSignature};
 use crate::resolve::ExecutableProbe;
 use crate::session::{
     BackgroundFailure, BackgroundFailureReason, Session, SubmitError, SubmitOutcome,
 };
-use crate::{BindingMutability, Environment, NominalRecordValue, ScopeStack, Status, Value};
+use crate::{
+    BindingMutability, Environment, NativeSessionSnapshot, NominalRecordValue, ScopeStack, Status,
+    Value,
+};
 use opaal_platform::Platform;
 
 /// The normally completed result of one non-interactive source file.
@@ -180,6 +183,37 @@ pub fn execute_module_program_outcome(
     )
 }
 
+/// Execute an explicitly supplied native CLI snapshot under foreground-only
+/// process admission. Other script entry points remain deny by default.
+#[allow(clippy::too_many_arguments)]
+pub fn execute_ambient_module_program_outcome(
+    program: &ModuleProgram,
+    script_arguments: &[String],
+    snapshot: NativeSessionSnapshot,
+    registry: &CommandRegistry,
+    probe: &dyn ExecutableProbe,
+    options: &SessionOptions,
+    platform: &dyn Platform,
+    clock: Arc<dyn Clock>,
+    output: &mut dyn Write,
+) -> ScriptExecutionOutcome {
+    let (cwd, mut environment) = snapshot.into_parts();
+    let limits = EvalLimits::ambient_process(CancellationToken::never(), ResourceBudget::opaal());
+    execute_module_program_outcome_with_limits(
+        program,
+        script_arguments,
+        &cwd,
+        &mut environment,
+        registry,
+        probe,
+        options,
+        platform,
+        clock,
+        output,
+        &limits,
+    )
+}
+
 /// Executes a module program under one cancellation token and shared step budget.
 ///
 /// The same budget crosses statement and module-initialization boundaries.
@@ -205,12 +239,16 @@ pub fn execute_module_program_outcome_with_limits(
         *options,
         registry.clone(),
     );
+    if limits.evaluation_policy() == EvaluationPolicy::AmbientProcess {
+        session.enable_ambient_process_policy();
+    }
     session.enable_script_job_control(Arc::clone(&clock));
     let binding_types = Arc::new(program.runtime_binding_types());
     let mut instances: BTreeMap<ModuleId, BTreeMap<String, Value>> = BTreeMap::new();
     let mut outcome: Result<(SubmitOutcome, Value), ScriptFailure> =
         Ok((SubmitOutcome::Continued, Value::Null));
     let mut budget = limits.resource_budget();
+    let mut child_starts = ChildStartBudget::per_submission();
 
     for module in module_initialization_order(program) {
         let mut scope = ScopeStack::new();
@@ -255,6 +293,7 @@ pub fn execute_module_program_outcome_with_limits(
             Arc::clone(&binding_types),
             limits,
             &mut budget,
+            &mut child_starts,
             probe,
             platform,
             clock.as_ref(),
@@ -342,6 +381,7 @@ pub fn execute_project_task_outcome(
     let mut instances: BTreeMap<ModuleId, BTreeMap<String, Value>> = BTreeMap::new();
     let mut scopes: BTreeMap<ModuleId, ScopeStack> = BTreeMap::new();
     let mut budget = ResourceBudget::opaal();
+    let mut child_starts = ChildStartBudget::per_submission();
     let initialization_limits = EvalLimits::pure_opaal(cancellation.clone(), budget);
     let mut outcome: Result<(SubmitOutcome, Value), ScriptFailure> =
         Ok((SubmitOutcome::Continued, Value::Null));
@@ -377,6 +417,7 @@ pub fn execute_project_task_outcome(
             Arc::clone(&binding_types),
             &initialization_limits,
             &mut budget,
+            &mut child_starts,
             probe,
             platform,
             clock.as_ref(),
@@ -671,9 +712,9 @@ fn finish_script_session_outcome(
     outcome: Result<(SubmitOutcome, Value), ScriptFailure>,
     evidence: Vec<OutcomeEvidence<ScriptError>>,
 ) -> ScriptExecutionOutcome {
-    // Cleanup always runs after the primary-producing evaluation route. Pure
-    // opaal currently owns no external resources; later adapters attach their
-    // typed cleanup and partial-effect evidence through `ExecutionOutcome`.
+    // Cleanup always runs after the primary-producing evaluation route.
+    // Foreground execution has already completed or cancelled its owned group;
+    // the coordinator joins any separately admitted background jobs here.
     let failures = session.join_background_jobs(platform);
     let primary = match outcome {
         Err(ScriptFailure::Error(error)) => {
@@ -717,5 +758,266 @@ fn background_exit_status(failures: &[BackgroundFailure]) -> Option<Status> {
         BackgroundFailureReason::Observation(_) | BackgroundFailureReason::Signal(_) => {
             Some(Status::exit(1, crate::Duration::ZERO).expect("one is a valid failure status"))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::ffi::OsStr;
+    use std::fs;
+    use std::os::unix::fs::symlink;
+    use std::path::{Path, PathBuf};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex};
+
+    use opaal_platform::FakePlatform;
+    use opaal_platform_posix::PosixPlatform;
+
+    use super::{
+        execute_ambient_module_program_outcome, execute_module_program_outcome_with_limits,
+    };
+    use crate::builtin::standard_registry;
+    use crate::eval::{CancellationToken, EvalLimits, FakeClock, ResourceBudget};
+    use crate::module::{
+        ModuleCanonicalizer, ModuleId, ModulePathError, ModuleProgramLoader, ModuleSourceError,
+        ModuleSourceLoader,
+    };
+    use crate::outcome::{PrimaryOutcome, RefusalReason};
+    use crate::plan::SessionOptions;
+    use crate::resolve::ExecutableProbe;
+    use crate::{Environment, HostEnvironmentLimits, NativeSessionSnapshot};
+
+    struct OneSource(String);
+
+    // POSIX signal forwarding has one process-wide guard per test binary.
+    static HOST_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    impl ModuleCanonicalizer for OneSource {
+        fn canonicalize(&self, candidate: &Path) -> Result<PathBuf, ModulePathError> {
+            Ok(candidate.to_path_buf())
+        }
+    }
+
+    impl ModuleSourceLoader for OneSource {
+        fn load(&self, _module: &ModuleId) -> Result<Vec<u8>, ModuleSourceError> {
+            Ok(self.0.as_bytes().to_vec())
+        }
+    }
+
+    #[derive(Default)]
+    struct CountingProbe(AtomicUsize);
+
+    impl ExecutableProbe for CountingProbe {
+        fn is_executable(&self, path: &OsStr) -> bool {
+            self.0.fetch_add(1, Ordering::Relaxed);
+            path == OsStr::new("/tools/tool")
+        }
+    }
+
+    #[derive(Default)]
+    struct AdvisoryRaceProbe(AtomicUsize);
+
+    impl ExecutableProbe for AdvisoryRaceProbe {
+        fn is_executable(&self, _path: &OsStr) -> bool {
+            self.0.fetch_add(1, Ordering::Relaxed);
+            true
+        }
+    }
+
+    #[test]
+    fn ambient_script_policy_reaches_the_existing_direct_executor() {
+        let sources = OneSource("^tool\n".to_owned());
+        let program = ModuleProgramLoader::new(&sources, &sources)
+            .load_for_frontend_with_commands(Path::new("/project/main.opaal"), &standard_registry())
+            .expect("the source should load");
+        let probe = CountingProbe::default();
+        let mut output = Vec::new();
+        let snapshot = NativeSessionSnapshot::from_snapshot(
+            Path::new("/project"),
+            [("PATH", "/tools")],
+            HostEnvironmentLimits::OPAAL,
+        )
+        .expect("the native snapshot is valid");
+        let outcome = execute_ambient_module_program_outcome(
+            &program,
+            &[],
+            snapshot,
+            &standard_registry(),
+            &probe,
+            &SessionOptions::default(),
+            &FakePlatform::full(),
+            Arc::new(FakeClock::new()),
+            &mut output,
+        );
+
+        assert!(matches!(outcome.primary(), PrimaryOutcome::Completed(_)));
+        assert_eq!(probe.0.load(Ordering::Relaxed), 1);
+
+        let default_probe = CountingProbe::default();
+        let mut environment = Environment::from_snapshot([("PATH", "/tools")]);
+        let default_outcome = execute_module_program_outcome_with_limits(
+            &program,
+            &[],
+            Path::new("/project"),
+            &mut environment,
+            &standard_registry(),
+            &default_probe,
+            &SessionOptions::default(),
+            &FakePlatform::full(),
+            Arc::new(FakeClock::new()),
+            &mut Vec::new(),
+            &EvalLimits::new(CancellationToken::never(), ResourceBudget::opaal()),
+        );
+        assert!(matches!(
+            default_outcome.primary(),
+            PrimaryOutcome::Refused(refusal)
+                if refusal.reason() == RefusalReason::Unsupported
+        ));
+        assert_eq!(default_probe.0.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn ambient_script_retains_pipeline_redirect_bytes_and_final_status() {
+        let _serial = HOST_TEST_LOCK.lock().unwrap();
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/tmp");
+        fs::create_dir_all(&root).expect("test output directory should exist");
+        let output_path = root.join(format!("ambient-script-{}.bin", std::process::id()));
+        let source = format!(
+            "^/usr/bin/printf 'pipeline bytes' | ^/bin/cat > '{}'\n^/usr/bin/false\n",
+            output_path.display()
+        );
+        let sources = OneSource(source);
+        let program = ModuleProgramLoader::new(&sources, &sources)
+            .load_for_frontend_with_commands(Path::new("/project/main.opaal"), &standard_registry())
+            .expect("the pipeline source should load");
+        let mut environment = Environment::new();
+        let outcome = execute_module_program_outcome_with_limits(
+            &program,
+            &[],
+            &root,
+            &mut environment,
+            &standard_registry(),
+            &PosixPlatform,
+            &SessionOptions::default(),
+            &PosixPlatform,
+            Arc::new(crate::eval::SystemClock::new()),
+            &mut Vec::new(),
+            &EvalLimits::ambient_process(CancellationToken::never(), ResourceBudget::opaal()),
+        );
+
+        let PrimaryOutcome::Completed(completion) = outcome.primary() else {
+            panic!("the foreground script should complete: {outcome:?}");
+        };
+        assert_eq!(completion.status().and_then(crate::Status::code), Some(1));
+        assert_eq!(fs::read(&output_path).unwrap(), b"pipeline bytes");
+        fs::remove_file(output_path).expect("test output should be removable");
+    }
+
+    #[test]
+    fn ambient_script_reports_spawn_race_without_search_fallback() {
+        let _serial = HOST_TEST_LOCK.lock().unwrap();
+        let sources = OneSource("^opaal-racing-target\n".to_owned());
+        let program = ModuleProgramLoader::new(&sources, &sources)
+            .load_for_frontend_with_commands(Path::new("/project/main.opaal"), &standard_registry())
+            .expect("the racing source should load");
+        let probe = AdvisoryRaceProbe::default();
+        let mut environment = Environment::from_snapshot([("PATH", "/opaal-absent:/bin")]);
+        let outcome = execute_module_program_outcome_with_limits(
+            &program,
+            &[],
+            Path::new("/project"),
+            &mut environment,
+            &standard_registry(),
+            &probe,
+            &SessionOptions::default(),
+            &PosixPlatform,
+            Arc::new(crate::eval::SystemClock::new()),
+            &mut Vec::new(),
+            &EvalLimits::ambient_process(CancellationToken::never(), ResourceBudget::opaal()),
+        );
+
+        let PrimaryOutcome::Error(error) = outcome.primary() else {
+            panic!("a vanished candidate must be a runtime error: {outcome:?}");
+        };
+        assert_eq!(probe.0.load(Ordering::Relaxed), 1);
+        assert!(error.render().contains("main.opaal"), "{error}");
+        assert!(error.render().contains("spawn"), "{error}");
+    }
+
+    #[test]
+    fn ambient_script_uses_updated_cwd_for_relative_path_and_native_argv() {
+        let _serial = HOST_TEST_LOCK.lock().unwrap();
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/tmp")
+            .join(format!("ambient-relative-{}", std::process::id()));
+        let tools = root.join("child/tools");
+        fs::create_dir_all(&tools).expect("test tools directory should exist");
+        symlink("/usr/bin/printf", tools.join("probe"))
+            .expect("the fixture should link the host program");
+        let output_path = root.join("argv.bin");
+        let source = format!(
+            "cd child\n^probe '%s|%s|%s' '' 'two words' 'λ' > '{}'\n",
+            output_path.display()
+        );
+        let sources = OneSource(source);
+        let program = ModuleProgramLoader::new(&sources, &sources)
+            .load_for_frontend_with_commands(Path::new("/project/main.opaal"), &standard_registry())
+            .expect("the relative program source should load");
+        let mut environment = Environment::from_snapshot([("PATH", "tools")]);
+        let outcome = execute_module_program_outcome_with_limits(
+            &program,
+            &[],
+            &root,
+            &mut environment,
+            &standard_registry(),
+            &PosixPlatform,
+            &SessionOptions::default(),
+            &PosixPlatform,
+            Arc::new(crate::eval::SystemClock::new()),
+            &mut Vec::new(),
+            &EvalLimits::ambient_process(CancellationToken::never(), ResourceBudget::opaal()),
+        );
+
+        assert!(
+            matches!(outcome.primary(), PrimaryOutcome::Completed(_)),
+            "{outcome:?}"
+        );
+        assert_eq!(fs::read(output_path).unwrap(), "|two words|λ".as_bytes());
+    }
+
+    #[test]
+    fn ambient_script_connects_an_external_stage_to_a_named_transform() {
+        let _serial = HOST_TEST_LOCK.lock().unwrap();
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/tmp");
+        fs::create_dir_all(&root).expect("test output directory should exist");
+        let output_path = root.join(format!("ambient-mixed-{}.bin", std::process::id()));
+        let sources = OneSource(format!(
+            "^/usr/bin/printf alpha | decode utf8 | encode utf8 > '{}'\n",
+            output_path.display()
+        ));
+        let program = ModuleProgramLoader::new(&sources, &sources)
+            .load_for_frontend_with_commands(Path::new("/project/main.opaal"), &standard_registry())
+            .expect("the mixed pipeline source should load");
+        let mut environment = Environment::new();
+        let outcome = execute_module_program_outcome_with_limits(
+            &program,
+            &[],
+            &root,
+            &mut environment,
+            &standard_registry(),
+            &PosixPlatform,
+            &SessionOptions::default(),
+            &PosixPlatform,
+            Arc::new(crate::eval::SystemClock::new()),
+            &mut Vec::new(),
+            &EvalLimits::ambient_process(CancellationToken::never(), ResourceBudget::opaal()),
+        );
+
+        let PrimaryOutcome::Completed(completion) = outcome.primary() else {
+            panic!("the mixed pipeline should complete: {outcome:?}");
+        };
+        assert_eq!(completion.status().and_then(crate::Status::code), Some(0));
+        assert_eq!(fs::read(&output_path).unwrap(), b"alpha");
+        fs::remove_file(output_path).expect("test output should be removable");
     }
 }

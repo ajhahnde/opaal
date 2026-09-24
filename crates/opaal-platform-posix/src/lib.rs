@@ -25,9 +25,10 @@ use std::time::Duration;
 use opaal_platform::{
     AuthorityEnforcement, AuthorityQuery, Capabilities, Capability, ChildProcess,
     DescriptorEndpoint, DescriptorReadError, DescriptorWriteError, DirectoryEntry,
-    DirectoryEntryKind, DirectoryReadError, DirectoryReadRequest, DirectoryStream, FileActionError,
-    FileIoEndpoint, FileOpenMode, FileOpenRequest, ForegroundTerminalGuard, JobControlSignalGuard,
-    JobSignal, PipeEndpoints, PipeError, Platform, PlatformError, ProcessGroupId, ProcessStatus,
+    DirectoryEntryKind, DirectoryReadError, DirectoryReadRequest, DirectoryStream, ExecutableProbe,
+    FileActionError, FileIoEndpoint, FileOpenMode, FileOpenRequest, ForegroundSignalGuard,
+    ForegroundTerminalGuard, JobControlSignalGuard, JobSignal, OwnedProcessGroup, PipeEndpoints,
+    PipeError, Platform, PlatformError, ProcessGroupError, ProcessGroupId, ProcessStatus,
     ProcessTransition, SignalError, SpawnError, SpawnRequest, StandardDirectories,
     StandardDirectoryEnvironment, TerminalModeGuard, TerminalModeToken, TerminalSize,
     TerminateError, WaitError, WorkingDirectoryError, WorkingDirectoryRequest,
@@ -193,12 +194,76 @@ impl FileIoEndpoint for OwnedDescriptor {
 #[derive(Debug, Default, Clone, Copy)]
 pub struct PosixPlatform;
 
+impl ExecutableProbe for PosixPlatform {
+    fn is_executable(&self, path: &OsStr) -> bool {
+        let Ok(metadata) = fs::metadata(path) else {
+            return false;
+        };
+        metadata.is_file()
+            && rustix::fs::accessat(
+                rustix::fs::CWD,
+                path,
+                rustix::fs::Access::EXEC_OK,
+                rustix::fs::AtFlags::EACCESS,
+            )
+            .is_ok()
+    }
+}
+
 /// Owned POSIX child process handle.
 #[derive(Debug)]
 pub struct PosixChild {
     child: Child,
     completed: Option<ProcessStatus>,
     process_group: Option<ProcessGroupId>,
+}
+
+/// A POSIX process group anchored by one private, unreaped child.
+///
+/// The anchor starts before any user process or pipeline descriptor exists and
+/// stays waitable until release. Its pid therefore reserves the equal process-
+/// group identifier even after every user member exits, closing the numeric
+/// reuse race around final group cleanup.
+#[derive(Debug)]
+struct PosixOwnedProcessGroup {
+    group: ProcessGroupId,
+    anchor: libc::pid_t,
+    control: Option<OwnedFd>,
+    watchdog: Option<process_group_owner::SignalWatchdog>,
+    released: bool,
+}
+
+impl OwnedProcessGroup for PosixOwnedProcessGroup {
+    fn id(&self) -> ProcessGroupId {
+        self.group
+    }
+
+    fn release(&mut self) -> Result<(), ProcessGroupError> {
+        if self.released {
+            return Ok(());
+        }
+        // The signal guard can outlive this owner while the runtime restores
+        // terminal and process signal state. Drain any handler that already
+        // loaded this group before its identifier becomes reusable.
+        foreground_signals::deactivate_group(self.group);
+        self.released = true;
+        let watchdog_result = self
+            .watchdog
+            .take()
+            .map(process_group_owner::SignalWatchdog::stop);
+        drop(self.control.take());
+        let anchor_result = process_group_owner::terminate_and_reap(self.anchor);
+        watchdog_result
+            .transpose()
+            .and(anchor_result)
+            .map_err(process_group_operation_error)
+    }
+}
+
+impl Drop for PosixOwnedProcessGroup {
+    fn drop(&mut self) {
+        let _ = self.release();
+    }
 }
 
 impl ChildProcess for PosixChild {
@@ -433,6 +498,29 @@ impl Platform for PosixPlatform {
             .map(ProcessGroupId::new)
     }
 
+    fn create_process_group(&self) -> Result<Box<dyn OwnedProcessGroup>, ProcessGroupError> {
+        self.require(Capability::ProcessGroups)?;
+        let (anchor, control, watchdog) =
+            process_group_owner::create().map_err(process_group_operation_error)?;
+        let group = ProcessGroupId::new(u64::try_from(anchor).map_err(|_| {
+            ProcessGroupError::Operation {
+                kind: io::ErrorKind::InvalidData,
+                message: "the process-group anchor had a negative identifier".to_owned(),
+            }
+        })?)
+        .ok_or_else(|| ProcessGroupError::Operation {
+            kind: io::ErrorKind::InvalidData,
+            message: "the process-group anchor had the reserved zero identifier".to_owned(),
+        })?;
+        Ok(Box::new(PosixOwnedProcessGroup {
+            group,
+            anchor,
+            control: Some(control),
+            watchdog: Some(watchdog),
+            released: false,
+        }))
+    }
+
     fn enter_foreground(
         &self,
         group: ProcessGroupId,
@@ -459,6 +547,11 @@ impl Platform for PosixPlatform {
         self.require(Capability::Signals)?;
         job_control_signals::install()
             .map(|guard| Box::new(guard) as Box<dyn JobControlSignalGuard>)
+    }
+
+    fn prepare_foreground_signals(&self) -> Result<Box<dyn ForegroundSignalGuard>, PlatformError> {
+        self.require(Capability::Signals)?;
+        foreground_signals::prepare().map(|guard| Box::new(guard) as Box<dyn ForegroundSignalGuard>)
     }
 
     fn shell_executable(&self) -> Result<std::path::PathBuf, PlatformError> {
@@ -841,10 +934,383 @@ fn spawn_error(error: io::Error) -> SpawnError {
     }
 }
 
+fn process_group_operation_error(error: io::Error) -> ProcessGroupError {
+    ProcessGroupError::Operation {
+        kind: error.kind(),
+        message: error.to_string(),
+    }
+}
+
 fn file_action_error(error: io::Error) -> FileActionError {
     FileActionError::Operation {
         kind: error.kind(),
         message: error.to_string(),
+    }
+}
+
+/// A private anchor process that reserves one foreground process-group
+/// identifier until the parent explicitly releases it.
+///
+/// Fork is used only to create the anchor. The child performs exclusively
+/// async-signal-safe syscalls before `_exit`: it allocates nothing, takes no
+/// Rust lock, and runs no destructor. The private pipes are close-on-exec in
+/// the parent, so later user programs cannot retain the ownership channel.
+#[allow(unsafe_code)]
+mod process_group_owner {
+    use std::io;
+    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+    use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
+    use std::thread;
+    use std::time::{Duration, Instant};
+
+    const READY: u8 = 1;
+    const FAILED: u8 = 0;
+    const SIGNAL: u8 = 1;
+    const CANCEL: u8 = 2;
+    const GRACE: Duration = Duration::from_secs(2);
+
+    // These statics are used only by the forked anchor's signal handler. The
+    // child has its own address space, so the parent never changes them.
+    static SIGNAL_WRITER: AtomicI32 = AtomicI32::new(-1);
+    static SIGNAL_REPORTED: AtomicBool = AtomicBool::new(false);
+
+    pub(super) struct SignalWatchdog {
+        cancel: OwnedFd,
+        reader_owner: OwnedFd,
+        thread: thread::JoinHandle<io::Result<()>>,
+    }
+
+    impl std::fmt::Debug for SignalWatchdog {
+        fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter
+                .debug_struct("SignalWatchdog")
+                .finish_non_exhaustive()
+        }
+    }
+
+    impl SignalWatchdog {
+        pub(super) fn stop(self) -> io::Result<()> {
+            let cancel = CANCEL;
+            // SAFETY: the descriptor and one-byte value remain live for the call.
+            let written =
+                unsafe { libc::write(self.cancel.as_raw_fd(), (&raw const cancel).cast(), 1) };
+            let write_error = (written != 1).then(io::Error::last_os_error);
+            drop(self.cancel);
+            drop(self.reader_owner);
+            let joined = self
+                .thread
+                .join()
+                .map_err(|_| io::Error::other("the process-group signal watchdog panicked"))?;
+            if let Some(error) = write_error {
+                return Err(error);
+            }
+            joined
+        }
+    }
+
+    pub(super) fn create() -> io::Result<(libc::pid_t, OwnedFd, SignalWatchdog)> {
+        let control = pipe_cloexec()?;
+        let ready = match pipe_cloexec() {
+            Ok(pipe) => pipe,
+            Err(error) => {
+                close_pair(control);
+                return Err(error);
+            }
+        };
+        let notification = match pipe_cloexec() {
+            Ok(pipe) => pipe,
+            Err(error) => {
+                close_pair(control);
+                close_pair(ready);
+                return Err(error);
+            }
+        };
+
+        // SAFETY: the child branch calls only the async-signal-safe routine
+        // below and never returns to Rust. The parent retains ordinary Rust
+        // ownership and wraps exactly one still-open descriptor.
+        let anchor = unsafe { libc::fork() };
+        if anchor == -1 {
+            let error = io::Error::last_os_error();
+            close_pair(control);
+            close_pair(ready);
+            close_pair(notification);
+            return Err(error);
+        }
+        if anchor == 0 {
+            child_main(control, ready, notification);
+        }
+
+        close(control[0]);
+        close(ready[1]);
+        let readiness = read_byte(ready[0]);
+        close(ready[0]);
+        match readiness {
+            Ok(READY) => {
+                // SAFETY: each raw descriptor has exactly one parent owner.
+                let reader = unsafe { OwnedFd::from_raw_fd(notification[0]) };
+                // SAFETY: this is the distinct writable end of the pipe.
+                let cancel = unsafe { OwnedFd::from_raw_fd(notification[1]) };
+                let reader_owner = match reader.try_clone() {
+                    Ok(owner) => owner,
+                    Err(error) => {
+                        close(control[1]);
+                        let _ = terminate_and_reap(anchor);
+                        return Err(error);
+                    }
+                };
+                let watcher = thread::Builder::new()
+                    .name("opaal-foreground-signal-watchdog".to_owned())
+                    .spawn(move || watch_signals(reader, anchor));
+                let watcher = match watcher {
+                    Ok(thread) => SignalWatchdog {
+                        cancel,
+                        reader_owner,
+                        thread,
+                    },
+                    Err(error) => {
+                        close(control[1]);
+                        let _ = terminate_and_reap(anchor);
+                        return Err(error);
+                    }
+                };
+                // SAFETY: this is the sole remaining owner of the descriptor
+                // in the parent branch and it is released exactly once.
+                let control = unsafe { OwnedFd::from_raw_fd(control[1]) };
+                Ok((anchor, control, watcher))
+            }
+            Ok(_) => {
+                close(control[1]);
+                close_pair(notification);
+                let _ = terminate_and_reap(anchor);
+                Err(io::Error::other(
+                    "the process-group anchor could not establish its group",
+                ))
+            }
+            Err(error) => {
+                close(control[1]);
+                close_pair(notification);
+                let _ = terminate_and_reap(anchor);
+                Err(error)
+            }
+        }
+    }
+
+    fn watch_signals(reader: OwnedFd, anchor: libc::pid_t) -> io::Result<()> {
+        let mut deadline = None;
+        loop {
+            let timeout = deadline.map_or(-1, |end: Instant| {
+                let remaining = end.saturating_duration_since(Instant::now());
+                i32::try_from(remaining.as_millis()).unwrap_or(i32::MAX)
+            });
+            let mut event = libc::pollfd {
+                fd: reader.as_raw_fd(),
+                events: libc::POLLIN,
+                revents: 0,
+            };
+            // SAFETY: event is live writable storage for one poll descriptor.
+            let polled = unsafe { libc::poll(&raw mut event, 1, timeout) };
+            if polled == -1 {
+                let error = io::Error::last_os_error();
+                if error.kind() == io::ErrorKind::Interrupted {
+                    continue;
+                }
+                return Err(error);
+            }
+            if polled == 0 {
+                // The anchor remains unreaped until this thread joins, so its
+                // group number cannot have been reused by another job.
+                // SAFETY: negative anchor targets that reserved process group.
+                if unsafe { libc::kill(-anchor, libc::SIGKILL) } == -1 {
+                    let error = io::Error::last_os_error();
+                    if error.kind() != io::ErrorKind::NotFound {
+                        return Err(error);
+                    }
+                }
+                return Ok(());
+            }
+            match read_byte(reader.as_raw_fd())? {
+                CANCEL | FAILED => return Ok(()),
+                SIGNAL if deadline.is_none() => deadline = Some(Instant::now() + GRACE),
+                _ => {}
+            }
+        }
+    }
+
+    extern "C" fn report_signal(_signal: libc::c_int) {
+        if !SIGNAL_REPORTED.swap(true, Ordering::Relaxed) {
+            let writer = SIGNAL_WRITER.load(Ordering::Relaxed);
+            if writer >= 0 {
+                // SAFETY: write with one static byte is async-signal-safe. The
+                // handler writes at most once, so the pipe cannot fill here.
+                let signal = SIGNAL;
+                // SAFETY: writer is the anchor's live pipe descriptor and signal is live.
+                unsafe { libc::write(writer, (&raw const signal).cast(), 1) };
+            }
+        }
+    }
+
+    pub(super) fn terminate_and_reap(anchor: libc::pid_t) -> io::Result<()> {
+        // The anchor pid stays allocated until this wait, so the targeted kill
+        // cannot reach a reused process identity.
+        // SAFETY: kill takes scalar values and the retained positive pid names
+        // the unreaped child created by `create`.
+        let killed = unsafe { libc::kill(anchor, libc::SIGKILL) };
+        let kill_error = (killed == -1).then(io::Error::last_os_error);
+
+        let mut status = 0;
+        loop {
+            // SAFETY: status points to a live integer and `anchor` is the exact
+            // direct child that has not been waited elsewhere.
+            let waited = unsafe { libc::waitpid(anchor, &raw mut status, 0) };
+            if waited == anchor {
+                break;
+            }
+            let error = io::Error::last_os_error();
+            if error.kind() == io::ErrorKind::Interrupted {
+                continue;
+            }
+            if error.raw_os_error() != Some(libc::ECHILD) {
+                return Err(error);
+            }
+            break;
+        }
+
+        if let Some(error) = kill_error
+            && error.kind() != io::ErrorKind::NotFound
+        {
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    fn pipe_cloexec() -> io::Result<[libc::c_int; 2]> {
+        let mut pipe = [-1; 2];
+        // SAFETY: pipe points to storage for exactly two descriptors.
+        if unsafe { libc::pipe(pipe.as_mut_ptr()) } == -1 {
+            return Err(io::Error::last_os_error());
+        }
+        for descriptor in pipe {
+            // SAFETY: fcntl receives one valid descriptor and scalar flags.
+            if unsafe { libc::fcntl(descriptor, libc::F_SETFD, libc::FD_CLOEXEC) } == -1 {
+                let error = io::Error::last_os_error();
+                close_pair(pipe);
+                return Err(error);
+            }
+        }
+        Ok(pipe)
+    }
+
+    fn read_byte(descriptor: libc::c_int) -> io::Result<u8> {
+        let mut byte = 0u8;
+        loop {
+            // SAFETY: byte is live writable storage for the requested byte.
+            let read = unsafe { libc::read(descriptor, (&raw mut byte).cast(), 1) };
+            if read == 1 {
+                return Ok(byte);
+            }
+            if read == 0 {
+                return Ok(FAILED);
+            }
+            let error = io::Error::last_os_error();
+            if error.kind() == io::ErrorKind::Interrupted {
+                continue;
+            }
+            return Err(error);
+        }
+    }
+
+    fn close_pair(pair: [libc::c_int; 2]) {
+        close(pair[0]);
+        close(pair[1]);
+    }
+
+    fn close(descriptor: libc::c_int) {
+        if descriptor >= 0 {
+            // SAFETY: close takes one scalar descriptor; repeated failure is
+            // irrelevant during best-effort setup cleanup.
+            unsafe {
+                libc::close(descriptor);
+            }
+        }
+    }
+
+    fn child_main(
+        control: [libc::c_int; 2],
+        ready: [libc::c_int; 2],
+        notification: [libc::c_int; 2],
+    ) -> ! {
+        close(control[1]);
+        close(ready[0]);
+        close(notification[0]);
+        SIGNAL_WRITER.store(notification[1], Ordering::Relaxed);
+
+        // Block every catchable signal except the three supported termination
+        // signals, which the anchor reports to its parent's watchdog.
+        // SAFETY: the zero pattern is a valid base and sigfillset initializes
+        // the complete live set before sigprocmask reads it.
+        let mut blocked: libc::sigset_t = unsafe { std::mem::zeroed() };
+        // SAFETY: all arguments point to live storage or are scalar values.
+        let blocked_ok = unsafe { libc::sigfillset(&raw mut blocked) } != -1
+            && unsafe {
+                libc::sigprocmask(libc::SIG_SETMASK, &raw const blocked, std::ptr::null_mut())
+            } != -1;
+        // SAFETY: zero is a valid base for sigaction; sigemptyset fills the mask.
+        let mut action: libc::sigaction = unsafe { std::mem::zeroed() };
+        action.sa_sigaction = report_signal as *const () as usize;
+        // SAFETY: action contains live writable mask storage.
+        let handlers_ok = unsafe { libc::sigemptyset(&raw mut action.sa_mask) } != -1
+            && [libc::SIGHUP, libc::SIGINT, libc::SIGTERM]
+                .into_iter()
+                // SAFETY: action is initialized and remains live for each call.
+                .all(|signal| unsafe {
+                    libc::sigaction(signal, &raw const action, std::ptr::null_mut()) != -1
+                });
+        // SAFETY: setpgid with two zeros makes the calling child the leader of
+        // a new group named by its own pid.
+        let grouped = blocked_ok
+            && handlers_ok
+            && unsafe { libc::setpgid(0, 0) } != -1
+            && unsafe { libc::sigdelset(&raw mut blocked, libc::SIGHUP) } != -1
+            && unsafe { libc::sigdelset(&raw mut blocked, libc::SIGINT) } != -1
+            && unsafe { libc::sigdelset(&raw mut blocked, libc::SIGTERM) } != -1
+            && unsafe {
+                libc::sigprocmask(libc::SIG_SETMASK, &raw const blocked, std::ptr::null_mut())
+            } != -1;
+        let state = if grouped { READY } else { FAILED };
+        // SAFETY: state is one initialized byte and ready[1] is the private
+        // writable end inherited from the parent.
+        unsafe {
+            libc::write(ready[1], (&raw const state).cast(), 1);
+            libc::close(ready[1]);
+        }
+        if !grouped {
+            // SAFETY: `_exit` terminates without invoking inherited Rust state.
+            unsafe { libc::_exit(127) }
+        }
+
+        let mut byte = 0u8;
+        loop {
+            // SAFETY: byte is live and control[0] is the private read end.
+            let read = unsafe { libc::read(control[0], (&raw mut byte).cast(), 1) };
+            if read == 0 {
+                break;
+            }
+            if read == -1 {
+                // The supported-signal handler interrupts this read. Retry;
+                // ownership still belongs to the parent until it closes the
+                // control channel.
+                continue;
+            }
+        }
+        // Closing the parent owner is a last-resort cleanup path. Signal the
+        // whole still-owned group, including this anchor, without ever exposing
+        // a reusable numeric identifier.
+        // SAFETY: target zero names the caller's current process group.
+        unsafe {
+            libc::kill(0, libc::SIGKILL);
+            libc::_exit(127)
+        }
     }
 }
 
@@ -889,11 +1355,11 @@ fn working_directory_error(error: io::Error) -> WorkingDirectoryError {
 /// executed yet.
 ///
 /// Dispositions and the signal mask are both inherited across `fork`. An
-/// interactive shell ignores the job-control signals for its own survival, so
-/// without this reset every job it starts would inherit that ignore and stop
-/// responding to the keyboard. The mask is cleared for the same reason: `fork`
-/// copies the calling thread's mask, and an executed program is entitled to a
-/// clear one.
+/// interactive shell ignores the job-control signals for its own survival and
+/// installs a foreground termination handler. A child must replace both before
+/// a later pre-exec hook can receive a signal. The mask is cleared for the same
+/// reason: `fork` copies the calling thread's mask, and an executed program is
+/// entitled to a clear one.
 #[allow(unsafe_code)]
 mod child_signal_dispositions {
     use std::io;
@@ -902,13 +1368,15 @@ mod child_signal_dispositions {
 
     /// Signal dispositions a spawned program must not inherit from its shell.
     ///
-    /// The interactive shell arranges the five job-control signals for its own
-    /// survival. A reserved background-chain supervisor additionally ignores
-    /// hang-up so it can wait for its descendants after the parent signals the
-    /// group; ordinary external descendants must restore the default instead.
-    const RESET: [libc::c_int; 6] = [
+    /// The interactive shell arranges the job-control signals for its own
+    /// survival and handles foreground termination. A reserved background-chain
+    /// supervisor additionally ignores hang-up so it can wait for its
+    /// descendants after the parent signals the group; ordinary external
+    /// descendants must restore the default instead.
+    const RESET: [libc::c_int; 7] = [
         libc::SIGHUP,
         libc::SIGINT,
+        libc::SIGTERM,
         libc::SIGQUIT,
         libc::SIGTSTP,
         libc::SIGTTOU,
@@ -949,6 +1417,61 @@ mod child_signal_dispositions {
                 }
                 Ok(())
             });
+        }
+    }
+
+    #[cfg(test)]
+    #[allow(unsafe_code)]
+    mod tests {
+        use std::os::unix::process::{CommandExt, ExitStatusExt};
+        use std::process::Command;
+
+        use super::configure;
+
+        #[test]
+        fn resets_termination_before_later_pre_exec_hooks() {
+            if std::env::var_os("OPAAL_TEST_PRE_EXEC_TERM").is_none() {
+                let status = Command::new(std::env::current_exe().expect("test binary path"))
+                    .arg("--exact")
+                    .arg("child_signal_dispositions::tests::resets_termination_before_later_pre_exec_hooks")
+                    .env("OPAAL_TEST_PRE_EXEC_TERM", "1")
+                    .status()
+                    .expect("isolated test process starts");
+                assert!(status.success(), "isolated test process failed: {status}");
+                return;
+            }
+
+            // The child must replace an inherited ignore before the later
+            // pre-exec hook raises TERM. Exec itself would reset a caught
+            // handler, so signalling after exec would miss this interval.
+            // SAFETY: the action and mask are initialized before sigaction
+            // reads them in this isolated test process.
+            unsafe {
+                let mut ignored: libc::sigaction = std::mem::zeroed();
+                ignored.sa_sigaction = libc::SIG_IGN;
+                assert_eq!(libc::sigemptyset(&raw mut ignored.sa_mask), 0);
+                assert_eq!(
+                    libc::sigaction(libc::SIGTERM, &raw const ignored, std::ptr::null_mut()),
+                    0
+                );
+            }
+
+            let mut command = Command::new("/bin/true");
+            configure(&mut command);
+            // SAFETY: the child hook calls only the async-signal-safe raise
+            // operation before exec and captures no parent state.
+            unsafe {
+                command.pre_exec(|| {
+                    libc::raise(libc::SIGTERM);
+                    Ok(())
+                });
+            }
+            let status = command
+                .spawn()
+                .expect("child starts")
+                .wait()
+                .expect("child is waitable");
+            assert_eq!(status.signal(), Some(libc::SIGTERM));
         }
     }
 }
@@ -1203,6 +1726,308 @@ mod hangup_disposition {
     fn unavailable(error: io::Error) -> PlatformError {
         PlatformError::Unavailable {
             capability: Capability::HangupDisposition,
+            reason: error.to_string(),
+        }
+    }
+}
+
+/// Scoped forwarding of the three termination signals supported by foreground
+/// OPAAL execution.
+///
+/// Preparation blocks the signals on the calling thread before installing the
+/// handlers. The runtime activates the guard after the first verified child
+/// joins its owned group, at which point the prior mask is restored. A signal
+/// handled by another thread before activation is retained for that child.
+/// The handler performs only lock-free atomics and POSIX `kill`, which are
+/// async-signal-safe on the two qualified targets.
+#[allow(unsafe_code)]
+mod foreground_signals {
+    use std::io;
+    use std::sync::atomic::{AtomicBool, AtomicI32, AtomicUsize, Ordering};
+
+    use opaal_platform::{Capability, ForegroundSignalGuard, PlatformError, ProcessGroupId};
+
+    const FORWARDED: [libc::c_int; 3] = [libc::SIGHUP, libc::SIGINT, libc::SIGTERM];
+
+    static ACTIVE: AtomicBool = AtomicBool::new(false);
+    static ACTIVE_GROUP: AtomicI32 = AtomicI32::new(0);
+    static FORWARDING_HANDLERS: AtomicUsize = AtomicUsize::new(0);
+    static PENDING_SIGNALS: AtomicUsize = AtomicUsize::new(0);
+
+    pub(super) fn deactivate_group(group: ProcessGroupId) {
+        let Ok(group) = libc::pid_t::try_from(group.get()) else {
+            return;
+        };
+        let _ = ACTIVE_GROUP.compare_exchange(group, 0, Ordering::SeqCst, Ordering::SeqCst);
+        // A handler increments before loading ACTIVE_GROUP. Once this reaches
+        // zero, every handler that could have loaded `group` has completed its
+        // kill call; later handlers observe zero instead. Drain even when a
+        // guard restored its actions just before this owner was released.
+        while FORWARDING_HANDLERS.load(Ordering::SeqCst) != 0 {
+            std::thread::yield_now();
+        }
+    }
+
+    pub(super) struct PosixForegroundSignalGuard {
+        previous: [libc::sigaction; 3],
+        previous_mask: libc::sigset_t,
+        blocked_mask: libc::sigset_t,
+        activated: bool,
+        restored: bool,
+    }
+
+    impl std::fmt::Debug for PosixForegroundSignalGuard {
+        fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter
+                .debug_struct("PosixForegroundSignalGuard")
+                .field("activated", &self.activated)
+                .field("restored", &self.restored)
+                .finish_non_exhaustive()
+        }
+    }
+
+    pub(super) fn prepare() -> Result<PosixForegroundSignalGuard, PlatformError> {
+        if ACTIVE
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            return Err(unavailable(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "another foreground signal guard is already active",
+            )));
+        }
+        PENDING_SIGNALS.store(0, Ordering::SeqCst);
+
+        let blocked = match signal_set() {
+            Ok(blocked) => blocked,
+            Err(error) => {
+                ACTIVE.store(false, Ordering::Release);
+                return Err(error);
+            }
+        };
+        // SAFETY: an all-zero pattern is a valid base for sigset_t, and libc
+        // initializes the complete output before any later read.
+        let mut previous_mask: libc::sigset_t = unsafe { std::mem::zeroed() };
+        // SAFETY: `blocked` and `previous_mask` are live, correctly typed signal
+        // sets. pthread_sigmask changes only the calling thread's mask.
+        let masked = unsafe {
+            libc::pthread_sigmask(libc::SIG_BLOCK, &raw const blocked, &raw mut previous_mask)
+        };
+        if masked != 0 {
+            ACTIVE.store(false, Ordering::Release);
+            return Err(unavailable(io::Error::from_raw_os_error(masked)));
+        }
+
+        // SAFETY: every slot is overwritten by sigaction before it is read.
+        let mut previous: [libc::sigaction; 3] = unsafe { std::mem::zeroed() };
+        // SAFETY: the zero pattern is a valid base and sigemptyset initializes
+        // the mask field before the action is passed to sigaction.
+        let mut action: libc::sigaction = unsafe { std::mem::zeroed() };
+        action.sa_sigaction = forward as *const () as usize;
+        // SAFETY: the pointer targets the live mask field of `action`.
+        if unsafe { libc::sigemptyset(&raw mut action.sa_mask) } == -1 {
+            let _ = restore_mask(&previous_mask);
+            ACTIVE.store(false, Ordering::Release);
+            return Err(unavailable(io::Error::last_os_error()));
+        }
+
+        for index in 0..FORWARDED.len() {
+            // SAFETY: both pointers target live initialized values and the
+            // index is bounded by the arrays being traversed.
+            let installed = unsafe {
+                libc::sigaction(
+                    FORWARDED[index],
+                    &raw const action,
+                    &raw mut previous[index],
+                )
+            };
+            if installed == -1 {
+                let failure = io::Error::last_os_error();
+                undo_actions(&previous, index);
+                let _ = restore_mask(&previous_mask);
+                ACTIVE.store(false, Ordering::Release);
+                return Err(unavailable(failure));
+            }
+        }
+
+        Ok(PosixForegroundSignalGuard {
+            previous,
+            previous_mask,
+            blocked_mask: blocked,
+            activated: false,
+            restored: false,
+        })
+    }
+
+    extern "C" fn forward(signal: libc::c_int) {
+        FORWARDING_HANDLERS.fetch_add(1, Ordering::SeqCst);
+        let bit = match signal {
+            libc::SIGHUP => 1,
+            libc::SIGINT => 2,
+            libc::SIGTERM => 4,
+            _ => 0,
+        };
+        PENDING_SIGNALS.fetch_or(bit, Ordering::SeqCst);
+        let group = ACTIVE_GROUP.load(Ordering::SeqCst);
+        if group > 1 && PENDING_SIGNALS.fetch_and(!bit, Ordering::SeqCst) & bit != 0 {
+            // SAFETY: kill takes only scalar values. The negative target names
+            // the exact active process group and the received signal is one of
+            // the three handlers installed above.
+            unsafe {
+                libc::kill(-group, signal);
+            }
+        }
+        FORWARDING_HANDLERS.fetch_sub(1, Ordering::SeqCst);
+    }
+
+    impl PosixForegroundSignalGuard {
+        fn restore_now(&mut self) -> Result<(), PlatformError> {
+            if self.restored {
+                return Ok(());
+            }
+            self.restored = true;
+
+            // SAFETY: both sets are live. Blocking closes the interval between
+            // clearing the destination group and restoring the old handlers.
+            let masked = unsafe {
+                libc::pthread_sigmask(
+                    libc::SIG_BLOCK,
+                    &raw const self.blocked_mask,
+                    std::ptr::null_mut(),
+                )
+            };
+            let mut first_error = (masked != 0).then(|| io::Error::from_raw_os_error(masked));
+
+            ACTIVE_GROUP.store(0, Ordering::SeqCst);
+            PENDING_SIGNALS.store(0, Ordering::SeqCst);
+            for (previous, signal) in self.previous.iter().zip(FORWARDED) {
+                // SAFETY: each disposition was captured from this exact signal
+                // during preparation and the pointer stays live for the call.
+                if unsafe { libc::sigaction(signal, &raw const *previous, std::ptr::null_mut()) }
+                    == -1
+                    && first_error.is_none()
+                {
+                    first_error = Some(io::Error::last_os_error());
+                }
+            }
+            // Always attempt to restore the caller's complete prior mask.
+            let restored_mask = restore_mask(&self.previous_mask);
+            if first_error.is_none() {
+                first_error = restored_mask.err();
+            }
+            ACTIVE.store(false, Ordering::Release);
+
+            first_error.map_or(Ok(()), |error| Err(unavailable(error)))
+        }
+    }
+
+    impl ForegroundSignalGuard for PosixForegroundSignalGuard {
+        fn forward_to(&mut self, group: ProcessGroupId) -> Result<(), PlatformError> {
+            if self.restored {
+                return Err(unavailable(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "the foreground signal guard was already restored",
+                )));
+            }
+            if self.activated {
+                return Err(unavailable(io::Error::new(
+                    io::ErrorKind::AlreadyExists,
+                    "the foreground signal guard already has a process group",
+                )));
+            }
+            let group = libc::pid_t::try_from(group.get()).map_err(|_| {
+                unavailable(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("process group {group} exceeds the POSIX process identifier range"),
+                ))
+            })?;
+            if group == 1 {
+                return Err(unavailable(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "process group 1 is not addressable as a group",
+                )));
+            }
+
+            ACTIVE_GROUP.store(group, Ordering::SeqCst);
+            let pending = PENDING_SIGNALS.swap(0, Ordering::SeqCst);
+            for (index, signal) in FORWARDED.iter().enumerate() {
+                if pending & (1 << index) != 0 {
+                    // SAFETY: the owned group is still anchored, and the
+                    // pending signal is one of the installed dispositions.
+                    if unsafe { libc::kill(-group, *signal) } == -1 {
+                        let error = io::Error::last_os_error();
+                        ACTIVE_GROUP.store(0, Ordering::SeqCst);
+                        return Err(unavailable(error));
+                    }
+                }
+            }
+            if let Err(error) = restore_mask(&self.previous_mask) {
+                ACTIVE_GROUP.store(0, Ordering::SeqCst);
+                return Err(unavailable(error));
+            }
+            self.activated = true;
+            Ok(())
+        }
+
+        fn restore(&mut self) -> Result<(), PlatformError> {
+            self.restore_now()
+        }
+    }
+
+    impl Drop for PosixForegroundSignalGuard {
+        fn drop(&mut self) {
+            let _ = self.restore_now();
+        }
+    }
+
+    fn signal_set() -> Result<libc::sigset_t, PlatformError> {
+        // SAFETY: the zero pattern is a valid base and sigemptyset initializes
+        // the complete set before it is returned.
+        let mut set: libc::sigset_t = unsafe { std::mem::zeroed() };
+        // SAFETY: the pointer targets the live local signal set.
+        if unsafe { libc::sigemptyset(&raw mut set) } == -1 {
+            return Err(unavailable(io::Error::last_os_error()));
+        }
+        for signal in FORWARDED {
+            // SAFETY: the pointer remains live and `signal` is a valid POSIX
+            // signal constant.
+            if unsafe { libc::sigaddset(&raw mut set, signal) } == -1 {
+                return Err(unavailable(io::Error::last_os_error()));
+            }
+        }
+        Ok(set)
+    }
+
+    fn restore_mask(mask: &libc::sigset_t) -> Result<(), io::Error> {
+        // SAFETY: the pointer targets a mask captured or initialized by libc;
+        // the null output pointer requests no previous-mask snapshot.
+        let restored = unsafe {
+            libc::pthread_sigmask(libc::SIG_SETMASK, &raw const *mask, std::ptr::null_mut())
+        };
+        if restored == 0 {
+            Ok(())
+        } else {
+            Err(io::Error::from_raw_os_error(restored))
+        }
+    }
+
+    fn undo_actions(previous: &[libc::sigaction; 3], installed: usize) {
+        for index in 0..installed {
+            // SAFETY: every restored slot was initialized by a successful
+            // sigaction call earlier in preparation.
+            unsafe {
+                libc::sigaction(
+                    FORWARDED[index],
+                    &raw const previous[index],
+                    std::ptr::null_mut(),
+                );
+            }
+        }
+    }
+
+    fn unavailable(error: io::Error) -> PlatformError {
+        PlatformError::Unavailable {
+            capability: Capability::Signals,
             reason: error.to_string(),
         }
     }

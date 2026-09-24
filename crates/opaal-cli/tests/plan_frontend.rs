@@ -39,7 +39,7 @@ impl ModuleSourceLoader for Sources {
 
 #[test]
 fn valid_opaal_is_refused_before_any_host_capability_can_be_supplied() {
-    let sources = Sources::default().with("/project/main.opaal", "let value = 1\n");
+    let sources = Sources::default().with("/project/main.opaal", "^tool\n");
     let run = inspect_source(Path::new("/project/main.opaal"), &sources);
 
     assert!(!run.is_success());

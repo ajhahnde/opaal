@@ -1,6 +1,6 @@
 # Core commands
 
-OPAAL registers 29 internal command names. The table records the registry's invocation text and carrier contract. `E` means empty input, `B` byte stream, `V` one structured value, and `S` value stream. A command listed here is recognized by analysis and help; its registration does not authorize an effectful source run.
+OPAAL registers 29 internal command names. The table records the registry's invocation text and carrier contract. `E` means empty input, `B` byte stream, `V` one structured value, and `S` value stream. Registration supplies recognition and help, while the evaluation context decides whether a command may run. In 1.1 CLI sessions, `cd`, `pwd`, `help`, and `exit` may run alone; the 16 named transforms may run only in a pipeline containing a caret stage. Other host commands and job controls remain refused.
 
 | Command | Invocation | Input → output | Purpose |
 | --- | --- | --- | --- |

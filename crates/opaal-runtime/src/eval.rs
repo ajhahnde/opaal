@@ -18,8 +18,8 @@ use std::time::Instant as SystemInstant;
 
 use opaal_platform::{
     DescriptorReadError, DescriptorWriteError, DirectoryEntry, DirectoryReadError, DirectoryStream,
-    FileActionError, PipeError, PlatformError, SignalError, SpawnError, WaitError,
-    WorkingDirectoryError,
+    FileActionError, PipeError, PlatformError, ProcessGroupError, SignalError, SpawnError,
+    WaitError, WorkingDirectoryError,
 };
 use opaal_syntax::{
     AndChain, Assignment, BinaryOperator, Block, CallExpression, Closure, CommandItemKind,
@@ -41,6 +41,7 @@ use crate::operational::source::{
     SourceActionOutcome, SourceOperationalHost, contains_control_carrier,
 };
 use crate::outcome::{Refusal, RefusalReason};
+use crate::resolve::PathSearchLimitKind;
 use crate::{
     BindingMutability, Callable, Environment, NativePath, NominalRecordValue, Record, ScopeError,
     ScopeStack, Status, Value, VariantValue,
@@ -424,10 +425,18 @@ pub enum RuntimeErrorKind {
     DuplicateParameter { name: String },
     /// A construct requiring the execution engine that does not exist yet.
     ExecutionUnsupported,
+    /// An effect refused by the selected evaluation policy before host access.
+    PolicyRefused {
+        reason: RefusalReason,
+        operation: &'static str,
+    },
     /// Automatic startup config reached an operation outside its capability set.
     RestrictedStartup { capability: RestrictedCapability },
     /// Evaluation charged more steps than its resource budget allowed.
     ResourceBudgetExceeded,
+    /// A standalone run or interactive submission reserved more external child
+    /// starts than its deterministic ceiling.
+    ChildStartLimitExceeded { limit: usize },
     /// An operation deliberately unavailable through the selected boundary.
     Unsupported { feature: &'static str },
     /// An integer literal outside the signed 64-bit range.
@@ -460,9 +469,19 @@ pub enum RuntimeErrorKind {
     /// An `export` produced a native environment value containing NUL, which
     /// no child-process environment can represent.
     EnvironmentValueContainsNul { name: String },
+    /// An embedding-supplied native environment contains a NUL value. The
+    /// inherited name is deliberately not retained in the diagnostic.
+    EnvironmentSnapshotContainsNul,
     /// A command name that resolved to neither an internal command nor an
     /// executable on `PATH`. `name` is the searched native command name.
     CommandNotFound { name: OsString },
+    /// Native `PATH` exceeded a deterministic executable-search ceiling.
+    PathSearchLimitExceeded {
+        /// The exhausted resource dimension.
+        kind: PathSearchLimitKind,
+        /// The exact inclusive ceiling.
+        limit: usize,
+    },
     /// A bare command spelling is reserved against implicit external fallback.
     ReservedCommand(Box<ReservedCommandDetails>),
     /// A redirection descriptor number whose decimal spelling does not fit in a
@@ -575,6 +594,18 @@ pub enum RuntimeErrorKind {
     /// them without the terminal would send every keyboard interrupt to the
     /// shell instead of to the job.
     ForegroundTerminal(PlatformError),
+    /// The host could not prepare, activate, or restore scoped foreground
+    /// signal forwarding.
+    ForegroundSignal(PlatformError),
+    /// Foreground startup could not verify the exact process group owned by
+    /// the new pipeline leader and every later member.
+    ForegroundProcessGroupUnavailable,
+    /// The host could not create or release stable foreground process-group
+    /// ownership.
+    ForegroundProcessGroup(ProcessGroupError),
+    /// Forced cleanup after foreground startup or observation did not complete
+    /// without an additional host failure.
+    ProcessCleanup { message: String },
     /// Background startup could not establish and verify one process group for
     /// every pipeline member.
     BackgroundProcessGroupUnavailable,
@@ -659,6 +690,7 @@ impl RuntimeErrorKind {
             | Self::SpreadElementNotWordEligible { .. }
             | Self::ExportValueNotEligible { .. }
             | Self::EnvironmentValueContainsNul { .. }
+            | Self::EnvironmentSnapshotContainsNul
             | Self::ArgumentContainsNul
             | Self::CarrierMismatch(_)
             | Self::MergedEdgeNotByteStream { .. }
@@ -677,7 +709,9 @@ impl RuntimeErrorKind {
             | Self::MissingHome
             | Self::InvalidExitCode => ErrorCategory::Command,
             Self::ResourceBudgetExceeded
+            | Self::ChildStartLimitExceeded { .. }
             | Self::GlobLimitExceeded { .. }
+            | Self::PathSearchLimitExceeded { .. }
             | Self::CaptureLimitExceeded { .. }
             | Self::BackgroundIdentityExhausted => ErrorCategory::Resource,
             Self::DirectoryRead(_)
@@ -691,7 +725,10 @@ impl RuntimeErrorKind {
             | Self::RedirectionSetup(_) => ErrorCategory::Io,
             Self::ProcessSpawn(_)
             | Self::ProcessWait(_)
+            | Self::ProcessCleanup { .. }
             | Self::RepeatedStop { .. }
+            | Self::ForegroundProcessGroupUnavailable
+            | Self::ForegroundProcessGroup(_)
             | Self::BackgroundProcessGroupUnavailable
             | Self::InvalidProcessIdentity => ErrorCategory::Process,
             Self::JobControlUnavailable { .. }
@@ -707,12 +744,14 @@ impl RuntimeErrorKind {
             Self::Presentation(_)
             | Self::TerminalPresentation(_)
             | Self::ShellExecutable(_)
+            | Self::ForegroundSignal(_)
             | Self::ForegroundTerminal(_) => ErrorCategory::Platform,
             Self::GlobPattern { .. }
             | Self::CaptureInvalidUtf8 { .. }
             | Self::StreamCancelled { .. }
             | Self::RestrictedStartup { .. }
             | Self::ExecutionUnsupported
+            | Self::PolicyRefused { .. }
             | Self::Unsupported { .. }
             | Self::ExecutionCapsule { .. }
             | Self::DuplicateParameter { .. }
@@ -805,6 +844,12 @@ impl fmt::Display for RuntimeErrorKind {
             Self::ExecutionUnsupported => {
                 formatter.write_str("command execution is not available in pure evaluation")
             }
+            Self::PolicyRefused { reason, operation } => {
+                write!(
+                    formatter,
+                    "{reason} operation `{operation}` was refused before execution"
+                )
+            }
             Self::RestrictedStartup { capability } => write!(
                 formatter,
                 "{} is not available during automatic startup",
@@ -813,6 +858,10 @@ impl fmt::Display for RuntimeErrorKind {
             Self::ResourceBudgetExceeded => {
                 formatter.write_str("evaluation exceeded its resource budget")
             }
+            Self::ChildStartLimitExceeded { limit } => write!(
+                formatter,
+                "external child starts exceeded the per-submission limit of {limit}"
+            ),
             Self::Unsupported { feature } => {
                 write!(formatter, "{feature} is not supported by this boundary")
             }
@@ -852,6 +901,9 @@ impl fmt::Display for RuntimeErrorKind {
             Self::EnvironmentValueContainsNul { name } => {
                 write!(formatter, "environment entry {name:?} contains a NUL byte")
             }
+            Self::EnvironmentSnapshotContainsNul => {
+                formatter.write_str("native environment snapshot contains a NUL byte")
+            }
             Self::CommandNotFound { name } => {
                 write!(
                     formatter,
@@ -859,6 +911,11 @@ impl fmt::Display for RuntimeErrorKind {
                     NativePath::new(name.clone())
                 )
             }
+            Self::PathSearchLimitExceeded { kind, limit } => write!(
+                formatter,
+                "PATH exceeded the {} limit of {limit}",
+                kind.name()
+            ),
             Self::ReservedCommand(details) => {
                 write!(
                     formatter,
@@ -1013,6 +1070,21 @@ impl fmt::Display for RuntimeErrorKind {
             }
             Self::ForegroundTerminal(error) => {
                 write!(formatter, "terminal handover to the job failed: {error}")
+            }
+            Self::ForegroundSignal(error) => {
+                write!(formatter, "foreground signal forwarding failed: {error}")
+            }
+            Self::ForegroundProcessGroupUnavailable => {
+                formatter.write_str("foreground execution requires one verified process group")
+            }
+            Self::ForegroundProcessGroup(error) => {
+                write!(
+                    formatter,
+                    "foreground process-group ownership failed: {error}"
+                )
+            }
+            Self::ProcessCleanup { message } => {
+                write!(formatter, "foreground process cleanup failed: {message}")
             }
             Self::BackgroundProcessGroupUnavailable => {
                 formatter.write_str("background execution requires one established process group")
@@ -1513,7 +1585,26 @@ pub(crate) enum EvaluationPolicy {
     General,
     Startup,
     PureOpaal,
+    AmbientProcess,
     ControlledAction,
+}
+
+impl EvaluationPolicy {
+    pub(crate) const fn permits_environment_mutation(self) -> bool {
+        !matches!(self, Self::PureOpaal)
+    }
+
+    pub(crate) const fn permits_environment_read(self) -> bool {
+        !matches!(self, Self::PureOpaal | Self::AmbientProcess)
+    }
+
+    pub(crate) const fn permits_filesystem_read(self) -> bool {
+        !matches!(self, Self::PureOpaal | Self::AmbientProcess)
+    }
+
+    pub(crate) const fn permits_background_processes(self) -> bool {
+        !matches!(self, Self::PureOpaal | Self::AmbientProcess)
+    }
 }
 
 impl EvalLimits {
@@ -1547,6 +1638,19 @@ impl EvalLimits {
         }
     }
 
+    /// Limits for the crate-private foreground ambient-process policy seam.
+    ///
+    /// Only the runtime's explicit native snapshot entry points select it;
+    /// callers cannot request it through the public limits constructors.
+    #[must_use]
+    pub(crate) const fn ambient_process(cancel: CancellationToken, budget: ResourceBudget) -> Self {
+        Self {
+            cancel,
+            budget,
+            policy: EvaluationPolicy::AmbientProcess,
+        }
+    }
+
     /// Limits for invoking one already checked action through the accepted-plan
     /// boundary. Project initialization still uses [`Self::pure_opaal`].
     #[must_use]
@@ -1560,6 +1664,10 @@ impl EvalLimits {
 
     pub(crate) const fn resource_budget(&self) -> ResourceBudget {
         self.budget
+    }
+
+    pub(crate) const fn evaluation_policy(&self) -> EvaluationPolicy {
+        self.policy
     }
 }
 
@@ -1801,6 +1909,13 @@ impl EvaluationHost for PureEvaluationHost<'_> {
         context: EvaluationContext,
     ) -> Result<Status, Abort> {
         let _ = (&context.binding_types, &context.cancel);
+        if self.policy == EvaluationPolicy::AmbientProcess {
+            return Err(Abort::Refused(Refusal::new(
+                RefusalReason::Unsupported,
+                "process execution",
+                chain.span(),
+            )));
+        }
         Err(Abort::Error(
             // opaal-foundation-boundary(embedding-refusal): Pure evaluator entry points cannot execute jobs.
             RuntimeError::new(RuntimeErrorKind::ExecutionUnsupported, chain.span())
@@ -2132,8 +2247,9 @@ pub(crate) fn apply_callable_with_budget(
         return match abort {
             Abort::Cancelled(cancellation) => Ok(Completion::Cancelled(cancellation)),
             Abort::Error(error) => Err(error),
-            Abort::Refused(_) | Abort::Exit(_) | Abort::Stopped(_) | Abort::Output(_) => {
-                unreachable!("the pure evaluation host cannot produce session outcomes")
+            Abort::Refused(refusal) => Err(policy_refusal_error(refusal)),
+            Abort::Exit(_) | Abort::Stopped(_) | Abort::Output(_) => {
+                unreachable!("callable evaluation cannot produce session control outcomes")
             }
         };
     }
@@ -2145,8 +2261,9 @@ pub(crate) fn apply_callable_with_budget(
         Ok(value) => Ok(Completion::Value(value)),
         Err(Abort::Cancelled(cancellation)) => Ok(Completion::Cancelled(cancellation)),
         Err(Abort::Error(error)) => Err(error),
-        Err(Abort::Refused(_) | Abort::Exit(_) | Abort::Stopped(_) | Abort::Output(_)) => {
-            unreachable!("the pure evaluation host cannot produce session outcomes")
+        Err(Abort::Refused(refusal)) => Err(policy_refusal_error(refusal)),
+        Err(Abort::Exit(_) | Abort::Stopped(_) | Abort::Output(_)) => {
+            unreachable!("callable evaluation cannot produce session control outcomes")
         }
     }
 }
@@ -2302,7 +2419,29 @@ pub(crate) fn expand_word_with_context(
     environment: &Environment,
     binding_types: Arc<RuntimeBindingTypes>,
 ) -> Result<ExpandedWord, RuntimeError> {
-    let limits = EvalLimits::default();
+    expand_word_with_context_and_policy(
+        word,
+        source,
+        scope,
+        environment,
+        binding_types,
+        EvalLimits::default().evaluation_policy(),
+    )
+}
+
+pub(crate) fn expand_word_with_context_and_policy(
+    word: &Word,
+    source: &SourceFile,
+    scope: &mut ScopeStack,
+    environment: &Environment,
+    binding_types: Arc<RuntimeBindingTypes>,
+    policy: EvaluationPolicy,
+) -> Result<ExpandedWord, RuntimeError> {
+    let limits = EvalLimits {
+        cancel: CancellationToken::never(),
+        budget: ResourceBudget::unlimited(),
+        policy,
+    };
     let mut env = environment.clone();
     let mut host = PureEvaluationHost {
         environment: &mut env,
@@ -2323,8 +2462,9 @@ pub(crate) fn expand_word_with_context(
         Err(Abort::Cancelled(_)) => {
             unreachable!("a never-cancelling token cannot produce a cancellation")
         }
-        Err(Abort::Refused(_) | Abort::Exit(_) | Abort::Stopped(_) | Abort::Output(_)) => {
-            unreachable!("the pure evaluation host cannot produce session outcomes")
+        Err(Abort::Refused(refusal)) => Err(policy_refusal_error(refusal)),
+        Err(Abort::Exit(_) | Abort::Stopped(_) | Abort::Output(_)) => {
+            unreachable!("word expansion cannot produce session control outcomes")
         }
     }
 }
@@ -2361,7 +2501,31 @@ pub(crate) fn expand_spread_with_context(
     environment: &Environment,
     binding_types: Arc<RuntimeBindingTypes>,
 ) -> Result<Vec<ExpandedWord>, RuntimeError> {
-    let limits = EvalLimits::default();
+    expand_spread_with_context_and_policy(
+        expression,
+        item_span,
+        source,
+        scope,
+        environment,
+        binding_types,
+        EvalLimits::default().evaluation_policy(),
+    )
+}
+
+pub(crate) fn expand_spread_with_context_and_policy(
+    expression: &Expression,
+    item_span: Span,
+    source: &SourceFile,
+    scope: &mut ScopeStack,
+    environment: &Environment,
+    binding_types: Arc<RuntimeBindingTypes>,
+    policy: EvaluationPolicy,
+) -> Result<Vec<ExpandedWord>, RuntimeError> {
+    let limits = EvalLimits {
+        cancel: CancellationToken::never(),
+        budget: ResourceBudget::unlimited(),
+        policy,
+    };
     let mut env = environment.clone();
     let mut host = PureEvaluationHost {
         environment: &mut env,
@@ -2382,10 +2546,21 @@ pub(crate) fn expand_spread_with_context(
         Err(Abort::Cancelled(_)) => {
             unreachable!("a never-cancelling token cannot produce a cancellation")
         }
-        Err(Abort::Refused(_) | Abort::Exit(_) | Abort::Stopped(_) | Abort::Output(_)) => {
-            unreachable!("the pure evaluation host cannot produce session outcomes")
+        Err(Abort::Refused(refusal)) => Err(policy_refusal_error(refusal)),
+        Err(Abort::Exit(_) | Abort::Stopped(_) | Abort::Output(_)) => {
+            unreachable!("spread expansion cannot produce session control outcomes")
         }
     }
+}
+
+fn policy_refusal_error(refusal: Refusal) -> RuntimeError {
+    RuntimeError::new(
+        RuntimeErrorKind::PolicyRefused {
+            reason: refusal.reason(),
+            operation: refusal.operation(),
+        },
+        refusal.span(),
+    )
 }
 
 /// Encodes a word-eligible scalar with its canonical word encoding, or returns
@@ -2664,7 +2839,7 @@ impl Evaluator<'_, '_> {
         environment: &EnvironmentStatement,
         scope: &mut ScopeStack,
     ) -> Eval<()> {
-        if self.host.policy() == EvaluationPolicy::PureOpaal {
+        if !self.host.policy().permits_environment_mutation() {
             let span = match environment {
                 EnvironmentStatement::Export { name, value: _ }
                 | EnvironmentStatement::Unset { name } => name.span(),
@@ -4163,6 +4338,13 @@ impl Evaluator<'_, '_> {
                 .binding_types
                 .qualified_operational_call(self.source.id(), &segments)
             {
+                if self.host.policy() == EvaluationPolicy::AmbientProcess {
+                    return Err(Abort::Refused(Refusal::new(
+                        RefusalReason::Unsupported,
+                        "operational standard module",
+                        span,
+                    )));
+                }
                 let arguments = call
                     .arguments
                     .iter()
@@ -4239,7 +4421,7 @@ impl Evaluator<'_, '_> {
                 let argument = self.expression(&call.arguments[0], scope)?;
                 match intrinsic {
                     ExpressionIntrinsic::Env => {
-                        if self.host.policy() == EvaluationPolicy::PureOpaal {
+                        if !self.host.policy().permits_environment_read() {
                             return Err(Abort::Refused(Refusal::new(
                                 RefusalReason::Unsupported,
                                 "environment read",
@@ -4255,7 +4437,11 @@ impl Evaluator<'_, '_> {
                                 call.arguments[0].span(),
                             ));
                         };
-                        let value = self.host.environment().get(&name).map(OsStr::to_os_string);
+                        let value = self
+                            .host
+                            .environment()
+                            .get(name.as_ref())
+                            .map(OsStr::to_os_string);
                         return value.map_or(Ok(Value::Null), |value| {
                             value.into_string().map(Value::string).map_err(|_| {
                                 self.error(
@@ -4487,7 +4673,7 @@ impl Evaluator<'_, '_> {
     }
 
     fn glob(&mut self, value: &Value, span: Span) -> Eval<Value> {
-        if self.host.policy() == EvaluationPolicy::PureOpaal {
+        if !self.host.policy().permits_filesystem_read() {
             return Err(Abort::Refused(Refusal::new(
                 RefusalReason::Unsupported,
                 "filesystem read",
@@ -5574,6 +5760,71 @@ mod tests {
         environment: Environment,
     }
 
+    #[derive(Default)]
+    struct AmbientRouteCalls {
+        directory: AtomicUsize,
+        operational: AtomicUsize,
+        action: AtomicUsize,
+    }
+
+    struct AmbientRouteHost {
+        environment: Environment,
+        calls: Arc<AmbientRouteCalls>,
+    }
+
+    impl EvaluationHost for AmbientRouteHost {
+        fn environment(&mut self) -> &mut Environment {
+            &mut self.environment
+        }
+
+        fn current_status(&self) -> Option<&Status> {
+            None
+        }
+
+        fn policy(&self) -> EvaluationPolicy {
+            EvaluationPolicy::AmbientProcess
+        }
+
+        fn invoke_operational(
+            &mut self,
+            _module: &ModuleId,
+            _operation: &str,
+            _arguments: Vec<Value>,
+        ) -> Option<Result<Value, OperationalModuleError>> {
+            self.calls.operational.fetch_add(1, Ordering::Relaxed);
+            None
+        }
+
+        fn action_start(
+            &mut self,
+            _action: &ActionId,
+        ) -> Option<Result<(), OperationalModuleError>> {
+            self.calls.action.fetch_add(1, Ordering::Relaxed);
+            None
+        }
+
+        fn read_directory(
+            &mut self,
+            _path: &Path,
+        ) -> Result<Box<dyn DirectoryStream>, RuntimeErrorKind> {
+            self.calls.directory.fetch_add(1, Ordering::Relaxed);
+            Err(RuntimeErrorKind::ExecutionUnsupported)
+        }
+
+        fn execute_chain(
+            &mut self,
+            chain: &ConditionalChain,
+            _scope: &mut ScopeStack,
+            _context: EvaluationContext,
+        ) -> Result<Status, Abort> {
+            Err(Abort::Refused(Refusal::new(
+                RefusalReason::Unsupported,
+                "process execution",
+                chain.span(),
+            )))
+        }
+    }
+
     impl EvaluationHost for StoppedHost {
         fn environment(&mut self) -> &mut Environment {
             &mut self.environment
@@ -5649,6 +5900,149 @@ mod tests {
             Arc::new(RuntimeBindingTypes::default()),
             &mut host,
         )
+    }
+
+    fn evaluate_ambient_routes(
+        text: &str,
+    ) -> (
+        Result<HostedEvaluationOutcome, HostedEvaluationFailure>,
+        Arc<AmbientRouteCalls>,
+    ) {
+        let source = Arc::new(SourceFile::new(
+            SourceId::new(1),
+            "ambient-routes.opaal",
+            text,
+        ));
+        let ParseOutcome::Complete(script) = parse_opaal(&source) else {
+            panic!("ambient route fixture must parse: {text:?}");
+        };
+        let binding_types = RuntimeBindingTypes::analyze_repl_source(
+            &source,
+            &script,
+            &ModuleAliasRegistry::default(),
+        )
+        .unwrap_or_else(|diagnostic| panic!("ambient route fixture must analyze: {diagnostic:?}"));
+        let calls = Arc::new(AmbientRouteCalls::default());
+        let mut host = AmbientRouteHost {
+            environment: Environment::new(),
+            calls: Arc::clone(&calls),
+        };
+        let outcome = evaluate_with_host(
+            &script,
+            source,
+            &mut ScopeStack::new(),
+            &EvalLimits::ambient_process(CancellationToken::never(), ResourceBudget::unlimited()),
+            Arc::new(binding_types),
+            &mut host,
+        );
+        (outcome, calls)
+    }
+
+    #[test]
+    fn ambient_process_policy_propagates_into_lazy_transform_closures() {
+        let source = SourceFile::new(
+            SourceId::new(1),
+            "ambient-closure.opaal",
+            "{|value| env('OPAAL_POLICY_SECRET')}",
+        );
+        let ParseOutcome::Complete(script) = parse_opaal(&source) else {
+            panic!("ambient closure fixture must parse");
+        };
+        let callable = evaluate(&script, &source, &mut ScopeStack::new())
+            .expect("closure construction is effect free");
+        let mut environment = Environment::from_snapshot([("OPAAL_POLICY_SECRET", "not-readable")]);
+        let error = apply_callable(
+            &callable,
+            vec![Value::Null],
+            &source,
+            script.span(),
+            &mut environment,
+            &EvalLimits::ambient_process(CancellationToken::never(), ResourceBudget::unlimited()),
+        )
+        .expect_err("an ambient transform closure must not read the environment");
+
+        assert_eq!(
+            error.kind(),
+            &RuntimeErrorKind::PolicyRefused {
+                reason: RefusalReason::Unsupported,
+                operation: "environment read",
+            }
+        );
+    }
+
+    #[test]
+    fn ambient_process_policy_structurally_refuses_commands_in_lazy_transform_closures() {
+        let source = SourceFile::new(
+            SourceId::new(1),
+            "ambient-command-closure.opaal",
+            "{|value| open file}",
+        );
+        let ParseOutcome::Complete(script) = parse_opaal(&source) else {
+            panic!("ambient command closure fixture must parse");
+        };
+        let callable = evaluate(&script, &source, &mut ScopeStack::new())
+            .expect("closure construction is effect free");
+        let error = apply_callable(
+            &callable,
+            vec![Value::Null],
+            &source,
+            script.span(),
+            &mut Environment::new(),
+            &EvalLimits::ambient_process(CancellationToken::never(), ResourceBudget::unlimited()),
+        )
+        .expect_err("an ambient transform closure must refuse nested commands");
+
+        assert_eq!(
+            error.kind(),
+            &RuntimeErrorKind::PolicyRefused {
+                reason: RefusalReason::Unsupported,
+                operation: "process execution",
+            }
+        );
+    }
+
+    #[test]
+    fn ambient_process_policy_refuses_nested_host_routes_before_their_boundaries() {
+        for (source, operation) in [
+            (
+                "let read = {|value| glob('*')}\nread(null)\n",
+                "filesystem read",
+            ),
+            (
+                "import std::time as time\nlet run = {|value| time::wall_now()}\nrun(null)\n",
+                "operational standard module",
+            ),
+            (
+                "action effect() -> String effects { clock.wall; } { return 'done' }\nlet run = {|value| effect()}\nrun(null)\n",
+                "effectful action execution",
+            ),
+        ] {
+            let (outcome, calls) = evaluate_ambient_routes(source);
+            assert!(
+                matches!(
+                    outcome,
+                    Ok(HostedEvaluationOutcome::Refused(refusal))
+                        if refusal.reason() == RefusalReason::Unsupported
+                            && refusal.operation() == operation
+                ),
+                "unexpected outcome for {source:?}",
+            );
+            assert_eq!(
+                calls.directory.load(Ordering::Relaxed),
+                0,
+                "{source:?} reached directory access"
+            );
+            assert_eq!(
+                calls.operational.load(Ordering::Relaxed),
+                0,
+                "{source:?} reached an operational adapter"
+            );
+            assert_eq!(
+                calls.action.load(Ordering::Relaxed),
+                0,
+                "{source:?} reached action execution"
+            );
+        }
     }
 
     #[test]

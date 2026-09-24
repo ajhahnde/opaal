@@ -129,10 +129,24 @@ fn directive_free_imports_run_silently() {
 }
 
 #[test]
-fn effectful_source_is_refused_before_process_access() {
-    let temp = TempDir::new("effect-refusal");
-    let marker = temp.0.join("must-not-exist");
+fn foreground_external_source_runs() {
+    let temp = TempDir::new("foreground-external");
+    let marker = temp.0.join("created");
     let source = format!("^touch '{}'\n", marker.display());
+    let script = temp.script("main.opaal", &source);
+    let output = run(&script, &[]);
+
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert!(output.stdout.is_empty());
+    assert!(output.stderr.is_empty());
+    assert!(marker.exists());
+}
+
+#[test]
+fn background_external_source_is_refused_before_process_access() {
+    let temp = TempDir::new("background-refusal");
+    let marker = temp.0.join("must-not-exist");
+    let source = format!("^touch '{}' &\n", marker.display());
     let script = temp.script("main.opaal", &source);
     let output = run(&script, &[]);
 

@@ -28,6 +28,7 @@ use rustix::termios::{Winsize, tcsetwinsize};
 
 const FIXTURE: &str = env!("CARGO_BIN_EXE_opaal-terminal-editor-fixture");
 const OPAAL: &str = env!("CARGO_BIN_EXE_opaal");
+const DIRECT_PROBE: &str = env!("CARGO_BIN_EXE_opaal-e2e-direct-probe-fixture");
 const TIMEOUT: Duration = Duration::from_secs(10);
 static UNIQUE: AtomicU32 = AtomicU32::new(0);
 
@@ -395,6 +396,32 @@ fn interactive_project_spelling_is_a_language_error_not_a_project_command() {
     pty.await_prompt_after("error[RUN001]");
     pty.send(b"\x04");
     assert_eq!(pty.wait_exit(), 0);
+}
+
+#[test]
+fn interactive_foreground_program_runs_and_background_stays_refused() {
+    let work = unique_dir("direct-program");
+    std::os::unix::fs::symlink(DIRECT_PROBE, work.join("opaal-direct-probe"))
+        .expect("put direct probe on PATH");
+    let path = work.to_str().expect("test work path is UTF-8");
+    let mut pty = Pty::spawn_with_env(
+        OPAAL,
+        &[("PATH", path), ("OPAAL_GOLDEN_VALUE", "interactive-golden")],
+    );
+    pty.wait_for(">> ");
+    pty.send(b"^opaal-direct-probe env OPAAL_GOLDEN_VALUE\r");
+    pty.wait_for("interactive-golden");
+    pty.await_prompt_after("interactive-golden");
+
+    let marker = work.join("should-not-exist");
+    let source = format!("^opaal-direct-probe mark {} &\r", marker.display());
+    pty.send(source.as_bytes());
+    let refusal = pty.wait_for("refused");
+    assert!(!marker.exists(), "background probe must not start");
+    pty.await_prompt_after("refused");
+    assert!(refusal.contains("refused"));
+    exit_cleanly(&mut pty);
+    fs::remove_dir_all(work).expect("remove owned direct-program work directory");
 }
 
 /// Leave the session through the fixture's own exit path.

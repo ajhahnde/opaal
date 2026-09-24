@@ -6,4 +6,10 @@ Project control TOML uses schema version 1. Workflow artifacts use the closed id
 
 A source program and a Rust embedding client have different compatibility questions: [embedding compatibility](embedding/compatibility.md) records that Rust API shape is not promised stable for OPAAL 1.0.
 
-This page describes the 1.0 contract. A build's version string and any release artifact remain separate evidence of what has actually been published.
+OPAAL 1.1 keeps the same implicit source identity and artifact schemas. Its
+versioned change is that an explicit foreground `^program` in a standalone or
+interactive CLI session executes instead of receiving the 1.0 ordinary-effect
+refusal. Users who relied on that refusal should pin 1.0 or remove the caret
+invocation. [OPAAL 1.1](../specification/1.1.md) defines the narrow grant and
+its limits. A build's version string and any release artifact remain separate
+evidence of what has actually been published.

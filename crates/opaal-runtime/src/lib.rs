@@ -43,7 +43,10 @@ pub mod structured;
 mod value;
 pub mod workflow;
 
-pub use environment::Environment;
+pub use environment::{
+    Environment, EnvironmentSnapshotError, HostEnvironmentLimitKind, HostEnvironmentLimits,
+    InvalidEnvironmentComponent, NativeSessionSnapshot, NativeSessionSnapshotError,
+};
 pub use scope::*;
 pub use value::*;
 

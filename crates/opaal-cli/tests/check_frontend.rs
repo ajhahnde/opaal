@@ -99,6 +99,27 @@ fn a_clean_program_is_silent_with_only_module_filesystem_capabilities() {
 }
 
 #[test]
+fn explicit_external_programs_are_checked_with_only_module_filesystem_capabilities() {
+    let filesystem = FakeFilesystem::default()
+        .resolves("/project/main.opaal", "/project/main.opaal")
+        .contains("/project/main.opaal", "^tool\n");
+
+    let run = check_source(
+        &CheckRequest::new(PathBuf::from("/project/main.opaal")),
+        &filesystem,
+    );
+
+    assert!(run.is_success(), "{:?}", run.rendered_issues());
+    assert_eq!(
+        filesystem.calls(),
+        vec![
+            Call::Canonicalize(PathBuf::from("/project/main.opaal")),
+            Call::Load(PathBuf::from("/project/main.opaal")),
+        ]
+    );
+}
+
+#[test]
 fn path_qualifies_unspanned_root_resolution_and_source_failures() {
     let unresolved = FakeFilesystem::default().rejects_path("missing.opaal", "permission denied");
     let run = check_source(

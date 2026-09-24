@@ -12,7 +12,7 @@ publish.workspace = true
 opaal-platform = { path = "../opaal-platform" }
 libc = "0.2"
 httparse = "=1.10.1"
-rustix = { version = "=1.1.5", features = ["fs"] }
+rustix = { version = "=1.1.5", features = ["fs", "pty"] }
 rustls = { version = "=0.23.45", default-features = false, features = ["std", "ring", "tls12"] }
 
 [[bin]]
@@ -25,6 +25,13 @@ doc = false
 [[bin]]
 name = "opaal-signal-guard-fixture"
 path = "tests/fixtures/signal_guard.rs"
+test = false
+bench = false
+doc = false
+
+[[bin]]
+name = "opaal-foreground-signal-fixture"
+path = "tests/fixtures/foreground_signal.rs"
 test = false
 bench = false
 doc = false

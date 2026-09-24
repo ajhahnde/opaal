@@ -382,6 +382,16 @@ def source_problems(root: Path, *, run: Run = run_command) -> list[str]:
             ci,
         ):
             problems.append("CI does not pin the operational-core Apple-silicon host")
+        for host in ("linux", "macos"):
+            job = re.search(
+                rf"(?ms)^  operational-core-{host}:\n(.*?)(?=^  [\w-]+:|\Z)",
+                ci,
+            )
+            if job is None or not re.search(
+                r"(?m)^\s+run: cargo test --workspace --locked --no-fail-fast$",
+                job.group(1),
+            ):
+                problems.append(f"CI does not test the complete workspace on {host}")
         if not re.search(
             r"(?m)^\s*run: python3 benchmarks/run\.py --profile qualification\s*$",
             ci,

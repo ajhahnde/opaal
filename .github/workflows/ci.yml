@@ -118,6 +118,9 @@ jobs:
       - name: Build the optimized non-publishing candidate
         run: cargo build --release --locked -p opaal-cli --bin opaal
 
+      - name: Test the complete workspace on Linux
+        run: cargo test --workspace --locked --no-fail-fast
+
       - name: Qualify the complete Linux workflow
         run: python3 ci/qualify_operational_core.py --profile qualification
 
@@ -140,6 +143,9 @@ jobs:
 
       - name: Build the optimized non-publishing candidate
         run: cargo build --release --locked -p opaal-cli --bin opaal
+
+      - name: Test the complete workspace on macOS
+        run: cargo test --workspace --locked --no-fail-fast
 
       - name: Qualify the macOS process boundary
         run: python3 ci/qualify_operational_core.py --profile qualification

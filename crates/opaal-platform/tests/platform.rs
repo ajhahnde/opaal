@@ -8,9 +8,10 @@ use opaal_platform::{
     Capabilities, Capability, ChildDescriptor, ChildProcess, DescriptorEndpoint,
     DescriptorReadError, DirectoryEntry, DirectoryEntryKind, DirectoryReadError,
     DirectoryReadRequest, FAKE_STOP_SIGNAL, FakeChild, FakePlatform, FileActionError, FileOpenMode,
-    FileOpenRequest, JobControlSignalGuard, JobSignal, NoopJobControlSignalGuard, PipeEndpoints,
-    PipeError, Platform, PlatformError, ProcessGroup, ProcessGroupId, ProcessStatus,
-    ProcessTransition, RecordingPlatform, SignalError, SpawnError, SpawnRequest, SpawnRequestError,
+    FileOpenRequest, ForegroundSignalGuard, JobControlSignalGuard, JobSignal,
+    NoopForegroundSignalGuard, NoopJobControlSignalGuard, PipeEndpoints, PipeError, Platform,
+    PlatformError, ProcessGroup, ProcessGroupId, ProcessStatus, ProcessTransition,
+    RecordingPlatform, SignalError, SpawnError, SpawnRequest, SpawnRequestError,
     StandardDirectoryEnvironment, WorkingDirectoryError, WorkingDirectoryRequest,
 };
 
@@ -852,6 +853,18 @@ fn installing_job_control_signals_needs_the_signals_capability() {
 }
 
 #[test]
+fn preparing_foreground_signals_needs_the_signals_capability() {
+    let platform = FakePlatform::new(Capabilities::full_without(Capability::Signals));
+
+    assert!(matches!(
+        platform.prepare_foreground_signals(),
+        Err(PlatformError::Unsupported {
+            capability: Capability::Signals,
+        }),
+    ));
+}
+
+#[test]
 fn a_recording_platform_reports_every_group_signal_in_call_order() {
     let platform = RecordingPlatform::new(FakePlatform::full());
     let log = platform.signal_log();
@@ -894,6 +907,16 @@ fn a_job_control_signal_guard_restores_once_however_it_is_released() {
     assert_eq!(guard.restore(), Ok(()));
     // Restoration is idempotent, so an explicit call followed by the drop is
     // well defined rather than a double restore.
+    assert_eq!(guard.restore(), Ok(()));
+}
+
+#[test]
+fn a_noop_foreground_signal_guard_activates_and_restores_idempotently() {
+    let group = ProcessGroupId::new(31).expect("the group is usable");
+    let mut guard = NoopForegroundSignalGuard;
+
+    assert_eq!(guard.forward_to(group), Ok(()));
+    assert_eq!(guard.restore(), Ok(()));
     assert_eq!(guard.restore(), Ok(()));
 }
 

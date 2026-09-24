@@ -1,6 +1,11 @@
 # CLI
 
-`opaal` without arguments starts the interactive client when attached to a terminal. `opaal SCRIPT [ARGUMENT]...` evaluates one explicit `.opaal` root; later UTF-8 operands belong to that script, including option-like values. Successful non-interactive pure evaluation is silent. Use `opaal --help` and a subcommand's `--help` for the parser's current usage text.
+`opaal` without arguments starts the interactive client. `opaal SCRIPT
+[ARGUMENT]...` evaluates one explicit `.opaal` root; later UTF-8 operands
+belong to that script, including option-like values. In OPAAL 1.1, both routes
+can run explicit foreground `^program` stages. Pure non-interactive evaluation
+is silent, while an external child writes its own stdout and stderr. Use
+`opaal --help` and a subcommand's `--help` for current usage text.
 
 The CLI reports these usage forms:
 
@@ -41,4 +46,14 @@ opaal format --help
 
 Project check and plan accept repeated `--input NAME=VALUE` or `--input-file NAME=PATH` bindings. The selected environment chooses authority and tool lock. `opaal plan [--] SOURCE` remains a host-free `PLAN004` refusal, not a source planning route. A source file never selects a project implicitly.
 
-Diagnostics use standard error and a nonzero exit. A successful check, formatter check, and non-interactive pure run are silent by default. The JSON check form writes one canonical artifact to standard output; plan and artifact inspectors have their own bounded output. Artifact destinations use explicit paths and refuse existing targets. See [project lifecycle](../operational/lifecycle.md).
+The script and interactive clients capture their native cwd and a bounded
+native environment snapshot before evaluation. `cd`, `export`, and `unset`
+change the later child context; `pwd` returns its working directory as a value.
+Static commands do not probe executables. A script's final process status
+supplies its host exit status. Diagnostics use standard
+error and a nonzero exit. A successful check, formatter check, and pure script
+run are silent by default. The JSON check form writes one canonical artifact
+to standard output; plan and artifact inspectors have their own bounded output.
+Artifact destinations use explicit paths and refuse existing targets. See
+[direct external execution](../../how-to/run-an-external-program.md) and
+[project lifecycle](../operational/lifecycle.md).

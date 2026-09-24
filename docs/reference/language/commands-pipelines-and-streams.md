@@ -6,4 +6,13 @@ A command word can contain `{expression}` for one scalar fragment or `...{expres
 
 A pipeline connects explicit carriers: empty input, byte stream, single value, or value stream. A stage's registered signature specifies what it accepts and produces. The checker rejects incompatible adjacent carriers rather than silently serializing structured data. `decode` and `from` cross from bytes to values; `encode` and `to` cross back. Stream consumers pull lazily under item, byte, terminal-state, cancellation, and cleanup bounds. A stream is single-consumer even when its elements are ordinary values.
 
-[Core commands](core-commands.md) gives signatures. Registry presence describes parsing and carrier compatibility; ordinary source still refuses effectful execution before host access. An [accepted project plan](../operational/lifecycle.md) is the controlled route for declared operations.
+[Core commands](core-commands.md) gives signatures. In OPAAL 1.1, a standalone
+or interactive CLI session may run a foreground caret stage with explicit
+redirections and the listed external-connected transforms: `check`, `decode`,
+`from`, `encode`, `to`, `first`, `last`, `collect`, `length`, `lines`, `each`,
+`where`, `select`, `get`, `update`, and `sort`. Those transforms do not become
+an independent ambient command mode. `cd`, `pwd`, `export`, `unset`, `help`, and
+`exit` are available as session controls. Background work, filesystem
+commands, operational calls, and unrelated effects remain refused before host
+access. An [accepted project plan](../operational/lifecycle.md) is the
+controlled route for declared operations.

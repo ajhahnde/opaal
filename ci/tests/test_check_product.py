@@ -74,9 +74,11 @@ publish = false
             "  operational-core-linux:\n"
             "    name: operational-core-linux\n"
             "    runs-on: ubuntu-24.04\n"
+            "        run: cargo test --workspace --locked --no-fail-fast\n"
             "  operational-core-macos:\n"
             "    name: operational-core-macos\n"
             "    runs-on: macos-15\n"
+            "        run: cargo test --workspace --locked --no-fail-fast\n"
             "run: python3 benchmarks/run.py --profile qualification\n"
             "name: required\n"
             "needs: [foundation, policy, fuzz, operational-core-linux, operational-core-macos]\n",
@@ -186,9 +188,33 @@ publish = false
         self.assertIn("does not run operational-core qualification", findings)
         self.assertIn("does not pin the operational-core Linux host", findings)
         self.assertIn("does not pin the operational-core Apple-silicon host", findings)
+        self.assertIn("does not test the complete workspace on linux", findings)
+        self.assertIn("does not test the complete workspace on macos", findings)
         self.assertIn("does not validate the full macOS performance profile", findings)
         self.assertIn("required aggregate", findings)
         self.assertIn("removed transition checker", findings)
+
+    def test_requires_workspace_tests_in_each_host_job(self) -> None:
+        path = self.root / ".github/workflows/ci.yml"
+        original = path.read_text(encoding="utf-8")
+        command = "        run: cargo test --workspace --locked --no-fail-fast\n"
+        for host in ("linux", "macos"):
+            with self.subTest(host=host):
+                changed = (
+                    original.replace(command, "", 1)
+                    if host == "linux"
+                    else "".join(original.rsplit(command, 1))
+                )
+                self.write(
+                    ".github/workflows/ci.yml",
+                    changed,
+                )
+                findings = "\n".join(checker.source_problems(self.root, run=self.runner))
+                self.assertIn(f"does not test the complete workspace on {host}", findings)
+                self.assertNotIn(
+                    f"does not test the complete workspace on {'macos' if host == 'linux' else 'linux'}",
+                    findings,
+                )
 
     def test_requires_every_operational_core_qualification_file(self) -> None:
         missing = "tests/golden/release-readiness/tasks.opaal"
