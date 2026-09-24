@@ -4,6 +4,19 @@ All notable changes to OPAAL are documented here.
 
 ## [Unreleased]
 
+### Changed
+
+- Permit explicit foreground `^program` execution in standalone scripts and
+  interactive sessions on qualified Linux x86_64 and macOS arm64 hosts. The
+  CLI captures a native cwd and bounded native environment snapshot before
+  evaluation. It uses direct argv and `PATH` resolution, existing pipeline and
+  `Status` semantics, and owned foreground
+  process-group cleanup. This changes the 1.0 ordinary-source refusal for the
+  exact caret route; unrelated host effects and background jobs remain refused.
+- Children inherit the session environment, possibly including credentials,
+  and can perform opaque effects under the OS user's authority. This route has
+  no sandbox, accepted-plan authority, audit, output redaction, or rollback.
+
 ## [1.0.0]
 
 ### Changed

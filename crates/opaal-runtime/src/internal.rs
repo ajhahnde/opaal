@@ -22,7 +22,9 @@ use crate::closure::{
 use crate::command::{Carrier, CommandRegistry};
 use crate::convert::{Codec, DecodeStep, EncodeStep, decode, encode};
 use crate::directory::{ListStep, list};
-use crate::eval::{EvalLimits, RuntimeError, RuntimeErrorKind};
+use crate::eval::{
+    CancellationToken, EvalLimits, EvaluationPolicy, ResourceBudget, RuntimeError, RuntimeErrorKind,
+};
 use crate::file::{OpenStep, open, write_complete};
 use crate::format::{
     FromJsonStep, FromTextStep, JsonMode, ToJsonStep, ToTextStep, from_json, from_text, to_json,
@@ -97,8 +99,29 @@ pub fn execute_internal_pipeline(
     platform: &dyn Platform,
     source: &SourceFile,
 ) -> Result<InternalPipelineOutcome, RuntimeError> {
+    execute_internal_pipeline_with_policy(
+        plan,
+        state,
+        registry,
+        probe,
+        platform,
+        source,
+        EvalLimits::default().evaluation_policy(),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn execute_internal_pipeline_with_policy(
+    plan: &ExecutionPlan,
+    state: &mut SessionState,
+    registry: &CommandRegistry,
+    probe: &dyn ExecutableProbe,
+    platform: &dyn Platform,
+    source: &SourceFile,
+    policy: EvaluationPolicy,
+) -> Result<InternalPipelineOutcome, RuntimeError> {
     preflight(plan)?;
-    execute_internal_suffix(
+    execute_internal_suffix_with_policy(
         plan,
         0,
         InternalPayload::Empty,
@@ -108,6 +131,7 @@ pub fn execute_internal_pipeline(
         probe,
         platform,
         source,
+        policy,
     )
 }
 
@@ -122,6 +146,32 @@ pub fn execute_internal_pipeline(
 pub fn execute_internal_suffix(
     plan: &ExecutionPlan,
     start: usize,
+    payload: InternalPayload,
+    statuses: Vec<Status>,
+    state: &mut SessionState,
+    registry: &CommandRegistry,
+    probe: &dyn ExecutableProbe,
+    platform: &dyn Platform,
+    source: &SourceFile,
+) -> Result<InternalPipelineOutcome, RuntimeError> {
+    execute_internal_suffix_with_policy(
+        plan,
+        start,
+        payload,
+        statuses,
+        state,
+        registry,
+        probe,
+        platform,
+        source,
+        EvalLimits::default().evaluation_policy(),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn execute_internal_suffix_with_policy(
+    plan: &ExecutionPlan,
+    start: usize,
     mut payload: InternalPayload,
     mut statuses: Vec<Status>,
     state: &mut SessionState,
@@ -129,13 +179,16 @@ pub fn execute_internal_suffix(
     probe: &dyn ExecutableProbe,
     platform: &dyn Platform,
     source: &SourceFile,
+    policy: EvaluationPolicy,
 ) -> Result<InternalPipelineOutcome, RuntimeError> {
     statuses.reserve(plan.stages().len().saturating_sub(start));
-    let closure_context = OwnedClosureContext::new(
-        source.clone(),
-        state.environment().clone(),
-        EvalLimits::default(),
-    );
+    let closure_limits = if policy == EvaluationPolicy::AmbientProcess {
+        EvalLimits::ambient_process(CancellationToken::never(), ResourceBudget::unlimited())
+    } else {
+        EvalLimits::default()
+    };
+    let closure_context =
+        OwnedClosureContext::new(source.clone(), state.environment().clone(), closure_limits);
 
     for stage in plan.stages().iter().skip(start) {
         let PlannedResolution::Internal { canonical_name, .. } = stage.resolution() else {

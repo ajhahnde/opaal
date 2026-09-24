@@ -1,8 +1,9 @@
 # OPAAL documentation
 
 OPAAL 1.0 is a language and toolchain for source programs and explicitly
-selected project tasks. A plain `.opaal` file can be analyzed and evaluated
-without project authority. An
+selected project tasks. The unreleased 1.1 contract additionally permits
+foreground `^program` execution in the CLI. A plain `.opaal` file can be
+analyzed and evaluated without project authority. An
 explicit project adds typed tasks that can be checked, planned, reviewed,
 executed under bound authority, and audited. Which operations run depends on
 the task, its authority document, and the host.
@@ -15,7 +16,7 @@ Choose the path that matches what you need:
 | Complete a specific command or project task | [How-to guides](how-to/README.md) |
 | Look up syntax, standard modules, formats, commands, or limits | [Reference](reference/README.md) |
 | Understand authority, planning, resources, or reproducibility | [Concepts](concepts/README.md) |
-| Check the normative 1.0 language and operational contract | [Specification](specification/README.md) |
+| Check the versioned language and operational contract | [Specifications](specification/README.md) |
 
 The [CLI reference](reference/tooling/cli.md) lists command forms. Start with
 [getting started](learn/getting-started.md) for pure source, or follow

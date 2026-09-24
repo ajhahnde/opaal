@@ -2,24 +2,27 @@
 
 use std::ffi::{OsStr, OsString};
 use std::fs;
-use std::io::{Read, Write};
+use std::io::{self, Read, Write};
 use std::os::fd::{AsRawFd, OwnedFd};
-use std::os::unix::ffi::OsStringExt;
-use std::os::unix::fs::symlink;
-use std::os::unix::net::UnixStream;
+use std::os::unix::ffi::{OsStrExt, OsStringExt};
+use std::os::unix::fs::{PermissionsExt, symlink};
+use std::os::unix::net::{UnixListener, UnixStream};
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use opaal_platform::{
     Capability, ChildDescriptor, DirectoryEntry, DirectoryEntryKind, DirectoryReadError,
-    DirectoryReadRequest, FileOpenMode, FileOpenRequest, JobSignal, Platform, PlatformError,
-    ProcessGroup, ProcessGroupId, ProcessStatus, ProcessTransition, SignalError, SpawnError,
-    SpawnRequest, StandardDirectoryEnvironment, TerminalSize, WorkingDirectoryError,
+    DirectoryReadRequest, ExecutableProbe, FileOpenMode, FileOpenRequest, JobSignal, Platform,
+    PlatformError, ProcessGroup, ProcessGroupId, ProcessStatus, ProcessTransition, SignalError,
+    SpawnError, SpawnRequest, StandardDirectoryEnvironment, TerminalSize, WorkingDirectoryError,
     WorkingDirectoryRequest,
 };
 use opaal_platform_posix::{OwnedDescriptor, PosixPlatform};
+use rustix::fs::{Mode, OFlags, open};
+use rustix::pty::{OpenptFlags, grantpt, openpt, ptsname, unlockpt};
 
 struct DirectoryEnvironment(Vec<(OsString, OsString)>);
 
@@ -52,6 +55,64 @@ fn the_adapter_names_the_running_executable() {
     let expected = std::env::current_exe().expect("the test binary has a path");
 
     assert_eq!(reported, expected);
+}
+
+#[test]
+fn executable_probe_accepts_a_regular_executable_file() {
+    let temp = TempDir::new("executable-probe-file");
+    let target = temp.path().join("program");
+    fs::write(&target, b"#!/bin/sh\n").expect("fixture file should be written");
+    fs::set_permissions(&target, fs::Permissions::from_mode(0o700))
+        .expect("fixture should be executable");
+
+    assert!(PosixPlatform.is_executable(target.as_os_str()));
+}
+
+#[test]
+fn executable_probe_follows_a_symlink_to_an_executable_file() {
+    let temp = TempDir::new("executable-probe-symlink");
+    let target = temp.path().join("program");
+    let link = temp.path().join("program-link");
+    fs::write(&target, b"#!/bin/sh\n").expect("fixture file should be written");
+    fs::set_permissions(&target, fs::Permissions::from_mode(0o700))
+        .expect("fixture should be executable");
+    symlink("program", &link).expect("fixture symlink should be created");
+
+    assert!(PosixPlatform.is_executable(link.as_os_str()));
+}
+
+#[test]
+fn executable_probe_rejects_a_directory() {
+    let temp = TempDir::new("executable-probe-directory");
+
+    assert!(!PosixPlatform.is_executable(temp.path().as_os_str()));
+}
+
+#[test]
+fn executable_probe_rejects_a_non_regular_target() {
+    let temp = TempDir::new("executable-probe-socket");
+    let socket = temp.path().join("socket");
+    let _listener = UnixListener::bind(&socket).expect("fixture socket should be bound");
+
+    assert!(!PosixPlatform.is_executable(socket.as_os_str()));
+}
+
+#[test]
+fn executable_probe_rejects_a_missing_path() {
+    let temp = TempDir::new("executable-probe-missing");
+
+    assert!(!PosixPlatform.is_executable(temp.path().join("missing").as_os_str()));
+}
+
+#[test]
+fn executable_probe_rejects_a_regular_file_without_execute_access() {
+    let temp = TempDir::new("executable-probe-permission");
+    let target = temp.path().join("program");
+    fs::write(&target, b"#!/bin/sh\n").expect("fixture file should be written");
+    fs::set_permissions(&target, fs::Permissions::from_mode(0o600))
+        .expect("fixture execute bits should be absent");
+
+    assert!(!PosixPlatform.is_executable(target.as_os_str()));
 }
 
 #[test]
@@ -404,6 +465,44 @@ fn posix_spawn_preserves_native_argv_and_never_invokes_a_shell() {
         false,
     );
     assert_eq!(bytes, expected);
+}
+
+#[test]
+fn posix_spawn_preserves_native_environment_names_and_values() {
+    let temp = TempDir::new("native-environment");
+    let report = temp.path().join("report.bin");
+    let native_report = temp.path().join("native.bin");
+    let native_name = OsString::from_vec(b"OPAAL_NATIVE_\x80".to_vec());
+    let native_value = OsString::from_vec(b"value_\xfe".to_vec());
+    let environment = [
+        (
+            OsString::from("OPAAL_PROBE_REPORT"),
+            report.into_os_string(),
+        ),
+        (
+            OsString::from("OPAAL_PROBE_NATIVE_NAME"),
+            native_name.clone(),
+        ),
+        (
+            OsString::from("OPAAL_PROBE_NATIVE_REPORT"),
+            native_report.clone().into_os_string(),
+        ),
+        (native_name, native_value.clone()),
+    ];
+    let argv = [OsString::from("native-environment")];
+    let request = SpawnRequest::new(
+        Path::new(env!("CARGO_BIN_EXE_opaal-process-observer-fixture")),
+        &argv,
+        &environment,
+        temp.path(),
+    )
+    .expect("the spawn request is valid");
+
+    let mut child = PosixPlatform
+        .spawn(&request)
+        .expect("the fixture should spawn");
+    assert_eq!(child.wait(), Ok(ProcessStatus::Exited(0)));
+    assert_eq!(fs::read(native_report).unwrap(), native_value.as_bytes());
 }
 
 #[test]
@@ -918,6 +1017,183 @@ fn an_interactive_shell_survives_the_signals_its_children_still_answer() {
     assert!(
         findings.contains("child-status:Signaled(2)"),
         "a child must not inherit the shell's ignore: {findings}",
+    );
+}
+
+#[test]
+fn foreground_signals_are_forwarded_to_the_owned_group_and_every_child_is_reaped() {
+    let temp = TempDir::new("foreground-signals");
+    let report = temp.path().join("signal-report.txt");
+    let fixture = Path::new(env!("CARGO_BIN_EXE_opaal-foreground-signal-fixture"));
+    let observer = Path::new(env!("CARGO_BIN_EXE_opaal-process-observer-fixture"));
+
+    let status = Command::new(fixture)
+        .env("OPAAL_SIGNAL_REPORT", &report)
+        .env("OPAAL_SIGNAL_OBSERVER", observer)
+        .env("OPAAL_SIGNAL_WORKSPACE", temp.path())
+        .status()
+        .expect("the foreground signal fixture should run");
+
+    assert!(
+        status.success(),
+        "the forwarding fixture failed: {status:?}"
+    );
+    assert_eq!(
+        fs::read_to_string(report).expect("the fixture should write its report"),
+        format!(
+            concat!(
+                "{}:forwarded-and-reaped\n{}:caught-and-reaped\n{}:ignored-and-reaped\n",
+                "{}:forwarded-and-reaped\n{}:caught-and-reaped\n{}:ignored-and-reaped\n",
+                "{}:forwarded-and-reaped\n{}:caught-and-reaped\n{}:ignored-and-reaped\n",
+                "preactivation-signal-forwarded\nno-signal-has-no-deadline\n",
+                "prior-dispositions-restored\n",
+                "owned-group-descendant-terminated\n",
+                "ignored-same-group-descendant-escalated\n",
+                "concurrent-handler-release-safe"
+            ),
+            libc::SIGHUP,
+            libc::SIGHUP,
+            libc::SIGHUP,
+            libc::SIGINT,
+            libc::SIGINT,
+            libc::SIGINT,
+            libc::SIGTERM,
+            libc::SIGTERM,
+            libc::SIGTERM,
+        )
+    );
+}
+
+#[test]
+fn terminal_generated_interrupt_reaps_the_job_and_returns_the_pty() {
+    run_terminal_interrupt_case(false);
+}
+
+#[test]
+fn terminal_generated_interrupt_escalates_an_ignored_child_and_returns_the_pty() {
+    run_terminal_interrupt_case(true);
+}
+
+fn run_terminal_interrupt_case(ignored: bool) {
+    let temp = TempDir::new("foreground-pty");
+    let master = openpt(OpenptFlags::RDWR | OpenptFlags::NOCTTY).expect("open PTY master");
+    // Keep terminal output draining while the session leader exits; a PTY
+    // close can otherwise wait for an echoed interrupt byte to be consumed.
+    // SAFETY: fcntl changes only the flags of this test's live PTY master.
+    unsafe {
+        let flags = libc::fcntl(master.as_raw_fd(), libc::F_GETFL);
+        assert!(flags >= 0);
+        assert_eq!(
+            libc::fcntl(master.as_raw_fd(), libc::F_SETFL, flags | libc::O_NONBLOCK),
+            0
+        );
+    }
+    grantpt(&master).expect("grant PTY slave");
+    unlockpt(&master).expect("unlock PTY slave");
+    let name = ptsname(&master, Vec::new()).expect("name PTY slave");
+    let slave = std::fs::File::from(
+        open(
+            name.as_c_str(),
+            OFlags::RDWR | OFlags::NOCTTY,
+            Mode::empty(),
+        )
+        .expect("open PTY slave"),
+    );
+    // A newly opened PTY may inherit a host-specific terminal mode. Make the
+    // interrupt byte an actual terminal-generated signal on both hosts.
+    // SAFETY: the termios pointer is live and the slave descriptor is valid.
+    unsafe {
+        let mut attributes: libc::termios = std::mem::zeroed();
+        assert_eq!(libc::tcgetattr(slave.as_raw_fd(), &raw mut attributes), 0);
+        attributes.c_lflag |= libc::ISIG | libc::ICANON;
+        attributes.c_cc[libc::VINTR] = 3;
+        assert_eq!(
+            libc::tcsetattr(slave.as_raw_fd(), libc::TCSANOW, &raw const attributes),
+            0
+        );
+    }
+    let fixture = Path::new(env!("CARGO_BIN_EXE_opaal-foreground-signal-fixture"));
+    let observer = Path::new(env!("CARGO_BIN_EXE_opaal-process-observer-fixture"));
+    let mut command = Command::new(fixture);
+    command
+        .env("OPAAL_PTY_WORKSPACE", temp.path())
+        .env("OPAAL_SIGNAL_OBSERVER", observer)
+        .stdin(Stdio::from(slave.try_clone().expect("clone PTY slave")))
+        .stdout(Stdio::from(slave.try_clone().expect("clone PTY slave")))
+        .stderr(Stdio::from(slave));
+    if ignored {
+        command.env("OPAAL_PTY_IGNORE", "1");
+    }
+    // SAFETY: only async-signal-safe POSIX operations run in the child before
+    // exec. Standard input already refers to the PTY slave.
+    unsafe {
+        command.pre_exec(|| {
+            if libc::setsid() == -1 || libc::ioctl(0, libc::TIOCSCTTY.into(), 0) == -1 {
+                return Err(io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    let mut child = command.spawn().expect("start the isolated PTY session");
+    let shell_group = i32::try_from(child.id()).expect("the child PID fits a process group");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let transferred = loop {
+        // SAFETY: tcgetpgrp reads the foreground group of the live PTY master.
+        let group = unsafe { libc::tcgetpgrp(master.as_raw_fd()) };
+        if group > 0 && group != shell_group {
+            break group;
+        }
+        if let Some(status) = child.try_wait().expect("observe the PTY fixture") {
+            panic!("PTY fixture exited before terminal handoff: {status}");
+        }
+        assert!(Instant::now() < deadline, "PTY handoff timed out");
+        std::thread::sleep(Duration::from_millis(5));
+    };
+    while !temp.path().join("pty-child-report").exists() {
+        assert!(
+            Instant::now() < deadline,
+            "PTY observer readiness timed out"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let reported_group = fs::read_dir(temp.path())
+        .expect("read PTY observer reports")
+        .filter_map(Result::ok)
+        .find(|entry| entry.path().extension().is_some_and(|ext| ext == "group"))
+        .expect("observer should report its process group");
+    assert_eq!(
+        fs::read_to_string(reported_group.path()).expect("read observer group"),
+        transferred.to_string(),
+    );
+    // SAFETY: write addresses the live PTY master with one initialized byte.
+    let sent = unsafe { libc::write(master.as_raw_fd(), b"\x03".as_ptr().cast(), 1) };
+    assert_eq!(sent, 1);
+    let signaled_at = Instant::now();
+    let status = loop {
+        let mut output = [0u8; 4096];
+        // SAFETY: read writes at most the size of the live output buffer.
+        let _ = unsafe { libc::read(master.as_raw_fd(), output.as_mut_ptr().cast(), output.len()) };
+        if let Some(status) = child.try_wait().expect("observe the PTY fixture") {
+            break status;
+        }
+        if Instant::now() >= deadline {
+            child.kill().expect("terminate a stalled PTY fixture");
+            panic!("PTY interrupt timed out for group {transferred}");
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    };
+    assert!(status.success(), "PTY fixture failed: {status}");
+    if ignored {
+        assert!(signaled_at.elapsed() >= Duration::from_millis(1800));
+        assert!(signaled_at.elapsed() < Duration::from_secs(5));
+    }
+    assert_eq!(
+        fs::read_to_string(temp.path().join("pty-result")).expect("read the PTY result"),
+        if ignored {
+            "ignored-interrupt-escalated-and-restored"
+        } else {
+            "interrupted-and-restored"
+        }
     );
 }
 

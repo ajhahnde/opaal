@@ -939,6 +939,75 @@ impl fmt::Display for SignalError {
 
 impl std::error::Error for SignalError {}
 
+/// Failure while creating or releasing a stably owned process group.
+///
+/// A numeric process-group identifier is not ownership: after its last member
+/// is reaped, the host may assign the same number to an unrelated job.  An
+/// [`OwnedProcessGroup`] keeps an adapter-native anchor unreaped until release,
+/// so callers may address the group without that reuse race.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ProcessGroupError {
+    /// The platform cannot satisfy the process-group capability.
+    Platform(PlatformError),
+    /// The host rejected or could not complete the ownership operation.
+    Operation {
+        /// Stable I/O error category from the host adapter.
+        kind: io::ErrorKind,
+        /// A human-readable description of the host failure.
+        message: String,
+    },
+}
+
+impl From<PlatformError> for ProcessGroupError {
+    fn from(error: PlatformError) -> Self {
+        Self::Platform(error)
+    }
+}
+
+impl fmt::Display for ProcessGroupError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Platform(error) => error.fmt(formatter),
+            Self::Operation { message, .. } => {
+                write!(formatter, "process-group ownership failed: {message}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for ProcessGroupError {}
+
+/// A process group whose identifier cannot be reused until explicit release.
+///
+/// The owner is created before user children join the group and remains live or
+/// waitable until [`release`](OwnedProcessGroup::release). Implementations must
+/// also clean up from `Drop`, because an unwind must not leak the anchor or the
+/// group members it protects.
+pub trait OwnedProcessGroup: Send + fmt::Debug {
+    /// The exact group identifier reserved by this owner.
+    fn id(&self) -> ProcessGroupId;
+
+    /// Reap the ownership anchor after the caller has finished addressing the
+    /// group. This operation is idempotent.
+    fn release(&mut self) -> Result<(), ProcessGroupError>;
+}
+
+/// Host-free process-group ownership used by deterministic platform tests.
+#[derive(Debug)]
+pub struct FakeOwnedProcessGroup {
+    id: ProcessGroupId,
+}
+
+impl OwnedProcessGroup for FakeOwnedProcessGroup {
+    fn id(&self) -> ProcessGroupId {
+        self.id
+    }
+
+    fn release(&mut self) -> Result<(), ProcessGroupError> {
+        Ok(())
+    }
+}
+
 /// An active job-control signal arrangement owned by an interactive shell.
 ///
 /// The dispositions are process-wide, so restoration must also run in the
@@ -955,6 +1024,36 @@ pub trait JobControlSignalGuard: fmt::Debug {
 pub struct NoopJobControlSignalGuard;
 
 impl JobControlSignalGuard for NoopJobControlSignalGuard {
+    fn restore(&mut self) -> Result<(), PlatformError> {
+        Ok(())
+    }
+}
+
+/// A scoped foreground-signal arrangement owned by one process invocation.
+///
+/// The guard is prepared before the first child starts, then activated after
+/// the adapter verifies that child joined the owned process group. This closes
+/// the startup race in which the host could otherwise terminate the parent
+/// after one child had started but before the runtime knew where to forward
+/// the signal. Restoration must also run from `Drop`, so every early failure
+/// route reinstates the prior process dispositions and mask.
+pub trait ForegroundSignalGuard: fmt::Debug {
+    /// Forward supported host termination signals to `group` from now on.
+    fn forward_to(&mut self, group: ProcessGroupId) -> Result<(), PlatformError>;
+
+    /// Restore the process signal state that preceded this guard.
+    fn restore(&mut self) -> Result<(), PlatformError>;
+}
+
+/// A guard that arranges no process-wide signal state.
+#[derive(Debug)]
+pub struct NoopForegroundSignalGuard;
+
+impl ForegroundSignalGuard for NoopForegroundSignalGuard {
+    fn forward_to(&mut self, _group: ProcessGroupId) -> Result<(), PlatformError> {
+        Ok(())
+    }
+
     fn restore(&mut self) -> Result<(), PlatformError> {
         Ok(())
     }
@@ -1347,6 +1446,16 @@ pub trait ForegroundTerminalGuard: fmt::Debug {
     fn previous_owner(&self) -> Option<ProcessGroupId>;
 }
 
+/// Answers whether a native path currently names an executable regular file.
+///
+/// This is an advisory preflight capability: direct process spawn remains
+/// authoritative if the target changes between probing and execution.
+pub trait ExecutableProbe: Send + Sync {
+    /// Whether `path` names a regular file executable by the effective host
+    /// credentials.
+    fn is_executable(&self, path: &OsStr) -> bool;
+}
+
 /// Implemented by OPAAL platform adapters.
 ///
 /// Capability methods (spawn, pipes, file actions, …) are added to this trait
@@ -1436,6 +1545,21 @@ pub trait Platform: Send + Sync {
         Ok(None)
     }
 
+    /// Create a process group whose identifier remains reserved until its
+    /// returned owner is explicitly released.
+    ///
+    /// Adapters must not implement this as a bare numeric allocation. The
+    /// owner is the proof that a later group-directed signal cannot target an
+    /// unrelated group that reused the same identifier.
+    fn create_process_group(&self) -> Result<Box<dyn OwnedProcessGroup>, ProcessGroupError> {
+        self.require(Capability::ProcessGroups)?;
+        Err(PlatformError::Unavailable {
+            capability: Capability::ProcessGroups,
+            reason: "the adapter does not implement stable process-group ownership".to_owned(),
+        }
+        .into())
+    }
+
     /// Give the terminal to `group` until the returned guard is dropped.
     ///
     /// The guard, not the caller, remembers which group held the terminal
@@ -1472,6 +1596,18 @@ pub trait Platform: Send + Sync {
     fn install_job_control_signals(&self) -> Result<Box<dyn JobControlSignalGuard>, PlatformError> {
         self.require(Capability::Signals)?;
         Ok(Box::new(NoopJobControlSignalGuard))
+    }
+
+    /// Prepare scoped forwarding for `SIGHUP`, `SIGINT`, and `SIGTERM` before
+    /// the first foreground child starts.
+    ///
+    /// Minimal and non-POSIX adapters default to a no-op guard. Runtime callers
+    /// use this only when process groups and signals are both advertised, so an
+    /// adapter that claims those capabilities must override this method when it
+    /// needs process-wide signal handling.
+    fn prepare_foreground_signals(&self) -> Result<Box<dyn ForegroundSignalGuard>, PlatformError> {
+        self.require(Capability::Signals)?;
+        Ok(Box::new(NoopForegroundSignalGuard))
     }
 
     /// The path of the running shell executable.
@@ -1702,6 +1838,18 @@ impl Platform for FakePlatform {
     fn terminal_size(&self) -> Result<TerminalSize, PlatformError> {
         self.require(Capability::TerminalInfo)?;
         Ok(self.terminal_size)
+    }
+
+    fn create_process_group(&self) -> Result<Box<dyn OwnedProcessGroup>, ProcessGroupError> {
+        static NEXT_GROUP: AtomicUsize = AtomicUsize::new(1_000_000);
+
+        self.require(Capability::ProcessGroups)?;
+        let value = NEXT_GROUP.fetch_add(1, Ordering::Relaxed) as u64;
+        let id = ProcessGroupId::new(value).ok_or_else(|| ProcessGroupError::Operation {
+            kind: io::ErrorKind::Other,
+            message: "fake process-group identifiers were exhausted".to_owned(),
+        })?;
+        Ok(Box::new(FakeOwnedProcessGroup { id }))
     }
 
     fn shell_executable(&self) -> Result<PathBuf, PlatformError> {
@@ -2108,6 +2256,10 @@ impl Platform for RecordingPlatform {
         self.inner.foreground_process_group()
     }
 
+    fn create_process_group(&self) -> Result<Box<dyn OwnedProcessGroup>, ProcessGroupError> {
+        self.inner.create_process_group()
+    }
+
     fn enter_foreground(
         &self,
         group: ProcessGroupId,
@@ -2209,6 +2361,10 @@ impl Platform for RecordingPlatform {
 
     fn install_job_control_signals(&self) -> Result<Box<dyn JobControlSignalGuard>, PlatformError> {
         self.inner.install_job_control_signals()
+    }
+
+    fn prepare_foreground_signals(&self) -> Result<Box<dyn ForegroundSignalGuard>, PlatformError> {
+        self.inner.prepare_foreground_signals()
     }
 }
 

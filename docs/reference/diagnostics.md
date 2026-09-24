@@ -16,4 +16,12 @@ A diagnostic names the failing boundary and carries a stable code, message, and 
 
 `PLAN004` is the deliberate refusal for `opaal plan SOURCE`. `CHECK008` reports an unsupported process request against a macOS lock; `CHECK009` reports an unknown target. Neither means that a process was attempted. A denied authority row, unsupported host, malformed control file, and stale plan are different failures; address the named boundary rather than retrying with a broad grant.
 
+In the direct CLI route, missing or non-executable candidates, excessive
+`PATH`, and spawn failures are source-spanned errors. A preflight probe is
+advisory: a file can change before spawn, and the spawn result determines the
+failure. A child exit status is a `Status`, not a missing-program error.
+Failure to acquire a complete native cwd/environment snapshot, including a
+duplicate environment name, refuses before source evaluation. Snapshot
+diagnostics do not print inherited values.
+
 The [CLI reference](tooling/cli.md) explains output channels. [Authority](operational/authority.md), [formats](formats/README.md), and [limits](limits.md) give the corresponding contract.

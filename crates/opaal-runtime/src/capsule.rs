@@ -612,7 +612,7 @@ fn encode_environment(
 ) -> Result<(), CapsuleError> {
     encoder.usize(environment.len())?;
     for (name, value) in environment.iter() {
-        encoder.string(name)?;
+        encoder.native(name)?;
         encoder.native(value)?;
     }
     Ok(())
@@ -622,7 +622,7 @@ fn decode_environment(decoder: &mut Decoder<'_>) -> Result<Environment, CapsuleE
     let count = decoder.collection_len()?;
     let mut entries = Vec::with_capacity(count);
     for _ in 0..count {
-        entries.push((decoder.string()?, decoder.native()?));
+        entries.push((decoder.native()?, decoder.native()?));
     }
     Ok(Environment::from_snapshot(entries))
 }
@@ -1374,7 +1374,7 @@ mod tests {
             )
             .expect("valid binding");
         let environment = Environment::from_snapshot(vec![(
-            "NATIVE".to_owned(),
+            OsString::from_vec(vec![b'N', 0x82]),
             OsString::from_vec(vec![b'a', 0x80]),
         )]);
         let cwd = PathBuf::from(OsString::from_vec(vec![b'/', b'w', 0x81]));

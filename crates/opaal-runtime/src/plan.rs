@@ -31,14 +31,47 @@ use crate::command::{
     CommandOptionTerminator, CommandOutput, CommandRegistry, CommandSignature,
 };
 use crate::eval::{
-    ExpandedWord, ReservedCommandDetails, RuntimeError, RuntimeErrorKind,
-    evaluate_closure_argument_with_binding_types, expand_spread_with_context,
-    expand_word_with_context,
+    EvalLimits, EvaluationPolicy, ExpandedWord, ReservedCommandDetails, RuntimeError,
+    RuntimeErrorKind, evaluate_closure_argument_with_binding_types,
+    expand_spread_with_context_and_policy, expand_word_with_context_and_policy,
 };
 use crate::help::{HelpCatalog, HelpSnapshot, render_help};
 use crate::module::RuntimeBindingTypes;
 use crate::resolve::{ExecutableProbe, Resolution, ResolutionError, resolve_command};
 use crate::{Environment, ScopeStack, Value};
+
+/// Maximum external child processes reserved by one standalone run or
+/// interactive submission.
+pub const MAX_CHILD_STARTS_PER_SUBMISSION: usize = 4_096;
+
+/// Submission-scoped reservations for external child starts.
+///
+/// Planning checks the remaining capacity before executable resolution, so an
+/// excess stage cannot probe the host. A complete plan commits its reservations
+/// before execution; a plan that fails to build commits none of them.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct ChildStartBudget {
+    reserved: usize,
+}
+
+impl ChildStartBudget {
+    pub(crate) const fn per_submission() -> Self {
+        Self { reserved: 0 }
+    }
+
+    fn reserve(&mut self, span: Span) -> Result<(), RuntimeError> {
+        if self.reserved >= MAX_CHILD_STARTS_PER_SUBMISSION {
+            return Err(RuntimeError::new(
+                RuntimeErrorKind::ChildStartLimitExceeded {
+                    limit: MAX_CHILD_STARTS_PER_SUBMISSION,
+                },
+                span,
+            ));
+        }
+        self.reserved += 1;
+        Ok(())
+    }
+}
 
 /// A complete, inspectable plan for one command pipeline.
 ///
@@ -885,6 +918,7 @@ pub fn plan_pipeline_with_options(
     probe: &dyn ExecutableProbe,
     options: &SessionOptions,
 ) -> Result<ExecutionPlan, RuntimeError> {
+    let mut child_starts = ChildStartBudget::per_submission();
     plan_pipeline_with_options_and_binding_types(
         pipeline,
         cwd,
@@ -895,6 +929,8 @@ pub fn plan_pipeline_with_options(
         probe,
         options,
         Arc::new(RuntimeBindingTypes::default()),
+        EvalLimits::default().evaluation_policy(),
+        &mut child_starts,
     )
 }
 
@@ -909,7 +945,11 @@ pub(crate) fn plan_pipeline_with_options_and_binding_types(
     probe: &dyn ExecutableProbe,
     options: &SessionOptions,
     binding_types: Arc<RuntimeBindingTypes>,
+    policy: EvaluationPolicy,
+    child_starts: &mut ChildStartBudget,
 ) -> Result<ExecutionPlan, RuntimeError> {
+    let cwd = cwd.into();
+    let mut planned_child_starts = *child_starts;
     let mut stages = Vec::with_capacity(pipeline.stages().len());
     for stage in pipeline.stages() {
         let has_upstream = !stages.is_empty();
@@ -928,14 +968,22 @@ pub(crate) fn plan_pipeline_with_options_and_binding_types(
         };
         let context = StagePlanningContext {
             source,
+            cwd: &cwd,
             environment,
             registry,
             probe,
             input_carrier,
             has_upstream,
             binding_types: Arc::clone(&binding_types),
+            policy,
         };
-        stages.push(plan_stage(command, span, scope, &context)?);
+        stages.push(plan_stage(
+            command,
+            span,
+            scope,
+            &context,
+            &mut planned_child_starts,
+        )?);
     }
 
     let edges = pipeline
@@ -947,8 +995,8 @@ pub(crate) fn plan_pipeline_with_options_and_binding_types(
         })
         .collect();
 
-    Ok(ExecutionPlan {
-        cwd: cwd.into(),
+    let plan = ExecutionPlan {
+        cwd,
         environment: environment.clone(),
         stages,
         edges,
@@ -958,17 +1006,21 @@ pub(crate) fn plan_pipeline_with_options_and_binding_types(
         supervisor_input: None,
         supervisor_completion: false,
         span: pipeline.span(),
-    })
+    };
+    *child_starts = planned_child_starts;
+    Ok(plan)
 }
 
 struct StagePlanningContext<'a> {
     source: &'a SourceFile,
+    cwd: &'a Path,
     environment: &'a Environment,
     registry: &'a CommandRegistry,
     probe: &'a dyn ExecutableProbe,
     input_carrier: Carrier,
     has_upstream: bool,
     binding_types: Arc<RuntimeBindingTypes>,
+    policy: EvaluationPolicy,
 }
 
 fn plan_stage(
@@ -976,6 +1028,7 @@ fn plan_stage(
     span: Span,
     scope: &mut ScopeStack,
     context: &StagePlanningContext<'_>,
+    child_starts: &mut ChildStartBudget,
 ) -> Result<PlannedStage, RuntimeError> {
     if command.head.kind() == opaal_syntax::CommandHeadKind::Bare
         && context.source.slice(command.head.word().span()).ok() == Some("help")
@@ -985,14 +1038,18 @@ fn plan_stage(
 
     // argv[0] is the expanded command word; the head marker only steers
     // resolution and is never part of the name.
-    let head = expand_word_with_context(
+    let head = expand_word_with_context_and_policy(
         command.head.word(),
         context.source,
         scope,
         context.environment,
         Arc::clone(&context.binding_types),
+        context.policy,
     )?;
     let force_external = command.head.kind() == opaal_syntax::CommandHeadKind::ForcedExternal;
+    if force_external {
+        child_starts.reserve(command.head.span())?;
+    }
     let (resolution, input_carriers, output_carrier) =
         resolve(head.value(), force_external, command.head.span(), context)?;
     if matches!(
@@ -1013,24 +1070,26 @@ fn plan_stage(
     for item in &command.items {
         match item.kind() {
             CommandItemKind::Word(word) => {
-                let word = expand_word_with_context(
+                let word = expand_word_with_context_and_policy(
                     word,
                     context.source,
                     scope,
                     context.environment,
                     Arc::clone(&context.binding_types),
+                    context.policy,
                 )?;
                 argv.push(word.clone());
                 arguments.push(PlannedArgument::Word(word));
             }
             CommandItemKind::Spread(expression) => {
-                let words = expand_spread_with_context(
+                let words = expand_spread_with_context_and_policy(
                     expression,
                     item.span(),
                     context.source,
                     scope,
                     context.environment,
                     Arc::clone(&context.binding_types),
+                    context.policy,
                 )?;
                 argv.extend(words.iter().cloned());
                 arguments.extend(words.into_iter().map(PlannedArgument::Word));
@@ -1062,6 +1121,7 @@ fn plan_stage(
                     scope,
                     context.environment,
                     Arc::clone(&context.binding_types),
+                    context.policy,
                 )?;
                 redirections.push(PlannedRedirection {
                     action,
@@ -1242,12 +1302,13 @@ fn plan_help_stage(
         .lookup("help")
         .expect("the standard help command is registered");
     let mut head_scope = scope.clone();
-    let head = expand_word_with_context(
+    let head = expand_word_with_context_and_policy(
         command.head.word(),
         context.source,
         &mut head_scope,
         context.environment,
         Arc::clone(&context.binding_types),
+        context.policy,
     )?;
     let mut argv = vec![head];
     let mut arguments = Vec::new();
@@ -1285,12 +1346,13 @@ fn plan_help_stage(
                 }
                 query_span = item.span();
                 let mut query_scope = scope.clone();
-                let expanded = expand_word_with_context(
+                let expanded = expand_word_with_context_and_policy(
                     word,
                     context.source,
                     &mut query_scope,
                     context.environment,
                     Arc::clone(&context.binding_types),
+                    context.policy,
                 )?;
                 let name = expanded.value().to_str().ok_or_else(|| {
                     RuntimeError::new(
@@ -1322,6 +1384,7 @@ fn plan_help_stage(
                     &mut redirection_scope,
                     context.environment,
                     Arc::clone(&context.binding_types),
+                    context.policy,
                 )?;
                 redirections.push(PlannedRedirection {
                     action,
@@ -1393,6 +1456,7 @@ fn resolve(
         name,
         force_external,
         context.registry,
+        context.cwd,
         context.environment,
         context.probe,
     ) {
@@ -1430,6 +1494,10 @@ fn resolve(
             RuntimeErrorKind::CommandNotFound { name },
             head_span,
         )),
+        Err(ResolutionError::PathSearchLimitExceeded { kind, limit }) => Err(RuntimeError::new(
+            RuntimeErrorKind::PathSearchLimitExceeded { kind, limit },
+            head_span,
+        )),
         Err(ResolutionError::Reserved {
             name,
             purpose,
@@ -1451,6 +1519,7 @@ fn plan_redirection(
     scope: &mut ScopeStack,
     environment: &Environment,
     binding_types: Arc<RuntimeBindingTypes>,
+    policy: EvaluationPolicy,
 ) -> Result<RedirectionAction, RuntimeError> {
     match kind {
         RedirectionKind::Input {
@@ -1460,12 +1529,13 @@ fn plan_redirection(
         } => Ok(RedirectionAction::Input {
             descriptor: descriptor_or(descriptor.as_ref(), 0, source)?,
             operator_span: *operator_span,
-            target: expand_word_with_context(
+            target: expand_word_with_context_and_policy(
                 target,
                 source,
                 scope,
                 environment,
                 Arc::clone(&binding_types),
+                policy,
             )?,
         }),
         RedirectionKind::File(FileRedirection {
@@ -1477,7 +1547,14 @@ fn plan_redirection(
             descriptor: descriptor_or(descriptor.as_ref(), 1, source)?,
             mode: *mode,
             operator_span: *operator_span,
-            target: expand_word_with_context(target, source, scope, environment, binding_types)?,
+            target: expand_word_with_context_and_policy(
+                target,
+                source,
+                scope,
+                environment,
+                binding_types,
+                policy,
+            )?,
         }),
         RedirectionKind::Duplicate {
             descriptor,
@@ -1557,15 +1634,13 @@ pub fn preflight(plan: &ExecutionPlan) -> Result<(), RuntimeError> {
 /// backstop covers native snapshots and decoded supervisor state before any
 /// stage can reach a platform adapter.
 fn check_environment_nul(plan: &ExecutionPlan) -> Result<(), RuntimeError> {
-    if let Some((name, _)) = plan
+    if plan
         .environment()
         .iter()
-        .find(|(_, value)| value.as_encoded_bytes().contains(&0))
+        .any(|(_, value)| value.as_encoded_bytes().contains(&0))
     {
         return Err(RuntimeError::new(
-            RuntimeErrorKind::EnvironmentValueContainsNul {
-                name: name.to_owned(),
-            },
+            RuntimeErrorKind::EnvironmentSnapshotContainsNul,
             plan.span(),
         ));
     }
@@ -1738,12 +1813,16 @@ fn check_descriptor_ownership(stage: &PlannedStage) -> Result<(), RuntimeError> 
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Mutex;
+
     use super::*;
     use crate::builtin::standard_registry;
+    use crate::eval::ErrorCategory;
     use crate::module::{
         ModuleCanonicalizer, ModuleId, ModulePathError, ModuleProgramLoader, ModuleSourceError,
         ModuleSourceLoader,
     };
+    use crate::resolve::{MAX_PATH_SEARCH_ELEMENTS, PathSearchLimitKind};
     use opaal_syntax::{SourceId, StatementKind};
 
     struct OneModule(Vec<u8>);
@@ -1766,6 +1845,186 @@ mod tests {
         fn is_executable(&self, _path: &OsStr) -> bool {
             false
         }
+    }
+
+    #[derive(Default)]
+    struct RecordingExecutable {
+        observed: Mutex<Vec<PathBuf>>,
+    }
+
+    impl ExecutableProbe for RecordingExecutable {
+        fn is_executable(&self, path: &OsStr) -> bool {
+            self.observed
+                .lock()
+                .expect("probe log lock")
+                .push(PathBuf::from(path));
+            path == OsStr::new("/session/tools/probe")
+        }
+    }
+
+    #[test]
+    fn external_planning_probes_relative_path_against_the_plan_cwd() {
+        let loader = OneModule(b"^probe\n".to_vec());
+        let root = Path::new("/session/main.opaal");
+        let registry = standard_registry();
+        let report =
+            ModuleProgramLoader::new(&loader, &loader).analyze_with_commands(root, &registry);
+        assert!(report.issues().is_empty(), "{:?}", report.issues());
+        let program = report.program().expect("the external source must check");
+        let source = program
+            .sources()
+            .source(program.graph().root())
+            .expect("the root source is retained");
+        let script = program
+            .sources()
+            .script(program.graph().root())
+            .expect("the root syntax is retained");
+        let StatementKind::Job(job) = script.statements()[0].kind() else {
+            panic!("the statement is a command job");
+        };
+        let probe = RecordingExecutable::default();
+        let plan = plan_pipeline(
+            &job.chain.or_terms()[0].and_terms()[0],
+            "/session",
+            source,
+            &mut ScopeStack::new(),
+            &Environment::from_snapshot([("PATH", "tools")]),
+            &registry,
+            &probe,
+        )
+        .expect("the external command must plan");
+
+        assert_eq!(
+            plan.stages()[0].resolution(),
+            &PlannedResolution::External {
+                path: PathBuf::from("tools/probe"),
+            }
+        );
+        assert_eq!(
+            *probe.observed.lock().expect("probe log lock"),
+            [PathBuf::from("/session/tools/probe")]
+        );
+    }
+
+    #[test]
+    fn external_planning_maps_path_limit_to_resource_error_before_probe() {
+        let loader = OneModule(b"^probe\n".to_vec());
+        let root = Path::new("/session/main.opaal");
+        let registry = standard_registry();
+        let report =
+            ModuleProgramLoader::new(&loader, &loader).analyze_with_commands(root, &registry);
+        assert!(report.issues().is_empty(), "{:?}", report.issues());
+        let program = report.program().expect("the external source must check");
+        let source = program
+            .sources()
+            .source(program.graph().root())
+            .expect("the root source is retained");
+        let script = program
+            .sources()
+            .script(program.graph().root())
+            .expect("the root syntax is retained");
+        let StatementKind::Job(job) = script.statements()[0].kind() else {
+            panic!("the statement is a command job");
+        };
+        let probe = RecordingExecutable::default();
+        let error = plan_pipeline(
+            &job.chain.or_terms()[0].and_terms()[0],
+            "/session",
+            source,
+            &mut ScopeStack::new(),
+            &Environment::from_snapshot([(
+                "PATH",
+                vec!["x"; MAX_PATH_SEARCH_ELEMENTS + 1].join(":"),
+            )]),
+            &registry,
+            &probe,
+        )
+        .expect_err("an over-limit PATH must refuse planning");
+
+        assert_eq!(
+            error.kind(),
+            &RuntimeErrorKind::PathSearchLimitExceeded {
+                kind: PathSearchLimitKind::Elements,
+                limit: MAX_PATH_SEARCH_ELEMENTS,
+            }
+        );
+        assert_eq!(error.category(), ErrorCategory::Resource);
+        assert!(probe.observed.lock().expect("probe log lock").is_empty());
+    }
+
+    #[test]
+    fn child_start_limit_accepts_exact_boundary_and_refuses_excess_before_probe() {
+        let loader = OneModule(b"^tools/probe\n".to_vec());
+        let root = Path::new("/session/main.opaal");
+        let registry = standard_registry();
+        let report =
+            ModuleProgramLoader::new(&loader, &loader).analyze_with_commands(root, &registry);
+        assert!(report.issues().is_empty(), "{:?}", report.issues());
+        let program = report.program().expect("the external source must check");
+        let source = program
+            .sources()
+            .source(program.graph().root())
+            .expect("the root source is retained");
+        let script = program
+            .sources()
+            .script(program.graph().root())
+            .expect("the root syntax is retained");
+        let StatementKind::Job(job) = script.statements()[0].kind() else {
+            panic!("the statement is a command job");
+        };
+        let pipeline = &job.chain.or_terms()[0].and_terms()[0];
+        let environment = Environment::new();
+        let probe = RecordingExecutable::default();
+        let mut child_starts = ChildStartBudget::per_submission();
+
+        for _ in 0..MAX_CHILD_STARTS_PER_SUBMISSION {
+            plan_pipeline_with_options_and_binding_types(
+                pipeline,
+                "/session",
+                source,
+                &mut ScopeStack::new(),
+                &environment,
+                &registry,
+                &probe,
+                &SessionOptions::default(),
+                Arc::new(RuntimeBindingTypes::default()),
+                EvalLimits::default().evaluation_policy(),
+                &mut child_starts,
+            )
+            .expect("the exact child-start boundary must plan");
+        }
+        assert_eq!(
+            probe.observed.lock().expect("probe log lock").len(),
+            MAX_CHILD_STARTS_PER_SUBMISSION
+        );
+
+        let error = plan_pipeline_with_options_and_binding_types(
+            pipeline,
+            "/session",
+            source,
+            &mut ScopeStack::new(),
+            &environment,
+            &registry,
+            &probe,
+            &SessionOptions::default(),
+            Arc::new(RuntimeBindingTypes::default()),
+            EvalLimits::default().evaluation_policy(),
+            &mut child_starts,
+        )
+        .expect_err("the first excess child start must refuse planning");
+
+        assert_eq!(
+            error.kind(),
+            &RuntimeErrorKind::ChildStartLimitExceeded {
+                limit: MAX_CHILD_STARTS_PER_SUBMISSION,
+            }
+        );
+        assert_eq!(error.category(), ErrorCategory::Resource);
+        assert_eq!(
+            probe.observed.lock().expect("probe log lock").len(),
+            MAX_CHILD_STARTS_PER_SUBMISSION,
+            "the excess stage must not probe"
+        );
     }
 
     #[test]
@@ -1792,6 +2051,7 @@ mod tests {
             panic!("the second statement is a command job");
         };
         let pipeline = &job.chain.or_terms()[0].and_terms()[0];
+        let mut child_starts = ChildStartBudget::per_submission();
         let plan = plan_pipeline_with_options_and_binding_types(
             pipeline,
             "/predictable",
@@ -1802,6 +2062,8 @@ mod tests {
             &NoExecutables,
             &SessionOptions::default(),
             Arc::new(program.runtime_binding_types()),
+            EvalLimits::default().evaluation_policy(),
+            &mut child_starts,
         )
         .expect("qualified expressions must plan with module identity");
         assert_eq!(

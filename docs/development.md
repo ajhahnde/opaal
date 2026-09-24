@@ -48,7 +48,7 @@ target/debug/opaal check examples/language-foundation.opaal
 target/debug/opaal examples/language-foundation.opaal
 ```
 
-Non-interactive success is silent. Examples must not depend on authority that
+Pure non-interactive evaluation does not print its final value. Examples must not depend on authority that
 the pure foundation does not grant.
 
 ## Benchmarks

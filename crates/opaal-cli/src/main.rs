@@ -27,14 +27,15 @@ use opaal_cli::project::{
 use opaal_cli::report::{HostReport, write_report};
 use opaal_cli::{RawLineEditor, ReedlineEditor};
 use opaal_platform_posix::PosixPlatform;
-use opaal_runtime::eval::{Clock, FakeClock};
+use opaal_runtime::eval::SystemClock;
 use opaal_runtime::module::ModuleProgramLoader;
 use opaal_runtime::outcome::{OutcomeEvidence, PrimaryOutcome};
 use opaal_runtime::plan::SessionOptions;
-use opaal_runtime::resolve::ExecutableProbe;
-use opaal_runtime::script::{ScriptError, ScriptExecutionOutcome, execute_module_program_outcome};
+use opaal_runtime::script::{
+    ScriptError, ScriptExecutionOutcome, execute_ambient_module_program_outcome,
+};
 use opaal_runtime::session::{BackgroundFailure, Session, SubmitError, SubmitOutcome};
-use opaal_runtime::{Environment, Status, Value};
+use opaal_runtime::{NativeSessionSnapshot, Status, Value};
 
 const HELP: &str = "OPAAL language client
 
@@ -402,18 +403,22 @@ fn run_script(path: &Path, arguments: &[String]) -> ExitCode {
             return emit_report(HostReport::failure(rendered.as_bytes()));
         }
     };
-    let mut environment = Environment::new();
+    let snapshot = match NativeSessionSnapshot::capture() {
+        Ok(snapshot) => snapshot,
+        Err(error) => {
+            return emit_report(HostReport::failure(format!("opaal: {error}\n").as_bytes()));
+        }
+    };
     let mut output = io::stdout().lock();
-    let outcome = execute_module_program_outcome(
+    let outcome = execute_ambient_module_program_outcome(
         &program,
         arguments,
-        Path::new(""),
-        &mut environment,
+        snapshot,
         &registry,
-        &NoHost,
+        &PosixPlatform,
         &SessionOptions::default(),
         &PosixPlatform,
-        Arc::new(FakeClock::new()) as Arc<dyn Clock>,
+        Arc::new(SystemClock::new()),
         &mut output,
     );
     let flush = output.flush();
@@ -438,12 +443,17 @@ fn run_interactive() -> ExitCode {
 }
 
 fn run_interactive_with_editor(editor: &mut dyn LineEditor) -> ExitCode {
-    let session = Session::new(
-        PathBuf::new(),
-        Environment::new(),
-        SessionOptions::default(),
-    );
-    let mut evaluator = OpaalEvaluator { session };
+    let snapshot = match NativeSessionSnapshot::capture() {
+        Ok(snapshot) => snapshot,
+        Err(error) => {
+            return emit_report(HostReport::failure(format!("opaal: {error}\n").as_bytes()));
+        }
+    };
+    let session = Session::from_ambient_snapshot(snapshot, SessionOptions::default());
+    let mut evaluator = OpaalEvaluator {
+        session,
+        clock: SystemClock::new(),
+    };
     let mut output = io::stdout();
     let mut diagnostics = io::stderr();
     ExitCode::from(
@@ -460,6 +470,7 @@ fn run_interactive_with_editor(editor: &mut dyn LineEditor) -> ExitCode {
 
 struct OpaalEvaluator {
     session: Session,
+    clock: SystemClock,
 }
 
 impl InteractiveEvaluator for OpaalEvaluator {
@@ -475,15 +486,14 @@ impl InteractiveEvaluator for OpaalEvaluator {
         source: &str,
         output: &mut dyn Write,
     ) -> Result<EvaluationControl, InteractiveEvaluationError> {
-        let clock = FakeClock::new();
         let outcome = self
             .session
             .submit_with_value(
                 source_name(),
                 source,
-                &NoHost,
                 &PosixPlatform,
-                &clock,
+                &PosixPlatform,
+                &self.clock,
                 output,
             )
             .and_then(|(outcome, value)| {
@@ -628,12 +638,4 @@ fn render_background_failures(failures: &[BackgroundFailure]) -> String {
         .iter()
         .map(|failure| format!("opaal: {}\n", failure.render()))
         .collect()
-}
-
-struct NoHost;
-
-impl ExecutableProbe for NoHost {
-    fn is_executable(&self, _path: &OsStr) -> bool {
-        false
-    }
 }

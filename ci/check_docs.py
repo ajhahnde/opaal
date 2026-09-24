@@ -95,7 +95,8 @@ concepts/reproducibility-and-stale-plans.md
 concepts/resources-and-lifetimes.md
 concepts/security-model.md
 specification/README.md
-specification/1.0.md""".splitlines())
+specification/1.0.md
+specification/1.1.md""".splitlines())
 LINK = re.compile(r"(?<!!)\[[^]]*\]\(([^)]+)\)")
 TYPO = re.compile(r"\b(teh|recieve|seperate|occurence|enviroment|definately|wich|lenght|authroity|exectue)\b", re.I)
 NUMBER = re.compile(r"(?<![\w.])(\d[\d,]*)(?:\s+(KiB|MiB))?")
@@ -297,6 +298,37 @@ def limits(root: Path) -> list[str]:
                    f"documented {documented[value]}"
                    for value, count in source_values.items()
                    if documented[value] < count]
+    environment = (root / "crates/opaal-runtime/src/environment.rs").read_text()
+    snapshot = re.search(
+        r"pub const OPAAL: Self = Self::new\(\s*([^,]+),\s*([^)]+)\)", environment
+    )
+    if not snapshot:
+        return errors + ["missing direct CLI environment limits source"]
+    direct_limits = [
+        calculate(snapshot.group(1)),
+        calculate(snapshot.group(2)),
+        constant((root / "crates/opaal-runtime/src/resolve.rs").read_text(),
+                 "MAX_PATH_SEARCH_BYTES"),
+        constant((root / "crates/opaal-runtime/src/resolve.rs").read_text(),
+                 "MAX_PATH_SEARCH_ELEMENTS"),
+        constant((root / "crates/opaal-runtime/src/plan.rs").read_text(),
+                 "MAX_CHILD_STARTS_PER_SUBMISSION"),
+    ]
+    direct_row = next((line for line in docs.splitlines()
+                       if line.startswith("| 1.1 direct CLI process context |")), "")
+    direct_segments = direct_row.split("|")[2].split(";") if direct_row else []
+    if len(direct_segments) != len(direct_limits):
+        errors.append("1.1 direct CLI process context: expected five limit fields")
+    else:
+        for name, source_value, segment in zip(
+            ("environment entries", "environment bytes", "PATH bytes",
+             "PATH elements", "child starts"), direct_limits, direct_segments
+        ):
+            if documented_values(segment) != Counter([source_value]):
+                errors.append(
+                    f"1.1 direct CLI process context: {name} must equal "
+                    f"source limit {display(source_value)}"
+                )
     return errors
 
 

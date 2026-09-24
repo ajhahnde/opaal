@@ -47,6 +47,7 @@ class DocumentationCheckerTests(unittest.TestCase):
 | Evaluation | 1,000,000; 256; 1,000,000; 16 MiB |
 | Project control | 1 MiB; 16; 256; 64 |
 | Journal | 16 MiB; 100,000 |
+| 1.1 direct CLI process context | 1,000,000 native environment entries; 16 MiB combined native name and value bytes; 1 MiB `PATH`; 4,096 ordered `PATH` elements; 4,096 child starts per standalone run or interactive submission |
 """,
         )
         self.write(
@@ -78,6 +79,19 @@ const MAX_PROJECT_INPUTS: usize = 64;
             """const MAX_JOURNAL_BYTES: usize = 16 * 1024 * 1024;
 const MAX_JOURNAL_LINES: usize = 100_000;
 """,
+        )
+        self.write(
+            "crates/opaal-runtime/src/environment.rs",
+            "pub const OPAAL: Self = Self::new(1_000_000, 16 * 1024 * 1024);\n",
+        )
+        self.write(
+            "crates/opaal-runtime/src/resolve.rs",
+            "pub const MAX_PATH_SEARCH_BYTES: usize = 1024 * 1024;\n"
+            "pub const MAX_PATH_SEARCH_ELEMENTS: usize = 4_096;\n",
+        )
+        self.write(
+            "crates/opaal-runtime/src/plan.rs",
+            "pub const MAX_CHILD_STARTS_PER_SUBMISSION: usize = 4_096;\n",
         )
 
     def populate_catalogs(self) -> None:
@@ -159,6 +173,18 @@ fn parse_opaal_source() {}
         )
         findings = "\n".join(checker.limits(self.root))
         self.assertIn("Analysis: source limit 100,000 occurs 2 times, documented 1", findings)
+
+    def test_limits_reject_direct_process_drift(self) -> None:
+        self.populate_limits()
+        path = self.root / "docs/reference/limits.md"
+        path.write_text(
+            path.read_text(encoding="utf-8").replace("1 MiB `PATH`", "2 MiB `PATH`"),
+            encoding="utf-8",
+        )
+        self.assertIn(
+            "1.1 direct CLI process context: PATH bytes must equal source limit 1 MiB",
+            checker.limits(self.root),
+        )
 
     def test_catalogs_accept_exact_owners_and_report_export_drift(self) -> None:
         self.populate_catalogs()

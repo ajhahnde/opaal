@@ -46,28 +46,30 @@ use crate::eval::{
     evaluate_with_host_and_budget, expand_word_with_environment,
 };
 use crate::execute::{
-    MixedPipelineControl, MixedSegment, aggregate_statuses, execute_foreground_status,
-    start_mixed_pipeline,
+    MixedPipelineControl, MixedSegment, aggregate_statuses, attach_secondary,
+    execute_foreground_status, start_mixed_pipeline,
 };
 use crate::help::render_module_operation_help;
 use crate::internal::{
     DEFAULT_MATERIALIZATION_LIMIT, InternalPayload, InternalPipelineOutcome, StageOutcome,
-    execute_internal_pipeline, execute_internal_suffix, execute_stage,
+    execute_internal_pipeline_with_policy, execute_internal_suffix_with_policy, execute_stage,
 };
 use crate::job::JobPlacement;
 use crate::module::{ModuleAliasRegistry, RuntimeBindingTypes};
 use crate::operation::OperationDescriptor;
 use crate::outcome::{Refusal, RefusalReason};
 use crate::plan::{
-    ExecutionPlan, InternalStdoutRoute, PlannedResolution, PlannedStage, SessionOptions,
-    internal_stdout_route, plan_pipeline_with_options_and_binding_types, preflight,
+    ChildStartBudget, ExecutionPlan, InternalStdoutRoute, PlannedResolution, PlannedStage,
+    SessionOptions, internal_stdout_route, plan_pipeline_with_options_and_binding_types, preflight,
 };
 use crate::presentation::{
     OutputDestination, TerminalPresentation, render_table, select_terminal_presentation,
 };
 use crate::resolve::ExecutableProbe;
 use crate::stream::{BytePull, ByteStream, StreamPull, ValueStream};
-use crate::{Duration, Environment, Record, ScopeStack, Status, Table, Value};
+use crate::{
+    Duration, Environment, NativeSessionSnapshot, Record, ScopeStack, Status, Table, Value,
+};
 
 pub use crate::background::{
     BackgroundFailure, BackgroundFailureReason, JobCommandError, JobNotice, JobNoticeError,
@@ -129,6 +131,7 @@ pub struct Session {
     state: SessionState,
     options: SessionOptions,
     registry: CommandRegistry,
+    policy: EvaluationPolicy,
     next_source: u32,
     jobs: Option<BackgroundJobs>,
     opaal_aliases: ModuleAliasRegistry,
@@ -139,6 +142,16 @@ impl Session {
     #[must_use]
     pub fn new(cwd: impl Into<PathBuf>, environment: Environment, options: SessionOptions) -> Self {
         Self::with_scope(ScopeStack::new(), cwd, environment, options)
+    }
+
+    /// Build a foreground-only CLI session from a complete native snapshot.
+    /// Existing constructors remain deny by default.
+    #[must_use]
+    pub fn from_ambient_snapshot(snapshot: NativeSessionSnapshot, options: SessionOptions) -> Self {
+        let (cwd, environment) = snapshot.into_parts();
+        let mut session = Self::new(cwd, environment, options);
+        session.enable_ambient_process_policy();
+        session
     }
 
     /// Build a session seeded with an already-established scope.
@@ -172,6 +185,7 @@ impl Session {
             state: SessionState::new(cwd, environment),
             options,
             registry,
+            policy: EvaluationPolicy::PureOpaal,
             next_source: 1,
             jobs: None,
             opaal_aliases: ModuleAliasRegistry::default(),
@@ -200,6 +214,14 @@ impl Session {
     #[must_use]
     pub const fn registry(&self) -> &CommandRegistry {
         &self.registry
+    }
+
+    /// Select the narrow foreground ambient-process admission policy.
+    ///
+    /// Existing public session constructors remain deny by default; the CLI
+    /// reaches this only through an explicit native snapshot constructor.
+    pub(crate) fn enable_ambient_process_policy(&mut self) {
+        self.policy = EvaluationPolicy::AmbientProcess;
     }
 
     /// Qualified compiled operations visible to the current interactive session.
@@ -366,6 +388,7 @@ impl Session {
         let imports_analyzed = true;
         let limits = EvalLimits::pure_opaal(CancellationToken::never(), ResourceBudget::opaal());
         let mut budget = limits.resource_budget();
+        let mut child_starts = ChildStartBudget::per_submission();
 
         self.submit_parsed(
             source,
@@ -374,6 +397,7 @@ impl Session {
             Some(Arc::new(binding_types)),
             &limits,
             &mut budget,
+            &mut child_starts,
             probe,
             platform,
             clock,
@@ -392,6 +416,7 @@ impl Session {
         binding_types: Arc<RuntimeBindingTypes>,
         limits: &EvalLimits,
         budget: &mut ResourceBudget,
+        child_starts: &mut ChildStartBudget,
         probe: &dyn ExecutableProbe,
         platform: &dyn Platform,
         clock: &dyn Clock,
@@ -405,6 +430,7 @@ impl Session {
             Some(binding_types),
             limits,
             budget,
+            child_starts,
             probe,
             platform,
             clock,
@@ -423,6 +449,7 @@ impl Session {
         binding_types: Option<Arc<RuntimeBindingTypes>>,
         limits: &EvalLimits,
         budget: &mut ResourceBudget,
+        child_starts: &mut ChildStartBudget,
         probe: &dyn ExecutableProbe,
         platform: &dyn Platform,
         clock: &dyn Clock,
@@ -431,7 +458,7 @@ impl Session {
         let source_file = source.as_ref();
         let binding_types =
             binding_types.unwrap_or_else(|| Arc::new(RuntimeBindingTypes::default()));
-        let policy = EvaluationPolicy::PureOpaal;
+        let policy = self.policy;
         let Session {
             scope,
             state,
@@ -476,7 +503,7 @@ impl Session {
                     let background_span = job
                         .background_span
                         .expect("the guarded background statement has a marker");
-                    if policy == EvaluationPolicy::PureOpaal {
+                    if !policy.permits_background_processes() {
                         return Ok((
                             SubmitOutcome::Refused(Refusal::new(
                                 RefusalReason::Unsupported,
@@ -517,6 +544,8 @@ impl Session {
                             probe,
                             options,
                             Arc::clone(&binding_types),
+                            policy,
+                            child_starts,
                         )
                         .map_err(|error| runtime(source_file, &error))?
                     } else {
@@ -558,6 +587,7 @@ impl Session {
                             jobs,
                             output,
                             policy,
+                            child_starts,
                         };
                         evaluate_with_host_and_budget(
                             &one,
@@ -652,6 +682,71 @@ fn chain_is_standalone_exit(chain: &ConditionalChain, source: &SourceFile) -> bo
 fn chain_is_pure_opaal_host_control(chain: &ConditionalChain, source: &SourceFile) -> bool {
     (chain_is_standalone_help(chain, source) || chain_is_standalone_exit(chain, source))
         && chain_standalone_command_has_effect_free_arguments(chain)
+}
+
+const AMBIENT_PROCESS_TRANSFORMS: [&str; 16] = [
+    "check", "decode", "from", "encode", "to", "first", "last", "collect", "length", "lines",
+    "each", "where", "select", "get", "update", "sort",
+];
+
+fn chain_is_ambient_process_admitted(
+    chain: &ConditionalChain,
+    source: &SourceFile,
+    scope: &ScopeStack,
+    environment: &Environment,
+    registry: &CommandRegistry,
+) -> bool {
+    chain.or_terms().iter().all(|and_chain| {
+        and_chain.and_terms().iter().all(|pipeline| {
+            if let [stage] = pipeline.stages()
+                && let StageKind::Command(command) = stage.kind()
+                && command.head.kind() == CommandHeadKind::Bare
+                && ambient_process_core_name(command, source, scope, environment, registry)
+                    .is_some_and(|name| matches!(name, "cd" | "pwd" | "help" | "exit"))
+            {
+                return true;
+            }
+            let mut contains_external = false;
+            let admitted = pipeline.stages().iter().all(|stage| {
+                let StageKind::Command(command) = stage.kind() else {
+                    return false;
+                };
+                if command.head.kind() == CommandHeadKind::ForcedExternal {
+                    contains_external = true;
+                    return true;
+                }
+                ambient_process_core_name(command, source, scope, environment, registry)
+                    .is_some_and(|name| AMBIENT_PROCESS_TRANSFORMS.contains(&name))
+            });
+            admitted && contains_external
+        })
+    })
+}
+
+fn ambient_process_core_name<'registry>(
+    command: &opaal_syntax::CommandStage,
+    source: &SourceFile,
+    scope: &ScopeStack,
+    environment: &Environment,
+    registry: &'registry CommandRegistry,
+) -> Option<&'registry str> {
+    if !word_has_effect_free_parts(command.head.word()) {
+        return None;
+    }
+    let mut head_scope = scope.clone();
+    let expanded =
+        expand_word_with_environment(command.head.word(), source, &mut head_scope, environment)
+            .ok()?;
+    let name = expanded.value().to_str()?;
+    if scope.get(name).is_some() {
+        return None;
+    }
+    match registry.classify(name) {
+        CommandClassification::Core { signature, .. } => Some(signature.name()),
+        CommandClassification::Unknown
+        | CommandClassification::Alias { .. }
+        | CommandClassification::Reserved { .. } => None,
+    }
 }
 
 fn validate_bare_command_heads(
@@ -808,6 +903,28 @@ enum Interrupt {
     Output(io::Error),
 }
 
+#[derive(Debug)]
+struct OutputCleanupError {
+    output: io::Error,
+    cleanup: RuntimeError,
+}
+
+impl std::fmt::Display for OutputCleanupError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "output write failed: {}; process cleanup also failed: {}",
+            self.output, self.cleanup
+        )
+    }
+}
+
+impl std::error::Error for OutputCleanupError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.output)
+    }
+}
+
 /// Final stdout selected for every reached pipeline in one chain.
 enum ChainOutput<'output> {
     Session(&'output mut dyn Write),
@@ -828,6 +945,7 @@ struct SessionEvaluationHost<'session> {
     jobs: &'session mut Option<BackgroundJobs>,
     output: &'session mut dyn Write,
     policy: EvaluationPolicy,
+    child_starts: &'session mut ChildStartBudget,
 }
 
 impl EvaluationHost for SessionEvaluationHost<'_> {
@@ -888,9 +1006,18 @@ impl EvaluationHost for SessionEvaluationHost<'_> {
             self.registry,
         )
         .map_err(|error| Abort::Error(error.with_source(Arc::clone(&error_source))))?;
-        if self.policy == EvaluationPolicy::PureOpaal
-            && !chain_is_pure_opaal_host_control(chain, &context.source)
-        {
+        let admitted = match self.policy {
+            EvaluationPolicy::PureOpaal => chain_is_pure_opaal_host_control(chain, &context.source),
+            EvaluationPolicy::AmbientProcess => chain_is_ambient_process_admitted(
+                chain,
+                &context.source,
+                scope,
+                self.state.environment(),
+                self.registry,
+            ),
+            _ => true,
+        };
+        if !admitted {
             return Err(Abort::Refused(Refusal::new(
                 RefusalReason::Unsupported,
                 "process execution",
@@ -898,12 +1025,13 @@ impl EvaluationHost for SessionEvaluationHost<'_> {
             )));
         }
         let _ = &context.cancel;
-        if context.manage_foreground
+        let use_supervisor = if context.manage_foreground
             && self
                 .jobs
                 .as_ref()
                 .is_some_and(BackgroundJobs::manages_foreground)
-            && foreground_chain_requires_supervisor(
+        {
+            foreground_chain_requires_supervisor(
                 chain,
                 &context.source,
                 scope,
@@ -912,8 +1040,14 @@ impl EvaluationHost for SessionEvaluationHost<'_> {
                 self.registry,
                 self.probe,
                 &context.binding_types,
+                self.policy,
+                self.child_starts,
             )
-        {
+            .map_err(|error| runtime_error_abort(error, Arc::clone(&error_source)))?
+        } else {
+            false
+        };
+        if use_supervisor {
             let plan = supervisor_plan(
                 chain,
                 &context.source,
@@ -959,6 +1093,8 @@ impl EvaluationHost for SessionEvaluationHost<'_> {
             self.clock,
             self.jobs,
             context.manage_foreground,
+            self.policy,
+            self.child_starts,
             &mut output,
         )
         .map_err(|interrupt| interrupt.into_abort(error_source))?;
@@ -1041,12 +1177,15 @@ fn foreground_chain_requires_supervisor(
     registry: &CommandRegistry,
     probe: &dyn ExecutableProbe,
     binding_types: &Arc<RuntimeBindingTypes>,
-) -> bool {
+    policy: EvaluationPolicy,
+    child_starts: &mut ChildStartBudget,
+) -> Result<bool, RuntimeError> {
     if chain_contains_static_job_command(chain, source) {
-        return false;
+        return Ok(false);
     }
 
     let mut planned_scope = scope.clone();
+    let mut planned_child_starts = *child_starts;
     let pipeline_total = chain
         .or_terms()
         .iter()
@@ -1058,7 +1197,7 @@ fn foreground_chain_requires_supervisor(
     for and_chain in chain.or_terms() {
         for pipeline in and_chain.and_terms() {
             pipeline_count += 1;
-            let Ok(plan) = plan_pipeline_with_options_and_binding_types(
+            let plan = match plan_pipeline_with_options_and_binding_types(
                 pipeline,
                 state.cwd(),
                 source,
@@ -1068,8 +1207,19 @@ fn foreground_chain_requires_supervisor(
                 probe,
                 options,
                 Arc::clone(binding_types),
-            ) else {
-                return pipeline_total > 1;
+                policy,
+                &mut planned_child_starts,
+            ) {
+                Ok(plan) => plan,
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        RuntimeErrorKind::ChildStartLimitExceeded { .. }
+                    ) =>
+                {
+                    return Err(error);
+                }
+                Err(_) => return Ok(pipeline_total > 1),
             };
             for stage in plan.stages() {
                 match stage.resolution() {
@@ -1080,7 +1230,11 @@ fn foreground_chain_requires_supervisor(
         }
     }
 
-    has_external && (has_internal || pipeline_count > 1)
+    let required = has_external && (has_internal || pipeline_count > 1);
+    if required {
+        *child_starts = planned_child_starts;
+    }
+    Ok(required)
 }
 
 fn chain_contains_static_job_command(chain: &ConditionalChain, source: &SourceFile) -> bool {
@@ -1214,10 +1368,20 @@ impl Interrupt {
                 };
                 Abort::Cancelled(crate::eval::Cancellation::new(*reason, error.span()))
             }
-            Self::Runtime(error) if error.source().is_some() => Abort::Error(error),
-            Self::Runtime(error) => Abort::Error(error.with_source(source)),
+            Self::Runtime(error) => runtime_error_abort(error, source),
             Self::Output(error) => Abort::Output(error),
         }
+    }
+}
+
+fn runtime_error_abort(error: RuntimeError, source: Arc<SourceFile>) -> Abort {
+    if let RuntimeErrorKind::PolicyRefused { reason, operation } = error.kind() {
+        return Abort::Refused(Refusal::new(*reason, operation, error.span()));
+    }
+    if error.source().is_some() {
+        Abort::Error(error)
+    } else {
+        Abort::Error(error.with_source(source))
     }
 }
 
@@ -1241,6 +1405,8 @@ fn run_chain(
     clock: &dyn Clock,
     jobs: &mut Option<BackgroundJobs>,
     manage_foreground: bool,
+    policy: EvaluationPolicy,
+    child_starts: &mut ChildStartBudget,
     output: &mut ChainOutput<'_>,
 ) -> Result<ChainStep, Interrupt> {
     if let [and_chain] = chain.or_terms()
@@ -1259,6 +1425,8 @@ fn run_chain(
             clock,
             jobs,
             manage_foreground,
+            policy,
+            child_starts,
             output,
         );
     }
@@ -1279,6 +1447,8 @@ fn run_chain(
         platform,
         clock,
         jobs,
+        policy,
+        child_starts,
         output,
     )?;
     for and_chain in or_terms {
@@ -1301,6 +1471,8 @@ fn run_chain(
             platform,
             clock,
             jobs,
+            policy,
+            child_starts,
             output,
         )?;
     }
@@ -1320,6 +1492,8 @@ fn run_and_chain(
     platform: &dyn Platform,
     clock: &dyn Clock,
     jobs: &mut Option<BackgroundJobs>,
+    policy: EvaluationPolicy,
+    child_starts: &mut ChildStartBudget,
     output: &mut ChainOutput<'_>,
 ) -> Result<ChainStep, Interrupt> {
     let mut pipelines = chain.and_terms().iter();
@@ -1339,6 +1513,8 @@ fn run_and_chain(
         clock,
         jobs,
         false,
+        policy,
+        child_starts,
         output,
     )?;
     for pipeline in pipelines {
@@ -1362,6 +1538,8 @@ fn run_and_chain(
             clock,
             jobs,
             false,
+            policy,
+            child_starts,
             output,
         )?;
     }
@@ -1382,6 +1560,8 @@ fn run_pipeline_checked(
     clock: &dyn Clock,
     jobs: &mut Option<BackgroundJobs>,
     manage_foreground: bool,
+    policy: EvaluationPolicy,
+    child_starts: &mut ChildStartBudget,
     output: &mut ChainOutput<'_>,
 ) -> Result<ChainStep, Interrupt> {
     run_pipeline(
@@ -1397,6 +1577,8 @@ fn run_pipeline_checked(
         clock,
         jobs,
         manage_foreground,
+        policy,
+        child_starts,
         output,
     )
 }
@@ -1415,6 +1597,8 @@ fn run_pipeline(
     clock: &dyn Clock,
     jobs: &mut Option<BackgroundJobs>,
     manage_foreground: bool,
+    policy: EvaluationPolicy,
+    child_starts: &mut ChildStartBudget,
     output: &mut ChainOutput<'_>,
 ) -> Result<ChainStep, Interrupt> {
     let plan = plan_pipeline_with_options_and_binding_types(
@@ -1427,6 +1611,8 @@ fn run_pipeline(
         probe,
         options,
         Arc::clone(binding_types),
+        policy,
+        child_starts,
     )?;
     validate_job_builtin_arguments(&plan)?;
 
@@ -1464,9 +1650,18 @@ fn run_pipeline(
                 platform,
                 source,
                 jobs,
+                policy,
             )?
         } else {
-            execute_internal_pipeline(&plan, &mut pending_state, registry, probe, platform, source)?
+            execute_internal_pipeline_with_policy(
+                &plan,
+                &mut pending_state,
+                registry,
+                probe,
+                platform,
+                source,
+                policy,
+            )?
         };
         return match outcome {
             InternalPipelineOutcome::Exit(code) => {
@@ -1502,7 +1697,7 @@ fn run_pipeline(
         .any(|stage| matches!(stage.resolution(), PlannedResolution::Internal { .. }))
     {
         return run_mixed_pipeline(
-            &plan, state, registry, source, probe, platform, clock, output,
+            &plan, state, registry, source, probe, platform, clock, policy, output,
         );
     }
 
@@ -1769,6 +1964,7 @@ fn is_job_table_head(plan: &ExecutionPlan) -> bool {
 /// The snapshot is produced here rather than in the built-in executor because
 /// the coordinator is deliberately outside the clonable [`SessionState`] that
 /// ordinary lazy built-ins roll back.
+#[allow(clippy::too_many_arguments)]
 fn execute_job_table_pipeline(
     plan: &ExecutionPlan,
     state: &mut SessionState,
@@ -1777,6 +1973,7 @@ fn execute_job_table_pipeline(
     platform: &dyn Platform,
     source: &SourceFile,
     jobs: &mut Option<BackgroundJobs>,
+    policy: EvaluationPolicy,
 ) -> Result<InternalPipelineOutcome, RuntimeError> {
     let head = plan
         .stages()
@@ -1795,7 +1992,7 @@ fn execute_job_table_pipeline(
         .map(job_table_row)
         .collect::<Vec<_>>();
     let status = Status::exit(0, Duration::ZERO).expect("zero is a valid snapshot status");
-    execute_internal_suffix(
+    execute_internal_suffix_with_policy(
         plan,
         1,
         InternalPayload::ValueStream(ValueStream::from_values(rows)),
@@ -1805,6 +2002,7 @@ fn execute_job_table_pipeline(
         probe,
         platform,
         source,
+        policy,
     )
 }
 
@@ -2052,8 +2250,11 @@ fn run_mixed_pipeline(
     probe: &dyn ExecutableProbe,
     platform: &dyn Platform,
     clock: &dyn Clock,
+    policy: EvaluationPolicy,
     output: &mut ChainOutput<'_>,
 ) -> Result<ChainStep, Interrupt> {
+    use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
+
     let topology = plan
         .mixed_topology()
         .expect("the caller found a mixed pipeline topology");
@@ -2099,42 +2300,60 @@ fn run_mixed_pipeline(
             let closure_environment = closure_environment.clone();
             let control = control.clone();
             workers.push(scope.spawn(move || {
-                let result = run_mixed_segment(
-                    segment,
-                    plan,
-                    registry,
-                    source,
-                    probe,
-                    platform,
-                    preparation,
-                    closure_environment,
-                    control.clone(),
-                    None,
-                    None,
-                );
+                let result = match catch_unwind(AssertUnwindSafe(|| {
+                    run_mixed_segment(
+                        segment,
+                        plan,
+                        registry,
+                        source,
+                        probe,
+                        platform,
+                        preparation,
+                        closure_environment,
+                        control.clone(),
+                        policy,
+                        None,
+                        None,
+                    )
+                })) {
+                    Ok(result) => result,
+                    Err(panic) => {
+                        control.cancel_and_reap(platform);
+                        resume_unwind(panic);
+                    }
+                };
                 if result.as_ref().is_err_and(|failure| !failure.triggered) {
-                    control.cancel_and_reap();
+                    control.cancel_and_reap(platform);
                 }
                 result
             }));
         }
 
         let final_result = final_segment.map(|segment| {
-            let result = run_mixed_segment(
-                segment,
-                plan,
-                registry,
-                source,
-                probe,
-                platform,
-                Arc::clone(&preparation),
-                closure_environment.clone(),
-                control.clone(),
-                presentation.as_ref(),
-                Some(output),
-            );
+            let result = match catch_unwind(AssertUnwindSafe(|| {
+                run_mixed_segment(
+                    segment,
+                    plan,
+                    registry,
+                    source,
+                    probe,
+                    platform,
+                    Arc::clone(&preparation),
+                    closure_environment.clone(),
+                    control.clone(),
+                    policy,
+                    presentation.as_ref(),
+                    Some(output),
+                )
+            })) {
+                Ok(result) => result,
+                Err(panic) => {
+                    control.cancel_and_reap(platform);
+                    resume_unwind(panic);
+                }
+            };
             if result.as_ref().is_err_and(|failure| !failure.triggered) {
-                control.cancel_and_reap();
+                control.cancel_and_reap(platform);
             }
             result
         });
@@ -2182,8 +2401,9 @@ fn run_mixed_pipeline(
         let Err(failure) = segment_results.remove(failure_index) else {
             unreachable!("the selected mixed segment result is a failure");
         };
-        mixed.terminate();
-        return Err(*failure.interrupt);
+        let cleanup = mixed.terminate(platform, plan);
+        let interrupt = *failure.interrupt;
+        return Err(attach_mixed_cleanup(interrupt, cleanup));
     }
 
     let mut pending_state = preparation
@@ -2233,7 +2453,7 @@ fn run_mixed_pipeline(
         }
     }
     if let Some(code) = requested_exit {
-        mixed.terminate();
+        mixed.terminate(platform, plan)?;
         *state = pending_state;
         return Ok(ChainStep::Exit(code));
     }
@@ -2262,6 +2482,19 @@ fn run_mixed_pipeline(
     pending_state.set_current_status(Some(status.clone()));
     *state = pending_state;
     Ok(ChainStep::Status(status))
+}
+
+fn attach_mixed_cleanup(interrupt: Interrupt, cleanup: Result<(), RuntimeError>) -> Interrupt {
+    match (interrupt, cleanup) {
+        (Interrupt::Runtime(primary), Err(cleanup)) => {
+            Interrupt::Runtime(attach_secondary(primary, Some(cleanup)))
+        }
+        (Interrupt::Output(output), Err(cleanup)) => Interrupt::Output(io::Error::new(
+            output.kind(),
+            OutputCleanupError { output, cleanup },
+        )),
+        (interrupt, _) => interrupt,
+    }
 }
 
 enum StageStatusSlot {
@@ -2444,6 +2677,7 @@ fn run_mixed_segment(
     preparation: Arc<MixedPreparation>,
     closure_environment: Environment,
     control: MixedPipelineControl,
+    policy: EvaluationPolicy,
     presentation: Option<&TerminalPresentation>,
     output: Option<&mut ChainOutput<'_>>,
 ) -> Result<MixedSegmentResult, MixedSegmentFailure> {
@@ -2460,14 +2694,19 @@ fn run_mixed_segment(
             InternalPayload::ByteStream(pipe_byte_stream(reader, plan.stages()[first_stage].span()))
         });
     let cancellation_control = control.clone();
-    let closure_context = OwnedClosureContext::new(
-        source.clone(),
-        closure_environment,
+    let closure_limits = if policy == EvaluationPolicy::AmbientProcess {
+        EvalLimits::ambient_process(
+            CancellationToken::from_fn(move || cancellation_control.is_cancelled()),
+            ResourceBudget::unlimited(),
+        )
+    } else {
         EvalLimits::new(
             CancellationToken::from_fn(move || cancellation_control.is_cancelled()),
             ResourceBudget::unlimited(),
-        ),
-    );
+        )
+    };
+    let closure_context =
+        OwnedClosureContext::new(source.clone(), closure_environment, closure_limits);
     let mut statuses = Vec::with_capacity(stages.len());
     let mut deferred_checks = Vec::new();
 
@@ -2550,7 +2789,7 @@ fn run_mixed_segment(
                 };
                 drop(prepared);
                 drop(resource);
-                control.cancel_and_reap();
+                control.cancel_and_reap(platform);
                 return Ok(result);
             }
             Err(error) => {
@@ -2996,6 +3235,41 @@ pub(crate) fn render_runtime_diagnostic(
 }
 
 #[cfg(test)]
+mod mixed_output_cleanup_tests {
+    use super::*;
+
+    #[test]
+    fn fatal_output_failure_retains_cleanup_failure_and_original_output_error() {
+        let source = SourceFile::new(SourceId::new(1), "mixed-output.opaal", "");
+        let cleanup = RuntimeError::new(
+            RuntimeErrorKind::ProcessCleanup {
+                message: "group termination failed".to_owned(),
+            },
+            source.span(0..0).expect("empty source has an empty span"),
+        );
+        let output = io::Error::new(io::ErrorKind::BrokenPipe, "sink closed");
+        let Interrupt::Output(error) =
+            attach_mixed_cleanup(Interrupt::Output(output), Err(cleanup))
+        else {
+            panic!("an output failure must remain fatal");
+        };
+        assert_eq!(error.kind(), io::ErrorKind::BrokenPipe);
+        assert!(error.to_string().contains("sink closed"));
+        assert!(error.to_string().contains("group termination failed"));
+        let detail = error
+            .get_ref()
+            .and_then(|error| error.downcast_ref::<OutputCleanupError>())
+            .expect("both failures remain available through the error source");
+        assert_eq!(detail.output.kind(), io::ErrorKind::BrokenPipe);
+        assert!(matches!(
+            detail.cleanup.kind(),
+            RuntimeErrorKind::ProcessCleanup { message }
+                if message == "group termination failed"
+        ));
+    }
+}
+
+#[cfg(test)]
 mod core_command_usage_tests {
     use super::*;
     use std::ffi::OsStr;
@@ -3046,5 +3320,437 @@ mod core_command_usage_tests {
             validate_job_builtin_arguments(&plan_job_command(source))
                 .unwrap_or_else(|error| panic!("{source:?} must be accepted: {error}"));
         }
+    }
+}
+
+#[cfg(test)]
+mod ambient_process_policy_tests {
+    use super::*;
+    use std::ffi::OsStr;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use opaal_platform::{
+        Capabilities, ChildProcess, DescriptorEndpoint, DirectoryReadError, DirectoryReadRequest,
+        DirectoryStream, FakePlatform, FileActionError, FileIoEndpoint, FileOpenRequest,
+        PipeEndpoints, PipeError, RecordingPlatform, SpawnError, SpawnRequest,
+    };
+
+    use crate::eval::FakeClock;
+
+    #[derive(Default)]
+    struct CountingExecutableProbe {
+        calls: AtomicUsize,
+        executable: bool,
+    }
+
+    impl CountingExecutableProbe {
+        const fn accepting() -> Self {
+            Self {
+                calls: AtomicUsize::new(0),
+                executable: true,
+            }
+        }
+
+        fn calls(&self) -> usize {
+            self.calls.load(Ordering::Relaxed)
+        }
+    }
+
+    impl ExecutableProbe for CountingExecutableProbe {
+        fn is_executable(&self, _path: &OsStr) -> bool {
+            self.calls.fetch_add(1, Ordering::Relaxed);
+            self.executable
+        }
+    }
+
+    #[derive(Default)]
+    struct ForbiddenHostCalls {
+        file: AtomicUsize,
+        directory: AtomicUsize,
+        spawn: AtomicUsize,
+    }
+
+    struct CountingPlatform {
+        inner: FakePlatform,
+        calls: Arc<ForbiddenHostCalls>,
+    }
+
+    impl CountingPlatform {
+        fn full() -> (Self, Arc<ForbiddenHostCalls>) {
+            let calls = Arc::new(ForbiddenHostCalls::default());
+            (
+                Self {
+                    inner: FakePlatform::full(),
+                    calls: Arc::clone(&calls),
+                },
+                calls,
+            )
+        }
+    }
+
+    impl Platform for CountingPlatform {
+        fn capabilities(&self) -> Capabilities {
+            self.inner.capabilities()
+        }
+
+        fn pipe(&self) -> Result<PipeEndpoints, PipeError> {
+            self.inner.pipe()
+        }
+
+        fn open_file(
+            &self,
+            request: FileOpenRequest<'_>,
+        ) -> Result<Box<dyn DescriptorEndpoint>, FileActionError> {
+            self.calls.file.fetch_add(1, Ordering::Relaxed);
+            self.inner.open_file(request)
+        }
+
+        fn open_file_io(
+            &self,
+            request: FileOpenRequest<'_>,
+        ) -> Result<Box<dyn FileIoEndpoint>, FileActionError> {
+            self.calls.file.fetch_add(1, Ordering::Relaxed);
+            self.inner.open_file_io(request)
+        }
+
+        fn inherit_descriptor(
+            &self,
+            descriptor: u32,
+        ) -> Result<Box<dyn DescriptorEndpoint>, FileActionError> {
+            self.inner.inherit_descriptor(descriptor)
+        }
+
+        fn read_directory(
+            &self,
+            request: DirectoryReadRequest<'_>,
+        ) -> Result<Box<dyn DirectoryStream>, DirectoryReadError> {
+            self.calls.directory.fetch_add(1, Ordering::Relaxed);
+            self.inner.read_directory(request)
+        }
+
+        fn spawn(&self, request: &SpawnRequest<'_>) -> Result<Box<dyn ChildProcess>, SpawnError> {
+            self.calls.spawn.fetch_add(1, Ordering::Relaxed);
+            self.inner.spawn(request)
+        }
+    }
+
+    fn assert_no_forbidden_host_calls(
+        source: &str,
+        probe: &CountingExecutableProbe,
+        calls: &ForbiddenHostCalls,
+    ) {
+        assert_eq!(probe.calls(), 0, "{source:?} reached executable probing");
+        assert_eq!(
+            calls.file.load(Ordering::Relaxed),
+            0,
+            "{source:?} opened a file"
+        );
+        assert_eq!(
+            calls.directory.load(Ordering::Relaxed),
+            0,
+            "{source:?} read a directory"
+        );
+        assert_eq!(
+            calls.spawn.load(Ordering::Relaxed),
+            0,
+            "{source:?} reached process spawn"
+        );
+    }
+
+    fn ambient_admits(text: &str) -> bool {
+        let source = SourceFile::new(SourceId::new(1), "ambient-policy.opaal", text);
+        let ParseOutcome::Complete(script) = parse_opaal(&source) else {
+            panic!("ambient policy fixture must parse: {text:?}");
+        };
+        let StatementKind::Job(job) = script.statements()[0].kind() else {
+            panic!("ambient policy fixture must contain one command job: {text:?}");
+        };
+        chain_is_ambient_process_admitted(
+            &job.chain,
+            &source,
+            &ScopeStack::new(),
+            &Environment::new(),
+            &standard_registry(),
+        )
+    }
+
+    fn ambient_session() -> Session {
+        let snapshot = NativeSessionSnapshot::from_snapshot(
+            "/ambient",
+            [
+                ("PATH", "/tools"),
+                ("OPAAL_POLICY_SECRET", "not-readable"),
+                ("PWD", "/ambient"),
+            ],
+            crate::HostEnvironmentLimits::OPAAL,
+        )
+        .expect("the ambient fixture has a valid native snapshot");
+        Session::from_ambient_snapshot(snapshot, SessionOptions::default())
+    }
+
+    fn submit_ambient(
+        session: &mut Session,
+        source: &str,
+        probe: &dyn ExecutableProbe,
+        platform: &dyn Platform,
+    ) -> Result<SubmitOutcome, SubmitError> {
+        session.submit(
+            "ambient-policy.opaal",
+            source,
+            probe,
+            platform,
+            &FakeClock::new(),
+            &mut Vec::new(),
+        )
+    }
+
+    #[test]
+    fn ambient_process_admission_matrix_is_exact() {
+        for source in [
+            "^tool\n",
+            "^tool > output\n",
+            "^tool | check\n",
+            "^tool | decode utf8\n",
+            "^tool | from json\n",
+            "^tool | encode utf8\n",
+            "^tool | to json\n",
+            "^tool | first\n",
+            "^tool | last\n",
+            "^tool | collect\n",
+            "^tool | length\n",
+            "^tool | lines\n",
+            "^tool | each {|value| value}\n",
+            "^tool | where {|value| true}\n",
+            "^tool | select field\n",
+            "^tool | get field\n",
+            "^tool | update field value\n",
+            "^tool | sort\n",
+            "^first | decode utf8 | collect\n",
+            "^first && ^second\n",
+            "cd child && ^tool\n",
+            "^tool && pwd\n",
+            "cd {path}\n",
+            "pwd\n",
+            "help\n",
+            "exit 0\n",
+        ] {
+            assert!(ambient_admits(source), "expected admission for {source:?}");
+        }
+
+        for source in [
+            "tool\n",
+            "check\n",
+            "decode utf8\n",
+            "which tool\n",
+            "ls\n",
+            "open file\n",
+            "save file\n",
+            "jobs\n",
+            "fg\n",
+            "bg\n",
+            "wait\n",
+            "kill '%1'\n",
+            "^tool | ls\n",
+        ] {
+            assert!(!ambient_admits(source), "expected refusal for {source:?}");
+        }
+    }
+
+    #[test]
+    fn ambient_process_policy_starts_only_explicit_foreground_programs() {
+        let probe = CountingExecutableProbe::accepting();
+        let platform = RecordingPlatform::new(FakePlatform::full());
+        let spawns = platform.spawn_log();
+        let outcome = submit_ambient(&mut ambient_session(), "^tool\n", &probe, &platform)
+            .expect("an admitted fake program must complete");
+
+        assert_eq!(outcome, SubmitOutcome::Continued);
+        assert_eq!(probe.calls(), 1);
+        assert_eq!(spawns.records().len(), 1);
+    }
+
+    #[test]
+    fn ambient_process_policy_refuses_every_other_command_route_before_host_access() {
+        for source in [
+            "check\n",
+            "decode utf8\n",
+            "which tool\n",
+            "ls\n",
+            "open file\n",
+            "save file\n",
+            "jobs\n",
+            "fg\n",
+            "bg\n",
+            "wait\n",
+            "kill '%1'\n",
+            "^tool | ls\n",
+        ] {
+            let probe = CountingExecutableProbe::accepting();
+            let (platform, calls) = CountingPlatform::full();
+            let outcome = submit_ambient(&mut ambient_session(), source, &probe, &platform)
+                .unwrap_or_else(|error| panic!("{source:?} must refuse, not fail: {error:?}"));
+
+            assert!(
+                matches!(
+                    outcome,
+                    SubmitOutcome::Refused(refusal)
+                        if refusal.reason() == RefusalReason::Unsupported
+                            && refusal.operation() == "process execution"
+                ),
+                "unexpected outcome for {source:?}: {outcome:?}",
+            );
+            assert_no_forbidden_host_calls(source, &probe, &calls);
+        }
+    }
+
+    #[test]
+    fn ambient_process_policy_refuses_background_environment_reads_and_globbing() {
+        for (source, operation) in [
+            ("^tool &\n", "background process execution"),
+            (
+                "let value = env('OPAAL_POLICY_SECRET')\n",
+                "environment read",
+            ),
+            ("let files = glob('*')\n", "filesystem read"),
+        ] {
+            let probe = CountingExecutableProbe::accepting();
+            let (platform, calls) = CountingPlatform::full();
+            let outcome = submit_ambient(&mut ambient_session(), source, &probe, &platform)
+                .unwrap_or_else(|error| panic!("{source:?} must refuse, not fail: {error:?}"));
+
+            assert!(
+                matches!(
+                    outcome,
+                    SubmitOutcome::Refused(refusal)
+                        if refusal.reason() == RefusalReason::Unsupported
+                            && refusal.operation() == operation
+                ),
+                "unexpected outcome for {source:?}: {outcome:?}",
+            );
+            assert_no_forbidden_host_calls(source, &probe, &calls);
+        }
+    }
+
+    #[test]
+    fn default_embedding_refuses_external_execution_before_probe_or_spawn() {
+        let probe = CountingExecutableProbe::accepting();
+        let (platform, calls) = CountingPlatform::full();
+        let mut session = Session::new(
+            "/embedding",
+            Environment::from_snapshot([("PATH", "/tools")]),
+            SessionOptions::default(),
+        );
+        let outcome = session
+            .submit(
+                "default-embedding.opaal",
+                "^tool\n",
+                &probe,
+                &platform,
+                &FakeClock::new(),
+                &mut Vec::new(),
+            )
+            .expect("the default embedding must return a structured refusal");
+
+        assert!(matches!(
+            outcome,
+            SubmitOutcome::Refused(refusal)
+                if refusal.reason() == RefusalReason::Unsupported
+                    && refusal.operation() == "process execution"
+        ));
+        assert_no_forbidden_host_calls("^tool\n", &probe, &calls);
+    }
+
+    #[test]
+    fn ambient_process_policy_reaches_argument_expansion_but_never_process_spawn() {
+        for (source, operation) in [
+            (
+                "^tool \"{env('OPAAL_POLICY_SECRET')}\"\n",
+                "environment read",
+            ),
+            (
+                "^tool ...{[env('OPAAL_POLICY_SECRET')]}\n",
+                "environment read",
+            ),
+            (
+                "^tool > \"{env('OPAAL_POLICY_SECRET')}\"\n",
+                "environment read",
+            ),
+            (
+                "import std::time as time\n^tool \"{time::wall_now()}\"\n",
+                "operational standard module",
+            ),
+            (
+                "action effect() -> String effects { clock.wall; } { return 'done' }\n^tool \"{effect()}\"\n",
+                "effectful action execution",
+            ),
+        ] {
+            let probe = CountingExecutableProbe::accepting();
+            let (platform, calls) = CountingPlatform::full();
+            let outcome = submit_ambient(&mut ambient_session(), source, &probe, &platform)
+                .unwrap_or_else(|error| panic!("{source:?} must refuse, not fail: {error:?}"));
+
+            assert!(
+                matches!(
+                    outcome,
+                    SubmitOutcome::Refused(refusal)
+                        if refusal.reason() == RefusalReason::Unsupported
+                            && refusal.operation() == operation
+                ),
+                "unexpected outcome for {source:?}: {outcome:?}",
+            );
+            assert_eq!(
+                probe.calls(),
+                1,
+                "{source:?} did not reach direct resolution"
+            );
+            assert_eq!(
+                calls.file.load(Ordering::Relaxed),
+                0,
+                "{source:?} opened a file"
+            );
+            assert_eq!(
+                calls.directory.load(Ordering::Relaxed),
+                0,
+                "{source:?} read a directory"
+            );
+            assert_eq!(
+                calls.spawn.load(Ordering::Relaxed),
+                0,
+                "{source:?} reached process spawn"
+            );
+        }
+    }
+
+    #[test]
+    fn ambient_process_policy_admits_only_named_session_context_controls() {
+        let probe = CountingExecutableProbe::default();
+        let platform = RecordingPlatform::new(FakePlatform::full());
+        let mut session = ambient_session();
+
+        assert_eq!(
+            submit_ambient(
+                &mut session,
+                "let path = 'child'\ncd {path}\nexport SAMPLE = 'value'\n",
+                &probe,
+                &platform,
+            )
+            .expect("named ambient context controls must complete"),
+            SubmitOutcome::Continued,
+        );
+        assert_eq!(session.cwd(), Path::new("/ambient/child"));
+        assert_eq!(
+            session.environment().get("SAMPLE"),
+            Some(OsStr::new("value"))
+        );
+        assert_eq!(probe.calls(), 0);
+        assert!(platform.spawn_log().records().is_empty());
+
+        assert_eq!(
+            submit_ambient(&mut session, "unset SAMPLE\n", &probe, &platform)
+                .expect("unset is a named ambient context control"),
+            SubmitOutcome::Continued,
+        );
+        assert!(!session.environment().contains("SAMPLE"));
     }
 }

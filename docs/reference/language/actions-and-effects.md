@@ -6,4 +6,10 @@ The closed effect families are `filesystem.read`, `filesystem.write`, `process.r
 
 Actions may call functions and statically named actions. The graph must be acyclic, at most 64 calls deep, and contain at most 1,024 actions. Every caller declares the requests reachable through its callees. A function cannot call an action; an action is not a first-class value. A `task` declaration appears only in a project's manifest-selected root module and exports one action without overriding its signature or effects.
 
-Ordinary script and interactive evaluation refuse an effectful invocation before platform access. A project check compares declared requests with exact authority and target capabilities without running the task. Execution requires a reviewed plan digest for that task. Read [authority](../operational/authority.md) for grants, denials, and enforcement verdicts.
+Ordinary script and interactive evaluation refuse an effectful action
+invocation before platform access. This does not describe the separate 1.1
+foreground `^program` route. A project check compares declared requests with
+exact authority and target capabilities without running the task. Execution
+requires a reviewed plan digest for that task. Read
+[authority](../operational/authority.md) for grants, denials, and enforcement
+verdicts.

@@ -5,12 +5,13 @@ contains its standalone syntax, runtime, command-line client, platform
 contracts, POSIX adapter, and Language Server Protocol implementation.
 
 > OPAAL 1.0's explicit project surface can inspect, check, render, explicitly accept,
-> execute, journal, and audit one typed task under bound authority. Standalone
-> source remains non-operational. A non-publishing qualification workflow
-> checks release eligibility separately from publication.
+> execute, journal, and audit one typed task under bound authority. The
+> unreleased 1.1 source contract adds direct foreground `^program` execution
+> in the standalone and interactive clients. A non-publishing qualification
+> workflow checks release eligibility separately from publication.
 
-The current checkout builds `1.0.0`. The product documentation states the
-OPAAL 1.0 contract. The `v1.0.0` GitHub release provides tagged source and
+The current checkout builds `1.0.0` while developing the 1.1 contract. The
+`v1.0.0` GitHub release provides tagged source and
 binary archives for Linux x86_64 and macOS arm64. Each archive contains
 `opaal`, `opaal-language-server`, the license, and this README, with an
 accompanying SHA-256 checksum. The tagged source includes the pinned Rust
@@ -51,7 +52,8 @@ cargo run --locked -p opaal-cli --bin opaal -- check examples/language-foundatio
 cargo run --locked -p opaal-cli --bin opaal -- format --check examples/language-foundation.opaal
 ```
 
-Successful non-interactive execution is silent; the embedding API retains the
+The pure example finishes without printing its final value; a foreground
+external program can write to stdout and stderr. The embedding API retains the
 final value. Running `opaal` without a script in a terminal starts the
 interactive client, which presents completed values. The interactive client is
 a language evaluator; project-management commands are not part of its surface.
@@ -59,7 +61,9 @@ a language evaluator; project-management commands are not part of its surface.
 OPAAL uses one value language throughout: bare names read bindings, the final
 expression is a block's value, `{expression}` interpolates into a command word,
 `...{expression}` spreads a list, and only a literal head prefixed with `^`
-denotes an external program. An unknown name never launches a host process.
+denotes an external program. In 1.1 standalone and interactive sessions, that
+head can launch a foreground child. An unknown bare name never launches a host
+process.
 
 ## Current surfaces
 

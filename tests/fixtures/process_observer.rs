@@ -29,6 +29,14 @@ fn main() {
 
     fs::write(report_path, report).expect("report should be written");
 
+    if let (Some(name), Some(path)) = (
+        env::var_os("OPAAL_PROBE_NATIVE_NAME"),
+        env::var_os("OPAAL_PROBE_NATIVE_REPORT"),
+    ) {
+        let value = env::var_os(&name).expect("native environment name should survive spawn");
+        fs::write(path, value.as_bytes()).expect("native environment report should be written");
+    }
+
     // Written to a per-process file inside the named directory: the probe must
     // not disturb the byte layout the argv, environment, and descriptor tests
     // compare exactly, and two pipeline members sharing one environment must

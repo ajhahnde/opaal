@@ -1,0 +1,6 @@
+^opaal-direct-probe args "two words" "" "λ"
+^opaal-direct-probe env OPAAL_GOLDEN_VALUE
+^opaal-direct-probe pwd
+^opaal-direct-probe emit | ^opaal-direct-probe copy
+^opaal-direct-probe copy < golden-input.txt > golden-output.txt
+^opaal-direct-probe status 7
