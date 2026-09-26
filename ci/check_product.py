@@ -31,7 +31,7 @@ FUZZ_PATH_PACKAGES = {"opaal-platform", "opaal-runtime", "opaal-syntax"}
 QUALIFICATION_FILES = {
     "ci/qualify_operational_core.py",
     "ci/tests/test_qualify_operational_core.py",
-    "docs/release-readiness.md",
+    "RELEASING.md",
     "tests/golden/release-readiness/Cargo.lock",
     "tests/golden/release-readiness/Cargo.toml",
     "tests/golden/release-readiness/authority-ci.toml",

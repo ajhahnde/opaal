@@ -73,4 +73,4 @@ operator-controlled release review. It does not change the development version,
 publish a crate, package a binary, create a tag or release, qualify another
 operating-system image, or establish downstream hardware support.
 
-[← Documentation index](README.md) · [Project lifecycle](reference/operational/lifecycle.md) · [Development](development.md)
+[← Repository overview](README.md) · [Project lifecycle](https://opaal-lang.org/docs/projects/) · [Development](DEVELOPMENT.md)

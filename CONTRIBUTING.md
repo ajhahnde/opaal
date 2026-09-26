@@ -17,7 +17,7 @@ state, or unrelated logs in a public issue.
 ## Maintainer workflow
 
 Repository changes use a focused branch from `main` and the applicable checks
-in the [development guide](docs/development.md). Pull requests for maintainer
+in the [development guide](DEVELOPMENT.md). Pull requests for maintainer
 branches must pass the `required` and `security-required` checks. Keep
 generated build, fuzz, and benchmark-result files out of commits.
 

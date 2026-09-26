@@ -4,27 +4,22 @@ OPAAL is the Operational Programming & Automation Language. This repository
 contains its standalone syntax, runtime, command-line client, platform
 contracts, POSIX adapter, and Language Server Protocol implementation.
 
+The [OPAAL website](https://opaal-lang.org/) is the home of the
+[product documentation](https://opaal-lang.org/docs/),
+[learning guides](https://opaal-lang.org/learn/), and
+[downloads](https://opaal-lang.org/download/). This repository contains the
+source code, contributor information, and maintainer guides.
+
 > OPAAL 1.0's explicit project surface can inspect, check, render, explicitly accept,
 > execute, journal, and audit one typed task under bound authority. The
 > unreleased 1.1 source contract adds direct foreground `^program` execution
 > in the standalone and interactive clients. A non-publishing qualification
 > workflow checks release eligibility separately from publication.
 
-The current checkout builds `1.0.0` while developing the 1.1 contract. The
-`v1.0.0` GitHub release provides tagged source and
-binary archives for Linux x86_64 and macOS arm64. Each archive contains
-`opaal`, `opaal-language-server`, the license, and this README, with an
-accompanying SHA-256 checksum. The tagged source includes the pinned Rust
-toolchain; support claims remain limited to the qualified Linux and macOS
-surfaces below.
-
-For a binary install, download the archive and matching `.sha256` file from the
-GitHub release into the same directory. From that directory, verify with
-`sha256sum -c FILE.tar.gz.sha256` on Linux or
-`shasum -a 256 -c FILE.tar.gz.sha256` on macOS, then unpack with
-`tar -xzf FILE.tar.gz`.
-Run `./opaal-v1.0.0-PLATFORM/opaal --version` before placing the programs on
-your `PATH`, replacing `PLATFORM` with the archive's platform suffix.
+OPAAL 1.0.0 is the current published release. The source tree can contain
+unreleased changes; [the changelog](CHANGELOG.md) identifies them. Follow the
+[download and installation guide](https://opaal-lang.org/download/) for the
+released Linux x86_64 and macOS arm64 archives and checksum instructions.
 
 ## Try OPAAL
 
@@ -92,7 +87,7 @@ process.
   signature help, definitions, references, and whole-document formatting. An
   editor may select exactly one project with the absolute manifest `file:` URI
   in `initializationOptions.opaal.projectManifest`; omission is standalone
-  mode. See the [language server reference](docs/reference/tooling/lsp.md).
+  mode. See the [editor-services reference](https://opaal-lang.org/docs/developer-services/).
 
 Effectful action declarations are statically analyzed everywhere. Ordinary
 script and interactive evaluation still refuse them before host access; only
@@ -142,12 +137,12 @@ Host success establishes only the exercised macOS/Linux surfaces. It does not
 claim packaging by another operating system, Redox support, or physical
 hardware qualification.
 
-Read the [documentation index](docs/README.md), [getting started](docs/learn/getting-started.md),
-[first project](docs/learn/first-project.md), [language reference](docs/reference/language/README.md),
-[operational lifecycle](docs/reference/operational/lifecycle.md), and
-[platform support](docs/reference/platform-support.md). Repository guides cover
-[release qualification](docs/release-readiness.md),
-[development](docs/development.md), [feedback policy](CONTRIBUTING.md),
+The website provides the [language reference](https://opaal-lang.org/docs/language/),
+[project and authority reference](https://opaal-lang.org/docs/projects/),
+[compatibility and platform limits](https://opaal-lang.org/docs/compatibility/),
+and [getting started path](https://opaal-lang.org/learn/getting-started/).
+Repository guides cover [development](DEVELOPMENT.md),
+[release qualification](RELEASING.md), [contributions](CONTRIBUTING.md),
 [security](SECURITY.md), and the [changelog](CHANGELOG.md).
 
 ## License

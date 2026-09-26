@@ -17,4 +17,4 @@ unreviewed unsafe code.
 Fixture binaries and their `OPAAL_*` environment protocol names are test-only.
 They are not installed language tools and do not expand source authority.
 
-[← OPAAL documentation](../../docs/README.md)
+[← OPAAL documentation](https://opaal-lang.org/docs/)

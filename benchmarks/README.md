@@ -67,4 +67,4 @@ Checked-in evidence is one bounded macOS-arm64 observation under recorded host
 load. It is not a universal product guarantee and does not establish external
 packaging, another OS or architecture, emulation, or physical hardware.
 
-[← OPAAL documentation](../docs/README.md)
+[← OPAAL documentation](https://opaal-lang.org/docs/)

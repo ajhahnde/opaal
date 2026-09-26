@@ -19,9 +19,9 @@ python3 ci/check_public_boundary.py
 git diff --check
 ```
 
-The workspace has exactly six packages at `1.0.0`. A new dependency,
-feature, crate, binary, environment protocol, source extension, diagnostic
-namespace, or source identity is a public contract change.
+The workspace has exactly six packages sharing the workspace version. A new
+dependency, feature, crate, binary, environment protocol, source extension,
+diagnostic namespace, or source identity is a public contract change.
 
 ## Focused checks
 
@@ -78,7 +78,7 @@ This creates an isolated temporary project and proves the complete
 non-publishing check, plan, accepted-execution, journal, and audit path on Linux.
 On macOS arm64 it proves secret-free execution/audit plus the explicit refused
 process boundary. The harness uses only synthetic inputs and a TLS loopback
-server. See [Qualifying the operational core](release-readiness.md) for the
+server. See [Qualifying the operational core](RELEASING.md) for the
 scenario and evidence boundary.
 
 ## Fuzzing
@@ -106,4 +106,4 @@ only read-only validation. Maintainer pull requests must pass the stable `requir
 `security-required` aggregates; third-party actions are pinned to full commit
 identifiers.
 
-[← Documentation index](README.md) · [Source and project references](reference/README.md)
+[← Repository overview](README.md) · [Product documentation](https://opaal-lang.org/docs/)
