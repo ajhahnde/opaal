@@ -40,4 +40,4 @@ Review, reproduce, and minimize every failure before retaining a regression.
 Bounded completion is evidence for the exercised target and corpus, not proof
 that defects are absent.
 
-[← OPAAL documentation](../docs/README.md)
+[← OPAAL documentation](https://opaal-lang.org/docs/)
