@@ -10,16 +10,14 @@ The [OPAAL website](https://opaal-lang.org/) is the home of the
 [downloads](https://opaal-lang.org/download/). This repository contains the
 source code, contributor information, and maintainer guides.
 
-> OPAAL 1.0's explicit project surface can inspect, check, render, explicitly accept,
-> execute, journal, and audit one typed task under bound authority. The
-> unreleased 1.1 source contract adds direct foreground `^program` execution
-> in the standalone and interactive clients. A non-publishing qualification
-> workflow checks release eligibility separately from publication.
+> OPAAL's explicit project surface can inspect, check, render, explicitly accept,
+> execute, journal, and audit one typed task under bound authority. OPAAL 1.1.0
+> adds direct foreground `^program` execution in standalone and interactive
+> clients. A non-publishing qualification workflow checks release eligibility.
 
-OPAAL 1.0.0 is the current published release. The source tree can contain
-unreleased changes; [the changelog](CHANGELOG.md) identifies them. Follow the
-[download and installation guide](https://opaal-lang.org/download/) for the
-released Linux x86_64 and macOS arm64 archives and checksum instructions.
+The [changelog](CHANGELOG.md) records changes by release. Follow the
+[download and installation guide](https://opaal-lang.org/download/) for Linux
+x86_64 and macOS arm64 archives and checksum instructions.
 
 ## Try OPAAL
 
