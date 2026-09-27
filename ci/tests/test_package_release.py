@@ -25,7 +25,7 @@ class ReleasePackageTests(unittest.TestCase):
             with tarfile.open(archive, "r:gz") as tar:
                 self.assertEqual(len(tar.getmembers()), len(FILES))
                 for source_name, member_name, mode in FILES:
-                    member = tar.getmember(f"opaal-v1.0.0-linux-x86_64/{member_name}")
+                    member = tar.getmember(f"opaal-v1.1.0-linux-x86_64/{member_name}")
                     self.assertEqual(member.mode, mode)
                     self.assertEqual(tar.extractfile(member).read(), source_name.encode())
 

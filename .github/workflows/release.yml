@@ -11,7 +11,7 @@ on:
       - README.md
       - LICENSE
   push:
-    tags: [v1.0.0]
+    tags: [v1.1.0]
 
 permissions:
   contents: read
@@ -23,7 +23,7 @@ concurrency:
 jobs:
   release-binaries:
     name: release-binaries-${{ matrix.platform }}
-    if: github.event_name == 'push' || github.head_ref == 'release/opaal-1.0.0'
+    if: github.event_name == 'push' || github.head_ref == 'release/opaal-1.1.0'
     strategy:
       fail-fast: false
       matrix:
@@ -48,7 +48,7 @@ jobs:
 
       - name: Verify the release tag
         if: github.event_name == 'push'
-        run: test "${GITHUB_REF_NAME}" = "v1.0.0"
+        run: test "${GITHUB_REF_NAME}" = "v1.1.0"
 
       - name: Verify the release host
         run: test "$(uname -m)" = "${{ matrix.arch }}"
@@ -57,7 +57,7 @@ jobs:
         run: cargo build --release --locked -p opaal-cli -p opaal-lsp
 
       - name: Verify the CLI release identity
-        run: test "$(target/release/opaal --version)" = "opaal 1.0.0"
+        run: test "$(target/release/opaal --version)" = "opaal 1.1.0"
 
       - name: Verify the release candidate boundary
         run: python3 ci/check_product.py release-candidate
@@ -68,12 +68,12 @@ jobs:
       - name: Upload the exact archive and checksum
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: opaal-v1.0.0-${{ matrix.platform }}-${{ github.sha }}
+          name: opaal-v1.1.0-${{ matrix.platform }}-${{ github.sha }}
           path: |
-            dist/opaal-v1.0.0-${{ matrix.platform }}.tar.gz
-            dist/opaal-v1.0.0-${{ matrix.platform }}.tar.gz.sha256
+            dist/opaal-v1.1.0-${{ matrix.platform }}.tar.gz
+            dist/opaal-v1.1.0-${{ matrix.platform }}.tar.gz.sha256
           if-no-files-found: error
           compression-level: 0
 
       - name: Record the binary result
-        run: echo "Built and archived OPAAL 1.0.0 for ${{ matrix.platform }} from ${{ github.sha }}. The operator publishes the checked archive and checksum after both tag jobs pass." >> "${GITHUB_STEP_SUMMARY}"
+        run: echo "Built and archived OPAAL 1.1.0 for ${{ matrix.platform }} from ${{ github.sha }}. The operator publishes the checked archive and checksum after both tag jobs pass." >> "${GITHUB_STEP_SUMMARY}"
