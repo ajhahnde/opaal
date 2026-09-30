@@ -966,3 +966,101 @@ fn list_query_and_order_signatures_expose_option_and_ordered_constraints() {
         assert_eq!(result["signatures"][0]["label"], expected);
     }
 }
+
+#[test]
+fn record_signatures_hover_and_completion_share_the_structural_contract() {
+    for (call, expected, parameter) in [
+        (
+            "keys({ a: 1 })",
+            "std::record::keys(input: Record) -> List[String]",
+            0,
+        ),
+        (
+            "has({}, 'a')",
+            "std::record::has(input: Record, key: String) -> Bool",
+            1,
+        ),
+        (
+            "get_or({}, 'a', null)",
+            "std::record::get_or(input: Record, key: String, default: Any) -> Any",
+            2,
+        ),
+        (
+            "select({}, [])",
+            "std::record::select(input: Record, keys: List[String]) -> Record",
+            1,
+        ),
+        (
+            "set({}, 'a', null)",
+            "std::record::set(input: Record, key: String, value: Any) -> Record",
+            2,
+        ),
+        (
+            "merge({}, {})",
+            "std::record::merge(left: Record, right: Record) -> Record",
+            1,
+        ),
+    ] {
+        let text = format!("import std::record as fields\nfields::{call}\n");
+        let directory = TestDirectory::new();
+        let uri = directory.uri("main.opaal");
+        let mut workspace = Workspace::new();
+        workspace.open(uri.clone(), 1, text.clone()).unwrap();
+        let signature = request(
+            &workspace,
+            PositionEncoding::Utf16,
+            &RequestControl::new(),
+            "textDocument/signatureHelp",
+            positional(
+                &uri,
+                &text,
+                text.rfind(')').unwrap(),
+                PositionEncoding::Utf16,
+            ),
+        )
+        .unwrap();
+        assert_eq!(signature["activeParameter"], parameter);
+        assert_eq!(signature["signatures"][0]["label"], expected);
+        let hover = request(
+            &workspace,
+            PositionEncoding::Utf16,
+            &RequestControl::new(),
+            "textDocument/hover",
+            positional(
+                &uri,
+                &text,
+                text.find("fields::").unwrap() + "fields::".len(),
+                PositionEncoding::Utf16,
+            ),
+        )
+        .unwrap();
+        let contents = hover["contents"]["value"].as_str().unwrap();
+        assert!(contents.contains(expected), "{contents}");
+        assert!(contents.contains("nominal records"));
+        let completion = request(
+            &workspace,
+            PositionEncoding::Utf16,
+            &RequestControl::new(),
+            "textDocument/completion",
+            positional(
+                &uri,
+                &text,
+                text.find("fields::").unwrap() + "fields::".len(),
+                PositionEncoding::Utf16,
+            ),
+        )
+        .unwrap();
+        let labels = completion
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|item| item["label"].as_str().unwrap())
+            .collect::<Vec<_>>();
+        for name in ["keys", "has", "get_or", "select", "set", "merge"] {
+            assert!(
+                labels.contains(&format!("fields::{name}").as_str()),
+                "{labels:?}"
+            );
+        }
+    }
+}

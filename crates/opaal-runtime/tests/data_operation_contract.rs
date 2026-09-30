@@ -790,6 +790,59 @@ fn interactive_list_selection_and_order_require_complete_type_evidence() {
 }
 
 #[test]
+fn interactive_record_calls_compose_across_submissions_and_reject_nominal_inputs() {
+    let mut session = opaal_runtime::session::Session::new(
+        "/project",
+        Environment::new(),
+        SessionOptions::default(),
+    );
+    let mut submit = |source: &str| {
+        session
+            .submit_with_value(
+                "<interactive>",
+                source.to_owned(),
+                &NoExecutables,
+                &FakePlatform::full(),
+                &FakeClock::new(),
+                &mut Vec::new(),
+            )
+            .map(|(_, value)| value)
+    };
+    submit("import std::record as fields\nimport std::list as list\nlet input = { z: 1, a: null }")
+        .unwrap();
+    submit("let changed = fields::set(input, 'z', 2)").unwrap();
+    submit("let merged = fields::merge(changed, { b: 3 })").unwrap();
+    submit("let selected = fields::select(merged, ['b', 'a'])").unwrap();
+    assert_eq!(
+        submit("fields::keys(selected)").unwrap(),
+        Value::list(vec![Value::string("b"), Value::string("a")])
+    );
+    assert_eq!(submit("[fields::has(selected, 'a'), fields::get_or(selected, 'a', 9), fields::get_or(selected, 'missing', 9), input.z]").unwrap(), Value::list(vec![Value::Bool(true), Value::Null, Value::Int(9), Value::Int(1)]));
+    assert_eq!(
+        submit("list::reverse(fields::keys(merged))").unwrap(),
+        Value::list(vec![
+            Value::string("b"),
+            Value::string("a"),
+            Value::string("z")
+        ])
+    );
+    submit("type Row = {}\nlet row = Row {}").unwrap();
+    for call in [
+        "fields::keys(row)",
+        "fields::has(row, 'a')",
+        "fields::get_or(row, 'a', 0)",
+        "fields::select(row, [])",
+        "fields::set(row, 'a', 0)",
+        "fields::merge({}, row)",
+        "fields::select({}, [1])",
+        "fields::select(input, ['z', 'z'])",
+        "fields::merge({}, 1)",
+    ] {
+        assert!(submit(call).is_err(), "{call}");
+    }
+}
+
+#[test]
 fn query_and_key_callbacks_propagate_errors_in_source_order_and_share_steps() {
     for (name, signature, body) in [
         ("any", "Int", "false"),

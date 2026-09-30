@@ -635,7 +635,12 @@ impl Evaluator<'_, '_> {
         }
     }
 
-    fn compare_key_bytes(&mut self, left: &[u8], right: &[u8], span: Span) -> Eval<Ordering> {
+    pub(super) fn compare_key_bytes(
+        &mut self,
+        left: &[u8],
+        right: &[u8],
+        span: Span,
+    ) -> Eval<Ordering> {
         for (left, right) in left.chunks(4096).zip(right.chunks(4096)) {
             self.check_cancel(span)?;
             self.charge(span)?;

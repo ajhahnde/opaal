@@ -160,6 +160,12 @@ impl Evaluator<'_, '_> {
             | StandardOperation::Reverse => {
                 self.list_operation(descriptor, &arguments, &substitutions, span)
             }
+            StandardOperation::RecordKeys
+            | StandardOperation::RecordHas
+            | StandardOperation::RecordGetOr
+            | StandardOperation::RecordSelect
+            | StandardOperation::RecordSet
+            | StandardOperation::RecordMerge => self.record_operation(descriptor, &arguments, span),
             _ => self.string_operation(descriptor, &arguments, span),
         }
     }

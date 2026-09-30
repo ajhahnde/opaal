@@ -234,6 +234,15 @@ impl Record {
         &self.entries
     }
 
+    /// Construct from already unique keys without repeating the public
+    /// constructor's duplicate scan. Callers must prove uniqueness before
+    /// retaining entries and charge any allocation/work to their live budget.
+    pub(crate) fn from_unique_entries(entries: Vec<(Arc<str>, Value)>) -> Self {
+        Self {
+            entries: Arc::from(entries),
+        }
+    }
+
     #[must_use]
     pub fn get(&self, key: &str) -> Option<&Value> {
         self.entries

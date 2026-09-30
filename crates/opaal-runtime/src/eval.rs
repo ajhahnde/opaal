@@ -31,6 +31,7 @@ use opaal_syntax::{
 };
 
 mod list_operations;
+mod record_operations;
 mod string_operations;
 
 use crate::glob::{DEFAULT_GLOB_ENTRY_LIMIT, GlobPattern};

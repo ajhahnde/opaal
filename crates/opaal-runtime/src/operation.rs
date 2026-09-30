@@ -694,6 +694,12 @@ pub(crate) enum StandardOperation {
     Take,
     Drop,
     Reverse,
+    RecordKeys,
+    RecordHas,
+    RecordGetOr,
+    RecordSelect,
+    RecordSet,
+    RecordMerge,
 }
 
 /// A compiled operation descriptor that cannot enter the standard manifest.
@@ -950,6 +956,66 @@ pub fn standard_operation(module: &ModuleId, name: &str) -> Option<OperationDesc
             .expect("compiled list descriptors must be valid");
         return Some(descriptor);
     }
+    if standard == "record" {
+        use StandardOperation::{
+            RecordGetOr, RecordHas, RecordKeys, RecordMerge, RecordSelect, RecordSet,
+        };
+        use ValueType::{Any, Bool, List, Record, String as Text};
+        let (implementation, parameters, result, documentation) = match name {
+            "keys" => (
+                RecordKeys,
+                vec![("input", Record)],
+                List(Box::new(Text)),
+                "Return keys in retained field order.",
+            ),
+            "has" => (
+                RecordHas,
+                vec![("input", Record), ("key", Text)],
+                Bool,
+                "Test exact key presence, including fields whose value is null.",
+            ),
+            "get_or" => (
+                RecordGetOr,
+                vec![("input", Record), ("key", Text), ("default", Any)],
+                Any,
+                "Return a field's value or the default only for absence; the default is evaluated eagerly like every ordinary argument.",
+            ),
+            "select" => (
+                RecordSelect,
+                vec![("input", Record), ("keys", List(Box::new(Text)))],
+                Record,
+                "Return fields in requested order; missing or repeated requested keys are errors; an empty request returns an empty Record.",
+            ),
+            "set" => (
+                RecordSet,
+                vec![("input", Record), ("key", Text), ("value", Any)],
+                Record,
+                "Replace a field keeping its position, or append a new field; preserve the input.",
+            ),
+            "merge" => (
+                RecordMerge,
+                vec![("left", Record), ("right", Record)],
+                Record,
+                "Merge with right values winning; keep replaced left positions and append new right fields in right order; preserve both inputs.",
+            ),
+            _ => return None,
+        };
+        let descriptor = OperationDescriptor {
+            id: OperationId::new(module.clone(), name),
+            type_parameters: Vec::new(),
+            overloads: vec![OperationOverload::values(parameters, result)],
+            documentation: format!(
+                "{documentation} Accept structural Records only; nominal records retain their schemas. Share caller budgets and cancellation. Ordinary keys and values have no automatic secret taint."
+            ),
+            purity: OperationPurity::Pure,
+            downstream: DownstreamCallMetadata::foundation(),
+            implementation,
+        };
+        descriptor
+            .validate()
+            .expect("compiled Record descriptors must be valid");
+        return Some(descriptor);
+    }
     if standard == "string" {
         use StandardOperation::{
             Contains, DecodeUtf8, EndsWith, Join, Replace, Split, StartsWith, Trim,
@@ -1074,6 +1140,12 @@ pub(crate) fn standard_operations(module: &ModuleId) -> Vec<OperationDescriptor>
         "take",
         "drop",
         "reverse",
+        "keys",
+        "has",
+        "get_or",
+        "select",
+        "set",
+        "merge",
     ]
     .into_iter()
     .filter_map(|name| standard_operation(module, name))

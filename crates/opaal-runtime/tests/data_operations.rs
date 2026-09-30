@@ -29,7 +29,8 @@ impl ModuleCanonicalizer for Sources {
 impl ModuleSourceLoader for Sources {
     fn load(&self, module: &ModuleId) -> Result<Vec<u8>, ModuleSourceError> {
         Ok(if module.path().file_name().unwrap() == "api.opaal" {
-            b"import std::string as text\nexport { text }\n".to_vec()
+            b"import std::string as text\nimport std::record as records\nexport { text, records }\n"
+                .to_vec()
         } else {
             self.0.as_bytes().to_vec()
         })
@@ -323,4 +324,336 @@ fn growth_and_split_retention_share_the_caller_budget() {
         execute(&program, ResourceBudget::default().with_collection_items(3)).primary(),
         PrimaryOutcome::Error(_)
     ));
+}
+
+fn record_value(source: &str) -> Value {
+    value(&format!("import std::record as record\n{source}"))
+}
+
+#[test]
+fn record_keys_presence_and_defaults_preserve_order_null_and_exact_unicode() {
+    assert_eq!(
+        record_value("record::keys({ z: 1, '': 2, 'é': null, 'é': 3 })"),
+        Value::list(vec![
+            Value::string("z"),
+            Value::string(""),
+            Value::string("é"),
+            Value::string("é")
+        ])
+    );
+    assert_eq!(record_value("record::keys({})"), Value::list(vec![]));
+    for (source, expected) in [
+        ("record::has({ x: null }, 'x')", Value::Bool(true)),
+        ("record::has({ x: null }, 'X')", Value::Bool(false)),
+        ("record::has({}, '')", Value::Bool(false)),
+        ("record::has({ 'é': 1 }, 'é')", Value::Bool(false)),
+        ("record::get_or({ x: null }, 'x', 7)", Value::Null),
+        ("record::get_or({}, 'x', 7)", Value::Int(7)),
+        ("record::get_or({ '': 9 }, '', null)", Value::Int(9)),
+        (
+            "record::get_or({}, '', [1, 2])",
+            Value::list(vec![Value::Int(1), Value::Int(2)]),
+        ),
+    ] {
+        assert_eq!(record_value(source), expected, "{source}");
+    }
+}
+
+#[test]
+fn record_selection_update_and_merge_keep_exact_order_and_immutable_inputs() {
+    for source in [
+        "let input = { a: 1, b: 2, c: 3 }\nlet output = record::select(input, ['c', 'a'])\n[record::keys(output), output.c, output.a, record::keys(input), input.b]",
+        "let input = { c: 3, a: 1 }\nlet output = record::set(input, 'a', 9)\n[record::keys(output), output.a, input.a]",
+        "let input = { c: 3 }\nlet output = record::set(input, 'a', 9)\n[record::keys(output), output.a, record::keys(input)]",
+        "let left = { z: 1, a: 2 }\nlet right = { a: null, n: 3, z: 4, m: 5 }\nlet output = record::merge(left, right)\n[record::keys(output), output.z, output.a, output.n, output.m, left.z, left.a, record::keys(right)]",
+    ] {
+        let expected = if source.contains("select") {
+            Value::list(vec![
+                Value::list(vec![Value::string("c"), Value::string("a")]),
+                Value::Int(3),
+                Value::Int(1),
+                Value::list(vec![
+                    Value::string("a"),
+                    Value::string("b"),
+                    Value::string("c"),
+                ]),
+                Value::Int(2),
+            ])
+        } else if source.contains("merge") {
+            Value::list(vec![
+                Value::list(vec![
+                    Value::string("z"),
+                    Value::string("a"),
+                    Value::string("n"),
+                    Value::string("m"),
+                ]),
+                Value::Int(4),
+                Value::Null,
+                Value::Int(3),
+                Value::Int(5),
+                Value::Int(1),
+                Value::Int(2),
+                Value::list(vec![
+                    Value::string("a"),
+                    Value::string("n"),
+                    Value::string("z"),
+                    Value::string("m"),
+                ]),
+            ])
+        } else if source.contains("input.a") {
+            Value::list(vec![
+                Value::list(vec![Value::string("c"), Value::string("a")]),
+                Value::Int(9),
+                Value::Int(1),
+            ])
+        } else {
+            Value::list(vec![
+                Value::list(vec![Value::string("c"), Value::string("a")]),
+                Value::Int(9),
+                Value::list(vec![Value::string("c")]),
+            ])
+        };
+        assert_eq!(record_value(source), expected);
+    }
+    for source in [
+        "record::select({ a: 1 }, [])",
+        "record::select({}, [])",
+        "record::merge({}, {})",
+    ] {
+        assert_eq!(
+            record_value(source),
+            opaal_runtime::Record::new(vec![]).unwrap().into()
+        );
+    }
+    for source in [
+        "record::merge({ a: 1 }, {})",
+        "record::merge({}, { a: 1 })",
+        "record::set({}, 'a', 1)",
+    ] {
+        assert_eq!(
+            record_value(source),
+            opaal_runtime::Record::new(vec![("a".to_owned(), Value::Int(1))])
+                .unwrap()
+                .into()
+        );
+    }
+    assert_eq!(
+        record_value(
+            "import std::list as list\nlet input = { z: 2, a: 1 }\nlist::map[String, Any](record::keys(input), {|key: String| -> Any input[key]})"
+        ),
+        Value::list(vec![Value::Int(2), Value::Int(1)])
+    );
+    assert_eq!(
+        record_value(
+            "import std::list as list\nlist::map[Record, Record]([{ a: 1 }, { a: 2 }], {|row: Record| -> Record record::merge(row, { b: 3 })})"
+        ),
+        Value::list(vec![
+            opaal_runtime::Record::new(vec![
+                ("a".to_owned(), Value::Int(1)),
+                ("b".to_owned(), Value::Int(3))
+            ])
+            .unwrap()
+            .into(),
+            opaal_runtime::Record::new(vec![
+                ("a".to_owned(), Value::Int(2)),
+                ("b".to_owned(), Value::Int(3))
+            ])
+            .unwrap()
+            .into()
+        ])
+    );
+}
+
+#[test]
+fn record_errors_are_catchable_spanned_and_show_bounded_escaped_keys() {
+    for (call, expected) in [
+        (
+            "record::select({ a: 1 }, ['b'])",
+            "std::record::select: missing requested key \"b\"",
+        ),
+        (
+            "record::select({ a: 1 }, ['a', 'a'])",
+            "std::record::select: repeated requested key \"a\"",
+        ),
+        (
+            "record::select({}, [\"line\n\t\u{1b}\"])",
+            "std::record::select: missing requested key \"line\\n\\t\\u{1b}\"",
+        ),
+    ] {
+        let source = format!(
+            "import std::record as record\nmut found = []\ntry {{ let result = {call} }} catch error {{ found = [error.message, error.source.start, error.source.end] }}\nfound"
+        );
+        let start = source.find(call).unwrap();
+        let outcome = execute(&load(&source), ResourceBudget::default());
+        assert!(
+            matches!(outcome.primary(), PrimaryOutcome::Completed(completion) if completion.value() == &Value::list(vec![Value::string(expected), Value::Int(start as i64), Value::Int((start + call.len()) as i64)])),
+            "{outcome:?}"
+        );
+    }
+    let sensitive = "secret".repeat(1000);
+    let output = record_value(&format!(
+        "mut message = ''\ntry {{ let result = record::select({{}}, ['{sensitive}']) }} catch error {{ message = error.message }}\nmessage"
+    ));
+    let Value::String(message) = output else {
+        panic!("error message expected")
+    };
+    assert!(message.len() < 200);
+    assert!(!message.contains(&sensitive));
+}
+
+#[test]
+fn record_arguments_and_defaults_are_eager_even_for_present_keys_and_bad_inputs() {
+    for call in [
+        "record::get_or({ a: 1 }, 'a', fail())",
+        "record::get_or(dynamic(1), 'a', fail())",
+        "record::set({}, 'a', fail())",
+    ] {
+        assert_eq!(
+            record_value(&format!(
+                "def dynamic(x: Any) -> Any {{ x }}\ndef fail() -> Any {{ throw 'eager' }}\nmut message = ''\ntry {{ let result = {call} }} catch error {{ message = error.message }}\nmessage"
+            )),
+            Value::string("eager")
+        );
+    }
+}
+
+#[test]
+fn structural_records_preserve_nominal_and_callable_values_through_any_parameters() {
+    assert_eq!(
+        record_value(
+            "import std::outcome as outcome\n\
+             type Row = { a: Int }\n\
+             let row = Row { a: 7 }\n\
+             let option: outcome::Option[Int] = outcome::Option::Some(9)\n\
+             let callback = {|x: Int| -> Int x + 1}\n\
+             def dynamic(x: Any) -> Any { x }\n\
+             let input = record::set(dynamic({}), 'row', row)\n\
+             let merged = record::merge(input, { option: option, callback: callback })\n\
+             let selected = record::select(merged, dynamic(['callback', 'row', 'option']))\n\
+             [record::get_or(selected, 'row', null) == row,\n\
+              record::get_or(selected, 'option', null) == option,\n\
+              record::get_or(selected, 'callback', null) == callback,\n\
+              record::get_or({}, 'missing', row) == row,\n\
+              record::get_or({}, 'missing', option) == option,\n\
+              record::get_or({}, 'missing', callback) == callback,\n\
+              record::keys(input) == ['row']]"
+        ),
+        Value::list(vec![Value::Bool(true); 7])
+    );
+}
+
+#[test]
+fn record_checker_and_runtime_reject_wrong_shapes_including_nominal_records() {
+    for call in [
+        "record::keys()",
+        "record::keys({}, {})",
+        "record::keys(1)",
+        "record::keys[Int]({})",
+        "record::has({}, 1)",
+        "record::get_or({}, 'x')",
+        "record::select({}, [1])",
+        "record::set({}, 'x')",
+        "record::merge({}, 1)",
+        "record::unknown({})",
+        "{} | record::keys",
+        "record::keys(row)",
+        "record::has(row, 'a')",
+        "record::get_or(row, 'a', 1)",
+        "record::select(row, [])",
+        "record::set(row, 'a', 1)",
+        "record::merge({}, row)",
+    ] {
+        let source = Sources(format!(
+            "import std::record as record\ntype Row = {{ a: Int }}\nlet row = Row {{ a: 1 }}\n{call}"
+        ));
+        let report =
+            ModuleProgramLoader::new(&source, &source).analyze(Path::new("/project/main.opaal"));
+        assert!(
+            report.program().is_none() && !report.issues().is_empty(),
+            "{call}"
+        );
+    }
+    for call in [
+        "record::keys(dynamic(1))",
+        "record::has({}, dynamic(1))",
+        "record::get_or({}, dynamic(1), 0)",
+        "record::select({}, dynamic([1]))",
+        "record::select({}, dynamic(1))",
+        "record::set({}, dynamic(1), 0)",
+        "record::merge(dynamic(1), {})",
+        "record::merge({}, dynamic(1))",
+        "record::keys(dynamic(row))",
+        "record::has(dynamic(row), 'a')",
+        "record::get_or(dynamic(row), 'a', 0)",
+        "record::select(dynamic(row), [])",
+        "record::set(dynamic(row), 'a', 0)",
+        "record::merge({}, dynamic(row))",
+    ] {
+        let source = format!(
+            "import std::record as record\ntype Row = {{ a: Int }}\nlet row = Row {{ a: 1 }}\ndef dynamic(x: Any) -> Any {{ x }}\n{call}"
+        );
+        let outcome = execute(&load(&source), ResourceBudget::default());
+        assert!(
+            matches!(outcome.primary(), PrimaryOutcome::Error(_)),
+            "{call}: {outcome:?}"
+        );
+    }
+}
+
+#[test]
+fn all_record_descriptors_resolve_through_aliases_reexports_and_help() {
+    let program = load(
+        "import std::record as record\nimport './api.opaal' as api\napi::records::merge({ a: 1 }, { b: 2 })",
+    );
+    let root = program.graph().root();
+    let help = ModuleHelpCatalog::snapshot(&program);
+    for (name, arity, result) in [
+        ("keys", 1, "List[String]"),
+        ("has", 2, "Bool"),
+        ("get_or", 3, "Any"),
+        ("select", 2, "Record"),
+        ("set", 3, "Record"),
+        ("merge", 2, "Record"),
+    ] {
+        let direct = program.resolve_operation(root, &["record", name]).unwrap();
+        let exported = program
+            .resolve_operation(root, &["api", "records", name])
+            .unwrap();
+        assert_eq!(direct, exported);
+        assert_eq!(direct.validate(), Ok(()));
+        assert!(direct.type_parameters().is_empty());
+        assert_eq!(direct.overloads()[0].parameters().len(), arity);
+        assert!(direct.signature_labels()[0].ends_with(&format!("-> {result}")));
+        assert!(!direct.supports_value_pipeline());
+        assert!(direct.documentation().contains("nominal"));
+        assert_eq!(
+            help.query(root, &format!("api::records::{name}"))
+                .unwrap()
+                .operation(),
+            Some(&direct)
+        );
+    }
+    let source = program.sources().source(root).unwrap();
+    let registry = standard_registry();
+    let context = program
+        .semantic_queries(&registry)
+        .operation_signature_at(root, source.text().rfind("b: 2").unwrap())
+        .unwrap();
+    assert_eq!(context.active_parameter(), 1);
+    assert_eq!(
+        context.operation().signature_labels(),
+        ["std::record::merge(left: Record, right: Record) -> Record"]
+    );
+    assert_eq!(
+        match execute(&program, ResourceBudget::default()).primary() {
+            PrimaryOutcome::Completed(completion) => completion.value().clone(),
+            other => panic!("{other:?}"),
+        },
+        opaal_runtime::Record::new(vec![
+            ("a".to_owned(), Value::Int(1)),
+            ("b".to_owned(), Value::Int(2))
+        ])
+        .unwrap()
+        .into()
+    );
 }

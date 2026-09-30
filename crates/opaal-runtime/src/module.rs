@@ -6695,7 +6695,7 @@ impl<'a> SignatureValidator<'a> {
         matches!(
             owner.origin(),
             ModuleOrigin::Standard { namespace, module }
-                if namespace == "std" && matches!(module.as_str(), "value" | "string" | "list")
+                if namespace == "std" && matches!(module.as_str(), "value" | "string" | "list" | "record")
         )
         .then(|| self.text(operation.span()).to_owned())
     }
@@ -10728,6 +10728,7 @@ fn is_standard_module(namespace: &str, module: &str) -> bool {
             "value"
                 | "string"
                 | "list"
+                | "record"
                 | "outcome"
                 | "data"
                 | "path"
