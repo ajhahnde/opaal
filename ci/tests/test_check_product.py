@@ -81,7 +81,17 @@ publish = false
             "        run: cargo test --workspace --locked --no-fail-fast\n"
             "run: python3 benchmarks/run.py --profile qualification\n"
             "name: required\n"
-            "needs: [foundation, policy, fuzz, operational-core-linux, operational-core-macos]\n",
+            "needs: [foundation, policy, fuzz, operational-core-linux, operational-core-macos, data-processing-linux, data-processing-macos]\n"
+            "  data-processing-linux:\n"
+            "    runs-on: ubuntu-24.04\n"
+            "    ref: ${{ github.event.pull_request.head.sha || github.sha }}\n"
+            "    run: cargo build --release --workspace --locked\n"
+            "    ci/package_data_processing.py ci/qualify_data_processing.py --expected-source actions/upload-artifact@\n"
+            "  data-processing-macos:\n"
+            "    runs-on: macos-15\n"
+            "    ref: ${{ github.event.pull_request.head.sha || github.sha }}\n"
+            "    run: cargo build --release --workspace --locked\n"
+            "    ci/package_data_processing.py ci/qualify_data_processing.py --expected-source actions/upload-artifact@\n",
         )
         self.write(
             ".github/workflows/release.yml",
@@ -149,6 +159,24 @@ publish = false
         self.assertIn("removed API remains: LanguageIdentity", findings)
         self.assertIn("removed API remains: OPAAL_V1", findings)
         self.assertIn("source-generation wording remains", findings)
+
+    def test_requires_candidate_build_identity_qualification_and_retention(self) -> None:
+        path = self.root / ".github/workflows/ci.yml"
+        original = path.read_text()
+        for required in (
+            "ref: ${{ github.event.pull_request.head.sha || github.sha }}",
+            "cargo build --release --workspace --locked",
+            "ci/qualify_data_processing.py", "--expected-source", "actions/upload-artifact@",
+        ):
+            with self.subTest(required=required):
+                path.write_text(original.replace(required, "removed"))
+                findings = "\n".join(checker.source_problems(self.root, run=self.runner))
+                for candidate_host in ("linux", "macos"):
+                    self.assertIn(f"CI does not build/qualify/retain data-processing candidates on {candidate_host}", findings)
+        path.write_text(original.replace(
+            ", data-processing-linux, data-processing-macos]", "]"))
+        self.assertIn("CI required aggregate does not require foundation, policy, fuzz, and both operational-core and data-processing hosts",
+                      checker.source_problems(self.root, run=self.runner))
 
     def test_rejects_source_directives(self) -> None:
         self.write("examples/stale.opaal", "## note\r\nlanguage 1; let answer = 42\r\n")

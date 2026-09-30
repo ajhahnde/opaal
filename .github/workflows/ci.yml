@@ -153,10 +153,70 @@ jobs:
       - name: Validate the full macOS performance profile
         run: python3 benchmarks/run.py --profile qualification
 
+  data-processing-linux:
+    name: data-processing-linux
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+      - name: Activate the pinned Rust toolchain
+        run: rustup show active-toolchain || rustup toolchain install
+      - name: Build the candidate programs
+        run: cargo build --release --workspace --locked
+      - name: Package the exact programs and examples
+        run: python3 ci/package_data_processing.py --platform linux-x86_64
+      - name: Qualify installation and report processing outside the checkout
+        run: |
+          candidate_version=$(python3 -c 'from ci.package_release import VERSION; print(VERSION)')
+          python3 ci/qualify_data_processing.py \
+            --archive "dist/opaal-v${candidate_version}-linux-x86_64.tar.gz" \
+            --examples "dist/opaal-v${candidate_version}-data-processing.tar.gz" \
+            --expected-version "${candidate_version}" --expected-source "$(git rev-parse HEAD)" \
+            --platform linux-x86_64 --report dist/data-processing-linux.json
+      - name: Retain candidate identity and qualification evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: data-processing-linux
+          path: dist/*
+          if-no-files-found: error
+
+  data-processing-macos:
+    name: data-processing-macos
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+      - name: Activate the pinned Rust toolchain
+        run: rustup show active-toolchain || rustup toolchain install
+      - name: Build the candidate programs
+        run: cargo build --release --workspace --locked
+      - name: Package the exact programs and examples
+        run: python3 ci/package_data_processing.py --platform macos-arm64
+      - name: Qualify installation and report processing outside the checkout
+        run: |
+          candidate_version=$(python3 -c 'from ci.package_release import VERSION; print(VERSION)')
+          python3 ci/qualify_data_processing.py \
+            --archive "dist/opaal-v${candidate_version}-macos-arm64.tar.gz" \
+            --examples "dist/opaal-v${candidate_version}-data-processing.tar.gz" \
+            --expected-version "${candidate_version}" --expected-source "$(git rev-parse HEAD)" \
+            --platform macos-arm64 --report dist/data-processing-macos.json
+      - name: Retain candidate identity and qualification evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: data-processing-macos
+          path: dist/*
+          if-no-files-found: error
+
   required:
     name: required
     if: always()
-    needs: [foundation, policy, fuzz, operational-core-linux, operational-core-macos]
+    needs: [foundation, policy, fuzz, operational-core-linux, operational-core-macos, data-processing-linux, data-processing-macos]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -167,12 +227,17 @@ jobs:
           FUZZ_RESULT: ${{ needs.fuzz.result }}
           OPERATIONAL_CORE_LINUX_RESULT: ${{ needs.operational-core-linux.result }}
           OPERATIONAL_CORE_MACOS_RESULT: ${{ needs.operational-core-macos.result }}
+          DATA_PROCESSING_LINUX_RESULT: ${{ needs.data-processing-linux.result }}
+          DATA_PROCESSING_MACOS_RESULT: ${{ needs.data-processing-macos.result }}
         run: |
           if [ "${FOUNDATION_RESULT}" != "success" ] ||
              [ "${POLICY_RESULT}" != "success" ] ||
              [ "${FUZZ_RESULT}" != "success" ] ||
              [ "${OPERATIONAL_CORE_LINUX_RESULT}" != "success" ] ||
-             [ "${OPERATIONAL_CORE_MACOS_RESULT}" != "success" ]; then
+             [ "${OPERATIONAL_CORE_MACOS_RESULT}" != "success" ] ||
+             [ "${DATA_PROCESSING_LINUX_RESULT}" != "success" ] ||
+             [ "${DATA_PROCESSING_MACOS_RESULT}" != "success" ]; then
             echo "foundation=${FOUNDATION_RESULT} policy=${POLICY_RESULT} fuzz=${FUZZ_RESULT} operational-core-linux=${OPERATIONAL_CORE_LINUX_RESULT} operational-core-macos=${OPERATIONAL_CORE_MACOS_RESULT}"
+            echo "data-processing-linux=${DATA_PROCESSING_LINUX_RESULT} data-processing-macos=${DATA_PROCESSING_MACOS_RESULT}"
             exit 1
           fi
