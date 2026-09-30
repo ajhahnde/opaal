@@ -145,7 +145,12 @@ impl Evaluator<'_, '_> {
                 ));
             }
         }
-        self.string_operation(descriptor, &arguments, span)
+        match descriptor.implementation() {
+            StandardOperation::Map | StandardOperation::Filter | StandardOperation::Fold => {
+                self.list_operation(descriptor, &arguments, &substitutions, span)
+            }
+            _ => self.string_operation(descriptor, &arguments, span),
+        }
     }
 
     fn invalid_string_argument(
@@ -397,6 +402,8 @@ mod tests {
             source,
             binding_types: Arc::new(RuntimeBindingTypes::default()),
             current_result_type: None,
+            current_type_arguments: std::collections::BTreeMap::new(),
+            budgeted_callback: false,
             cancel,
             budget,
             host: &mut host,

@@ -30,6 +30,7 @@ use opaal_syntax::{
     WordPart, WordPartKind,
 };
 
+mod list_operations;
 mod string_operations;
 
 use crate::glob::{DEFAULT_GLOB_ENTRY_LIMIT, GlobPattern};
@@ -2070,6 +2071,8 @@ pub(crate) fn evaluate_with_host_and_budget(
         source,
         binding_types,
         current_result_type: None,
+        current_type_arguments: BTreeMap::new(),
+        budgeted_callback: false,
         cancel: limits.cancel.clone(),
         budget,
         host,
@@ -2159,6 +2162,8 @@ pub(crate) fn evaluate_closure_argument_with_binding_types(
         source: Arc::new(source.clone()),
         binding_types,
         current_result_type: None,
+        current_type_arguments: BTreeMap::new(),
+        budgeted_callback: false,
         cancel: limits.cancel,
         budget: &mut budget,
         host: &mut host,
@@ -2240,6 +2245,8 @@ pub(crate) fn apply_callable_with_budget(
         source: Arc::new(source.clone()),
         binding_types: Arc::clone(&function.binding_types),
         current_result_type: None,
+        current_type_arguments: BTreeMap::new(),
+        budgeted_callback: false,
         cancel: limits.cancel.clone(),
         budget,
         host: &mut host,
@@ -2310,6 +2317,8 @@ pub(crate) fn apply_callable_with_controlled_host_and_budget(
         source: Arc::new(source.clone()),
         binding_types: Arc::clone(&function.binding_types),
         current_result_type: None,
+        current_type_arguments: BTreeMap::new(),
+        budgeted_callback: false,
         cancel: limits.cancel.clone(),
         budget,
         host: &mut host,
@@ -2454,6 +2463,8 @@ pub(crate) fn expand_word_with_context_and_policy(
         source: Arc::new(source.clone()),
         binding_types,
         current_result_type: None,
+        current_type_arguments: BTreeMap::new(),
+        budgeted_callback: false,
         cancel: limits.cancel.clone(),
         budget: &mut budget,
         host: &mut host,
@@ -2538,6 +2549,8 @@ pub(crate) fn expand_spread_with_context_and_policy(
         source: Arc::new(source.clone()),
         binding_types,
         current_result_type: None,
+        current_type_arguments: BTreeMap::new(),
+        budgeted_callback: false,
         cancel: limits.cancel.clone(),
         budget: &mut budget,
         host: &mut host,
@@ -2602,6 +2615,8 @@ struct Evaluator<'budget, 'host> {
     source: Arc<SourceFile>,
     binding_types: Arc<RuntimeBindingTypes>,
     current_result_type: Option<ValueType>,
+    current_type_arguments: BTreeMap<String, ValueType>,
+    budgeted_callback: bool,
     cancel: CancellationToken,
     budget: &'budget mut ResourceBudget,
     host: &'host mut dyn EvaluationHost,
@@ -4249,6 +4264,7 @@ impl Evaluator<'_, '_> {
             location: self.location(definition.name.span()),
             inspection,
             origin_span: definition.name.span(),
+            captured_type_arguments: self.current_type_arguments.clone(),
         };
         let value = Value::Callable(Arc::new(callable));
         scope
@@ -4274,6 +4290,7 @@ impl Evaluator<'_, '_> {
             location: self.location(closure.span),
             inspection: None,
             origin_span: closure.span,
+            captured_type_arguments: self.current_type_arguments.clone(),
         };
         Ok(Value::Callable(Arc::new(callable)))
     }
@@ -4397,21 +4414,70 @@ impl Evaluator<'_, '_> {
                         span,
                     ));
                 }
-                let type_arguments = call
-                    .type_arguments
-                    .iter()
-                    .map(|argument| {
-                        self.binding_types
-                            .annotation_type(self.source.id(), argument.span)
-                            .cloned()
-                            .unwrap_or(ValueType::Any)
+                let mut type_arguments = self
+                    .binding_types
+                    .operation_type_arguments(self.source.id(), span)
+                    .map(|arguments| {
+                        arguments
+                            .iter()
+                            .map(|argument| {
+                                crate::module::substitute_type(
+                                    argument,
+                                    &self.current_type_arguments,
+                                )
+                            })
+                            .collect::<Vec<_>>()
                     })
-                    .collect::<Vec<_>>();
-                let arguments = call
-                    .arguments
+                    .unwrap_or_else(|| {
+                        call.type_arguments
+                            .iter()
+                            .map(|argument| {
+                                let annotation = self
+                                    .binding_types
+                                    .annotation_type(self.source.id(), argument.span)
+                                    .cloned()
+                                    .unwrap_or(ValueType::Any);
+                                crate::module::substitute_type(
+                                    &annotation,
+                                    &self.current_type_arguments,
+                                )
+                            })
+                            .collect()
+                    });
+                let substitutions = operation
+                    .type_parameters()
                     .iter()
-                    .map(|argument| self.expression(argument, scope))
-                    .collect::<Eval<Vec<_>>>()?;
+                    .cloned()
+                    .zip(type_arguments.iter().cloned())
+                    .collect();
+                let mut arguments = Vec::with_capacity(call.arguments.len());
+                for (argument, parameter) in call.arguments.iter().zip(overload.parameters()) {
+                    let crate::operation::OperationInputType::Value(input) = parameter.input()
+                    else {
+                        unreachable!("value call parameter")
+                    };
+                    let expected = crate::module::substitute_type(input, &substitutions);
+                    arguments.push(self.expression_with_expected(
+                        argument,
+                        scope,
+                        Some(&expected),
+                    )?);
+                }
+                if type_arguments.is_empty()
+                    && operation.overloads()[0]
+                        .parameters()
+                        .iter()
+                        .any(|parameter| parameter.callback().is_some())
+                {
+                    type_arguments = self.infer_operation_arguments(
+                        &operation,
+                        call,
+                        &arguments,
+                        scope,
+                        expected_result,
+                        span,
+                    )?;
+                }
                 return self.execute_operation(&operation, arguments, &type_arguments, span);
             }
         }
@@ -4505,10 +4571,12 @@ impl Evaluator<'_, '_> {
                 call.type_arguments
                     .iter()
                     .map(|argument| {
-                        self.binding_types
+                        let annotation = self
+                            .binding_types
                             .annotation_type(self.source.id(), argument.span)
                             .cloned()
-                            .unwrap_or(ValueType::Any)
+                            .unwrap_or(ValueType::Any);
+                        crate::module::substitute_type(&annotation, &self.current_type_arguments)
                     })
                     .collect(),
             )
@@ -4875,7 +4943,12 @@ impl Evaluator<'_, '_> {
         )?;
         for (parameter, argument) in function.parameters.iter().zip(&arguments) {
             let expected = crate::module::substitute_type(&parameter.value_type, &substitutions);
-            if !expected.accepts(&argument.value) {
+            let accepted = if self.budgeted_callback {
+                self.validate_operation_value(&expected, &argument.value, argument.span)?
+            } else {
+                expected.accepts(&argument.value)
+            };
+            if !accepted {
                 return Err(self.error(
                     RuntimeErrorKind::ParameterTypeMismatch {
                         parameter: parameter.name.to_string(),
@@ -4919,6 +4992,10 @@ impl Evaluator<'_, '_> {
         let caller_source = std::mem::replace(&mut self.source, Arc::clone(&function.source));
         let caller_binding_types =
             std::mem::replace(&mut self.binding_types, Arc::clone(&function.binding_types));
+        let mut defining_types = function.captured_type_arguments.clone();
+        defining_types.extend(substitutions.clone());
+        let caller_type_arguments =
+            std::mem::replace(&mut self.current_type_arguments, defining_types);
         let mut result = (|| {
             for (parameter, argument) in function.parameters.iter().zip(arguments) {
                 let expected =
@@ -4951,12 +5028,27 @@ impl Evaluator<'_, '_> {
             // call frame naming this callee and its call site. Everything above
             // (cancellation, argument, arity, not-callable resolution) ran in the
             // caller's context and is deliberately left unframed.
-            let frame = CallFrame::new(function.name.as_deref(), span, Arc::clone(&self.source));
+            let frame = CallFrame::new(function.name.as_deref(), span, Arc::clone(&caller_source));
             let result_type = function
                 .result_type
                 .as_ref()
                 .map(|result_type| crate::module::substitute_type(result_type, &substitutions));
             self.run_body_in_defining_source(function, result_type.as_ref(), &mut call_scope)
+                .and_then(|value| {
+                    if self.budgeted_callback
+                        && let Some(expected) = expected_result
+                        && !self.validate_operation_value(expected, &value, function.origin_span)?
+                    {
+                        return Err(self.error(
+                            RuntimeErrorKind::FunctionResultTypeMismatch {
+                                expected: expected.clone(),
+                                actual: value.family_name(),
+                            },
+                            function.origin_span,
+                        ));
+                    }
+                    Ok(value)
+                })
                 .map_err(|abort| abort.with_frame(frame))
         })();
         if action.is_some() && result.as_ref().is_ok_and(contains_control_carrier) {
@@ -5027,6 +5119,7 @@ impl Evaluator<'_, '_> {
         }
         self.source = caller_source;
         self.binding_types = caller_binding_types;
+        self.current_type_arguments = caller_type_arguments;
         self.budget.leave_call();
         result
     }
@@ -5079,16 +5172,21 @@ impl Evaluator<'_, '_> {
             ))?,
         };
 
-        if let Some(expected) = result_type
-            && !expected.accepts(&result.value)
-        {
-            return Err(self.error(
-                RuntimeErrorKind::FunctionResultTypeMismatch {
-                    expected: expected.clone(),
-                    actual: result.value.family_name(),
-                },
-                result.span,
-            ));
+        if let Some(expected) = result_type {
+            let accepted = if self.budgeted_callback {
+                self.validate_operation_value(expected, &result.value, result.span)?
+            } else {
+                expected.accepts(&result.value)
+            };
+            if !accepted {
+                return Err(self.error(
+                    RuntimeErrorKind::FunctionResultTypeMismatch {
+                        expected: expected.clone(),
+                        actual: result.value.family_name(),
+                    },
+                    result.span,
+                ));
+            }
         }
         Ok(result.value)
     }
@@ -5304,6 +5402,7 @@ struct CallableValue {
     location: String,
     inspection: Option<crate::help::FunctionInspection>,
     origin_span: Span,
+    captured_type_arguments: BTreeMap<String, ValueType>,
 }
 
 #[derive(Clone, Debug)]
@@ -5315,6 +5414,7 @@ pub(crate) struct CallableSnapshot {
     pub(crate) result_type: Option<ValueType>,
     pub(crate) location: String,
     pub(crate) origin_span: Span,
+    pub(crate) captured_type_arguments: BTreeMap<String, ValueType>,
 }
 
 pub(crate) fn snapshot_callable(callable: &Arc<dyn Callable>) -> Option<CallableSnapshot> {
@@ -5331,6 +5431,7 @@ pub(crate) fn snapshot_callable(callable: &Arc<dyn Callable>) -> Option<Callable
         result_type: callable.result_type.clone(),
         location: callable.location.clone(),
         origin_span: callable.origin_span,
+        captured_type_arguments: callable.captured_type_arguments.clone(),
     })
 }
 
@@ -5366,6 +5467,9 @@ pub(crate) fn restore_callable(snapshot: CallableSnapshot) -> Result<Arc<dyn Cal
             .cloned()
             .map(|signature| crate::help::FunctionInspection::new(signature, &source))
     });
+    let type_parameters = binding_types
+        .function_signature(source.id(), snapshot.origin_span)
+        .map_or_else(Vec::new, |signature| signature.type_parameters().to_vec());
     let callable = CallableValue {
         name: snapshot.name.map(Arc::from),
         parameters: snapshot
@@ -5377,7 +5481,7 @@ pub(crate) fn restore_callable(snapshot: CallableSnapshot) -> Result<Arc<dyn Cal
                 pattern: None,
             })
             .collect(),
-        type_parameters: Vec::new(),
+        type_parameters,
         body,
         captured: snapshot.captured,
         source,
@@ -5386,6 +5490,7 @@ pub(crate) fn restore_callable(snapshot: CallableSnapshot) -> Result<Arc<dyn Cal
         location: snapshot.location,
         inspection,
         origin_span: snapshot.origin_span,
+        captured_type_arguments: snapshot.captured_type_arguments,
     };
     Ok(Arc::new(callable))
 }
@@ -6128,6 +6233,8 @@ mod tests {
             source,
             binding_types: Arc::new(RuntimeBindingTypes::default()),
             current_result_type: None,
+            current_type_arguments: BTreeMap::new(),
+            budgeted_callback: false,
             cancel: CancellationToken::never(),
             budget: &mut budget,
             host: &mut host,

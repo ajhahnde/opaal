@@ -26,7 +26,7 @@ use crate::{
 
 const MAGIC: &[u8; 8] = b"OPAALCAP";
 const COMPLETION_MAGIC: &[u8; 8] = b"OPAALEND";
-const VERSION: u16 = 2;
+const VERSION: u16 = 3;
 const MAX_CAPSULE_DEPTH: usize = 64;
 const MAX_CAPSULE_ITEMS: usize = 1_000_000;
 pub const MAX_CAPSULE_BYTES: usize = 16 * 1024 * 1024;
@@ -507,6 +507,11 @@ fn encode_callable(
     encoder.u32(snapshot.origin_span.source_id().get());
     encoder.usize(snapshot.origin_span.start())?;
     encoder.usize(snapshot.origin_span.end())?;
+    encoder.usize(snapshot.captured_type_arguments.len())?;
+    for (name, value_type) in &snapshot.captured_type_arguments {
+        encoder.string(name)?;
+        encode_value_type(encoder, value_type)?;
+    }
     Ok(())
 }
 
@@ -541,6 +546,15 @@ fn decode_callable(
     let origin_span = source
         .span(ByteRange { start, end })
         .map_err(|error| CapsuleError::new(format!("invalid callable origin span: {error}")))?;
+    let type_argument_count = decoder.collection_len()?;
+    let mut captured_type_arguments = BTreeMap::new();
+    for _ in 0..type_argument_count {
+        let name = decoder.string()?;
+        let value_type = decode_value_type(decoder, 0)?;
+        if captured_type_arguments.insert(name, value_type).is_some() {
+            return Err(CapsuleError::new("duplicate captured type parameter"));
+        }
+    }
     Ok(CallableSnapshot {
         name,
         parameters,
@@ -549,6 +563,7 @@ fn decode_callable(
         result_type,
         location,
         origin_span,
+        captured_type_arguments,
     })
 }
 
@@ -1331,6 +1346,89 @@ mod tests {
         SessionOptions::default()
             .with_pipefail(true)
             .with_capture_limit(12_345)
+    }
+
+    #[test]
+    fn reconstructed_callbacks_keep_operation_aliases_and_callable_kind() {
+        use crate::eval::{
+            Completion, EvalLimits, evaluate_in_environment_owned_with_binding_types,
+        };
+        use crate::module::{ModuleAliasRegistry, RuntimeBindingTypes};
+        use opaal_syntax::{ParseOutcome, parse_opaal};
+
+        let apply = |callable: &Value, arguments| {
+            let caller = SourceFile::new(SourceId::new(93), "next.opaal", "process()");
+            crate::eval::apply_callable(
+                callable,
+                arguments,
+                &caller,
+                caller.span(0..9).unwrap(),
+                &mut Environment::new(),
+                &EvalLimits::default(),
+            )
+        };
+        let round_trip = |text: &str| {
+            let source = Arc::new(SourceFile::new(SourceId::new(92), "callbacks.opaal", text));
+            let ParseOutcome::Complete(script) = parse_opaal(&source) else {
+                panic!("fixture must parse");
+            };
+            let types = RuntimeBindingTypes::analyze_repl_source(
+                &source,
+                &script,
+                &ModuleAliasRegistry::default(),
+            )
+            .unwrap();
+            let mut scope = ScopeStack::new();
+            evaluate_in_environment_owned_with_binding_types(
+                &script,
+                source,
+                &mut scope,
+                &mut Environment::new(),
+                &EvalLimits::default(),
+                Arc::new(types),
+            )
+            .unwrap();
+            let wire = encode_background_capsule(
+                "next.opaal",
+                "",
+                Path::new("/project"),
+                &Environment::new(),
+                None,
+                &scope,
+                options(),
+            )
+            .unwrap();
+            decode_background_capsule(&wire).unwrap()
+        };
+        let decoded = round_trip(
+            "import std::list as list\nlet amount = 3\ndef transform(x: Int) -> Int { x + amount }\ndef process(items: List[Int]) -> List[Int] { list::map[Int, Int](items, transform) }",
+        );
+        let process = decoded.scope().get("process").unwrap();
+        assert!(matches!(
+            apply(process, vec![Value::list(vec![Value::Int(2), Value::Int(1)])]).unwrap(),
+            Completion::Value(value) if value == Value::list(vec![Value::Int(5), Value::Int(4)])
+        ));
+
+        let decoded = round_trip(
+            "import std::list as list\ndef identity[X: Equal](x: Any) -> Any { x }\ndef make[X: Equal]() -> Closure { {|x| identity[X](x)} }\nlet callback = make[Int]()\ndef process() -> List[Int] { list::map[Int, Int]([1], callback) }",
+        );
+        assert!(matches!(
+            apply(decoded.scope().get("process").unwrap(), vec![]).unwrap(),
+            Completion::Value(value) if value == Value::list(vec![Value::Int(1)])
+        ));
+
+        for definition in [
+            "action callback(x: Int) -> Int effects {} { x }",
+            "action callback(x: Int) -> Int effects { clock.wall; } { x }",
+            "def callback[X](x: Int) -> Int { x }",
+        ] {
+            let text = format!(
+                "import std::list as list\n{definition}\ndef process() -> List[Int] {{ list::map[Int, Int]([], callback) }}"
+            );
+            let decoded = round_trip(&text);
+            let process = decoded.scope().get("process").unwrap();
+            assert!(apply(process, vec![]).is_err(), "{definition}");
+        }
     }
 
     #[test]

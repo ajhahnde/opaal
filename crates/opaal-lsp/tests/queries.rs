@@ -870,3 +870,53 @@ fn explicit_cancellation_wins_and_generation_changes_return_content_modified() {
         })
     );
 }
+
+#[test]
+fn callback_operation_signatures_show_relations_and_argument_positions() {
+    let directory = TestDirectory::new();
+    let uri = directory.uri("main.opaal");
+    let text = "import std::list as list\nlist::fold[Int, Int]([1], 0, {|a, x| a + x}   )\n";
+    let mut workspace = Workspace::new();
+    workspace.open(uri.clone(), 1, text.into()).unwrap();
+    let result = request(
+        &workspace,
+        PositionEncoding::Utf16,
+        &RequestControl::new(),
+        "textDocument/signatureHelp",
+        positional(
+            &uri,
+            text,
+            text.rfind(')').unwrap(),
+            PositionEncoding::Utf16,
+        ),
+    )
+    .unwrap();
+    assert_eq!(result["activeParameter"], 2);
+    assert_eq!(
+        result["signatures"][0]["label"],
+        "std::list::fold[T, A](input: List[T], initial: A, combine: Callable(A, T) -> A) -> A"
+    );
+    assert_eq!(
+        result["signatures"][0]["parameters"],
+        json!([{"label":"input"}, {"label":"initial"}, {"label":"combine"}])
+    );
+    let hover = request(
+        &workspace,
+        PositionEncoding::Utf16,
+        &RequestControl::new(),
+        "textDocument/hover",
+        positional(
+            &uri,
+            text,
+            text.find("fold").unwrap(),
+            PositionEncoding::Utf16,
+        ),
+    )
+    .unwrap();
+    assert!(
+        hover["contents"]["value"]
+            .as_str()
+            .unwrap()
+            .contains("Callable(A, T) -> A")
+    );
+}

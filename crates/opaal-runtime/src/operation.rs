@@ -74,6 +74,160 @@ pub struct OperationOverload {
 pub struct OperationParameter {
     name: String,
     input: OperationInputType,
+    callback: Option<OperationCallback>,
+}
+
+/// A pure callback's parameter/result relation over descriptor type parameters.
+/// This is metadata over Function and Closure, not a source callable type.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OperationCallback {
+    parameters: Vec<ValueType>,
+    result: ValueType,
+}
+
+impl OperationCallback {
+    #[must_use]
+    pub fn parameters(&self) -> &[ValueType] {
+        &self.parameters
+    }
+
+    #[must_use]
+    pub const fn result(&self) -> &ValueType {
+        &self.result
+    }
+}
+
+/// Available binding metadata, shared by source checking and runtime preflight.
+#[derive(Clone)]
+pub(crate) struct CallbackShape {
+    pub(crate) action: bool,
+    pub(crate) generics: Vec<crate::module::ResolvedTypeParameter>,
+    pub(crate) parameters: Vec<ValueType>,
+    pub(crate) result: ValueType,
+}
+
+impl CallbackShape {
+    pub(crate) fn infer_operation(
+        &self,
+        relation: &OperationCallback,
+        substitutions: &mut std::collections::BTreeMap<String, ValueType>,
+    ) -> Result<(), String> {
+        if self.action {
+            return Err(
+                "callbacks require a function or closure; actions are not accepted".to_owned(),
+            );
+        }
+        if self.parameters.len() != relation.parameters.len() {
+            return Err(format!(
+                "callback expects {} arguments; operation supplies {}",
+                self.parameters.len(),
+                relation.parameters.len()
+            ));
+        }
+        for (expected, actual) in relation
+            .parameters
+            .iter()
+            .zip(&self.parameters)
+            .chain(std::iter::once((&relation.result, &self.result)))
+        {
+            if !self.contains_own_generic(actual)
+                && !crate::module::unify_type(expected, actual, substitutions)
+            {
+                return Err(format!(
+                    "callback type `{actual}` conflicts with `{expected}`"
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn contains_own_generic(&self, value_type: &ValueType) -> bool {
+        match value_type {
+            ValueType::TypeParameter(name) => self
+                .generics
+                .iter()
+                .any(|parameter| parameter.name() == name),
+            ValueType::List(element) => self.contains_own_generic(element),
+            ValueType::Nominal { arguments, .. } => arguments
+                .iter()
+                .any(|argument| self.contains_own_generic(argument)),
+            _ => false,
+        }
+    }
+
+    pub(crate) fn instantiate(
+        &self,
+        relation: &OperationCallback,
+        operation_types: &std::collections::BTreeMap<String, ValueType>,
+        satisfies: impl Fn(&ValueType, opaal_syntax::TypeConstraint) -> bool,
+    ) -> Result<Vec<ValueType>, String> {
+        if self.action {
+            return Err(
+                "callbacks require a function or closure; actions are not accepted".to_owned(),
+            );
+        }
+        if self.parameters.len() != relation.parameters.len() {
+            return Err(format!(
+                "callback expects {} arguments; operation supplies {}",
+                self.parameters.len(),
+                relation.parameters.len()
+            ));
+        }
+        let inputs = relation
+            .parameters
+            .iter()
+            .map(|input| substitute_type(input, operation_types))
+            .collect::<Vec<_>>();
+        let output = substitute_type(&relation.result, operation_types);
+        let mut own_types = std::collections::BTreeMap::new();
+        for (parameter, supplied) in self
+            .parameters
+            .iter()
+            .zip(&inputs)
+            .chain(std::iter::once((&self.result, &output)))
+        {
+            if !crate::module::unify_type(parameter, supplied, &mut own_types) {
+                return Err(format!(
+                    "callback type `{parameter}` conflicts with operation type `{supplied}`"
+                ));
+            }
+        }
+        let mut arguments = Vec::new();
+        for generic in &self.generics {
+            let Some(actual) = own_types.get(generic.name()) else {
+                return Err(format!(
+                    "cannot infer callback type `{}`; use a concrete typed wrapper",
+                    generic.name()
+                ));
+            };
+            if generic
+                .constraints()
+                .iter()
+                .any(|constraint| !satisfies(actual, *constraint))
+            {
+                return Err(format!(
+                    "callback type `{actual}` fails constraints for `{}`",
+                    generic.name()
+                ));
+            }
+            arguments.push(actual.clone());
+        }
+        for (parameter, supplied) in self.parameters.iter().zip(&inputs) {
+            let parameter = substitute_type(parameter, &own_types);
+            if !parameter.accepts_type(supplied) {
+                return Err(format!(
+                    "callback parameter `{parameter}` cannot accept `{supplied}`"
+                ));
+            }
+        }
+        let result = substitute_type(&self.result, &own_types);
+        if result != ValueType::Any && !output.accepts_type(&result) {
+            return Err(format!(
+                "callback result `{result}` does not fit `{output}`"
+            ));
+        }
+        Ok(arguments)
+    }
 }
 
 impl OperationParameter {
@@ -86,6 +240,11 @@ impl OperationParameter {
     pub const fn input(&self) -> &OperationInputType {
         &self.input
     }
+
+    #[must_use]
+    pub const fn callback(&self) -> Option<&OperationCallback> {
+        self.callback.as_ref()
+    }
 }
 
 impl OperationOverload {
@@ -94,6 +253,7 @@ impl OperationOverload {
             parameters: vec![OperationParameter {
                 name: "input".to_owned(),
                 input: input.clone(),
+                callback: None,
             }],
             input,
             result,
@@ -106,6 +266,7 @@ impl OperationOverload {
             .map(|(name, value_type)| OperationParameter {
                 name: name.to_owned(),
                 input: OperationInputType::Value(value_type),
+                callback: None,
             })
             .collect::<Vec<_>>();
         Self {
@@ -226,7 +387,23 @@ impl OperationDescriptor {
                     overload
                         .parameters()
                         .iter()
-                        .map(|parameter| format!("{}: {}", parameter.name(), parameter.input()))
+                        .map(|parameter| {
+                            if let Some(callback) = parameter.callback() {
+                                format!(
+                                    "{}: Callable({}) -> {}",
+                                    parameter.name(),
+                                    callback
+                                        .parameters()
+                                        .iter()
+                                        .map(ToString::to_string)
+                                        .collect::<Vec<_>>()
+                                        .join(", "),
+                                    callback.result()
+                                )
+                            } else {
+                                format!("{}: {}", parameter.name(), parameter.input())
+                            }
+                        })
                         .collect::<Vec<_>>()
                         .join(", "),
                     overload.result(),
@@ -256,6 +433,12 @@ impl OperationDescriptor {
                     }
                 };
                 validate_type_parameters(input, &parameters)?;
+                if let Some(callback) = parameter.callback() {
+                    for input in callback.parameters() {
+                        validate_type_parameters(input, &parameters)?;
+                    }
+                    validate_type_parameters(callback.result(), &parameters)?;
+                }
             }
             validate_type_parameters(&overload.result, &parameters)?;
         }
@@ -472,6 +655,9 @@ pub(crate) enum StandardOperation {
     EndsWith,
     Replace,
     DecodeUtf8,
+    Map,
+    Filter,
+    Fold,
 }
 
 /// A compiled operation descriptor that cannot enter the standard manifest.
@@ -562,6 +748,77 @@ pub fn standard_operation(module: &ModuleId, name: &str) -> Option<OperationDesc
     };
     if namespace != "std" {
         return None;
+    }
+    if standard == "list" {
+        use ValueType::{Any, Bool, List, TypeParameter};
+        let t = TypeParameter("T".to_owned());
+        let (implementation, generics, parameters, callback, result, documentation) = match name {
+            "map" => {
+                let u = TypeParameter("U".to_owned());
+                (
+                    StandardOperation::Map,
+                    vec!["T", "U"],
+                    vec![("input", List(Box::new(t.clone()))), ("transform", Any)],
+                    OperationCallback {
+                        parameters: vec![t],
+                        result: u.clone(),
+                    },
+                    List(Box::new(u)),
+                    "Apply a pure callback once per item in source order; preserve result values without flattening.",
+                )
+            }
+            "filter" => (
+                StandardOperation::Filter,
+                vec!["T"],
+                vec![("input", List(Box::new(t.clone()))), ("predicate", Any)],
+                OperationCallback {
+                    parameters: vec![t.clone()],
+                    result: Bool,
+                },
+                List(Box::new(t)),
+                "Retain items in source order when a pure callback returns Bool true.",
+            ),
+            "fold" => {
+                let a = TypeParameter("A".to_owned());
+                (
+                    StandardOperation::Fold,
+                    vec!["T", "A"],
+                    vec![
+                        ("input", List(Box::new(t.clone()))),
+                        ("initial", a.clone()),
+                        ("combine", Any),
+                    ],
+                    OperationCallback {
+                        parameters: vec![a.clone(), t],
+                        result: a.clone(),
+                    },
+                    a,
+                    "Left fold with a pure callback receiving accumulator then item; empty input returns initial.",
+                )
+            }
+            _ => return None,
+        };
+        let mut overload = OperationOverload::values(parameters, result);
+        overload
+            .parameters
+            .last_mut()
+            .expect("callback parameter")
+            .callback = Some(callback);
+        let descriptor = OperationDescriptor {
+            id: OperationId::new(module.clone(), name),
+            type_parameters: generics.into_iter().map(str::to_owned).collect(),
+            overloads: vec![overload],
+            documentation: format!(
+                "{documentation} Validate callback kind, arity and annotations even on empty input; share caller budgets and cancellation; stop on first failure."
+            ),
+            purity: OperationPurity::Pure,
+            downstream: DownstreamCallMetadata::foundation(),
+            implementation,
+        };
+        descriptor
+            .validate()
+            .expect("compiled list descriptors must be valid");
+        return Some(descriptor);
     }
     if standard == "string" {
         use StandardOperation::{
@@ -675,6 +932,9 @@ pub(crate) fn standard_operations(module: &ModuleId) -> Vec<OperationDescriptor>
         "ends_with",
         "replace",
         "decode_utf8",
+        "map",
+        "filter",
+        "fold",
     ]
     .into_iter()
     .filter_map(|name| standard_operation(module, name))
