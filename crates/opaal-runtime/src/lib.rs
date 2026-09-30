@@ -21,6 +21,7 @@ pub mod file;
 pub mod format;
 pub mod glob;
 pub mod help;
+mod interactive_modules;
 pub mod internal;
 pub mod intrinsic;
 pub mod job;

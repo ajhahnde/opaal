@@ -17,7 +17,7 @@
 //! unredirected interactive output terminal. An all-external pipeline retains
 //! the existing process executor.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::io::{self, Write};
 use std::os::unix::ffi::OsStrExt;
@@ -29,10 +29,12 @@ use opaal_platform::{
     DescriptorEndpoint, DescriptorReadError, DescriptorWriteError, DirectoryReadRequest,
     DirectoryStream, FileOpenMode, FileOpenRequest, JobSignal, Platform, ProcessGroupId,
 };
+#[cfg(test)]
+use opaal_syntax::parse_opaal;
 use opaal_syntax::{
     CommandHeadKind, CommandItemKind, ConditionalChain, Diagnostic, OutputMode, ParseOutcome,
     Script, Severity, SourceFile, SourceId, Span, StageKind, StatementKind, Word, WordPartKind,
-    parse_opaal, render_diagnostic,
+    render_diagnostic,
 };
 
 use crate::background::{BackgroundJobs, ForegroundJobOutcome, QuarantinePolicy, escape_job_label};
@@ -50,12 +52,18 @@ use crate::execute::{
     execute_foreground_status, start_mixed_pipeline,
 };
 use crate::help::render_module_operation_help;
+use crate::interactive_modules::{
+    InteractiveModules, MAX_RETAINED_BYTES, MAX_RETAINED_ITEMS, MAX_RETAINED_SOURCE_BYTES,
+    MAX_RETAINED_SOURCES, PrepareError, PreparedImports,
+};
 use crate::internal::{
     DEFAULT_MATERIALIZATION_LIMIT, InternalPayload, InternalPipelineOutcome, StageOutcome,
     execute_internal_pipeline_with_policy, execute_internal_suffix_with_policy, execute_stage,
 };
 use crate::job::JobPlacement;
-use crate::module::{ModuleAliasRegistry, RuntimeBindingTypes};
+use crate::module::{
+    ModuleAliasRegistry, ModuleCanonicalizer, ModuleSourceLoader, RuntimeBindingTypes,
+};
 use crate::operation::OperationDescriptor;
 use crate::outcome::{Refusal, RefusalReason};
 use crate::plan::{
@@ -66,6 +74,7 @@ use crate::presentation::{
     OutputDestination, TerminalPresentation, render_table, select_terminal_presentation,
 };
 use crate::resolve::ExecutableProbe;
+use crate::script::declare_qualified_alias_values;
 use crate::stream::{BytePull, ByteStream, StreamPull, ValueStream};
 use crate::{
     Duration, Environment, NativeSessionSnapshot, Record, ScopeStack, Status, Table, Value,
@@ -132,9 +141,10 @@ pub struct Session {
     options: SessionOptions,
     registry: CommandRegistry,
     policy: EvaluationPolicy,
-    next_source: u32,
+    next_source: u64,
     jobs: Option<BackgroundJobs>,
     opaal_aliases: ModuleAliasRegistry,
+    interactive_modules: InteractiveModules,
 }
 
 impl Session {
@@ -189,6 +199,7 @@ impl Session {
             next_source: 1,
             jobs: None,
             opaal_aliases: ModuleAliasRegistry::default(),
+            interactive_modules: InteractiveModules::default(),
         }
     }
 
@@ -364,10 +375,138 @@ impl Session {
         clock: &dyn Clock,
         output: &mut dyn Write,
     ) -> Result<(SubmitOutcome, Value), SubmitError> {
-        let source = Arc::new(SourceFile::new(SourceId::new(self.next_source), name, text));
-        self.next_source = self.next_source.wrapping_add(1);
+        let limits = EvalLimits::pure_opaal(CancellationToken::never(), ResourceBudget::opaal());
+        self.submit_interactive(
+            name.into(),
+            text.into(),
+            None,
+            &limits,
+            probe,
+            platform,
+            clock,
+            output,
+        )
+    }
 
-        let parsed = parse_opaal(&source);
+    /// Submits interactive source with an explicit capability to resolve and read
+    /// local modules. Imports use the logical cwd and retain immutable snapshots
+    /// for the lifetime of this session. Initialization is always host-free.
+    #[allow(clippy::too_many_arguments)]
+    pub fn submit_with_source_loader(
+        &mut self,
+        name: impl Into<String>,
+        text: impl Into<String>,
+        canonicalizer: &dyn ModuleCanonicalizer,
+        source_loader: &dyn ModuleSourceLoader,
+        probe: &dyn ExecutableProbe,
+        platform: &dyn Platform,
+        clock: &dyn Clock,
+        output: &mut dyn Write,
+    ) -> Result<(SubmitOutcome, Value), SubmitError> {
+        let limits = EvalLimits::pure_opaal(CancellationToken::never(), ResourceBudget::opaal());
+        self.submit_with_source_loader_and_limits(
+            name,
+            text,
+            canonicalizer,
+            source_loader,
+            &limits,
+            probe,
+            platform,
+            clock,
+            output,
+        )
+    }
+
+    /// Submits with one explicit evaluation budget and cancellation token shared
+    /// by module initialization and the importing cell. Source access remains
+    /// bounded analysis; caller limits never grant initialization authority.
+    #[allow(clippy::too_many_arguments)]
+    pub fn submit_with_source_loader_and_limits(
+        &mut self,
+        name: impl Into<String>,
+        text: impl Into<String>,
+        canonicalizer: &dyn ModuleCanonicalizer,
+        source_loader: &dyn ModuleSourceLoader,
+        limits: &EvalLimits,
+        probe: &dyn ExecutableProbe,
+        platform: &dyn Platform,
+        clock: &dyn Clock,
+        output: &mut dyn Write,
+    ) -> Result<(SubmitOutcome, Value), SubmitError> {
+        self.submit_interactive(
+            name.into(),
+            text.into(),
+            Some((canonicalizer, source_loader)),
+            limits,
+            probe,
+            platform,
+            clock,
+            output,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn submit_interactive(
+        &mut self,
+        name: String,
+        text: String,
+        capabilities: Option<(&dyn ModuleCanonicalizer, &dyn ModuleSourceLoader)>,
+        limits: &EvalLimits,
+        probe: &dyn ExecutableProbe,
+        platform: &dyn Platform,
+        clock: &dyn Clock,
+        output: &mut dyn Write,
+    ) -> Result<(SubmitOutcome, Value), SubmitError> {
+        let id = u32::try_from(self.next_source)
+            .ok()
+            .filter(|id| *id != u32::MAX)
+            .ok_or_else(|| SubmitError::Diagnostic("source identity exhausted\n".to_owned()))?;
+        self.next_source += 1;
+        if text.len()
+            + self.interactive_modules.cell_bytes
+            + self
+                .interactive_modules
+                .programs
+                .iter()
+                .flat_map(|program| program.sources().entries())
+                .map(|entry| entry.source().text().len())
+                .sum::<usize>()
+            > MAX_RETAINED_SOURCE_BYTES
+            || self.interactive_modules.cell_count
+                + self
+                    .interactive_modules
+                    .programs
+                    .iter()
+                    .map(|program| program.sources().entries().count())
+                    .sum::<usize>()
+                + 1
+                > MAX_RETAINED_SOURCES
+        {
+            return Err(SubmitError::Diagnostic(
+                "interactive retained source limit exceeded\n".to_owned(),
+            ));
+        }
+        let source = Arc::new(SourceFile::new(SourceId::new(id), name, text));
+        let cancellation = limits.cancellation_token();
+        let cancelled = || {
+            (
+                SubmitOutcome::Cancelled(crate::eval::Cancellation::new(
+                    cancellation.reason(),
+                    source.span(0..0).unwrap(),
+                )),
+                Value::Null,
+            )
+        };
+        if cancellation.is_cancelled() {
+            return Ok(cancelled());
+        }
+
+        let parsed = match opaal_syntax::parse_opaal_with_control(&source, &|| {
+            cancellation.is_cancelled()
+        }) {
+            opaal_syntax::ControlledParseOutcome::Parsed(parsed) => parsed,
+            opaal_syntax::ControlledParseOutcome::Cancelled => return Ok(cancelled()),
+        };
         let script = match parsed {
             ParseOutcome::Complete(script) => script,
             ParseOutcome::Incomplete(input) => {
@@ -382,27 +521,134 @@ impl Session {
             ParseOutcome::Invalid(diagnostics) => return Err(render(&source, &diagnostics)),
         };
 
-        let binding_types =
-            RuntimeBindingTypes::analyze_repl_source(&source, &script, &self.opaal_aliases)
-                .map_err(|diagnostic| render(&source, &[diagnostic]))?;
+        let cwd = self.cwd().to_path_buf();
+        let analysis_cancellation = cancellation.clone();
+        let control = crate::module::AnalysisControl::cooperative(move || {
+            analysis_cancellation.is_cancelled()
+        });
+        let imports = Some(if let Some((canonicalizer, loader)) = capabilities {
+            match self.interactive_modules.prepare(
+                &cwd,
+                &source,
+                &script,
+                canonicalizer,
+                loader,
+                &mut self.next_source,
+                &control,
+            ) {
+                Ok(imports) => imports,
+                Err(PrepareError::Diagnostic(message)) => {
+                    return Err(SubmitError::Diagnostic(message));
+                }
+                Err(PrepareError::Cancelled) => return Ok(cancelled()),
+            }
+        } else {
+            PreparedImports {
+                programs: self.interactive_modules.programs.clone(),
+                imports: BTreeMap::new(),
+                resolutions: BTreeMap::new(),
+            }
+        });
+        let local_imports = imports.as_ref().map_or_else(BTreeMap::new, |prepared| {
+            prepared
+                .imports
+                .iter()
+                .map(|(offset, program)| (*offset, program.graph().root().clone()))
+                .collect()
+        });
+        let programs = imports
+            .as_ref()
+            .map_or(self.interactive_modules.programs.as_slice(), |prepared| {
+                prepared.programs.as_slice()
+            });
+        for statement in script.statements() {
+            if let StatementKind::ModuleImport(import) = statement.kind() {
+                let name = source.slice(import.alias.span()).unwrap();
+                if self.scope.get(name).is_some() {
+                    return Err(render(
+                        &source,
+                        &[Diagnostic::new(
+                            Severity::Error,
+                            "MOD011",
+                            format!("module alias `{name}` conflicts"),
+                        )
+                        .with_primary(import.alias.span(), "this name is already bound")],
+                    ));
+                }
+            }
+        }
+        let inherited_types = self.interactive_modules.binding_types.clone();
+        let analyzed = RuntimeBindingTypes::analyze_interactive_with_control(
+            &source,
+            &script,
+            &self.opaal_aliases,
+            programs,
+            &local_imports,
+            self.interactive_modules.binding_types.as_deref(),
+            &control.for_run(crate::module::AnalysisLimits::OPAAL),
+        );
+        if cancellation.is_cancelled() {
+            return Ok(cancelled());
+        }
+        let binding_types = Arc::new(analyzed.map_err(|diagnostic| {
+            SubmitError::Diagnostic(RuntimeBindingTypes::render_interactive_diagnostic(
+                &source,
+                &diagnostic,
+                programs,
+                self.interactive_modules.binding_types.as_deref(),
+            ))
+        })?);
         let imports_analyzed = true;
-        let limits = EvalLimits::pure_opaal(CancellationToken::never(), ResourceBudget::opaal());
         let mut budget = limits.resource_budget();
         let mut child_starts = ChildStartBudget::per_submission();
 
-        self.submit_parsed(
-            source,
+        self.interactive_modules.admitted_statements = 0;
+        let result = self.submit_parsed(
+            Arc::clone(&source),
             &script,
             imports_analyzed,
-            Some(Arc::new(binding_types)),
-            &limits,
+            Some(Arc::clone(&binding_types)),
+            limits,
             &mut budget,
             &mut child_starts,
             probe,
             platform,
             clock,
             output,
-        )
+            imports.as_ref(),
+        );
+        if self.interactive_modules.admitted_statements > 0 {
+            let retained = binding_types.retain_interactive_prefix(
+                &source,
+                &script,
+                self.interactive_modules.admitted_statements,
+                &self.opaal_aliases,
+                &self.interactive_modules.programs,
+                inherited_types.as_deref(),
+            );
+            self.interactive_modules.binding_types = Some(Arc::new(retained));
+            // Earlier callables can retain the complete analysis of this cell.
+            // Charge unpublished graphs conservatively without caching their
+            // sources or exposing their aliases after a later import failure.
+            if let Some(prepared) = &imports {
+                for program in &prepared.programs {
+                    if !self
+                        .interactive_modules
+                        .programs
+                        .iter()
+                        .any(|published| published.graph().root() == program.graph().root())
+                    {
+                        self.interactive_modules.cell_bytes += program
+                            .sources()
+                            .entries()
+                            .map(|entry| entry.source().text().len())
+                            .sum::<usize>();
+                        self.interactive_modules.cell_count += program.sources().entries().count();
+                    }
+                }
+            }
+        }
+        result
     }
 
     /// Executes one source from a fully analyzed module program in an isolated
@@ -435,6 +681,7 @@ impl Session {
             platform,
             clock,
             output,
+            None,
         );
         std::mem::swap(&mut self.scope, &mut scope);
         outcome.map(|(outcome, value)| (outcome, scope, value))
@@ -454,6 +701,7 @@ impl Session {
         platform: &dyn Platform,
         clock: &dyn Clock,
         output: &mut dyn Write,
+        imports: Option<&PreparedImports>,
     ) -> Result<(SubmitOutcome, Value), SubmitError> {
         let source_file = source.as_ref();
         let binding_types =
@@ -466,11 +714,47 @@ impl Session {
             registry,
             jobs,
             opaal_aliases,
+            interactive_modules,
             ..
         } = self;
 
         let mut last_value = Value::Null;
+        let mut admitted = 0;
+        let mut previous_items = budget.collection_items();
+        let mut previous_bytes = budget.collection_bytes();
+        let admission_token = limits.cancellation_token();
+        let admission_control =
+            crate::module::AnalysisControl::cooperative(move || admission_token.is_cancelled())
+                .for_run(crate::module::AnalysisLimits::OPAAL);
         for statement in script.statements() {
+            let cancellation = limits.cancellation_token();
+            if imports.is_some() && cancellation.is_cancelled() {
+                return Ok((
+                    SubmitOutcome::Cancelled(crate::eval::Cancellation::new(
+                        cancellation.reason(),
+                        statement.span(),
+                    )),
+                    last_value,
+                ));
+            }
+            if imports.is_some()
+                && let Some(diagnostic) = binding_types.uninitialized_interactive_type(
+                    statement.span(),
+                    &interactive_modules.instances,
+                    &admission_control,
+                )
+            {
+                if cancellation.is_cancelled() {
+                    return Ok((
+                        SubmitOutcome::Cancelled(crate::eval::Cancellation::new(
+                            cancellation.reason(),
+                            statement.span(),
+                        )),
+                        last_value,
+                    ));
+                }
+                return Err(render(source_file, &[diagnostic]));
+            }
             match statement.kind() {
                 StatementKind::ModuleImport(import) if imports_analyzed => {
                     let alias_name = source_file
@@ -480,11 +764,56 @@ impl Session {
                         .module_alias(source_file.id(), alias_name)
                         .cloned()
                     {
+                        if let Some(prepared) = imports
+                            && let Some(program) =
+                                prepared.imports.get(&import.source.span().start())
+                        {
+                            match interactive_modules.initialize(
+                                program,
+                                limits,
+                                budget,
+                                previous_items,
+                                previous_bytes,
+                            ) {
+                                Ok(HostedEvaluationOutcome::Value(_)) => {}
+                                Ok(HostedEvaluationOutcome::Cancelled(cancelled)) => {
+                                    return Ok((SubmitOutcome::Cancelled(cancelled), last_value));
+                                }
+                                Ok(HostedEvaluationOutcome::Refused(refusal)) => {
+                                    return Ok((SubmitOutcome::Refused(refusal), last_value));
+                                }
+                                Ok(_) => unreachable!("a pure initializer cannot exit or stop"),
+                                Err(HostedEvaluationFailure::Runtime(error)) => {
+                                    return Err(runtime(source_file, &error));
+                                }
+                                Err(HostedEvaluationFailure::Output(error)) => {
+                                    return Err(SubmitError::Output(error));
+                                }
+                            }
+                            declare_qualified_alias_values(
+                                scope,
+                                program,
+                                &interactive_modules.instances,
+                                alias.name(),
+                                alias.target(),
+                            );
+                            interactive_modules.resolutions.extend(
+                                prepared
+                                    .resolutions
+                                    .iter()
+                                    .filter(|(_, target)| {
+                                        interactive_modules
+                                            .sources
+                                            .keys()
+                                            .any(|module| module.path() == target.as_path())
+                                    })
+                                    .map(|(requested, target)| (requested.clone(), target.clone())),
+                            );
+                        }
                         opaal_aliases.retain_alias(alias);
                     }
-                    continue;
                 }
-                StatementKind::ModuleExport(_) if imports_analyzed => continue,
+                StatementKind::ModuleExport(_) if imports_analyzed => {}
                 StatementKind::Job(job)
                     if policy == EvaluationPolicy::PureOpaal
                         && job.background_span.is_none()
@@ -601,6 +930,23 @@ impl Session {
                     };
                     match evaluated {
                         Ok(HostedEvaluationOutcome::Value(value)) => {
+                            if imports.is_some() {
+                                let items = budget.collection_items() - previous_items;
+                                let bytes = budget.collection_bytes() - previous_bytes;
+                                if interactive_modules.items.saturating_add(items)
+                                    > MAX_RETAINED_ITEMS
+                                    || interactive_modules.bytes.saturating_add(bytes)
+                                        > MAX_RETAINED_BYTES
+                                {
+                                    return Err(runtime(
+                                        source_file,
+                                        &RuntimeError::new(
+                                            RuntimeErrorKind::ResourceBudgetExceeded,
+                                            statement.span(),
+                                        ),
+                                    ));
+                                }
+                            }
                             *scope = pending_scope;
                             *state = pending_state;
                             last_value = value;
@@ -630,6 +976,18 @@ impl Session {
                         }
                     }
                 }
+            }
+            if imports.is_some() {
+                admitted += 1;
+                interactive_modules.admitted_statements = admitted;
+                if admitted == 1 {
+                    interactive_modules.cell_bytes += source_file.text().len();
+                    interactive_modules.cell_count += 1;
+                }
+                interactive_modules.items += budget.collection_items() - previous_items;
+                interactive_modules.bytes += budget.collection_bytes() - previous_bytes;
+                previous_items = budget.collection_items();
+                previous_bytes = budget.collection_bytes();
             }
         }
 
@@ -3752,5 +4110,157 @@ mod ambient_process_policy_tests {
             SubmitOutcome::Continued,
         );
         assert!(!session.environment().contains("SAMPLE"));
+    }
+}
+
+#[cfg(test)]
+mod interactive_retention_tests {
+    use super::*;
+    use crate::eval::FakeClock;
+    use opaal_platform::FakePlatform;
+    use opaal_platform_posix::PosixPlatform;
+
+    fn submit(session: &mut Session, text: &str) -> Result<(SubmitOutcome, Value), SubmitError> {
+        session.submit_with_value(
+            "cell",
+            text,
+            &PosixPlatform,
+            &FakePlatform::full(),
+            &FakeClock::new(),
+            &mut Vec::new(),
+        )
+    }
+
+    #[test]
+    fn source_ids_fail_closed_instead_of_wrapping_or_using_the_standard_id() {
+        let mut session = Session::new("/project", Environment::new(), SessionOptions::default());
+        session.next_source = u64::from(u32::MAX) - 1;
+        submit(&mut session, "let marker = {|| 1}").unwrap();
+        let Some(Value::Callable(callable)) = session.scope().get("marker") else {
+            panic!("marker is callable")
+        };
+        assert_eq!(
+            crate::eval::snapshot_callable(callable)
+                .unwrap()
+                .source
+                .id(),
+            SourceId::new(u32::MAX - 1)
+        );
+        let failure = submit(&mut session, "let excess = 2").unwrap_err();
+        assert!(failure.render().contains("source identity exhausted"));
+        assert!(session.scope().get("marker").is_some());
+        assert!(session.scope().get("excess").is_none());
+        assert_eq!(session.next_source, u64::from(u32::MAX));
+    }
+
+    #[test]
+    fn retained_collection_items_accept_the_boundary_before_refusing_a_later_statement() {
+        let mut session = Session::new("/project", Environment::new(), SessionOptions::default());
+        session.interactive_modules.items = MAX_RETAINED_ITEMS - 1;
+        submit(&mut session, "let first = [1]").unwrap();
+        assert_eq!(session.interactive_modules.items, MAX_RETAINED_ITEMS);
+        let failure = submit(&mut session, "let excess = [2]").unwrap_err();
+        assert!(
+            matches!(failure, SubmitError::Runtime { ref error, .. } if matches!(error.kind(), RuntimeErrorKind::ResourceBudgetExceeded))
+        );
+        assert!(session.scope().get("first").is_some());
+        assert!(session.scope().get("excess").is_none());
+        assert_eq!(
+            submit(&mut session, "first").unwrap().1,
+            Value::list(vec![Value::Int(1)])
+        );
+    }
+
+    #[test]
+    fn retained_nominal_schemas_and_forward_standard_aliases_restore_after_failure() {
+        let mut session = Session::new("/project", Environment::new(), SessionOptions::default());
+        submit(
+            &mut session,
+            "type Check = { value: outcome::Option[Int] }\n1 / 0\nimport std::outcome as outcome",
+        )
+        .unwrap_err();
+        submit(&mut session, "import std::outcome as outcome").unwrap();
+        submit(
+            &mut session,
+            "let checked = Check {value: outcome::Option::Some(7)}",
+        )
+        .unwrap();
+        submit(&mut session, "def get(item: Check) -> Int { match item.value { outcome::Option::Some(x) => { x }; outcome::Option::None => { 0 } } }").unwrap();
+        let Value::Callable(callable) = session.scope().get("get").unwrap() else {
+            panic!("callable")
+        };
+        let snapshot = crate::eval::snapshot_callable(callable).unwrap();
+        let restored = crate::eval::restore_callable(snapshot, &mut 5_000_000).unwrap();
+        let caller = SourceFile::new(SourceId::new(50_000), "caller", "get(checked)");
+        let value = crate::eval::apply_callable(
+            &Value::Callable(restored),
+            vec![session.scope().get("checked").unwrap().clone()],
+            &caller,
+            caller.span(0..caller.len()).unwrap(),
+            &mut Environment::new(),
+            &crate::eval::EvalLimits::default(),
+        )
+        .unwrap();
+        assert!(matches!(
+            value,
+            crate::eval::Completion::Value(Value::Int(7))
+        ));
+        let wire = crate::capsule::encode_background_capsule(
+            "next",
+            "",
+            session.cwd(),
+            session.environment(),
+            None,
+            session.scope(),
+            SessionOptions::default(),
+        )
+        .unwrap();
+        let decoded = crate::capsule::decode_background_capsule(&wire).unwrap();
+        assert_eq!(
+            decoded.scope().get("checked"),
+            session.scope().get("checked")
+        );
+    }
+
+    #[test]
+    fn forward_interactive_type_dependencies_survive_a_failed_cell_without_unrelated_types() {
+        let mut session = Session::new("/project", Environment::new(), SessionOptions::default());
+        submit(&mut session, "type Wrapper = { item: Item }\n1 / 0\ntype Item = { value: Int }\ntype Unused = { wrong: String }").unwrap_err();
+        submit(&mut session, "type Unused = { value: Int }").unwrap();
+        submit(
+            &mut session,
+            "let wrapped = Wrapper {item: Item {value: 7}}",
+        )
+        .unwrap();
+        submit(
+            &mut session,
+            "def get(value: Wrapper) -> Int { value.item.value }",
+        )
+        .unwrap();
+        let wire = crate::capsule::encode_background_capsule(
+            "next",
+            "",
+            session.cwd(),
+            session.environment(),
+            None,
+            session.scope(),
+            SessionOptions::default(),
+        )
+        .unwrap();
+        let decoded = crate::capsule::decode_background_capsule(&wire).unwrap();
+        let caller = SourceFile::new(SourceId::new(50_000), "caller", "get(wrapped)");
+        let value = crate::eval::apply_callable(
+            decoded.scope().get("get").unwrap(),
+            vec![decoded.scope().get("wrapped").unwrap().clone()],
+            &caller,
+            caller.span(0..caller.len()).unwrap(),
+            &mut Environment::new(),
+            &crate::eval::EvalLimits::default(),
+        )
+        .unwrap();
+        assert!(matches!(
+            value,
+            crate::eval::Completion::Value(Value::Int(7))
+        ));
     }
 }

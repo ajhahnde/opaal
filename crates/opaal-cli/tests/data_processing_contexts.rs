@@ -5,8 +5,53 @@
 mod support;
 
 use std::fs;
+use std::io::Write;
 use std::os::unix::fs::symlink;
+use std::process::Stdio;
 use support::{INVALID, ReportDir, VALID, effects, failure, fixture, success};
+
+#[test]
+fn interactive_import_reuses_the_exact_report_in_later_cells_and_a_pipeline() {
+    for name in std::iter::once("jobs").chain(VALID.iter().copied()) {
+        let work = ReportDir::new();
+        let expected = if name == "jobs" {
+            fixture("expected-report.json")
+        } else {
+            work.write("jobs.json", fixture(&format!("valid/{name}.json")));
+            fixture(&format!("valid/{name}.expected.json"))
+        };
+        let mut child = work
+            .command()
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child.stdin.take().unwrap().write_all(concat!(
+            "import './report.opaal' as report\n",
+            "import std::data as data\n",
+            "let empty = report::build({jobs: []})\n",
+            "data::json_encode(empty)\n",
+            "^cat jobs.json | from json document | each {|document| data::json_encode(report::build(document))} | encode bytes\n",
+            "exit 0\n",
+        ).as_bytes()).unwrap();
+        let result = child.wait_with_output().unwrap();
+        success(&result);
+        assert!(
+            result.stderr.is_empty(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        assert!(
+            result
+                .stdout
+                .windows(expected.len())
+                .any(|bytes| bytes == expected),
+            "{}",
+            String::from_utf8_lossy(&result.stdout)
+        );
+    }
+}
 
 #[test]
 fn controlled_plan_execute_and_audit_match_the_ordinary_report() {

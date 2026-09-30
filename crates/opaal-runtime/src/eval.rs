@@ -37,9 +37,7 @@ mod string_operations;
 
 use crate::glob::{DEFAULT_GLOB_ENTRY_LIMIT, GlobPattern};
 use crate::intrinsic::{DynamicBinding, ExpressionIntrinsic};
-use crate::module::{
-    ActionId, ModuleAliasRegistry, ModuleId, ResolvedTypeParameter, RuntimeBindingTypes, ValueType,
-};
+use crate::module::{ActionId, ModuleId, ResolvedTypeParameter, RuntimeBindingTypes, ValueType};
 use crate::operation::{self, OperationError};
 use crate::operational::ModuleError as OperationalModuleError;
 use crate::operational::source::{
@@ -1613,6 +1611,9 @@ impl EvaluationPolicy {
 }
 
 impl EvalLimits {
+    pub(crate) fn cancellation_token(&self) -> CancellationToken {
+        self.cancel.clone()
+    }
     /// Limits pairing a cancellation token with a resource budget.
     #[must_use]
     pub const fn new(cancel: CancellationToken, budget: ResourceBudget) -> Self {
@@ -2056,6 +2057,43 @@ pub(crate) fn evaluate_with_host(
         &mut budget,
         binding_types,
         host,
+    )
+}
+
+/// Initializes a checked module through the host-free policy and caller budget.
+pub(crate) fn evaluate_module_initializer(
+    script: &Script,
+    source: Arc<SourceFile>,
+    scope: &mut ScopeStack,
+    limits: &EvalLimits,
+    budget: &mut ResourceBudget,
+    binding_types: Arc<RuntimeBindingTypes>,
+) -> Result<HostedEvaluationOutcome, HostedEvaluationFailure> {
+    let statements = script
+        .statements()
+        .iter()
+        .filter(|statement| {
+            !matches!(
+                statement.kind(),
+                StatementKind::ModuleImport(_) | StatementKind::ModuleExport(_)
+            )
+        })
+        .cloned()
+        .collect();
+    let script = Script::new(statements, script.span());
+    let mut environment = Environment::new();
+    let mut host = PureEvaluationHost {
+        environment: &mut environment,
+        policy: EvaluationPolicy::PureOpaal,
+    };
+    evaluate_with_host_and_budget(
+        &script,
+        source,
+        scope,
+        limits,
+        budget,
+        binding_types,
+        &mut host,
     )
 }
 
@@ -5613,6 +5651,7 @@ pub(crate) struct CallableSnapshot {
     pub(crate) location: String,
     pub(crate) origin_span: Span,
     pub(crate) captured_type_arguments: BTreeMap<String, ValueType>,
+    pub(crate) type_context: crate::module::RuntimeTypeContext,
 }
 
 pub(crate) fn snapshot_callable(callable: &Arc<dyn Callable>) -> Option<CallableSnapshot> {
@@ -5630,6 +5669,7 @@ pub(crate) fn snapshot_callable(callable: &Arc<dyn Callable>) -> Option<Callable
         location: callable.location.clone(),
         origin_span: callable.origin_span,
         captured_type_arguments: callable.captured_type_arguments.clone(),
+        type_context: callable.binding_types.context.clone(),
     })
 }
 
@@ -5640,7 +5680,19 @@ pub(crate) fn callable_contains_control_carrier(callable: &Arc<dyn Callable>) ->
         .is_some_and(|callable| callable.captured.values().any(contains_control_carrier))
 }
 
-pub(crate) fn restore_callable(snapshot: CallableSnapshot) -> Result<Arc<dyn Callable>, String> {
+pub(crate) fn callable_binding_types(
+    callable: &Arc<dyn Callable>,
+) -> Option<Arc<RuntimeBindingTypes>> {
+    callable
+        .as_any()
+        .downcast_ref::<CallableValue>()
+        .map(|callable| Arc::clone(&callable.binding_types))
+}
+
+pub(crate) fn restore_callable(
+    snapshot: CallableSnapshot,
+    work_remaining: &mut u64,
+) -> Result<Arc<dyn Callable>, String> {
     let parsed = match opaal_syntax::parse_opaal(&snapshot.source) {
         opaal_syntax::ParseOutcome::Complete(script) => script,
         opaal_syntax::ParseOutcome::Incomplete(_) => {
@@ -5650,14 +5702,47 @@ pub(crate) fn restore_callable(snapshot: CallableSnapshot) -> Result<Arc<dyn Cal
             return Err("callable source is invalid".to_owned());
         }
     };
-    let body = find_callable_body(&parsed, &snapshot)
+    let syntax = find_callable_body(&parsed, &snapshot)
         .ok_or_else(|| "callable definition is absent from its source".to_owned())?;
-    let binding_types = RuntimeBindingTypes::analyze_repl_source(
-        &snapshot.source,
-        &parsed,
-        &ModuleAliasRegistry::default(),
-    )
-    .map_err(|_| "callable source types cannot be restored".to_owned())?;
+    let binding_types = snapshot
+        .type_context
+        .restore(&snapshot.source, work_remaining)?;
+    let signature = binding_types.function_signature(snapshot.source.id(), snapshot.origin_span);
+    let parameters = syntax
+        .parameters
+        .iter()
+        .enumerate()
+        .map(|(index, parameter)| {
+            let name = snapshot
+                .source
+                .slice(parameter.name.span())
+                .map_err(|_| "invalid parameter span")?;
+            let value_type = signature
+                .and_then(|signature| signature.parameters().get(index))
+                .map(|parameter| parameter.value_type().clone())
+                .or_else(|| {
+                    parameter.type_annotation.as_ref().and_then(|annotation| {
+                        binding_types
+                            .annotation_type(snapshot.source.id(), annotation.span)
+                            .cloned()
+                    })
+                })
+                .unwrap_or(ValueType::Any);
+            Ok((name.to_owned(), value_type))
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    let result_type = if snapshot.name.is_some() {
+        signature.map(|signature| signature.result().clone())
+    } else {
+        syntax.result_type.as_ref().and_then(|annotation| {
+            binding_types
+                .annotation_type(snapshot.source.id(), annotation.span)
+                .cloned()
+        })
+    };
+    if snapshot.parameters != parameters || snapshot.result_type != result_type {
+        return Err("callable signature does not match its retained source".to_owned());
+    }
     let source = Arc::new(snapshot.source);
     let inspection = snapshot.name.as_deref().and_then(|_| {
         binding_types
@@ -5673,14 +5758,15 @@ pub(crate) fn restore_callable(snapshot: CallableSnapshot) -> Result<Arc<dyn Cal
         parameters: snapshot
             .parameters
             .into_iter()
-            .map(|(name, value_type)| CallableParameter {
+            .zip(syntax.parameters)
+            .map(|((name, value_type), parameter)| CallableParameter {
                 name: Arc::from(name),
                 value_type,
-                pattern: None,
+                pattern: Some(parameter.pattern),
             })
             .collect(),
         type_parameters,
-        body,
+        body: syntax.body,
         captured: snapshot.captured,
         source,
         binding_types: Arc::new(binding_types),
@@ -5693,7 +5779,16 @@ pub(crate) fn restore_callable(snapshot: CallableSnapshot) -> Result<Arc<dyn Cal
     Ok(Arc::new(callable))
 }
 
-fn find_callable_body(script: &Script, snapshot: &CallableSnapshot) -> Option<CallableBody> {
+struct RestoredCallableSyntax {
+    body: CallableBody,
+    parameters: Vec<Parameter>,
+    result_type: Option<opaal_syntax::TypeReference>,
+}
+
+fn find_callable_body(
+    script: &Script,
+    snapshot: &CallableSnapshot,
+) -> Option<RestoredCallableSyntax> {
     script
         .statements()
         .iter()
@@ -5703,7 +5798,7 @@ fn find_callable_body(script: &Script, snapshot: &CallableSnapshot) -> Option<Ca
 fn find_callable_in_statement(
     statement: &Statement,
     snapshot: &CallableSnapshot,
-) -> Option<CallableBody> {
+) -> Option<RestoredCallableSyntax> {
     match statement.kind() {
         StatementKind::ModuleImport(_)
         | StatementKind::ModuleExport(_)
@@ -5728,7 +5823,11 @@ fn find_callable_in_statement(
                         .is_ok_and(|candidate| candidate == name)
             });
             matches
-                .then(|| CallableBody::Block(definition.body.clone()))
+                .then(|| RestoredCallableSyntax {
+                    body: CallableBody::Block(definition.body.clone()),
+                    parameters: definition.parameters.clone(),
+                    result_type: definition.return_type.clone(),
+                })
                 .or_else(|| find_callable_in_block(&definition.body, snapshot))
         }
         StatementKind::Action(definition) => {
@@ -5740,7 +5839,11 @@ fn find_callable_in_statement(
                         .is_ok_and(|candidate| candidate == name)
             });
             matches
-                .then(|| CallableBody::Block(definition.body.clone()))
+                .then(|| RestoredCallableSyntax {
+                    body: CallableBody::Block(definition.body.clone()),
+                    parameters: definition.parameters.clone(),
+                    result_type: Some(definition.return_type.clone()),
+                })
                 .or_else(|| find_callable_in_block(&definition.body, snapshot))
         }
         StatementKind::Task(_) => None,
@@ -5786,7 +5889,7 @@ fn find_callable_in_statement(
 fn find_callable_in_if(
     statement: &IfStatement,
     snapshot: &CallableSnapshot,
-) -> Option<CallableBody> {
+) -> Option<RestoredCallableSyntax> {
     find_callable_in_chain(&statement.condition, snapshot)
         .or_else(|| find_callable_in_block(&statement.then_block, snapshot))
         .or_else(|| {
@@ -5800,7 +5903,10 @@ fn find_callable_in_if(
         })
 }
 
-fn find_callable_in_block(block: &Block, snapshot: &CallableSnapshot) -> Option<CallableBody> {
+fn find_callable_in_block(
+    block: &Block,
+    snapshot: &CallableSnapshot,
+) -> Option<RestoredCallableSyntax> {
     block
         .statements
         .iter()
@@ -5810,7 +5916,7 @@ fn find_callable_in_block(block: &Block, snapshot: &CallableSnapshot) -> Option<
 fn find_callable_in_chain(
     chain: &ConditionalChain,
     snapshot: &CallableSnapshot,
-) -> Option<CallableBody> {
+) -> Option<RestoredCallableSyntax> {
     chain.or_terms().iter().find_map(|and_chain| {
         and_chain.and_terms().iter().find_map(|pipeline| {
             pipeline
@@ -5854,16 +5960,20 @@ fn find_callable_in_chain(
 fn find_callable_in_closure(
     closure: &Closure,
     snapshot: &CallableSnapshot,
-) -> Option<CallableBody> {
+) -> Option<RestoredCallableSyntax> {
     (snapshot.name.is_none() && closure.span == snapshot.origin_span)
-        .then(|| CallableBody::Expression(closure.body.clone()))
+        .then(|| RestoredCallableSyntax {
+            body: CallableBody::Expression(closure.body.clone()),
+            parameters: closure.parameters.clone(),
+            result_type: closure.result_type.clone(),
+        })
         .or_else(|| find_callable_in_chain(&closure.body, snapshot))
 }
 
 fn find_callable_in_expression(
     expression: &Expression,
     snapshot: &CallableSnapshot,
-) -> Option<CallableBody> {
+) -> Option<RestoredCallableSyntax> {
     match expression.kind() {
         ExpressionKind::Literal(literal) => match literal.kind() {
             LiteralKind::DoubleQuoted(parts) => parts
@@ -5904,7 +6014,10 @@ fn find_callable_in_expression(
     }
 }
 
-fn find_callable_in_word(word: &Word, snapshot: &CallableSnapshot) -> Option<CallableBody> {
+fn find_callable_in_word(
+    word: &Word,
+    snapshot: &CallableSnapshot,
+) -> Option<RestoredCallableSyntax> {
     word.parts()
         .iter()
         .find_map(|part| find_callable_in_word_part(part, snapshot))
@@ -5913,7 +6026,7 @@ fn find_callable_in_word(word: &Word, snapshot: &CallableSnapshot) -> Option<Cal
 fn find_callable_in_word_part(
     part: &WordPart,
     snapshot: &CallableSnapshot,
-) -> Option<CallableBody> {
+) -> Option<RestoredCallableSyntax> {
     match part.kind() {
         WordPartKind::DoubleQuoted(parts) => parts
             .iter()
@@ -6234,7 +6347,7 @@ mod tests {
         let binding_types = RuntimeBindingTypes::analyze_repl_source(
             &source,
             &script,
-            &ModuleAliasRegistry::default(),
+            &crate::module::ModuleAliasRegistry::default(),
         )
         .unwrap_or_else(|diagnostic| panic!("ambient route fixture must analyze: {diagnostic:?}"));
         let calls = Arc::new(AmbientRouteCalls::default());

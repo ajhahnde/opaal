@@ -83,7 +83,7 @@ impl AnalysisControl {
         !self.charge(AnalysisLimitKind::WorkUnits, 1)
     }
 
-    fn for_run(&self, limits: AnalysisLimits) -> Self {
+    pub(crate) fn for_run(&self, limits: AnalysisLimits) -> Self {
         Self {
             is_cancelled: Arc::clone(&self.is_cancelled),
             cancelled: Arc::clone(&self.cancelled),
@@ -458,6 +458,13 @@ pub enum ModuleOrigin {
 }
 
 impl ModuleId {
+    pub(crate) fn local(path: PathBuf) -> Self {
+        Self {
+            path,
+            origin: ModuleOrigin::Local,
+        }
+    }
+
     /// The canonical native path for a local module, or `std::name` identity
     /// spelling for a compiled standard module.
     #[must_use]
@@ -1597,6 +1604,9 @@ pub struct NominalTypeId {
 }
 
 impl NominalTypeId {
+    pub(crate) fn new(module: ModuleId, name: String) -> Self {
+        Self { module, name }
+    }
     pub(crate) fn standard(module: &str, name: &str) -> Self {
         Self {
             module: ModuleId::standard("std", module),
@@ -1622,7 +1632,7 @@ impl NominalTypeId {
     }
 }
 
-fn is_opaque_operational_nominal(id: &NominalTypeId) -> bool {
+pub(crate) fn is_opaque_operational_nominal(id: &NominalTypeId) -> bool {
     match id.module().origin() {
         ModuleOrigin::Standard { namespace, module } if namespace == "project" => {
             matches!(module.as_str(), "tools" | "endpoints" | "secrets")
@@ -3229,13 +3239,409 @@ pub(crate) struct RuntimeBindingTypes {
     by_source: BTreeMap<SourceId, Vec<ResolvedBindingType>>,
     functions_by_source: BTreeMap<SourceId, Vec<FunctionSignature>>,
     annotations_by_source: BTreeMap<SourceId, Vec<ResolvedTypeAnnotation>>,
+    nominal_references_by_source: BTreeMap<SourceId, Vec<ResolvedNominalReference>>,
     operation_types_by_source: BTreeMap<SourceId, BTreeMap<usize, Vec<ValueType>>>,
     modules_by_source: BTreeMap<SourceId, ModuleId>,
     nominals_by_module: BTreeMap<ModuleId, BTreeMap<String, NominalType>>,
     aliases: ModuleAliasRegistry,
+    pub(crate) context: RuntimeTypeContext,
+}
+
+/// Retained, host-free inputs for restoring the defining type context.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct RuntimeTypeContext {
+    pub(crate) programs: Vec<Arc<ModuleProgram>>,
+    pub(crate) cells: Vec<ReplTypeSource>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ReplTypeSource {
+    pub(crate) source: Arc<SourceFile>,
+    pub(crate) local_imports: BTreeMap<usize, ModuleId>,
+    pub(crate) statement_count: usize,
+    pub(crate) nominal_offsets: BTreeSet<usize>,
+}
+
+impl RuntimeTypeContext {
+    pub(crate) fn restore(
+        &self,
+        defining_source: &SourceFile,
+        work_remaining: &mut u64,
+    ) -> Result<RuntimeBindingTypes, String> {
+        if self.cells.is_empty() {
+            if let Some(program) = self.programs.iter().find(|program| {
+                program
+                    .sources()
+                    .entries()
+                    .any(|entry| entry.source() == defining_source)
+            }) {
+                return Ok(program.runtime_binding_types_in_context(self.programs.clone()));
+            }
+            if !self.programs.is_empty() {
+                return Err("callable source is absent from its retained module context".to_owned());
+            }
+        }
+        let mut types: Option<RuntimeBindingTypes> = None;
+        let mut aliases = ModuleAliasRegistry::default();
+        let control = AnalysisControl::never().for_run(
+            AnalysisLimits::OPAAL.with_limit(AnalysisLimitKind::WorkUnits, *work_remaining),
+        );
+        for cell in &self.cells {
+            let ParseOutcome::Complete(parsed) = opaal_syntax::parse_opaal(&cell.source) else {
+                return Err("retained interactive source does not parse".to_owned());
+            };
+            if cell.statement_count > parsed.statements().len() {
+                return Err("invalid retained statement count".to_owned());
+            }
+            let nominal_offsets = parsed
+                .statements()
+                .iter()
+                .filter(|statement| {
+                    matches!(
+                        statement.kind(),
+                        StatementKind::NominalType(_) | StatementKind::VariantType(_)
+                    )
+                })
+                .map(|statement| statement.span().start())
+                .collect::<BTreeSet<_>>();
+            if !cell.nominal_offsets.is_subset(&nominal_offsets) {
+                return Err("invalid retained nominal declaration offset".to_owned());
+            }
+            // Standard imports are compiled metadata and were available to the
+            // original whole-cell analysis, even when execution stopped before
+            // the import. Keep that input without publishing its alias.
+            let mut statements = parsed.statements()[..cell.statement_count].to_vec();
+            statements.extend(
+                parsed.statements()[cell.statement_count..]
+                    .iter()
+                    .filter(|statement| {
+                        matches!(statement.kind(), StatementKind::ModuleImport(import)
+                    if matches!(import.source, opaal_syntax::ModuleImportSource::Standard { .. })
+                        || cell.local_imports.contains_key(&import.source.span().start()))
+                            || (cell.nominal_offsets.contains(&statement.span().start())
+                                && matches!(
+                                    statement.kind(),
+                                    StatementKind::NominalType(_) | StatementKind::VariantType(_)
+                                ))
+                    })
+                    .cloned(),
+            );
+            let script = Script::new(statements, parsed.span());
+            let analyzed = RuntimeBindingTypes::analyze_interactive_with_control(
+                &cell.source,
+                &script,
+                &aliases,
+                &self.programs,
+                &cell.local_imports,
+                types.as_ref(),
+                &control,
+            )
+            .map_err(|_| "retained interactive types cannot be restored".to_owned())?;
+            let mut published = analyzed.aliases.clone();
+            if let Some(current) = published
+                .by_module
+                .get_mut(&ModuleId::local(PathBuf::from("<interactive>")))
+            {
+                current.aliases.retain(|_, alias| {
+                    alias.declaration_span.source_id() != cell.source.id()
+                        || parsed.statements()[..cell.statement_count]
+                            .iter()
+                            .any(|statement| {
+                                statement.span().start() <= alias.declaration_span.start()
+                                    && statement.span().end() >= alias.declaration_span.end()
+                            })
+                });
+            }
+            let retained = analyzed.retain_interactive_prefix(
+                &cell.source,
+                &script,
+                cell.statement_count,
+                &published,
+                &self.programs,
+                types.as_ref(),
+            );
+            aliases = published;
+            types = Some(retained);
+        }
+        *work_remaining =
+            work_remaining.saturating_sub(control.usage().get(AnalysisLimitKind::WorkUnits));
+        if let Some(types) = types {
+            if self
+                .cells
+                .last()
+                .is_none_or(|cell| cell.source.as_ref() != defining_source)
+            {
+                return Err(
+                    "callable source does not match its retained interactive context".to_owned(),
+                );
+            }
+            return Ok(types);
+        }
+        let ParseOutcome::Complete(script) = opaal_syntax::parse_opaal(defining_source) else {
+            return Err("callable source does not parse".to_owned());
+        };
+        RuntimeBindingTypes::analyze_repl_source(defining_source, &script, &aliases)
+            .map_err(|_| "callable source types cannot be restored".to_owned())
+    }
 }
 
 impl RuntimeBindingTypes {
+    pub(crate) fn nominal_by_id(&self, id: &NominalTypeId) -> Option<&NominalType> {
+        self.nominals_by_module.get(id.module())?.get(id.name())
+    }
+    /// Local type schemas become usable only after their dependency initializer
+    /// succeeds. Analysis can resolve forward imports without publishing them.
+    pub(crate) fn uninitialized_interactive_type(
+        &self,
+        statement: Span,
+        initialized: &BTreeMap<ModuleId, BTreeMap<String, crate::Value>>,
+        control: &AnalysisControl,
+    ) -> Option<Diagnostic> {
+        fn missing<'a>(
+            types: &'a RuntimeBindingTypes,
+            value_type: &'a ValueType,
+            initialized: &BTreeMap<ModuleId, BTreeMap<String, crate::Value>>,
+            control: &AnalysisControl,
+        ) -> Result<Option<&'a ModuleId>, ()> {
+            let mut pending = vec![value_type];
+            let mut visited = BTreeSet::new();
+            while let Some(value_type) = pending.pop() {
+                if control.is_cancelled() {
+                    return Err(());
+                }
+                match value_type {
+                    ValueType::List(element) => pending.push(element),
+                    ValueType::Nominal { id, arguments } => {
+                        if id.module().origin() == &ModuleOrigin::Local
+                            && id.module().path() != Path::new("<interactive>")
+                            && !initialized.contains_key(id.module())
+                        {
+                            return Ok(Some(id.module()));
+                        }
+                        pending.extend(arguments);
+                        if visited.insert(id.as_ref().clone())
+                            && let Some(nominal) = types.nominal_by_id(id)
+                        {
+                            pending
+                                .extend(nominal.fields().iter().map(NominalTypeField::value_type));
+                            pending.extend(
+                                nominal.variants().iter().flat_map(NominalVariant::payload),
+                            );
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            Ok(None)
+        }
+        let contains = |span: Span| {
+            span.source_id() == statement.source_id()
+                && span.start() >= statement.start()
+                && span.end() <= statement.end()
+        };
+        let mut candidates = self
+            .annotations_by_source
+            .get(&statement.source_id())
+            .into_iter()
+            .flatten()
+            .filter(|annotation| !control.is_cancelled() && contains(annotation.span()))
+            .map(|annotation| (annotation.span(), annotation.value_type().clone()))
+            .collect::<Vec<_>>();
+        candidates.extend(
+            self.nominal_references_by_source
+                .get(&statement.source_id())
+                .into_iter()
+                .flatten()
+                .filter(|reference| !control.is_cancelled() && contains(reference.span))
+                .map(|reference| {
+                    (
+                        reference.span,
+                        ValueType::Nominal {
+                            id: Box::new(reference.id.clone()),
+                            arguments: Vec::new(),
+                        },
+                    )
+                }),
+        );
+        for (span, value_type) in candidates {
+            match missing(self, &value_type, initialized, control) {
+                Ok(Some(module)) => {
+                    return Some(
+                        Diagnostic::new(
+                            Severity::Error,
+                            "MOD013",
+                            format!(
+                                "initialize local module `{}` before using its types",
+                                module.path().display()
+                            ),
+                        )
+                        .with_primary(span, "move the local import before this statement"),
+                    );
+                }
+                Ok(None) => {}
+                Err(()) => break,
+            }
+        }
+        control.is_cancelled().then(|| {
+            Diagnostic::new(
+                Severity::Error,
+                "RUN001",
+                "interactive type admission did not complete",
+            )
+            .with_primary(
+                statement,
+                "analysis was cancelled or exceeded a resource limit",
+            )
+        })
+    }
+
+    pub(crate) fn render_interactive_diagnostic(
+        source: &SourceFile,
+        diagnostic: &Diagnostic,
+        programs: &[Arc<ModuleProgram>],
+        inherited: Option<&Self>,
+    ) -> String {
+        let outcome = SourceFile::new(
+            SourceId::new(u32::MAX),
+            "std::outcome",
+            STANDARD_OUTCOME_MODULE,
+        );
+        let mut available = BTreeMap::from([(source.id(), source), (outcome.id(), &outcome)]);
+        for program in programs {
+            for entry in program.sources().entries() {
+                available.insert(entry.source().id(), entry.source());
+            }
+        }
+        if let Some(inherited) = inherited {
+            for cell in &inherited.context.cells {
+                available.insert(cell.source.id(), cell.source.as_ref());
+            }
+        }
+        render_diagnostic_sources(available.values().copied(), diagnostic)
+            .unwrap_or_else(|_| format!("{}\n", diagnostic.message()))
+    }
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn retain_interactive_prefix(
+        &self,
+        source: &SourceFile,
+        script: &Script,
+        admitted: usize,
+        aliases: &ModuleAliasRegistry,
+        programs: &[Arc<ModuleProgram>],
+        inherited: Option<&Self>,
+    ) -> Self {
+        let mut retained = self.clone();
+        retained.aliases = aliases.clone();
+        for program in programs {
+            retained
+                .aliases
+                .by_module
+                .extend(program.aliases.by_module.clone());
+        }
+        let interactive = ModuleId::local(PathBuf::from("<interactive>"));
+        retained.nominals_by_module.retain(|module, _| {
+            module == &interactive
+                || matches!(module.origin(), ModuleOrigin::Standard { .. })
+                || programs
+                    .iter()
+                    .any(|program| program.types.by_module.contains_key(module))
+        });
+        let prefix_end = script.statements()[..admitted]
+            .last()
+            .map_or(0, |statement| statement.span().end());
+        let in_prefix = |span: Span| span.source_id() != source.id() || span.end() <= prefix_end;
+        let mut required = BTreeSet::new();
+        let mut pending = Vec::new();
+        if let Some(nominals) = self.nominals_by_module.get(&interactive) {
+            for nominal in nominals
+                .values()
+                .filter(|nominal| in_prefix(nominal.declaration_span()))
+            {
+                required.insert(nominal.id().clone());
+                pending.extend(nominal.fields().iter().map(NominalTypeField::value_type));
+                pending.extend(nominal.variants().iter().flat_map(NominalVariant::payload));
+            }
+        }
+        pending.extend(
+            self.annotations_by_source
+                .get(&source.id())
+                .into_iter()
+                .flatten()
+                .filter(|annotation| in_prefix(annotation.span()))
+                .map(ResolvedTypeAnnotation::value_type),
+        );
+        for reference in self
+            .nominal_references_by_source
+            .get(&source.id())
+            .into_iter()
+            .flatten()
+            .filter(|reference| in_prefix(reference.span))
+        {
+            if required.insert(reference.id.clone())
+                && let Some(nominal) = self.nominal_by_id(&reference.id)
+            {
+                pending.extend(nominal.fields().iter().map(NominalTypeField::value_type));
+                pending.extend(nominal.variants().iter().flat_map(NominalVariant::payload));
+            }
+        }
+        while let Some(value_type) = pending.pop() {
+            match value_type {
+                ValueType::List(element) => pending.push(element),
+                ValueType::Nominal { id, arguments } => {
+                    pending.extend(arguments);
+                    if required.insert(id.as_ref().clone())
+                        && let Some(nominal) = self.nominal_by_id(id)
+                    {
+                        pending.extend(nominal.fields().iter().map(NominalTypeField::value_type));
+                        pending.extend(nominal.variants().iter().flat_map(NominalVariant::payload));
+                    }
+                }
+                _ => {}
+            }
+        }
+        let declarations = script
+            .statements()
+            .iter()
+            .filter(|statement| {
+                matches!(
+                    statement.kind(),
+                    StatementKind::NominalType(_) | StatementKind::VariantType(_)
+                )
+            })
+            .map(|statement| (statement.span().start(), statement.span().end()))
+            .collect::<BTreeMap<_, _>>();
+        let mut nominal_offsets = BTreeSet::new();
+        if let Some(nominals) = retained.nominals_by_module.get_mut(&interactive) {
+            nominals.retain(|_, nominal| required.contains(nominal.id()));
+            for nominal in nominals.values() {
+                if nominal.declaration_span().source_id() == source.id()
+                    && let Some((start, end)) = declarations
+                        .range(..=nominal.declaration_span().start())
+                        .next_back()
+                    && *end >= nominal.declaration_span().end()
+                {
+                    nominal_offsets.insert(*start);
+                }
+            }
+        }
+        retained.context =
+            inherited.map_or_else(RuntimeTypeContext::default, |types| types.context.clone());
+        retained.context.programs = programs.to_vec();
+        let local_imports = self.context.cells.last().map_or_else(BTreeMap::new, |cell| {
+            cell.local_imports.iter().filter(|(offset, target)| {
+                programs.iter().any(|program| program.types.by_module.contains_key(*target))
+                    || script.statements()[..admitted].iter().any(|statement|
+                        matches!(statement.kind(), StatementKind::ModuleImport(import) if import.source.span().start() == **offset))
+            }).map(|(offset, target)| (*offset, target.clone())).collect()
+        });
+        retained.context.cells.push(ReplTypeSource {
+            source: Arc::new(source.clone()),
+            local_imports,
+            statement_count: admitted,
+            nominal_offsets,
+        });
+        retained
+    }
     pub(crate) fn operation_type_arguments(
         &self,
         source: SourceId,
@@ -3449,6 +3855,56 @@ impl RuntimeBindingTypes {
         script: &Script,
         inherited_aliases: &ModuleAliasRegistry,
     ) -> Result<Self, Diagnostic> {
+        Self::analyze_interactive(
+            source,
+            script,
+            inherited_aliases,
+            &[],
+            &BTreeMap::new(),
+            None,
+        )
+    }
+
+    pub(crate) fn analyze_interactive(
+        source: &SourceFile,
+        script: &Script,
+        inherited_aliases: &ModuleAliasRegistry,
+        programs: &[Arc<ModuleProgram>],
+        local_imports: &BTreeMap<usize, ModuleId>,
+        inherited: Option<&Self>,
+    ) -> Result<Self, Diagnostic> {
+        Self::analyze_interactive_with_control(
+            source,
+            script,
+            inherited_aliases,
+            programs,
+            local_imports,
+            inherited,
+            &AnalysisControl::never().for_run(AnalysisLimits::OPAAL),
+        )
+    }
+
+    pub(crate) fn analyze_interactive_with_control(
+        source: &SourceFile,
+        script: &Script,
+        inherited_aliases: &ModuleAliasRegistry,
+        programs: &[Arc<ModuleProgram>],
+        local_imports: &BTreeMap<usize, ModuleId>,
+        inherited: Option<&Self>,
+        control: &AnalysisControl,
+    ) -> Result<Self, Diagnostic> {
+        let metrics = SyntaxMetrics::for_script(script);
+        if !control.charge(AnalysisLimitKind::SourceBytes, source.text().len() as u64)
+            || !control.charge(AnalysisLimitKind::AstNodes, metrics.nodes)
+            || !control.observe(AnalysisLimitKind::TypeDepth, metrics.type_depth)
+        {
+            return Err(Diagnostic::new(
+                Severity::Error,
+                "RUN001",
+                "interactive analysis resource limit exceeded",
+            )
+            .with_primary(script.span(), "analysis did not complete"));
+        }
         let entry = RegisteredModuleSource {
             module: ModuleId {
                 // Submission names remain diagnostic labels. Interactive state
@@ -3461,6 +3917,9 @@ impl RuntimeBindingTypes {
             script: script.clone(),
         };
         let mut aliases = inherited_aliases.clone();
+        for program in programs {
+            aliases.by_module.extend(program.aliases.by_module.clone());
+        }
         aliases.by_module.entry(entry.module().clone()).or_default();
 
         let mut occupied = script
@@ -3494,37 +3953,45 @@ impl RuntimeBindingTypes {
                 )
                 .with_primary(import.alias.span(), "this alias conflicts"));
             }
-            let opaal_syntax::ModuleImportSource::Standard {
-                namespace,
-                module,
-                span,
-            } = import.source
-            else {
-                return Err(Diagnostic::new(
-                    Severity::Error,
-                    "MOD013",
-                    "interactive local module loading is not available",
-                )
-                .with_primary(
-                    import.source.span(),
-                    "run the versioned module as a source file instead",
-                ));
-            };
-            let namespace = source
-                .slice(namespace.span())
-                .expect("standard namespace belongs to its source");
-            let standard = source
-                .slice(module.span())
-                .expect("standard module belongs to its source");
-            if !is_standard_module(namespace, standard) {
-                return Err(ModuleAliasError::UnknownStandard {
-                    module: entry.module().clone(),
-                    name: standard.to_owned(),
+            let (target, requested) = match import.source {
+                opaal_syntax::ModuleImportSource::Standard {
+                    namespace,
+                    module,
                     span,
+                } => {
+                    let namespace = source.slice(namespace.span()).unwrap();
+                    let standard = source.slice(module.span()).unwrap();
+                    if !is_standard_module(namespace, standard) {
+                        return Err(ModuleAliasError::UnknownStandard {
+                            module: entry.module().clone(),
+                            name: standard.to_owned(),
+                            span,
+                        }
+                        .diagnostic());
+                    }
+                    (ModuleId::standard(namespace, standard), None)
                 }
-                .diagnostic());
-            }
-            let target = ModuleId::standard(namespace, standard);
+                opaal_syntax::ModuleImportSource::Local { path } => {
+                    let Some(target) = local_imports.get(&path.start()) else {
+                        return Err(Diagnostic::new(Severity::Error, "MOD013",
+                            "interactive local module loading requires an explicit source capability")
+                            .with_primary(path, "no source loader was supplied"));
+                    };
+                    let quoted = source.slice(path).unwrap();
+                    (
+                        target.clone(),
+                        Some(PathBuf::from(&quoted[1..quoted.len() - 1])),
+                    )
+                }
+                opaal_syntax::ModuleImportSource::Project { span, .. } => {
+                    return Err(Diagnostic::new(
+                        Severity::Error,
+                        "MOD013",
+                        "project imports require a project",
+                    )
+                    .with_primary(span, "select an explicit project"));
+                }
+            };
             aliases
                 .by_module
                 .get_mut(entry.module())
@@ -3536,26 +4003,47 @@ impl RuntimeBindingTypes {
                         name: alias_name.clone(),
                         importer: entry.module().clone(),
                         target,
-                        requested: None,
+                        requested,
                         declaration_span: import.alias.span(),
                     },
                 );
             occupied.insert(alias_name);
         }
 
-        let control = AnalysisControl::never();
         let mut names = ModuleNameRegistry::default();
         let mut declarations = ModuleTypeRegistry::default();
-        declarations.by_module.insert(
-            entry.module().clone(),
-            TypeCollector::declarations(&entry, &control),
-        );
+        for program in programs {
+            names.by_module.extend(program.names.by_module.clone());
+            declarations
+                .by_module
+                .extend(program.types.by_module.clone());
+        }
+        let mut current = TypeCollector::declarations(&entry, control);
+        if let Some(inherited) = inherited
+            && let Some(nominals) = inherited.nominals_by_module.get(entry.module())
+        {
+            for (name, nominal) in nominals {
+                if current.nominals.contains_key(name) {
+                    return Err(Diagnostic::new(
+                        Severity::Error,
+                        "MOD011",
+                        format!("type `{name}` conflicts"),
+                    )
+                    .with_primary(script.span(), "a retained nominal type cannot be replaced"));
+                }
+                current.nominals.insert(name.clone(), nominal.clone());
+            }
+        }
+        declarations
+            .by_module
+            .insert(entry.module().clone(), current);
         // List find returns the existing outcome nominal. Interactive type
         // annotations, constructors and patterns must use that same schema.
         let outcome = ModuleId::standard("std", "outcome");
         if aliases
             .aliases(entry.module())
             .any(|alias| alias.target() == &outcome)
+            && !declarations.by_module.contains_key(&outcome)
         {
             let outcome_source = SourceFile::new(
                 SourceId::new(u32::MAX),
@@ -3574,11 +4062,22 @@ impl RuntimeBindingTypes {
             };
             declarations.by_module.insert(
                 outcome.clone(),
-                TypeCollector::declarations(&outcome_entry, &control),
+                TypeCollector::declarations(&outcome_entry, control),
             );
             let (types, errors) =
-                TypeCollector::new(&outcome_entry, &aliases, &names, &declarations, &control)
+                TypeCollector::new(&outcome_entry, &aliases, &names, &declarations, control)
                     .collect();
+            if control.is_cancelled() {
+                return Err(Diagnostic::new(
+                    Severity::Error,
+                    "RUN001",
+                    "interactive analysis did not complete",
+                )
+                .with_primary(
+                    script.span(),
+                    "analysis was cancelled or exceeded a resource limit",
+                ));
+            }
             assert!(errors.is_empty(), "compiled outcome schemas must resolve");
             // Type resolution checks exports as well as declarations. Retained
             // aliases need the same visibility as an import in this submission.
@@ -3604,14 +4103,40 @@ impl RuntimeBindingTypes {
             declarations.by_module.insert(outcome, types);
         }
         let (types, errors) =
-            TypeCollector::new(&entry, &aliases, &names, &declarations, &control).collect();
+            TypeCollector::new(&entry, &aliases, &names, &declarations, control).collect();
+        if control.is_cancelled() {
+            return Err(Diagnostic::new(
+                Severity::Error,
+                "RUN001",
+                "interactive analysis did not complete",
+            )
+            .with_primary(
+                script.span(),
+                "analysis was cancelled or exceeded a resource limit",
+            ));
+        }
         if let Some(error) = errors.into_iter().next() {
             return Err(error.diagnostic());
         }
+        declarations
+            .by_module
+            .get_mut(entry.module())
+            .unwrap()
+            .nominals = types.nominals.clone();
+        let mut context =
+            inherited.map_or_else(RuntimeTypeContext::default, |types| types.context.clone());
+        context.programs = programs.to_vec();
+        context.cells.push(ReplTypeSource {
+            source: Arc::new(source.clone()),
+            local_imports: local_imports.clone(),
+            statement_count: script.statements().len(),
+            nominal_offsets: BTreeSet::new(),
+        });
         Ok(Self {
             by_source: BTreeMap::from([(source.id(), types.bindings)]),
             functions_by_source: BTreeMap::from([(source.id(), types.functions)]),
             annotations_by_source: BTreeMap::from([(source.id(), types.annotations)]),
+            nominal_references_by_source: BTreeMap::from([(source.id(), types.nominal_references)]),
             operation_types_by_source: BTreeMap::new(),
             modules_by_source: BTreeMap::from([(source.id(), entry.module().clone())]),
             nominals_by_module: declarations
@@ -3620,6 +4145,7 @@ impl RuntimeBindingTypes {
                 .map(|(module, types)| (module, types.nominals))
                 .collect(),
             aliases,
+            context,
         })
     }
 }
@@ -9664,7 +10190,7 @@ pub struct ModuleProgramLoadError {
 }
 
 impl ModuleProgramLoadError {
-    fn new(error: ModuleProgramError, sources: &[ModuleAnalysisSource]) -> Self {
+    pub(crate) fn new(error: ModuleProgramError, sources: &[ModuleAnalysisSource]) -> Self {
         let diagnostics = error.diagnostics();
         let available = sources
             .iter()
@@ -9791,9 +10317,17 @@ impl ModuleProgram {
     }
 
     pub(crate) fn runtime_binding_types(&self) -> RuntimeBindingTypes {
+        self.runtime_binding_types_in_context(vec![Arc::new(self.clone())])
+    }
+
+    pub(crate) fn runtime_binding_types_in_context(
+        &self,
+        programs: Vec<Arc<ModuleProgram>>,
+    ) -> RuntimeBindingTypes {
         let mut by_source = BTreeMap::new();
         let mut functions_by_source = BTreeMap::new();
         let mut annotations_by_source = BTreeMap::new();
+        let mut nominal_references_by_source = BTreeMap::new();
         let mut modules_by_source = BTreeMap::new();
         let mut operation_types_by_source = BTreeMap::new();
         for entry in self.sources.entries() {
@@ -9810,6 +10344,10 @@ impl ModuleProgram {
                 entry.source().id(),
                 types.map_or_else(Vec::new, |types| types.annotations.clone()),
             );
+            nominal_references_by_source.insert(
+                entry.source().id(),
+                types.map_or_else(Vec::new, |types| types.nominal_references.clone()),
+            );
             operation_types_by_source.insert(
                 entry.source().id(),
                 self.types
@@ -9824,6 +10362,7 @@ impl ModuleProgram {
             by_source,
             functions_by_source,
             annotations_by_source,
+            nominal_references_by_source,
             operation_types_by_source,
             modules_by_source,
             nominals_by_module: self
@@ -9833,6 +10372,10 @@ impl ModuleProgram {
                 .map(|(module, types)| (module.clone(), types.nominals.clone()))
                 .collect(),
             aliases: self.aliases.clone(),
+            context: RuntimeTypeContext {
+                programs,
+                cells: Vec::new(),
+            },
         }
     }
 }
@@ -9842,6 +10385,8 @@ pub struct ModuleProgramLoader<'a> {
     resolver: ModuleResolver<'a>,
     source_loader: &'a dyn ModuleSourceLoader,
     allow_project: bool,
+    source_ids: BTreeMap<ModuleId, SourceId>,
+    source_id_start: u32,
 }
 
 enum PendingModuleImport {
@@ -9864,7 +10409,7 @@ enum PendingModuleImport {
 impl<'a> ModuleProgramLoader<'a> {
     /// Creates a program loader over injected path and source capabilities.
     #[must_use]
-    pub const fn new(
+    pub fn new(
         canonicalizer: &'a dyn ModuleCanonicalizer,
         source_loader: &'a dyn ModuleSourceLoader,
     ) -> Self {
@@ -9872,12 +10417,14 @@ impl<'a> ModuleProgramLoader<'a> {
             resolver: ModuleResolver::new(canonicalizer),
             source_loader,
             allow_project: false,
+            source_ids: BTreeMap::new(),
+            source_id_start: 0,
         }
     }
 
     /// Creates a loader for an explicitly selected, already validated project.
     #[must_use]
-    pub(crate) const fn for_project(
+    pub(crate) fn for_project(
         canonicalizer: &'a dyn ModuleCanonicalizer,
         source_loader: &'a dyn ModuleSourceLoader,
     ) -> Self {
@@ -9885,7 +10432,19 @@ impl<'a> ModuleProgramLoader<'a> {
             resolver: ModuleResolver::new(canonicalizer),
             source_loader,
             allow_project: true,
+            source_ids: BTreeMap::new(),
+            source_id_start: 0,
         }
+    }
+
+    pub(crate) fn with_source_ids(
+        mut self,
+        source_ids: BTreeMap<ModuleId, SourceId>,
+        start: u32,
+    ) -> Self {
+        self.source_ids = source_ids;
+        self.source_id_start = start;
+        self
     }
 
     /// Loads one root and every reachable static import without executing any
@@ -10388,9 +10947,18 @@ impl<'a> ModuleProgramLoader<'a> {
         if control.is_cancelled() {
             return;
         }
-        let source_id = match u32::try_from(retained.len()) {
-            Ok(id) => SourceId::new(id),
-            Err(_) => {
+        let allocated = retained
+            .iter()
+            .filter(|entry| !self.source_ids.contains_key(entry.module()))
+            .count();
+        let source_id = match self.source_ids.get(&module).copied().or_else(|| {
+            u32::try_from(allocated)
+                .ok()
+                .and_then(|offset| self.source_id_start.checked_add(offset))
+                .map(SourceId::new)
+        }) {
+            Some(id) => id,
+            None => {
                 issues.push(ModuleAnalysisIssue::new(
                     ModuleProgramError::SourceIdentityExhausted,
                 ));
