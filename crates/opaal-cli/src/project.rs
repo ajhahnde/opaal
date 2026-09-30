@@ -3129,7 +3129,18 @@ fn build_check_artifact(
         .into_iter()
         .flatten()
         .collect::<Vec<_>>();
-    sort_values_canonical(&mut rules);
+    // Authority artifacts order rules by effect and scope, independently of
+    // the decision. Sorting the whole object puts deny before grant and can
+    // reorder otherwise valid mixed-decision rules.
+    rules.sort_by_cached_key(|rule| {
+        (
+            rule["effect"]
+                .as_str()
+                .expect("constructed rule effects are strings")
+                .to_owned(),
+            serde_json::to_vec(&rule["scope"]).expect("constructed scopes are serializable"),
+        )
+    });
     let authority_value = json!({
         "path":native_path(authority_path),
         "digest":digest_bytes(authority_bytes),

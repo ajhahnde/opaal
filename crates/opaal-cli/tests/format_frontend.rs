@@ -505,3 +505,27 @@ fn first_difference(original: &str, canonical: &str) -> usize {
         .find_map(|((offset, original), (_, canonical))| (original != canonical).then_some(offset))
         .unwrap_or_else(|| original.len().min(canonical.len()))
 }
+
+#[test]
+fn complete_data_processing_sources_are_canonical_and_idempotent() {
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/golden/data-processing");
+    for name in [
+        "report.opaal",
+        "json-report.opaal",
+        "text-report.opaal",
+        "policy-operations.opaal",
+        "tasks.opaal",
+    ] {
+        let original = std::fs::read_to_string(fixtures.join(name)).unwrap();
+        let source = SourceFile::new(SourceId::new(1), name, original.clone());
+        let FormatOutcome::Complete(canonical) = format_source_opaal(&source) else {
+            panic!("{name} must parse and format");
+        };
+        assert_eq!(canonical, original, "{name}");
+        let again = SourceFile::new(SourceId::new(2), name, canonical.clone());
+        assert_eq!(
+            format_source_opaal(&again),
+            FormatOutcome::Complete(canonical)
+        );
+    }
+}

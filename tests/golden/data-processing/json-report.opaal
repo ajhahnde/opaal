@@ -1,0 +1,3 @@
+import './report.opaal' as report
+import std::data as data
+^cat jobs.json | from json document | each {|document| data::json_encode(report::build(document))} | encode bytes

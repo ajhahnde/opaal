@@ -1148,3 +1148,82 @@ fn data_signatures_hover_and_completion_share_pure_codec_contracts() {
         }
     }
 }
+
+#[test]
+fn complete_report_and_policy_observers_resolve_the_same_source_operations() {
+    let directory = TestDirectory::new();
+    let fixtures =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/golden/data-processing");
+    let mut workspace = Workspace::new();
+    for name in [
+        "report.opaal",
+        "json-report.opaal",
+        "text-report.opaal",
+        "policy-operations.opaal",
+    ] {
+        let source = fs::read_to_string(fixtures.join(name)).unwrap();
+        workspace.open(directory.uri(name), 1, source).unwrap();
+    }
+    let diagnostics = workspace
+        .diagnostic_snapshot()
+        .analyze_diagnostics(PositionEncoding::Utf16)
+        .unwrap();
+    assert!(
+        diagnostics
+            .documents()
+            .iter()
+            .all(|document| document.diagnostics().is_empty()),
+        "{diagnostics:?}"
+    );
+    for (name, token, expected) in [
+        (
+            "report.opaal",
+            "string::trim",
+            "std::string::trim(input: String) -> String",
+        ),
+        (
+            "report.opaal",
+            "list::map",
+            "std::list::map[T, U](input: List[T], transform: Callable(T) -> U) -> List[U]",
+        ),
+        (
+            "policy-operations.opaal",
+            "list::find",
+            "std::list::find[T](input: List[T], predicate: Callable(T) -> Bool) -> Option[T]",
+        ),
+        (
+            "policy-operations.opaal",
+            "record::merge",
+            "std::record::merge(left: Record, right: Record) -> Record",
+        ),
+    ] {
+        let text = fs::read_to_string(fixtures.join(name)).unwrap();
+        let uri = directory.uri(name);
+        let offset = text.find(token).unwrap() + token.find("::").unwrap() + 2;
+        let hover = request(
+            &workspace,
+            PositionEncoding::Utf16,
+            &RequestControl::new(),
+            "textDocument/hover",
+            positional(&uri, &text, offset, PositionEncoding::Utf16),
+        )
+        .unwrap();
+        assert!(
+            hover["contents"]["value"]
+                .as_str()
+                .unwrap()
+                .contains(expected),
+            "{hover:#}"
+        );
+        let argument = offset + text[offset..].find('(').unwrap() + 1;
+        let signature = request(
+            &workspace,
+            PositionEncoding::Utf16,
+            &RequestControl::new(),
+            "textDocument/signatureHelp",
+            positional(&uri, &text, argument, PositionEncoding::Utf16),
+        )
+        .unwrap();
+        assert_eq!(signature["signatures"][0]["label"], expected);
+    }
+}

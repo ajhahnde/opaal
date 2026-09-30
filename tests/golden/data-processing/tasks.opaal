@@ -1,0 +1,18 @@
+import './report.opaal' as report
+import project::context as project
+import std::filesystem as fs
+import std::data as data
+export { summarize }
+
+action summarize(input: Path) -> Record
+effects {
+    filesystem.read(project::root);
+    filesystem.write(project::evidence);
+}
+{
+    let bytes = fs::read(input, 8388608)
+    let result = report::build(data::json_decode(bytes))
+    fs::write_atomic(project::evidence, data::json_encode(result))
+    return result
+}
+task summarize = summarize

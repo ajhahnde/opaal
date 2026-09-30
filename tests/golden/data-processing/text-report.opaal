@@ -1,0 +1,2 @@
+import './report.opaal' as report
+^cat jobs.json | from json document | each {|document| report::render(report::build(document))} | to text

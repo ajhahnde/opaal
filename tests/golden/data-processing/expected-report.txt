@@ -1,0 +1,2 @@
+failed=1, pending=1
+"test / linux" : failure
