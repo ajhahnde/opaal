@@ -30,6 +30,8 @@ use opaal_syntax::{
     WordPart, WordPartKind,
 };
 
+mod string_operations;
+
 use crate::glob::{DEFAULT_GLOB_ENTRY_LIMIT, GlobPattern};
 use crate::intrinsic::{DynamicBinding, ExpressionIntrinsic};
 use crate::module::{
@@ -3455,6 +3457,11 @@ impl Evaluator<'_, '_> {
                     // opaal-foundation-boundary(carrier-refusal): Unknown OPAAL operation stages cannot consume a value carrier.
                     return Err(self.unsupported("unknown value pipeline operation", stage.span()));
                 };
+                if !operation.supports_value_pipeline() {
+                    return Err(
+                        self.unsupported("parameterized value pipeline operation", stage.span())
+                    );
+                }
                 value = operation
                     .execute_value(value)
                     .map_err(|error| self.operation(error, stage.span()))?;
@@ -4364,10 +4371,13 @@ impl Evaluator<'_, '_> {
                 .binding_types
                 .qualified_operation(self.source.id(), &segments)
             {
-                if call.arguments.len() != 1 {
+                let overload = operation
+                    .value_overload()
+                    .expect("callable operations have a value overload");
+                if call.arguments.len() != overload.parameters().len() {
                     return Err(self.error(
                         RuntimeErrorKind::ArityMismatch {
-                            expected: 1,
+                            expected: overload.parameters().len(),
                             actual: call.arguments.len(),
                         },
                         span,
@@ -4397,10 +4407,12 @@ impl Evaluator<'_, '_> {
                             .unwrap_or(ValueType::Any)
                     })
                     .collect::<Vec<_>>();
-                let argument = self.expression(&call.arguments[0], scope)?;
-                return operation
-                    .execute_value_with_types(argument, &type_arguments)
-                    .map_err(|error| self.operation(error, span));
+                let arguments = call
+                    .arguments
+                    .iter()
+                    .map(|argument| self.expression(argument, scope))
+                    .collect::<Eval<Vec<_>>>()?;
+                return self.execute_operation(&operation, arguments, &type_arguments, span);
             }
         }
 

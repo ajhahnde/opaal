@@ -65,12 +65,60 @@ pub enum OperationInputType {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct OperationOverload {
     input: OperationInputType,
+    parameters: Vec<OperationParameter>,
     result: ValueType,
+}
+
+/// One named argument in a compiled operation's ordinary call signature.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OperationParameter {
+    name: String,
+    input: OperationInputType,
+}
+
+impl OperationParameter {
+    #[must_use]
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    #[must_use]
+    pub const fn input(&self) -> &OperationInputType {
+        &self.input
+    }
 }
 
 impl OperationOverload {
     fn new(input: OperationInputType, result: ValueType) -> Self {
-        Self { input, result }
+        Self {
+            parameters: vec![OperationParameter {
+                name: "input".to_owned(),
+                input: input.clone(),
+            }],
+            input,
+            result,
+        }
+    }
+
+    fn values(parameters: Vec<(&str, ValueType)>, result: ValueType) -> Self {
+        let parameters = parameters
+            .into_iter()
+            .map(|(name, value_type)| OperationParameter {
+                name: name.to_owned(),
+                input: OperationInputType::Value(value_type),
+            })
+            .collect::<Vec<_>>();
+        Self {
+            input: parameters[0].input.clone(),
+            parameters,
+            result,
+        }
+    }
+
+    /// Every argument, in source call order, including the first carrier.
+    #[must_use]
+    pub fn parameters(&self) -> &[OperationParameter] {
+        &self.parameters
     }
 
     /// The first-parameter carrier and type accepted by this overload.
@@ -144,6 +192,22 @@ impl OperationDescriptor {
         &self.downstream
     }
 
+    pub(crate) const fn implementation(&self) -> StandardOperation {
+        self.implementation
+    }
+
+    pub(crate) fn value_overload(&self) -> Option<&OperationOverload> {
+        self.overloads
+            .iter()
+            .find(|overload| matches!(overload.input(), OperationInputType::Value(_)))
+    }
+
+    /// Only existing unary operations admit the implicit value-pipeline form.
+    #[must_use]
+    pub fn supports_value_pipeline(&self) -> bool {
+        self.implementation == StandardOperation::Length
+    }
+
     /// Canonical callable labels for every carrier overload in descriptor order.
     #[must_use]
     pub fn signature_labels(&self) -> Vec<String> {
@@ -156,10 +220,15 @@ impl OperationDescriptor {
                     format!("[{}]", self.type_parameters.join(", "))
                 };
                 format!(
-                    "{}{}(input: {}) -> {}",
+                    "{}{}({}) -> {}",
                     self.id.qualified_name(),
                     generics,
-                    overload.input(),
+                    overload
+                        .parameters()
+                        .iter()
+                        .map(|parameter| format!("{}: {}", parameter.name(), parameter.input()))
+                        .collect::<Vec<_>>()
+                        .join(", "),
                     overload.result(),
                 )
             })
@@ -180,22 +249,31 @@ impl OperationDescriptor {
             }
         }
         for overload in &self.overloads {
-            let input = match &overload.input {
-                OperationInputType::Value(input) | OperationInputType::ValueStream(input) => input,
-            };
-            validate_type_parameters(input, &parameters)?;
+            for parameter in overload.parameters() {
+                let input = match parameter.input() {
+                    OperationInputType::Value(input) | OperationInputType::ValueStream(input) => {
+                        input
+                    }
+                };
+                validate_type_parameters(input, &parameters)?;
+            }
             validate_type_parameters(&overload.result, &parameters)?;
         }
         for (index, left) in self.overloads.iter().enumerate() {
             for right in &self.overloads[index + 1..] {
-                let overlap = match (&left.input, &right.input) {
-                    (OperationInputType::Value(left), OperationInputType::Value(right))
-                    | (
-                        OperationInputType::ValueStream(left),
-                        OperationInputType::ValueStream(right),
-                    ) => types_overlap(left, right),
-                    _ => false,
-                };
+                let overlap = left.parameters.len() == right.parameters.len()
+                    && left
+                        .parameters
+                        .iter()
+                        .zip(&right.parameters)
+                        .all(|(left, right)| match (&left.input, &right.input) {
+                            (OperationInputType::Value(left), OperationInputType::Value(right))
+                            | (
+                                OperationInputType::ValueStream(left),
+                                OperationInputType::ValueStream(right),
+                            ) => types_overlap(left, right),
+                            _ => false,
+                        });
                 if overlap {
                     return Err(OperationDescriptorError::OverlappingOverloads);
                 }
@@ -237,6 +315,11 @@ impl OperationDescriptor {
                 input: format!("Value({})", value.family_name()),
             });
         };
+        if self.implementation != StandardOperation::Length {
+            return Err(OperationError::HostContextRequired {
+                operation: "budgeted pure operation",
+            });
+        }
         debug_assert_eq!(overload.result, ValueType::Int);
         match self.implementation {
             StandardOperation::Length => match value {
@@ -247,6 +330,7 @@ impl OperationDescriptor {
                 }),
                 _ => unreachable!("the selected value overload accepts only lists"),
             },
+            _ => unreachable!("budgeted operations use the shared evaluator"),
         }
     }
 
@@ -305,6 +389,7 @@ impl OperationDescriptor {
                 };
                 finish_stream_operation(&mut stream, primary, delivered_items)
             }
+            _ => unreachable!("only length has a stream overload"),
         }
     }
 }
@@ -377,8 +462,16 @@ fn finish_stream_operation(
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum StandardOperation {
+pub(crate) enum StandardOperation {
     Length,
+    Trim,
+    Split,
+    Join,
+    Contains,
+    StartsWith,
+    EndsWith,
+    Replace,
+    DecodeUtf8,
 }
 
 /// A compiled operation descriptor that cannot enter the standard manifest.
@@ -467,7 +560,80 @@ pub fn standard_operation(module: &ModuleId, name: &str) -> Option<OperationDesc
     else {
         return None;
     };
-    if namespace != "std" || standard != "value" || name != "length" {
+    if namespace != "std" {
+        return None;
+    }
+    if standard == "string" {
+        use StandardOperation::{
+            Contains, DecodeUtf8, EndsWith, Join, Replace, Split, StartsWith, Trim,
+        };
+        use ValueType::{Bool, Bytes, List, String as Text};
+        let (implementation, parameters, result, documentation) = match name {
+            "trim" => (
+                Trim,
+                vec![("input", Text)],
+                Text,
+                "Remove leading and trailing Unicode whitespace, preserving interior text.",
+            ),
+            "split" => (
+                Split,
+                vec![("input", Text), ("separator", Text)],
+                List(Box::new(Text)),
+                "Split at a nonempty literal separator, retaining empty fields.",
+            ),
+            "join" => (
+                Join,
+                vec![("input", List(Box::new(Text))), ("separator", Text)],
+                Text,
+                "Join String items in order with a literal separator between items.",
+            ),
+            "contains" => (
+                Contains,
+                vec![("input", Text), ("pattern", Text)],
+                Bool,
+                "Test a literal substring; an empty pattern succeeds.",
+            ),
+            "starts_with" => (
+                StartsWith,
+                vec![("input", Text), ("prefix", Text)],
+                Bool,
+                "Test a literal anchored prefix; an empty prefix succeeds.",
+            ),
+            "ends_with" => (
+                EndsWith,
+                vec![("input", Text), ("suffix", Text)],
+                Bool,
+                "Test a literal anchored suffix; an empty suffix succeeds.",
+            ),
+            "replace" => (
+                Replace,
+                vec![("input", Text), ("pattern", Text), ("replacement", Text)],
+                Text,
+                "Replace nonoverlapping literal matches; an empty pattern is an error.",
+            ),
+            "decode_utf8" => (
+                DecodeUtf8,
+                vec![("input", Bytes)],
+                Text,
+                "Decode strict UTF8 bytes without trimming, BOM removal or lossy conversion.",
+            ),
+            _ => return None,
+        };
+        let descriptor = OperationDescriptor {
+            id: OperationId::new(module.clone(), name),
+            type_parameters: Vec::new(),
+            overloads: vec![OperationOverload::values(parameters, result)],
+            documentation: documentation.to_owned(),
+            purity: OperationPurity::Pure,
+            downstream: DownstreamCallMetadata::foundation(),
+            implementation,
+        };
+        descriptor
+            .validate()
+            .expect("compiled String descriptors must be valid");
+        return Some(descriptor);
+    }
+    if standard != "value" || name != "length" {
         return None;
     }
     let descriptor = OperationDescriptor {
@@ -499,16 +665,28 @@ pub fn standard_operation(module: &ModuleId, name: &str) -> Option<OperationDesc
 /// Returns the closed compiled operation catalog for one standard module.
 #[must_use]
 pub(crate) fn standard_operations(module: &ModuleId) -> Vec<OperationDescriptor> {
-    ["length"]
-        .into_iter()
-        .filter_map(|name| standard_operation(module, name))
-        .collect()
+    [
+        "length",
+        "trim",
+        "split",
+        "join",
+        "contains",
+        "starts_with",
+        "ends_with",
+        "replace",
+        "decode_utf8",
+    ]
+    .into_iter()
+    .filter_map(|name| standard_operation(module, name))
+    .collect()
 }
 
 /// A pure-operation failure, reported without a source span.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub enum OperationError {
+    /// A well-typed argument violates the operation's value contract.
+    InvalidArgument { operation: String, message: String },
     /// An operator received operand families it is not defined for.
     UnsupportedOperands {
         operator: &'static str,
@@ -547,6 +725,9 @@ pub enum OperationError {
 impl fmt::Display for OperationError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::InvalidArgument { operation, message } => {
+                write!(formatter, "{operation}: {message}")
+            }
             Self::UnsupportedOperands { operator, operands } => {
                 write!(formatter, "operator `{operator}` is not defined for ")?;
                 for (index, family) in operands.iter().enumerate() {

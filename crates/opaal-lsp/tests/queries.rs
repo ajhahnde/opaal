@@ -66,6 +66,60 @@ fn request(
 }
 
 #[test]
+fn string_operation_signatures_expose_every_argument_and_active_parameter() {
+    let directory = TestDirectory::new();
+    let uri = directory.uri("main.opaal");
+    let text = "import std::string as text\ntext::replace(\"old\", \"old\", \"new\")\n";
+    let mut workspace = Workspace::new();
+    workspace.open(uri.clone(), 1, text.into()).unwrap();
+    let result = request(
+        &workspace,
+        PositionEncoding::Utf16,
+        &RequestControl::new(),
+        "textDocument/signatureHelp",
+        positional(
+            &uri,
+            text,
+            text.rfind("\"new\"").unwrap() + 1,
+            PositionEncoding::Utf16,
+        ),
+    )
+    .unwrap();
+    assert_eq!(result["activeParameter"], 2);
+    assert_eq!(
+        result["signatures"][0]["label"],
+        "std::string::replace(input: String, pattern: String, replacement: String) -> String"
+    );
+    assert_eq!(
+        result["signatures"][0]["parameters"],
+        json!([{"label":"input"}, {"label":"pattern"}, {"label":"replacement"}])
+    );
+}
+
+#[test]
+fn string_signature_keeps_the_last_parameter_active_before_the_closing_parenthesis() {
+    let directory = TestDirectory::new();
+    let uri = directory.uri("main.opaal");
+    let text = "import std::string as text\ntext::replace(\"old\", \"old\", \"new\"   )\n";
+    let mut workspace = Workspace::new();
+    workspace.open(uri.clone(), 1, text.into()).unwrap();
+    let result = request(
+        &workspace,
+        PositionEncoding::Utf16,
+        &RequestControl::new(),
+        "textDocument/signatureHelp",
+        positional(
+            &uri,
+            text,
+            text.rfind(')').unwrap(),
+            PositionEncoding::Utf16,
+        ),
+    )
+    .unwrap();
+    assert_eq!(result["activeParameter"], 2);
+}
+
+#[test]
 fn completion_is_deterministic_and_retains_registry_results_without_a_program() {
     let directory = TestDirectory::new();
     let uri = directory.uri("main.opaal");

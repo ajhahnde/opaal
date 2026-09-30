@@ -517,24 +517,31 @@ fn signature_help(
     }
     if let Some(signature) = queries.operation_signature_at(module, cursor) {
         let operation = signature.operation();
+        let active_parameter = signature.active_parameter().min(
+            operation.overloads()[0]
+                .parameters()
+                .len()
+                .saturating_sub(1),
+        );
         let signatures = operation
             .signature_labels()
             .into_iter()
-            .map(|label| {
+            .zip(operation.overloads())
+            .map(|(label, overload)| {
                 json!({
                     "label": label,
                     "documentation": {
                         "kind": "markdown",
                         "value": operation.documentation(),
                     },
-                    "parameters": [{"label": "input"}],
+                    "parameters": overload.parameters().iter().map(|parameter| json!({"label": parameter.name()})).collect::<Vec<_>>(),
                 })
             })
             .collect::<Vec<_>>();
         return Ok(json!({
             "signatures": signatures,
             "activeSignature": 0,
-            "activeParameter": 0,
+            "activeParameter": active_parameter,
         }));
     }
     if let Some(signature) = queries.intrinsic_signature_at(module, cursor) {

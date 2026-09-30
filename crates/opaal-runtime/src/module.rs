@@ -471,7 +471,7 @@ impl ModuleId {
         &self.origin
     }
 
-    fn standard(namespace: &str, module: &str) -> Self {
+    pub(crate) fn standard(namespace: &str, module: &str) -> Self {
         Self {
             path: PathBuf::from(format!("{namespace}::{module}")),
             origin: ModuleOrigin::Standard {
@@ -5206,6 +5206,15 @@ impl<'a> SignatureValidator<'a> {
                     });
                 return Ok(Some((stage.span(), ValueType::Any)));
             };
+            if !operation.supports_value_pipeline() {
+                self.errors
+                    .borrow_mut()
+                    .push(ModuleTypeError::InvalidOperationStage {
+                        module: self.entry.module().clone(),
+                        stage_span: stage.span(),
+                    });
+                return Ok(Some((stage.span(), ValueType::Any)));
+            }
             if !self.control.charge(
                 AnalysisLimitKind::OverloadCandidates,
                 operation.overloads().len() as u64,
@@ -6563,7 +6572,7 @@ impl<'a> SignatureValidator<'a> {
         matches!(
             owner.origin(),
             ModuleOrigin::Standard { namespace, module }
-                if namespace == "std" && module == "value"
+                if namespace == "std" && matches!(module.as_str(), "value" | "string")
         )
         .then(|| self.text(operation.span()).to_owned())
     }
@@ -6585,14 +6594,9 @@ impl<'a> SignatureValidator<'a> {
             return Ok(None);
         }
         let overload = operation
-            .overloads()
-            .iter()
-            .find_map(|overload| match overload.input() {
-                OperationInputType::Value(input) => Some((input, overload.result())),
-                OperationInputType::ValueStream(_) => None,
-            })
+            .value_overload()
             .expect("a callable standard operation has a value overload");
-        if call.arguments.len() != 1 {
+        if call.arguments.len() != overload.parameters().len() {
             for argument in &call.arguments {
                 self.expression(argument)?;
             }
@@ -6602,7 +6606,7 @@ impl<'a> SignatureValidator<'a> {
                     module: self.entry.module().clone(),
                     name: operation.id().qualified_name(),
                     call_span,
-                    expected: 1,
+                    expected: overload.parameters().len(),
                     actual: call.arguments.len(),
                 });
             return Ok(Some(ValueType::Any));
@@ -6629,22 +6633,29 @@ impl<'a> SignatureValidator<'a> {
                 .map_or(ValueType::Any, |annotation| annotation.value_type().clone());
             substitutions.insert(parameter.clone(), actual);
         }
-        let expected = substitute_type(overload.0, &substitutions);
-        let actual = self.expression_with_expected(&call.arguments[0], Some(&expected))?;
-        if call.type_arguments.is_empty()
-            && let Some(actual) = actual.as_ref()
-            && !unify_type(overload.0, actual, &mut substitutions)
-        {
-            self.errors
-                .borrow_mut()
-                .push(ModuleTypeError::OperationArgumentMismatch {
-                    module: self.entry.module().clone(),
-                    name: operation.id().qualified_name(),
-                    argument_span: call.arguments[0].span(),
-                    expected: overload.0.clone(),
-                    actual: actual.clone(),
-                });
-            return Ok(Some(ValueType::Any));
+        let mut actuals = Vec::new();
+        for (argument, parameter) in call.arguments.iter().zip(overload.parameters()) {
+            let OperationInputType::Value(input) = parameter.input() else {
+                unreachable!("value call parameters have value carriers")
+            };
+            let expected = substitute_type(input, &substitutions);
+            let actual = self.expression_with_expected(argument, Some(&expected))?;
+            if call.type_arguments.is_empty()
+                && let Some(actual) = actual.as_ref()
+                && !unify_type(input, actual, &mut substitutions)
+            {
+                self.errors
+                    .borrow_mut()
+                    .push(ModuleTypeError::OperationArgumentMismatch {
+                        module: self.entry.module().clone(),
+                        name: operation.id().qualified_name(),
+                        argument_span: argument.span(),
+                        expected: input.clone(),
+                        actual: actual.clone(),
+                    });
+                return Ok(Some(ValueType::Any));
+            }
+            actuals.push(actual);
         }
         for parameter in operation.type_parameters() {
             if !substitutions.contains_key(parameter) {
@@ -6659,24 +6670,34 @@ impl<'a> SignatureValidator<'a> {
                 return Ok(Some(ValueType::Any));
             }
         }
-        if let Some(actual) = actual
-            && actual != ValueType::Any
+        for ((argument, parameter), actual) in call
+            .arguments
+            .iter()
+            .zip(overload.parameters())
+            .zip(actuals)
         {
-            let expected = substitute_type(overload.0, &substitutions);
-            if !expected.accepts_type(&actual) {
-                self.errors
-                    .borrow_mut()
-                    .push(ModuleTypeError::OperationArgumentMismatch {
-                        module: self.entry.module().clone(),
-                        name: operation.id().qualified_name(),
-                        argument_span: call.arguments[0].span(),
-                        expected,
-                        actual,
-                    });
-                return Ok(Some(ValueType::Any));
+            let OperationInputType::Value(input) = parameter.input() else {
+                unreachable!("value call parameters have value carriers")
+            };
+            if let Some(actual) = actual
+                && actual != ValueType::Any
+            {
+                let expected = substitute_type(input, &substitutions);
+                if !expected.accepts_type(&actual) {
+                    self.errors
+                        .borrow_mut()
+                        .push(ModuleTypeError::OperationArgumentMismatch {
+                            module: self.entry.module().clone(),
+                            name: operation.id().qualified_name(),
+                            argument_span: argument.span(),
+                            expected,
+                            actual,
+                        });
+                    return Ok(Some(ValueType::Any));
+                }
             }
         }
-        Ok(Some(substitute_type(overload.1, &substitutions)))
+        Ok(Some(substitute_type(overload.result(), &substitutions)))
     }
 
     fn nominal_for_qualified_prefix(
@@ -10310,6 +10331,7 @@ fn is_standard_module(namespace: &str, module: &str) -> bool {
         && matches!(
             module,
             "value"
+                | "string"
                 | "outcome"
                 | "data"
                 | "path"
