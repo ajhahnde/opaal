@@ -324,6 +324,13 @@ fn float_value<E: de::Error>(value: f64) -> Result<Value, E> {
         .map_err(|_| de::Error::custom("a JSON number that is not finite"))
 }
 
+/// Use the stream parser's exact numeric conversion for an explicit JSON token.
+pub(crate) fn json_number<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Value, D::Error> {
+    deserializer.deserialize_any(ValueVisitor {
+        duplicate: Rc::new(RefCell::new(None)),
+    })
+}
+
 /// Threads [`ValueVisitor`] and its duplicate-key slot through nested arrays
 /// and objects.
 struct ValueSeed {

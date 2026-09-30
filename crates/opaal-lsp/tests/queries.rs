@@ -1064,3 +1064,87 @@ fn record_signatures_hover_and_completion_share_the_structural_contract() {
         }
     }
 }
+
+#[test]
+fn data_signatures_hover_and_completion_share_pure_codec_contracts() {
+    for (call, expected, parameter) in [
+        (
+            "toml_decode(input)",
+            "std::data::toml_decode(input: Bytes) -> Any",
+            0,
+        ),
+        (
+            "get({}, ['x'])",
+            "std::data::get(input: Any, keys: List[String]) -> Any",
+            1,
+        ),
+        (
+            "json_encode({})",
+            "std::data::json_encode(input: Any) -> Bytes",
+            0,
+        ),
+        (
+            "json_decode(input)",
+            "std::data::json_decode(input: Bytes) -> Any",
+            0,
+        ),
+    ] {
+        let text = format!(
+            "import std::data as codecs\ndef run(input: Bytes) -> Any {{ codecs::{call} }}\n"
+        );
+        let directory = TestDirectory::new();
+        let uri = directory.uri("main.opaal");
+        let mut workspace = Workspace::new();
+        workspace.open(uri.clone(), 1, text.clone()).unwrap();
+        let signature = request(
+            &workspace,
+            PositionEncoding::Utf16,
+            &RequestControl::new(),
+            "textDocument/signatureHelp",
+            positional(
+                &uri,
+                &text,
+                text.rfind(')').unwrap(),
+                PositionEncoding::Utf16,
+            ),
+        )
+        .unwrap();
+        assert_eq!(signature["activeParameter"], parameter);
+        assert_eq!(signature["signatures"][0]["label"], expected);
+        let offset = text.find("codecs::").unwrap() + "codecs::".len();
+        let hover = request(
+            &workspace,
+            PositionEncoding::Utf16,
+            &RequestControl::new(),
+            "textDocument/hover",
+            positional(&uri, &text, offset, PositionEncoding::Utf16),
+        )
+        .unwrap();
+        let contents = hover["contents"]["value"].as_str().unwrap();
+        assert!(contents.contains(expected), "{contents}");
+        assert!(!contents.contains("controlled operation unavailable"));
+        if call.starts_with("json_decode") {
+            assert!(contents.contains("8 MiB/depth64"));
+        }
+        let completion = request(
+            &workspace,
+            PositionEncoding::Utf16,
+            &RequestControl::new(),
+            "textDocument/completion",
+            positional(&uri, &text, offset, PositionEncoding::Utf16),
+        )
+        .unwrap();
+        let labels = completion
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|item| item["label"].as_str().unwrap())
+            .collect::<Vec<_>>();
+        for name in ["toml_decode", "get", "json_encode", "json_decode"] {
+            assert!(
+                labels.contains(&format!("codecs::{name}").as_str()),
+                "{labels:?}"
+            );
+        }
+    }
+}

@@ -11,6 +11,7 @@ pub mod closure;
 pub mod command;
 pub mod context;
 pub mod convert;
+pub mod data;
 pub mod directory;
 pub mod documentation;
 mod environment;

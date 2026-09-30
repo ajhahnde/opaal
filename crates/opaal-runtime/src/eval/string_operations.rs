@@ -119,6 +119,16 @@ impl Evaluator<'_, '_> {
                 )
                 .map_err(|error| self.operation(error, span));
         }
+        // Released codecs keep their original dynamic validation and accounting.
+        // In particular, do not add generic traversal or charge their results.
+        if matches!(
+            descriptor.implementation(),
+            StandardOperation::TomlDecode
+                | StandardOperation::DataGet
+                | StandardOperation::JsonEncode
+        ) {
+            return self.legacy_data_operation(descriptor, &arguments, span);
+        }
         let overload = descriptor.value_overload().expect("value operation");
         let substitutions = descriptor
             .type_parameters()
@@ -146,6 +156,7 @@ impl Evaluator<'_, '_> {
             }
         }
         match descriptor.implementation() {
+            StandardOperation::JsonDecode => self.json_decode(&arguments, span),
             StandardOperation::Map
             | StandardOperation::Filter
             | StandardOperation::Fold

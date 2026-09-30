@@ -700,6 +700,10 @@ pub(crate) enum StandardOperation {
     RecordSelect,
     RecordSet,
     RecordMerge,
+    TomlDecode,
+    DataGet,
+    JsonEncode,
+    JsonDecode,
 }
 
 /// A compiled operation descriptor that cannot enter the standard manifest.
@@ -956,6 +960,50 @@ pub fn standard_operation(module: &ModuleId, name: &str) -> Option<OperationDesc
             .expect("compiled list descriptors must be valid");
         return Some(descriptor);
     }
+    if standard == "data" {
+        use StandardOperation::{DataGet, JsonDecode, JsonEncode, TomlDecode};
+        use ValueType::{Any, Bytes, List, String as Text};
+        let (implementation, parameters, result, documentation) = match name {
+            "toml_decode" => (
+                TomlDecode,
+                vec![("input", Bytes)],
+                Any,
+                "Decode UTF8 TOML with the existing 16 MiB/depth64 limits, errors and per-call accounting; datetime conversion remains explicit.",
+            ),
+            "get" => (
+                DataGet,
+                vec![("input", Any), ("keys", List(Box::new(Text)))],
+                Any,
+                "Strictly traverse a multi-key structural Record path; an empty path returns the input. Preserve existing errors and per-call accounting.",
+            ),
+            "json_encode" => (
+                JsonEncode,
+                vec![("input", Any)],
+                Bytes,
+                "Encode canonical compact JSON with sorted object keys, existing 16 MiB/depth64 limits, errors and per-call accounting; recursively refuse secret/control carriers and unsupported values.",
+            ),
+            "json_decode" => (
+                JsonDecode,
+                vec![("input", Bytes)],
+                Any,
+                "Decode one strict UTF8 JSON document, at most 8 MiB/depth64. Reject duplicate keys and nonfinite numbers; retain array and object source order. Integer tokens fitting i64 become Int; other finite numbers become Float with possible precision loss. Share caller allocation, work and cancellation budgets; errors contain bounded escaped keys or byte offsets, never the document. Ordinary values have no automatic secret taint.",
+            ),
+            _ => return None,
+        };
+        let descriptor = OperationDescriptor {
+            id: OperationId::new(module.clone(), name),
+            type_parameters: Vec::new(),
+            overloads: vec![OperationOverload::values(parameters, result)],
+            documentation: documentation.to_owned(),
+            purity: OperationPurity::Pure,
+            downstream: DownstreamCallMetadata::foundation(),
+            implementation,
+        };
+        descriptor
+            .validate()
+            .expect("compiled data descriptors must be valid");
+        return Some(descriptor);
+    }
     if standard == "record" {
         use StandardOperation::{
             RecordGetOr, RecordHas, RecordKeys, RecordMerge, RecordSelect, RecordSet,
@@ -1128,6 +1176,10 @@ pub(crate) fn standard_operations(module: &ModuleId) -> Vec<OperationDescriptor>
         "ends_with",
         "replace",
         "decode_utf8",
+        "toml_decode",
+        "get",
+        "json_encode",
+        "json_decode",
         "map",
         "filter",
         "fold",

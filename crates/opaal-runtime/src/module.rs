@@ -6695,7 +6695,7 @@ impl<'a> SignatureValidator<'a> {
         matches!(
             owner.origin(),
             ModuleOrigin::Standard { namespace, module }
-                if namespace == "std" && matches!(module.as_str(), "value" | "string" | "list" | "record")
+                if namespace == "std" && matches!(module.as_str(), "value" | "string" | "list" | "record" | "data")
         )
         .then(|| self.text(operation.span()).to_owned())
     }
@@ -10644,12 +10644,6 @@ enum Option[T] {
 }
 "#;
 
-const STANDARD_DATA_MODULE: &str = r#"export { toml_decode, get, json_encode }
-def toml_decode(input: Bytes) -> Any { throw "controlled operation unavailable" }
-def get(input: Any, keys: List[String]) -> Any { throw "controlled operation unavailable" }
-def json_encode(input: Any) -> Bytes { throw "controlled operation unavailable" }
-"#;
-
 const STANDARD_PATH_MODULE: &str = r#"export { normalize, join, contained }
 def normalize(input: Path) -> Path { throw "controlled operation unavailable" }
 def join(root: Path, child: String) -> Path { throw "controlled operation unavailable" }
@@ -10708,7 +10702,6 @@ fn standard_module_source(module: &ModuleId) -> Option<&'static str> {
     }
     match module.as_str() {
         "outcome" => Some(STANDARD_OUTCOME_MODULE),
-        "data" => Some(STANDARD_DATA_MODULE),
         "path" => Some(STANDARD_PATH_MODULE),
         "filesystem" => Some(STANDARD_FILESYSTEM_MODULE),
         "time" => Some(STANDARD_TIME_MODULE),

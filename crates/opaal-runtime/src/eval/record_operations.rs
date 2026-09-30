@@ -174,7 +174,7 @@ impl Evaluator<'_, '_> {
         self.charge(span)
     }
 
-    fn record_compare(&mut self, left: &str, right: &str, span: Span) -> Eval<Ordering> {
+    pub(super) fn record_compare(&mut self, left: &str, right: &str, span: Span) -> Eval<Ordering> {
         self.record_visit(span)?;
         self.compare_key_bytes(left.as_bytes(), right.as_bytes(), span)
     }
@@ -234,7 +234,7 @@ impl Evaluator<'_, '_> {
 
     /// Stable bottom-up sorting over borrowed keys. Two index buffers bound
     /// extra storage to O(n); every comparison and 4096 key bytes are charged.
-    fn sorted_record_indices<'a>(
+    pub(super) fn sorted_record_indices<'a>(
         &mut self,
         length: usize,
         key: impl Fn(usize) -> &'a str,

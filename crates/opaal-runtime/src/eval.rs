@@ -30,6 +30,7 @@ use opaal_syntax::{
     WordPart, WordPartKind,
 };
 
+mod data_operations;
 mod list_operations;
 mod record_operations;
 mod string_operations;
@@ -5262,7 +5263,7 @@ impl Evaluator<'_, '_> {
                     "success",
                     "ACTION000",
                     "action completed",
-                    crate::operational::data::json_encode(value)
+                    crate::data::json_encode(value)
                         .ok()
                         .map(|bytes| crate::workflow::digest_bytes(&bytes)),
                     false,

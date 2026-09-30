@@ -18,7 +18,7 @@ use crate::project::{MaintainedAdapter, ProjectManifest, ToolLock};
 use crate::security::{MAX_SECRET_BYTES, Secret, SecretId};
 use crate::{NativePath, NominalRecordValue, Record, Status, Value};
 
-use super::{ModuleError, data, filesystem, http, integrity, path, process, time, url, version};
+use super::{ModuleError, filesystem, http, integrity, path, process, time, url, version};
 
 const MAX_JOURNAL_MESSAGE_BYTES: usize = 4 * 1024;
 
@@ -548,18 +548,6 @@ impl<'a> ControlledSourceOperations<'a> {
         arguments: Vec<Value>,
     ) -> Result<Value, ModuleError> {
         match (module, operation) {
-            ("data", "toml_decode") => Ok(data::toml_decode(bytes(&arguments, 0)?)?),
-            ("data", "get") => {
-                let keys = string_list(&arguments, 1)?;
-                Ok(data::get(
-                    argument(&arguments, 0)?,
-                    &keys.iter().map(String::as_str).collect::<Vec<_>>(),
-                )?
-                .clone())
-            }
-            ("data", "json_encode") => {
-                Ok(Value::bytes(data::json_encode(argument(&arguments, 0)?)?))
-            }
             ("path", "normalize") => Ok(path_value(path::normalize(value_path(argument(
                 &arguments, 0,
             )?)?)?)),
