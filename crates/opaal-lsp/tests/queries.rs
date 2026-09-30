@@ -920,3 +920,49 @@ fn callback_operation_signatures_show_relations_and_argument_positions() {
             .contains("Callable(A, T) -> A")
     );
 }
+
+#[test]
+fn list_query_and_order_signatures_expose_option_and_ordered_constraints() {
+    for (text, expected, parameter) in [
+        (
+            "import std::list as list\nlist::find[Int]([1], {|x| true}   )\n",
+            "std::list::find[T](input: List[T], predicate: Callable(T) -> Bool) -> Option[T]",
+            1,
+        ),
+        (
+            "import std::list as list\nlist::sort_by[Int, String]([1], {|x| 'key'}   )\n",
+            "std::list::sort_by[T, K: Ordered](input: List[T], key: Callable(T) -> K) -> List[T]",
+            1,
+        ),
+        (
+            "import std::list as list\nlist::sort[Int]([1]   )\n",
+            "std::list::sort[T: Ordered](input: List[T]) -> List[T]",
+            0,
+        ),
+        (
+            "import std::list as list\nlist::take[Int]([1], 2   )\n",
+            "std::list::take[T](input: List[T], count: Int) -> List[T]",
+            1,
+        ),
+    ] {
+        let directory = TestDirectory::new();
+        let uri = directory.uri("main.opaal");
+        let mut workspace = Workspace::new();
+        workspace.open(uri.clone(), 1, text.into()).unwrap();
+        let result = request(
+            &workspace,
+            PositionEncoding::Utf16,
+            &RequestControl::new(),
+            "textDocument/signatureHelp",
+            positional(
+                &uri,
+                text,
+                text.rfind(')').unwrap(),
+                PositionEncoding::Utf16,
+            ),
+        )
+        .unwrap();
+        assert_eq!(result["activeParameter"], parameter);
+        assert_eq!(result["signatures"][0]["label"], expected);
+    }
+}

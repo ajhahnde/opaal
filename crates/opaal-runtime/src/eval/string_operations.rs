@@ -146,7 +146,18 @@ impl Evaluator<'_, '_> {
             }
         }
         match descriptor.implementation() {
-            StandardOperation::Map | StandardOperation::Filter | StandardOperation::Fold => {
+            StandardOperation::Map
+            | StandardOperation::Filter
+            | StandardOperation::Fold
+            | StandardOperation::Any
+            | StandardOperation::All
+            | StandardOperation::Count
+            | StandardOperation::Find
+            | StandardOperation::Sort
+            | StandardOperation::SortBy
+            | StandardOperation::Take
+            | StandardOperation::Drop
+            | StandardOperation::Reverse => {
                 self.list_operation(descriptor, &arguments, &substitutions, span)
             }
             _ => self.string_operation(descriptor, &arguments, span),

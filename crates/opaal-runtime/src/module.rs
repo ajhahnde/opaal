@@ -1520,6 +1520,38 @@ pub(crate) fn substitute_type(
     }
 }
 
+/// Descriptor parameters without a binding cannot supply context to another
+/// call. Lexical generic parameters with an established binding remain valid.
+pub(crate) fn has_unbound_type_parameters(
+    value_type: &ValueType,
+    substitutions: &BTreeMap<String, ValueType>,
+) -> bool {
+    match value_type {
+        ValueType::TypeParameter(name) => !substitutions.contains_key(name),
+        ValueType::List(element) => has_unbound_type_parameters(element, substitutions),
+        ValueType::Nominal { arguments, .. } => arguments
+            .iter()
+            .any(|argument| has_unbound_type_parameters(argument, substitutions)),
+        _ => false,
+    }
+}
+
+pub(crate) fn single_value_expression(chain: &ConditionalChain) -> Option<&Expression> {
+    let [and_chain] = chain.or_terms() else {
+        return None;
+    };
+    let [pipeline] = and_chain.and_terms() else {
+        return None;
+    };
+    let [stage] = pipeline.stages() else {
+        return None;
+    };
+    match stage.kind() {
+        StageKind::Expression(expression) => Some(expression),
+        _ => None,
+    }
+}
+
 pub(crate) fn unify_type(
     expected: &ValueType,
     actual: &ValueType,
@@ -3512,12 +3544,65 @@ impl RuntimeBindingTypes {
         }
 
         let control = AnalysisControl::never();
-        let names = ModuleNameRegistry::default();
+        let mut names = ModuleNameRegistry::default();
         let mut declarations = ModuleTypeRegistry::default();
         declarations.by_module.insert(
             entry.module().clone(),
             TypeCollector::declarations(&entry, &control),
         );
+        // List find returns the existing outcome nominal. Interactive type
+        // annotations, constructors and patterns must use that same schema.
+        let outcome = ModuleId::standard("std", "outcome");
+        if aliases
+            .aliases(entry.module())
+            .any(|alias| alias.target() == &outcome)
+        {
+            let outcome_source = SourceFile::new(
+                SourceId::new(u32::MAX),
+                "std::outcome",
+                STANDARD_OUTCOME_MODULE,
+            );
+            let ControlledParseOutcome::Parsed(ParseOutcome::Complete(outcome_script)) =
+                parse_opaal_source(&outcome_source, &|| false)
+            else {
+                panic!("compiled outcome source must parse");
+            };
+            let outcome_entry = RegisteredModuleSource {
+                module: outcome.clone(),
+                source: outcome_source,
+                script: outcome_script,
+            };
+            declarations.by_module.insert(
+                outcome.clone(),
+                TypeCollector::declarations(&outcome_entry, &control),
+            );
+            let (types, errors) =
+                TypeCollector::new(&outcome_entry, &aliases, &names, &declarations, &control)
+                    .collect();
+            assert!(errors.is_empty(), "compiled outcome schemas must resolve");
+            // Type resolution checks exports as well as declarations. Retained
+            // aliases need the same visibility as an import in this submission.
+            let mut outcome_names = ModuleNames::default();
+            for statement in outcome_entry.script().statements() {
+                let StatementKind::ModuleExport(export) = statement.kind() else {
+                    continue;
+                };
+                for identifier in &export.names {
+                    let name = outcome_entry.source().slice(identifier.span()).unwrap();
+                    let nominal = &types.nominals[name];
+                    outcome_names.exports.insert(
+                        name.to_owned(),
+                        ModuleExport {
+                            name: name.to_owned(),
+                            declaration_span: nominal.declaration_span(),
+                            export_span: identifier.span(),
+                        },
+                    );
+                }
+            }
+            names.by_module.insert(outcome.clone(), outcome_names);
+            declarations.by_module.insert(outcome, types);
+        }
         let (types, errors) =
             TypeCollector::new(&entry, &aliases, &names, &declarations, &control).collect();
         if let Some(error) = errors.into_iter().next() {
@@ -5405,6 +5490,9 @@ impl<'a> SignatureValidator<'a> {
                 Ok(Some(ValueType::Closure))
             }
             ExpressionKind::GroupedJob(chain) => {
+                if let Some(expression) = single_value_expression(chain) {
+                    return self.expression_with_expected(expression, expected);
+                }
                 self.chain(chain)?;
                 Ok(None)
             }
@@ -6684,7 +6772,9 @@ impl<'a> SignatureValidator<'a> {
                 unreachable!("value call parameters have value carriers")
             };
             let expected = substitute_type(input, &substitutions);
-            let actual = self.expression_with_expected(argument, Some(&expected))?;
+            let expected =
+                (!has_unbound_type_parameters(input, &substitutions)).then_some(&expected);
+            let actual = self.operation_argument_type(argument, expected)?;
             if let Some(relation) = parameter.callback() {
                 let shape = self.callback_shape(argument);
                 if let Some(shape) = &shape {
@@ -6757,6 +6847,21 @@ impl<'a> SignatureValidator<'a> {
                 }
             }
         }
+        for name in operation.type_parameters() {
+            for constraint in operation.type_parameter_constraints(name) {
+                if !self.type_satisfies_constraint(&substitutions[name], *constraint) {
+                    self.callback_error(
+                        operation,
+                        call_span,
+                        format!(
+                            "type `{}` fails Ordered constraint for `{name}`",
+                            substitutions[name]
+                        ),
+                    );
+                    return Ok(Some(ValueType::Any));
+                }
+            }
+        }
         for ((argument, parameter), actual) in call
             .arguments
             .iter()
@@ -6796,6 +6901,77 @@ impl<'a> SignatureValidator<'a> {
                 .collect(),
         );
         Ok(Some(substitute_type(overload.result(), &substitutions)))
+    }
+
+    /// Operation inference respects declared dynamic types even when a literal
+    /// initializer supplies a more specific type for other source analyses.
+    fn operation_argument_type(
+        &self,
+        expression: &Expression,
+        expected: Option<&ValueType>,
+    ) -> Result<Option<ValueType>, Box<ModuleTypeError>> {
+        if self.control.is_cancelled() {
+            return Ok(None);
+        }
+        match expression.kind() {
+            ExpressionKind::Name(_) => {
+                let declared = self
+                    .names
+                    .reference(self.entry.module(), expression.span())
+                    .and_then(|reference| match reference.target() {
+                        ModuleReferenceTarget::Local {
+                            module,
+                            declaration_span,
+                        } => self.types.binding_type(module, *declaration_span),
+                        ModuleReferenceTarget::Imported {
+                            target_module,
+                            declaration_span,
+                            ..
+                        } => self.types.binding_type(target_module, *declaration_span),
+                        _ => None,
+                    });
+                if let Some(declared) = declared {
+                    return Ok(Some(declared.clone()));
+                }
+            }
+            ExpressionKind::List(elements) => {
+                let expected_element = match expected {
+                    Some(ValueType::List(element)) => Some(element.as_ref()),
+                    _ => None,
+                };
+                let mut element_type = None;
+                for element in elements {
+                    let Some(current) = self.operation_argument_type(element, expected_element)?
+                    else {
+                        return Ok(None);
+                    };
+                    if element_type
+                        .as_ref()
+                        .is_some_and(|previous| previous != &current)
+                    {
+                        return Ok(None);
+                    }
+                    element_type = Some(current);
+                }
+                return Ok(element_type.map(|element| ValueType::List(Box::new(element))));
+            }
+            ExpressionKind::Index(index) => {
+                let target = self.operation_argument_type(&index.target, None)?;
+                let position = self.expression(&index.index)?;
+                return Ok(match (target, position) {
+                    (Some(ValueType::List(element)), Some(ValueType::Int)) => Some(*element),
+                    (Some(ValueType::String), Some(ValueType::Int)) => Some(ValueType::String),
+                    _ => None,
+                });
+            }
+            ExpressionKind::GroupedJob(chain) => {
+                if let Some(inner) = single_value_expression(chain) {
+                    return self.operation_argument_type(inner, expected);
+                }
+            }
+            _ => {}
+        }
+        self.expression_with_expected(expression, expected)
     }
 
     fn callback_error(

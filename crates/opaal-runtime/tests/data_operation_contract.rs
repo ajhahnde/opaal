@@ -501,3 +501,510 @@ fn nested_callback_validation_shares_live_call_depth_and_restores_it_after_error
         if completion.value() == &Value::list(vec![Value::Int(2)]))
     );
 }
+
+#[test]
+fn list_queries_short_circuit_and_keep_exact_empty_identities() {
+    for (source, expected) in [
+        (
+            "def fail(x: Int) -> Bool { throw 'unvisited' }\nlist::any[Int]([], fail)",
+            Value::Bool(false),
+        ),
+        (
+            "def fail(x: Int) -> Bool { throw 'unvisited' }\nlist::all[Int]([], fail)",
+            Value::Bool(true),
+        ),
+        (
+            "def fail(x: Int) -> Bool { throw 'unvisited' }\nlist::count[Int]([], fail)",
+            Value::Int(0),
+        ),
+        (
+            "def stop(x: Int) -> Bool { if x == 2 { return true }; throw 'unvisited' }\nlist::any([2, 3], stop)",
+            Value::Bool(true),
+        ),
+        (
+            "def stop(x: Int) -> Bool { if x == 2 { return false }; throw 'unvisited' }\nlist::all([2, 3], stop)",
+            Value::Bool(false),
+        ),
+        (
+            "list::count([3, 1, 2, 1], {|x: Int| -> Bool x < 3})",
+            Value::Int(3),
+        ),
+        (
+            "list::any([3, 1], {|x: Int| -> Bool false})",
+            Value::Bool(false),
+        ),
+        (
+            "list::all([3, 1], {|x: Int| -> Bool true})",
+            Value::Bool(true),
+        ),
+    ] {
+        assert_eq!(value(source), expected, "{source}");
+    }
+    for name in ["any", "all", "count", "find"] {
+        for callback in ["{|x: Int| -> Int 1}", "{|x, y| true}", "ready"] {
+            let source = format!(
+                "action ready(x: Int) -> Bool effects {{}} {{ true }}\nlist::{name}[Int]([], {callback})"
+            );
+            assert!(try_load(&source).is_err(), "{source}");
+        }
+        let source = format!(
+            "def dynamic(x: Any) -> Any {{ x }}\nlist::{name}[Int]([1], dynamic({{|x| 'wrong'}}))"
+        );
+        assert!(
+            matches!(
+                execute(
+                    &load(&source),
+                    EvalLimits::pure_opaal(CancellationToken::never(), ResourceBudget::default())
+                )
+                .primary(),
+                PrimaryOutcome::Error(_)
+            ),
+            "{source}"
+        );
+    }
+}
+
+#[test]
+fn find_uses_the_standard_option_identity_and_distinguishes_some_null() {
+    let found = value(
+        "def stop(x: Int) -> Bool { if x == 2 { return true }; throw 'unvisited' }\nlist::find([2, 1, 3], stop)",
+    );
+    let Value::Variant(found) = found else {
+        panic!("expected nominal Option")
+    };
+    assert_eq!(found.id().module().path(), Path::new("std::outcome"));
+    assert_eq!(found.id().name(), "Option");
+    assert_eq!(found.constructor(), "Some");
+    assert_eq!(found.payload(), &[Value::Int(2)]);
+    assert_eq!(
+        found.type_arguments().to_vec(),
+        vec![opaal_runtime::module::ValueType::Int]
+    );
+    for source in [
+        "list::find[Int]([], {|x| true})",
+        "list::find([1, 2], {|x: Int| -> Bool false})",
+    ] {
+        let Value::Variant(absent) = value(source) else {
+            panic!("expected Option")
+        };
+        assert_eq!(absent.id(), found.id());
+        assert_eq!(absent.constructor(), "None");
+        assert!(absent.payload().is_empty());
+    }
+    assert_eq!(
+        value(
+            "import std::outcome as outcome\nlet found: outcome::Option[Null] = list::find([null], {|x: Null| -> Bool true})\nmatch found { outcome::Option::Some(x) => { x == null }; outcome::Option::None => { false } }"
+        ),
+        Value::Bool(true)
+    );
+    assert_eq!(
+        value(
+            "import std::outcome as outcome\nlet found: outcome::Option[Int] = list::find([], {|x| true})\nmatch found { outcome::Option::Some(x) => { x }; outcome::Option::None => { 9 } }"
+        ),
+        Value::Int(9)
+    );
+    assert_eq!(
+        direct_value(
+            "import std::outcome as outcome\nlet found = list::find[Int]([4], {|x| true})\nmatch found { outcome::Option::Some(x) => { x }; outcome::Option::None => { 0 } }"
+        ),
+        Value::Int(4)
+    );
+}
+
+#[test]
+fn selection_preserves_values_duplicates_and_input_and_rejects_negative_counts() {
+    assert_eq!(
+        value(
+            "let input = [3, 1, 3]\n[input, list::take(input, 2), list::drop(input, 1), list::reverse(input)]"
+        ),
+        Value::list(vec![
+            Value::list(vec![Value::Int(3), Value::Int(1), Value::Int(3)]),
+            Value::list(vec![Value::Int(3), Value::Int(1)]),
+            Value::list(vec![Value::Int(1), Value::Int(3)]),
+            Value::list(vec![Value::Int(3), Value::Int(1), Value::Int(3)]),
+        ])
+    );
+    for (source, expected) in [
+        ("list::take[Int]([], 9223372036854775807)", vec![]),
+        ("list::drop[Int]([], 0)", vec![]),
+        ("list::reverse[Int]([])", vec![]),
+        ("list::take([1, 2], 0)", vec![]),
+        (
+            "list::take([1, 2], 9223372036854775807)",
+            vec![Value::Int(1), Value::Int(2)],
+        ),
+        ("list::drop([1, 2], 9223372036854775807)", vec![]),
+        ("list::drop([1, 2], 0)", vec![Value::Int(1), Value::Int(2)]),
+    ] {
+        assert_eq!(value(source), Value::list(expected), "{source}");
+    }
+    for name in ["take", "drop"] {
+        assert_eq!(
+            value(&format!(
+                "mut caught = false\ntry {{ list::{name}[Int]([], -1) }} catch error {{ caught = true }}\ncaught"
+            )),
+            Value::Bool(true)
+        );
+        assert!(try_load(&format!("list::{name}([1], '2')")).is_err());
+        let source = format!(
+            "def dynamic(x: Any) -> Any {{ x }}\nlist::{name}[Int](dynamic([1, 'wrong']), 0)"
+        );
+        assert!(matches!(
+            execute(
+                &load(&source),
+                EvalLimits::pure_opaal(CancellationToken::never(), ResourceBudget::default())
+            )
+            .primary(),
+            PrimaryOutcome::Error(_)
+        ));
+    }
+}
+
+#[test]
+fn natural_and_keyed_sort_are_stable_and_validate_the_ordered_relation() {
+    assert_eq!(
+        value("list::sort([3, 1, 2, 1])"),
+        Value::list(vec![
+            Value::Int(1),
+            Value::Int(1),
+            Value::Int(2),
+            Value::Int(3)
+        ])
+    );
+    assert_eq!(
+        value("list::sort[List[Int]]([[1, 2], [], [1], [0], [1, 1]])"),
+        Value::list(vec![
+            Value::list(vec![]),
+            Value::list(vec![Value::Int(0)]),
+            Value::list(vec![Value::Int(1)]),
+            Value::list(vec![Value::Int(1), Value::Int(1)]),
+            Value::list(vec![Value::Int(1), Value::Int(2)])
+        ])
+    );
+    assert_eq!(
+        value(
+            "let items = [{ k: 2, id: 'a' }, { k: 1, id: 'b' }, { k: 2, id: 'c' }]\nlet sorted = list::sort_by[Record, Int](items, {|x: Record| -> Int x.k})\nlist::map[Record, String](sorted, {|x: Record| -> String x.id})"
+        ),
+        Value::list(vec![
+            Value::string("b"),
+            Value::string("a"),
+            Value::string("c")
+        ])
+    );
+    assert_eq!(
+        value(
+            "def ordered[X: Ordered](items: List[X]) -> List[X] { list::sort[X](items) }\nordered[Int]([2, 1])"
+        ),
+        Value::list(vec![Value::Int(1), Value::Int(2)])
+    );
+    assert_eq!(
+        value(
+            "def fail(x: Int) -> String { throw 'unvisited' }\nlist::sort_by[Int, String]([], fail)"
+        ),
+        Value::list(vec![])
+    );
+    for source in [
+        "list::sort[Bool]([])",
+        "list::sort[Any]([])",
+        "list::sort[Record]([])",
+        "list::sort[List[Bool]]([])",
+        "list::sort([])",
+        "list::sort([1, 1.0])",
+        "list::sort_by[Int, Bool]([], {|x| true})",
+        "list::sort_by[Int, Int]([], {|x, y| 0})",
+        "def unordered[X](items: List[X]) -> List[X] { list::sort[X](items) }",
+    ] {
+        assert!(try_load(source).is_err(), "{source}");
+    }
+    for source in [
+        "def dynamic(x: Any) -> Any { x }\nlist::sort[Int](dynamic(['wrong']))",
+        "def dynamic(x: Any) -> Any { x }\ndef key(x: Int) -> Any { if x == 1 { return 1 }; return 1.0 }\nlist::sort_by[Int, Int]([1, 2], dynamic(key))",
+    ] {
+        assert!(
+            matches!(
+                execute(
+                    &load(source),
+                    EvalLimits::pure_opaal(CancellationToken::never(), ResourceBudget::default())
+                )
+                .primary(),
+                PrimaryOutcome::Error(_)
+            ),
+            "{source}"
+        );
+    }
+}
+
+#[test]
+fn list_observers_share_option_results_and_ordered_constraints() {
+    let program = load("list::sort_by[Int, Int]([2, 1], {|x| x})");
+    for name in [
+        "any", "all", "count", "find", "sort", "sort_by", "take", "drop", "reverse",
+    ] {
+        let operation = program
+            .resolve_operation(program.graph().root(), &["list", name])
+            .unwrap();
+        assert_eq!(operation.validate(), Ok(()));
+        let help = ModuleHelpCatalog::snapshot(&program)
+            .query(program.graph().root(), &format!("list::{name}"))
+            .unwrap();
+        assert_eq!(help.operation(), Some(&operation));
+        if matches!(name, "sort" | "sort_by") {
+            assert!(operation.signature_labels()[0].contains(": Ordered"));
+        }
+        if name == "find" {
+            assert!(
+                operation.signature_labels()[0].ends_with("Option[T]"),
+                "{:?}",
+                operation.signature_labels()
+            );
+        }
+    }
+}
+
+#[test]
+fn interactive_list_selection_and_order_require_complete_type_evidence() {
+    for source in [
+        "list::sort([2, 1])",
+        "list::reverse([2, 1])",
+        "list::take([1, 2], 2)",
+        "list::drop([9, 1, 2], 1)",
+    ] {
+        assert_eq!(
+            direct_value(source),
+            Value::list(vec![Value::Int(1), Value::Int(2)]),
+            "{source}"
+        );
+    }
+    for source in [
+        "list::sort([])",
+        "list::sort[Bool]([])",
+        "list::reverse([])",
+        "def dynamic(x: Any) -> Any { x }\nlist::sort(dynamic([2, 1]))",
+    ] {
+        assert!(direct(source).is_err(), "{source}");
+    }
+    assert_eq!(
+        direct_value("let items: List[Int] = []\nlist::sort(items)"),
+        Value::list(vec![])
+    );
+}
+
+#[test]
+fn query_and_key_callbacks_propagate_errors_in_source_order_and_share_steps() {
+    for (name, signature, body) in [
+        ("any", "Int", "false"),
+        ("all", "Int", "true"),
+        ("count", "Int", "false"),
+        ("find", "Int", "false"),
+        ("sort_by", "Int, Int", "x"),
+    ] {
+        let result_type = if name == "sort_by" { "Int" } else { "Bool" };
+        let source = format!(
+            "def key(x: Int) -> {result_type} {{ if x == 2 {{ throw 'second item' }}; if x == 1 {{ throw 'third item' }}; return {body} }}\nlist::{name}[{signature}]([3, 2, 1], key)"
+        );
+        let result = execute(
+            &load(&source),
+            EvalLimits::pure_opaal(CancellationToken::never(), ResourceBudget::default()),
+        );
+        let PrimaryOutcome::Error(error) = result.primary() else {
+            panic!("{result:?}")
+        };
+        assert!(error.to_string().contains("second item"), "{error}");
+    }
+    let first = load("list::any([1, 2, 3], {|x: Int| -> Bool x == 1})");
+    let last = load("list::any([1, 2, 3], {|x: Int| -> Bool x == 3})");
+    let minimum = |program: &ModuleProgram| {
+        (1..200)
+            .find(|steps| {
+                matches!(
+                    execute(
+                        program,
+                        EvalLimits::pure_opaal(
+                            CancellationToken::never(),
+                            ResourceBudget::steps(*steps)
+                        )
+                    )
+                    .primary(),
+                    PrimaryOutcome::Completed(_)
+                )
+            })
+            .unwrap()
+    };
+    assert!(minimum(&first) < minimum(&last));
+    for name in ["any", "all", "count", "find", "sort_by"] {
+        let result = if name == "sort_by" {
+            "x"
+        } else if name == "all" {
+            "true"
+        } else {
+            "false"
+        };
+        let types = if name == "sort_by" { "Int, Int" } else { "Int" };
+        let items = (1..=30)
+            .map(|item| item.to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let program = load(&format!(
+            "list::{name}[{types}]([{items}], {{|x| {result}}})"
+        ));
+        let polls = Arc::new(AtomicUsize::new(0));
+        let seen = Arc::clone(&polls);
+        let token = CancellationToken::from_fn(move || seen.fetch_add(1, Ordering::SeqCst) >= 20);
+        let outcome = execute(
+            &program,
+            EvalLimits::pure_opaal(token, ResourceBudget::default()),
+        );
+        assert!(
+            matches!(outcome.primary(), PrimaryOutcome::Cancelled(_)),
+            "{name}: {outcome:?}"
+        );
+    }
+}
+
+#[test]
+fn find_payload_uses_one_retained_slot_and_failed_limits_do_not_return_an_option() {
+    let program = load("list::find[Int]([1], {|x| true})");
+    // One input item and one Some payload item. Existing literal list slots
+    // retain their released byte accounting; the new payload charges its slot.
+    let bytes = size_of::<Value>() as u64;
+    assert!(matches!(
+        execute(
+            &program,
+            EvalLimits::pure_opaal(
+                CancellationToken::never(),
+                ResourceBudget::unlimited()
+                    .with_collection_items(2)
+                    .with_collection_bytes(bytes)
+            )
+        )
+        .primary(),
+        PrimaryOutcome::Completed(_)
+    ));
+    for budget in [
+        ResourceBudget::unlimited().with_collection_items(1),
+        ResourceBudget::unlimited().with_collection_bytes(bytes - 1),
+    ] {
+        assert!(matches!(
+            execute(
+                &program,
+                EvalLimits::pure_opaal(CancellationToken::never(), budget)
+            )
+            .primary(),
+            PrimaryOutcome::Error(_)
+        ));
+    }
+    assert_eq!(
+        direct_value("import std::value as value\nvalue::length([])"),
+        Value::Int(0)
+    );
+}
+
+#[test]
+fn interactive_option_identity_survives_separate_submissions_and_construction() {
+    let mut session = opaal_runtime::session::Session::new(
+        "/project",
+        Environment::new(),
+        SessionOptions::default(),
+    );
+    for (index, (source, expected)) in [
+        (
+            "import std::list as list\nimport std::outcome as result\nlet found = list::find[Null]([null], {|x| true})\nlet absent = list::find[Null]([], {|x| true})\ntrue",
+            Value::Bool(true),
+        ),
+        (
+            "let copied: result::Option[Null] = found\nmatch copied { result::Option::Some(x) => { x == null }; result::Option::None => { false } }",
+            Value::Bool(true),
+        ),
+        (
+            "let made: result::Option[Null] = result::Option::Some(null)\nmade == found && absent != made",
+            Value::Bool(true),
+        ),
+        (
+            "let none: result::Option[Null] = result::Option::None\nnone == absent",
+            Value::Bool(true),
+        ),
+        (
+            "def unwrap(value: result::Option[Null]) -> Bool { match value { result::Option::Some(x) => { x == null }; result::Option::None => { false } } }\nunwrap(found)",
+            Value::Bool(true),
+        ),
+        ("unwrap(absent)", Value::Bool(false)),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let (_, actual) = session
+            .submit_with_value(
+                format!("cell-{index}"),
+                source,
+                &NoExecutables,
+                &FakePlatform::full(),
+                &FakeClock::new(),
+                &mut Vec::new(),
+            )
+            .unwrap_or_else(|error| panic!("{source}: {}", error.render()));
+        assert_eq!(actual, expected, "{source}");
+    }
+}
+
+#[test]
+fn interactive_list_composition_uses_instantiated_result_evidence() {
+    for source in [
+        "def identity[X](x: X) -> X { x }\nlist::sort(identity[List[Int]]([2, 1]))",
+        "def identity[X](x: X) -> X { x }\nlist::sort(identity([2, 1]))",
+        "list::sort(list::reverse([1, 2]))",
+        "list::sort([[2, 1]][0])",
+        "let items: List[List[Int]] = [[2, 1]]\nlist::sort(items[0])",
+        "list::sort((list::reverse([1, 2])))",
+        "let result: List[Int] = list::sort(list::reverse[Int]([]))\nresult",
+        "def empty[X](x: X) -> List[X] { [] }\nlist::reverse(empty[Int](0))",
+        "list::map(list::reverse([1, 2]), {|x: Int| -> Int x})",
+        "def order[X: Ordered](items: List[X]) -> List[X] { let copy: List[X] = items; list::sort(copy) }\norder[Int]([2, 1])",
+    ] {
+        assert_eq!(direct_value(source), value(source), "{source}");
+    }
+    for source in [
+        "def dynamic(x: Any) -> Any { x }\nlist::sort(dynamic([2, 1]))",
+        "def dynamic(x: Any) -> Any { x }\nlist::sort((dynamic([2, 1])))",
+        "def dynamic(x: Any) -> Any { x }\nlist::sort(dynamic([[2, 1]])[0])",
+        "let input: Any = [[2, 1]]\nlist::sort(input[0])",
+        "let row: Record = { items: [2, 1] }\nlist::sort(row.items)",
+        "def dynamic(x: Any) -> Any { x }\nlist::sort([dynamic(1)])",
+        "def identity[X](x: X) -> X { x }\nlist::sort(identity[Any]([2, 1]))",
+        "list::sort(list::reverse[Any]([1, 2]))",
+        "list::sort(list::reverse([]))",
+        "list::sort[Bool](list::reverse[Bool]([]))",
+    ] {
+        assert!(direct(source).is_err(), "{source}");
+        assert!(try_load(source).is_err(), "{source}");
+    }
+}
+
+#[test]
+fn keyed_sort_charges_keys_workspace_and_output_in_one_caller_budget() {
+    let program = load("list::sort_by[Int, Int]([3, 1, 2, 1], {|x| x})");
+    // Four released literal slots, four key slots and four result slots. The
+    // new operation owns two Value buffers and two index buffers.
+    let bytes = (4 * (2 * size_of::<Value>() + 2 * size_of::<usize>())) as u64;
+    let run = |items, byte_limit| {
+        execute(
+            &program,
+            EvalLimits::pure_opaal(
+                CancellationToken::never(),
+                ResourceBudget::unlimited()
+                    .with_collection_items(items)
+                    .with_collection_bytes(byte_limit),
+            ),
+        )
+    };
+    assert!(
+        matches!(run(12, bytes).primary(), PrimaryOutcome::Completed(completion)
+        if completion.value() == &Value::list(vec![Value::Int(1), Value::Int(1), Value::Int(2), Value::Int(3)]))
+    );
+    for outcome in [run(11, bytes), run(12, bytes - 1)] {
+        assert!(
+            matches!(outcome.primary(), PrimaryOutcome::Error(error)
+            if error.to_string().contains("resource budget")),
+            "{outcome:?}"
+        );
+    }
+}

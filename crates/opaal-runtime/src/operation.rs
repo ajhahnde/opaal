@@ -11,7 +11,7 @@ use std::fmt;
 use std::sync::Arc;
 
 use crate::eval::{FrameCallee, RuntimeError};
-use crate::module::{ModuleId, ModuleOrigin, ValueType, substitute_type};
+use crate::module::{ModuleId, ModuleOrigin, NominalTypeId, ValueType, substitute_type};
 use crate::seam::DownstreamCallMetadata;
 use crate::stream::{
     CheckedStreamPull, StreamCleanupFailure, StreamContractViolation, ValueStream,
@@ -329,6 +329,33 @@ impl OperationDescriptor {
         &self.type_parameters
     }
 
+    /// Constraints shared by checking, execution and signature observers.
+    #[must_use]
+    pub fn type_parameter_constraints(&self, name: &str) -> &[opaal_syntax::TypeConstraint] {
+        if matches!(
+            (self.implementation, name),
+            (StandardOperation::Sort, "T") | (StandardOperation::SortBy, "K")
+        ) {
+            &[opaal_syntax::TypeConstraint::Ordered]
+        } else {
+            &[]
+        }
+    }
+
+    #[must_use]
+    pub fn type_parameter_labels(&self) -> Vec<String> {
+        self.type_parameters
+            .iter()
+            .map(|name| {
+                if self.type_parameter_constraints(name).is_empty() {
+                    name.clone()
+                } else {
+                    format!("{name}: Ordered")
+                }
+            })
+            .collect()
+    }
+
     /// The complete, construction-validated overload set.
     #[must_use]
     pub fn overloads(&self) -> &[OperationOverload] {
@@ -378,7 +405,7 @@ impl OperationDescriptor {
                 let generics = if self.type_parameters.is_empty() {
                     String::new()
                 } else {
-                    format!("[{}]", self.type_parameters.join(", "))
+                    format!("[{}]", self.type_parameter_labels().join(", "))
                 };
                 format!(
                     "{}{}({}) -> {}",
@@ -658,6 +685,15 @@ pub(crate) enum StandardOperation {
     Map,
     Filter,
     Fold,
+    Any,
+    All,
+    Count,
+    Find,
+    Sort,
+    SortBy,
+    Take,
+    Drop,
+    Reverse,
 }
 
 /// A compiled operation descriptor that cannot enter the standard manifest.
@@ -750,7 +786,7 @@ pub fn standard_operation(module: &ModuleId, name: &str) -> Option<OperationDesc
         return None;
     }
     if standard == "list" {
-        use ValueType::{Any, Bool, List, TypeParameter};
+        use ValueType::{Any, Bool, Int, List, TypeParameter};
         let t = TypeParameter("T".to_owned());
         let (implementation, generics, parameters, callback, result, documentation) = match name {
             "map" => {
@@ -759,10 +795,10 @@ pub fn standard_operation(module: &ModuleId, name: &str) -> Option<OperationDesc
                     StandardOperation::Map,
                     vec!["T", "U"],
                     vec![("input", List(Box::new(t.clone()))), ("transform", Any)],
-                    OperationCallback {
+                    Some(OperationCallback {
                         parameters: vec![t],
                         result: u.clone(),
-                    },
+                    }),
                     List(Box::new(u)),
                     "Apply a pure callback once per item in source order; preserve result values without flattening.",
                 )
@@ -771,10 +807,10 @@ pub fn standard_operation(module: &ModuleId, name: &str) -> Option<OperationDesc
                 StandardOperation::Filter,
                 vec!["T"],
                 vec![("input", List(Box::new(t.clone()))), ("predicate", Any)],
-                OperationCallback {
+                Some(OperationCallback {
                     parameters: vec![t.clone()],
                     result: Bool,
-                },
+                }),
                 List(Box::new(t)),
                 "Retain items in source order when a pure callback returns Bool true.",
             ),
@@ -788,12 +824,106 @@ pub fn standard_operation(module: &ModuleId, name: &str) -> Option<OperationDesc
                         ("initial", a.clone()),
                         ("combine", Any),
                     ],
-                    OperationCallback {
+                    Some(OperationCallback {
                         parameters: vec![a.clone(), t],
                         result: a.clone(),
-                    },
+                    }),
                     a,
                     "Left fold with a pure callback receiving accumulator then item; empty input returns initial.",
+                )
+            }
+            "any" | "all" | "count" | "find" => {
+                let (implementation, result, documentation) = match name {
+                    "any" => (
+                        StandardOperation::Any,
+                        Bool,
+                        "Return true at the first true predicate; empty input returns false.",
+                    ),
+                    "all" => (
+                        StandardOperation::All,
+                        Bool,
+                        "Return false at the first false predicate; empty input returns true.",
+                    ),
+                    "count" => (
+                        StandardOperation::Count,
+                        Int,
+                        "Count true predicate results with checked Int arithmetic; empty input returns zero.",
+                    ),
+                    _ => (
+                        StandardOperation::Find,
+                        ValueType::Nominal {
+                            id: Box::new(NominalTypeId::standard("outcome", "Option")),
+                            arguments: vec![t.clone()],
+                        },
+                        "Return the first matching original item as std::outcome::Option::Some; empty or unmatched input returns None, distinct from Some(null).",
+                    ),
+                };
+                (
+                    implementation,
+                    vec!["T"],
+                    vec![("input", List(Box::new(t.clone()))), ("predicate", Any)],
+                    Some(OperationCallback {
+                        parameters: vec![t],
+                        result: Bool,
+                    }),
+                    result,
+                    documentation,
+                )
+            }
+            "sort_by" => {
+                let k = TypeParameter("K".to_owned());
+                (
+                    StandardOperation::SortBy,
+                    vec!["T", "K"],
+                    vec![("input", List(Box::new(t.clone()))), ("key", Any)],
+                    Some(OperationCallback {
+                        parameters: vec![t.clone()],
+                        result: k,
+                    }),
+                    List(Box::new(t)),
+                    "Compute one Ordered key per item in source order, then sort stably in ascending order; equal keys retain source order.",
+                )
+            }
+            "sort" | "reverse" => {
+                let (implementation, documentation) = if name == "sort" {
+                    (
+                        StandardOperation::Sort,
+                        "Sort homogeneous Ordered items stably in ascending order.",
+                    )
+                } else {
+                    (
+                        StandardOperation::Reverse,
+                        "Return all items in reverse order, retaining duplicates; this reverses equal-key runs in a sorted input.",
+                    )
+                };
+                (
+                    implementation,
+                    vec!["T"],
+                    vec![("input", List(Box::new(t.clone())))],
+                    None,
+                    List(Box::new(t)),
+                    documentation,
+                )
+            }
+            "take" | "drop" => {
+                let (implementation, documentation) = if name == "take" {
+                    (
+                        StandardOperation::Take,
+                        "Return the prefix of min(count, length) items; negative count is an Error.",
+                    )
+                } else {
+                    (
+                        StandardOperation::Drop,
+                        "Return the suffix after min(count, length) items; negative count is an Error.",
+                    )
+                };
+                (
+                    implementation,
+                    vec!["T"],
+                    vec![("input", List(Box::new(t.clone()))), ("count", Int)],
+                    None,
+                    List(Box::new(t)),
+                    documentation,
                 )
             }
             _ => return None,
@@ -803,13 +933,13 @@ pub fn standard_operation(module: &ModuleId, name: &str) -> Option<OperationDesc
             .parameters
             .last_mut()
             .expect("callback parameter")
-            .callback = Some(callback);
+            .callback = callback;
         let descriptor = OperationDescriptor {
             id: OperationId::new(module.clone(), name),
             type_parameters: generics.into_iter().map(str::to_owned).collect(),
             overloads: vec![overload],
             documentation: format!(
-                "{documentation} Validate callback kind, arity and annotations even on empty input; share caller budgets and cancellation; stop on first failure."
+                "{documentation} Validate types and any callback kind, arity and annotations even on empty input; share caller budgets and cancellation; stop on first failure."
             ),
             purity: OperationPurity::Pure,
             downstream: DownstreamCallMetadata::foundation(),
@@ -935,6 +1065,15 @@ pub(crate) fn standard_operations(module: &ModuleId) -> Vec<OperationDescriptor>
         "map",
         "filter",
         "fold",
+        "any",
+        "all",
+        "count",
+        "find",
+        "sort",
+        "sort_by",
+        "take",
+        "drop",
+        "reverse",
     ]
     .into_iter()
     .filter_map(|name| standard_operation(module, name))

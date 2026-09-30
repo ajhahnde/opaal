@@ -4343,13 +4343,152 @@ impl Evaluator<'_, '_> {
         span: Span,
         expected_result: Option<&ValueType>,
     ) -> Eval<Value> {
+        self.call_with_result_type(call, scope, span, expected_result)
+            .map(|(value, _)| value)
+    }
+
+    fn operation_argument(
+        &mut self,
+        expression: &Expression,
+        scope: &mut ScopeStack,
+        expected: Option<&ValueType>,
+    ) -> Eval<(Value, Option<ValueType>)> {
+        match expression.kind() {
+            ExpressionKind::Call(call) => {
+                self.charge(expression.span())?;
+                self.call_with_result_type(call, scope, expression.span(), expected)
+                    .map(|(value, result_type)| (value, Some(result_type)))
+            }
+            ExpressionKind::GroupedJob(chain) => {
+                if let Some(inner) = crate::module::single_value_expression(chain) {
+                    self.charge(expression.span())?;
+                    return self.operation_argument(inner, scope, expected);
+                }
+                // A general job group has no declared concrete result family.
+                self.expression_with_expected(expression, scope, expected)
+                    .map(|value| (value, Some(ValueType::Any)))
+            }
+            ExpressionKind::Name(name) => {
+                let result_type =
+                    scope
+                        .declared_type(self.text(name.name.span()))
+                        .map(|value_type| {
+                            crate::module::substitute_type(value_type, &self.current_type_arguments)
+                        });
+                self.expression_with_expected(expression, scope, expected)
+                    .map(|value| (value, result_type))
+            }
+            ExpressionKind::List(elements) => {
+                self.charge(expression.span())?;
+                if !self.budget.enter_call() {
+                    return Err(
+                        self.error(RuntimeErrorKind::ResourceBudgetExceeded, expression.span())
+                    );
+                }
+                let result = (|| {
+                    if !self.budget.charge_collection_items(elements.len()) {
+                        return Err(
+                            self.error(RuntimeErrorKind::ResourceBudgetExceeded, expression.span())
+                        );
+                    }
+                    let expected_element = match expected {
+                        Some(ValueType::List(element)) => Some(element.as_ref()),
+                        _ => None,
+                    };
+                    let mut values = Vec::with_capacity(elements.len());
+                    let mut element_type = None;
+                    let mut homogeneous = true;
+                    for element in elements {
+                        let (value, declared) =
+                            self.operation_argument(element, scope, expected_element)?;
+                        let actual = match declared {
+                            Some(declared) => Some(declared),
+                            None => self.complete_value_type(&value, element.span())?,
+                        };
+                        if actual.is_none()
+                            || element_type
+                                .as_ref()
+                                .is_some_and(|previous| Some(previous) != actual.as_ref())
+                        {
+                            homogeneous = false;
+                        }
+                        element_type = actual;
+                        values.push(value);
+                    }
+                    let result_type = if homogeneous {
+                        element_type.map(|element| ValueType::List(Box::new(element)))
+                    } else {
+                        Some(ValueType::Any)
+                    };
+                    Ok((Value::list(values), result_type))
+                })();
+                self.budget.leave_call();
+                result
+            }
+            ExpressionKind::Index(index) => {
+                self.charge(expression.span())?;
+                let (target, declared) = self.operation_argument(&index.target, scope, None)?;
+                let target_type = match declared {
+                    Some(declared) => Some(declared),
+                    None => self.complete_value_type(&target, index.target.span())?,
+                };
+                let position = self.expression(&index.index, scope)?;
+                let result_type = match (target_type, &position) {
+                    (Some(ValueType::List(element)), Value::Int(_)) => *element,
+                    (Some(ValueType::String), Value::Int(_)) => ValueType::String,
+                    _ => ValueType::Any,
+                };
+                operation::index(&target, &position)
+                    .map(|value| (value, Some(result_type)))
+                    .map_err(|error| self.operation(error, expression.span()))
+            }
+            ExpressionKind::Member(member) => {
+                self.charge(expression.span())?;
+                let (target, declared) = self.operation_argument(&member.target, scope, None)?;
+                let target_type = match declared {
+                    Some(declared) => Some(declared),
+                    None => self.complete_value_type(&target, member.target.span())?,
+                };
+                let name = self.text(member.member.span());
+                let result_type = match (target_type, name) {
+                    (Some(ValueType::Status), "ok") => ValueType::Bool,
+                    (Some(ValueType::Status), "stages") => {
+                        ValueType::List(Box::new(ValueType::Status))
+                    }
+                    (Some(ValueType::Status), "duration") => ValueType::Duration,
+                    (Some(ValueType::Error), "category" | "message") => ValueType::String,
+                    (Some(ValueType::Error), "labels" | "frames") => {
+                        ValueType::List(Box::new(ValueType::Record))
+                    }
+                    _ => ValueType::Any,
+                };
+                operation::field(&target, name)
+                    .map(|value| (value, Some(result_type)))
+                    .map_err(|error| self.operation(error, expression.span()))
+            }
+            _ => self
+                .expression_with_expected(expression, scope, expected)
+                .map(|value| (value, None)),
+        }
+    }
+
+    /// Keep instantiated call evidence alongside the value without evaluating
+    /// the call again or inferring a concrete type from an Any result.
+    fn call_with_result_type(
+        &mut self,
+        call: &CallExpression,
+        scope: &mut ScopeStack,
+        span: Span,
+        expected_result: Option<&ValueType>,
+    ) -> Eval<(Value, ValueType)> {
         // Cancellation is polled before entering any call.
         self.check_cancel(span)?;
 
         if let ExpressionKind::Qualified(name) = call.callee.kind()
             && let Some(value) = self.variant_value(name, call, scope, span, expected_result)?
         {
-            return Ok(value);
+            let result_type = runtime_value_type(&value).unwrap_or(ValueType::Any);
+            return Ok((value, result_type));
         }
 
         if let ExpressionKind::Qualified(name) = call.callee.kind() {
@@ -4382,7 +4521,9 @@ impl Evaluator<'_, '_> {
                         span,
                     )));
                 };
-                return result.map_err(|error| self.operational_abort(error, span));
+                return result
+                    .map(|value| (value, ValueType::Any))
+                    .map_err(|error| self.operational_abort(error, span));
             }
             if let Some(operation) = self
                 .binding_types
@@ -4444,41 +4585,63 @@ impl Evaluator<'_, '_> {
                             })
                             .collect()
                     });
-                let substitutions = operation
+                let mut substitutions = operation
                     .type_parameters()
                     .iter()
                     .cloned()
                     .zip(type_arguments.iter().cloned())
                     .collect();
+                if type_arguments.is_empty()
+                    && let Some(expected) = expected_result
+                {
+                    crate::module::unify_type(overload.result(), expected, &mut substitutions);
+                }
                 let mut arguments = Vec::with_capacity(call.arguments.len());
+                let mut result_types = Vec::with_capacity(call.arguments.len());
+                let infer_types = type_arguments.is_empty()
+                    && !operation.type_parameters().is_empty()
+                    && operation.implementation() != crate::operation::StandardOperation::Length;
                 for (argument, parameter) in call.arguments.iter().zip(overload.parameters()) {
                     let crate::operation::OperationInputType::Value(input) = parameter.input()
                     else {
                         unreachable!("value call parameter")
                     };
                     let expected = crate::module::substitute_type(input, &substitutions);
-                    arguments.push(self.expression_with_expected(
-                        argument,
-                        scope,
-                        Some(&expected),
-                    )?);
+                    // Unbound descriptor parameters are not concrete evidence
+                    // for a nested call's independently named generics.
+                    let expected =
+                        (!crate::module::has_unbound_type_parameters(input, &substitutions))
+                            .then_some(&expected);
+                    let (value, result_type) = if infer_types {
+                        self.operation_argument(argument, scope, expected)?
+                    } else {
+                        (
+                            self.expression_with_expected(argument, scope, expected)?,
+                            None,
+                        )
+                    };
+                    arguments.push(value);
+                    result_types.push(result_type);
                 }
-                if type_arguments.is_empty()
-                    && operation.overloads()[0]
-                        .parameters()
-                        .iter()
-                        .any(|parameter| parameter.callback().is_some())
-                {
+                if infer_types {
                     type_arguments = self.infer_operation_arguments(
                         &operation,
-                        call,
                         &arguments,
-                        scope,
+                        &result_types,
                         expected_result,
                         span,
                     )?;
                 }
-                return self.execute_operation(&operation, arguments, &type_arguments, span);
+                let substitutions = operation
+                    .type_parameters()
+                    .iter()
+                    .cloned()
+                    .zip(type_arguments.iter().cloned())
+                    .collect();
+                let result_type = crate::module::substitute_type(overload.result(), &substitutions);
+                return self
+                    .execute_operation(&operation, arguments, &type_arguments, span)
+                    .map(|value| (value, result_type));
             }
         }
 
@@ -4520,22 +4683,29 @@ impl Evaluator<'_, '_> {
                             .environment()
                             .get(name.as_ref())
                             .map(OsStr::to_os_string);
-                        return value.map_or(Ok(Value::Null), |value| {
-                            value.into_string().map(Value::string).map_err(|_| {
-                                self.error(
-                                    RuntimeErrorKind::EnvironmentValueNotUtf8 {
-                                        name: name.to_string(),
-                                    },
-                                    span,
-                                )
+                        return value
+                            .map_or(Ok(Value::Null), |value| {
+                                value.into_string().map(Value::string).map_err(|_| {
+                                    self.error(
+                                        RuntimeErrorKind::EnvironmentValueNotUtf8 {
+                                            name: name.to_string(),
+                                        },
+                                        span,
+                                    )
+                                })
                             })
-                        });
+                            .map(|value| (value, intrinsic.result_type()));
                     }
-                    ExpressionIntrinsic::Glob => return self.glob(&argument, span),
+                    ExpressionIntrinsic::Glob => {
+                        return self
+                            .glob(&argument, span)
+                            .map(|value| (value, intrinsic.result_type()));
+                    }
                     ExpressionIntrinsic::Float | ExpressionIntrinsic::Int => {}
                 }
                 return intrinsic
                     .invoke(&argument)
+                    .map(|value| (value, intrinsic.result_type()))
                     .map_err(|error| self.operation(error, span));
             }
         }
@@ -4608,7 +4778,7 @@ impl Evaluator<'_, '_> {
                 span: argument.span(),
             });
         }
-        self.run_call(
+        self.run_call_with_result_type(
             &callable,
             function,
             arguments,
@@ -4925,6 +5095,26 @@ impl Evaluator<'_, '_> {
         explicit_type_arguments: Option<Vec<ValueType>>,
         expected_result: Option<&ValueType>,
     ) -> Eval<Value> {
+        self.run_call_with_result_type(
+            callable,
+            function,
+            arguments,
+            span,
+            explicit_type_arguments,
+            expected_result,
+        )
+        .map(|(value, _)| value)
+    }
+
+    fn run_call_with_result_type(
+        &mut self,
+        callable: &Arc<dyn Callable>,
+        function: &CallableValue,
+        arguments: Vec<RuntimeArgument>,
+        span: Span,
+        explicit_type_arguments: Option<Vec<ValueType>>,
+        expected_result: Option<&ValueType>,
+    ) -> Eval<(Value, ValueType)> {
         if action_has_declared_effects(&function.source, function.origin_span)
             && !self.host.permits_controlled_action()
         {
@@ -4994,6 +5184,12 @@ impl Evaluator<'_, '_> {
             std::mem::replace(&mut self.binding_types, Arc::clone(&function.binding_types));
         let mut defining_types = function.captured_type_arguments.clone();
         defining_types.extend(substitutions.clone());
+        let result_type = function
+            .result_type
+            .as_ref()
+            .map_or(ValueType::Any, |result| {
+                crate::module::substitute_type(result, &defining_types)
+            });
         let caller_type_arguments =
             std::mem::replace(&mut self.current_type_arguments, defining_types);
         let mut result = (|| {
@@ -5121,7 +5317,7 @@ impl Evaluator<'_, '_> {
         self.binding_types = caller_binding_types;
         self.current_type_arguments = caller_type_arguments;
         self.budget.leave_call();
-        result
+        result.map(|value| (value, result_type))
     }
 
     fn run_body_in_defining_source(
