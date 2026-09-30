@@ -26,7 +26,9 @@ WORKSPACE_PACKAGES = {
     "crates/opaal-cli": "opaal-cli",
 }
 PRIMARY_BINARIES = {"opaal", "opaal-language-server"}
-FUZZ_TARGETS = {"lexer", "parser", "expander", "resources", "secret_sinks"}
+FUZZ_TARGETS = {
+    "lexer", "parser", "expander", "resources", "data_operations_limits", "secret_sinks"
+}
 FUZZ_PATH_PACKAGES = {"opaal-platform", "opaal-runtime", "opaal-syntax"}
 QUALIFICATION_FILES = {
     "ci/qualify_operational_core.py",

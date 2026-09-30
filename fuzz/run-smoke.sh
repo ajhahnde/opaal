@@ -42,14 +42,18 @@ corpus_roots=(
   "$repository_root/tests/opaal-foundation/language/types/invalid"
 )
 
-for target in lexer parser expander resources secret_sinks; do
+for target in lexer parser expander resources data_operations_limits secret_sinks; do
   corpus="$work/$target"
   mkdir "$corpus"
+  seeds=("${corpus_roots[@]}")
+  if [ "$target" = data_operations_limits ]; then
+    seeds=("$script_dir/seeds/data_operations_limits")
+  fi
   cargo fuzz run \
     --fuzz-dir "$repository_root/fuzz" \
     "$target" \
     "$corpus" \
-    "${corpus_roots[@]}" \
+    "${seeds[@]}" \
     -- \
     "-runs=$runs" \
     -max_len=4096 \
