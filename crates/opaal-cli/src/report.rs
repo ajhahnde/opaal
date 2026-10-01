@@ -49,6 +49,11 @@ pub enum HostReport<'a> {
     },
     /// A pre-rendered shell-owned diagnostic.
     Failure { diagnostic: &'a [u8] },
+    /// Machine output for failed CLI work, followed by optional diagnostics.
+    FailureWithOutput {
+        output: &'a [u8],
+        diagnostic: &'a [u8],
+    },
     /// One launcher-misuse message, without the `opaal:` prefix or newline.
     Misuse { message: &'a str },
 }
@@ -94,6 +99,12 @@ impl<'a> HostReport<'a> {
     #[must_use]
     pub const fn failure(diagnostic: &'a [u8]) -> Self {
         Self::Failure { diagnostic }
+    }
+
+    /// Build machine output that must retain a failing host status.
+    #[must_use]
+    pub const fn failure_with_output(output: &'a [u8], diagnostic: &'a [u8]) -> Self {
+        Self::FailureWithOutput { output, diagnostic }
     }
 
     /// Build one launcher-misuse report.
@@ -217,6 +228,17 @@ where
             }
         }
         HostReport::Failure { diagnostic } => {
+            let _ = write_required(diagnostics, diagnostic);
+            HostExit::Failure
+        }
+        HostReport::FailureWithOutput {
+            output: bytes,
+            diagnostic,
+        } => {
+            if let Err(error) = write_required(output, bytes) {
+                report_output_failure(diagnostics, &error);
+                return HostExit::Failure;
+            }
             let _ = write_required(diagnostics, diagnostic);
             HostExit::Failure
         }
