@@ -1,0 +1,42 @@
+import std::string as string
+import std::list as list
+import std::record as record
+import std::data as data
+import std::value as value
+export { build, render }
+
+def normalize(job: Record) -> Record {
+    let name = string::trim(job.name)
+    let job_status: String = job.status
+    let conclusion: String = record::get_or(job, "conclusion", "")
+    if job_status != "completed" && job_status != "queued" && job_status != "in_progress" {
+        throw "unsupported job status"
+    }
+    if job_status == "completed" {
+        if conclusion != "success" && conclusion != "failure" && conclusion != "cancelled" && conclusion != "timed_out" && conclusion != "skipped" && conclusion != "neutral" && conclusion != "action_required" && conclusion != "stale" && conclusion != "startup_failure" {
+            throw "unsupported completed-job conclusion"
+        }
+    }
+    let selected = record::select(job, ["name", "status"])
+    let titled = record::set(selected, "name", string::join(string::split(name, "/"), " / "))
+    return record::set(titled, "conclusion", conclusion)
+}
+
+def failed(job: Record) -> Bool {
+    return (job.status == "completed" && job.conclusion != "success" && job.conclusion != "skipped" && job.conclusion != "neutral")
+}
+
+def build(document: Record) -> Record {
+    let jobs = list::map[Any, Record](document.jobs, {|job: Any| -> Record normalize(job)})
+    let failures = list::filter[Record](jobs, failed)
+    let pending = list::filter[Record](jobs, {|job: Record| -> Bool job.status != "completed"})
+    let ordered = list::sort_by[Record, String](failures, {|job: Record| -> String job.name})
+    let selected = list::take[Record](ordered, 10)
+    let count = list::fold[Record, Int](failures, 0, {|n: Int, job: Record| -> Int n + 1})
+    return ({ total: value::length[Record](jobs), failed: count, pending: value::length[Record](pending), failures: selected })
+}
+
+def render(report: Record) -> String {
+    let lines = list::map[Record, String](report.failures, {|job: Record| -> String string::join([string::decode_utf8(data::json_encode(job.name)), " : ", job.conclusion], "")})
+    return string::join(["failed=", string::decode_utf8(data::json_encode(report.failed)), ", pending=", string::decode_utf8(data::json_encode(report.pending)), "\n", string::join(lines, "\n")], "")
+}

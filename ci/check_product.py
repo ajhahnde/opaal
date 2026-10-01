@@ -26,9 +26,14 @@ WORKSPACE_PACKAGES = {
     "crates/opaal-cli": "opaal-cli",
 }
 PRIMARY_BINARIES = {"opaal", "opaal-language-server"}
-FUZZ_TARGETS = {"lexer", "parser", "expander", "resources", "secret_sinks"}
+FUZZ_TARGETS = {
+    "lexer", "parser", "expander", "resources", "data_operations_limits", "secret_sinks"
+}
 FUZZ_PATH_PACKAGES = {"opaal-platform", "opaal-runtime", "opaal-syntax"}
 QUALIFICATION_FILES = {
+    "ci/package_data_processing.py",
+    "ci/qualify_data_processing.py",
+    "ci/tests/test_data_processing_candidate.py",
     "ci/qualify_operational_core.py",
     "ci/tests/test_qualify_operational_core.py",
     "RELEASING.md",
@@ -400,12 +405,22 @@ def source_problems(root: Path, *, run: Run = run_command) -> list[str]:
         if "--budget-environment host-darwin-arm64" in ci:
             problems.append("CI applies a retained host budget to the shared macOS runner")
         if not re.search(
-            r"needs:\s*\[foundation, policy, fuzz, operational-core-linux, operational-core-macos\]",
+            r"needs:\s*\[foundation, policy, fuzz, operational-core-linux, operational-core-macos, data-processing-linux, data-processing-macos\]",
             ci,
         ):
             problems.append(
-                "CI required aggregate does not require foundation, policy, fuzz, and both operational-core hosts"
+                "CI required aggregate does not require foundation, policy, fuzz, and both operational-core and data-processing hosts"
             )
+        for candidate_host, runner in (("linux", "ubuntu-24.04"), ("macos", "macos-15")):
+            job = re.search(rf"(?ms)^  data-processing-{candidate_host}:\n(.*?)(?=^  [\w-]+:|\Z)", ci)
+            if job is None or f"runs-on: {runner}" not in job.group(1) or not all(
+                owner in job.group(1) for owner in (
+                    "ref: ${{ github.event.pull_request.head.sha || github.sha }}",
+                    "cargo build --release --workspace --locked", "ci/package_data_processing.py",
+                    "ci/qualify_data_processing.py", "--expected-source", "actions/upload-artifact@",
+                )
+            ):
+                problems.append(f"CI does not build/qualify/retain data-processing candidates on {candidate_host}")
         if "python3 ci/check_product.py release-candidate" not in release:
             problems.append("release workflow does not run the release-candidate validator")
         if not re.search(

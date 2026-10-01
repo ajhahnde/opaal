@@ -1,0 +1,11 @@
+failed=14, pending=0
+"test / 00" : failure
+"test / 00" : cancelled
+"test / 01" : failure
+"test / 02" : failure
+"test / 03" : failure
+"test / 04" : failure
+"test / 05" : failure
+"test / 06" : failure
+"test / 07" : failure
+"test / 08" : failure

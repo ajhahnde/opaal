@@ -83,7 +83,7 @@ impl AnalysisControl {
         !self.charge(AnalysisLimitKind::WorkUnits, 1)
     }
 
-    fn for_run(&self, limits: AnalysisLimits) -> Self {
+    pub(crate) fn for_run(&self, limits: AnalysisLimits) -> Self {
         Self {
             is_cancelled: Arc::clone(&self.is_cancelled),
             cancelled: Arc::clone(&self.cancelled),
@@ -458,6 +458,13 @@ pub enum ModuleOrigin {
 }
 
 impl ModuleId {
+    pub(crate) fn local(path: PathBuf) -> Self {
+        Self {
+            path,
+            origin: ModuleOrigin::Local,
+        }
+    }
+
     /// The canonical native path for a local module, or `std::name` identity
     /// spelling for a compiled standard module.
     #[must_use]
@@ -471,7 +478,7 @@ impl ModuleId {
         &self.origin
     }
 
-    fn standard(namespace: &str, module: &str) -> Self {
+    pub(crate) fn standard(namespace: &str, module: &str) -> Self {
         Self {
             path: PathBuf::from(format!("{namespace}::{module}")),
             origin: ModuleOrigin::Standard {
@@ -1439,7 +1446,7 @@ impl ValueType {
         }
     }
 
-    fn accepts_type(&self, actual: &Self) -> bool {
+    pub(crate) fn accepts_type(&self, actual: &Self) -> bool {
         match (self, actual) {
             (Self::Any, _) => true,
             (Self::List(expected), Self::List(actual)) => expected.accepts_type(actual),
@@ -1520,7 +1527,39 @@ pub(crate) fn substitute_type(
     }
 }
 
-fn unify_type(
+/// Descriptor parameters without a binding cannot supply context to another
+/// call. Lexical generic parameters with an established binding remain valid.
+pub(crate) fn has_unbound_type_parameters(
+    value_type: &ValueType,
+    substitutions: &BTreeMap<String, ValueType>,
+) -> bool {
+    match value_type {
+        ValueType::TypeParameter(name) => !substitutions.contains_key(name),
+        ValueType::List(element) => has_unbound_type_parameters(element, substitutions),
+        ValueType::Nominal { arguments, .. } => arguments
+            .iter()
+            .any(|argument| has_unbound_type_parameters(argument, substitutions)),
+        _ => false,
+    }
+}
+
+pub(crate) fn single_value_expression(chain: &ConditionalChain) -> Option<&Expression> {
+    let [and_chain] = chain.or_terms() else {
+        return None;
+    };
+    let [pipeline] = and_chain.and_terms() else {
+        return None;
+    };
+    let [stage] = pipeline.stages() else {
+        return None;
+    };
+    match stage.kind() {
+        StageKind::Expression(expression) => Some(expression),
+        _ => None,
+    }
+}
+
+pub(crate) fn unify_type(
     expected: &ValueType,
     actual: &ValueType,
     substitutions: &mut BTreeMap<String, ValueType>,
@@ -1565,6 +1604,9 @@ pub struct NominalTypeId {
 }
 
 impl NominalTypeId {
+    pub(crate) fn new(module: ModuleId, name: String) -> Self {
+        Self { module, name }
+    }
     pub(crate) fn standard(module: &str, name: &str) -> Self {
         Self {
             module: ModuleId::standard("std", module),
@@ -1590,7 +1632,7 @@ impl NominalTypeId {
     }
 }
 
-fn is_opaque_operational_nominal(id: &NominalTypeId) -> bool {
+pub(crate) fn is_opaque_operational_nominal(id: &NominalTypeId) -> bool {
     match id.module().origin() {
         ModuleOrigin::Standard { namespace, module } if namespace == "project" => {
             matches!(module.as_str(), "tools" | "endpoints" | "secrets")
@@ -3197,12 +3239,420 @@ pub(crate) struct RuntimeBindingTypes {
     by_source: BTreeMap<SourceId, Vec<ResolvedBindingType>>,
     functions_by_source: BTreeMap<SourceId, Vec<FunctionSignature>>,
     annotations_by_source: BTreeMap<SourceId, Vec<ResolvedTypeAnnotation>>,
+    nominal_references_by_source: BTreeMap<SourceId, Vec<ResolvedNominalReference>>,
+    operation_types_by_source: BTreeMap<SourceId, BTreeMap<usize, Vec<ValueType>>>,
     modules_by_source: BTreeMap<SourceId, ModuleId>,
     nominals_by_module: BTreeMap<ModuleId, BTreeMap<String, NominalType>>,
     aliases: ModuleAliasRegistry,
+    pub(crate) context: RuntimeTypeContext,
+}
+
+/// Retained, host-free inputs for restoring the defining type context.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct RuntimeTypeContext {
+    pub(crate) programs: Vec<Arc<ModuleProgram>>,
+    pub(crate) cells: Vec<ReplTypeSource>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ReplTypeSource {
+    pub(crate) source: Arc<SourceFile>,
+    pub(crate) local_imports: BTreeMap<usize, ModuleId>,
+    pub(crate) statement_count: usize,
+    pub(crate) nominal_offsets: BTreeSet<usize>,
+}
+
+impl RuntimeTypeContext {
+    pub(crate) fn restore(
+        &self,
+        defining_source: &SourceFile,
+        work_remaining: &mut u64,
+    ) -> Result<RuntimeBindingTypes, String> {
+        if self.cells.is_empty() {
+            if let Some(program) = self.programs.iter().find(|program| {
+                program
+                    .sources()
+                    .entries()
+                    .any(|entry| entry.source() == defining_source)
+            }) {
+                return Ok(program.runtime_binding_types_in_context(self.programs.clone()));
+            }
+            if !self.programs.is_empty() {
+                return Err("callable source is absent from its retained module context".to_owned());
+            }
+        }
+        let mut types: Option<RuntimeBindingTypes> = None;
+        let mut aliases = ModuleAliasRegistry::default();
+        let control = AnalysisControl::never().for_run(
+            AnalysisLimits::OPAAL.with_limit(AnalysisLimitKind::WorkUnits, *work_remaining),
+        );
+        for cell in &self.cells {
+            let ParseOutcome::Complete(parsed) = opaal_syntax::parse_opaal(&cell.source) else {
+                return Err("retained interactive source does not parse".to_owned());
+            };
+            if cell.statement_count > parsed.statements().len() {
+                return Err("invalid retained statement count".to_owned());
+            }
+            let nominal_offsets = parsed
+                .statements()
+                .iter()
+                .filter(|statement| {
+                    matches!(
+                        statement.kind(),
+                        StatementKind::NominalType(_) | StatementKind::VariantType(_)
+                    )
+                })
+                .map(|statement| statement.span().start())
+                .collect::<BTreeSet<_>>();
+            if !cell.nominal_offsets.is_subset(&nominal_offsets) {
+                return Err("invalid retained nominal declaration offset".to_owned());
+            }
+            // Standard imports are compiled metadata and were available to the
+            // original whole-cell analysis, even when execution stopped before
+            // the import. Keep that input without publishing its alias.
+            let mut statements = parsed.statements()[..cell.statement_count].to_vec();
+            statements.extend(
+                parsed.statements()[cell.statement_count..]
+                    .iter()
+                    .filter(|statement| {
+                        matches!(statement.kind(), StatementKind::ModuleImport(import)
+                    if matches!(import.source, opaal_syntax::ModuleImportSource::Standard { .. })
+                        || cell.local_imports.contains_key(&import.source.span().start()))
+                            || (cell.nominal_offsets.contains(&statement.span().start())
+                                && matches!(
+                                    statement.kind(),
+                                    StatementKind::NominalType(_) | StatementKind::VariantType(_)
+                                ))
+                    })
+                    .cloned(),
+            );
+            let script = Script::new(statements, parsed.span());
+            let analyzed = RuntimeBindingTypes::analyze_interactive_with_control(
+                &cell.source,
+                &script,
+                &aliases,
+                &self.programs,
+                &cell.local_imports,
+                types.as_ref(),
+                &control,
+            )
+            .map_err(|_| "retained interactive types cannot be restored".to_owned())?;
+            let mut published = analyzed.aliases.clone();
+            if let Some(current) = published
+                .by_module
+                .get_mut(&ModuleId::local(PathBuf::from("<interactive>")))
+            {
+                current.aliases.retain(|_, alias| {
+                    alias.declaration_span.source_id() != cell.source.id()
+                        || parsed.statements()[..cell.statement_count]
+                            .iter()
+                            .any(|statement| {
+                                statement.span().start() <= alias.declaration_span.start()
+                                    && statement.span().end() >= alias.declaration_span.end()
+                            })
+                });
+            }
+            let retained = analyzed.retain_interactive_prefix(
+                &cell.source,
+                &script,
+                cell.statement_count,
+                &published,
+                &self.programs,
+                types.as_ref(),
+            );
+            aliases = published;
+            types = Some(retained);
+        }
+        *work_remaining =
+            work_remaining.saturating_sub(control.usage().get(AnalysisLimitKind::WorkUnits));
+        if let Some(types) = types {
+            if self
+                .cells
+                .last()
+                .is_none_or(|cell| cell.source.as_ref() != defining_source)
+            {
+                return Err(
+                    "callable source does not match its retained interactive context".to_owned(),
+                );
+            }
+            return Ok(types);
+        }
+        let ParseOutcome::Complete(script) = opaal_syntax::parse_opaal(defining_source) else {
+            return Err("callable source does not parse".to_owned());
+        };
+        RuntimeBindingTypes::analyze_repl_source(defining_source, &script, &aliases)
+            .map_err(|_| "callable source types cannot be restored".to_owned())
+    }
 }
 
 impl RuntimeBindingTypes {
+    pub(crate) fn nominal_by_id(&self, id: &NominalTypeId) -> Option<&NominalType> {
+        self.nominals_by_module.get(id.module())?.get(id.name())
+    }
+    /// Local type schemas become usable only after their dependency initializer
+    /// succeeds. Analysis can resolve forward imports without publishing them.
+    pub(crate) fn uninitialized_interactive_type(
+        &self,
+        statement: Span,
+        initialized: &BTreeMap<ModuleId, BTreeMap<String, crate::Value>>,
+        control: &AnalysisControl,
+    ) -> Option<Diagnostic> {
+        fn missing<'a>(
+            types: &'a RuntimeBindingTypes,
+            value_type: &'a ValueType,
+            initialized: &BTreeMap<ModuleId, BTreeMap<String, crate::Value>>,
+            control: &AnalysisControl,
+        ) -> Result<Option<&'a ModuleId>, ()> {
+            let mut pending = vec![value_type];
+            let mut visited = BTreeSet::new();
+            while let Some(value_type) = pending.pop() {
+                if control.is_cancelled() {
+                    return Err(());
+                }
+                match value_type {
+                    ValueType::List(element) => pending.push(element),
+                    ValueType::Nominal { id, arguments } => {
+                        if id.module().origin() == &ModuleOrigin::Local
+                            && id.module().path() != Path::new("<interactive>")
+                            && !initialized.contains_key(id.module())
+                        {
+                            return Ok(Some(id.module()));
+                        }
+                        pending.extend(arguments);
+                        if visited.insert(id.as_ref().clone())
+                            && let Some(nominal) = types.nominal_by_id(id)
+                        {
+                            pending
+                                .extend(nominal.fields().iter().map(NominalTypeField::value_type));
+                            pending.extend(
+                                nominal.variants().iter().flat_map(NominalVariant::payload),
+                            );
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            Ok(None)
+        }
+        let contains = |span: Span| {
+            span.source_id() == statement.source_id()
+                && span.start() >= statement.start()
+                && span.end() <= statement.end()
+        };
+        let mut candidates = self
+            .annotations_by_source
+            .get(&statement.source_id())
+            .into_iter()
+            .flatten()
+            .filter(|annotation| !control.is_cancelled() && contains(annotation.span()))
+            .map(|annotation| (annotation.span(), annotation.value_type().clone()))
+            .collect::<Vec<_>>();
+        candidates.extend(
+            self.nominal_references_by_source
+                .get(&statement.source_id())
+                .into_iter()
+                .flatten()
+                .filter(|reference| !control.is_cancelled() && contains(reference.span))
+                .map(|reference| {
+                    (
+                        reference.span,
+                        ValueType::Nominal {
+                            id: Box::new(reference.id.clone()),
+                            arguments: Vec::new(),
+                        },
+                    )
+                }),
+        );
+        for (span, value_type) in candidates {
+            match missing(self, &value_type, initialized, control) {
+                Ok(Some(module)) => {
+                    return Some(
+                        Diagnostic::new(
+                            Severity::Error,
+                            "MOD013",
+                            format!(
+                                "initialize local module `{}` before using its types",
+                                module.path().display()
+                            ),
+                        )
+                        .with_primary(span, "move the local import before this statement"),
+                    );
+                }
+                Ok(None) => {}
+                Err(()) => break,
+            }
+        }
+        control.is_cancelled().then(|| {
+            Diagnostic::new(
+                Severity::Error,
+                "RUN001",
+                "interactive type admission did not complete",
+            )
+            .with_primary(
+                statement,
+                "analysis was cancelled or exceeded a resource limit",
+            )
+        })
+    }
+
+    pub(crate) fn render_interactive_diagnostic(
+        source: &SourceFile,
+        diagnostic: &Diagnostic,
+        programs: &[Arc<ModuleProgram>],
+        inherited: Option<&Self>,
+    ) -> String {
+        let outcome = SourceFile::new(
+            SourceId::new(u32::MAX),
+            "std::outcome",
+            STANDARD_OUTCOME_MODULE,
+        );
+        let mut available = BTreeMap::from([(source.id(), source), (outcome.id(), &outcome)]);
+        for program in programs {
+            for entry in program.sources().entries() {
+                available.insert(entry.source().id(), entry.source());
+            }
+        }
+        if let Some(inherited) = inherited {
+            for cell in &inherited.context.cells {
+                available.insert(cell.source.id(), cell.source.as_ref());
+            }
+        }
+        render_diagnostic_sources(available.values().copied(), diagnostic)
+            .unwrap_or_else(|_| format!("{}\n", diagnostic.message()))
+    }
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn retain_interactive_prefix(
+        &self,
+        source: &SourceFile,
+        script: &Script,
+        admitted: usize,
+        aliases: &ModuleAliasRegistry,
+        programs: &[Arc<ModuleProgram>],
+        inherited: Option<&Self>,
+    ) -> Self {
+        let mut retained = self.clone();
+        retained.aliases = aliases.clone();
+        for program in programs {
+            retained
+                .aliases
+                .by_module
+                .extend(program.aliases.by_module.clone());
+        }
+        let interactive = ModuleId::local(PathBuf::from("<interactive>"));
+        retained.nominals_by_module.retain(|module, _| {
+            module == &interactive
+                || matches!(module.origin(), ModuleOrigin::Standard { .. })
+                || programs
+                    .iter()
+                    .any(|program| program.types.by_module.contains_key(module))
+        });
+        let prefix_end = script.statements()[..admitted]
+            .last()
+            .map_or(0, |statement| statement.span().end());
+        let in_prefix = |span: Span| span.source_id() != source.id() || span.end() <= prefix_end;
+        let mut required = BTreeSet::new();
+        let mut pending = Vec::new();
+        if let Some(nominals) = self.nominals_by_module.get(&interactive) {
+            for nominal in nominals
+                .values()
+                .filter(|nominal| in_prefix(nominal.declaration_span()))
+            {
+                required.insert(nominal.id().clone());
+                pending.extend(nominal.fields().iter().map(NominalTypeField::value_type));
+                pending.extend(nominal.variants().iter().flat_map(NominalVariant::payload));
+            }
+        }
+        pending.extend(
+            self.annotations_by_source
+                .get(&source.id())
+                .into_iter()
+                .flatten()
+                .filter(|annotation| in_prefix(annotation.span()))
+                .map(ResolvedTypeAnnotation::value_type),
+        );
+        for reference in self
+            .nominal_references_by_source
+            .get(&source.id())
+            .into_iter()
+            .flatten()
+            .filter(|reference| in_prefix(reference.span))
+        {
+            if required.insert(reference.id.clone())
+                && let Some(nominal) = self.nominal_by_id(&reference.id)
+            {
+                pending.extend(nominal.fields().iter().map(NominalTypeField::value_type));
+                pending.extend(nominal.variants().iter().flat_map(NominalVariant::payload));
+            }
+        }
+        while let Some(value_type) = pending.pop() {
+            match value_type {
+                ValueType::List(element) => pending.push(element),
+                ValueType::Nominal { id, arguments } => {
+                    pending.extend(arguments);
+                    if required.insert(id.as_ref().clone())
+                        && let Some(nominal) = self.nominal_by_id(id)
+                    {
+                        pending.extend(nominal.fields().iter().map(NominalTypeField::value_type));
+                        pending.extend(nominal.variants().iter().flat_map(NominalVariant::payload));
+                    }
+                }
+                _ => {}
+            }
+        }
+        let declarations = script
+            .statements()
+            .iter()
+            .filter(|statement| {
+                matches!(
+                    statement.kind(),
+                    StatementKind::NominalType(_) | StatementKind::VariantType(_)
+                )
+            })
+            .map(|statement| (statement.span().start(), statement.span().end()))
+            .collect::<BTreeMap<_, _>>();
+        let mut nominal_offsets = BTreeSet::new();
+        if let Some(nominals) = retained.nominals_by_module.get_mut(&interactive) {
+            nominals.retain(|_, nominal| required.contains(nominal.id()));
+            for nominal in nominals.values() {
+                if nominal.declaration_span().source_id() == source.id()
+                    && let Some((start, end)) = declarations
+                        .range(..=nominal.declaration_span().start())
+                        .next_back()
+                    && *end >= nominal.declaration_span().end()
+                {
+                    nominal_offsets.insert(*start);
+                }
+            }
+        }
+        retained.context =
+            inherited.map_or_else(RuntimeTypeContext::default, |types| types.context.clone());
+        retained.context.programs = programs.to_vec();
+        let local_imports = self.context.cells.last().map_or_else(BTreeMap::new, |cell| {
+            cell.local_imports.iter().filter(|(offset, target)| {
+                programs.iter().any(|program| program.types.by_module.contains_key(*target))
+                    || script.statements()[..admitted].iter().any(|statement|
+                        matches!(statement.kind(), StatementKind::ModuleImport(import) if import.source.span().start() == **offset))
+            }).map(|(offset, target)| (*offset, target.clone())).collect()
+        });
+        retained.context.cells.push(ReplTypeSource {
+            source: Arc::new(source.clone()),
+            local_imports,
+            statement_count: admitted,
+            nominal_offsets,
+        });
+        retained
+    }
+    pub(crate) fn operation_type_arguments(
+        &self,
+        source: SourceId,
+        span: Span,
+    ) -> Option<&[ValueType]> {
+        self.operation_types_by_source
+            .get(&source)?
+            .get(&span.start())
+            .map(Vec::as_slice)
+    }
+
     pub(crate) fn binding_type(
         &self,
         source: SourceId,
@@ -3405,6 +3855,56 @@ impl RuntimeBindingTypes {
         script: &Script,
         inherited_aliases: &ModuleAliasRegistry,
     ) -> Result<Self, Diagnostic> {
+        Self::analyze_interactive(
+            source,
+            script,
+            inherited_aliases,
+            &[],
+            &BTreeMap::new(),
+            None,
+        )
+    }
+
+    pub(crate) fn analyze_interactive(
+        source: &SourceFile,
+        script: &Script,
+        inherited_aliases: &ModuleAliasRegistry,
+        programs: &[Arc<ModuleProgram>],
+        local_imports: &BTreeMap<usize, ModuleId>,
+        inherited: Option<&Self>,
+    ) -> Result<Self, Diagnostic> {
+        Self::analyze_interactive_with_control(
+            source,
+            script,
+            inherited_aliases,
+            programs,
+            local_imports,
+            inherited,
+            &AnalysisControl::never().for_run(AnalysisLimits::OPAAL),
+        )
+    }
+
+    pub(crate) fn analyze_interactive_with_control(
+        source: &SourceFile,
+        script: &Script,
+        inherited_aliases: &ModuleAliasRegistry,
+        programs: &[Arc<ModuleProgram>],
+        local_imports: &BTreeMap<usize, ModuleId>,
+        inherited: Option<&Self>,
+        control: &AnalysisControl,
+    ) -> Result<Self, Diagnostic> {
+        let metrics = SyntaxMetrics::for_script(script);
+        if !control.charge(AnalysisLimitKind::SourceBytes, source.text().len() as u64)
+            || !control.charge(AnalysisLimitKind::AstNodes, metrics.nodes)
+            || !control.observe(AnalysisLimitKind::TypeDepth, metrics.type_depth)
+        {
+            return Err(Diagnostic::new(
+                Severity::Error,
+                "RUN001",
+                "interactive analysis resource limit exceeded",
+            )
+            .with_primary(script.span(), "analysis did not complete"));
+        }
         let entry = RegisteredModuleSource {
             module: ModuleId {
                 // Submission names remain diagnostic labels. Interactive state
@@ -3417,6 +3917,9 @@ impl RuntimeBindingTypes {
             script: script.clone(),
         };
         let mut aliases = inherited_aliases.clone();
+        for program in programs {
+            aliases.by_module.extend(program.aliases.by_module.clone());
+        }
         aliases.by_module.entry(entry.module().clone()).or_default();
 
         let mut occupied = script
@@ -3450,37 +3953,45 @@ impl RuntimeBindingTypes {
                 )
                 .with_primary(import.alias.span(), "this alias conflicts"));
             }
-            let opaal_syntax::ModuleImportSource::Standard {
-                namespace,
-                module,
-                span,
-            } = import.source
-            else {
-                return Err(Diagnostic::new(
-                    Severity::Error,
-                    "MOD013",
-                    "interactive local module loading is not available",
-                )
-                .with_primary(
-                    import.source.span(),
-                    "run the versioned module as a source file instead",
-                ));
-            };
-            let namespace = source
-                .slice(namespace.span())
-                .expect("standard namespace belongs to its source");
-            let standard = source
-                .slice(module.span())
-                .expect("standard module belongs to its source");
-            if !is_standard_module(namespace, standard) {
-                return Err(ModuleAliasError::UnknownStandard {
-                    module: entry.module().clone(),
-                    name: standard.to_owned(),
+            let (target, requested) = match import.source {
+                opaal_syntax::ModuleImportSource::Standard {
+                    namespace,
+                    module,
                     span,
+                } => {
+                    let namespace = source.slice(namespace.span()).unwrap();
+                    let standard = source.slice(module.span()).unwrap();
+                    if !is_standard_module(namespace, standard) {
+                        return Err(ModuleAliasError::UnknownStandard {
+                            module: entry.module().clone(),
+                            name: standard.to_owned(),
+                            span,
+                        }
+                        .diagnostic());
+                    }
+                    (ModuleId::standard(namespace, standard), None)
                 }
-                .diagnostic());
-            }
-            let target = ModuleId::standard(namespace, standard);
+                opaal_syntax::ModuleImportSource::Local { path } => {
+                    let Some(target) = local_imports.get(&path.start()) else {
+                        return Err(Diagnostic::new(Severity::Error, "MOD013",
+                            "interactive local module loading requires an explicit source capability")
+                            .with_primary(path, "no source loader was supplied"));
+                    };
+                    let quoted = source.slice(path).unwrap();
+                    (
+                        target.clone(),
+                        Some(PathBuf::from(&quoted[1..quoted.len() - 1])),
+                    )
+                }
+                opaal_syntax::ModuleImportSource::Project { span, .. } => {
+                    return Err(Diagnostic::new(
+                        Severity::Error,
+                        "MOD013",
+                        "project imports require a project",
+                    )
+                    .with_primary(span, "select an explicit project"));
+                }
+            };
             aliases
                 .by_module
                 .get_mut(entry.module())
@@ -3492,29 +4003,141 @@ impl RuntimeBindingTypes {
                         name: alias_name.clone(),
                         importer: entry.module().clone(),
                         target,
-                        requested: None,
+                        requested,
                         declaration_span: import.alias.span(),
                     },
                 );
             occupied.insert(alias_name);
         }
 
-        let control = AnalysisControl::never();
-        let names = ModuleNameRegistry::default();
+        let mut names = ModuleNameRegistry::default();
         let mut declarations = ModuleTypeRegistry::default();
-        declarations.by_module.insert(
-            entry.module().clone(),
-            TypeCollector::declarations(&entry, &control),
-        );
+        for program in programs {
+            names.by_module.extend(program.names.by_module.clone());
+            declarations
+                .by_module
+                .extend(program.types.by_module.clone());
+        }
+        let mut current = TypeCollector::declarations(&entry, control);
+        if let Some(inherited) = inherited
+            && let Some(nominals) = inherited.nominals_by_module.get(entry.module())
+        {
+            for (name, nominal) in nominals {
+                if current.nominals.contains_key(name) {
+                    return Err(Diagnostic::new(
+                        Severity::Error,
+                        "MOD011",
+                        format!("type `{name}` conflicts"),
+                    )
+                    .with_primary(script.span(), "a retained nominal type cannot be replaced"));
+                }
+                current.nominals.insert(name.clone(), nominal.clone());
+            }
+        }
+        declarations
+            .by_module
+            .insert(entry.module().clone(), current);
+        // List find returns the existing outcome nominal. Interactive type
+        // annotations, constructors and patterns must use that same schema.
+        let outcome = ModuleId::standard("std", "outcome");
+        if aliases
+            .aliases(entry.module())
+            .any(|alias| alias.target() == &outcome)
+            && !declarations.by_module.contains_key(&outcome)
+        {
+            let outcome_source = SourceFile::new(
+                SourceId::new(u32::MAX),
+                "std::outcome",
+                STANDARD_OUTCOME_MODULE,
+            );
+            let ControlledParseOutcome::Parsed(ParseOutcome::Complete(outcome_script)) =
+                parse_opaal_source(&outcome_source, &|| false)
+            else {
+                panic!("compiled outcome source must parse");
+            };
+            let outcome_entry = RegisteredModuleSource {
+                module: outcome.clone(),
+                source: outcome_source,
+                script: outcome_script,
+            };
+            declarations.by_module.insert(
+                outcome.clone(),
+                TypeCollector::declarations(&outcome_entry, control),
+            );
+            let (types, errors) =
+                TypeCollector::new(&outcome_entry, &aliases, &names, &declarations, control)
+                    .collect();
+            if control.is_cancelled() {
+                return Err(Diagnostic::new(
+                    Severity::Error,
+                    "RUN001",
+                    "interactive analysis did not complete",
+                )
+                .with_primary(
+                    script.span(),
+                    "analysis was cancelled or exceeded a resource limit",
+                ));
+            }
+            assert!(errors.is_empty(), "compiled outcome schemas must resolve");
+            // Type resolution checks exports as well as declarations. Retained
+            // aliases need the same visibility as an import in this submission.
+            let mut outcome_names = ModuleNames::default();
+            for statement in outcome_entry.script().statements() {
+                let StatementKind::ModuleExport(export) = statement.kind() else {
+                    continue;
+                };
+                for identifier in &export.names {
+                    let name = outcome_entry.source().slice(identifier.span()).unwrap();
+                    let nominal = &types.nominals[name];
+                    outcome_names.exports.insert(
+                        name.to_owned(),
+                        ModuleExport {
+                            name: name.to_owned(),
+                            declaration_span: nominal.declaration_span(),
+                            export_span: identifier.span(),
+                        },
+                    );
+                }
+            }
+            names.by_module.insert(outcome.clone(), outcome_names);
+            declarations.by_module.insert(outcome, types);
+        }
         let (types, errors) =
-            TypeCollector::new(&entry, &aliases, &names, &declarations, &control).collect();
+            TypeCollector::new(&entry, &aliases, &names, &declarations, control).collect();
+        if control.is_cancelled() {
+            return Err(Diagnostic::new(
+                Severity::Error,
+                "RUN001",
+                "interactive analysis did not complete",
+            )
+            .with_primary(
+                script.span(),
+                "analysis was cancelled or exceeded a resource limit",
+            ));
+        }
         if let Some(error) = errors.into_iter().next() {
             return Err(error.diagnostic());
         }
+        declarations
+            .by_module
+            .get_mut(entry.module())
+            .unwrap()
+            .nominals = types.nominals.clone();
+        let mut context =
+            inherited.map_or_else(RuntimeTypeContext::default, |types| types.context.clone());
+        context.programs = programs.to_vec();
+        context.cells.push(ReplTypeSource {
+            source: Arc::new(source.clone()),
+            local_imports: local_imports.clone(),
+            statement_count: script.statements().len(),
+            nominal_offsets: BTreeSet::new(),
+        });
         Ok(Self {
             by_source: BTreeMap::from([(source.id(), types.bindings)]),
             functions_by_source: BTreeMap::from([(source.id(), types.functions)]),
             annotations_by_source: BTreeMap::from([(source.id(), types.annotations)]),
+            nominal_references_by_source: BTreeMap::from([(source.id(), types.nominal_references)]),
+            operation_types_by_source: BTreeMap::new(),
             modules_by_source: BTreeMap::from([(source.id(), entry.module().clone())]),
             nominals_by_module: declarations
                 .by_module
@@ -3522,6 +4145,7 @@ impl RuntimeBindingTypes {
                 .map(|(module, types)| (module, types.nominals))
                 .collect(),
             aliases,
+            context,
         })
     }
 }
@@ -3530,6 +4154,7 @@ impl RuntimeBindingTypes {
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct ModuleTypeRegistry {
     by_module: BTreeMap<ModuleId, ModuleTypes>,
+    operation_types: BTreeMap<ModuleId, BTreeMap<usize, Vec<ValueType>>>,
 }
 
 impl ModuleTypeRegistry {
@@ -3657,9 +4282,13 @@ impl ModuleTypeRegistry {
             if control.is_cancelled() {
                 return Ok(registry);
             }
-            errors.extend(
-                SignatureValidator::new(entry, aliases, names, &registry, control).validate(),
-            );
+            let validator =
+                SignatureValidator::new(entry, sources, aliases, names, &registry, control);
+            let (source_errors, operations) = validator.validate();
+            errors.extend(source_errors);
+            registry
+                .operation_types
+                .insert(entry.module().clone(), operations);
         }
         let source_order = sources
             .entries()
@@ -4009,8 +4638,9 @@ impl<'a> TypeCollector<'a> {
                     declared_effects: Vec::new(),
                     downstream: crate::seam::DownstreamCallMetadata::foundation(),
                 });
+                let result = self.statements(&function.body.statements);
                 self.type_parameter_scopes.pop();
-                self.statements(&function.body.statements)
+                result
             }
             StatementKind::Action(action) => {
                 let signature_index = self.types.functions.len();
@@ -4570,10 +5200,13 @@ impl<'a> TypeCollector<'a> {
 
 struct SignatureValidator<'a> {
     entry: &'a RegisteredModuleSource,
+    sources: &'a ModuleSourceRegistry,
     aliases: &'a ModuleAliasRegistry,
     names: &'a ModuleNameRegistry,
     types: &'a ModuleTypeRegistry,
     inferred_bindings: RefCell<BTreeMap<(ModuleId, usize), ValueType>>,
+    callback_bindings: RefCell<BTreeMap<(ModuleId, usize), crate::operation::CallbackShape>>,
+    operation_types: RefCell<BTreeMap<usize, Vec<ValueType>>>,
     type_parameter_scopes: RefCell<Vec<BTreeMap<String, Vec<TypeConstraint>>>>,
     errors: RefCell<Vec<ModuleTypeError>>,
     control: &'a AnalysisControl,
@@ -4582,6 +5215,7 @@ struct SignatureValidator<'a> {
 impl<'a> SignatureValidator<'a> {
     fn new(
         entry: &'a RegisteredModuleSource,
+        sources: &'a ModuleSourceRegistry,
         aliases: &'a ModuleAliasRegistry,
         names: &'a ModuleNameRegistry,
         types: &'a ModuleTypeRegistry,
@@ -4589,20 +5223,23 @@ impl<'a> SignatureValidator<'a> {
     ) -> Self {
         Self {
             entry,
+            sources,
             aliases,
             names,
             types,
             inferred_bindings: RefCell::new(BTreeMap::new()),
+            callback_bindings: RefCell::new(BTreeMap::new()),
+            operation_types: RefCell::new(BTreeMap::new()),
             type_parameter_scopes: RefCell::new(Vec::new()),
             errors: RefCell::new(Vec::new()),
             control,
         }
     }
 
-    fn validate(self) -> Vec<ModuleTypeError> {
+    fn validate(self) -> (Vec<ModuleTypeError>, BTreeMap<usize, Vec<ValueType>>) {
         self.statements(self.entry.script().statements())
             .expect("accumulating signature validation does not fail fast");
-        self.errors.into_inner()
+        (self.errors.into_inner(), self.operation_types.into_inner())
     }
 
     fn statements(&self, statements: &[Statement]) -> Result<(), Box<ModuleTypeError>> {
@@ -4894,6 +5531,15 @@ impl<'a> SignatureValidator<'a> {
                         .map(ResolvedTypeAnnotation::value_type)
                 });
                 let actual = self.expression_with_expected(&declaration.value, expected)?;
+                if !declaration.mutable
+                    && matches!(declaration.pattern, Pattern::Binding(_))
+                    && let Some(shape) = self.callback_shape(&declaration.value)
+                {
+                    self.callback_bindings.borrow_mut().insert(
+                        (self.entry.module().clone(), declaration.name.span().start()),
+                        shape,
+                    );
+                }
                 if let Some(actual) = actual {
                     if actual != ValueType::Any
                         && let Some(expected) = expected
@@ -5206,6 +5852,15 @@ impl<'a> SignatureValidator<'a> {
                     });
                 return Ok(Some((stage.span(), ValueType::Any)));
             };
+            if !operation.supports_value_pipeline() {
+                self.errors
+                    .borrow_mut()
+                    .push(ModuleTypeError::InvalidOperationStage {
+                        module: self.entry.module().clone(),
+                        stage_span: stage.span(),
+                    });
+                return Ok(Some((stage.span(), ValueType::Any)));
+            }
             if !self.control.charge(
                 AnalysisLimitKind::OverloadCandidates,
                 operation.overloads().len() as u64,
@@ -5361,6 +6016,9 @@ impl<'a> SignatureValidator<'a> {
                 Ok(Some(ValueType::Closure))
             }
             ExpressionKind::GroupedJob(chain) => {
+                if let Some(expression) = single_value_expression(chain) {
+                    return self.expression_with_expected(expression, expected);
+                }
                 self.chain(chain)?;
                 Ok(None)
             }
@@ -6072,7 +6730,7 @@ impl<'a> SignatureValidator<'a> {
         if let ExpressionKind::Qualified(name) = call.callee.kind()
             && let Some(operation) = self.operation_for_qualified(name)
         {
-            return self.operation_call_type(&operation, call_span, call);
+            return self.operation_call_type(&operation, call_span, call, expected_result);
         }
         if let ExpressionKind::Qualified(name) = call.callee.kind()
             && let Some(unknown) = self.unknown_standard_operation(name)
@@ -6563,7 +7221,7 @@ impl<'a> SignatureValidator<'a> {
         matches!(
             owner.origin(),
             ModuleOrigin::Standard { namespace, module }
-                if namespace == "std" && module == "value"
+                if namespace == "std" && matches!(module.as_str(), "value" | "string" | "list" | "record" | "data")
         )
         .then(|| self.text(operation.span()).to_owned())
     }
@@ -6573,6 +7231,7 @@ impl<'a> SignatureValidator<'a> {
         operation: &OperationDescriptor,
         call_span: Span,
         call: &opaal_syntax::CallExpression,
+        expected_result: Option<&ValueType>,
     ) -> Result<Option<ValueType>, Box<ModuleTypeError>> {
         if !self.control.charge(
             AnalysisLimitKind::OverloadCandidates,
@@ -6585,14 +7244,9 @@ impl<'a> SignatureValidator<'a> {
             return Ok(None);
         }
         let overload = operation
-            .overloads()
-            .iter()
-            .find_map(|overload| match overload.input() {
-                OperationInputType::Value(input) => Some((input, overload.result())),
-                OperationInputType::ValueStream(_) => None,
-            })
+            .value_overload()
             .expect("a callable standard operation has a value overload");
-        if call.arguments.len() != 1 {
+        if call.arguments.len() != overload.parameters().len() {
             for argument in &call.arguments {
                 self.expression(argument)?;
             }
@@ -6602,7 +7256,7 @@ impl<'a> SignatureValidator<'a> {
                     module: self.entry.module().clone(),
                     name: operation.id().qualified_name(),
                     call_span,
-                    expected: 1,
+                    expected: overload.parameters().len(),
                     actual: call.arguments.len(),
                 });
             return Ok(Some(ValueType::Any));
@@ -6622,29 +7276,70 @@ impl<'a> SignatureValidator<'a> {
             return Ok(Some(ValueType::Any));
         }
         let mut substitutions = BTreeMap::new();
-        for (parameter, argument) in operation.type_parameters().iter().zip(&call.type_arguments) {
-            let actual = self
-                .types
-                .annotation(self.entry.module(), argument.span)
-                .map_or(ValueType::Any, |annotation| annotation.value_type().clone());
-            substitutions.insert(parameter.clone(), actual);
+        if call.type_arguments.is_empty() {
+            if let Some(expected) = expected_result {
+                unify_type(overload.result(), expected, &mut substitutions);
+            }
+        } else {
+            for (parameter, argument) in
+                operation.type_parameters().iter().zip(&call.type_arguments)
+            {
+                let actual = self
+                    .types
+                    .annotation(self.entry.module(), argument.span)
+                    .map_or(ValueType::Any, |annotation| annotation.value_type().clone());
+                substitutions.insert(parameter.clone(), actual);
+            }
         }
-        let expected = substitute_type(overload.0, &substitutions);
-        let actual = self.expression_with_expected(&call.arguments[0], Some(&expected))?;
-        if call.type_arguments.is_empty()
-            && let Some(actual) = actual.as_ref()
-            && !unify_type(overload.0, actual, &mut substitutions)
-        {
-            self.errors
-                .borrow_mut()
-                .push(ModuleTypeError::OperationArgumentMismatch {
-                    module: self.entry.module().clone(),
-                    name: operation.id().qualified_name(),
-                    argument_span: call.arguments[0].span(),
-                    expected: overload.0.clone(),
-                    actual: actual.clone(),
-                });
-            return Ok(Some(ValueType::Any));
+        let mut actuals = Vec::new();
+        let mut callbacks = Vec::new();
+        for (argument, parameter) in call.arguments.iter().zip(overload.parameters()) {
+            let OperationInputType::Value(input) = parameter.input() else {
+                unreachable!("value call parameters have value carriers")
+            };
+            let expected = substitute_type(input, &substitutions);
+            let expected =
+                (!has_unbound_type_parameters(input, &substitutions)).then_some(&expected);
+            let actual = self.operation_argument_type(argument, expected)?;
+            if let Some(relation) = parameter.callback() {
+                let shape = self.callback_shape(argument);
+                if let Some(shape) = &shape {
+                    if call.type_arguments.is_empty()
+                        && let Err(message) = shape.infer_operation(relation, &mut substitutions)
+                    {
+                        self.callback_error(operation, argument.span(), message);
+                        return Ok(Some(ValueType::Any));
+                    }
+                } else if let Some(actual) = &actual
+                    && !matches!(
+                        actual,
+                        ValueType::Any | ValueType::Function | ValueType::Closure
+                    )
+                {
+                    self.callback_error(
+                        operation,
+                        argument.span(),
+                        format!("expected function or closure, found `{actual}`"),
+                    );
+                    return Ok(Some(ValueType::Any));
+                }
+                callbacks.push((argument.span(), relation, shape));
+            } else if call.type_arguments.is_empty()
+                && let Some(actual) = actual.as_ref()
+                && !unify_type(input, actual, &mut substitutions)
+            {
+                self.errors
+                    .borrow_mut()
+                    .push(ModuleTypeError::OperationArgumentMismatch {
+                        module: self.entry.module().clone(),
+                        name: operation.id().qualified_name(),
+                        argument_span: argument.span(),
+                        expected: input.clone(),
+                        actual: actual.clone(),
+                    });
+                return Ok(Some(ValueType::Any));
+            }
+            actuals.push(actual);
         }
         for parameter in operation.type_parameters() {
             if !substitutions.contains_key(parameter) {
@@ -6659,24 +7354,261 @@ impl<'a> SignatureValidator<'a> {
                 return Ok(Some(ValueType::Any));
             }
         }
-        if let Some(actual) = actual
-            && actual != ValueType::Any
-        {
-            let expected = substitute_type(overload.0, &substitutions);
-            if !expected.accepts_type(&actual) {
-                self.errors
-                    .borrow_mut()
-                    .push(ModuleTypeError::OperationArgumentMismatch {
-                        module: self.entry.module().clone(),
-                        name: operation.id().qualified_name(),
-                        argument_span: call.arguments[0].span(),
-                        expected,
-                        actual,
-                    });
-                return Ok(Some(ValueType::Any));
+        for (span, relation, shape) in callbacks {
+            if let Some(shape) = shape {
+                if !shape.generics.is_empty()
+                    && !self
+                        .control
+                        .charge(AnalysisLimitKind::GenericInstantiations, 1)
+                {
+                    return Ok(None);
+                }
+                if let Err(message) =
+                    shape.instantiate(relation, &substitutions, |actual, constraint| {
+                        self.type_satisfies_constraint(actual, constraint)
+                    })
+                {
+                    self.callback_error(operation, span, message);
+                    return Ok(Some(ValueType::Any));
+                }
             }
         }
-        Ok(Some(substitute_type(overload.1, &substitutions)))
+        for name in operation.type_parameters() {
+            for constraint in operation.type_parameter_constraints(name) {
+                if !self.type_satisfies_constraint(&substitutions[name], *constraint) {
+                    self.callback_error(
+                        operation,
+                        call_span,
+                        format!(
+                            "type `{}` fails Ordered constraint for `{name}`",
+                            substitutions[name]
+                        ),
+                    );
+                    return Ok(Some(ValueType::Any));
+                }
+            }
+        }
+        for ((argument, parameter), actual) in call
+            .arguments
+            .iter()
+            .zip(overload.parameters())
+            .zip(actuals)
+        {
+            if parameter.callback().is_some() {
+                continue;
+            }
+            let OperationInputType::Value(input) = parameter.input() else {
+                unreachable!("value parameter")
+            };
+            if let Some(actual) = actual
+                && actual != ValueType::Any
+            {
+                let expected = substitute_type(input, &substitutions);
+                if !expected.accepts_type(&actual) {
+                    self.errors
+                        .borrow_mut()
+                        .push(ModuleTypeError::OperationArgumentMismatch {
+                            module: self.entry.module().clone(),
+                            name: operation.id().qualified_name(),
+                            argument_span: argument.span(),
+                            expected,
+                            actual,
+                        });
+                    return Ok(Some(ValueType::Any));
+                }
+            }
+        }
+        self.operation_types.borrow_mut().insert(
+            call_span.start(),
+            operation
+                .type_parameters()
+                .iter()
+                .map(|parameter| substitutions[parameter].clone())
+                .collect(),
+        );
+        Ok(Some(substitute_type(overload.result(), &substitutions)))
+    }
+
+    /// Operation inference respects declared dynamic types even when a literal
+    /// initializer supplies a more specific type for other source analyses.
+    fn operation_argument_type(
+        &self,
+        expression: &Expression,
+        expected: Option<&ValueType>,
+    ) -> Result<Option<ValueType>, Box<ModuleTypeError>> {
+        if self.control.is_cancelled() {
+            return Ok(None);
+        }
+        match expression.kind() {
+            ExpressionKind::Name(_) => {
+                let declared = self
+                    .names
+                    .reference(self.entry.module(), expression.span())
+                    .and_then(|reference| match reference.target() {
+                        ModuleReferenceTarget::Local {
+                            module,
+                            declaration_span,
+                        } => self.types.binding_type(module, *declaration_span),
+                        ModuleReferenceTarget::Imported {
+                            target_module,
+                            declaration_span,
+                            ..
+                        } => self.types.binding_type(target_module, *declaration_span),
+                        _ => None,
+                    });
+                if let Some(declared) = declared {
+                    return Ok(Some(declared.clone()));
+                }
+            }
+            ExpressionKind::List(elements) => {
+                let expected_element = match expected {
+                    Some(ValueType::List(element)) => Some(element.as_ref()),
+                    _ => None,
+                };
+                let mut element_type = None;
+                for element in elements {
+                    let Some(current) = self.operation_argument_type(element, expected_element)?
+                    else {
+                        return Ok(None);
+                    };
+                    if element_type
+                        .as_ref()
+                        .is_some_and(|previous| previous != &current)
+                    {
+                        return Ok(None);
+                    }
+                    element_type = Some(current);
+                }
+                return Ok(element_type.map(|element| ValueType::List(Box::new(element))));
+            }
+            ExpressionKind::Index(index) => {
+                let target = self.operation_argument_type(&index.target, None)?;
+                let position = self.expression(&index.index)?;
+                return Ok(match (target, position) {
+                    (Some(ValueType::List(element)), Some(ValueType::Int)) => Some(*element),
+                    (Some(ValueType::String), Some(ValueType::Int)) => Some(ValueType::String),
+                    _ => None,
+                });
+            }
+            ExpressionKind::GroupedJob(chain) => {
+                if let Some(inner) = single_value_expression(chain) {
+                    return self.operation_argument_type(inner, expected);
+                }
+            }
+            _ => {}
+        }
+        self.expression_with_expected(expression, expected)
+    }
+
+    fn callback_error(
+        &self,
+        operation: &OperationDescriptor,
+        argument_span: Span,
+        message: String,
+    ) {
+        self.errors
+            .borrow_mut()
+            .push(ModuleTypeError::OperationCallbackMismatch {
+                module: self.entry.module().clone(),
+                name: operation.id().qualified_name(),
+                argument_span,
+                message,
+            });
+    }
+
+    fn callback_shape(&self, expression: &Expression) -> Option<crate::operation::CallbackShape> {
+        use crate::operation::CallbackShape;
+        let mut expression = expression;
+        let mut owner = self.entry.module();
+        let mut visited = BTreeSet::new();
+        loop {
+            if self.control.is_cancelled() {
+                return None;
+            }
+            let signature = match expression.kind() {
+                ExpressionKind::Closure(closure) => {
+                    let resolve = |annotation: Option<&opaal_syntax::TypeReference>| {
+                        annotation
+                            .and_then(|annotation| self.types.annotation(owner, annotation.span))
+                            .map_or(ValueType::Any, |annotation| annotation.value_type().clone())
+                    };
+                    return Some(CallbackShape {
+                        action: false,
+                        generics: Vec::new(),
+                        parameters: closure
+                            .parameters
+                            .iter()
+                            .map(|parameter| resolve(parameter.type_annotation.as_ref()))
+                            .collect(),
+                        result: resolve(closure.result_type.as_ref()),
+                    });
+                }
+                ExpressionKind::Qualified(_) | ExpressionKind::Name(_) => {
+                    let reference = self.names.reference(owner, expression.span())?;
+                    let (module, span) = match reference.target() {
+                        ModuleReferenceTarget::Local {
+                            module,
+                            declaration_span,
+                        } => (module, *declaration_span),
+                        ModuleReferenceTarget::Imported {
+                            target_module,
+                            declaration_span,
+                            ..
+                        } => (target_module, *declaration_span),
+                        _ => return None,
+                    };
+                    if let Some(shape) = self
+                        .callback_bindings
+                        .borrow()
+                        .get(&(module.clone(), span.start()))
+                    {
+                        return Some(shape.clone());
+                    }
+                    if let Some(signature) = self.types.function(module, span) {
+                        signature
+                    } else {
+                        if !visited.insert((module.clone(), span.start())) {
+                            return None;
+                        }
+                        let declaration =
+                            self.sources.script(module)?.statements().iter().find_map(
+                                |statement| {
+                                    if self.control.is_cancelled() {
+                                        return None;
+                                    }
+                                    match statement.kind() {
+                                        StatementKind::Declaration(declaration)
+                                            if !declaration.mutable
+                                                && matches!(
+                                                    declaration.pattern,
+                                                    Pattern::Binding(_)
+                                                )
+                                                && declaration.name.span() == span =>
+                                        {
+                                            Some(declaration)
+                                        }
+                                        _ => None,
+                                    }
+                                },
+                            )?;
+                        owner = module;
+                        expression = &declaration.value;
+                        continue;
+                    }
+                }
+                _ => return None,
+            };
+            return Some(CallbackShape {
+                action: signature.kind() == CallableKind::Action,
+                generics: signature.type_parameters().to_vec(),
+                parameters: signature
+                    .parameters()
+                    .iter()
+                    .map(|parameter| parameter.value_type().clone())
+                    .collect(),
+                result: signature.result().clone(),
+            });
+        }
     }
 
     fn nominal_for_qualified_prefix(
@@ -9258,7 +10190,7 @@ pub struct ModuleProgramLoadError {
 }
 
 impl ModuleProgramLoadError {
-    fn new(error: ModuleProgramError, sources: &[ModuleAnalysisSource]) -> Self {
+    pub(crate) fn new(error: ModuleProgramError, sources: &[ModuleAnalysisSource]) -> Self {
         let diagnostics = error.diagnostics();
         let available = sources
             .iter()
@@ -9385,10 +10317,19 @@ impl ModuleProgram {
     }
 
     pub(crate) fn runtime_binding_types(&self) -> RuntimeBindingTypes {
+        self.runtime_binding_types_in_context(vec![Arc::new(self.clone())])
+    }
+
+    pub(crate) fn runtime_binding_types_in_context(
+        &self,
+        programs: Vec<Arc<ModuleProgram>>,
+    ) -> RuntimeBindingTypes {
         let mut by_source = BTreeMap::new();
         let mut functions_by_source = BTreeMap::new();
         let mut annotations_by_source = BTreeMap::new();
+        let mut nominal_references_by_source = BTreeMap::new();
         let mut modules_by_source = BTreeMap::new();
+        let mut operation_types_by_source = BTreeMap::new();
         for entry in self.sources.entries() {
             let types = self.types.by_module.get(entry.module());
             by_source.insert(
@@ -9403,12 +10344,26 @@ impl ModuleProgram {
                 entry.source().id(),
                 types.map_or_else(Vec::new, |types| types.annotations.clone()),
             );
+            nominal_references_by_source.insert(
+                entry.source().id(),
+                types.map_or_else(Vec::new, |types| types.nominal_references.clone()),
+            );
+            operation_types_by_source.insert(
+                entry.source().id(),
+                self.types
+                    .operation_types
+                    .get(entry.module())
+                    .cloned()
+                    .unwrap_or_default(),
+            );
             modules_by_source.insert(entry.source().id(), entry.module().clone());
         }
         RuntimeBindingTypes {
             by_source,
             functions_by_source,
             annotations_by_source,
+            nominal_references_by_source,
+            operation_types_by_source,
             modules_by_source,
             nominals_by_module: self
                 .types
@@ -9417,6 +10372,10 @@ impl ModuleProgram {
                 .map(|(module, types)| (module.clone(), types.nominals.clone()))
                 .collect(),
             aliases: self.aliases.clone(),
+            context: RuntimeTypeContext {
+                programs,
+                cells: Vec::new(),
+            },
         }
     }
 }
@@ -9426,6 +10385,8 @@ pub struct ModuleProgramLoader<'a> {
     resolver: ModuleResolver<'a>,
     source_loader: &'a dyn ModuleSourceLoader,
     allow_project: bool,
+    source_ids: BTreeMap<ModuleId, SourceId>,
+    source_id_start: u32,
 }
 
 enum PendingModuleImport {
@@ -9448,7 +10409,7 @@ enum PendingModuleImport {
 impl<'a> ModuleProgramLoader<'a> {
     /// Creates a program loader over injected path and source capabilities.
     #[must_use]
-    pub const fn new(
+    pub fn new(
         canonicalizer: &'a dyn ModuleCanonicalizer,
         source_loader: &'a dyn ModuleSourceLoader,
     ) -> Self {
@@ -9456,12 +10417,14 @@ impl<'a> ModuleProgramLoader<'a> {
             resolver: ModuleResolver::new(canonicalizer),
             source_loader,
             allow_project: false,
+            source_ids: BTreeMap::new(),
+            source_id_start: 0,
         }
     }
 
     /// Creates a loader for an explicitly selected, already validated project.
     #[must_use]
-    pub(crate) const fn for_project(
+    pub(crate) fn for_project(
         canonicalizer: &'a dyn ModuleCanonicalizer,
         source_loader: &'a dyn ModuleSourceLoader,
     ) -> Self {
@@ -9469,7 +10432,19 @@ impl<'a> ModuleProgramLoader<'a> {
             resolver: ModuleResolver::new(canonicalizer),
             source_loader,
             allow_project: true,
+            source_ids: BTreeMap::new(),
+            source_id_start: 0,
         }
+    }
+
+    pub(crate) fn with_source_ids(
+        mut self,
+        source_ids: BTreeMap<ModuleId, SourceId>,
+        start: u32,
+    ) -> Self {
+        self.source_ids = source_ids;
+        self.source_id_start = start;
+        self
     }
 
     /// Loads one root and every reachable static import without executing any
@@ -9972,9 +10947,18 @@ impl<'a> ModuleProgramLoader<'a> {
         if control.is_cancelled() {
             return;
         }
-        let source_id = match u32::try_from(retained.len()) {
-            Ok(id) => SourceId::new(id),
-            Err(_) => {
+        let allocated = retained
+            .iter()
+            .filter(|entry| !self.source_ids.contains_key(entry.module()))
+            .count();
+        let source_id = match self.source_ids.get(&module).copied().or_else(|| {
+            u32::try_from(allocated)
+                .ok()
+                .and_then(|offset| self.source_id_start.checked_add(offset))
+                .map(SourceId::new)
+        }) {
+            Some(id) => id,
+            None => {
                 issues.push(ModuleAnalysisIssue::new(
                     ModuleProgramError::SourceIdentityExhausted,
                 ));
@@ -10228,12 +11212,6 @@ enum Option[T] {
 }
 "#;
 
-const STANDARD_DATA_MODULE: &str = r#"export { toml_decode, get, json_encode }
-def toml_decode(input: Bytes) -> Any { throw "controlled operation unavailable" }
-def get(input: Any, keys: List[String]) -> Any { throw "controlled operation unavailable" }
-def json_encode(input: Any) -> Bytes { throw "controlled operation unavailable" }
-"#;
-
 const STANDARD_PATH_MODULE: &str = r#"export { normalize, join, contained }
 def normalize(input: Path) -> Path { throw "controlled operation unavailable" }
 def join(root: Path, child: String) -> Path { throw "controlled operation unavailable" }
@@ -10292,7 +11270,6 @@ fn standard_module_source(module: &ModuleId) -> Option<&'static str> {
     }
     match module.as_str() {
         "outcome" => Some(STANDARD_OUTCOME_MODULE),
-        "data" => Some(STANDARD_DATA_MODULE),
         "path" => Some(STANDARD_PATH_MODULE),
         "filesystem" => Some(STANDARD_FILESYSTEM_MODULE),
         "time" => Some(STANDARD_TIME_MODULE),
@@ -10310,6 +11287,9 @@ fn is_standard_module(namespace: &str, module: &str) -> bool {
         && matches!(
             module,
             "value"
+                | "string"
+                | "list"
+                | "record"
                 | "outcome"
                 | "data"
                 | "path"
@@ -11035,6 +12015,12 @@ pub enum ModuleTypeError {
         expected: &'static str,
         actual: ValueType,
     },
+    OperationCallbackMismatch {
+        module: ModuleId,
+        name: String,
+        argument_span: Span,
+        message: String,
+    },
     OperationArgumentMismatch {
         module: ModuleId,
         name: String,
@@ -11160,6 +12146,7 @@ impl ModuleTypeError {
             | Self::UnknownNominalField { module, .. }
             | Self::MissingNominalField { module, .. }
             | Self::IntrinsicArgumentMismatch { module, .. }
+            | Self::OperationCallbackMismatch { module, .. }
             | Self::OperationArgumentMismatch { module, .. }
             | Self::InvalidOperationStage { module, .. }
             | Self::UnknownOperation { module, .. }
@@ -11190,6 +12177,7 @@ impl ModuleTypeError {
             | Self::OperationGenericArity { call_span, .. } => *call_span,
             Self::ArgumentMismatch { argument_span, .. }
             | Self::IntrinsicArgumentMismatch { argument_span, .. }
+            | Self::OperationCallbackMismatch { argument_span, .. }
             | Self::OperationArgumentMismatch { argument_span, .. } => *argument_span,
             Self::InvalidOperationStage { stage_span, .. } => *stage_span,
             Self::UnknownOperation { span, .. } => *span,
@@ -11326,6 +12314,12 @@ impl ModuleTypeError {
                 *argument_span,
                 format!("this argument is `{actual}`, expected `{expected}`"),
             ),
+            Self::OperationCallbackMismatch {
+                argument_span,
+                message,
+                ..
+            } => Diagnostic::new(Severity::Error, "OPR003", self.to_string())
+                .with_primary(*argument_span, message),
             Self::OperationArgumentMismatch {
                 argument_span,
                 expected,
@@ -11599,6 +12593,16 @@ impl fmt::Display for ModuleTypeError {
             } => write!(
                 formatter,
                 "module `{}` passes `{actual}` to intrinsic `{name}`; expected `{expected}`",
+                module.path().display()
+            ),
+            Self::OperationCallbackMismatch {
+                module,
+                name,
+                message,
+                ..
+            } => write!(
+                formatter,
+                "module `{}` passes an invalid callback to `{name}`: {message}",
                 module.path().display()
             ),
             Self::OperationArgumentMismatch {

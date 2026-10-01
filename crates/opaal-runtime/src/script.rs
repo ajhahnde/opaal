@@ -643,7 +643,7 @@ pub fn execute_module_program(
     }
 }
 
-fn declare_qualified_alias_values(
+pub(crate) fn declare_qualified_alias_values(
     scope: &mut ScopeStack,
     program: &ModuleProgram,
     instances: &BTreeMap<ModuleId, BTreeMap<String, Value>>,
@@ -672,7 +672,7 @@ fn declare_qualified_alias_values(
     }
 }
 
-fn module_initialization_order(program: &ModuleProgram) -> Vec<ModuleId> {
+pub(crate) fn module_initialization_order(program: &ModuleProgram) -> Vec<ModuleId> {
     fn visit(
         program: &ModuleProgram,
         module: &ModuleId,

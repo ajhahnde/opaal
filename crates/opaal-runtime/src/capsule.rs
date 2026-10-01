@@ -14,19 +14,24 @@ use opaal_syntax::{SourceFile, SourceId};
 use crate::builtin::SessionState;
 use crate::eval::{
     CallFrame, CallableSnapshot, ErrorCategory, ErrorLabel, FrameCallee, RuntimeErrorSnapshot,
-    restore_callable, restore_runtime_error, snapshot_callable, snapshot_runtime_error,
+    callable_binding_types, restore_callable, restore_runtime_error, snapshot_callable,
+    snapshot_runtime_error,
 };
-use crate::module::ValueType;
+use crate::module::{
+    AnalysisLimitKind, AnalysisLimits, ModuleCanonicalizer, ModuleId, ModuleOrigin,
+    ModulePathError, ModuleProgramLoader, ModuleSourceError, ModuleSourceLoader, NominalTypeId,
+    ReplTypeSource, RuntimeBindingTypes, RuntimeTypeContext, ValueType,
+};
 use crate::plan::SessionOptions;
 use crate::scope::CapsuleBinding;
 use crate::{
-    BindingMutability, ByteSize, Duration, Environment, FiniteFloat, NativePath, Range, Record,
-    ScopeStack, Signal, Status, Table, Value,
+    BindingMutability, ByteSize, Duration, Environment, FiniteFloat, NativePath,
+    NominalRecordValue, Range, Record, ScopeStack, Signal, Status, Table, Value, VariantValue,
 };
 
 const MAGIC: &[u8; 8] = b"OPAALCAP";
 const COMPLETION_MAGIC: &[u8; 8] = b"OPAALEND";
-const VERSION: u16 = 2;
+const VERSION: u16 = 4;
 const MAX_CAPSULE_DEPTH: usize = 64;
 const MAX_CAPSULE_ITEMS: usize = 1_000_000;
 pub const MAX_CAPSULE_BYTES: usize = 16 * 1024 * 1024;
@@ -173,6 +178,7 @@ pub fn encode_background_capsule(
 ) -> Result<Vec<u8>, CapsuleError> {
     let mut callables = CallableTable::default();
     callables.collect_scope(scope)?;
+    validate_nominal_scopes(&[scope], &callables.types, &callables.snapshots)?;
 
     let mut payload = Encoder::default();
     payload.string(name)?;
@@ -253,10 +259,12 @@ pub fn decode_background_capsule(bytes: &[u8]) -> Result<BackgroundCapsule, Caps
     let mut callables = Vec::with_capacity(callable_count);
     for _ in 0..callable_count {
         let snapshot = decode_callable(&mut wire, &callables)?;
-        let callable = restore_callable(snapshot).map_err(CapsuleError::new)?;
+        let callable = restore_callable(snapshot, &mut wire.analysis_work_remaining)
+            .map_err(CapsuleError::new)?;
         callables.push(callable);
     }
     let scope = decode_scope(&mut wire, &callables)?;
+    validate_decoded_nominals(&[&scope], &callables)?;
     if wire.remaining() != 0 {
         return Err(CapsuleError::new("execution capsule has trailing bytes"));
     }
@@ -279,6 +287,11 @@ pub fn encode_supervisor_completion(
     let mut callables = CallableTable::default();
     callables.collect_scope(&completion.base_scope)?;
     callables.collect_scope(&completion.updated_scope)?;
+    validate_nominal_scopes(
+        &[&completion.base_scope, &completion.updated_scope],
+        &callables.types,
+        &callables.snapshots,
+    )?;
     let mut payload = Encoder::default();
     match completion.outcome {
         SupervisorOutcome::Continued => payload.u8(0),
@@ -322,10 +335,14 @@ pub fn decode_supervisor_completion(bytes: &[u8]) -> Result<SupervisorCompletion
     let mut callables = Vec::with_capacity(callable_count);
     for _ in 0..callable_count {
         let snapshot = decode_callable(&mut wire, &callables)?;
-        callables.push(restore_callable(snapshot).map_err(CapsuleError::new)?);
+        callables.push(
+            restore_callable(snapshot, &mut wire.analysis_work_remaining)
+                .map_err(CapsuleError::new)?,
+        );
     }
     let base_scope = decode_scope(&mut wire, &callables)?;
     let updated_scope = decode_scope(&mut wire, &callables)?;
+    validate_decoded_nominals(&[&base_scope, &updated_scope], &callables)?;
     let base_state = decode_session_state(&mut wire)?;
     let updated_state = decode_session_state(&mut wire)?;
     if wire.remaining() != 0 {
@@ -412,6 +429,7 @@ struct CallableTable {
     ids: BTreeMap<usize, u32>,
     visiting: BTreeSet<usize>,
     snapshots: Vec<CallableSnapshot>,
+    types: Vec<Arc<RuntimeBindingTypes>>,
     items: usize,
 }
 
@@ -440,6 +458,16 @@ impl CallableTable {
             }
             Value::Record(record) => {
                 for (_, value) in record.entries() {
+                    self.collect_value(value, depth + 1)?;
+                }
+            }
+            Value::NominalRecord(record) => {
+                for (_, value) in record.fields() {
+                    self.collect_value(value, depth + 1)?;
+                }
+            }
+            Value::Variant(variant) => {
+                for value in variant.payload() {
                     self.collect_value(value, depth + 1)?;
                 }
             }
@@ -476,9 +504,243 @@ impl CallableTable {
         let id = u32::try_from(self.snapshots.len())
             .map_err(|_| CapsuleError::new("execution capsule has too many callables"))?;
         self.ids.insert(key, id);
+        self.types.push(
+            callable_binding_types(callable)
+                .ok_or_else(|| CapsuleError::new("opaque callable type context"))?,
+        );
         self.snapshots.push(snapshot);
         Ok(())
     }
+}
+
+fn validate_decoded_nominals(
+    scopes: &[&ScopeStack],
+    callables: &[Arc<dyn crate::Callable>],
+) -> Result<(), CapsuleError> {
+    let types = callables
+        .iter()
+        .filter_map(callable_binding_types)
+        .collect::<Vec<_>>();
+    let snapshots = callables
+        .iter()
+        .filter_map(snapshot_callable)
+        .collect::<Vec<_>>();
+    validate_nominal_scopes(scopes, &types, &snapshots)
+}
+
+fn validate_nominal_scopes(
+    scopes: &[&ScopeStack],
+    types: &[Arc<RuntimeBindingTypes>],
+    snapshots: &[CallableSnapshot],
+) -> Result<(), CapsuleError> {
+    fn concrete_type(
+        value_type: &ValueType,
+        types: &[Arc<RuntimeBindingTypes>],
+        remaining: &mut usize,
+        depth: usize,
+    ) -> Result<(), CapsuleError> {
+        *remaining = remaining
+            .checked_sub(1)
+            .ok_or_else(|| CapsuleError::new("nominal validation exceeds its type limit"))?;
+        if depth > MAX_CAPSULE_DEPTH {
+            return Err(CapsuleError::new("nominal type nesting is too deep"));
+        }
+        match value_type {
+            ValueType::TypeParameter(_) => {
+                return Err(CapsuleError::new(
+                    "nominal value has an unresolved type argument",
+                ));
+            }
+            ValueType::List(element) => concrete_type(element, types, remaining, depth + 1)?,
+            ValueType::Nominal { id, arguments } => {
+                *remaining = remaining.checked_sub(types.len()).ok_or_else(|| {
+                    CapsuleError::new("nominal validation exceeds its work limit")
+                })?;
+                if crate::module::is_opaque_operational_nominal(id)
+                    || !types.iter().any(|types| {
+                        types.nominal_by_id(id).is_some_and(|nominal| {
+                            nominal.type_parameters().len() == arguments.len()
+                        })
+                    })
+                {
+                    return Err(CapsuleError::new(
+                        "nominal type argument has no retained schema",
+                    ));
+                }
+                for argument in arguments {
+                    concrete_type(argument, types, remaining, depth + 1)?;
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+    fn value(
+        value: &Value,
+        types: &[Arc<RuntimeBindingTypes>],
+        remaining: &mut usize,
+        depth: usize,
+    ) -> Result<(), CapsuleError> {
+        *remaining = remaining
+            .checked_sub(1)
+            .ok_or_else(|| CapsuleError::new("nominal validation exceeds its value limit"))?;
+        if depth > MAX_CAPSULE_DEPTH {
+            return Err(CapsuleError::new("nominal validation nesting is too deep"));
+        }
+        let nominal = match value {
+            Value::NominalRecord(record) => Some((record.id(), record.type_arguments())),
+            Value::Variant(variant) => Some((variant.id(), variant.type_arguments())),
+            _ => None,
+        };
+        if let Some((id, arguments)) = nominal {
+            if crate::module::is_opaque_operational_nominal(id) {
+                return Err(CapsuleError::new(
+                    "control carriers cannot cross the execution capsule",
+                ));
+            }
+            for argument in arguments {
+                concrete_type(argument, types, remaining, 0)?;
+            }
+            *remaining = remaining
+                .checked_sub(types.len())
+                .ok_or_else(|| CapsuleError::new("nominal validation exceeds its work limit"))?;
+            let schemas = types
+                .iter()
+                .filter_map(|types| types.nominal_by_id(id))
+                .collect::<Vec<_>>();
+            if schemas.is_empty() {
+                return Err(CapsuleError::new("nominal value has no retained schema"));
+            }
+            for schema in schemas {
+                *remaining = remaining
+                    .checked_sub(
+                        schema.fields().len()
+                            + schema.variants().len()
+                            + schema.type_parameters().len(),
+                    )
+                    .ok_or_else(|| {
+                        CapsuleError::new("nominal validation exceeds its work limit")
+                    })?;
+                if schema.type_parameters().len() != arguments.len() {
+                    return Err(CapsuleError::new("invalid nominal type argument count"));
+                }
+                let substitutions = schema
+                    .type_parameters()
+                    .iter()
+                    .zip(arguments)
+                    .map(|(parameter, argument)| (parameter.name().to_owned(), argument.clone()))
+                    .collect::<BTreeMap<_, _>>();
+                for (parameter, argument) in schema.type_parameters().iter().zip(arguments) {
+                    for constraint in parameter.constraints() {
+                        if !types
+                            .iter()
+                            .any(|types| types.type_satisfies_constraint(argument, *constraint))
+                        {
+                            return Err(CapsuleError::new(
+                                "invalid nominal type argument constraint",
+                            ));
+                        }
+                    }
+                }
+                let valid = match value {
+                    Value::NominalRecord(record) => {
+                        let fields = record
+                            .fields()
+                            .iter()
+                            .map(|(name, value)| (name.as_ref(), value))
+                            .collect::<BTreeMap<_, _>>();
+                        schema.kind() == crate::module::NominalTypeKind::Record
+                            && record.fields().len() == schema.fields().len()
+                            && fields.len() == record.fields().len()
+                            && schema.fields().iter().all(|field| {
+                                fields.get(field.name()).is_some_and(|value| {
+                                    crate::module::substitute_type(
+                                        field.value_type(),
+                                        &substitutions,
+                                    )
+                                    .accepts(value)
+                                })
+                            })
+                    }
+                    Value::Variant(variant) => {
+                        schema.kind() == crate::module::NominalTypeKind::Variant
+                            && schema
+                                .variants()
+                                .iter()
+                                .find(|constructor| constructor.name() == variant.constructor())
+                                .is_some_and(|constructor| {
+                                    constructor.payload().len() == variant.payload().len()
+                                        && constructor.payload().iter().zip(variant.payload()).all(
+                                            |(expected, value)| {
+                                                crate::module::substitute_type(
+                                                    expected,
+                                                    &substitutions,
+                                                )
+                                                .accepts(value)
+                                            },
+                                        )
+                                })
+                    }
+                    _ => unreachable!(),
+                };
+                if !valid {
+                    return Err(CapsuleError::new(
+                        "nominal value does not match its retained schema",
+                    ));
+                }
+            }
+        }
+        match value {
+            Value::List(values) => {
+                for child in values.iter() {
+                    value_child(child, types, remaining, depth)?;
+                }
+            }
+            Value::Record(record) => {
+                for (_, child) in record.entries() {
+                    value_child(child, types, remaining, depth)?;
+                }
+            }
+            Value::Table(table) => {
+                for row in table.rows() {
+                    for child in row.iter() {
+                        value_child(child, types, remaining, depth)?;
+                    }
+                }
+            }
+            Value::NominalRecord(record) => {
+                for (_, child) in record.fields() {
+                    value_child(child, types, remaining, depth)?;
+                }
+            }
+            Value::Variant(variant) => {
+                for child in variant.payload() {
+                    value_child(child, types, remaining, depth)?;
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+    fn value_child(
+        child: &Value,
+        types: &[Arc<RuntimeBindingTypes>],
+        remaining: &mut usize,
+        depth: usize,
+    ) -> Result<(), CapsuleError> {
+        value(child, types, remaining, depth + 1)
+    }
+    let mut remaining = MAX_CAPSULE_ITEMS;
+    for scope in scopes
+        .iter()
+        .copied()
+        .chain(snapshots.iter().map(|snapshot| &snapshot.captured))
+    {
+        for child in scope.values() {
+            value(child, types, &mut remaining, 0)?;
+        }
+    }
+    Ok(())
 }
 
 fn encode_callable(
@@ -507,6 +769,12 @@ fn encode_callable(
     encoder.u32(snapshot.origin_span.source_id().get());
     encoder.usize(snapshot.origin_span.start())?;
     encoder.usize(snapshot.origin_span.end())?;
+    encoder.usize(snapshot.captured_type_arguments.len())?;
+    for (name, value_type) in &snapshot.captured_type_arguments {
+        encoder.string(name)?;
+        encode_value_type(encoder, value_type)?;
+    }
+    encode_type_context(encoder, &snapshot.type_context)?;
     Ok(())
 }
 
@@ -541,6 +809,15 @@ fn decode_callable(
     let origin_span = source
         .span(ByteRange { start, end })
         .map_err(|error| CapsuleError::new(format!("invalid callable origin span: {error}")))?;
+    let type_argument_count = decoder.collection_len()?;
+    let mut captured_type_arguments = BTreeMap::new();
+    for _ in 0..type_argument_count {
+        let name = decoder.string()?;
+        let value_type = decode_value_type(decoder, 0)?;
+        if captured_type_arguments.insert(name, value_type).is_some() {
+            return Err(CapsuleError::new("duplicate captured type parameter"));
+        }
+    }
     Ok(CallableSnapshot {
         name,
         parameters,
@@ -549,7 +826,228 @@ fn decode_callable(
         result_type,
         location,
         origin_span,
+        captured_type_arguments,
+        type_context: decode_type_context(decoder)?,
     })
+}
+
+fn encode_module_id(encoder: &mut Encoder, module: &ModuleId) -> Result<(), CapsuleError> {
+    match module.origin() {
+        ModuleOrigin::Local => {
+            encoder.u8(0);
+            encoder.native(module.path().as_os_str())?;
+        }
+        ModuleOrigin::Standard { namespace, module } => {
+            encoder.u8(1);
+            encoder.string(namespace)?;
+            encoder.string(module)?;
+        }
+    }
+    Ok(())
+}
+
+fn decode_module_id(decoder: &mut Decoder<'_>) -> Result<ModuleId, CapsuleError> {
+    match decoder.u8()? {
+        0 => Ok(ModuleId::local(PathBuf::from(decoder.native()?))),
+        1 => Ok(ModuleId::standard(&decoder.string()?, &decoder.string()?)),
+        _ => Err(CapsuleError::new("invalid module origin")),
+    }
+}
+
+fn encode_type_context(
+    encoder: &mut Encoder,
+    context: &RuntimeTypeContext,
+) -> Result<(), CapsuleError> {
+    let mut sources = BTreeMap::new();
+    let mut resolutions = BTreeMap::new();
+    for program in &context.programs {
+        for entry in program.sources().entries() {
+            if let Some(previous) = sources.insert(entry.module().clone(), entry.source())
+                && previous != entry.source()
+            {
+                return Err(CapsuleError::new("conflicting retained module sources"));
+            }
+        }
+        for import in program.graph().imports() {
+            if import.target().origin() == &ModuleOrigin::Local {
+                let candidate = import
+                    .importer()
+                    .path()
+                    .parent()
+                    .unwrap_or(Path::new("/"))
+                    .join(import.requested())
+                    .components()
+                    .collect::<PathBuf>();
+                resolutions.insert(candidate, import.target().path().to_path_buf());
+            }
+        }
+    }
+    encoder.usize(sources.len())?;
+    for (module, source) in sources {
+        encode_module_id(encoder, &module)?;
+        encode_source(encoder, source)?;
+    }
+    encoder.usize(resolutions.len())?;
+    for (requested, target) in resolutions {
+        encoder.native(requested.as_os_str())?;
+        encoder.native(target.as_os_str())?;
+    }
+    encoder.usize(context.programs.len())?;
+    for program in &context.programs {
+        encode_module_id(encoder, program.graph().root())?;
+    }
+    encoder.usize(context.cells.len())?;
+    for cell in &context.cells {
+        encode_source(encoder, &cell.source)?;
+        encoder.usize(cell.statement_count)?;
+        encoder.usize(cell.nominal_offsets.len())?;
+        for offset in &cell.nominal_offsets {
+            encoder.usize(*offset)?;
+        }
+        encoder.usize(cell.local_imports.len())?;
+        for (offset, target) in &cell.local_imports {
+            encoder.usize(*offset)?;
+            encode_module_id(encoder, target)?;
+        }
+    }
+    Ok(())
+}
+
+struct RetainedSources {
+    sources: BTreeMap<ModuleId, SourceFile>,
+    resolutions: BTreeMap<PathBuf, PathBuf>,
+}
+
+impl ModuleCanonicalizer for RetainedSources {
+    fn canonicalize(&self, candidate: &Path) -> Result<PathBuf, ModulePathError> {
+        let candidate = candidate.components().collect::<PathBuf>();
+        self.resolutions
+            .get(&candidate)
+            .cloned()
+            .or_else(|| {
+                self.sources
+                    .keys()
+                    .find(|module| module.path() == candidate)
+                    .map(|module| module.path().to_path_buf())
+            })
+            .ok_or_else(|| ModulePathError::new("path is absent from retained source context"))
+    }
+}
+
+impl ModuleSourceLoader for RetainedSources {
+    fn load(&self, module: &ModuleId) -> Result<Vec<u8>, ModuleSourceError> {
+        self.sources
+            .get(module)
+            .map(|source| source.text().as_bytes().to_vec())
+            .ok_or_else(|| ModuleSourceError::new("source is absent from retained source context"))
+    }
+}
+
+fn decode_type_context(decoder: &mut Decoder<'_>) -> Result<RuntimeTypeContext, CapsuleError> {
+    let count = decoder.collection_len()?;
+    if count > 256 {
+        return Err(CapsuleError::new("too many retained sources"));
+    }
+    let mut sources = BTreeMap::new();
+    let mut ids = BTreeSet::new();
+    for _ in 0..count {
+        let module = decode_module_id(decoder)?;
+        let source = decode_source(decoder)?;
+        if !ids.insert(source.id()) || sources.insert(module, source).is_some() {
+            return Err(CapsuleError::new("duplicate retained source identity"));
+        }
+    }
+    let count = decoder.collection_len()?;
+    let mut resolutions = BTreeMap::new();
+    for _ in 0..count {
+        let requested = PathBuf::from(decoder.native()?);
+        let target = PathBuf::from(decoder.native()?);
+        if resolutions.insert(requested, target).is_some() {
+            return Err(CapsuleError::new("duplicate retained path resolution"));
+        }
+    }
+    let retained = RetainedSources {
+        sources,
+        resolutions,
+    };
+    let count = decoder.collection_len()?;
+    if count > 256 {
+        return Err(CapsuleError::new("too many retained programs"));
+    }
+    let mut programs = Vec::new();
+    for _ in 0..count {
+        let root = decode_module_id(decoder)?;
+        if root.origin() != &ModuleOrigin::Local {
+            return Err(CapsuleError::new("retained program root must be local"));
+        }
+        let ids = retained
+            .sources
+            .iter()
+            .map(|(module, source)| (module.clone(), source.id()))
+            .collect();
+        let limits = AnalysisLimits::OPAAL.with_limit(
+            AnalysisLimitKind::WorkUnits,
+            decoder.analysis_work_remaining,
+        );
+        let report = ModuleProgramLoader::new(&retained, &retained)
+            .with_source_ids(ids, 0)
+            .analyze_with_limits(root.path(), limits);
+        decoder.analysis_work_remaining = decoder
+            .analysis_work_remaining
+            .saturating_sub(report.usage().get(AnalysisLimitKind::WorkUnits));
+        let program = report
+            .program()
+            .cloned()
+            .ok_or_else(|| CapsuleError::new("retained module context cannot be analyzed"))?;
+        if program
+            .sources()
+            .entries()
+            .any(|entry| retained.sources.get(entry.module()) != Some(entry.source()))
+        {
+            return Err(CapsuleError::new(
+                "retained module source context is inconsistent",
+            ));
+        }
+        programs.push(Arc::new(program));
+    }
+    let count = decoder.collection_len()?;
+    if count + retained.sources.len() > 256 {
+        return Err(CapsuleError::new("too many retained sources"));
+    }
+    let mut cells = Vec::new();
+    for _ in 0..count {
+        let source = decode_source(decoder)?;
+        if !ids.insert(source.id()) {
+            return Err(CapsuleError::new("duplicate retained source identity"));
+        }
+        let statement_count = decoder.usize()?;
+        let nominal_count = decoder.collection_len()?;
+        let mut nominal_offsets = BTreeSet::new();
+        for _ in 0..nominal_count {
+            let offset = decoder.usize()?;
+            if offset >= source.len() || !nominal_offsets.insert(offset) {
+                return Err(CapsuleError::new("invalid retained nominal declaration"));
+            }
+        }
+        let import_count = decoder.collection_len()?;
+        let mut local_imports = BTreeMap::new();
+        for _ in 0..import_count {
+            let offset = decoder.usize()?;
+            let target = decode_module_id(decoder)?;
+            if !retained.sources.contains_key(&target)
+                || local_imports.insert(offset, target).is_some()
+            {
+                return Err(CapsuleError::new("invalid retained interactive import"));
+            }
+        }
+        cells.push(ReplTypeSource {
+            source: Arc::new(source),
+            local_imports,
+            statement_count,
+            nominal_offsets,
+        });
+    }
+    Ok(RuntimeTypeContext { programs, cells })
 }
 
 fn encode_scope(
@@ -693,10 +1191,23 @@ fn encode_value_at(
                 encode_value_at(encoder, value, callable_ids, depth + 1)?;
             }
         }
-        Value::NominalRecord(_) | Value::Variant(_) => {
-            return Err(CapsuleError::new(
-                "nominal runtime values require an explicit versioned codec",
-            ));
+        Value::NominalRecord(record) => {
+            encoder.u8(16);
+            encode_nominal_identity(encoder, record.id(), record.type_arguments())?;
+            encoder.usize(record.fields().len())?;
+            for (name, value) in record.fields() {
+                encoder.string(name)?;
+                encode_value_at(encoder, value, callable_ids, depth + 1)?;
+            }
+        }
+        Value::Variant(variant) => {
+            encoder.u8(17);
+            encode_nominal_identity(encoder, variant.id(), variant.type_arguments())?;
+            encoder.string(variant.constructor())?;
+            encoder.usize(variant.payload().len())?;
+            for value in variant.payload() {
+                encode_value_at(encoder, value, callable_ids, depth + 1)?;
+            }
         }
         Value::Table(table) => {
             encoder.u8(11);
@@ -819,6 +1330,38 @@ fn decode_value(
             decoder,
             depth + 1,
         )?))),
+        16 => {
+            let (id, arguments) = decode_nominal_identity(decoder, depth)?;
+            let count = decoder.collection_len()?;
+            let mut fields = Vec::with_capacity(count);
+            let mut names = BTreeSet::new();
+            for _ in 0..count {
+                let name = decoder.string()?;
+                if !names.insert(name.clone()) {
+                    return Err(CapsuleError::new("duplicate nominal field"));
+                }
+                fields.push((
+                    Arc::from(name),
+                    decode_value(decoder, callables, depth + 1)?,
+                ));
+            }
+            Value::NominalRecord(Box::new(NominalRecordValue::new(id, arguments, fields)))
+        }
+        17 => {
+            let (id, arguments) = decode_nominal_identity(decoder, depth)?;
+            let constructor = decoder.string()?;
+            let count = decoder.collection_len()?;
+            let mut payload = Vec::with_capacity(count);
+            for _ in 0..count {
+                payload.push(decode_value(decoder, callables, depth + 1)?);
+            }
+            Value::Variant(Box::new(VariantValue::new(
+                id,
+                arguments,
+                constructor,
+                payload,
+            )))
+        }
         tag => {
             return Err(CapsuleError::new(format!(
                 "unknown capsule value tag {tag}"
@@ -1081,6 +1624,45 @@ fn encode_value_type(encoder: &mut Encoder, value_type: &ValueType) -> Result<()
     encode_value_type_at(encoder, value_type, 0)
 }
 
+fn encode_nominal_identity(
+    encoder: &mut Encoder,
+    id: &NominalTypeId,
+    arguments: &[ValueType],
+) -> Result<(), CapsuleError> {
+    if crate::module::is_opaque_operational_nominal(id) {
+        return Err(CapsuleError::new(
+            "control carriers cannot cross the execution capsule",
+        ));
+    }
+    encode_module_id(encoder, id.module())?;
+    encoder.string(id.name())?;
+    encoder.usize(arguments.len())?;
+    for argument in arguments {
+        encode_value_type(encoder, argument)?;
+    }
+    Ok(())
+}
+
+fn decode_nominal_identity(
+    decoder: &mut Decoder<'_>,
+    depth: usize,
+) -> Result<(NominalTypeId, Vec<ValueType>), CapsuleError> {
+    let module = decode_module_id(decoder)?;
+    let name = decoder.string()?;
+    let count = decoder.collection_len()?;
+    let mut arguments = Vec::with_capacity(count);
+    for _ in 0..count {
+        arguments.push(decode_value_type(decoder, depth + 1)?);
+    }
+    let id = NominalTypeId::new(module, name);
+    if crate::module::is_opaque_operational_nominal(&id) {
+        return Err(CapsuleError::new(
+            "control carriers cannot cross the execution capsule",
+        ));
+    }
+    Ok((id, arguments))
+}
+
 fn encode_value_type_at(
     encoder: &mut Encoder,
     value_type: &ValueType,
@@ -1113,10 +1695,24 @@ fn encode_value_type_at(
         ValueType::Error => 15,
         ValueType::Function => 16,
         ValueType::Closure => 17,
-        ValueType::TypeParameter(_) | ValueType::Nominal { .. } => {
-            return Err(CapsuleError::new(
-                "generic and nominal runtime type identities are not capsule-serializable",
-            ));
+        ValueType::TypeParameter(name) => {
+            encoder.u8(18);
+            return encoder.string(name);
+        }
+        ValueType::Nominal { id, arguments } => {
+            if crate::module::is_opaque_operational_nominal(id) {
+                return Err(CapsuleError::new(
+                    "control carriers cannot cross the execution capsule",
+                ));
+            }
+            encoder.u8(19);
+            encode_module_id(encoder, id.module())?;
+            encoder.string(id.name())?;
+            encoder.usize(arguments.len())?;
+            for argument in arguments {
+                encode_value_type_at(encoder, argument, depth + 1)?;
+            }
+            return Ok(());
         }
     };
     encoder.u8(tag);
@@ -1148,6 +1744,14 @@ fn decode_value_type(decoder: &mut Decoder<'_>, depth: usize) -> Result<ValueTyp
         15 => ValueType::Error,
         16 => ValueType::Function,
         17 => ValueType::Closure,
+        18 => ValueType::TypeParameter(decoder.string()?),
+        19 => {
+            let (id, arguments) = decode_nominal_identity(decoder, depth)?;
+            ValueType::Nominal {
+                id: Box::new(id),
+                arguments,
+            }
+        }
         tag => return Err(CapsuleError::new(format!("unknown capsule type tag {tag}"))),
     })
 }
@@ -1190,6 +1794,17 @@ impl Encoder {
     }
 
     fn byte_string(&mut self, value: &[u8]) -> Result<(), CapsuleError> {
+        if self
+            .bytes
+            .len()
+            .checked_add(4)
+            .and_then(|used| used.checked_add(value.len()))
+            .is_none_or(|used| used > MAX_CAPSULE_BYTES)
+        {
+            return Err(CapsuleError::new(
+                "execution capsule exceeds its byte limit",
+            ));
+        }
         self.usize(value.len())?;
         self.bytes.extend_from_slice(value);
         Ok(())
@@ -1216,6 +1831,7 @@ struct Decoder<'a> {
     bytes: &'a [u8],
     offset: usize,
     items_remaining: usize,
+    analysis_work_remaining: u64,
 }
 
 impl<'a> Decoder<'a> {
@@ -1224,6 +1840,7 @@ impl<'a> Decoder<'a> {
             bytes,
             offset: 0,
             items_remaining: MAX_CAPSULE_ITEMS,
+            analysis_work_remaining: 5_000_000,
         }
     }
 
@@ -1331,6 +1948,310 @@ mod tests {
         SessionOptions::default()
             .with_pipefail(true)
             .with_capture_limit(12_345)
+    }
+
+    #[test]
+    fn reconstructed_callbacks_keep_operation_aliases_and_callable_kind() {
+        use crate::eval::{
+            Completion, EvalLimits, evaluate_in_environment_owned_with_binding_types,
+        };
+        use crate::module::{ModuleAliasRegistry, RuntimeBindingTypes};
+        use opaal_syntax::{ParseOutcome, parse_opaal};
+
+        let apply = |callable: &Value, arguments| {
+            let caller = SourceFile::new(SourceId::new(93), "next.opaal", "process()");
+            crate::eval::apply_callable(
+                callable,
+                arguments,
+                &caller,
+                caller.span(0..9).unwrap(),
+                &mut Environment::new(),
+                &EvalLimits::default(),
+            )
+        };
+        let round_trip = |text: &str| {
+            let source = Arc::new(SourceFile::new(SourceId::new(92), "callbacks.opaal", text));
+            let ParseOutcome::Complete(script) = parse_opaal(&source) else {
+                panic!("fixture must parse");
+            };
+            let types = RuntimeBindingTypes::analyze_repl_source(
+                &source,
+                &script,
+                &ModuleAliasRegistry::default(),
+            )
+            .unwrap();
+            let mut scope = ScopeStack::new();
+            evaluate_in_environment_owned_with_binding_types(
+                &script,
+                source,
+                &mut scope,
+                &mut Environment::new(),
+                &EvalLimits::default(),
+                Arc::new(types),
+            )
+            .unwrap();
+            let wire = encode_background_capsule(
+                "next.opaal",
+                "",
+                Path::new("/project"),
+                &Environment::new(),
+                None,
+                &scope,
+                options(),
+            )
+            .unwrap();
+            decode_background_capsule(&wire).unwrap()
+        };
+        let decoded = round_trip(
+            "import std::list as list\nlet amount = 3\ndef transform(x: Int) -> Int { x + amount }\ndef process(items: List[Int]) -> List[Int] { list::map[Int, Int](items, transform) }",
+        );
+        let process = decoded.scope().get("process").unwrap();
+        assert!(matches!(
+            apply(process, vec![Value::list(vec![Value::Int(2), Value::Int(1)])]).unwrap(),
+            Completion::Value(value) if value == Value::list(vec![Value::Int(5), Value::Int(4)])
+        ));
+
+        let decoded = round_trip(
+            "import std::list as list\ndef identity[X: Equal](x: Any) -> Any { x }\ndef make[X: Equal]() -> Closure { {|x| identity[X](x)} }\nlet callback = make[Int]()\ndef process() -> List[Int] { list::map[Int, Int]([1], callback) }",
+        );
+        assert!(matches!(
+            apply(decoded.scope().get("process").unwrap(), vec![]).unwrap(),
+            Completion::Value(value) if value == Value::list(vec![Value::Int(1)])
+        ));
+
+        for definition in [
+            "action callback(x: Int) -> Int effects {} { x }",
+            "action callback(x: Int) -> Int effects { clock.wall; } { x }",
+            "def callback[X](x: Int) -> Int { x }",
+        ] {
+            let text = format!(
+                "import std::list as list\n{definition}\ndef process() -> List[Int] {{ list::map[Int, Int]([], callback) }}"
+            );
+            let decoded = round_trip(&text);
+            let process = decoded.scope().get("process").unwrap();
+            assert!(apply(process, vec![]).is_err(), "{definition}");
+        }
+    }
+
+    #[test]
+    fn nominal_codec_keeps_nested_control_carriers_opaque() {
+        for id in [
+            NominalTypeId::project("tools", "ToolIdentity"),
+            NominalTypeId::standard("http", "SecretHeader"),
+        ] {
+            let value = Value::NominalRecord(Box::new(NominalRecordValue::new(
+                id,
+                Vec::new(),
+                vec![(Arc::from("_id"), Value::string("private-marker"))],
+            )));
+            let nested = Value::list(vec![Value::Record(
+                Record::new(vec![("carrier".to_owned(), value)]).unwrap(),
+            )]);
+            let mut scope = ScopeStack::new();
+            scope
+                .declare("nested", BindingMutability::Immutable, nested)
+                .unwrap();
+            let error = encode_background_capsule(
+                "next",
+                "",
+                Path::new("/project"),
+                &Environment::new(),
+                None,
+                &scope,
+                options(),
+            )
+            .unwrap_err();
+            assert!(error.to_string().contains("control carriers"));
+            assert!(!error.to_string().contains("private-marker"));
+        }
+    }
+
+    #[test]
+    fn imported_callbacks_and_generic_nominals_restore_without_host_loading() {
+        use crate::eval::{Completion, EvalLimits, FakeClock};
+        use crate::module::{
+            ModuleCanonicalizer, ModuleId, ModulePathError, ModuleSourceError, ModuleSourceLoader,
+        };
+        use crate::session::Session;
+        use opaal_platform::FakePlatform;
+
+        struct Sources(BTreeMap<PathBuf, String>);
+        impl ModuleCanonicalizer for Sources {
+            fn canonicalize(&self, candidate: &Path) -> Result<PathBuf, ModulePathError> {
+                let path = candidate.components().collect::<PathBuf>();
+                self.0
+                    .contains_key(&path)
+                    .then_some(path)
+                    .ok_or_else(|| ModulePathError::new("missing source"))
+            }
+        }
+        impl ModuleSourceLoader for Sources {
+            fn load(&self, module: &ModuleId) -> Result<Vec<u8>, ModuleSourceError> {
+                self.0
+                    .get(module.path())
+                    .map(|text| text.as_bytes().to_vec())
+                    .ok_or_else(|| ModuleSourceError::new("missing source"))
+            }
+        }
+        let sources = Sources(BTreeMap::from([
+            (PathBuf::from("/project/model.opaal"), "type Box[T] = { value: T }\ndef get[T](item: Box[T]) -> T { item.value }\nexport { Box, get }\n".to_owned()),
+            (PathBuf::from("/project/facade.opaal"), "import './model.opaal' as model\nexport { model }\n".to_owned()),
+        ]));
+        let mut session = Session::new("/project", Environment::new(), options());
+        for text in [
+            "import './facade.opaal' as api",
+            "let item: api::model::Box[Int] = api::model::Box {value: 7}",
+            "def process(item: api::model::Box[Int]) -> Int { api::model::get[Int](item) }",
+            "let unpack = {|api::model::Box {value: x}: api::model::Box[Int]| x}",
+        ] {
+            session
+                .submit_with_source_loader(
+                    "cell",
+                    text,
+                    &sources,
+                    &sources,
+                    &opaal_platform_posix::PosixPlatform,
+                    &FakePlatform::full(),
+                    &FakeClock::new(),
+                    &mut Vec::new(),
+                )
+                .unwrap();
+        }
+        let wire = encode_background_capsule(
+            "next",
+            "",
+            Path::new("/project"),
+            &Environment::new(),
+            None,
+            session.scope(),
+            options(),
+        )
+        .unwrap();
+        drop(sources);
+        let decoded = decode_background_capsule(&wire).unwrap();
+        let caller = SourceFile::new(SourceId::new(50_000), "next", "process(item)");
+        let value = crate::eval::apply_callable(
+            decoded.scope().get("process").unwrap(),
+            vec![decoded.scope().get("item").unwrap().clone()],
+            &caller,
+            caller.span(0..caller.len()).unwrap(),
+            &mut Environment::new(),
+            &EvalLimits::default(),
+        )
+        .unwrap();
+        assert!(matches!(value, Completion::Value(Value::Int(7))));
+        assert_eq!(decoded.scope().get("item"), session.scope().get("item"));
+        let unpacked = crate::eval::apply_callable(
+            decoded.scope().get("unpack").unwrap(),
+            vec![decoded.scope().get("item").unwrap().clone()],
+            &caller,
+            caller.span(0..caller.len()).unwrap(),
+            &mut Environment::new(),
+            &EvalLimits::default(),
+        )
+        .unwrap();
+        assert!(matches!(unpacked, Completion::Value(Value::Int(7))));
+        let Value::Callable(process) = session.scope().get("process").unwrap() else {
+            panic!("callable")
+        };
+        let mut forged = snapshot_callable(process).unwrap();
+        forged.parameters[0].1 = ValueType::Any;
+        assert!(
+            restore_callable(forged, &mut 5_000_000)
+                .err()
+                .unwrap()
+                .contains("signature")
+        );
+        let Value::NominalRecord(item) = session.scope().get("item").unwrap() else {
+            panic!("nominal record")
+        };
+        for fields in [
+            Vec::new(),
+            vec![(Arc::from("value"), Value::string("wrong type"))],
+        ] {
+            let mut malformed = session.scope().clone();
+            malformed
+                .declare(
+                    "malformed",
+                    BindingMutability::Immutable,
+                    Value::NominalRecord(Box::new(NominalRecordValue::new(
+                        item.id().clone(),
+                        item.type_arguments().to_vec(),
+                        fields,
+                    ))),
+                )
+                .unwrap();
+            let error = encode_background_capsule(
+                "next",
+                "",
+                Path::new("/project"),
+                &Environment::new(),
+                None,
+                &malformed,
+                options(),
+            )
+            .unwrap_err();
+            assert!(error.to_string().contains("retained schema"), "{error}");
+        }
+        let mut malformed = session.scope().clone();
+        malformed
+            .declare(
+                "unresolved",
+                BindingMutability::Immutable,
+                Value::NominalRecord(Box::new(NominalRecordValue::new(
+                    item.id().clone(),
+                    vec![ValueType::TypeParameter("T".to_owned())],
+                    item.fields().to_vec(),
+                ))),
+            )
+            .unwrap();
+        let error = encode_background_capsule(
+            "next",
+            "",
+            Path::new("/project"),
+            &Environment::new(),
+            None,
+            &malformed,
+            options(),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("unresolved type argument"));
+        session
+            .submit_with_source_loader(
+                "cell",
+                "type Forward = { item: later::Box[Int] }\n1 / 0\nimport './model.opaal' as later",
+                &Sources(BTreeMap::new()),
+                &Sources(BTreeMap::new()),
+                &opaal_platform_posix::PosixPlatform,
+                &FakePlatform::full(),
+                &FakeClock::new(),
+                &mut Vec::new(),
+            )
+            .unwrap_err();
+        // The initialized transitive snapshot supplies analysis metadata; the
+        // unreached alias itself stays unpublished.
+        assert!(session.scope().get("later::get").is_none());
+        session
+            .submit_with_value(
+                "cell",
+                "def forward(item: Forward) -> Int { item.item.value }",
+                &opaal_platform_posix::PosixPlatform,
+                &FakePlatform::full(),
+                &FakeClock::new(),
+                &mut Vec::new(),
+            )
+            .unwrap();
+        let wire = encode_background_capsule(
+            "next",
+            "",
+            Path::new("/project"),
+            &Environment::new(),
+            None,
+            session.scope(),
+            options(),
+        )
+        .unwrap();
+        decode_background_capsule(&wire).unwrap();
     }
 
     #[test]

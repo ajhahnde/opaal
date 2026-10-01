@@ -66,6 +66,60 @@ fn request(
 }
 
 #[test]
+fn string_operation_signatures_expose_every_argument_and_active_parameter() {
+    let directory = TestDirectory::new();
+    let uri = directory.uri("main.opaal");
+    let text = "import std::string as text\ntext::replace(\"old\", \"old\", \"new\")\n";
+    let mut workspace = Workspace::new();
+    workspace.open(uri.clone(), 1, text.into()).unwrap();
+    let result = request(
+        &workspace,
+        PositionEncoding::Utf16,
+        &RequestControl::new(),
+        "textDocument/signatureHelp",
+        positional(
+            &uri,
+            text,
+            text.rfind("\"new\"").unwrap() + 1,
+            PositionEncoding::Utf16,
+        ),
+    )
+    .unwrap();
+    assert_eq!(result["activeParameter"], 2);
+    assert_eq!(
+        result["signatures"][0]["label"],
+        "std::string::replace(input: String, pattern: String, replacement: String) -> String"
+    );
+    assert_eq!(
+        result["signatures"][0]["parameters"],
+        json!([{"label":"input"}, {"label":"pattern"}, {"label":"replacement"}])
+    );
+}
+
+#[test]
+fn string_signature_keeps_the_last_parameter_active_before_the_closing_parenthesis() {
+    let directory = TestDirectory::new();
+    let uri = directory.uri("main.opaal");
+    let text = "import std::string as text\ntext::replace(\"old\", \"old\", \"new\"   )\n";
+    let mut workspace = Workspace::new();
+    workspace.open(uri.clone(), 1, text.into()).unwrap();
+    let result = request(
+        &workspace,
+        PositionEncoding::Utf16,
+        &RequestControl::new(),
+        "textDocument/signatureHelp",
+        positional(
+            &uri,
+            text,
+            text.rfind(')').unwrap(),
+            PositionEncoding::Utf16,
+        ),
+    )
+    .unwrap();
+    assert_eq!(result["activeParameter"], 2);
+}
+
+#[test]
 fn completion_is_deterministic_and_retains_registry_results_without_a_program() {
     let directory = TestDirectory::new();
     let uri = directory.uri("main.opaal");
@@ -815,4 +869,361 @@ fn explicit_cancellation_wins_and_generation_changes_return_content_modified() {
             "error": {"code": -32803, "message": "Analysis limit exceeded"}
         })
     );
+}
+
+#[test]
+fn callback_operation_signatures_show_relations_and_argument_positions() {
+    let directory = TestDirectory::new();
+    let uri = directory.uri("main.opaal");
+    let text = "import std::list as list\nlist::fold[Int, Int]([1], 0, {|a, x| a + x}   )\n";
+    let mut workspace = Workspace::new();
+    workspace.open(uri.clone(), 1, text.into()).unwrap();
+    let result = request(
+        &workspace,
+        PositionEncoding::Utf16,
+        &RequestControl::new(),
+        "textDocument/signatureHelp",
+        positional(
+            &uri,
+            text,
+            text.rfind(')').unwrap(),
+            PositionEncoding::Utf16,
+        ),
+    )
+    .unwrap();
+    assert_eq!(result["activeParameter"], 2);
+    assert_eq!(
+        result["signatures"][0]["label"],
+        "std::list::fold[T, A](input: List[T], initial: A, combine: Callable(A, T) -> A) -> A"
+    );
+    assert_eq!(
+        result["signatures"][0]["parameters"],
+        json!([{"label":"input"}, {"label":"initial"}, {"label":"combine"}])
+    );
+    let hover = request(
+        &workspace,
+        PositionEncoding::Utf16,
+        &RequestControl::new(),
+        "textDocument/hover",
+        positional(
+            &uri,
+            text,
+            text.find("fold").unwrap(),
+            PositionEncoding::Utf16,
+        ),
+    )
+    .unwrap();
+    assert!(
+        hover["contents"]["value"]
+            .as_str()
+            .unwrap()
+            .contains("Callable(A, T) -> A")
+    );
+}
+
+#[test]
+fn list_query_and_order_signatures_expose_option_and_ordered_constraints() {
+    for (text, expected, parameter) in [
+        (
+            "import std::list as list\nlist::find[Int]([1], {|x| true}   )\n",
+            "std::list::find[T](input: List[T], predicate: Callable(T) -> Bool) -> Option[T]",
+            1,
+        ),
+        (
+            "import std::list as list\nlist::sort_by[Int, String]([1], {|x| 'key'}   )\n",
+            "std::list::sort_by[T, K: Ordered](input: List[T], key: Callable(T) -> K) -> List[T]",
+            1,
+        ),
+        (
+            "import std::list as list\nlist::sort[Int]([1]   )\n",
+            "std::list::sort[T: Ordered](input: List[T]) -> List[T]",
+            0,
+        ),
+        (
+            "import std::list as list\nlist::take[Int]([1], 2   )\n",
+            "std::list::take[T](input: List[T], count: Int) -> List[T]",
+            1,
+        ),
+    ] {
+        let directory = TestDirectory::new();
+        let uri = directory.uri("main.opaal");
+        let mut workspace = Workspace::new();
+        workspace.open(uri.clone(), 1, text.into()).unwrap();
+        let result = request(
+            &workspace,
+            PositionEncoding::Utf16,
+            &RequestControl::new(),
+            "textDocument/signatureHelp",
+            positional(
+                &uri,
+                text,
+                text.rfind(')').unwrap(),
+                PositionEncoding::Utf16,
+            ),
+        )
+        .unwrap();
+        assert_eq!(result["activeParameter"], parameter);
+        assert_eq!(result["signatures"][0]["label"], expected);
+    }
+}
+
+#[test]
+fn record_signatures_hover_and_completion_share_the_structural_contract() {
+    for (call, expected, parameter) in [
+        (
+            "keys({ a: 1 })",
+            "std::record::keys(input: Record) -> List[String]",
+            0,
+        ),
+        (
+            "has({}, 'a')",
+            "std::record::has(input: Record, key: String) -> Bool",
+            1,
+        ),
+        (
+            "get_or({}, 'a', null)",
+            "std::record::get_or(input: Record, key: String, default: Any) -> Any",
+            2,
+        ),
+        (
+            "select({}, [])",
+            "std::record::select(input: Record, keys: List[String]) -> Record",
+            1,
+        ),
+        (
+            "set({}, 'a', null)",
+            "std::record::set(input: Record, key: String, value: Any) -> Record",
+            2,
+        ),
+        (
+            "merge({}, {})",
+            "std::record::merge(left: Record, right: Record) -> Record",
+            1,
+        ),
+    ] {
+        let text = format!("import std::record as fields\nfields::{call}\n");
+        let directory = TestDirectory::new();
+        let uri = directory.uri("main.opaal");
+        let mut workspace = Workspace::new();
+        workspace.open(uri.clone(), 1, text.clone()).unwrap();
+        let signature = request(
+            &workspace,
+            PositionEncoding::Utf16,
+            &RequestControl::new(),
+            "textDocument/signatureHelp",
+            positional(
+                &uri,
+                &text,
+                text.rfind(')').unwrap(),
+                PositionEncoding::Utf16,
+            ),
+        )
+        .unwrap();
+        assert_eq!(signature["activeParameter"], parameter);
+        assert_eq!(signature["signatures"][0]["label"], expected);
+        let hover = request(
+            &workspace,
+            PositionEncoding::Utf16,
+            &RequestControl::new(),
+            "textDocument/hover",
+            positional(
+                &uri,
+                &text,
+                text.find("fields::").unwrap() + "fields::".len(),
+                PositionEncoding::Utf16,
+            ),
+        )
+        .unwrap();
+        let contents = hover["contents"]["value"].as_str().unwrap();
+        assert!(contents.contains(expected), "{contents}");
+        assert!(contents.contains("nominal records"));
+        let completion = request(
+            &workspace,
+            PositionEncoding::Utf16,
+            &RequestControl::new(),
+            "textDocument/completion",
+            positional(
+                &uri,
+                &text,
+                text.find("fields::").unwrap() + "fields::".len(),
+                PositionEncoding::Utf16,
+            ),
+        )
+        .unwrap();
+        let labels = completion
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|item| item["label"].as_str().unwrap())
+            .collect::<Vec<_>>();
+        for name in ["keys", "has", "get_or", "select", "set", "merge"] {
+            assert!(
+                labels.contains(&format!("fields::{name}").as_str()),
+                "{labels:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn data_signatures_hover_and_completion_share_pure_codec_contracts() {
+    for (call, expected, parameter) in [
+        (
+            "toml_decode(input)",
+            "std::data::toml_decode(input: Bytes) -> Any",
+            0,
+        ),
+        (
+            "get({}, ['x'])",
+            "std::data::get(input: Any, keys: List[String]) -> Any",
+            1,
+        ),
+        (
+            "json_encode({})",
+            "std::data::json_encode(input: Any) -> Bytes",
+            0,
+        ),
+        (
+            "json_decode(input)",
+            "std::data::json_decode(input: Bytes) -> Any",
+            0,
+        ),
+    ] {
+        let text = format!(
+            "import std::data as codecs\ndef run(input: Bytes) -> Any {{ codecs::{call} }}\n"
+        );
+        let directory = TestDirectory::new();
+        let uri = directory.uri("main.opaal");
+        let mut workspace = Workspace::new();
+        workspace.open(uri.clone(), 1, text.clone()).unwrap();
+        let signature = request(
+            &workspace,
+            PositionEncoding::Utf16,
+            &RequestControl::new(),
+            "textDocument/signatureHelp",
+            positional(
+                &uri,
+                &text,
+                text.rfind(')').unwrap(),
+                PositionEncoding::Utf16,
+            ),
+        )
+        .unwrap();
+        assert_eq!(signature["activeParameter"], parameter);
+        assert_eq!(signature["signatures"][0]["label"], expected);
+        let offset = text.find("codecs::").unwrap() + "codecs::".len();
+        let hover = request(
+            &workspace,
+            PositionEncoding::Utf16,
+            &RequestControl::new(),
+            "textDocument/hover",
+            positional(&uri, &text, offset, PositionEncoding::Utf16),
+        )
+        .unwrap();
+        let contents = hover["contents"]["value"].as_str().unwrap();
+        assert!(contents.contains(expected), "{contents}");
+        assert!(!contents.contains("controlled operation unavailable"));
+        if call.starts_with("json_decode") {
+            assert!(contents.contains("8 MiB/depth64"));
+        }
+        let completion = request(
+            &workspace,
+            PositionEncoding::Utf16,
+            &RequestControl::new(),
+            "textDocument/completion",
+            positional(&uri, &text, offset, PositionEncoding::Utf16),
+        )
+        .unwrap();
+        let labels = completion
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|item| item["label"].as_str().unwrap())
+            .collect::<Vec<_>>();
+        for name in ["toml_decode", "get", "json_encode", "json_decode"] {
+            assert!(
+                labels.contains(&format!("codecs::{name}").as_str()),
+                "{labels:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn complete_report_and_policy_observers_resolve_the_same_source_operations() {
+    let directory = TestDirectory::new();
+    let fixtures =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/golden/data-processing");
+    let mut workspace = Workspace::new();
+    for name in [
+        "report.opaal",
+        "json-report.opaal",
+        "text-report.opaal",
+        "policy-operations.opaal",
+    ] {
+        let source = fs::read_to_string(fixtures.join(name)).unwrap();
+        workspace.open(directory.uri(name), 1, source).unwrap();
+    }
+    let diagnostics = workspace
+        .diagnostic_snapshot()
+        .analyze_diagnostics(PositionEncoding::Utf16)
+        .unwrap();
+    assert!(
+        diagnostics
+            .documents()
+            .iter()
+            .all(|document| document.diagnostics().is_empty()),
+        "{diagnostics:?}"
+    );
+    for (name, token, expected) in [
+        (
+            "report.opaal",
+            "string::trim",
+            "std::string::trim(input: String) -> String",
+        ),
+        (
+            "report.opaal",
+            "list::map",
+            "std::list::map[T, U](input: List[T], transform: Callable(T) -> U) -> List[U]",
+        ),
+        (
+            "policy-operations.opaal",
+            "list::find",
+            "std::list::find[T](input: List[T], predicate: Callable(T) -> Bool) -> Option[T]",
+        ),
+        (
+            "policy-operations.opaal",
+            "record::merge",
+            "std::record::merge(left: Record, right: Record) -> Record",
+        ),
+    ] {
+        let text = fs::read_to_string(fixtures.join(name)).unwrap();
+        let uri = directory.uri(name);
+        let offset = text.find(token).unwrap() + token.find("::").unwrap() + 2;
+        let hover = request(
+            &workspace,
+            PositionEncoding::Utf16,
+            &RequestControl::new(),
+            "textDocument/hover",
+            positional(&uri, &text, offset, PositionEncoding::Utf16),
+        )
+        .unwrap();
+        assert!(
+            hover["contents"]["value"]
+                .as_str()
+                .unwrap()
+                .contains(expected),
+            "{hover:#}"
+        );
+        let argument = offset + text[offset..].find('(').unwrap() + 1;
+        let signature = request(
+            &workspace,
+            PositionEncoding::Utf16,
+            &RequestControl::new(),
+            "textDocument/signatureHelp",
+            positional(&uri, &text, argument, PositionEncoding::Utf16),
+        )
+        .unwrap();
+        assert_eq!(signature["signatures"][0]["label"], expected);
+    }
 }

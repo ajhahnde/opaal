@@ -144,6 +144,11 @@ impl ScopeStack {
         self.find(name).map(|binding| &binding.value)
     }
 
+    pub(crate) fn declared_type(&self, name: &str) -> Option<&ValueType> {
+        self.find(name)
+            .and_then(|binding| binding.value_type.as_ref())
+    }
+
     pub(crate) fn values(&self) -> impl Iterator<Item = &Value> {
         self.frames
             .iter()

@@ -1,0 +1,17 @@
+import std::string as string
+import std::list as list
+import std::record as record
+let jobs = [{name: "test/linux"}, {name: "build"}, {name: "test/mac"}]
+let names = ["test/linux", "build", "test/mac"]
+({
+    prefix: string::starts_with("test/linux", "test/"),
+    suffix: string::ends_with("test/linux", "/linux"),
+    any_test: list::any[Record](jobs, {|job: Record| -> Bool string::starts_with(job.name, "test/")}),
+    all_test: list::all[Record](jobs, {|job: Record| -> Bool string::starts_with(job.name, "test/")}),
+    test_count: list::count[Record](jobs, {|job: Record| -> Bool string::starts_with(job.name, "test/")}),
+    first_test: list::find[Record](jobs, {|job: Record| -> Bool string::starts_with(job.name, "test/")}),
+    after_first: list::drop[String](names, 1),
+    ordered: list::sort[String](names),
+    reversed: list::reverse[String](names),
+    enriched: record::merge({name: "old", status: "queued"}, {name: "new", conclusion: "failure"}),
+})

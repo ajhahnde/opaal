@@ -488,9 +488,11 @@ impl InteractiveEvaluator for OpaalEvaluator {
     ) -> Result<EvaluationControl, InteractiveEvaluationError> {
         let outcome = self
             .session
-            .submit_with_value(
+            .submit_with_source_loader(
                 source_name(),
                 source,
+                &HostCheckFilesystem,
+                &HostCheckFilesystem,
                 &PosixPlatform,
                 &PosixPlatform,
                 &self.clock,

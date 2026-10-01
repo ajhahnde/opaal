@@ -5,7 +5,7 @@ use std::io::{self, Write};
 use crate::module::ModuleOrigin;
 use crate::{FiniteFloat, Record, Status, Value};
 
-use super::ModuleError;
+use crate::operational::ModuleError;
 
 pub const MAX_DATA_BYTES: usize = 16 * 1024 * 1024;
 pub const MAX_DATA_DEPTH: usize = 64;

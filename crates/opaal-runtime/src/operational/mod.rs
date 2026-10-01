@@ -3,9 +3,9 @@
 //! Pure data, path, version, URL, and integrity operations are immediately
 //! usable by embedders. File, clock, HTTP, secret, and process operations also
 //! require an explicit [`crate::context::OperationalContext`], an exact effect
-//! request, and a maintained adapter verdict. This module deliberately exposes
-//! no route from effectful OPAAL source; controlled invocation belongs to the
-//! later plan/execution lifecycle.
+//! request, and a maintained adapter verdict. Pure data source calls use shared
+//! evaluator dispatch; the remaining source operations require the explicit
+//! controlled plan/execution lifecycle.
 
 use std::fmt;
 
@@ -16,7 +16,8 @@ use crate::authority::{AuthorityVerdict, CapabilityRequest, EffectSet};
 use crate::context::OperationalContext;
 use crate::eval::CancelReason;
 
-pub mod data;
+// Keep the Rust embedding path pointed at the single pure codec owner.
+pub use crate::data;
 pub mod filesystem;
 pub mod http;
 pub mod integrity;
@@ -32,11 +33,11 @@ pub const MAX_TOTAL_READ_BYTES: usize = 32 * 1024 * 1024;
 pub const MAX_HTTP_BODY_BYTES: usize = opaal_platform::operational::MAX_HTTP_BODY_BYTES;
 pub const MAX_PROCESS_OUTPUT_BYTES: usize = opaal_platform::operational::MAX_PROCESS_OUTPUT_BYTES;
 
-/// The maintained standard-module catalog implemented by this adapter slice.
+/// The maintained module catalog, including the shared pure data codecs.
 ///
 /// The names are stable semantic identities for inspection and later
-/// controlled execution. They are not ambient globals and do not make the
-/// current source evaluator effectful.
+/// controlled execution. They are not ambient globals. Pure data source calls
+/// are compiled operations and bypass the authority host.
 pub const STANDARD_MODULES: [&str; 9] = [
     "std::data",
     "std::path",
@@ -50,9 +51,10 @@ pub const STANDARD_MODULES: [&str; 9] = [
 ];
 
 pub(crate) fn is_source_module(module: &str) -> bool {
-    STANDARD_MODULES
-        .iter()
-        .any(|candidate| candidate.strip_prefix("std::") == Some(module))
+    module != "data"
+        && STANDARD_MODULES
+            .iter()
+            .any(|candidate| candidate.strip_prefix("std::") == Some(module))
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

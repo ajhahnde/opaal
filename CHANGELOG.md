@@ -4,6 +4,21 @@ All notable changes to OPAAL are documented here.
 
 ## [Unreleased]
 
+### Added
+
+- Add bounded `std::string`, `std::list`, and `std::record` operations for
+  text transformation, callback-driven collection processing, selection,
+  ordering, and structural record updates.
+- Make pure `std::data` operations available in ordinary source and add
+  strict JSON decoding with shared resource and cancellation limits.
+- Add a reusable CI job report with ordinary, interactive, and controlled
+  filesystem examples, plus Linux and macOS candidate archive qualification.
+
+### Changed
+
+- Support local module imports in CLI interactive sessions while retaining
+  module and type identities across cells.
+
 ## [1.1.0]
 
 ### Security

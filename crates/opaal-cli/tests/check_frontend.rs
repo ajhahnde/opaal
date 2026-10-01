@@ -227,3 +227,80 @@ fn opaal_checker_rejects_unknown_standard_modules_and_alias_conflicts() {
     assert!(run.has_errors());
     assert!(run.rendered_issues()[0].starts_with("error[MOD011]"));
 }
+
+#[test]
+fn complete_report_and_policy_checks_load_only_the_explicit_source_graph() {
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/golden/data-processing");
+    let report = std::fs::read(fixtures.join("report.opaal")).unwrap();
+    for name in [
+        "json-report.opaal",
+        "text-report.opaal",
+        "policy-operations.opaal",
+    ] {
+        let root = PathBuf::from("/project").join(name);
+        let filesystem = FakeFilesystem::default()
+            .resolves(&root, &root)
+            .resolves("/project/report.opaal", "/project/report.opaal")
+            .contains(&root, std::fs::read(fixtures.join(name)).unwrap())
+            .contains("/project/report.opaal", report.clone());
+        let run = check_source(&CheckRequest::new(root.clone()), &filesystem);
+        assert!(run.is_success(), "{name}: {:?}", run.rendered_issues());
+        let mut expected = vec![Call::Canonicalize(root.clone()), Call::Load(root)];
+        if name != "policy-operations.opaal" {
+            expected.extend([
+                Call::Canonicalize(PathBuf::from("/project/report.opaal")),
+                Call::Load(PathBuf::from("/project/report.opaal")),
+            ]);
+        }
+        assert_eq!(filesystem.calls(), expected);
+    }
+}
+
+#[test]
+fn complete_report_compiled_help_matches_the_resolved_operation_descriptors() {
+    use opaal_runtime::help::{ModuleHelpCatalog, ModuleHelpKind, render_module_operation_help};
+    use opaal_runtime::module::ModuleProgramLoader;
+
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/golden/data-processing");
+    let root = PathBuf::from("/project/report.opaal");
+    let filesystem = FakeFilesystem::default()
+        .resolves(&root, &root)
+        .contains(&root, std::fs::read(fixtures.join("report.opaal")).unwrap());
+    let program = ModuleProgramLoader::new(&filesystem, &filesystem)
+        .load(&root)
+        .unwrap();
+    let module = program.graph().root();
+    let help = ModuleHelpCatalog::snapshot(&program);
+    for name in [
+        "string::trim",
+        "string::split",
+        "string::join",
+        "string::decode_utf8",
+        "list::map",
+        "list::filter",
+        "list::fold",
+        "list::sort_by",
+        "list::take",
+        "record::get_or",
+        "record::select",
+        "record::set",
+        "data::json_encode",
+    ] {
+        let descriptor = program
+            .resolve_operation(module, &name.split("::").collect::<Vec<_>>())
+            .unwrap();
+        let entry = help.query(module, name).unwrap();
+        assert_eq!(entry.kind(), ModuleHelpKind::Operation);
+        assert_eq!(entry.operation().unwrap().id(), descriptor.id());
+        let rendered =
+            String::from_utf8(render_module_operation_help(entry.operation().unwrap())).unwrap();
+        for signature in descriptor.signature_labels() {
+            assert!(rendered.contains(&signature), "{name}: {rendered}");
+        }
+        assert!(rendered.contains(descriptor.documentation()));
+    }
+    assert_eq!(
+        filesystem.calls(),
+        [Call::Canonicalize(root.clone()), Call::Load(root)]
+    );
+}

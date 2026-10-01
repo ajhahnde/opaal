@@ -11,7 +11,7 @@ use std::fmt;
 use std::sync::Arc;
 
 use crate::eval::{FrameCallee, RuntimeError};
-use crate::module::{ModuleId, ModuleOrigin, ValueType, substitute_type};
+use crate::module::{ModuleId, ModuleOrigin, NominalTypeId, ValueType, substitute_type};
 use crate::seam::DownstreamCallMetadata;
 use crate::stream::{
     CheckedStreamPull, StreamCleanupFailure, StreamContractViolation, ValueStream,
@@ -65,12 +65,221 @@ pub enum OperationInputType {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct OperationOverload {
     input: OperationInputType,
+    parameters: Vec<OperationParameter>,
     result: ValueType,
+}
+
+/// One named argument in a compiled operation's ordinary call signature.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OperationParameter {
+    name: String,
+    input: OperationInputType,
+    callback: Option<OperationCallback>,
+}
+
+/// A pure callback's parameter/result relation over descriptor type parameters.
+/// This is metadata over Function and Closure, not a source callable type.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OperationCallback {
+    parameters: Vec<ValueType>,
+    result: ValueType,
+}
+
+impl OperationCallback {
+    #[must_use]
+    pub fn parameters(&self) -> &[ValueType] {
+        &self.parameters
+    }
+
+    #[must_use]
+    pub const fn result(&self) -> &ValueType {
+        &self.result
+    }
+}
+
+/// Available binding metadata, shared by source checking and runtime preflight.
+#[derive(Clone)]
+pub(crate) struct CallbackShape {
+    pub(crate) action: bool,
+    pub(crate) generics: Vec<crate::module::ResolvedTypeParameter>,
+    pub(crate) parameters: Vec<ValueType>,
+    pub(crate) result: ValueType,
+}
+
+impl CallbackShape {
+    pub(crate) fn infer_operation(
+        &self,
+        relation: &OperationCallback,
+        substitutions: &mut std::collections::BTreeMap<String, ValueType>,
+    ) -> Result<(), String> {
+        if self.action {
+            return Err(
+                "callbacks require a function or closure; actions are not accepted".to_owned(),
+            );
+        }
+        if self.parameters.len() != relation.parameters.len() {
+            return Err(format!(
+                "callback expects {} arguments; operation supplies {}",
+                self.parameters.len(),
+                relation.parameters.len()
+            ));
+        }
+        for (expected, actual) in relation
+            .parameters
+            .iter()
+            .zip(&self.parameters)
+            .chain(std::iter::once((&relation.result, &self.result)))
+        {
+            if !self.contains_own_generic(actual)
+                && !crate::module::unify_type(expected, actual, substitutions)
+            {
+                return Err(format!(
+                    "callback type `{actual}` conflicts with `{expected}`"
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn contains_own_generic(&self, value_type: &ValueType) -> bool {
+        match value_type {
+            ValueType::TypeParameter(name) => self
+                .generics
+                .iter()
+                .any(|parameter| parameter.name() == name),
+            ValueType::List(element) => self.contains_own_generic(element),
+            ValueType::Nominal { arguments, .. } => arguments
+                .iter()
+                .any(|argument| self.contains_own_generic(argument)),
+            _ => false,
+        }
+    }
+
+    pub(crate) fn instantiate(
+        &self,
+        relation: &OperationCallback,
+        operation_types: &std::collections::BTreeMap<String, ValueType>,
+        satisfies: impl Fn(&ValueType, opaal_syntax::TypeConstraint) -> bool,
+    ) -> Result<Vec<ValueType>, String> {
+        if self.action {
+            return Err(
+                "callbacks require a function or closure; actions are not accepted".to_owned(),
+            );
+        }
+        if self.parameters.len() != relation.parameters.len() {
+            return Err(format!(
+                "callback expects {} arguments; operation supplies {}",
+                self.parameters.len(),
+                relation.parameters.len()
+            ));
+        }
+        let inputs = relation
+            .parameters
+            .iter()
+            .map(|input| substitute_type(input, operation_types))
+            .collect::<Vec<_>>();
+        let output = substitute_type(&relation.result, operation_types);
+        let mut own_types = std::collections::BTreeMap::new();
+        for (parameter, supplied) in self
+            .parameters
+            .iter()
+            .zip(&inputs)
+            .chain(std::iter::once((&self.result, &output)))
+        {
+            if !crate::module::unify_type(parameter, supplied, &mut own_types) {
+                return Err(format!(
+                    "callback type `{parameter}` conflicts with operation type `{supplied}`"
+                ));
+            }
+        }
+        let mut arguments = Vec::new();
+        for generic in &self.generics {
+            let Some(actual) = own_types.get(generic.name()) else {
+                return Err(format!(
+                    "cannot infer callback type `{}`; use a concrete typed wrapper",
+                    generic.name()
+                ));
+            };
+            if generic
+                .constraints()
+                .iter()
+                .any(|constraint| !satisfies(actual, *constraint))
+            {
+                return Err(format!(
+                    "callback type `{actual}` fails constraints for `{}`",
+                    generic.name()
+                ));
+            }
+            arguments.push(actual.clone());
+        }
+        for (parameter, supplied) in self.parameters.iter().zip(&inputs) {
+            let parameter = substitute_type(parameter, &own_types);
+            if !parameter.accepts_type(supplied) {
+                return Err(format!(
+                    "callback parameter `{parameter}` cannot accept `{supplied}`"
+                ));
+            }
+        }
+        let result = substitute_type(&self.result, &own_types);
+        if result != ValueType::Any && !output.accepts_type(&result) {
+            return Err(format!(
+                "callback result `{result}` does not fit `{output}`"
+            ));
+        }
+        Ok(arguments)
+    }
+}
+
+impl OperationParameter {
+    #[must_use]
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    #[must_use]
+    pub const fn input(&self) -> &OperationInputType {
+        &self.input
+    }
+
+    #[must_use]
+    pub const fn callback(&self) -> Option<&OperationCallback> {
+        self.callback.as_ref()
+    }
 }
 
 impl OperationOverload {
     fn new(input: OperationInputType, result: ValueType) -> Self {
-        Self { input, result }
+        Self {
+            parameters: vec![OperationParameter {
+                name: "input".to_owned(),
+                input: input.clone(),
+                callback: None,
+            }],
+            input,
+            result,
+        }
+    }
+
+    fn values(parameters: Vec<(&str, ValueType)>, result: ValueType) -> Self {
+        let parameters = parameters
+            .into_iter()
+            .map(|(name, value_type)| OperationParameter {
+                name: name.to_owned(),
+                input: OperationInputType::Value(value_type),
+                callback: None,
+            })
+            .collect::<Vec<_>>();
+        Self {
+            input: parameters[0].input.clone(),
+            parameters,
+            result,
+        }
+    }
+
+    /// Every argument, in source call order, including the first carrier.
+    #[must_use]
+    pub fn parameters(&self) -> &[OperationParameter] {
+        &self.parameters
     }
 
     /// The first-parameter carrier and type accepted by this overload.
@@ -120,6 +329,33 @@ impl OperationDescriptor {
         &self.type_parameters
     }
 
+    /// Constraints shared by checking, execution and signature observers.
+    #[must_use]
+    pub fn type_parameter_constraints(&self, name: &str) -> &[opaal_syntax::TypeConstraint] {
+        if matches!(
+            (self.implementation, name),
+            (StandardOperation::Sort, "T") | (StandardOperation::SortBy, "K")
+        ) {
+            &[opaal_syntax::TypeConstraint::Ordered]
+        } else {
+            &[]
+        }
+    }
+
+    #[must_use]
+    pub fn type_parameter_labels(&self) -> Vec<String> {
+        self.type_parameters
+            .iter()
+            .map(|name| {
+                if self.type_parameter_constraints(name).is_empty() {
+                    name.clone()
+                } else {
+                    format!("{name}: Ordered")
+                }
+            })
+            .collect()
+    }
+
     /// The complete, construction-validated overload set.
     #[must_use]
     pub fn overloads(&self) -> &[OperationOverload] {
@@ -144,6 +380,22 @@ impl OperationDescriptor {
         &self.downstream
     }
 
+    pub(crate) const fn implementation(&self) -> StandardOperation {
+        self.implementation
+    }
+
+    pub(crate) fn value_overload(&self) -> Option<&OperationOverload> {
+        self.overloads
+            .iter()
+            .find(|overload| matches!(overload.input(), OperationInputType::Value(_)))
+    }
+
+    /// Only existing unary operations admit the implicit value-pipeline form.
+    #[must_use]
+    pub fn supports_value_pipeline(&self) -> bool {
+        self.implementation == StandardOperation::Length
+    }
+
     /// Canonical callable labels for every carrier overload in descriptor order.
     #[must_use]
     pub fn signature_labels(&self) -> Vec<String> {
@@ -153,13 +405,34 @@ impl OperationDescriptor {
                 let generics = if self.type_parameters.is_empty() {
                     String::new()
                 } else {
-                    format!("[{}]", self.type_parameters.join(", "))
+                    format!("[{}]", self.type_parameter_labels().join(", "))
                 };
                 format!(
-                    "{}{}(input: {}) -> {}",
+                    "{}{}({}) -> {}",
                     self.id.qualified_name(),
                     generics,
-                    overload.input(),
+                    overload
+                        .parameters()
+                        .iter()
+                        .map(|parameter| {
+                            if let Some(callback) = parameter.callback() {
+                                format!(
+                                    "{}: Callable({}) -> {}",
+                                    parameter.name(),
+                                    callback
+                                        .parameters()
+                                        .iter()
+                                        .map(ToString::to_string)
+                                        .collect::<Vec<_>>()
+                                        .join(", "),
+                                    callback.result()
+                                )
+                            } else {
+                                format!("{}: {}", parameter.name(), parameter.input())
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                        .join(", "),
                     overload.result(),
                 )
             })
@@ -180,22 +453,37 @@ impl OperationDescriptor {
             }
         }
         for overload in &self.overloads {
-            let input = match &overload.input {
-                OperationInputType::Value(input) | OperationInputType::ValueStream(input) => input,
-            };
-            validate_type_parameters(input, &parameters)?;
+            for parameter in overload.parameters() {
+                let input = match parameter.input() {
+                    OperationInputType::Value(input) | OperationInputType::ValueStream(input) => {
+                        input
+                    }
+                };
+                validate_type_parameters(input, &parameters)?;
+                if let Some(callback) = parameter.callback() {
+                    for input in callback.parameters() {
+                        validate_type_parameters(input, &parameters)?;
+                    }
+                    validate_type_parameters(callback.result(), &parameters)?;
+                }
+            }
             validate_type_parameters(&overload.result, &parameters)?;
         }
         for (index, left) in self.overloads.iter().enumerate() {
             for right in &self.overloads[index + 1..] {
-                let overlap = match (&left.input, &right.input) {
-                    (OperationInputType::Value(left), OperationInputType::Value(right))
-                    | (
-                        OperationInputType::ValueStream(left),
-                        OperationInputType::ValueStream(right),
-                    ) => types_overlap(left, right),
-                    _ => false,
-                };
+                let overlap = left.parameters.len() == right.parameters.len()
+                    && left
+                        .parameters
+                        .iter()
+                        .zip(&right.parameters)
+                        .all(|(left, right)| match (&left.input, &right.input) {
+                            (OperationInputType::Value(left), OperationInputType::Value(right))
+                            | (
+                                OperationInputType::ValueStream(left),
+                                OperationInputType::ValueStream(right),
+                            ) => types_overlap(left, right),
+                            _ => false,
+                        });
                 if overlap {
                     return Err(OperationDescriptorError::OverlappingOverloads);
                 }
@@ -237,6 +525,11 @@ impl OperationDescriptor {
                 input: format!("Value({})", value.family_name()),
             });
         };
+        if self.implementation != StandardOperation::Length {
+            return Err(OperationError::HostContextRequired {
+                operation: "budgeted pure operation",
+            });
+        }
         debug_assert_eq!(overload.result, ValueType::Int);
         match self.implementation {
             StandardOperation::Length => match value {
@@ -247,6 +540,7 @@ impl OperationDescriptor {
                 }),
                 _ => unreachable!("the selected value overload accepts only lists"),
             },
+            _ => unreachable!("budgeted operations use the shared evaluator"),
         }
     }
 
@@ -305,6 +599,7 @@ impl OperationDescriptor {
                 };
                 finish_stream_operation(&mut stream, primary, delivered_items)
             }
+            _ => unreachable!("only length has a stream overload"),
         }
     }
 }
@@ -377,8 +672,38 @@ fn finish_stream_operation(
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum StandardOperation {
+pub(crate) enum StandardOperation {
     Length,
+    Trim,
+    Split,
+    Join,
+    Contains,
+    StartsWith,
+    EndsWith,
+    Replace,
+    DecodeUtf8,
+    Map,
+    Filter,
+    Fold,
+    Any,
+    All,
+    Count,
+    Find,
+    Sort,
+    SortBy,
+    Take,
+    Drop,
+    Reverse,
+    RecordKeys,
+    RecordHas,
+    RecordGetOr,
+    RecordSelect,
+    RecordSet,
+    RecordMerge,
+    TomlDecode,
+    DataGet,
+    JsonEncode,
+    JsonDecode,
 }
 
 /// A compiled operation descriptor that cannot enter the standard manifest.
@@ -467,7 +792,349 @@ pub fn standard_operation(module: &ModuleId, name: &str) -> Option<OperationDesc
     else {
         return None;
     };
-    if namespace != "std" || standard != "value" || name != "length" {
+    if namespace != "std" {
+        return None;
+    }
+    if standard == "list" {
+        use ValueType::{Any, Bool, Int, List, TypeParameter};
+        let t = TypeParameter("T".to_owned());
+        let (implementation, generics, parameters, callback, result, documentation) = match name {
+            "map" => {
+                let u = TypeParameter("U".to_owned());
+                (
+                    StandardOperation::Map,
+                    vec!["T", "U"],
+                    vec![("input", List(Box::new(t.clone()))), ("transform", Any)],
+                    Some(OperationCallback {
+                        parameters: vec![t],
+                        result: u.clone(),
+                    }),
+                    List(Box::new(u)),
+                    "Apply a pure callback once per item in source order; preserve result values without flattening.",
+                )
+            }
+            "filter" => (
+                StandardOperation::Filter,
+                vec!["T"],
+                vec![("input", List(Box::new(t.clone()))), ("predicate", Any)],
+                Some(OperationCallback {
+                    parameters: vec![t.clone()],
+                    result: Bool,
+                }),
+                List(Box::new(t)),
+                "Retain items in source order when a pure callback returns Bool true.",
+            ),
+            "fold" => {
+                let a = TypeParameter("A".to_owned());
+                (
+                    StandardOperation::Fold,
+                    vec!["T", "A"],
+                    vec![
+                        ("input", List(Box::new(t.clone()))),
+                        ("initial", a.clone()),
+                        ("combine", Any),
+                    ],
+                    Some(OperationCallback {
+                        parameters: vec![a.clone(), t],
+                        result: a.clone(),
+                    }),
+                    a,
+                    "Left fold with a pure callback receiving accumulator then item; empty input returns initial.",
+                )
+            }
+            "any" | "all" | "count" | "find" => {
+                let (implementation, result, documentation) = match name {
+                    "any" => (
+                        StandardOperation::Any,
+                        Bool,
+                        "Return true at the first true predicate; empty input returns false.",
+                    ),
+                    "all" => (
+                        StandardOperation::All,
+                        Bool,
+                        "Return false at the first false predicate; empty input returns true.",
+                    ),
+                    "count" => (
+                        StandardOperation::Count,
+                        Int,
+                        "Count true predicate results with checked Int arithmetic; empty input returns zero.",
+                    ),
+                    _ => (
+                        StandardOperation::Find,
+                        ValueType::Nominal {
+                            id: Box::new(NominalTypeId::standard("outcome", "Option")),
+                            arguments: vec![t.clone()],
+                        },
+                        "Return the first matching original item as std::outcome::Option::Some; empty or unmatched input returns None, distinct from Some(null).",
+                    ),
+                };
+                (
+                    implementation,
+                    vec!["T"],
+                    vec![("input", List(Box::new(t.clone()))), ("predicate", Any)],
+                    Some(OperationCallback {
+                        parameters: vec![t],
+                        result: Bool,
+                    }),
+                    result,
+                    documentation,
+                )
+            }
+            "sort_by" => {
+                let k = TypeParameter("K".to_owned());
+                (
+                    StandardOperation::SortBy,
+                    vec!["T", "K"],
+                    vec![("input", List(Box::new(t.clone()))), ("key", Any)],
+                    Some(OperationCallback {
+                        parameters: vec![t.clone()],
+                        result: k,
+                    }),
+                    List(Box::new(t)),
+                    "Compute one Ordered key per item in source order, then sort stably in ascending order; equal keys retain source order.",
+                )
+            }
+            "sort" | "reverse" => {
+                let (implementation, documentation) = if name == "sort" {
+                    (
+                        StandardOperation::Sort,
+                        "Sort homogeneous Ordered items stably in ascending order.",
+                    )
+                } else {
+                    (
+                        StandardOperation::Reverse,
+                        "Return all items in reverse order, retaining duplicates; this reverses equal-key runs in a sorted input.",
+                    )
+                };
+                (
+                    implementation,
+                    vec!["T"],
+                    vec![("input", List(Box::new(t.clone())))],
+                    None,
+                    List(Box::new(t)),
+                    documentation,
+                )
+            }
+            "take" | "drop" => {
+                let (implementation, documentation) = if name == "take" {
+                    (
+                        StandardOperation::Take,
+                        "Return the prefix of min(count, length) items; negative count is an Error.",
+                    )
+                } else {
+                    (
+                        StandardOperation::Drop,
+                        "Return the suffix after min(count, length) items; negative count is an Error.",
+                    )
+                };
+                (
+                    implementation,
+                    vec!["T"],
+                    vec![("input", List(Box::new(t.clone()))), ("count", Int)],
+                    None,
+                    List(Box::new(t)),
+                    documentation,
+                )
+            }
+            _ => return None,
+        };
+        let mut overload = OperationOverload::values(parameters, result);
+        overload
+            .parameters
+            .last_mut()
+            .expect("callback parameter")
+            .callback = callback;
+        let descriptor = OperationDescriptor {
+            id: OperationId::new(module.clone(), name),
+            type_parameters: generics.into_iter().map(str::to_owned).collect(),
+            overloads: vec![overload],
+            documentation: format!(
+                "{documentation} Validate types and any callback kind, arity and annotations even on empty input; share caller budgets and cancellation; stop on first failure."
+            ),
+            purity: OperationPurity::Pure,
+            downstream: DownstreamCallMetadata::foundation(),
+            implementation,
+        };
+        descriptor
+            .validate()
+            .expect("compiled list descriptors must be valid");
+        return Some(descriptor);
+    }
+    if standard == "data" {
+        use StandardOperation::{DataGet, JsonDecode, JsonEncode, TomlDecode};
+        use ValueType::{Any, Bytes, List, String as Text};
+        let (implementation, parameters, result, documentation) = match name {
+            "toml_decode" => (
+                TomlDecode,
+                vec![("input", Bytes)],
+                Any,
+                "Decode UTF8 TOML with the existing 16 MiB/depth64 limits, errors and per-call accounting; datetime conversion remains explicit.",
+            ),
+            "get" => (
+                DataGet,
+                vec![("input", Any), ("keys", List(Box::new(Text)))],
+                Any,
+                "Strictly traverse a multi-key structural Record path; an empty path returns the input. Preserve existing errors and per-call accounting.",
+            ),
+            "json_encode" => (
+                JsonEncode,
+                vec![("input", Any)],
+                Bytes,
+                "Encode canonical compact JSON with sorted object keys, existing 16 MiB/depth64 limits, errors and per-call accounting; recursively refuse secret/control carriers and unsupported values.",
+            ),
+            "json_decode" => (
+                JsonDecode,
+                vec![("input", Bytes)],
+                Any,
+                "Decode one strict UTF8 JSON document, at most 8 MiB/depth64. Reject duplicate keys and nonfinite numbers; retain array and object source order. Integer tokens fitting i64 become Int; other finite numbers become Float with possible precision loss. Share caller allocation, work and cancellation budgets; errors contain bounded escaped keys or byte offsets, never the document. Ordinary values have no automatic secret taint.",
+            ),
+            _ => return None,
+        };
+        let descriptor = OperationDescriptor {
+            id: OperationId::new(module.clone(), name),
+            type_parameters: Vec::new(),
+            overloads: vec![OperationOverload::values(parameters, result)],
+            documentation: documentation.to_owned(),
+            purity: OperationPurity::Pure,
+            downstream: DownstreamCallMetadata::foundation(),
+            implementation,
+        };
+        descriptor
+            .validate()
+            .expect("compiled data descriptors must be valid");
+        return Some(descriptor);
+    }
+    if standard == "record" {
+        use StandardOperation::{
+            RecordGetOr, RecordHas, RecordKeys, RecordMerge, RecordSelect, RecordSet,
+        };
+        use ValueType::{Any, Bool, List, Record, String as Text};
+        let (implementation, parameters, result, documentation) = match name {
+            "keys" => (
+                RecordKeys,
+                vec![("input", Record)],
+                List(Box::new(Text)),
+                "Return keys in retained field order.",
+            ),
+            "has" => (
+                RecordHas,
+                vec![("input", Record), ("key", Text)],
+                Bool,
+                "Test exact key presence, including fields whose value is null.",
+            ),
+            "get_or" => (
+                RecordGetOr,
+                vec![("input", Record), ("key", Text), ("default", Any)],
+                Any,
+                "Return a field's value or the default only for absence; the default is evaluated eagerly like every ordinary argument.",
+            ),
+            "select" => (
+                RecordSelect,
+                vec![("input", Record), ("keys", List(Box::new(Text)))],
+                Record,
+                "Return fields in requested order; missing or repeated requested keys are errors; an empty request returns an empty Record.",
+            ),
+            "set" => (
+                RecordSet,
+                vec![("input", Record), ("key", Text), ("value", Any)],
+                Record,
+                "Replace a field keeping its position, or append a new field; preserve the input.",
+            ),
+            "merge" => (
+                RecordMerge,
+                vec![("left", Record), ("right", Record)],
+                Record,
+                "Merge with right values winning; keep replaced left positions and append new right fields in right order; preserve both inputs.",
+            ),
+            _ => return None,
+        };
+        let descriptor = OperationDescriptor {
+            id: OperationId::new(module.clone(), name),
+            type_parameters: Vec::new(),
+            overloads: vec![OperationOverload::values(parameters, result)],
+            documentation: format!(
+                "{documentation} Accept structural Records only; nominal records retain their schemas. Share caller budgets and cancellation. Ordinary keys and values have no automatic secret taint."
+            ),
+            purity: OperationPurity::Pure,
+            downstream: DownstreamCallMetadata::foundation(),
+            implementation,
+        };
+        descriptor
+            .validate()
+            .expect("compiled Record descriptors must be valid");
+        return Some(descriptor);
+    }
+    if standard == "string" {
+        use StandardOperation::{
+            Contains, DecodeUtf8, EndsWith, Join, Replace, Split, StartsWith, Trim,
+        };
+        use ValueType::{Bool, Bytes, List, String as Text};
+        let (implementation, parameters, result, documentation) = match name {
+            "trim" => (
+                Trim,
+                vec![("input", Text)],
+                Text,
+                "Remove leading and trailing Unicode whitespace, preserving interior text.",
+            ),
+            "split" => (
+                Split,
+                vec![("input", Text), ("separator", Text)],
+                List(Box::new(Text)),
+                "Split at a nonempty literal separator, retaining empty fields.",
+            ),
+            "join" => (
+                Join,
+                vec![("input", List(Box::new(Text))), ("separator", Text)],
+                Text,
+                "Join String items in order with a literal separator between items.",
+            ),
+            "contains" => (
+                Contains,
+                vec![("input", Text), ("pattern", Text)],
+                Bool,
+                "Test a literal substring; an empty pattern succeeds.",
+            ),
+            "starts_with" => (
+                StartsWith,
+                vec![("input", Text), ("prefix", Text)],
+                Bool,
+                "Test a literal anchored prefix; an empty prefix succeeds.",
+            ),
+            "ends_with" => (
+                EndsWith,
+                vec![("input", Text), ("suffix", Text)],
+                Bool,
+                "Test a literal anchored suffix; an empty suffix succeeds.",
+            ),
+            "replace" => (
+                Replace,
+                vec![("input", Text), ("pattern", Text), ("replacement", Text)],
+                Text,
+                "Replace nonoverlapping literal matches; an empty pattern is an error.",
+            ),
+            "decode_utf8" => (
+                DecodeUtf8,
+                vec![("input", Bytes)],
+                Text,
+                "Decode strict UTF8 bytes without trimming, BOM removal or lossy conversion.",
+            ),
+            _ => return None,
+        };
+        let descriptor = OperationDescriptor {
+            id: OperationId::new(module.clone(), name),
+            type_parameters: Vec::new(),
+            overloads: vec![OperationOverload::values(parameters, result)],
+            documentation: documentation.to_owned(),
+            purity: OperationPurity::Pure,
+            downstream: DownstreamCallMetadata::foundation(),
+            implementation,
+        };
+        descriptor
+            .validate()
+            .expect("compiled String descriptors must be valid");
+        return Some(descriptor);
+    }
+    if standard != "value" || name != "length" {
         return None;
     }
     let descriptor = OperationDescriptor {
@@ -499,16 +1166,50 @@ pub fn standard_operation(module: &ModuleId, name: &str) -> Option<OperationDesc
 /// Returns the closed compiled operation catalog for one standard module.
 #[must_use]
 pub(crate) fn standard_operations(module: &ModuleId) -> Vec<OperationDescriptor> {
-    ["length"]
-        .into_iter()
-        .filter_map(|name| standard_operation(module, name))
-        .collect()
+    [
+        "length",
+        "trim",
+        "split",
+        "join",
+        "contains",
+        "starts_with",
+        "ends_with",
+        "replace",
+        "decode_utf8",
+        "toml_decode",
+        "get",
+        "json_encode",
+        "json_decode",
+        "map",
+        "filter",
+        "fold",
+        "any",
+        "all",
+        "count",
+        "find",
+        "sort",
+        "sort_by",
+        "take",
+        "drop",
+        "reverse",
+        "keys",
+        "has",
+        "get_or",
+        "select",
+        "set",
+        "merge",
+    ]
+    .into_iter()
+    .filter_map(|name| standard_operation(module, name))
+    .collect()
 }
 
 /// A pure-operation failure, reported without a source span.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub enum OperationError {
+    /// A well-typed argument violates the operation's value contract.
+    InvalidArgument { operation: String, message: String },
     /// An operator received operand families it is not defined for.
     UnsupportedOperands {
         operator: &'static str,
@@ -547,6 +1248,9 @@ pub enum OperationError {
 impl fmt::Display for OperationError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::InvalidArgument { operation, message } => {
+                write!(formatter, "{operation}: {message}")
+            }
             Self::UnsupportedOperands { operator, operands } => {
                 write!(formatter, "operator `{operator}` is not defined for ")?;
                 for (index, family) in operands.iter().enumerate() {

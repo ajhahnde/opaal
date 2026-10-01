@@ -1,0 +1,11 @@
+schema_version = 1
+[project]
+name = "job_report"
+root_module = "tasks.opaal"
+required_opaal = ">=1.2.0,<2.0.0"
+[paths]
+root = "."
+evidence = "report.json"
+[environments.ci]
+authority = "authority.toml"
+tool_lock = "tools.toml"
