@@ -6,6 +6,8 @@ All notable changes to OPAAL are documented here.
 
 ### Added
 
+- Add opt-in `opaal check --format json SOURCE` diagnostics with a versioned
+  schema, UTF-8 byte ranges, related locations, notes, and classified outcomes.
 - Add bounded `std::string`, `std::list`, and `std::record` operations for
   text transformation, callback-driven collection processing, selection,
   ordering, and structural record updates.

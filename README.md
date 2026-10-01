@@ -62,6 +62,9 @@ process.
 
 - `opaal [SCRIPT [ARG...]]` runs one explicit `.opaal` root.
 - `opaal check SOURCE` analyzes a source graph without executing it.
+- `opaal check --format json SOURCE` emits versioned source diagnostics with
+  UTF-8 byte ranges and classified outcomes; `opaal check --help` describes the
+  schema and exit behavior.
 - `opaal check --project opaal.toml ...` validates one explicit task,
   environment-derived authority/tool lock, explicit lexical or file-snapshot
   inputs, and zero-or-one executable secret requirement without executing an

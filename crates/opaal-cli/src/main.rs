@@ -77,13 +77,33 @@ const CHECK_HELP: &str = "Analyze OPAAL source without executing it
 
 Usage:
   opaal check [--] SOURCE
+  opaal check --format json [--] SOURCE
   opaal check --project opaal.toml --task TASK --environment ID [--input NAME=VALUE | --input-file NAME=PATH]... [--format json]
   opaal check --help
 
 SOURCE and every static import must be regular .opaal files. Checking performs
 syntax, module, name, signature, and carrier analysis without ambient
-configuration, history, host discovery, or execution. Success is silent;
-diagnostics use stderr. The environment selects authority and tools. --input
+configuration, history, host discovery, or execution. Human checks are silent
+on success and send diagnostics to stderr. Source --format json writes one
+schema_version 1 diagnostic document to stdout, followed by LF. Its outcome is
+complete, invalid, cancelled, refused, or failed; diagnostics preserve analysis
+order, primary/related label messages and notes. Locations contain source display
+identities and zero-based UTF-8 byte ranges with exclusive ends, or null when
+unavailable. Each diagnostic has a nonempty code, severity (error, warning, or
+note), message, primary_message (string or null), notes (string array), source
+(string or null), range ({start,end} or null), and related (array of objects
+with message, source, and range). Without errors, warnings and notes retain
+outcome complete. Multiple failure kinds use refused > failed > invalid
+precedence. Cancellation and budget refusal discard partial findings.
+Example: {\"schema_version\":1,\"outcome\":\"complete\",\"diagnostics\":[]}
+Source text is omitted. Native paths escape controls, backslashes,
+and invalid bytes (\\xNN); display identities are not filesystem operands.
+Message wording may change. Exit is 0 for complete, 1 for source failures, and
+2 for usage errors. Pre-analysis failures use stderr; output failures may leave
+truncated stdout. Consumers must validate the complete document and exit status
+and reject unknown schema versions. OS termination need not emit final JSON.
+Project --format json uses the separate project-check artifact schema.
+The environment selects authority and tools. --input
 parses lexical values without I/O; --input-file snapshots one regular file for
 a Path parameter.
 ";
@@ -162,7 +182,10 @@ fn main() -> ExitCode {
             emit_report(HostReport::success(version.as_bytes()))
         }
         Mode::CheckHelp => emit_report(HostReport::success(CHECK_HELP.as_bytes())),
-        Mode::Check { source } => run_checker(source),
+        Mode::Check {
+            source,
+            format_json,
+        } => run_checker(source, format_json),
         Mode::ProjectCheck {
             project,
             task,
@@ -225,13 +248,20 @@ fn reject_non_opaal(path: &Path, role: &str) -> Option<ExitCode> {
     })
 }
 
-fn run_checker(source: PathBuf) -> ExitCode {
+fn run_checker(source: PathBuf, format_json: bool) -> ExitCode {
     if let Some(exit) = reject_non_opaal(&source, "source") {
         return exit;
     }
     let request = CheckRequest::new(source);
     let run = check_source(&request, &HostCheckFilesystem);
-    if run.is_success() {
+    if format_json {
+        let json = run.render_json();
+        emit_report(if run.is_success() {
+            HostReport::success(&json)
+        } else {
+            HostReport::failure_with_output(&json, b"")
+        })
+    } else if run.is_success() {
         emit_report(HostReport::success(b""))
     } else {
         emit_report(HostReport::failure(

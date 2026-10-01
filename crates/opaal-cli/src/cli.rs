@@ -22,6 +22,7 @@ pub enum Mode {
     CheckHelp,
     Check {
         source: PathBuf,
+        format_json: bool,
     },
     ProjectCheck {
         project: PathBuf,
@@ -96,6 +97,7 @@ pub enum CliError {
     MissingCheckSource,
     UnexpectedCheckSource(String),
     StdinCheckSource,
+    InvalidCheckArgument(String),
     MissingPlanSource,
     UnexpectedPlanSource(String),
     StdinPlanSource,
@@ -124,6 +126,7 @@ impl CliError {
             Self::StdinCheckSource => {
                 "'-' is not supported as a checker source; name a file".to_owned()
             }
+            Self::InvalidCheckArgument(message) => message.clone(),
             Self::MissingPlanSource => "plan requires exactly one source path".to_owned(),
             Self::UnexpectedPlanSource(_) => "plan accepts exactly one source path".to_owned(),
             Self::StdinPlanSource => {
@@ -211,8 +214,10 @@ where
     I: IntoIterator<Item = OsString>,
 {
     let arguments = arguments.into_iter().collect::<Vec<_>>();
-    if arguments.first().is_none_or(|argument| argument != "--")
-        && arguments.iter().any(|argument| argument == "--project")
+    if arguments
+        .iter()
+        .take_while(|argument| *argument != "--")
+        .any(|argument| argument == "--project")
     {
         parse_project_check_args(&arguments)
     } else {
@@ -594,7 +599,9 @@ where
     let mut help = false;
     let mut source = None;
     let mut options_ended = false;
-    for argument in arguments {
+    let mut format_json = false;
+    let mut arguments = arguments.into_iter();
+    while let Some(argument) = arguments.next() {
         if !options_ended {
             match argument.to_str() {
                 Some("--help") => {
@@ -606,6 +613,21 @@ where
                 }
                 Some("--") => {
                     options_ended = true;
+                    continue;
+                }
+                Some("--format") if !plan => {
+                    if format_json {
+                        return Err(CliError::DuplicateOption("--format"));
+                    }
+                    let value = arguments.next().ok_or_else(|| {
+                        CliError::InvalidCheckArgument("--format requires a value".to_owned())
+                    })?;
+                    if value != "json" {
+                        return Err(CliError::InvalidCheckArgument(
+                            "--format supports only 'json'".to_owned(),
+                        ));
+                    }
+                    format_json = true;
                     continue;
                 }
                 Some("-") => {
@@ -636,6 +658,11 @@ where
         }
     }
     if help {
+        if format_json {
+            return Err(CliError::InvalidCheckArgument(
+                "--help cannot be combined with --format".to_owned(),
+            ));
+        }
         if let Some(source) = source {
             return Err(if plan {
                 CliError::UnexpectedPlanSource(source.to_string_lossy().into_owned())
@@ -660,7 +687,10 @@ where
         mode: if plan {
             Mode::Plan { source }
         } else {
-            Mode::Check { source }
+            Mode::Check {
+                source,
+                format_json,
+            }
         },
     })
 }
@@ -833,7 +863,8 @@ mod tests {
         assert_eq!(
             parse(&["check", "root.opaal"]).unwrap().mode,
             Mode::Check {
-                source: PathBuf::from("root.opaal")
+                source: PathBuf::from("root.opaal"),
+                format_json: false,
             }
         );
         assert_eq!(
@@ -845,7 +876,8 @@ mod tests {
         assert_eq!(
             parse(&["check", "--", "--project"]).unwrap().mode,
             Mode::Check {
-                source: PathBuf::from("--project")
+                source: PathBuf::from("--project"),
+                format_json: false,
             }
         );
         assert_eq!(

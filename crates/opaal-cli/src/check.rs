@@ -6,10 +6,13 @@ use std::path::{Path, PathBuf};
 
 use opaal_runtime::builtin::standard_registry;
 use opaal_runtime::module::{
-    ModuleCanonicalizer, ModuleId, ModulePathError, ModuleProgramError, ModuleProgramLoader,
-    ModuleSourceError, ModuleSourceLoader,
+    AnalysisControl, AnalysisLimits, ModuleAnalysisOutcome, ModuleCanonicalizer, ModuleId,
+    ModulePathError, ModuleProgramError, ModuleProgramLoader, ModuleSourceError,
+    ModuleSourceLoader,
 };
 use opaal_syntax::render_diagnostic_sources;
+
+mod json;
 
 /// One explicit source-check request.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -92,6 +95,8 @@ impl ModuleSourceLoader for HostCheckFilesystem {
 pub struct CheckRun {
     rendered_issues: Vec<String>,
     has_errors: bool,
+    requested: PathBuf,
+    analysis: Option<ModuleAnalysisOutcome>,
 }
 
 impl CheckRun {
@@ -112,6 +117,15 @@ impl CheckRun {
     pub const fn is_success(&self) -> bool {
         !self.has_errors
     }
+
+    /// One schema-version-1 UTF-8 JSON document, terminated by LF.
+    ///
+    /// Structured findings are serialized directly; human source excerpts are
+    /// never included. A default empty run represents a successful empty check.
+    #[must_use]
+    pub fn render_json(&self) -> Vec<u8> {
+        json::render(self)
+    }
 }
 
 /// Checks one source and its canonical imports without initializing or
@@ -121,9 +135,59 @@ pub fn check_source<F>(request: &CheckRequest, filesystem: &F) -> CheckRun
 where
     F: CheckFilesystem,
 {
+    check_source_controlled(
+        request,
+        filesystem,
+        &AnalysisControl::never(),
+        AnalysisLimits::default(),
+    )
+}
+
+/// Checks with injected cooperative cancellation and deterministic analysis
+/// ceilings. A stopped run retains no partial sources or findings.
+#[must_use]
+pub fn check_source_controlled<F>(
+    request: &CheckRequest,
+    filesystem: &F,
+    control: &AnalysisControl,
+    limits: AnalysisLimits,
+) -> CheckRun
+where
+    F: CheckFilesystem,
+{
     let commands = standard_registry();
-    let report = ModuleProgramLoader::new(filesystem, filesystem)
-        .analyze_with_commands(request.source(), &commands);
+    let analysis = ModuleProgramLoader::new(filesystem, filesystem)
+        .analyze_with_commands_and_limits_controlled(request.source(), &commands, control, limits);
+    render_run(request.source(), analysis)
+}
+
+fn render_run(requested: &Path, analysis: ModuleAnalysisOutcome) -> CheckRun {
+    let rendered_issues = match &analysis {
+        ModuleAnalysisOutcome::Complete(report) => render_report(requested, report),
+        ModuleAnalysisOutcome::Cancelled => {
+            vec!["opaal check: source analysis cancelled\n".to_owned()]
+        }
+        ModuleAnalysisOutcome::BudgetExceeded(exceeded) => vec![render_unspanned(
+            requested,
+            &ModuleProgramError::BudgetExceeded(*exceeded),
+        )],
+    };
+    let has_errors = match &analysis {
+        ModuleAnalysisOutcome::Complete(report) => report.has_errors(),
+        ModuleAnalysisOutcome::Cancelled | ModuleAnalysisOutcome::BudgetExceeded(_) => true,
+    };
+    CheckRun {
+        rendered_issues,
+        has_errors,
+        requested: requested.to_path_buf(),
+        analysis: Some(analysis),
+    }
+}
+
+fn render_report(
+    requested: &Path,
+    report: &opaal_runtime::module::ModuleAnalysisReport,
+) -> Vec<String> {
     let sources = report
         .sources()
         .iter()
@@ -134,7 +198,7 @@ where
     for issue in report.issues() {
         let diagnostics = issue.error().diagnostics();
         if diagnostics.is_empty() {
-            rendered_issues.push(render_unspanned(request.source(), issue.error()));
+            rendered_issues.push(render_unspanned(requested, issue.error()));
             continue;
         }
         rendered_issues.extend(diagnostics.iter().map(|diagnostic| {
@@ -143,10 +207,7 @@ where
         }));
     }
 
-    CheckRun {
-        rendered_issues,
-        has_errors: report.has_errors(),
-    }
+    rendered_issues
 }
 
 fn render_unspanned(requested: &Path, error: &ModuleProgramError) -> String {
