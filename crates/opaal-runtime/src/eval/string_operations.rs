@@ -2,7 +2,6 @@
 
 use super::{Eval, Evaluator, RuntimeErrorKind};
 use crate::Value;
-use crate::module::substitute_type;
 use crate::operation::{
     OperationDescriptor, OperationError, OperationInputType, StandardOperation,
 };
@@ -129,31 +128,60 @@ impl Evaluator<'_, '_> {
         ) {
             return self.legacy_data_operation(descriptor, &arguments, span);
         }
-        let overload = descriptor.value_overload().expect("value operation");
         let substitutions = descriptor
             .type_parameters()
             .iter()
             .cloned()
             .zip(type_arguments.iter().cloned())
             .collect();
-        for (argument, parameter) in arguments.iter().zip(overload.parameters()) {
-            let OperationInputType::Value(expected) = parameter.input() else {
-                unreachable!("value parameter")
-            };
-            // Lists are validated during their budgeted traversal below.
-            let accepted = match (expected, argument) {
-                (crate::module::ValueType::List(_), Value::List(_)) => true,
-                _ => substitute_type(expected, &substitutions).accepts(argument),
-            };
-            if !accepted {
-                return Err(self.operation(
-                    OperationError::NoMatchingOverload {
-                        operation: descriptor.id().qualified_name(),
-                        input: argument.family_name().to_owned(),
-                    },
-                    span,
-                ));
+        if descriptor.implementation().is_math() {
+            self.check_cancel(span)?;
+            self.charge(span)?;
+            for _ in descriptor.overloads() {
+                self.check_cancel(span)?;
+                self.charge(span)?;
             }
+        }
+        // Collection elements remain owned by the existing budgeted traversal,
+        // including released codecs' separate dynamic validation above.
+        let actuals = arguments
+            .iter()
+            .map(|value| {
+                Some(OperationInputType::Value(match value {
+                    Value::List(_) => {
+                        crate::module::ValueType::List(Box::new(crate::module::ValueType::Any))
+                    }
+                    _ => super::runtime_value_type(value).expect("noncollection type"),
+                }))
+            })
+            .collect::<Vec<_>>();
+        let candidates =
+            descriptor
+                .resolve_call(&actuals, &substitutions)
+                .map_err(|(index, _)| {
+                    self.operation(
+                        OperationError::NoMatchingOverload {
+                            operation: descriptor.id().qualified_name(),
+                            input: arguments[index].family_name().to_owned(),
+                        },
+                        span,
+                    )
+                })?;
+        if candidates.len() != 1 {
+            return Err(self.operation(
+                OperationError::InvalidArgument {
+                    operation: descriptor.id().qualified_name(),
+                    message: "ambiguous argument tuple".to_owned(),
+                },
+                span,
+            ));
+        }
+        if descriptor.implementation().is_math() {
+            self.check_cancel(span)?;
+            let result = crate::operation::numeric_operation(descriptor, &arguments)
+                .map_err(|error| self.operation(error, span));
+            self.check_cancel(span)?;
+            return result;
         }
         match descriptor.implementation() {
             StandardOperation::JsonDecode => self.json_decode(&arguments, span),

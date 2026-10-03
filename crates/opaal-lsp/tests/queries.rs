@@ -66,6 +66,130 @@ fn request(
 }
 
 #[test]
+fn math_aliases_signatures_completion_and_diagnostics_use_the_shared_catalog() {
+    let directory = TestDirectory::new();
+    let uri = directory.uri("main.opaal");
+    let api_uri = directory.uri("api.opaal");
+    let text = "import './api.opaal' as api\napi::math::clamp(1.0, 0.0, 2.0)\n";
+    let mut workspace = Workspace::new();
+    workspace
+        .open(
+            api_uri,
+            1,
+            "import std::math as math\nexport { math }\n".into(),
+        )
+        .unwrap();
+    workspace.open(uri.clone(), 1, text.into()).unwrap();
+    let result = request(
+        &workspace,
+        PositionEncoding::Utf16,
+        &RequestControl::new(),
+        "textDocument/signatureHelp",
+        positional(
+            &uri,
+            text,
+            text.rfind("2.0").unwrap() + 1,
+            PositionEncoding::Utf16,
+        ),
+    )
+    .unwrap();
+    assert_eq!(result["activeParameter"], 2);
+    assert_eq!(result["signatures"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        result["signatures"][0]["label"],
+        "std::math::clamp(value: Int, min: Int, max: Int) -> Int"
+    );
+    assert_eq!(
+        result["signatures"][1]["label"],
+        "std::math::clamp(value: Float, min: Float, max: Float) -> Float"
+    );
+    let completion = request(
+        &workspace,
+        PositionEncoding::Utf16,
+        &RequestControl::new(),
+        "textDocument/completion",
+        positional(
+            &uri,
+            text,
+            text.find("api::math::clamp").unwrap() + "api::math::".len(),
+            PositionEncoding::Utf16,
+        ),
+    )
+    .unwrap();
+    let mut names = completion
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| item["label"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    names.sort();
+    assert_eq!(
+        names,
+        [
+            "api::math::abs",
+            "api::math::ceil",
+            "api::math::clamp",
+            "api::math::floor",
+            "api::math::max",
+            "api::math::min",
+            "api::math::round",
+            "api::math::sqrt"
+        ]
+    );
+    let hover = request(
+        &workspace,
+        PositionEncoding::Utf16,
+        &RequestControl::new(),
+        "textDocument/hover",
+        positional(
+            &uri,
+            text,
+            text.find("clamp").unwrap() + 2,
+            PositionEncoding::Utf16,
+        ),
+    )
+    .unwrap();
+    assert!(
+        hover["contents"]["value"]
+            .as_str()
+            .unwrap()
+            .contains("no implicit conversion")
+    );
+    for invalid in [
+        "api::math::min(1, 2.0)",
+        "api::math::abs()",
+        "api::math::unknown(1)",
+    ] {
+        let mut workspace = Workspace::new();
+        workspace
+            .open(
+                directory.uri("api.opaal"),
+                1,
+                "import std::math as math\nexport { math }\n".into(),
+            )
+            .unwrap();
+        workspace
+            .open(
+                uri.clone(),
+                1,
+                format!("import './api.opaal' as api\n{invalid}\n"),
+            )
+            .unwrap();
+        let analysis = workspace
+            .diagnostic_snapshot()
+            .analyze_diagnostics(PositionEncoding::Utf16)
+            .unwrap();
+        assert!(
+            analysis
+                .documents()
+                .iter()
+                .any(|document| !document.diagnostics().is_empty()),
+            "{invalid}"
+        );
+    }
+}
+
+#[test]
 fn string_operation_signatures_expose_every_argument_and_active_parameter() {
     let directory = TestDirectory::new();
     let uri = directory.uri("main.opaal");

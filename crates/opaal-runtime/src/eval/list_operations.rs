@@ -34,7 +34,7 @@ impl Evaluator<'_, '_> {
         span: Span,
     ) -> Eval<Vec<ValueType>> {
         use crate::module::unify_type;
-        let overload = descriptor.value_overload().expect("value overload");
+        let overload = descriptor.inference_overload().expect("value overload");
         let mut types = BTreeMap::new();
         if let Some(expected) = expected_result {
             unify_type(overload.result(), expected, &mut types);
@@ -213,7 +213,7 @@ impl Evaluator<'_, '_> {
         };
         let (function, shape) = self.callback_shape(value, descriptor, span)?;
         let relation = descriptor
-            .value_overload()
+            .inference_overload()
             .expect("value overload")
             .parameters()
             .last()
@@ -336,7 +336,7 @@ impl Evaluator<'_, '_> {
             }
         }
         let callback = if descriptor
-            .value_overload()
+            .inference_overload()
             .expect("value overload")
             .parameters()
             .last()

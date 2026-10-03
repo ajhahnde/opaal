@@ -1,0 +1,3 @@
+import './report.opaal' as report
+let result = report::build()
+^printf "percent=%s delta=%s scale=%s\n" {result.percent} {result.delta} {result.scale}

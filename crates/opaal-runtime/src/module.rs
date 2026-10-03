@@ -7221,7 +7221,7 @@ impl<'a> SignatureValidator<'a> {
         matches!(
             owner.origin(),
             ModuleOrigin::Standard { namespace, module }
-                if namespace == "std" && matches!(module.as_str(), "value" | "string" | "list" | "record" | "data")
+                if namespace == "std" && matches!(module.as_str(), "value" | "string" | "list" | "record" | "data" | "math")
         )
         .then(|| self.text(operation.span()).to_owned())
     }
@@ -7243,10 +7243,7 @@ impl<'a> SignatureValidator<'a> {
         {
             return Ok(None);
         }
-        let overload = operation
-            .value_overload()
-            .expect("a callable standard operation has a value overload");
-        if call.arguments.len() != overload.parameters().len() {
+        if call.arguments.len() != operation.call_arity() {
             for argument in &call.arguments {
                 self.expression(argument)?;
             }
@@ -7256,7 +7253,7 @@ impl<'a> SignatureValidator<'a> {
                     module: self.entry.module().clone(),
                     name: operation.id().qualified_name(),
                     call_span,
-                    expected: overload.parameters().len(),
+                    expected: operation.call_arity(),
                     actual: call.arguments.len(),
                 });
             return Ok(Some(ValueType::Any));
@@ -7275,6 +7272,22 @@ impl<'a> SignatureValidator<'a> {
                 });
             return Ok(Some(ValueType::Any));
         }
+        // Contextual generic/callback inference needs a unique template. Scalar
+        // overloads instead collect all argument evidence without a guessed
+        // expected type, then use the same full-tuple resolver.
+        let Some(overload) = operation.inference_overload() else {
+            let actuals = call
+                .arguments
+                .iter()
+                .map(|argument| self.operation_argument_type(argument, None))
+                .collect::<Result<Vec<_>, _>>()?;
+            return Ok(Some(self.operation_tuple_result(
+                operation,
+                call,
+                &actuals,
+                &BTreeMap::new(),
+            )));
+        };
         let mut substitutions = BTreeMap::new();
         if call.type_arguments.is_empty() {
             if let Some(expected) = expected_result {
@@ -7392,7 +7405,7 @@ impl<'a> SignatureValidator<'a> {
             .arguments
             .iter()
             .zip(overload.parameters())
-            .zip(actuals)
+            .zip(actuals.iter().cloned())
         {
             if parameter.callback().is_some() {
                 continue;
@@ -7426,7 +7439,41 @@ impl<'a> SignatureValidator<'a> {
                 .map(|parameter| substitutions[parameter].clone())
                 .collect(),
         );
-        Ok(Some(substitute_type(overload.result(), &substitutions)))
+        Ok(Some(self.operation_tuple_result(
+            operation,
+            call,
+            &actuals,
+            &substitutions,
+        )))
+    }
+
+    fn operation_tuple_result(
+        &self,
+        operation: &OperationDescriptor,
+        call: &opaal_syntax::CallExpression,
+        actuals: &[Option<ValueType>],
+        substitutions: &BTreeMap<String, ValueType>,
+    ) -> ValueType {
+        let arguments = actuals
+            .iter()
+            .map(|actual| actual.clone().map(OperationInputType::Value))
+            .collect::<Vec<_>>();
+        match operation.resolve_call(&arguments, substitutions) {
+            Ok(candidates) => OperationDescriptor::call_result(&candidates, substitutions),
+            Err((index, OperationInputType::Value(expected))) => {
+                self.errors
+                    .borrow_mut()
+                    .push(ModuleTypeError::OperationArgumentMismatch {
+                        module: self.entry.module().clone(),
+                        name: operation.id().qualified_name(),
+                        argument_span: call.arguments[index].span(),
+                        expected,
+                        actual: actuals[index].clone().unwrap_or(ValueType::Any),
+                    });
+                ValueType::Any
+            }
+            Err(_) => unreachable!("ordinary calls have value carriers"),
+        }
     }
 
     /// Operation inference respects declared dynamic types even when a literal
@@ -11287,6 +11334,7 @@ fn is_standard_module(namespace: &str, module: &str) -> bool {
         && matches!(
             module,
             "value"
+                | "math"
                 | "string"
                 | "list"
                 | "record"

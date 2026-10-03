@@ -815,13 +815,14 @@ impl Session {
                 }
                 StatementKind::ModuleExport(_) if imports_analyzed => {}
                 StatementKind::Job(job)
-                    if policy == EvaluationPolicy::PureOpaal
-                        && job.background_span.is_none()
+                    if job.background_span.is_none()
                         && let Some(operation) = standalone_opaal_operation_help(
                             &job.chain,
                             source_file,
                             &binding_types,
-                        ) =>
+                        )
+                        && (policy == EvaluationPolicy::PureOpaal
+                            || operation.implementation().is_math()) =>
                 {
                     output
                         .write_all(&render_module_operation_help(&operation))

@@ -6,6 +6,7 @@
 //! frame.
 
 use std::cmp::Ordering;
+use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
 use std::sync::Arc;
@@ -384,10 +385,75 @@ impl OperationDescriptor {
         self.implementation
     }
 
-    pub(crate) fn value_overload(&self) -> Option<&OperationOverload> {
-        self.overloads
+    /// A contextual inference template exists only for a single value overload.
+    /// Multiple scalar overloads must wait for argument evidence.
+    pub(crate) fn inference_overload(&self) -> Option<&OperationOverload> {
+        if self.implementation.is_math() {
+            return None;
+        }
+        let mut values = self
+            .overloads
             .iter()
-            .find(|overload| matches!(overload.input(), OperationInputType::Value(_)))
+            .filter(|overload| matches!(overload.input(), OperationInputType::Value(_)));
+        let first = values.next()?;
+        values.next().is_none().then_some(first)
+    }
+
+    pub(crate) fn call_arity(&self) -> usize {
+        self.overloads[0].parameters.len()
+    }
+
+    /// Filter complete tuples, retaining candidates where static evidence is
+    /// unavailable. Expected results never select a numeric input family.
+    pub(crate) fn resolve_call<'a>(
+        &'a self,
+        arguments: &[Option<OperationInputType>],
+        substitutions: &BTreeMap<String, ValueType>,
+    ) -> Result<Vec<&'a OperationOverload>, (usize, OperationInputType)> {
+        let mut candidates = self
+            .overloads
+            .iter()
+            .filter(|overload| overload.parameters.len() == arguments.len())
+            .collect::<Vec<_>>();
+        for (index, actual) in arguments.iter().enumerate() {
+            let Some(actual) = actual else { continue };
+            let expected = candidates
+                .first()
+                .map(|overload| overload.parameters[index].input.clone());
+            candidates.retain(|overload| {
+                let expected = &overload.parameters[index].input;
+                match (expected, actual) {
+                    (OperationInputType::Value(expected), OperationInputType::Value(actual))
+                    | (
+                        OperationInputType::ValueStream(expected),
+                        OperationInputType::ValueStream(actual),
+                    ) => call_types_compatible(&substitute_type(expected, substitutions), actual),
+                    _ => false,
+                }
+            });
+            if candidates.is_empty() {
+                return Err((index, expected.unwrap_or_else(|| actual.clone())));
+            }
+        }
+        Ok(candidates)
+    }
+
+    pub(crate) fn call_result(
+        candidates: &[&OperationOverload],
+        substitutions: &BTreeMap<String, ValueType>,
+    ) -> ValueType {
+        let Some(first) = candidates.first() else {
+            return ValueType::Any;
+        };
+        let result = substitute_type(first.result(), substitutions);
+        if candidates
+            .iter()
+            .all(|candidate| substitute_type(candidate.result(), substitutions) == result)
+        {
+            result
+        } else {
+            ValueType::Any
+        }
     }
 
     /// Only existing unary operations admit the implicit value-pipeline form.
@@ -604,6 +670,17 @@ impl OperationDescriptor {
     }
 }
 
+fn call_types_compatible(expected: &ValueType, actual: &ValueType) -> bool {
+    match (expected, actual) {
+        (ValueType::Any | ValueType::TypeParameter(_), _)
+        | (_, ValueType::Any | ValueType::TypeParameter(_)) => true,
+        (ValueType::List(expected), ValueType::List(actual)) => {
+            call_types_compatible(expected, actual)
+        }
+        _ => expected.accepts_type(actual),
+    }
+}
+
 impl fmt::Display for OperationInputType {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -673,6 +750,14 @@ fn finish_stream_operation(
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum StandardOperation {
+    Abs,
+    Min,
+    Max,
+    Clamp,
+    Floor,
+    Ceil,
+    Round,
+    Sqrt,
     Length,
     Trim,
     Split,
@@ -704,6 +789,22 @@ pub(crate) enum StandardOperation {
     DataGet,
     JsonEncode,
     JsonDecode,
+}
+
+impl StandardOperation {
+    pub(crate) fn is_math(self) -> bool {
+        matches!(
+            self,
+            Self::Abs
+                | Self::Min
+                | Self::Max
+                | Self::Clamp
+                | Self::Floor
+                | Self::Ceil
+                | Self::Round
+                | Self::Sqrt
+        )
+    }
 }
 
 /// A compiled operation descriptor that cannot enter the standard manifest.
@@ -794,6 +895,88 @@ pub fn standard_operation(module: &ModuleId, name: &str) -> Option<OperationDesc
     };
     if namespace != "std" {
         return None;
+    }
+    if standard == "math" {
+        use StandardOperation::{Abs, Ceil, Clamp, Floor, Max, Min, Round, Sqrt};
+        let (implementation, names, homogeneous, documentation) = match name {
+            "abs" => (
+                Abs,
+                vec!["value"],
+                true,
+                "Return the absolute value, preserving Int or Float. Int minimum raises integer overflow.",
+            ),
+            "min" => (
+                Min,
+                vec!["left", "right"],
+                true,
+                "Return the smaller value; equal inputs select left.",
+            ),
+            "max" => (
+                Max,
+                vec!["left", "right"],
+                true,
+                "Return the larger value; equal inputs select left.",
+            ),
+            "clamp" => (
+                Clamp,
+                vec!["value", "min", "max"],
+                true,
+                "Clamp to inclusive bounds; equal bounds are valid. Reversed bounds raise an operation Error.",
+            ),
+            "floor" => (
+                Floor,
+                vec!["value"],
+                false,
+                "Return the largest integral Float at or below the input; no Int conversion.",
+            ),
+            "ceil" => (
+                Ceil,
+                vec!["value"],
+                false,
+                "Return the smallest integral Float at or above the input; no Int conversion.",
+            ),
+            "round" => (
+                Round,
+                vec!["value"],
+                false,
+                "Round to the nearest integral Float, with ties away from zero.",
+            ),
+            "sqrt" => (
+                Sqrt,
+                vec!["value"],
+                false,
+                "Return the correctly rounded binary64 square root (nearest, ties to even). Negative inputs raise an operation Error.",
+            ),
+            _ => return None,
+        };
+        let families = if homogeneous {
+            vec![ValueType::Int, ValueType::Float]
+        } else {
+            vec![ValueType::Float]
+        };
+        let descriptor = OperationDescriptor {
+            id: OperationId::new(module.clone(), name),
+            type_parameters: Vec::new(),
+            overloads: families
+                .into_iter()
+                .map(|family| {
+                    OperationOverload::values(
+                        names.iter().map(|name| (*name, family.clone())).collect(),
+                        family,
+                    )
+                })
+                .collect(),
+            documentation: format!(
+                "{documentation} All arguments must match one declared numeric family; no implicit conversion. Float results are finite with positive zero. Pure calls share caller work budgets and cancellation; no method or pipeline form."
+            ),
+            purity: OperationPurity::Pure,
+            downstream: DownstreamCallMetadata::foundation(),
+            implementation,
+        };
+        descriptor
+            .validate()
+            .expect("compiled math descriptors must be valid");
+        return Some(descriptor);
     }
     if standard == "list" {
         use ValueType::{Any, Bool, Int, List, TypeParameter};
@@ -1167,6 +1350,14 @@ pub fn standard_operation(module: &ModuleId, name: &str) -> Option<OperationDesc
 #[must_use]
 pub(crate) fn standard_operations(module: &ModuleId) -> Vec<OperationDescriptor> {
     [
+        "abs",
+        "min",
+        "max",
+        "clamp",
+        "floor",
+        "ceil",
+        "round",
+        "sqrt",
         "length",
         "trim",
         "split",
@@ -1202,6 +1393,92 @@ pub(crate) fn standard_operations(module: &ModuleId) -> Vec<OperationDescriptor>
     .into_iter()
     .filter_map(|name| standard_operation(module, name))
     .collect()
+}
+
+/// Scalar bodies run only after the descriptor's concrete tuple is selected.
+pub(crate) fn numeric_operation(
+    descriptor: &OperationDescriptor,
+    arguments: &[Value],
+) -> Result<Value, OperationError> {
+    use StandardOperation::{Abs, Ceil, Clamp, Floor, Max, Min, Round, Sqrt};
+    let invalid = |message: &str| OperationError::InvalidArgument {
+        operation: descriptor.id().qualified_name(),
+        message: message.to_owned(),
+    };
+    match arguments {
+        [Value::Int(value)] if descriptor.implementation == Abs => value
+            .checked_abs()
+            .map(Value::Int)
+            .ok_or(OperationError::IntegerOverflow { operator: "abs" }),
+        [Value::Int(left), Value::Int(right)] => Ok(Value::Int(match descriptor.implementation {
+            Min => {
+                if left <= right {
+                    *left
+                } else {
+                    *right
+                }
+            }
+            Max => {
+                if left >= right {
+                    *left
+                } else {
+                    *right
+                }
+            }
+            _ => unreachable!("numeric tuple validated"),
+        })),
+        [Value::Int(value), Value::Int(min), Value::Int(max)] => {
+            if min > max {
+                return Err(invalid("minimum exceeds maximum"));
+            }
+            Ok(Value::Int((*value).clamp(*min, *max)))
+        }
+        _ => {
+            let mut values = [0.0; 3];
+            for (slot, argument) in values.iter_mut().zip(arguments) {
+                let Value::Float(value) = argument else {
+                    unreachable!("numeric tuple validated")
+                };
+                *slot = value.get();
+            }
+            let result = match (descriptor.implementation, &values[..arguments.len()]) {
+                (Abs, [value]) => value.abs(),
+                (Min, [left, right]) => {
+                    if left <= right {
+                        *left
+                    } else {
+                        *right
+                    }
+                }
+                (Max, [left, right]) => {
+                    if left >= right {
+                        *left
+                    } else {
+                        *right
+                    }
+                }
+                (Clamp, [value, min, max]) => {
+                    if min > max {
+                        return Err(invalid("minimum exceeds maximum"));
+                    }
+                    value.clamp(*min, *max)
+                }
+                (Floor, [value]) => value.floor(),
+                (Ceil, [value]) => value.ceil(),
+                (Round, [value]) => value.round(),
+                (Sqrt, [value]) => {
+                    if *value < 0.0 {
+                        return Err(invalid("square root requires a nonnegative value"));
+                    }
+                    value.sqrt()
+                }
+                _ => unreachable!("numeric tuple validated"),
+            };
+            FiniteFloat::new(result)
+                .map(Value::Float)
+                .map_err(|_| OperationError::NonFiniteFloat)
+        }
+    }
 }
 
 /// A pure-operation failure, reported without a source span.

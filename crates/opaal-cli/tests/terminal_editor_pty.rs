@@ -399,6 +399,42 @@ fn interactive_project_spelling_is_a_language_error_not_a_project_command() {
 }
 
 #[test]
+fn numeric_report_values_are_retained_across_real_terminal_cells() {
+    let work = unique_dir("numeric-report");
+    fs::write(
+        work.join("report.opaal"),
+        include_bytes!("../../../examples/numeric-report/report.opaal"),
+    )
+    .unwrap();
+    let state = work.to_str().unwrap();
+    let mut pty = Pty::spawn_with_env(
+        OPAAL,
+        &[("XDG_STATE_HOME", state), ("XDG_CONFIG_HOME", state)],
+    );
+    pty.wait_for(">> ");
+    pty.send(
+        format!(
+            "import '{}' as report\r",
+            work.join("report.opaal").display()
+        )
+        .as_bytes(),
+    );
+    pty.await_prompt_after("as report");
+    let mark = pty.mark();
+    pty.send(b"report::build().percent\r");
+    pty.wait_for_from(mark, "93.0");
+    pty.await_prompt_after("93.0");
+    let mark = pty.mark();
+    pty.send(b"report::fallback()\r");
+    pty.wait_for_from(mark, "0.0");
+    pty.await_prompt_after("0.0");
+    assert!(!pty.rendered_from(0).contains("error["));
+    exit_cleanly(&mut pty);
+    drop(pty);
+    fs::remove_dir_all(work).unwrap();
+}
+
+#[test]
 fn interactive_foreground_program_runs_and_background_stays_refused() {
     let work = unique_dir("direct-program");
     std::os::unix::fs::symlink(DIRECT_PROBE, work.join("opaal-direct-probe"))

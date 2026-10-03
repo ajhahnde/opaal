@@ -6,6 +6,11 @@ All notable changes to OPAAL are documented here.
 
 ### Added
 
+- Add pure `std::math` scalar operations: homogeneous Int/Float `abs`, `min`,
+  `max`, and `clamp`, plus Float `floor`, `ceil`, `round`, and `sqrt`.
+  Calls select complete argument tuples, preserve finite Float and positive
+  zero, and report checked overflow and invalid domains as operation Errors.
+  Include ordinary, interactive, and controlled numeric report examples.
 - Add opt-in `opaal check --format json SOURCE` diagnostics with a versioned
   schema, UTF-8 byte ranges, related locations, notes, and classified outcomes.
 - Add bounded `std::string`, `std::list`, and `std::record` operations for
