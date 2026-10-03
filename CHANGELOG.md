@@ -18,6 +18,8 @@ All notable changes to OPAAL are documented here.
 
 ### Changed
 
+- Avoid repeated defining-source parsing in warmed function and callback calls,
+  preserving live action permission checks and existing capsule bytes.
 - Support local module imports in CLI interactive sessions while retaining
   module and type identities across cells.
 

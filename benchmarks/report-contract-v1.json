@@ -1,0 +1,1069 @@
+{
+  "protocol": "3 discarded warmups + 7 alternating pairs, independent process workers",
+  "thresholds": {
+    "report_1000_10000_each_pair_gain": "wall and CPU each pair > max(5% baseline median, baseline max-min)",
+    "all_other_median_wall_cpu_regression": "<= max(5% baseline median, 0.002 seconds)",
+    "each_case_peak_rss": "<= baseline maximum + max(5% baseline maximum, 1048576 bytes)"
+  },
+  "cases": [
+    {
+      "case": "report-0",
+      "commands": {
+        "baseline": [
+          "<cli>",
+          "json-report.opaal"
+        ],
+        "candidate": [
+          "<cli>",
+          "json-report.opaal"
+        ]
+      },
+      "expected_sha256": "bacaab76dfad6ab9564ac0f6079c70d52c3cfa4bfd2b1af909800239d5a2ac12",
+      "pair_order": [
+        [
+          "baseline",
+          "candidate"
+        ],
+        [
+          "candidate",
+          "baseline"
+        ],
+        [
+          "baseline",
+          "candidate"
+        ],
+        [
+          "candidate",
+          "baseline"
+        ],
+        [
+          "baseline",
+          "candidate"
+        ],
+        [
+          "candidate",
+          "baseline"
+        ],
+        [
+          "baseline",
+          "candidate"
+        ]
+      ]
+    },
+    {
+      "case": "report-1",
+      "commands": {
+        "baseline": [
+          "<cli>",
+          "json-report.opaal"
+        ],
+        "candidate": [
+          "<cli>",
+          "json-report.opaal"
+        ]
+      },
+      "expected_sha256": "e5a8f7fdbc39af42640871fc82cb25a1c58da3b15f3c3b38ccafe8785a56c4f0",
+      "pair_order": [
+        [
+          "baseline",
+          "candidate"
+        ],
+        [
+          "candidate",
+          "baseline"
+        ],
+        [
+          "baseline",
+          "candidate"
+        ],
+        [
+          "candidate",
+          "baseline"
+        ],
+        [
+          "baseline",
+          "candidate"
+        ],
+        [
+          "candidate",
+          "baseline"
+        ],
+        [
+          "baseline",
+          "candidate"
+        ]
+      ]
+    },
+    {
+      "case": "report-100",
+      "commands": {
+        "baseline": [
+          "<cli>",
+          "json-report.opaal"
+        ],
+        "candidate": [
+          "<cli>",
+          "json-report.opaal"
+        ]
+      },
+      "expected_sha256": "5f3e57ca8f2f9b66d82c13f0f12f15764b0f9c492b40853b31cb674b21857ef7",
+      "pair_order": [
+        [
+          "baseline",
+          "candidate"
+        ],
+        [
+          "candidate",
+          "baseline"
+        ],
+        [
+          "baseline",
+          "candidate"
+        ],
+        [
+          "candidate",
+          "baseline"
+        ],
+        [
+          "baseline",
+          "candidate"
+        ],
+        [
+          "candidate",
+          "baseline"
+        ],
+        [
+          "baseline",
+          "candidate"
+        ]
+      ]
+    },
+    {
+      "case": "report-1000",
+      "commands": {
+        "baseline": [
+          "<cli>",
+          "json-report.opaal"
+        ],
+        "candidate": [
+          "<cli>",
+          "json-report.opaal"
+        ]
+      },
+      "expected_sha256": "16f93a8d903f50c4ea34815bc03bfb6192e20cbcf248791d8aea24b8a21ddcdf",
+      "pair_order": [
+        [
+          "baseline",
+          "candidate"
+        ],
+        [
+          "candidate",
+          "baseline"
+        ],
+        [
+          "baseline",
+          "candidate"
+        ],
+        [
+          "candidate",
+          "baseline"
+        ],
+        [
+          "baseline",
+          "candidate"
+        ],
+        [
+          "candidate",
+          "baseline"
+        ],
+        [
+          "baseline",
+          "candidate"
+        ]
+      ]
+    },
+    {
+      "case": "report-10000",
+      "commands": {
+        "baseline": [
+          "<cli>",
+          "json-report.opaal"
+        ],
+        "candidate": [
+          "<cli>",
+          "json-report.opaal"
+        ]
+      },
+      "expected_sha256": "1fe5ae0c99544991d30d8b1d009723b52be5a3dbb89174aa998602b33936cdd3",
+      "pair_order": [
+        [
+          "baseline",
+          "candidate"
+        ],
+        [
+          "candidate",
+          "baseline"
+        ],
+        [
+          "baseline",
+          "candidate"
+        ],
+        [
+          "candidate",
+          "baseline"
+        ],
+        [
+          "baseline",
+          "candidate"
+        ],
+        [
+          "candidate",
+          "baseline"
+        ],
+        [
+          "baseline",
+          "candidate"
+        ]
+      ]
+    },
+    {
+      "case": "fresh-empty-startup",
+      "commands": {
+        "baseline": [
+          "<cli>",
+          "empty.opaal"
+        ],
+        "candidate": [
+          "<cli>",
+          "empty.opaal"
+        ]
+      },
+      "expected_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "pair_order": [
+        [
+          "baseline",
+          "candidate"
+        ],
+        [
+          "candidate",
+          "baseline"
+        ],
+        [
+          "baseline",
+          "candidate"
+        ],
+        [
+          "candidate",
+          "baseline"
+        ],
+        [
+          "baseline",
+          "candidate"
+        ],
+        [
+          "candidate",
+          "baseline"
+        ],
+        [
+          "baseline",
+          "candidate"
+        ]
+      ]
+    },
+    {
+      "case": "raw-one-unused",
+      "commands": {
+        "baseline": [
+          "<raw>",
+          "construct",
+          "1",
+          "0",
+          "2000"
+        ],
+        "candidate": [
+          "<raw>",
+          "construct",
+          "1",
+          "0",
+          "2000"
+        ]
+      },
+      "expected_sha256": "bf42c35f55ebb316b97e2bded9c786a08c57d3cbe5e854b3f637da031bc3d8c1",
+      "pair_order": [
+        [
+          "baseline",
+          "candidate"
+        ],
+        [
+          "candidate",
+          "baseline"
+        ],
+        [
+          "baseline",
+          "candidate"
+        ],
+        [
+          "candidate",
+          "baseline"
+        ],
+        [
+          "baseline",
+          "candidate"
+        ],
+        [
+          "candidate",
+          "baseline"
+        ],
+        [
+          "baseline",
+          "candidate"
+        ]
+      ]
+    },
+    {
+      "case": "raw-many-unused",
+      "commands": {
+        "baseline": [
+          "<raw>",
+          "construct",
+          "128",
+          "0",
+          "10"
+        ],
+        "candidate": [
+          "<raw>",
+          "construct",
+          "128",
+          "0",
+          "10"
+        ]
+      },
+      "expected_sha256": "f745ee4ece50fd30d80f86205261afa87e0fcf478fb108a29b220ad54140e49c",
+      "pair_order": [
+        [
+          "baseline",
+          "candidate"
+        ],
+        [
+          "candidate",
+          "baseline"
+        ],
+        [
+          "baseline",
+          "candidate"
+        ],
+        [
+          "candidate",
+          "baseline"
+        ],
+        [
+          "baseline",
+          "candidate"
+        ],
+        [
+          "candidate",
+          "baseline"
+        ],
+        [
+          "baseline",
+          "candidate"
+        ]
+      ]
+    },
+    {
+      "case": "raw-large-many-unused",
+      "commands": {
+        "baseline": [
+          "<raw>",
+          "construct",
+          "128",
+          "32768",
+          "10"
+        ],
+        "candidate": [
+          "<raw>",
+          "construct",
+          "128",
+          "32768",
+          "10"
+        ]
+      },
+      "expected_sha256": "79f5edec1453ac7d9ac4751dbc75e380221dd6958d66d87cc4f78a48639c1fe8",
+      "pair_order": [
+        [
+          "baseline",
+          "candidate"
+        ],
+        [
+          "candidate",
+          "baseline"
+        ],
+        [
+          "baseline",
+          "candidate"
+        ],
+        [
+          "candidate",
+          "baseline"
+        ],
+        [
+          "baseline",
+          "candidate"
+        ],
+        [
+          "candidate",
+          "baseline"
+        ],
+        [
+          "baseline",
+          "candidate"
+        ]
+      ]
+    },
+    {
+      "case": "raw-large-source",
+      "commands": {
+        "baseline": [
+          "<raw>",
+          "construct",
+          "1",
+          "262144",
+          "20"
+        ],
+        "candidate": [
+          "<raw>",
+          "construct",
+          "1",
+          "262144",
+          "20"
+        ]
+      },
+      "expected_sha256": "88375bffcc7cb93fa49c9ccff45f7ae8826f0337d6f87592c363e5b3ced4593e",
+      "pair_order": [
+        [
+          "baseline",
+          "candidate"
+        ],
+        [
+          "candidate",
+          "baseline"
+        ],
+        [
+          "baseline",
+          "candidate"
+        ],
+        [
+          "candidate",
+          "baseline"
+        ],
+        [
+          "baseline",
+          "candidate"
+        ],
+        [
+          "candidate",
+          "baseline"
+        ],
+        [
+          "baseline",
+          "candidate"
+        ]
+      ]
+    },
+    {
+      "case": "raw-repeated-closure-0",
+      "commands": {
+        "baseline": [
+          "<raw>",
+          "closure",
+          "0",
+          "500"
+        ],
+        "candidate": [
+          "<raw>",
+          "closure",
+          "0",
+          "500"
+        ]
+      },
+      "expected_sha256": "3feb51a33bb91105f0a0266e0e5037d4b7dac114aebc2907db79dfa55bcfba60",
+      "pair_order": [
+        [
+          "baseline",
+          "candidate"
+        ],
+        [
+          "candidate",
+          "baseline"
+        ],
+        [
+          "baseline",
+          "candidate"
+        ],
+        [
+          "candidate",
+          "baseline"
+        ],
+        [
+          "baseline",
+          "candidate"
+        ],
+        [
+          "candidate",
+          "baseline"
+        ],
+        [
+          "baseline",
+          "candidate"
+        ]
+      ]
+    },
+    {
+      "case": "raw-repeated-closure-131072",
+      "commands": {
+        "baseline": [
+          "<raw>",
+          "closure",
+          "131072",
+          "500"
+        ],
+        "candidate": [
+          "<raw>",
+          "closure",
+          "131072",
+          "500"
+        ]
+      },
+      "expected_sha256": "15c952fd09b9af608d76141d66e839fdcaee4f66028d366bcc2c6ac580ba88a1",
+      "pair_order": [
+        [
+          "baseline",
+          "candidate"
+        ],
+        [
+          "candidate",
+          "baseline"
+        ],
+        [
+          "baseline",
+          "candidate"
+        ],
+        [
+          "candidate",
+          "baseline"
+        ],
+        [
+          "baseline",
+          "candidate"
+        ],
+        [
+          "candidate",
+          "baseline"
+        ],
+        [
+          "baseline",
+          "candidate"
+        ]
+      ]
+    },
+    {
+      "case": "restore-0",
+      "commands": {
+        "baseline": [
+          "/usr/bin/env",
+          "REPORT_PADDING=0",
+          "REPORT_REPEATS=2000",
+          "<phases>",
+          "eval::tests::callable_classification::measure_restore_phase",
+          "--exact",
+          "--ignored",
+          "--nocapture",
+          "--test-threads=1"
+        ],
+        "candidate": [
+          "/usr/bin/env",
+          "REPORT_PADDING=0",
+          "REPORT_REPEATS=2000",
+          "<phases>",
+          "eval::tests::callable_classification::measure_restore_phase",
+          "--exact",
+          "--ignored",
+          "--nocapture",
+          "--test-threads=1"
+        ]
+      },
+      "expected_sha256": "92a260fbdd42cca919f008c1b65288a0bc0f759115bee36b564c7c0e1da02fe5",
+      "pair_order": [
+        [
+          "baseline",
+          "candidate"
+        ],
+        [
+          "candidate",
+          "baseline"
+        ],
+        [
+          "baseline",
+          "candidate"
+        ],
+        [
+          "candidate",
+          "baseline"
+        ],
+        [
+          "baseline",
+          "candidate"
+        ],
+        [
+          "candidate",
+          "baseline"
+        ],
+        [
+          "baseline",
+          "candidate"
+        ]
+      ]
+    },
+    {
+      "case": "restore-32768",
+      "commands": {
+        "baseline": [
+          "/usr/bin/env",
+          "REPORT_PADDING=32768",
+          "REPORT_REPEATS=200",
+          "<phases>",
+          "eval::tests::callable_classification::measure_restore_phase",
+          "--exact",
+          "--ignored",
+          "--nocapture",
+          "--test-threads=1"
+        ],
+        "candidate": [
+          "/usr/bin/env",
+          "REPORT_PADDING=32768",
+          "REPORT_REPEATS=200",
+          "<phases>",
+          "eval::tests::callable_classification::measure_restore_phase",
+          "--exact",
+          "--ignored",
+          "--nocapture",
+          "--test-threads=1"
+        ]
+      },
+      "expected_sha256": "957debc81e67377912629abf0ae720f3899fe544e8d02ab8328c69d7fde8e5ac",
+      "pair_order": [
+        [
+          "baseline",
+          "candidate"
+        ],
+        [
+          "candidate",
+          "baseline"
+        ],
+        [
+          "baseline",
+          "candidate"
+        ],
+        [
+          "candidate",
+          "baseline"
+        ],
+        [
+          "baseline",
+          "candidate"
+        ],
+        [
+          "candidate",
+          "baseline"
+        ],
+        [
+          "baseline",
+          "candidate"
+        ]
+      ]
+    },
+    {
+      "case": "call-cold-0",
+      "commands": {
+        "baseline": [
+          "<raw>",
+          "call",
+          "cold",
+          "0",
+          "2000"
+        ],
+        "candidate": [
+          "<raw>",
+          "call",
+          "cold",
+          "0",
+          "2000"
+        ]
+      },
+      "expected_sha256": "834bd26886579723c0c710eb8555792febfa225cdc28c56518589b0190532911",
+      "pair_order": [
+        [
+          "baseline",
+          "candidate"
+        ],
+        [
+          "candidate",
+          "baseline"
+        ],
+        [
+          "baseline",
+          "candidate"
+        ],
+        [
+          "candidate",
+          "baseline"
+        ],
+        [
+          "baseline",
+          "candidate"
+        ],
+        [
+          "candidate",
+          "baseline"
+        ],
+        [
+          "baseline",
+          "candidate"
+        ]
+      ]
+    },
+    {
+      "case": "call-cold-131072",
+      "commands": {
+        "baseline": [
+          "<raw>",
+          "call",
+          "cold",
+          "131072",
+          "100"
+        ],
+        "candidate": [
+          "<raw>",
+          "call",
+          "cold",
+          "131072",
+          "100"
+        ]
+      },
+      "expected_sha256": "2f8293c8ce3bd2d5a916ccba725422a65502c93be3af181aad73f36398a59412",
+      "pair_order": [
+        [
+          "baseline",
+          "candidate"
+        ],
+        [
+          "candidate",
+          "baseline"
+        ],
+        [
+          "baseline",
+          "candidate"
+        ],
+        [
+          "candidate",
+          "baseline"
+        ],
+        [
+          "baseline",
+          "candidate"
+        ],
+        [
+          "candidate",
+          "baseline"
+        ],
+        [
+          "baseline",
+          "candidate"
+        ]
+      ]
+    },
+    {
+      "case": "call-warm-131072",
+      "commands": {
+        "baseline": [
+          "<raw>",
+          "call",
+          "warm",
+          "131072",
+          "500"
+        ],
+        "candidate": [
+          "<raw>",
+          "call",
+          "warm",
+          "131072",
+          "500"
+        ]
+      },
+      "expected_sha256": "062a3e35709cdcd0fb9ff1a3c7129fcfd2b14622190e53d98b8fb7746c3a15d2",
+      "pair_order": [
+        [
+          "baseline",
+          "candidate"
+        ],
+        [
+          "candidate",
+          "baseline"
+        ],
+        [
+          "baseline",
+          "candidate"
+        ],
+        [
+          "candidate",
+          "baseline"
+        ],
+        [
+          "baseline",
+          "candidate"
+        ],
+        [
+          "candidate",
+          "baseline"
+        ],
+        [
+          "baseline",
+          "candidate"
+        ]
+      ]
+    },
+    {
+      "case": "callback-empty-preparation",
+      "commands": {
+        "baseline": [
+          "/usr/bin/env",
+          "REPORT_MODE=empty-preparation",
+          "REPORT_REPEATS=2000",
+          "<phases>",
+          "eval::tests::callable_classification::measure_first_use_phase",
+          "--exact",
+          "--ignored",
+          "--nocapture",
+          "--test-threads=1"
+        ],
+        "candidate": [
+          "/usr/bin/env",
+          "REPORT_MODE=empty-preparation",
+          "REPORT_REPEATS=2000",
+          "<phases>",
+          "eval::tests::callable_classification::measure_first_use_phase",
+          "--exact",
+          "--ignored",
+          "--nocapture",
+          "--test-threads=1"
+        ]
+      },
+      "expected_sha256": "bafe4598aea2ca6c3de3a90764af46b823d4cc9bc7708fb1d0c2c386427f2c8b",
+      "pair_order": [
+        [
+          "baseline",
+          "candidate"
+        ],
+        [
+          "candidate",
+          "baseline"
+        ],
+        [
+          "baseline",
+          "candidate"
+        ],
+        [
+          "candidate",
+          "baseline"
+        ],
+        [
+          "baseline",
+          "candidate"
+        ],
+        [
+          "candidate",
+          "baseline"
+        ],
+        [
+          "baseline",
+          "candidate"
+        ]
+      ]
+    },
+    {
+      "case": "callback-repeated-preparation",
+      "commands": {
+        "baseline": [
+          "/usr/bin/env",
+          "REPORT_MODE=nonempty-preparation",
+          "REPORT_REPEATS=2000",
+          "<phases>",
+          "eval::tests::callable_classification::measure_first_use_phase",
+          "--exact",
+          "--ignored",
+          "--nocapture",
+          "--test-threads=1"
+        ],
+        "candidate": [
+          "/usr/bin/env",
+          "REPORT_MODE=nonempty-preparation",
+          "REPORT_REPEATS=2000",
+          "<phases>",
+          "eval::tests::callable_classification::measure_first_use_phase",
+          "--exact",
+          "--ignored",
+          "--nocapture",
+          "--test-threads=1"
+        ]
+      },
+      "expected_sha256": "69d0689d46668f62df242e2250461fbc5f4abddff8e78cf03c3d3c0ba5a4186d",
+      "pair_order": [
+        [
+          "baseline",
+          "candidate"
+        ],
+        [
+          "candidate",
+          "baseline"
+        ],
+        [
+          "baseline",
+          "candidate"
+        ],
+        [
+          "candidate",
+          "baseline"
+        ],
+        [
+          "baseline",
+          "candidate"
+        ],
+        [
+          "candidate",
+          "baseline"
+        ],
+        [
+          "baseline",
+          "candidate"
+        ]
+      ]
+    },
+    {
+      "case": "retained-originals",
+      "commands": {
+        "baseline": [
+          "/usr/bin/env",
+          "REPORT_MODE=originals",
+          "REPORT_REPEATS=50000",
+          "<phases>",
+          "eval::tests::callable_classification::measure_first_use_phase",
+          "--exact",
+          "--ignored",
+          "--nocapture",
+          "--test-threads=1"
+        ],
+        "candidate": [
+          "/usr/bin/env",
+          "REPORT_MODE=originals",
+          "REPORT_REPEATS=50000",
+          "<phases>",
+          "eval::tests::callable_classification::measure_first_use_phase",
+          "--exact",
+          "--ignored",
+          "--nocapture",
+          "--test-threads=1"
+        ]
+      },
+      "expected_sha256": "8b61dba8d0640537c50ce180dddcc65df92ec190f7bf78553de6870be1e07eb9",
+      "pair_order": [
+        [
+          "baseline",
+          "candidate"
+        ],
+        [
+          "candidate",
+          "baseline"
+        ],
+        [
+          "baseline",
+          "candidate"
+        ],
+        [
+          "candidate",
+          "baseline"
+        ],
+        [
+          "baseline",
+          "candidate"
+        ],
+        [
+          "candidate",
+          "baseline"
+        ],
+        [
+          "baseline",
+          "candidate"
+        ]
+      ]
+    },
+    {
+      "case": "retained-clones",
+      "commands": {
+        "baseline": [
+          "/usr/bin/env",
+          "REPORT_MODE=clones",
+          "REPORT_REPEATS=50000",
+          "<phases>",
+          "eval::tests::callable_classification::measure_first_use_phase",
+          "--exact",
+          "--ignored",
+          "--nocapture",
+          "--test-threads=1"
+        ],
+        "candidate": [
+          "/usr/bin/env",
+          "REPORT_MODE=clones",
+          "REPORT_REPEATS=50000",
+          "<phases>",
+          "eval::tests::callable_classification::measure_first_use_phase",
+          "--exact",
+          "--ignored",
+          "--nocapture",
+          "--test-threads=1"
+        ]
+      },
+      "expected_sha256": "139193d254b96e83bf4d152efba5f784e11221f9f4fdaf152fcdee65f3590b6b",
+      "pair_order": [
+        [
+          "baseline",
+          "candidate"
+        ],
+        [
+          "candidate",
+          "baseline"
+        ],
+        [
+          "baseline",
+          "candidate"
+        ],
+        [
+          "candidate",
+          "baseline"
+        ],
+        [
+          "baseline",
+          "candidate"
+        ],
+        [
+          "candidate",
+          "baseline"
+        ],
+        [
+          "baseline",
+          "candidate"
+        ]
+      ]
+    }
+  ],
+  "schema": "opaal-report-performance-contract-v1"
+}
