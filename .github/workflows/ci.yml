@@ -176,6 +176,13 @@ jobs:
             --examples "dist/opaal-v${candidate_version}-data-processing.tar.gz" \
             --expected-version "${candidate_version}" --expected-source "$(git rev-parse HEAD)" \
             --platform linux-x86_64 --report dist/data-processing-linux.json
+      - name: Qualify scalar numeric report workflows
+        run: |
+          candidate_version=$(python3 -c 'from ci.package_release import VERSION; print(VERSION)')
+          python3 ci/qualify_numeric_operations.py \
+            --archive "dist/opaal-v${candidate_version}-linux-x86_64.tar.gz" \
+            --expected-source "$(git rev-parse HEAD)" --platform linux-x86_64 \
+            --report dist/numeric-operations-linux.json
       - name: Retain candidate identity and qualification evidence
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -206,6 +213,13 @@ jobs:
             --examples "dist/opaal-v${candidate_version}-data-processing.tar.gz" \
             --expected-version "${candidate_version}" --expected-source "$(git rev-parse HEAD)" \
             --platform macos-arm64 --report dist/data-processing-macos.json
+      - name: Qualify scalar numeric report workflows
+        run: |
+          candidate_version=$(python3 -c 'from ci.package_release import VERSION; print(VERSION)')
+          python3 ci/qualify_numeric_operations.py \
+            --archive "dist/opaal-v${candidate_version}-macos-arm64.tar.gz" \
+            --expected-source "$(git rev-parse HEAD)" --platform macos-arm64 \
+            --report dist/numeric-operations-macos.json
       - name: Retain candidate identity and qualification evidence
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:

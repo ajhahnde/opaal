@@ -27,7 +27,7 @@ WORKSPACE_PACKAGES = {
 }
 PRIMARY_BINARIES = {"opaal", "opaal-language-server"}
 FUZZ_TARGETS = {
-    "lexer", "parser", "expander", "resources", "data_operations_limits", "secret_sinks"
+    "lexer", "parser", "expander", "resources", "data_operations_limits", "numeric_operations_limits", "secret_sinks"
 }
 FUZZ_PATH_PACKAGES = {"opaal-platform", "opaal-runtime", "opaal-syntax"}
 QUALIFICATION_FILES = {

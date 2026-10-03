@@ -1,0 +1,8 @@
+schema_version = 1
+project = "numeric_report"
+environment = "ci"
+[[rules]]
+decision = "grant"
+effect = "filesystem.write"
+scope = "project.evidence"
+required_enforcement = "enforced"

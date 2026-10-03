@@ -56,5 +56,12 @@ test = false
 doc = false
 bench = false
 
+[[bin]]
+name = "numeric_operations_limits"
+path = "fuzz_targets/numeric_operations_limits.rs"
+test = false
+doc = false
+bench = false
+
 [workspace]
 members = ["."]

@@ -4575,13 +4575,11 @@ impl Evaluator<'_, '_> {
                 .binding_types
                 .qualified_operation(self.source.id(), &segments)
             {
-                let overload = operation
-                    .value_overload()
-                    .expect("callable operations have a value overload");
-                if call.arguments.len() != overload.parameters().len() {
+                let overload = operation.inference_overload();
+                if call.arguments.len() != operation.call_arity() {
                     return Err(self.error(
                         RuntimeErrorKind::ArityMismatch {
-                            expected: overload.parameters().len(),
+                            expected: operation.call_arity(),
                             actual: call.arguments.len(),
                         },
                         span,
@@ -4639,6 +4637,7 @@ impl Evaluator<'_, '_> {
                     .collect();
                 if type_arguments.is_empty()
                     && let Some(expected) = expected_result
+                    && let Some(overload) = overload
                 {
                     crate::module::unify_type(overload.result(), expected, &mut substitutions);
                 }
@@ -4647,17 +4646,24 @@ impl Evaluator<'_, '_> {
                 let infer_types = type_arguments.is_empty()
                     && !operation.type_parameters().is_empty()
                     && operation.implementation() != crate::operation::StandardOperation::Length;
-                for (argument, parameter) in call.arguments.iter().zip(overload.parameters()) {
-                    let crate::operation::OperationInputType::Value(input) = parameter.input()
-                    else {
-                        unreachable!("value call parameter")
-                    };
-                    let expected = crate::module::substitute_type(input, &substitutions);
+                for (index, argument) in call.arguments.iter().enumerate() {
+                    let input = overload.map(|overload| {
+                        let crate::operation::OperationInputType::Value(input) =
+                            overload.parameters()[index].input()
+                        else {
+                            unreachable!("value call parameter")
+                        };
+                        input
+                    });
+                    let expected =
+                        input.map(|input| crate::module::substitute_type(input, &substitutions));
                     // Unbound descriptor parameters are not concrete evidence
                     // for a nested call's independently named generics.
-                    let expected =
-                        (!crate::module::has_unbound_type_parameters(input, &substitutions))
-                            .then_some(&expected);
+                    let expected = input
+                        .filter(|input| {
+                            !crate::module::has_unbound_type_parameters(input, &substitutions)
+                        })
+                        .and(expected.as_ref());
                     let (value, result_type) = if infer_types {
                         self.operation_argument(argument, scope, expected)?
                     } else {
@@ -4684,10 +4690,19 @@ impl Evaluator<'_, '_> {
                     .cloned()
                     .zip(type_arguments.iter().cloned())
                     .collect();
-                let result_type = crate::module::substitute_type(overload.result(), &substitutions);
+                let result_type = overload.map_or(ValueType::Any, |overload| {
+                    crate::module::substitute_type(overload.result(), &substitutions)
+                });
                 return self
                     .execute_operation(&operation, arguments, &type_arguments, span)
-                    .map(|value| (value, result_type));
+                    .map(|value| {
+                        let result_type = if operation.implementation().is_math() {
+                            runtime_value_type(&value).expect("numeric result")
+                        } else {
+                            result_type
+                        };
+                        (value, result_type)
+                    });
             }
         }
 
@@ -6218,6 +6233,7 @@ fn decode_double_escape(raw: &str) -> String {
 #[cfg(test)]
 mod tests {
     mod callable_classification;
+    mod numeric_operations;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use opaal_platform::{DirectoryEntry, DirectoryEntryKind, DirectoryReadError};
