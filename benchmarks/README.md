@@ -67,4 +67,47 @@ Checked-in evidence is one bounded macOS-arm64 observation under recorded host
 load. It is not a universal product guarantee and does not establish external
 packaging, another OS or architecture, emulation, or physical hardware.
 
+## Report and callable comparison
+
+`report-contract-v1.json` defines a separate 21-case before/after comparison:
+reports with 0, 1, 100, 1,000 and 10,000 jobs; empty startup; unused definitions
+and repeated closure construction; restoration; cold and warmed calls; empty
+and repeated callback preparation; and 50,000 retained originals or clones.
+Cold runs create fresh callable families and include their first invocation.
+Only the explicitly warmed-call case performs an initial call before its loop.
+
+Build each version from a fresh public source export, with the same declared
+Rust toolchain and release profile. The export contains no Git metadata or
+account state. The builder refuses the checkout and retains source, compiler,
+command, helper-source and binary identities. It builds the CLI and raw API
+fixture, then temporarily replaces semantic tests in the export with the phase
+fixture. Counters, race scheduling, weak-reference observers and allocator
+diagnostics are removed from measured sources. The original exported source is
+restored after that build; the retained phase sources describe the measured
+executable. No runtime option or alternate evaluator path is introduced.
+
+```sh
+python3 ci/build_report_performance.py --source BEFORE_EXPORT --output BEFORE_BUILD
+python3 ci/build_report_performance.py --source AFTER_EXPORT --output AFTER_BUILD
+python3 ci/measure_report_performance.py \
+  --before BEFORE_CLI --after AFTER_CLI \
+  --before-raw BEFORE_RAW --after-raw AFTER_RAW \
+  --before-phases BEFORE_PHASES --after-phases AFTER_PHASES \
+  --output comparison.json
+```
+
+The build manifests identify the three executable paths for each version.
+Use the same host for a pair and qualify Linux x86_64 and macOS arm64 separately.
+The runner retains three discarded process warmups and seven alternating pairs,
+output bytes, wall time, user/system CPU and peak RSS. Every large-report pair
+must improve wall and CPU by more than the larger of 5% of the baseline median
+or its full observed spread. All other cases allow median regression of at
+most the larger of 5% or 2 ms. Every case permits peak RSS growth of at most the
+larger of 5% or 1 MiB. A report gain cannot waive a construction or memory failure.
+Invalid JSON diagnostics and valid JSON/text reports must also match exactly.
+Each attempt needs a new output path; failed attempts remain evidence.
+
+These checks qualify the named workloads and exact binaries. They do not imply
+uniform speed gains for other programs or acceptable overhead on every host.
+
 [← OPAAL documentation](https://opaal-lang.org/docs/)

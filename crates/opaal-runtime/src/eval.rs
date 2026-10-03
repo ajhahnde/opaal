@@ -13,7 +13,7 @@ use std::fmt;
 use std::io;
 use std::path::Path;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
 use std::time::Instant as SystemInstant;
 
 use opaal_platform::{
@@ -4288,12 +4288,16 @@ impl Evaluator<'_, '_> {
         let callable = CallableValue {
             name: Some(Arc::clone(&name)),
             parameters,
-            type_parameters: signature
-                .as_ref()
-                .map_or_else(Vec::new, |signature| signature.type_parameters().to_vec()),
+            family: Arc::new(CallableFamily {
+                source: Arc::clone(&self.source),
+                origin_span: definition.name.span(),
+                type_parameters: signature
+                    .as_ref()
+                    .map_or_else(Vec::new, |signature| signature.type_parameters().to_vec()),
+                classification: AtomicU8::new(0),
+            }),
             body: CallableBody::Block(definition.body.clone()),
             captured: scope.captured_snapshot(),
-            source: Arc::clone(&self.source),
             binding_types: Arc::clone(&self.binding_types),
             result_type: Some(
                 self.binding_types
@@ -4303,7 +4307,6 @@ impl Evaluator<'_, '_> {
             ),
             location: self.location(definition.name.span()),
             inspection,
-            origin_span: definition.name.span(),
             captured_type_arguments: self.current_type_arguments.clone(),
         };
         let value = Value::Callable(Arc::new(callable));
@@ -4317,10 +4320,14 @@ impl Evaluator<'_, '_> {
         let callable = CallableValue {
             name: None,
             parameters,
-            type_parameters: Vec::new(),
+            family: Arc::new(CallableFamily {
+                source: Arc::clone(&self.source),
+                origin_span: closure.span,
+                type_parameters: Vec::new(),
+                classification: AtomicU8::new(0),
+            }),
             body: CallableBody::Expression(closure.body.clone()),
             captured: scope.captured_snapshot(),
-            source: Arc::clone(&self.source),
             binding_types: Arc::clone(&self.binding_types),
             result_type: closure.result_type.as_ref().and_then(|annotation| {
                 self.binding_types
@@ -4329,7 +4336,6 @@ impl Evaluator<'_, '_> {
             }),
             location: self.location(closure.span),
             inspection: None,
-            origin_span: closure.span,
             captured_type_arguments: self.current_type_arguments.clone(),
         };
         Ok(Value::Callable(Arc::new(callable)))
@@ -4793,7 +4799,7 @@ impl Evaluator<'_, '_> {
         };
         let mut expected_substitutions = BTreeMap::new();
         if let Some(explicit) = &explicit_type_arguments {
-            for (parameter, value_type) in function.type_parameters.iter().zip(explicit) {
+            for (parameter, value_type) in function.family.type_parameters.iter().zip(explicit) {
                 expected_substitutions.insert(parameter.name().to_owned(), value_type.clone());
             }
         } else if let (Some(result_type), Some(expected_result)) =
@@ -5064,19 +5070,19 @@ impl Evaluator<'_, '_> {
     ) -> Eval<BTreeMap<String, ValueType>> {
         let mut substitutions = BTreeMap::new();
         if let Some(explicit) = explicit {
-            if explicit.len() != function.type_parameters.len() {
+            if explicit.len() != function.family.type_parameters.len() {
                 return Err(self.error(
                     RuntimeErrorKind::GenericInstantiation {
                         message: format!(
                             "expected {} type arguments, found {}",
-                            function.type_parameters.len(),
+                            function.family.type_parameters.len(),
                             explicit.len()
                         ),
                     },
                     span,
                 ));
             }
-            for (parameter, value_type) in function.type_parameters.iter().zip(explicit) {
+            for (parameter, value_type) in function.family.type_parameters.iter().zip(explicit) {
                 substitutions.insert(parameter.name().to_owned(), value_type.clone());
             }
         } else {
@@ -5094,7 +5100,7 @@ impl Evaluator<'_, '_> {
             }
         }
 
-        for parameter in &function.type_parameters {
+        for parameter in &function.family.type_parameters {
             let Some(value_type) = substitutions.get(parameter.name()) else {
                 return Err(self.error(
                     RuntimeErrorKind::GenericInstantiation {
@@ -5155,9 +5161,7 @@ impl Evaluator<'_, '_> {
         explicit_type_arguments: Option<Vec<ValueType>>,
         expected_result: Option<&ValueType>,
     ) -> Eval<(Value, ValueType)> {
-        if action_has_declared_effects(&function.source, function.origin_span)
-            && !self.host.permits_controlled_action()
-        {
+        if function.effect_requirement() && !self.host.permits_controlled_action() {
             return Err(Abort::Refused(Refusal::new(
                 RefusalReason::Unsupported,
                 "effectful action execution",
@@ -5194,7 +5198,7 @@ impl Evaluator<'_, '_> {
         }
         let action = function
             .binding_types
-            .function_signature(function.source.id(), function.origin_span)
+            .function_signature(function.family.source.id(), function.family.origin_span)
             .and_then(|signature| signature.downstream().action())
             .cloned();
         if let Some(action) = action.as_ref()
@@ -5219,7 +5223,8 @@ impl Evaluator<'_, '_> {
                 .expect("a fresh frame cannot already hold the function name");
         }
         call_scope.push();
-        let caller_source = std::mem::replace(&mut self.source, Arc::clone(&function.source));
+        let caller_source =
+            std::mem::replace(&mut self.source, Arc::clone(&function.family.source));
         let caller_binding_types =
             std::mem::replace(&mut self.binding_types, Arc::clone(&function.binding_types));
         let mut defining_types = function.captured_type_arguments.clone();
@@ -5273,14 +5278,18 @@ impl Evaluator<'_, '_> {
                 .and_then(|value| {
                     if self.budgeted_callback
                         && let Some(expected) = expected_result
-                        && !self.validate_operation_value(expected, &value, function.origin_span)?
+                        && !self.validate_operation_value(
+                            expected,
+                            &value,
+                            function.family.origin_span,
+                        )?
                     {
                         return Err(self.error(
                             RuntimeErrorKind::FunctionResultTypeMismatch {
                                 expected: expected.clone(),
                                 actual: value.family_name(),
                             },
-                            function.origin_span,
+                            function.family.origin_span,
                         ));
                     }
                     Ok(value)
@@ -5495,9 +5504,15 @@ impl Evaluator<'_, '_> {
 }
 
 fn action_has_declared_effects(source: &SourceFile, origin_span: Span) -> bool {
+    #[cfg(test)]
+    CLASSIFICATION_PARSES.with(|count| count.set(count.get() + 1));
     let opaal_syntax::ParseOutcome::Complete(script) = opaal_syntax::parse_opaal(source) else {
         return false;
     };
+    parsed_action_has_declared_effects(&script, origin_span)
+}
+
+fn parsed_action_has_declared_effects(script: &Script, origin_span: Span) -> bool {
     script.statements().iter().any(|statement| {
         matches!(
             statement.kind(),
@@ -5622,22 +5637,29 @@ fn runtime_value_type(value: &Value) -> Option<ValueType> {
     })
 }
 
+// Immutable defining metadata shared only by related callable views. Fresh
+// definitions and restores allocate a new family, even for identical source.
+struct CallableFamily {
+    source: Arc<SourceFile>,
+    origin_span: Span,
+    type_parameters: Vec<ResolvedTypeParameter>,
+    classification: AtomicU8,
+}
+
 /// The single runtime callable: a named function or an anonymous closure.
 #[derive(Clone)]
 struct CallableValue {
     /// `Some` for a `def` function, `None` for a closure.
     name: Option<Arc<str>>,
     parameters: Vec<CallableParameter>,
-    type_parameters: Vec<ResolvedTypeParameter>,
+    family: Arc<CallableFamily>,
     body: CallableBody,
     captured: ScopeStack,
-    source: Arc<SourceFile>,
     binding_types: Arc<RuntimeBindingTypes>,
     /// `Some`, including `Any`, for a named function; `None` for a closure.
     result_type: Option<ValueType>,
     location: String,
     inspection: Option<crate::help::FunctionInspection>,
-    origin_span: Span,
     captured_type_arguments: BTreeMap<String, ValueType>,
 }
 
@@ -5664,10 +5686,10 @@ pub(crate) fn snapshot_callable(callable: &Arc<dyn Callable>) -> Option<Callable
             .map(|parameter| (parameter.name.to_string(), parameter.value_type.clone()))
             .collect(),
         captured: callable.captured.clone(),
-        source: callable.source.as_ref().clone(),
+        source: callable.family.source.as_ref().clone(),
         result_type: callable.result_type.clone(),
         location: callable.location.clone(),
-        origin_span: callable.origin_span,
+        origin_span: callable.family.origin_span,
         captured_type_arguments: callable.captured_type_arguments.clone(),
         type_context: callable.binding_types.context.clone(),
     })
@@ -5765,17 +5787,32 @@ pub(crate) fn restore_callable(
                 pattern: Some(parameter.pattern),
             })
             .collect(),
-        type_parameters,
+        family: Arc::new(CallableFamily {
+            source,
+            origin_span: snapshot.origin_span,
+            type_parameters,
+            classification: AtomicU8::new(
+                if parsed_action_has_declared_effects(&parsed, snapshot.origin_span) {
+                    2
+                } else {
+                    1
+                },
+            ),
+        }),
         body: syntax.body,
         captured: snapshot.captured,
-        source,
         binding_types: Arc::new(binding_types),
         result_type: snapshot.result_type,
         location: snapshot.location,
         inspection,
-        origin_span: snapshot.origin_span,
         captured_type_arguments: snapshot.captured_type_arguments,
     };
+    #[cfg(test)]
+    RESTORED_FAMILIES.with(|families| {
+        if let Some(observed) = families.borrow_mut().as_mut() {
+            observed.push(Arc::downgrade(&callable.family));
+        }
+    });
     Ok(Arc::new(callable))
 }
 
@@ -6063,7 +6100,52 @@ enum CallableBody {
     Expression(Box<ConditionalChain>),
 }
 
+#[cfg(test)]
+thread_local! {
+    static CLASSIFICATION_PARSES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static COLD_OBSERVER: std::cell::RefCell<Option<ColdObserver>> = const { std::cell::RefCell::new(None) };
+    static RESTORED_FAMILIES: std::cell::RefCell<Option<Vec<std::sync::Weak<CallableFamily>>>> = const { std::cell::RefCell::new(None) };
+}
+#[cfg(test)]
+type ColdObserver = (usize, Box<dyn Fn()>);
+#[cfg(test)]
+fn observe_cold_classification(function: &CallableValue) {
+    let identity = Arc::as_ptr(&function.family) as usize;
+    COLD_OBSERVER.with(|observer| {
+        if let Some((expected, callback)) = observer.borrow().as_ref()
+            && *expected == identity
+        {
+            callback();
+        }
+    });
+}
+
 impl CallableValue {
+    fn effect_requirement(&self) -> bool {
+        // Cache source classification, never host permission. A cold race may
+        // derive twice; one publication attempt lets each entrant finish without
+        // waiting for another parser. The retained source makes both facts equal.
+        match self.family.classification.load(Ordering::Acquire) {
+            1 => false,
+            2 => true,
+            0 => {
+                #[cfg(test)]
+                observe_cold_classification(self);
+                let required =
+                    action_has_declared_effects(&self.family.source, self.family.origin_span);
+                let encoded = if required { 2 } else { 1 };
+                let _ = self.family.classification.compare_exchange(
+                    0,
+                    encoded,
+                    Ordering::Release,
+                    Ordering::Acquire,
+                );
+                required
+            }
+            _ => unreachable!("invalid private callable classification"),
+        }
+    }
+
     fn write_form(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self.name {
             Some(name) => write!(formatter, "<function {name} at {}>", self.location),
@@ -6135,6 +6217,7 @@ fn decode_double_escape(raw: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    mod callable_classification;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use opaal_platform::{DirectoryEntry, DirectoryEntryKind, DirectoryReadError};

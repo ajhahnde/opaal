@@ -118,6 +118,16 @@ impl Evaluator<'_, '_> {
         }
     }
 
+    #[cfg(test)]
+    pub(super) fn test_callback_shape(
+        &self,
+        value: &Value,
+        descriptor: &OperationDescriptor,
+        span: Span,
+    ) -> Eval<(CallableValue, CallbackShape)> {
+        self.callback_shape(value, descriptor, span)
+    }
+
     fn callback_shape(
         &self,
         value: &Value,
@@ -143,7 +153,7 @@ impl Evaluator<'_, '_> {
         };
         let mut function = function.clone();
         let mut captured = function.captured_type_arguments.clone();
-        for parameter in &function.type_parameters {
+        for parameter in &function.family.type_parameters {
             captured.remove(parameter.name());
         }
         for parameter in &mut function.parameters {
@@ -156,9 +166,9 @@ impl Evaluator<'_, '_> {
         let shape = CallbackShape {
             action: function
                 .binding_types
-                .function_signature(function.source.id(), function.origin_span)
+                .function_signature(function.family.source.id(), function.family.origin_span)
                 .is_some_and(|signature| signature.kind() == CallableKind::Action),
-            generics: function.type_parameters.clone(),
+            generics: function.family.type_parameters.clone(),
             parameters: function
                 .parameters
                 .iter()
