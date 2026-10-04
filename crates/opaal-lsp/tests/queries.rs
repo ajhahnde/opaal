@@ -190,6 +190,100 @@ fn math_aliases_signatures_completion_and_diagnostics_use_the_shared_catalog() {
 }
 
 #[test]
+fn random_reexports_signatures_effect_hover_and_completion_use_the_shared_catalog() {
+    let directory = TestDirectory::new();
+    let uri = directory.uri("random.opaal");
+    for (call, signature) in [
+        ("int(0, 4)", "std::random::int(min: Int, max: Int) -> Int"),
+        ("float()", "std::random::float() -> Float"),
+        ("bytes(16)", "std::random::bytes(count: Int) -> Bytes"),
+    ] {
+        let text = format!("import './api.opaal' as api\napi::random::{call}\n");
+        let mut workspace = Workspace::new();
+        workspace
+            .open(
+                directory.uri("api.opaal"),
+                1,
+                "import std::random as random\nexport { random }\n".into(),
+            )
+            .unwrap();
+        workspace.open(uri.clone(), 1, text.clone()).unwrap();
+        let signatures = request(
+            &workspace,
+            PositionEncoding::Utf16,
+            &RequestControl::new(),
+            "textDocument/signatureHelp",
+            positional(
+                &uri,
+                &text,
+                text.find('(').unwrap() + 1,
+                PositionEncoding::Utf16,
+            ),
+        )
+        .unwrap();
+        assert_eq!(signatures["signatures"].as_array().unwrap().len(), 1);
+        assert_eq!(signatures["signatures"][0]["label"], signature);
+        let hover = request(
+            &workspace,
+            PositionEncoding::Utf16,
+            &RequestControl::new(),
+            "textDocument/hover",
+            positional(
+                &uri,
+                &text,
+                text.find(call).unwrap() + 1,
+                PositionEncoding::Utf16,
+            ),
+        )
+        .unwrap();
+        assert!(
+            hover["contents"]["value"]
+                .as_str()
+                .unwrap()
+                .contains("entropy.system")
+        );
+        let completion = request(
+            &workspace,
+            PositionEncoding::Utf16,
+            &RequestControl::new(),
+            "textDocument/completion",
+            positional(
+                &uri,
+                &text,
+                text.find("api::random::").unwrap() + "api::random::".len(),
+                PositionEncoding::Utf16,
+            ),
+        )
+        .unwrap();
+        let mut names = completion
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|item| item["label"].as_str().unwrap())
+            .collect::<Vec<_>>();
+        names.sort();
+        assert_eq!(
+            names,
+            [
+                "api::random::bytes",
+                "api::random::float",
+                "api::random::int"
+            ]
+        );
+        let analysis = workspace
+            .diagnostic_snapshot()
+            .analyze_diagnostics(PositionEncoding::Utf16)
+            .unwrap();
+        assert!(
+            analysis
+                .documents()
+                .iter()
+                .all(|document| document.diagnostics().is_empty())
+        );
+    }
+}
+
+#[test]
 fn string_operation_signatures_expose_every_argument_and_active_parameter() {
     let directory = TestDirectory::new();
     let uri = directory.uri("main.opaal");

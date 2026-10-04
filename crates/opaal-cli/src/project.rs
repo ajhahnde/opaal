@@ -2345,6 +2345,7 @@ fn runtime_requests(
         }
         ("clock.wall", "evaluation") => vec![Ok(CapabilityRequest::clock_wall())],
         ("clock.monotonic", "evaluation") => vec![Ok(CapabilityRequest::clock_monotonic())],
+        ("entropy.system", "evaluation") => vec![Ok(CapabilityRequest::entropy_system())],
         _ => {
             return Err(execute_error(
                 "EXECUTE007",
@@ -2850,6 +2851,7 @@ fn authority_effect_name(effect: AuthorityEffect) -> &'static str {
         AuthorityEffect::SecretReveal => "secret.reveal",
         AuthorityEffect::ClockWall => "clock.wall",
         AuthorityEffect::ClockMonotonic => "clock.monotonic",
+        AuthorityEffect::EntropySystem => "entropy.system",
     }
 }
 

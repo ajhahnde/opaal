@@ -177,6 +177,15 @@ impl CapabilityRequest {
         }
     }
 
+    /// Request system entropy for this exact evaluation.
+    #[must_use]
+    pub const fn entropy_system() -> Self {
+        Self {
+            effect: AuthorityEffect::EntropySystem,
+            scope: CapabilityScope::Evaluation,
+        }
+    }
+
     /// The requested effect.
     #[must_use]
     pub const fn effect(&self) -> AuthorityEffect {

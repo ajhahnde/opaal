@@ -271,7 +271,11 @@ impl OperationOverload {
             })
             .collect::<Vec<_>>();
         Self {
-            input: parameters[0].input.clone(),
+            input: parameters
+                .first()
+                .map_or(OperationInputType::Value(ValueType::Null), |parameter| {
+                    parameter.input.clone()
+                }),
             parameters,
             result,
         }
@@ -750,6 +754,9 @@ fn finish_stream_operation(
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum StandardOperation {
+    RandomInt,
+    RandomFloat,
+    RandomBytes,
     Abs,
     Min,
     Max,
@@ -895,6 +902,45 @@ pub fn standard_operation(module: &ModuleId, name: &str) -> Option<OperationDesc
     };
     if namespace != "std" {
         return None;
+    }
+    if standard == "random" {
+        let (implementation, parameters, result, documentation) = match name {
+            "int" => (
+                StandardOperation::RandomInt,
+                vec![("min", ValueType::Int), ("max", ValueType::Int)],
+                ValueType::Int,
+                "Return an unbiased Int in [min, max). The interval must be nonempty; width one draws no entropy.",
+            ),
+            "float" => (
+                StandardOperation::RandomFloat,
+                vec![],
+                ValueType::Float,
+                "Return a finite Float k / 2^53 in [0, 1), including zero and excluding one.",
+            ),
+            "bytes" => (
+                StandardOperation::RandomBytes,
+                vec![("count", ValueType::Int)],
+                ValueType::Bytes,
+                "Return exactly count system random bytes. Count must be nonnegative and at most 1048576; zero draws no entropy.",
+            ),
+            _ => return None,
+        };
+        let descriptor = OperationDescriptor {
+            id: OperationId::new(module.clone(), name),
+            type_parameters: Vec::new(),
+            overloads: vec![OperationOverload::values(parameters, result)],
+            documentation: format!(
+                "{documentation} Requires entropy.system in evaluation scope, including no-draw calls, and an explicitly bound cancellable host. Pure functions, callbacks, initializers and default embeddings refuse. Calls share evaluation work and byte limits; errors and cancellation return no partial value. No seed, generator state, fallback or implicit conversion; no pipeline form."
+            ),
+            purity: OperationPurity::RequiresAuthorityContract,
+            downstream: DownstreamCallMetadata::foundation()
+                .with_declared_request(crate::authority::CapabilityRequest::entropy_system()),
+            implementation,
+        };
+        descriptor
+            .validate()
+            .expect("compiled random descriptors must be valid");
+        return Some(descriptor);
     }
     if standard == "math" {
         use StandardOperation::{Abs, Ceil, Clamp, Floor, Max, Min, Round, Sqrt};
@@ -1350,6 +1396,9 @@ pub fn standard_operation(module: &ModuleId, name: &str) -> Option<OperationDesc
 #[must_use]
 pub(crate) fn standard_operations(module: &ModuleId) -> Vec<OperationDescriptor> {
     [
+        "int",
+        "float",
+        "bytes",
         "abs",
         "min",
         "max",

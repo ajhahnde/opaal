@@ -114,6 +114,48 @@ fn tool_lock_reader_uses_only_the_selected_environment_path() {
 }
 
 #[test]
+fn entropy_effect_and_selected_environment_grant_use_only_evaluation_scope() {
+    let manifest =
+        parse_project_manifest(Path::new("/project/opaal.toml"), MANIFEST.as_bytes()).unwrap();
+    let source = br#"import std::random as random
+action sample() -> Int effects { entropy.system(); } { return random::int(0, 4) }
+action ready() -> Int effects { entropy.system(); } { return sample() }
+task release = ready
+"#;
+    let sources = MemorySources(BTreeMap::from([(
+        PathBuf::from("/project/tasks.opaal"),
+        source.to_vec(),
+    )]));
+    let project = load_project_program(manifest.clone(), &sources, &sources).unwrap();
+    let authority_text = format!(
+        "{AUTHORITY}\n[[rules]]\ndecision = 'grant'\neffect = 'entropy.system'\nscope = 'evaluation'\nrequired_enforcement = 'enforced'\n"
+    );
+    let authority = parse_authority_document(&manifest, "ci", authority_text.as_bytes()).unwrap();
+    let tools = parse_tool_lock(&manifest, "ci", LOCK.as_bytes()).unwrap();
+    let checked = check_project(&project, "release", "ci", &authority, &tools, []).unwrap();
+    assert_eq!(checked.task().effects().len(), 1);
+    assert_eq!(checked.task().effects()[0].capability(), "entropy.system");
+    assert_eq!(checked.task().effects()[0].scope(), "evaluation");
+    for scope in ["project.root", "tool.git", "entropy", ""] {
+        let invalid = authority_text.replace("scope = 'evaluation'", &format!("scope = '{scope}'"));
+        assert!(parse_authority_document(&manifest, "ci", invalid.as_bytes()).is_err());
+    }
+    let duplicate = format!(
+        "{authority_text}\n[[rules]]\ndecision = 'deny'\neffect = 'entropy.system'\nscope = 'evaluation'\n"
+    );
+    assert!(parse_authority_document(&manifest, "ci", duplicate.as_bytes()).is_err());
+    let undeclared = String::from_utf8(source.to_vec()).unwrap().replace(
+        "action ready() -> Int effects { entropy.system(); }",
+        "action ready() -> Int effects {}",
+    );
+    let sources = MemorySources(BTreeMap::from([(
+        PathBuf::from("/project/tasks.opaal"),
+        undeclared.into_bytes(),
+    )]));
+    assert!(load_project_program(manifest, &sources, &sources).is_err());
+}
+
+#[test]
 fn explicit_project_task_and_documents_bind_without_execution() {
     let manifest_path = Path::new("/project/opaal.toml");
     let manifest = parse_project_manifest(manifest_path, MANIFEST.as_bytes()).unwrap();

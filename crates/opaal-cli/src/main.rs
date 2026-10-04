@@ -6,6 +6,7 @@ use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use opaal_cli::check::{CheckRequest, HostCheckFilesystem, check_source};
 use opaal_cli::cli::{Mode, parse_args};
@@ -27,12 +28,19 @@ use opaal_cli::project::{
 use opaal_cli::report::{HostReport, write_report};
 use opaal_cli::{RawLineEditor, ReedlineEditor};
 use opaal_platform_posix::PosixPlatform;
+use opaal_platform_posix::standard_host::{PosixStandardHost, worker_entry};
+use opaal_runtime::authority::{
+    AuthorityContext, AuthorityRule, CapabilityRequest, EvaluationContextId, RequiredEnforcement,
+};
 use opaal_runtime::eval::SystemClock;
+use opaal_runtime::eval::{CancellationToken, Clock};
 use opaal_runtime::module::ModuleProgramLoader;
+use opaal_runtime::operational::random::{RandomLimits, RandomState};
+use opaal_runtime::operational::random_source::RandomBinding;
 use opaal_runtime::outcome::{OutcomeEvidence, PrimaryOutcome};
 use opaal_runtime::plan::SessionOptions;
 use opaal_runtime::script::{
-    ScriptError, ScriptExecutionOutcome, execute_ambient_module_program_outcome,
+    ScriptError, ScriptExecutionOutcome, execute_ambient_module_program_outcome_with_random,
 };
 use opaal_runtime::session::{BackgroundFailure, Session, SubmitError, SubmitOutcome};
 use opaal_runtime::{NativeSessionSnapshot, Status, Value};
@@ -171,7 +179,11 @@ redacted evidence; journal-byte validation belongs to audit generation.
 ";
 
 fn main() -> ExitCode {
-    let invocation = match parse_args(env::args_os().skip(1)) {
+    let arguments = env::args_os().collect::<Vec<_>>();
+    if let Some(code) = worker_entry(&arguments) {
+        return ExitCode::from(code as u8);
+    }
+    let invocation = match parse_args(arguments.into_iter().skip(1)) {
         Ok(invocation) => invocation,
         Err(error) => return emit_report(HostReport::misuse(&error.message())),
     };
@@ -439,8 +451,15 @@ fn run_script(path: &Path, arguments: &[String]) -> ExitCode {
             return emit_report(HostReport::failure(format!("opaal: {error}\n").as_bytes()));
         }
     };
-    let mut output = io::stdout().lock();
-    let outcome = execute_ambient_module_program_outcome(
+    let clock = Arc::new(SystemClock::new());
+    let mut random = match random_binding(clock.clone()) {
+        Ok(binding) => binding,
+        Err(error) => {
+            return emit_report(HostReport::failure(format!("opaal: {error}\n").as_bytes()));
+        }
+    };
+    let mut output = io::stdout();
+    let outcome = execute_ambient_module_program_outcome_with_random(
         &program,
         arguments,
         snapshot,
@@ -448,11 +467,11 @@ fn run_script(path: &Path, arguments: &[String]) -> ExitCode {
         &PosixPlatform,
         &SessionOptions::default(),
         &PosixPlatform,
-        Arc::new(SystemClock::new()),
+        clock,
         &mut output,
+        &mut random,
     );
     let flush = output.flush();
-    drop(output);
     finish_script_outcome_report(outcome, flush)
 }
 
@@ -516,13 +535,16 @@ impl InteractiveEvaluator for OpaalEvaluator {
         source: &str,
         output: &mut dyn Write,
     ) -> Result<EvaluationControl, InteractiveEvaluationError> {
+        let mut random = random_binding(Arc::new(self.clock.clone()))
+            .map_err(|error| InteractiveDiagnostic::new(format!("opaal: {error}\n")))?;
         let outcome = self
             .session
-            .submit_with_source_loader(
+            .submit_with_source_loader_and_random(
                 source_name(),
                 source,
                 &HostCheckFilesystem,
                 &HostCheckFilesystem,
+                &mut random,
                 &PosixPlatform,
                 &PosixPlatform,
                 &self.clock,
@@ -536,7 +558,7 @@ impl InteractiveEvaluator for OpaalEvaluator {
                 }
                 Ok(outcome)
             });
-        match outcome {
+        let result = match outcome {
             Ok(SubmitOutcome::Continued) => Ok(EvaluationControl::Continue),
             Ok(SubmitOutcome::Exit(code)) => Ok(EvaluationControl::Exit(code)),
             Ok(SubmitOutcome::Cancelled(cancellation)) => Err(InteractiveDiagnostic::new(format!(
@@ -558,8 +580,61 @@ impl InteractiveEvaluator for OpaalEvaluator {
             Err(SubmitError::Output(error)) => {
                 Err(InteractiveEvaluationError::ProgramOutput(error))
             }
+        };
+        let cleanup = random.take_cleanup_errors();
+        if cleanup.is_empty() {
+            return result;
         }
+        let mut rendered = match result {
+            Err(InteractiveEvaluationError::Diagnostic(primary)) => primary.rendered().to_owned(),
+            Err(InteractiveEvaluationError::ProgramOutput(error)) => {
+                format!("opaal: output failure: {error}\n")
+            }
+            Err(InteractiveEvaluationError::HostFailure(rendered)) => rendered,
+            Ok(_) => String::new(),
+        };
+        for error in cleanup {
+            rendered.push_str(&format!("opaal: cleanup failure: {error}\n"));
+        }
+        Err(InteractiveEvaluationError::HostFailure(rendered))
     }
+}
+
+fn random_binding(
+    clock: Arc<dyn Clock>,
+) -> Result<RandomBinding, opaal_runtime::operational::ModuleError> {
+    static NEXT_EVALUATION: AtomicU64 = AtomicU64::new(1);
+    let evaluation = NEXT_EVALUATION
+        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
+        .ok()
+        .and_then(EvaluationContextId::new)
+        .ok_or_else(|| {
+            opaal_runtime::operational::ModuleError::invalid(
+                "OPERATION001",
+                "evaluation identity exhausted",
+            )
+        })?;
+    let authority = AuthorityContext::new(
+        evaluation,
+        [AuthorityRule::grant(
+            CapabilityRequest::entropy_system(),
+            RequiredEnforcement::Enforced,
+        )],
+    )
+    .expect("one explicit evaluation entropy grant");
+    // Construction verifies the native backend but starts no worker. An
+    // unavailable backend refuses only a reached Random call, even no-draw calls.
+    let host = PosixStandardHost::for_cli(evaluation.get())
+        .ok()
+        .map(|host| Box::new(host) as Box<dyn opaal_platform::standard_host::StandardHost>);
+    let state = RandomState::new(host, RandomLimits::default())?;
+    Ok(RandomBinding::new(
+        authority,
+        CancellationToken::never(),
+        clock,
+        None,
+        state,
+    ))
 }
 
 const fn source_name() -> &'static str {
@@ -571,6 +646,9 @@ fn finish_script_outcome_report(
     output_flush: io::Result<()>,
 ) -> ExitCode {
     let (primary, evidence, _downstream) = outcome.into_parts();
+    let cleanup_failed = evidence
+        .iter()
+        .any(|item| matches!(item, OutcomeEvidence::CleanupFailure(_)));
     if let Err(error) = output_flush {
         let mut diagnostics = render_outcome_evidence(&evidence);
         diagnostics.push_str(&format!("opaal: fatal[output]: {error}\n"));
@@ -581,6 +659,9 @@ fn finish_script_outcome_report(
         PrimaryOutcome::Completed(completion) => {
             let mut diagnostics = render_background_failures(completion.background_failures());
             diagnostics.push_str(&evidence);
+            if cleanup_failed {
+                return emit_report(HostReport::failure(diagnostics.as_bytes()));
+            }
             match completion.status() {
                 Some(status) if diagnostics.is_empty() => {
                     emit_report(HostReport::completed(status, b""))

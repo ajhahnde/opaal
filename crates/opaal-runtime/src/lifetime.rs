@@ -119,6 +119,36 @@ impl CancellationScope {
         });
     }
 
+    /// Start one operation interval, intersected with the evaluation deadline.
+    /// This does not grant a fresh interval to transport chunks or candidates.
+    #[must_use]
+    pub fn operation_deadline(&self, timeout: std::time::Duration) -> Deadline {
+        let instant = Instant::from_nanos(
+            self.clock
+                .now()
+                .as_nanos()
+                .saturating_add(u64::try_from(timeout.as_nanos()).unwrap_or(u64::MAX)),
+        );
+        let deadline = Deadline::at(instant);
+        self.deadline
+            .map_or(deadline, |current| current.narrowed_to(deadline))
+    }
+
+    /// Poll an operation's original deadline, making timeout sticky.
+    #[must_use]
+    pub fn poll_until(&self, deadline: Deadline) -> Option<CancelReason> {
+        if let Some(reason) = self.poll() {
+            return Some(reason);
+        }
+        if self.clock.now() >= deadline.instant() {
+            let _ = self
+                .state
+                .compare_exchange(0, 2, Ordering::AcqRel, Ordering::Acquire);
+            return self.poll();
+        }
+        None
+    }
+
     /// Poll caller cancellation first, then the monotonic deadline.
     ///
     /// Once observed, the result is sticky even if a test predicate later

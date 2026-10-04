@@ -12,6 +12,7 @@ use crate::eval::{
     HostedEvaluationOutcome, ResourceBudget, apply_callable_with_controlled_host_and_budget,
 };
 use crate::module::{ModuleId, ModuleOrigin, ModuleProgram, ModuleSourceRegistry, NominalTypeId};
+use crate::operational::random_source::RandomBinding;
 use crate::operational::source::{
     ControlledSourceOperations, SourceOperationalEvidence, SourceOperationalHost,
 };
@@ -214,6 +215,39 @@ pub fn execute_ambient_module_program_outcome(
     )
 }
 
+/// Execute a CLI root with an explicit entropy binding. Imported initializers
+/// receive no binding; cleanup is retained beside the original primary.
+#[allow(clippy::too_many_arguments)]
+pub fn execute_ambient_module_program_outcome_with_random(
+    program: &ModuleProgram,
+    script_arguments: &[String],
+    snapshot: NativeSessionSnapshot,
+    registry: &CommandRegistry,
+    probe: &dyn ExecutableProbe,
+    options: &SessionOptions,
+    platform: &dyn Platform,
+    clock: Arc<dyn Clock>,
+    output: &mut dyn Write,
+    random: &mut RandomBinding,
+) -> ScriptExecutionOutcome {
+    let (cwd, mut environment) = snapshot.into_parts();
+    let limits = EvalLimits::ambient_process(random.cancellation.clone(), ResourceBudget::opaal());
+    execute_module_program_with_random(
+        program,
+        script_arguments,
+        &cwd,
+        &mut environment,
+        registry,
+        probe,
+        options,
+        platform,
+        clock,
+        output,
+        &limits,
+        Some(random),
+    )
+}
+
 /// Executes a module program under one cancellation token and shared step budget.
 ///
 /// The same budget crosses statement and module-initialization boundaries.
@@ -230,6 +264,37 @@ pub fn execute_module_program_outcome_with_limits(
     clock: Arc<dyn Clock>,
     output: &mut dyn Write,
     limits: &EvalLimits,
+) -> ScriptExecutionOutcome {
+    execute_module_program_with_random(
+        program,
+        script_arguments,
+        cwd,
+        environment,
+        registry,
+        probe,
+        options,
+        platform,
+        clock,
+        output,
+        limits,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn execute_module_program_with_random(
+    program: &ModuleProgram,
+    script_arguments: &[String],
+    cwd: &Path,
+    environment: &mut Environment,
+    registry: &CommandRegistry,
+    probe: &dyn ExecutableProbe,
+    options: &SessionOptions,
+    platform: &dyn Platform,
+    clock: Arc<dyn Clock>,
+    output: &mut dyn Write,
+    limits: &EvalLimits,
+    mut random: Option<&mut RandomBinding>,
 ) -> ScriptExecutionOutcome {
     let structured_outcomes = true;
     let mut session = Session::with_scope_and_registry(
@@ -298,6 +363,11 @@ pub fn execute_module_program_outcome_with_limits(
             platform,
             clock.as_ref(),
             output,
+            if &module == program.graph().root() {
+                random.as_deref_mut()
+            } else {
+                None
+            },
         ) {
             Ok((SubmitOutcome::Continued, completed_scope, value)) => {
                 let is_root = &module == program.graph().root();
@@ -343,7 +413,17 @@ pub fn execute_module_program_outcome_with_limits(
         }
     }
 
-    finish_script_session_outcome(&mut session, environment, platform, outcome, Vec::new())
+    let mut evidence = Vec::new();
+    if let Some(random) = random {
+        random.finish();
+        evidence.extend(random.take_cleanup_errors().into_iter().map(|error| {
+            OutcomeEvidence::CleanupFailure(ScriptError {
+                rendered: format!("opaal: {error}\n"),
+                background_failures: Vec::new(),
+            })
+        }));
+    }
+    finish_script_session_outcome(&mut session, environment, platform, outcome, evidence)
 }
 
 /// Invoke one checked project task through the controlled-action evaluator.
@@ -422,6 +502,7 @@ pub fn execute_project_task_outcome(
             platform,
             clock.as_ref(),
             output,
+            None,
         ) {
             Ok((SubmitOutcome::Continued, completed_scope, _)) => {
                 let exports = program

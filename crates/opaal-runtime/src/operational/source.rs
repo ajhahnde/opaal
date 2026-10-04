@@ -294,6 +294,7 @@ pub(crate) trait SourceOperationalHost {
         module: &ModuleId,
         operation: &str,
         arguments: Vec<Value>,
+        budget: &mut crate::eval::ResourceBudget,
     ) -> Result<Value, ModuleError>;
 
     fn take_evidence(&mut self) -> Vec<SourceOperationalEvidence>;
@@ -1036,6 +1037,7 @@ impl SourceOperationalHost for ControlledSourceOperations<'_> {
         module: &ModuleId,
         operation: &str,
         arguments: Vec<Value>,
+        _budget: &mut crate::eval::ResourceBudget,
     ) -> Result<Value, ModuleError> {
         let ModuleOrigin::Standard { namespace, module } = module.origin() else {
             return Err(ModuleError::invalid(

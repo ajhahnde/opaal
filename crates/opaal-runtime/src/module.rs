@@ -2808,7 +2808,7 @@ fn normalize_declared_effect(
     let expected = match capability.as_str() {
         "filesystem.read" | "filesystem.write" | "process.run" | "network.http" => 1,
         "secret.reveal" => 2,
-        "clock.wall" | "clock.monotonic" => 0,
+        "clock.wall" | "clock.monotonic" | "entropy.system" => 0,
         _ => {
             return Err(Box::new(ModuleActionError::UnknownCapability {
                 module: entry.module().clone(),
@@ -3744,6 +3744,9 @@ impl RuntimeBindingTypes {
         }
         let current = self.modules_by_source.get(&source)?;
         let owner = self.aliases.resolve(current, modules)?;
+        if standard_operation(owner, name).is_some() {
+            return None;
+        }
         let ModuleOrigin::Standard { namespace, module } = owner.origin() else {
             return None;
         };
@@ -7221,7 +7224,7 @@ impl<'a> SignatureValidator<'a> {
         matches!(
             owner.origin(),
             ModuleOrigin::Standard { namespace, module }
-                if namespace == "std" && matches!(module.as_str(), "value" | "string" | "list" | "record" | "data" | "math")
+                if namespace == "std" && matches!(module.as_str(), "value" | "string" | "list" | "record" | "data" | "math" | "random")
         )
         .then(|| self.text(operation.span()).to_owned())
     }
@@ -8688,6 +8691,8 @@ impl ModuleSourceRegistry {
 /// One potential module-initializer effect found without execution or probing.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum ModuleEffect {
+    /// System entropy requested by a compiled operation.
+    EntropySystem,
     /// A change to the session-owned logical working directory.
     WorkingDirectory,
     /// A change to the child environment shared by the program session.
@@ -9257,8 +9262,15 @@ impl<'a> StaticEffectAnalyzer<'a> {
         }
         let Some(reference) = self.semantics.names.reference(&self.module, callee.span()) else {
             if let ExpressionKind::Qualified(name) = callee.kind()
-                && self.qualified_operation(name).is_some()
+                && let Some(operation) = self.qualified_operation(name)
             {
+                if operation
+                    .downstream()
+                    .effects()
+                    .contains(&crate::authority::CapabilityRequest::entropy_system())
+                {
+                    self.summary.push(ModuleEffect::EntropySystem, call_span);
+                }
                 return;
             }
             if let ExpressionKind::Name(reference) = callee.kind()
@@ -11335,6 +11347,7 @@ fn is_standard_module(namespace: &str, module: &str) -> bool {
             module,
             "value"
                 | "math"
+                | "random"
                 | "string"
                 | "list"
                 | "record"

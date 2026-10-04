@@ -399,6 +399,55 @@ fn interactive_project_spelling_is_a_language_error_not_a_project_command() {
 }
 
 #[test]
+fn random_cells_retain_values_and_restore_the_editor_after_domain_errors() {
+    let work = unique_dir("random-values");
+    let state = work.to_str().unwrap();
+    let mut pty = Pty::spawn_with_env(
+        OPAAL,
+        &[("XDG_STATE_HOME", state), ("XDG_CONFIG_HOME", state)],
+    );
+    pty.wait_for(">> ");
+    for cell in [
+        "import std::random as random",
+        "let shard = random::int(0, 4)",
+        "let fraction = random::float()",
+        "let identifier = random::bytes(3)",
+    ] {
+        pty.send(format!("{cell}\r").as_bytes());
+        pty.await_prompt_after(cell);
+    }
+    for cell in [
+        "shard >= 0",
+        "shard < 4",
+        "fraction >= 0.0",
+        "fraction < 1.0",
+    ] {
+        let mark = pty.mark();
+        pty.send(format!("{cell}\r").as_bytes());
+        pty.wait_for_from(mark, "true");
+        pty.await_prompt_after("true");
+    }
+    pty.send(b"identifier\r");
+    pty.await_prompt_after("identifier");
+    assert!(!pty.rendered_from(0).contains("error["));
+    for cell in ["random::int(4, 4)", "random::bytes(-1)"] {
+        let mark = pty.mark();
+        pty.send(format!("{cell}\r").as_bytes());
+        pty.wait_for_from(mark, "RANDOM001");
+        pty.await_prompt_after("RANDOM001");
+    }
+    pty.send(b"let single = random::int(7, 8)\r");
+    pty.await_prompt_after("let single");
+    let mark = pty.mark();
+    pty.send(b"single\r");
+    pty.wait_for_from(mark, "7");
+    pty.await_prompt_after("single");
+    exit_cleanly(&mut pty);
+    drop(pty);
+    fs::remove_dir_all(work).unwrap();
+}
+
+#[test]
 fn numeric_report_values_are_retained_across_real_terminal_cells() {
     let work = unique_dir("numeric-report");
     fs::write(

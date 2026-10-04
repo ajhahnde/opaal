@@ -45,6 +45,8 @@ pub enum InteractiveEvaluationError {
     Diagnostic(InteractiveDiagnostic),
     /// A program-output failure that makes the interactive session unusable.
     ProgramOutput(io::Error),
+    /// An owned host failed to finalize; the text retains primary and secondary diagnostics.
+    HostFailure(String),
 }
 
 impl From<InteractiveDiagnostic> for InteractiveEvaluationError {
@@ -251,6 +253,7 @@ pub enum InteractiveSessionError {
     Editor(EditorError),
     NoticeAcknowledgement(InteractiveNoticeError),
     ProgramOutput(io::Error),
+    HostFailure(String),
     DiagnosticOutput(io::Error),
     UnsupportedEditorEvent(&'static str),
 }
@@ -268,6 +271,7 @@ impl fmt::Display for InteractiveSessionError {
             Self::ProgramOutput(error) => {
                 write!(formatter, "interactive command output failed: {error}")
             }
+            Self::HostFailure(rendered) => formatter.write_str(rendered),
             Self::DiagnosticOutput(error) => {
                 write!(formatter, "interactive diagnostic output failed: {error}")
             }
@@ -288,7 +292,7 @@ impl Error for InteractiveSessionError {
             Self::NoticeAcknowledgement(error) => Some(error),
             Self::ProgramOutput(error) => Some(error),
             Self::DiagnosticOutput(error) => Some(error),
-            Self::UnsupportedEditorEvent(_) => None,
+            Self::UnsupportedEditorEvent(_) | Self::HostFailure(_) => None,
         }
     }
 }
@@ -378,9 +382,14 @@ pub fn run_interactive_session(
                 if let Err(InteractiveEvaluationError::ProgramOutput(error)) = evaluation {
                     return Err(InteractiveSessionError::ProgramOutput(error));
                 }
-                program_output
-                    .flush()
-                    .map_err(InteractiveSessionError::ProgramOutput)?;
+                let flushed = program_output.flush();
+                if let Err(InteractiveEvaluationError::HostFailure(mut rendered)) = evaluation {
+                    if let Err(error) = flushed {
+                        rendered.push_str(&format!("opaal: output flush failure: {error}\n"));
+                    }
+                    return Err(InteractiveSessionError::HostFailure(rendered));
+                }
+                flushed.map_err(InteractiveSessionError::ProgramOutput)?;
                 match evaluation {
                     Ok(EvaluationControl::Continue) => {}
                     Ok(EvaluationControl::Exit(status)) => match evaluator.request_exit() {
@@ -402,6 +411,9 @@ pub fn run_interactive_session(
                     }
                     Err(InteractiveEvaluationError::ProgramOutput(_)) => {
                         unreachable!("program-output failure is returned before the required flush")
+                    }
+                    Err(InteractiveEvaluationError::HostFailure(_)) => {
+                        unreachable!("host failure is returned with its flush outcome above")
                     }
                 }
             }

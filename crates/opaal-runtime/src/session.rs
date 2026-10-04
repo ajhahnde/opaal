@@ -65,6 +65,7 @@ use crate::module::{
     ModuleAliasRegistry, ModuleCanonicalizer, ModuleSourceLoader, RuntimeBindingTypes,
 };
 use crate::operation::OperationDescriptor;
+use crate::operational::random_source::RandomBinding;
 use crate::outcome::{Refusal, RefusalReason};
 use crate::plan::{
     ChildStartBudget, ExecutionPlan, InternalStdoutRoute, PlannedResolution, PlannedStage,
@@ -385,6 +386,7 @@ impl Session {
             platform,
             clock,
             output,
+            None,
         )
     }
 
@@ -442,7 +444,43 @@ impl Session {
             platform,
             clock,
             output,
+            None,
         )
+    }
+
+    /// Submit one cell with an explicit evaluation-owned entropy binding.
+    /// Initializers remain pure; the worker is closed before this returns.
+    #[allow(clippy::too_many_arguments)]
+    pub fn submit_with_source_loader_and_random(
+        &mut self,
+        name: impl Into<String>,
+        text: impl Into<String>,
+        canonicalizer: &dyn ModuleCanonicalizer,
+        source_loader: &dyn ModuleSourceLoader,
+        random: &mut RandomBinding,
+        probe: &dyn ExecutableProbe,
+        platform: &dyn Platform,
+        clock: &dyn Clock,
+        output: &mut dyn Write,
+    ) -> Result<(SubmitOutcome, Value), SubmitError> {
+        let limits = if self.policy == EvaluationPolicy::AmbientProcess {
+            EvalLimits::ambient_process(random.cancellation.clone(), ResourceBudget::opaal())
+        } else {
+            EvalLimits::pure_opaal(random.cancellation.clone(), ResourceBudget::opaal())
+        };
+        let result = self.submit_interactive(
+            name.into(),
+            text.into(),
+            Some((canonicalizer, source_loader)),
+            &limits,
+            probe,
+            platform,
+            clock,
+            output,
+            Some(random),
+        );
+        random.finish();
+        result
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -456,6 +494,7 @@ impl Session {
         platform: &dyn Platform,
         clock: &dyn Clock,
         output: &mut dyn Write,
+        random: Option<&mut RandomBinding>,
     ) -> Result<(SubmitOutcome, Value), SubmitError> {
         let id = u32::try_from(self.next_source)
             .ok()
@@ -616,6 +655,7 @@ impl Session {
             clock,
             output,
             imports.as_ref(),
+            random,
         );
         if self.interactive_modules.admitted_statements > 0 {
             let retained = binding_types.retain_interactive_prefix(
@@ -667,6 +707,7 @@ impl Session {
         platform: &dyn Platform,
         clock: &dyn Clock,
         output: &mut dyn Write,
+        random: Option<&mut RandomBinding>,
     ) -> Result<(SubmitOutcome, ScopeStack, Value), SubmitError> {
         std::mem::swap(&mut self.scope, &mut scope);
         let outcome = self.submit_parsed(
@@ -682,6 +723,7 @@ impl Session {
             clock,
             output,
             None,
+            random,
         );
         std::mem::swap(&mut self.scope, &mut scope);
         outcome.map(|(outcome, value)| (outcome, scope, value))
@@ -702,6 +744,7 @@ impl Session {
         clock: &dyn Clock,
         output: &mut dyn Write,
         imports: Option<&PreparedImports>,
+        mut random: Option<&mut RandomBinding>,
     ) -> Result<(SubmitOutcome, Value), SubmitError> {
         let source_file = source.as_ref();
         let binding_types =
@@ -918,6 +961,7 @@ impl Session {
                             output,
                             policy,
                             child_starts,
+                            random: random.as_deref_mut(),
                         };
                         evaluate_with_host_and_budget(
                             &one,
@@ -1305,6 +1349,7 @@ struct SessionEvaluationHost<'session> {
     output: &'session mut dyn Write,
     policy: EvaluationPolicy,
     child_starts: &'session mut ChildStartBudget,
+    random: Option<&'session mut RandomBinding>,
 }
 
 impl EvaluationHost for SessionEvaluationHost<'_> {
@@ -1318,6 +1363,22 @@ impl EvaluationHost for SessionEvaluationHost<'_> {
 
     fn policy(&self) -> EvaluationPolicy {
         self.policy
+    }
+
+    fn permits_entropy_action(&self) -> bool {
+        self.random.is_some() && self.policy == EvaluationPolicy::AmbientProcess
+    }
+
+    fn invoke_operational(
+        &mut self,
+        module: &crate::module::ModuleId,
+        operation: &str,
+        arguments: Vec<Value>,
+        budget: &mut ResourceBudget,
+    ) -> Option<Result<Value, crate::operational::ModuleError>> {
+        self.random
+            .as_deref_mut()?
+            .invoke(module, operation, &arguments, budget, self.platform)
     }
 
     fn resolves_bare_commands(&self) -> bool {
