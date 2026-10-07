@@ -25,10 +25,7 @@ Changes to syntax, semantics, Rust APIs, diagnostics, source extensions,
 environment protocols, limits, or serialized formats need focused tests and
 matching public documentation.
 
-Every commit includes a `Signed-off-by` trailer certifying the
-[Developer Certificate of Origin 1.1](https://developercertificate.org/).
-Use `git commit -s` to add it. Do not include credentials or machine-specific
-state in a commit or pull request.
+Do not include credentials or machine-specific state in a commit or pull request.
 
 The repository does not publish crates. The maintainer alone creates release
 tags and attaches checked Linux and macOS binary archives to a GitHub release.
