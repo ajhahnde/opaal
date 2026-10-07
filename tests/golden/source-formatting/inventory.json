@@ -1067,7 +1067,7 @@
     },
     {
       "path": "ci/check_product.py",
-      "sha256": "4951a25f026d5eb6197b03c9330ee29fd1262237e8e64c694278480980f31802",
+      "sha256": "da1217a42c4215de7436207b42171b85be101a8278012a84d90acbdeb9fe8949",
       "source_markers": 15,
       "constructors_or_assertions": [
         "command_json",
@@ -1151,7 +1151,7 @@
     },
     {
       "path": "ci/package_release.py",
-      "sha256": "fdc4476b5c487e70510c9da0167e8cb47f3d7df15ebd6e183da164c63203c0b7",
+      "sha256": "e5bf3df5fb227c27681f28cd5a2a975a187991760eb60c71b5c06a41fe8f9eda",
       "source_markers": 2,
       "constructors_or_assertions": [
         "main",
@@ -1386,7 +1386,7 @@
     },
     {
       "path": "ci/tests/test_package_release.py",
-      "sha256": "872a2f1dc0a57959403c745c80112341596119e7bc5d8a36026a1f6953650846",
+      "sha256": "494c35e89e2096f2b4d6a95f34b2a5cc11e0b03987e79b12b4a2c4af358d6374",
       "source_markers": 2,
       "constructors_or_assertions": [
         "test_archive_contains_exact_programs_and_checksum",
@@ -1710,7 +1710,7 @@
     },
     {
       "path": "crates/opaal-cli/tests/e2e.rs",
-      "sha256": "f6482ac9cb580a534346b27e7118836f8e3aafcc3650e51d053e9f7452d102ad",
+      "sha256": "3db73d0a8270a27b5b2410515bceabb2e2d3c1efb44af2ee842435a0c2bec607",
       "source_markers": 12,
       "constructors_or_assertions": [
         "a_former_header_receives_only_an_ordinary_unknown_name_error",
@@ -1921,7 +1921,7 @@
     },
     {
       "path": "crates/opaal-cli/tests/project_frontend.rs",
-      "sha256": "d40c21907724481f20444e44fc8ba2d4ed1fd8a88a82e69de6dc3bf1f6f4dbe2",
+      "sha256": "03ade5bc4da852d405462aa4161ad41bb194dc3db37c324ca175f1528a22717d",
       "source_markers": 34,
       "constructors_or_assertions": [
         "accepted_execution_revalidates_probes_refuses_unused_secret_and_audits",
