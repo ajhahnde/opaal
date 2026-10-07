@@ -4,6 +4,8 @@ All notable changes to OPAAL are documented here.
 
 ## [Unreleased]
 
+## [1.2.0]
+
 ### Added
 
 - Add pure `std::math` scalar operations: homogeneous Int/Float `abs`, `min`,

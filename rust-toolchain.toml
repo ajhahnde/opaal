@@ -1,3 +1,4 @@
+# Pinned Rust toolchain for OPAAL development and CI.
 [toolchain]
 channel = "1.97.1"
 profile = "minimal"

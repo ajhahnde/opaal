@@ -102,8 +102,8 @@ This records program, fixture and working-source digests without claiming
 committed archive qualification. On a clean committed checkout, both host CI
 jobs package the separate fixture bundle with `ci/package_source_formatting.py`
 and replay it with the exact binary archive, retaining reports in `dist/`.
-The fixture project uses the development version range; release preparation
-must raise its minimum to 1.2 before qualifying the published candidate.
+The fixture project requires OPAAL 1.2 or later. Release qualification uses
+its committed version requirement without development adaptation.
 
 ## Benchmarks
 

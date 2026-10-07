@@ -15,6 +15,9 @@ source code, contributor information, and maintainer guides.
 > adds direct foreground `^program` execution in standalone and interactive
 > clients. A non-publishing qualification workflow checks release eligibility.
 
+This source tree targets OPAAL 1.2.0 with practical data processing, scalar
+math, canonical declaration formatting and reduced function-call overhead.
+
 The [changelog](CHANGELOG.md) records changes by release. Follow the
 [download and installation guide](https://opaal-lang.org/download/) for Linux
 x86_64 and macOS arm64 archives and checksum instructions.
@@ -52,10 +55,10 @@ final value. Running `opaal` without a script in a terminal starts the
 interactive client, which presents completed values. The interactive client is
 a language evaluator; project-management commands are not part of its surface.
 
-The development formatter places named function and action body braces on
-separate lines. Existing same-line declarations remain valid. Upgrade the
-toolchain before saving the new function layout; published 1.1 binaries require
-the function's opening brace on its signature line.
+OPAAL 1.2 places named function and action body braces on separate lines.
+Existing same-line declarations remain valid. Upgrade to 1.2 before saving the
+new function layout; 1.1 binaries require the function's opening brace on its
+signature line.
 
 OPAAL uses one value language throughout: bare names read bindings, the final
 expression is a block's value, `{expression}` interpolates into a command word,
