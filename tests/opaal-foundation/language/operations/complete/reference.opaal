@@ -2,15 +2,18 @@
 import './support/facade.opaal' as api
 import std::value as value
 
-def length(items: List[Int]) -> Int {
+def length(items: List[Int]) -> Int
+{
     return 99
 }
 
-def expression_count() -> Int {
+def expression_count() -> Int
+{
     return value::length([1, 2])
 }
 
-def pipeline_count() -> Int {
+def pipeline_count() -> Int
+{
     ["one", "two", "three"] | api::value::length
 }
 

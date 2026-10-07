@@ -26,7 +26,8 @@ OPAAL modules are UTF-8 `.opaal` files containing ordinary program text:
 ```opaal
 import std::value as value
 
-def remaining[T](items: List[T]) -> Int {
+def remaining[T](items: List[T]) -> Int
+{
     match items {
         [] => { return 0 }
         [first, ...rest] => { return value::length(rest) }
@@ -50,6 +51,11 @@ external program can write to stdout and stderr. The embedding API retains the
 final value. Running `opaal` without a script in a terminal starts the
 interactive client, which presents completed values. The interactive client is
 a language evaluator; project-management commands are not part of its surface.
+
+The development formatter places named function and action body braces on
+separate lines. Existing same-line declarations remain valid. Upgrade the
+toolchain before saving the new function layout; published 1.1 binaries require
+the function's opening brace on its signature line.
 
 OPAAL uses one value language throughout: bare names read bindings, the final
 expression is a block's value, `{expression}` interpolates into a command word,

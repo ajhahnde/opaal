@@ -27,6 +27,11 @@ class RepositoryDocumentationTests(unittest.TestCase):
         self.assertEqual(checker.check_guides(self.root), [])
         self.assertEqual(checker.check_links(self.root), [])
 
+    def test_fences_cover_tildes_indentation_long_closers_and_unclosed_blocks(self) -> None:
+        text = "  ~~~ opaal\n1\n  ~~~~\n````text\n```opaal\nignored\n```\n````\n```opaal\n2\n"
+        sources = [source for _, source in checker.opaal_fences(text)]
+        self.assertEqual(sources, ["1\n", "2\n"])
+
     def test_rejects_missing_guide_and_old_product_tree(self) -> None:
         (self.root / "RELEASING.md").unlink()
         (self.root / "docs").mkdir()

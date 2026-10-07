@@ -1,8 +1,9 @@
 use std::collections::BTreeSet;
 
 use crate::{
-    Delimiter, Diagnostic, IncompleteInput, Operator, ParseOutcome, Script, SourceFile,
-    StatementKind, Token, TokenKind, lex_opaal, parser::parse_opaal_with_interpolation_spans,
+    Block, Delimiter, Diagnostic, ElseBranch, IfStatement, IncompleteInput, Operator, ParseOutcome,
+    Script, SourceFile, Statement, StatementKind, Token, TokenKind, lex_opaal,
+    parser::parse_opaal_with_interpolation_spans,
 };
 
 /// The result of formatting one source file through the shared parser.
@@ -58,117 +59,184 @@ impl FormatLayout {
             layout.no_space_after.insert(span.start() + 1);
             layout.no_space_before.insert(span.end() - 1);
         }
-        for statement in script.statements() {
+        layout.statements(script.statements(), tokens);
+        layout
+    }
+
+    fn statements(&mut self, statements: &[Statement], tokens: &[Token]) {
+        for statement in statements {
             match statement.kind() {
+                StatementKind::Function(function) => {
+                    self.signature(tokens_in(
+                        tokens,
+                        statement.span().start(),
+                        function.body.span.start(),
+                    ));
+                    self.declaration_body(&function.body);
+                    self.statements(&function.body.statements, tokens);
+                }
                 StatementKind::Action(action) => {
-                    let signature_tokens = tokens
-                        .iter()
-                        .filter(|token| {
-                            token.span().start() >= statement.span().start()
-                                && token.span().end() <= action.effects_span.start()
-                        })
-                        .collect::<Vec<_>>();
-                    let compact_length = signature_tokens
-                        .iter()
-                        .filter(|token| {
-                            !matches!(token.kind(), TokenKind::Whitespace | TokenKind::Newline)
-                        })
-                        .map(|token| token.span().len().saturating_add(1))
-                        .sum::<usize>();
-                    let compactable = compact_length <= 100
-                        && signature_tokens.iter().all(|token| {
-                            !matches!(
-                                token.kind(),
-                                TokenKind::Comment
-                                    | TokenKind::DocumentationComment
-                                    | TokenKind::LineContinuation
-                            )
-                        });
-                    if compactable {
-                        layout.suppress_source_newline.extend(
-                            signature_tokens
-                                .iter()
-                                .filter(|token| token.kind() == TokenKind::Newline)
-                                .map(|token| token.span().start()),
-                        );
-                    }
-                    layout.newline_before.insert(action.effects_span.start());
-                    layout.newline_before.insert(action.effects_span.end() - 1);
-                    layout.newline_before.insert(action.body.span.start());
-                    layout.newline_before.insert(action.body.span.end() - 1);
-                    layout.newline_after.insert(action.effects_span.end());
-                    layout.newline_after.insert(action.body.span.start() + 1);
-                    layout.newline_after.insert(action.body.span.end());
+                    self.signature(tokens_in(
+                        tokens,
+                        statement.span().start(),
+                        action.effects_span.start(),
+                    ));
+                    self.newline_before.insert(action.effects_span.start());
+                    self.newline_before.insert(action.effects_span.end() - 1);
+                    self.newline_after.insert(action.effects_span.end());
+                    self.declaration_body(&action.body);
                     for request in &action.effects {
-                        layout.newline_after.insert(request.span.end());
+                        self.newline_after.insert(request.span.end());
                     }
-                    for (index, token) in tokens.iter().enumerate().filter(|(_, token)| {
-                        token.span().start() >= statement.span().start()
-                            && token.span().end() <= statement.span().end()
-                    }) {
-                        match token.kind() {
-                            TokenKind::Operator(Operator::Arrow) => {
-                                layout.space_before.insert(token.span().start());
-                                layout.space_after.insert(token.span().end());
-                            }
-                            TokenKind::Operator(Operator::Colon)
-                                if !tokens.get(index.wrapping_sub(1)).is_some_and(|token| {
-                                    token.kind() == TokenKind::Operator(Operator::Colon)
-                                }) && !tokens.get(index + 1).is_some_and(|token| {
-                                    token.kind() == TokenKind::Operator(Operator::Colon)
-                                }) =>
-                            {
-                                layout.no_space_before.insert(token.span().start());
-                                layout.space_after.insert(token.span().end());
-                            }
-                            TokenKind::Operator(Operator::Comma) => {
-                                layout.space_after.insert(token.span().end());
-                            }
-                            TokenKind::Delimiter(Delimiter::LeftParenthesis)
-                                if token.span().end() <= action.effects_span.start() =>
-                            {
-                                layout.no_space_after.insert(token.span().end());
-                                if let Some(next) = tokens[index + 1..].iter().find(|next| {
-                                    !matches!(
-                                        next.kind(),
-                                        TokenKind::Whitespace | TokenKind::Newline
-                                    )
-                                }) {
-                                    layout.no_space_before.insert(next.span().start());
-                                }
-                            }
-                            TokenKind::Delimiter(Delimiter::RightParenthesis)
-                                if token.span().end() <= action.effects_span.start() =>
-                            {
-                                layout.no_space_before.insert(token.span().start());
-                            }
-                            TokenKind::Delimiter(Delimiter::LeftBrace)
-                                if token.span().start() > action.effects_span.start()
-                                    && token.span().end() < action.effects_span.end() =>
-                            {
-                                layout.space_before.insert(token.span().start());
-                                layout.newline_after.insert(token.span().end());
-                            }
-                            _ => {}
+                    // Retain action-body spacing, including effect argument blocks.
+                    self.spacing(
+                        tokens_in(tokens, statement.span().start(), statement.span().end()),
+                        action.effects_span.start(),
+                    );
+                    for token in tokens_in(
+                        tokens,
+                        action.effects_span.start(),
+                        action.effects_span.end(),
+                    ) {
+                        if token.kind() == TokenKind::Delimiter(Delimiter::LeftBrace) {
+                            self.space_before.insert(token.span().start());
+                            self.newline_after.insert(token.span().end());
+                        }
+                    }
+                    self.statements(&action.body.statements, tokens);
+                }
+                StatementKind::Task(_) => {
+                    for token in tokens_in(tokens, statement.span().start(), statement.span().end())
+                    {
+                        if token.kind() == TokenKind::Operator(Operator::Assign) {
+                            self.space_before.insert(token.span().start());
+                            self.space_after.insert(token.span().end());
                         }
                     }
                 }
-                StatementKind::Task(_) => {
-                    for token in tokens.iter().filter(|token| {
-                        token.span().start() >= statement.span().start()
-                            && token.span().end() <= statement.span().end()
-                    }) {
-                        if token.kind() == TokenKind::Operator(Operator::Assign) {
-                            layout.space_before.insert(token.span().start());
-                            layout.space_after.insert(token.span().end());
-                        }
+                StatementKind::If(branch) => self.if_statement(branch, tokens),
+                StatementKind::While(loop_statement) => {
+                    self.statements(&loop_statement.body.statements, tokens)
+                }
+                StatementKind::For(loop_statement) => {
+                    self.statements(&loop_statement.body.statements, tokens)
+                }
+                StatementKind::Match(match_statement) => {
+                    for arm in &match_statement.arms {
+                        self.statements(&arm.body.statements, tokens);
                     }
+                }
+                StatementKind::Try(handler) => {
+                    self.statements(&handler.try_block.statements, tokens);
+                    self.statements(&handler.catch_block.statements, tokens);
+                }
+                StatementKind::ModuleImport(_)
+                | StatementKind::ModuleExport(_)
+                | StatementKind::NominalType(_)
+                | StatementKind::VariantType(_)
+                | StatementKind::Declaration(_)
+                | StatementKind::Assignment(_)
+                | StatementKind::Environment(_)
+                | StatementKind::Throw(_)
+                | StatementKind::Control(_)
+                | StatementKind::Job(_) => {}
+            }
+        }
+    }
+
+    fn if_statement(&mut self, branch: &IfStatement, tokens: &[Token]) {
+        self.statements(&branch.then_block.statements, tokens);
+        match &branch.else_branch {
+            Some(ElseBranch::Block(block)) => self.statements(&block.statements, tokens),
+            Some(ElseBranch::If(branch)) => self.if_statement(branch.kind(), tokens),
+            None => {}
+        }
+    }
+
+    fn declaration_body(&mut self, body: &Block) {
+        self.newline_before.insert(body.span.start());
+        self.newline_before.insert(body.span.end() - 1);
+        self.newline_after.insert(body.span.start() + 1);
+        self.newline_after.insert(body.span.end());
+    }
+
+    fn signature(&mut self, tokens: &[Token]) {
+        let compact_length = tokens
+            .iter()
+            .filter(|token| !matches!(token.kind(), TokenKind::Whitespace | TokenKind::Newline))
+            .map(|token| token.span().len().saturating_add(1))
+            .sum::<usize>();
+        if compact_length <= 100
+            && tokens.iter().all(|token| {
+                !matches!(
+                    token.kind(),
+                    TokenKind::Comment
+                        | TokenKind::DocumentationComment
+                        | TokenKind::LineContinuation
+                )
+            })
+        {
+            let signature_end = tokens
+                .iter()
+                .rfind(|token| !matches!(token.kind(), TokenKind::Whitespace | TokenKind::Newline))
+                .map_or(0, |token| token.span().end());
+            self.suppress_source_newline.extend(
+                tokens
+                    .iter()
+                    .filter(|token| {
+                        token.kind() == TokenKind::Newline && token.span().end() <= signature_end
+                    })
+                    .map(|token| token.span().start()),
+            );
+        }
+        self.spacing(tokens, usize::MAX);
+    }
+
+    fn spacing(&mut self, tokens: &[Token], signature_end: usize) {
+        for (index, token) in tokens.iter().enumerate() {
+            match token.kind() {
+                TokenKind::Operator(Operator::Arrow) => {
+                    self.space_before.insert(token.span().start());
+                    self.space_after.insert(token.span().end());
+                }
+                TokenKind::Operator(Operator::Colon)
+                    if !tokens.get(index.wrapping_sub(1)).is_some_and(|token| {
+                        token.kind() == TokenKind::Operator(Operator::Colon)
+                    }) && !tokens.get(index + 1).is_some_and(|token| {
+                        token.kind() == TokenKind::Operator(Operator::Colon)
+                    }) =>
+                {
+                    self.no_space_before.insert(token.span().start());
+                    self.space_after.insert(token.span().end());
+                }
+                TokenKind::Operator(Operator::Comma) => {
+                    self.space_after.insert(token.span().end());
+                }
+                TokenKind::Delimiter(Delimiter::LeftParenthesis)
+                    if token.span().end() <= signature_end =>
+                {
+                    self.no_space_after.insert(token.span().end());
+                    if let Some(next) = tokens[index + 1..].iter().find(|next| {
+                        !matches!(next.kind(), TokenKind::Whitespace | TokenKind::Newline)
+                    }) {
+                        self.no_space_before.insert(next.span().start());
+                    }
+                }
+                TokenKind::Delimiter(Delimiter::RightParenthesis)
+                    if token.span().end() <= signature_end =>
+                {
+                    self.no_space_before.insert(token.span().start());
                 }
                 _ => {}
             }
         }
-        layout
     }
+}
+
+fn tokens_in(tokens: &[Token], start: usize, end: usize) -> &[Token] {
+    let first = tokens.partition_point(|token| token.span().start() < start);
+    let last = tokens.partition_point(|token| token.span().end() <= end);
+    &tokens[first..last]
 }
 
 fn format_tokens(source: &SourceFile, tokens: &[Token], layout: &FormatLayout) -> String {
@@ -179,8 +247,9 @@ fn format_tokens(source: &SourceFile, tokens: &[Token], layout: &FormatLayout) -
     let mut pending_space = false;
     let mut suppress_source_newline = false;
     let mut previous_syntax_token_end = None;
+    let mut pending_break = false;
 
-    for token in tokens {
+    for (index, token) in tokens.iter().enumerate() {
         match token.kind() {
             TokenKind::Whitespace => {
                 if !at_line_start
@@ -206,6 +275,7 @@ fn format_tokens(source: &SourceFile, tokens: &[Token], layout: &FormatLayout) -
                 if !suppress_source_newline {
                     output.push('\n');
                 }
+                suppress_source_newline = false;
                 at_line_start = true;
                 pending_space = false;
             }
@@ -257,11 +327,22 @@ fn format_tokens(source: &SourceFile, tokens: &[Token], layout: &FormatLayout) -
                 if layout.no_space_after.contains(&token.span().end()) {
                     pending_space = false;
                 }
-                if layout.newline_after.contains(&token.span().end()) {
+                pending_break |= layout.newline_after.contains(&token.span().end());
+                let trailing_comment = tokens[index + 1..]
+                    .iter()
+                    .find(|next| next.kind() != TokenKind::Whitespace)
+                    .is_some_and(|next| {
+                        matches!(
+                            next.kind(),
+                            TokenKind::Comment | TokenKind::DocumentationComment
+                        )
+                    });
+                if pending_break && !trailing_comment {
                     output.push('\n');
                     at_line_start = true;
                     pending_space = false;
                     suppress_source_newline = true;
+                    pending_break = false;
                 }
             }
         }

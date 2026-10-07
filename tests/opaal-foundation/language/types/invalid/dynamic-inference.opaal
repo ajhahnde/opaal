@@ -1,9 +1,11 @@
 
-def dynamic(value) {
+def dynamic(value)
+{
     value
 }
 
-def identity[T](value: T) -> T {
+def identity[T](value: T) -> T
+{
     return value
 }
 

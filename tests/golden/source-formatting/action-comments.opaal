@@ -1,0 +1,9 @@
+##Keep the same value.
+action identity(value: String) -> String # signature
+effects { # effects-open
+    clock.wall; # request
+} # effects-close
+# before body
+{ # body-open
+    return value
+} # body-close

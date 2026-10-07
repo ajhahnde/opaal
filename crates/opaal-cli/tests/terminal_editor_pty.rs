@@ -586,6 +586,41 @@ fn incomplete_source_draws_the_continuation_prompt() {
 }
 
 #[test]
+fn named_declaration_continues_through_separate_body_and_can_be_cancelled() {
+    let mut pty = Pty::spawn(FIXTURE);
+    pty.wait_for(">> ");
+    for line in [
+        "def identity(value: String) -> String",
+        "{",
+        "return value",
+        "}",
+    ] {
+        let mark = pty.mark();
+        pty.send(line.as_bytes());
+        pty.wait_for_from(mark, line);
+        pty.send(b"\r");
+        if line != "}" {
+            pty.wait_for_from(mark, "...> ");
+            assert!(!pty.rendered_from(0).contains("submitted:"));
+        }
+    }
+    pty.await_prompt_after("submitted: def identity");
+    let text = pty.rendered_from(0);
+    assert!(
+        text.contains("submitted: def identity(value: String) -> String\r\n{\r\nreturn value\r\n}"),
+        "{text}"
+    );
+    let mark = pty.mark();
+    pty.send(b"def cancelled()\r");
+    pty.wait_for_from(mark, "...> ");
+    let cancel_mark = pty.mark();
+    pty.send(b"\x03");
+    pty.await_prompt(cancel_mark);
+    assert!(!pty.rendered_from(0).contains("submitted: def cancelled"));
+    exit_cleanly(&mut pty);
+}
+
+#[test]
 fn unicode_graphemes_and_multiline_movement_reach_the_real_portable_editor() {
     let mut pty = Pty::spawn(FIXTURE);
     pty.wait_for(">> ");

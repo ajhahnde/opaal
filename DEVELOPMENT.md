@@ -16,6 +16,8 @@ cargo deny check
 python3 -m unittest discover -s ci/tests -p 'test_*.py'
 python3 ci/check_product.py source
 python3 ci/check_public_boundary.py
+python3 ci/check_docs.py --cli target/debug/opaal
+python3 ci/check_source_formatting.py --cli target/debug/opaal
 git diff --check
 ```
 
@@ -50,6 +52,58 @@ target/debug/opaal examples/language-foundation.opaal
 
 Pure non-interactive evaluation does not print its final value. Examples must not depend on authority that
 the pure foundation does not grant.
+
+## Source formatting
+
+Use one canonical style for named functions and actions: the signature precedes
+the body brace on its own line, and actions place `effects {` on a separate line
+with semicolon-terminated requests. Control blocks, records and closures retain
+their existing layout. Old same-line declarations remain executable; formatting
+is an explicit check or rewrite, rather than an execution requirement.
+
+Give the formatter an explicit list of owned project sources:
+
+```sh
+target/debug/opaal format --check -- examples/numeric-report/report.opaal examples/numeric-report/tasks.opaal
+target/debug/opaal format --write -- examples/numeric-report/report.opaal examples/numeric-report/tasks.opaal
+```
+
+Check is read-only and silent on success; noncanonical source reports FMT001.
+Write preflights all operands and replaces each changed file atomically,
+preserving mode bits. A later replacement failure can leave earlier files
+rewritten: inspect and recheck the list. A rewrite changes content digests, so
+regenerate project checks and plans before accepting and executing them.
+
+The [source inventory](tests/golden/source-formatting/inventory.json) classifies
+every public source, Markdown fence, embedded source owner and fuzz seed.
+Positive sources are canonical. Invalid, incomplete and deliberately legacy
+fixtures retain their exact bytes and diagnostic assertions; semantic and
+runtime negatives retain their owning corpus expectations. Do not run a blanket
+write across fixtures. The inventory validator fails on unclassified or missing
+sources and requires renewed classification when embedded owners change.
+
+Editors can enable their own format-on-save using LSP document formatting. The
+server emits the same bytes as CLI write, independently of tab/space options;
+invalid and incomplete buffers receive no edit. Terminal and piped interactive
+input continue incomplete signatures/bodies without rewriting the entered text.
+Published 1.1 binaries cannot parse the new function layout; upgrade before
+migrating source and keep source backups when downgrading.
+
+Replay the formatter, framed language server and fresh/stale project workflows
+outside the checkout using built working programs (select the current host):
+
+```sh
+python3 ci/qualify_source_formatting.py --binary-directory target/debug \
+  --expected-source "$(git rev-parse HEAD)" --platform macos-arm64 \
+  --report dist/source-formatting-working.json
+```
+
+This records program, fixture and working-source digests without claiming
+committed archive qualification. On a clean committed checkout, both host CI
+jobs package the separate fixture bundle with `ci/package_source_formatting.py`
+and replay it with the exact binary archive, retaining reports in `dist/`.
+The fixture project uses the development version range; release preparation
+must raise its minimum to 1.2 before qualifying the published candidate.
 
 ## Benchmarks
 

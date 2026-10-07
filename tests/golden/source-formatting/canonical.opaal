@@ -1,0 +1,14 @@
+def identity(value: String) -> String
+{
+    return value
+}
+def five()
+{
+    def inner(value: Int) -> Int
+    {
+        return value
+    }
+    return inner(5)
+}
+identity('ready')
+five()

@@ -1,0 +1,4 @@
+schema_version = 1
+project = "formatting_example"
+environment = "ci"
+rules = []

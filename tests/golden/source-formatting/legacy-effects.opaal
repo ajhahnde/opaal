@@ -1,0 +1,6 @@
+##Keep the same value.
+action identity(value:String)->String # signature
+effects{ clock.wall; # declaration only
+}
+# body comment
+{ return value }

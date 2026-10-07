@@ -4,7 +4,8 @@ type Pair[T] = {
     right: T,
 }
 
-def dynamic(value) {
+def dynamic(value)
+{
     value
 }
 

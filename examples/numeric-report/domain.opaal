@@ -1,5 +1,6 @@
 import std::math as math
-def fail() -> Float {
+def fail() -> Float
+{
     try {
         return math::sqrt(-1.0)
     } catch error {
