@@ -3,7 +3,8 @@ type Box[T] = {
     value: T,
 }
 
-def integer(box: Box[Int]) -> Int {
+def integer(box: Box[Int]) -> Int
+{
     let Box { value: value } = box
     return value
 }

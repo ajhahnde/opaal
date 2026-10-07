@@ -46,6 +46,45 @@ struct Server {
     received: Vec<Value>,
 }
 
+#[test]
+fn framed_declaration_formatting_matches_canonical_fixture_and_is_idempotent() {
+    let directory = TempDirectory::new();
+    let uri = directory.uri("formatting.opaal");
+    let legacy = include_str!("../../../tests/golden/source-formatting/legacy.opaal");
+    let canonical = include_str!("../../../tests/golden/source-formatting/canonical.opaal");
+    let mut server = Server::start();
+    server.initialize();
+    server.open(&uri, 1, legacy);
+    server.send(
+        json!({"jsonrpc": "2.0", "id": 2, "method": "textDocument/formatting", "params": {
+            "textDocument": {"uri": uri.as_str()}, "options": {"tabSize": 8, "insertSpaces": false}
+        }}),
+    );
+    let response = server.receive_response(2);
+    assert_eq!(
+        response["result"].as_array().unwrap().len(),
+        1,
+        "{response}"
+    );
+    assert_eq!(response["result"][0]["newText"], canonical);
+    assert_eq!(
+        response["result"][0]["range"]["end"],
+        json!({"line": 7, "character": 0})
+    );
+    server.send(json!({"jsonrpc": "2.0", "method": "textDocument/didChange", "params": {
+        "textDocument": {"uri": uri.as_str(), "version": 2}, "contentChanges": [{"text": canonical}]
+    }}));
+    server.send(
+        json!({"jsonrpc": "2.0", "id": 3, "method": "textDocument/formatting", "params": {
+            "textDocument": {"uri": uri.as_str()}, "options": {}
+        }}),
+    );
+    assert_eq!(server.receive_response(3)["result"], json!([]));
+    let output = server.finish();
+    assert!(output.status.success(), "{output:?}");
+    assert!(output.stderr.is_empty(), "{output:?}");
+}
+
 impl Server {
     fn start() -> Self {
         Self::start_binary(env!("CARGO_BIN_EXE_opaal-language-server"))

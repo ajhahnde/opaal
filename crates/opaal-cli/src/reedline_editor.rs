@@ -445,7 +445,13 @@ mod tests {
     fn parser_validation_continues_only_structurally_incomplete_input() {
         let validator = OpaalValidator;
 
-        for complete in ["", "echo hello", "if true {\n    echo yes\n}"] {
+        for complete in [
+            "",
+            "echo hello",
+            "if true {\n    echo yes\n}",
+            "def ready()\n{\nreturn 5\n}",
+            "def missing()\nlet next = 1\n",
+        ] {
             assert!(matches!(
                 validator.validate(complete),
                 ValidationResult::Complete
@@ -459,7 +465,15 @@ mod tests {
             ValidationResult::Complete
         ));
 
-        for incomplete in ["echo hello |", "echo >", "echo \"unterminated", "if true {"] {
+        for incomplete in [
+            "echo hello |",
+            "echo >",
+            "echo \"unterminated",
+            "if true {",
+            "def waiting()\n",
+            "def waiting() -> Int # signature\n",
+            "def waiting()\n{\nreturn 5\n",
+        ] {
             assert!(matches!(
                 validator.validate(incomplete),
                 ValidationResult::Incomplete

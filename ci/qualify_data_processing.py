@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import argparse
 import base64
+import gzip
+import io
 import json
 import os
 import platform as host
@@ -41,19 +43,25 @@ def require(condition: bool, message: str) -> None:
 def unpack(archive: Path, destination: Path, *, kind: str, version: str,
            source: str, platform: str) -> tuple[Path, dict]:
     """Check identity, all hashes and modes before writing any archive member."""
-    manifest = json.loads(archive.with_name(archive.name + ".manifest.json").read_text())
-    prefix = f"opaal-v{version}-" + ("data-processing" if kind == "examples" else platform)
+    with archive.with_name(archive.name + ".manifest.json").open("rb") as handle:
+        manifest_bytes = handle.read(1024 * 1024 + 1)
+    require(len(manifest_bytes) <= 1024 * 1024, "archive manifest exceeds qualification bound")
+    manifest = json.loads(manifest_bytes)
+    require(kind in {"binaries", "examples", "formatting-fixtures"}, "unknown archive kind")
+    suffix = {"examples": "data-processing", "formatting-fixtures": "source-formatting"}.get(kind, platform)
+    prefix = f"opaal-v{version}-{suffix}"
     require(archive.name == prefix + ".tar.gz", "archive filename differs from candidate identity")
     expected = {"schema_version": 1, "kind": kind, "version": version,
                 "source": source, "platform": platform, "archive": archive.name}
     for key, value in expected.items():
         require(manifest.get(key) == value, f"archive manifest identity differs: {key}")
-    total_limit = 8 * 1024 * 1024 if kind == "examples" else 128 * 1024 * 1024
+    total_limit = 128 * 1024 * 1024 if kind == "binaries" else 8 * 1024 * 1024
     require(archive.stat().st_size <= total_limit, "compressed archive exceeds qualification bound")
     checksum = digest(archive.read_bytes())
     require(manifest.get("sha256") == checksum, "archive digest differs from manifest")
-    require(archive.with_name(archive.name + ".sha256").read_text(encoding="ascii") ==
-            f"{checksum}  {archive.name}\n", "archive checksum sidecar differs")
+    with archive.with_name(archive.name + ".sha256").open("rb") as handle:
+        require(handle.read(256) == f"{checksum}  {archive.name}\n".encode("ascii"),
+                "archive checksum sidecar differs")
     entries = manifest.get("members")
     require(isinstance(entries, list) and 0 < len(entries) <= 256, "invalid member inventory")
     require(all(isinstance(entry, dict) and isinstance(entry.get("path"), str)
@@ -64,8 +72,13 @@ def unpack(archive: Path, destination: Path, *, kind: str, version: str,
         require(set(expected_members) == {f"{prefix}/{name}" for name in
                 ("opaal", "opaal-language-server", "LICENSE", "README.md")},
                 "binary archive inventory differs")
+    # Bound metadata and padding too, before tarfile reads PAX/GNU headers.
+    stream_limit = total_limit + 256 * 1024 + tarfile.RECORDSIZE
+    with gzip.open(archive, "rb") as handle:
+        expanded = handle.read(stream_limit + 1)
+    require(len(expanded) <= stream_limit, "expanded archive stream exceeds qualification bound")
     contents = []
-    with tarfile.open(archive, "r:gz") as tar:
+    with tarfile.open(fileobj=io.BytesIO(expanded), mode="r:") as tar:
         total = 0
         seen = set()
         for member in tar:

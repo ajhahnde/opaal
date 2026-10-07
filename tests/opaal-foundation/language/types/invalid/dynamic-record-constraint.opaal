@@ -3,7 +3,8 @@ type EqualBox[T: Equal] = {
     value: T,
 }
 
-def dynamic(value) {
+def dynamic(value)
+{
     value
 }
 

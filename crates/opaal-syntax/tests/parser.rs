@@ -150,6 +150,47 @@ fn bare_name_conditions_stop_before_control_flow_blocks() {
 }
 
 #[test]
+fn named_function_bodies_accept_layout_without_widening_result_arrow_binding() {
+    for signature in [
+        "def identity(value: String)",
+        "def identity(value: String) -> String",
+        "def identity[T](value: T) -> T",
+    ] {
+        for trivia in [" ", "\n", " # signature\n\n# before body\n"] {
+            let text = format!("{signature}{trivia}{{ return value }}\nlet next = 1\n");
+            let script = complete(&text);
+            assert_eq!(script.statements().len(), 2, "{text:?}");
+            let StatementKind::Function(function) = script.statements()[0].kind() else {
+                panic!("expected function");
+            };
+            assert_eq!(function.return_type.is_some(), signature.contains("->"));
+            assert_eq!(source_text(&text, function.body.span), "{ return value }");
+        }
+        for suffix in ["\n", " # signature\n", "\n{\n", "\n{\nreturn value\n"] {
+            let text = format!("{signature}{suffix}");
+            let source = SourceFile::new(SourceId::new(904), "pending.opaal", &text);
+            assert!(
+                matches!(parse_opaal(&source), ParseOutcome::Incomplete(_)),
+                "{text:?}"
+            );
+        }
+        for suffix in [
+            "\nlet next = 1\n",
+            "\ndef next() {}\n",
+            "\n-> String {}\n",
+            "; {}\n",
+        ] {
+            let text = format!("{signature}{suffix}");
+            let source = SourceFile::new(SourceId::new(905), "missing-body.opaal", &text);
+            let ParseOutcome::Invalid(diagnostics) = parse_opaal(&source) else {
+                panic!("expected invalid function body: {text:?}");
+            };
+            assert_eq!(diagnostics[0].message(), "expected a block", "{text:?}");
+        }
+    }
+}
+
+#[test]
 fn mode_boundaries_and_newline_continuation_are_syntax_driven() {
     let script = complete("let value = (1\n    + 2)\nlet call = compute(\n    value,\n)\n");
     assert_eq!(script.statements().len(), 2);

@@ -1,7 +1,8 @@
 
 import './support/model.opaal' as model
 
-def inspect(box: model::Box[Int]) -> Int {
+def inspect(box: model::Box[Int]) -> Int
+{
     let model::Box { value: value } = box
     return value
 }

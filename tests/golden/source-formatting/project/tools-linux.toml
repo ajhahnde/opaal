@@ -1,0 +1,7 @@
+schema_version = 1
+project = "formatting_example"
+environment = "ci"
+platform = "x86_64-unknown-linux-gnu"
+tools = []
+[child_environment]
+inherit = []

@@ -9,7 +9,8 @@ enum Selection[T] {
     Empty,
 }
 
-def first[T: Equal](Pair { left: left, right: right }: Pair[T]) -> T {
+def first[T: Equal](Pair { left: left, right: right }: Pair[T]) -> T
+{
     return left
 }
 

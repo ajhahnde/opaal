@@ -604,7 +604,7 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
         } else {
             None
         };
-        self.skip_inline();
+        self.skip_layout();
         let body = self.parse_block()?;
         let span = self.span(start.start(), body.span.end());
         Ok(Statement::new(

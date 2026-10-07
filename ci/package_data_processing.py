@@ -48,8 +48,14 @@ def write_manifest(archive: Path, *, kind: str, source: str, platform: str) -> P
     return path
 
 
-def package_examples(root: Path, paths: list[str], source: str) -> Path:
-    prefix = f"opaal-v{VERSION}-data-processing"
+def package_examples(root: Path, paths: list[str], source: str, *,
+                     directory: str = EXAMPLES, name: str = "data-processing") -> Path:
+    root = root.resolve()
+    if SOURCE.fullmatch(source) is None or (directory, name) not in {
+        (EXAMPLES, "data-processing"), ("tests/golden/source-formatting", "source-formatting"),
+    }:
+        raise ValueError("invalid fixture source or bundle name")
+    prefix = f"opaal-v{VERSION}-{name}"
     output = root / "dist"
     output.mkdir(exist_ok=True)
     archive = output / f"{prefix}.tar.gz"
@@ -63,7 +69,9 @@ def package_examples(root: Path, paths: list[str], source: str) -> Path:
                     name = Path(relative)
                     if name.is_absolute() or ".." in name.parts or name.as_posix() != relative:
                         raise ValueError("example path must be canonical and relative")
-                    source_file = root / EXAMPLES / name
+                    source_file = root / directory / name
+                    if any(parent.is_symlink() for parent in (source_file, *source_file.parents)):
+                        raise ValueError(f"example input has a symlink component: {relative}")
                     if not source_file.is_file() or source_file.is_symlink():
                         raise ValueError(f"example input must be a regular file: {relative}")
                     data = source_file.read_bytes()
@@ -74,7 +82,8 @@ def package_examples(root: Path, paths: list[str], source: str) -> Path:
     archive.with_name(archive.name + ".sha256").write_text(
         f"{digest(archive.read_bytes())}  {archive.name}\n", encoding="ascii"
     )
-    write_manifest(archive, kind="examples", source=source, platform="portable")
+    write_manifest(archive, kind="examples" if directory == EXAMPLES else "formatting-fixtures",
+                   source=source, platform="portable")
     return archive
 
 

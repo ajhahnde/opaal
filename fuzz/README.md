@@ -3,7 +3,8 @@
 The separate unpublished `opaal-fuzz` package owns seven targets:
 
 - `lexer` checks lossless tokenization and progress;
-- `parser` checks bounded parsing and syntax-tree traversal;
+- `parser` checks parsing, complete-source formatting/reparsing, resolved AST
+  spellings, token preservation and formatting idempotence;
 - `expander` checks pure word expansion;
 - `resources` varies analysis and evaluation ceilings and cancellation;
 - `data_operations_limits` generates pure String/list/record/JSON calls with
@@ -28,6 +29,12 @@ The smoke script uses 1,000 executions per target by default. Inputs are seeded
 from current grammar, lexical, module, operation, outcome, rest/spread, and type
 corpora. Writable corpora live in a temporary directory; checked-in sources are
 never modified.
+
+The parser also receives the source-formatting goldens. Smoke output records
+each supplied seed's target, path and SHA-256 digest, including non-`.opaal`
+inputs; the source inventory checks these roles. The shared formatter has no
+source-size/depth admission limit or in-call cancellation. Fuzz limits below
+bound qualification inputs rather than the language's accepted source.
 
 The data-operation target uses its dedicated checked-in seeds. Its first eight
 bytes select an operation, step/depth/item/byte ceilings, cancellation poll,

@@ -1,9 +1,11 @@
 
-def choose[T: Equal](left: T, right: T) -> T {
+def choose[T: Equal](left: T, right: T) -> T
+{
     return left
 }
 
-def dynamic(value) {
+def dynamic(value)
+{
     value
 }
 
