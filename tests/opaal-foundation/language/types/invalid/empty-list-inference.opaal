@@ -1,5 +1,6 @@
 
-def first[T](values: List[T]) -> T {
+def first[T](values: List[T]) -> T
+{
     return values[0]
 }
 

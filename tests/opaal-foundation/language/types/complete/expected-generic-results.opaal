@@ -4,27 +4,33 @@ enum Maybe[T: Equal] {
     None,
 }
 
-def empty[T]() -> List[T] {
+def empty[T]() -> List[T]
+{
     return []
 }
 
-def identity[T: Equal](value: T) -> T {
+def identity[T: Equal](value: T) -> T
+{
     return value
 }
 
-def accept[T](values: List[T]) -> List[T] {
+def accept[T](values: List[T]) -> List[T]
+{
     return values
 }
 
-def empty_equal[T: Equal]() -> List[T] {
+def empty_equal[T: Equal]() -> List[T]
+{
     return []
 }
 
-def combine[T: Equal](value: T, values: List[T]) -> List[T] {
+def combine[T: Equal](value: T, values: List[T]) -> List[T]
+{
     return values
 }
 
-def nothing[T: Equal]() -> Maybe[T] {
+def nothing[T: Equal]() -> Maybe[T]
+{
     return Maybe::None
 }
 

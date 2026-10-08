@@ -1,5 +1,6 @@
 
-def equal_only[T: Equal](value: T) -> T {
+def equal_only[T: Equal](value: T) -> T
+{
     return value
 }
 

@@ -23,6 +23,19 @@ cleanup() {
 }
 trap cleanup EXIT
 
+mkdir "$work/source-formatting"
+python3 - "$repository_root/tests/golden/source-formatting" "$work/source-formatting" <<'PY'
+import shutil
+import sys
+from pathlib import Path
+
+source, destination = map(Path, sys.argv[1:])
+for path in sorted(source.rglob('*.opaal')):
+    target = destination / path.relative_to(source)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(path, target)
+PY
+
 corpus_roots=(
   "$repository_root/tests/opaal-foundation/language/grammar/complete"
   "$repository_root/tests/opaal-foundation/language/grammar/incomplete"
@@ -46,9 +59,24 @@ for target in lexer parser expander resources data_operations_limits numeric_ope
   corpus="$work/$target"
   mkdir "$corpus"
   seeds=("${corpus_roots[@]}")
+  if [ "$target" = parser ]; then
+    seeds+=("$work/source-formatting")
+  fi
   if [ "$target" = data_operations_limits ] || [ "$target" = numeric_operations_limits ]; then
     seeds=("$script_dir/seeds/$target")
   fi
+  python3 - "$target" "${seeds[@]}" <<'PY'
+import hashlib
+import sys
+from pathlib import Path
+
+for operand in sys.argv[2:]:
+    path = Path(operand)
+    files = sorted(path.rglob('*')) if path.is_dir() else [path]
+    for seed in files:
+        if seed.is_file():
+            print(f"seed {sys.argv[1]} {hashlib.sha256(seed.read_bytes()).hexdigest()} {seed}", flush=True)
+PY
   cargo fuzz run \
     --fuzz-dir "$repository_root/fuzz" \
     "$target" \

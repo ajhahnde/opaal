@@ -166,8 +166,20 @@ jobs:
         run: rustup show active-toolchain || rustup toolchain install
       - name: Build the candidate programs
         run: cargo build --release --workspace --locked
+      - name: Check the classified source formatting inventory
+        run: python3 ci/check_source_formatting.py --cli target/release/opaal
       - name: Package the exact programs and examples
         run: python3 ci/package_data_processing.py --platform linux-x86_64
+      - name: Package the exact source formatting fixtures
+        run: python3 ci/package_source_formatting.py
+      - name: Qualify source formatting outside the checkout
+        run: |
+          candidate_version=$(python3 -c 'from ci.package_release import VERSION; print(VERSION)')
+          python3 ci/qualify_source_formatting.py \
+            --archive "dist/opaal-v${candidate_version}-linux-x86_64.tar.gz" \
+            --fixtures "dist/opaal-v${candidate_version}-source-formatting.tar.gz" \
+            --expected-source "$(git rev-parse HEAD)" --platform linux-x86_64 \
+            --report dist/source-formatting-linux.json
       - name: Qualify installation and report processing outside the checkout
         run: |
           candidate_version=$(python3 -c 'from ci.package_release import VERSION; print(VERSION)')
@@ -203,8 +215,20 @@ jobs:
         run: rustup show active-toolchain || rustup toolchain install
       - name: Build the candidate programs
         run: cargo build --release --workspace --locked
+      - name: Check the classified source formatting inventory
+        run: python3 ci/check_source_formatting.py --cli target/release/opaal
       - name: Package the exact programs and examples
         run: python3 ci/package_data_processing.py --platform macos-arm64
+      - name: Package the exact source formatting fixtures
+        run: python3 ci/package_source_formatting.py
+      - name: Qualify source formatting outside the checkout
+        run: |
+          candidate_version=$(python3 -c 'from ci.package_release import VERSION; print(VERSION)')
+          python3 ci/qualify_source_formatting.py \
+            --archive "dist/opaal-v${candidate_version}-macos-arm64.tar.gz" \
+            --fixtures "dist/opaal-v${candidate_version}-source-formatting.tar.gz" \
+            --expected-source "$(git rev-parse HEAD)" --platform macos-arm64 \
+            --report dist/source-formatting-macos.json
       - name: Qualify installation and report processing outside the checkout
         run: |
           candidate_version=$(python3 -c 'from ci.package_release import VERSION; print(VERSION)')

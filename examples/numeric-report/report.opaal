@@ -1,11 +1,13 @@
 import std::math as math
 export { build, fallback }
 
-def percentage(done: Float, total: Float) -> Float {
+def percentage(done: Float, total: Float) -> Float
+{
     return math::clamp(math::round(done / total * 100.0), 0.0, 100.0)
 }
 
-def build() -> Record {
+def build() -> Record
+{
     return ({
         percent: percentage(37.0, 40.0),
         delta: math::abs(-3),
@@ -17,7 +19,8 @@ def build() -> Record {
     })
 }
 
-def fallback() -> Float {
+def fallback() -> Float
+{
     try {
         return math::sqrt(-1.0)
     } catch error {

@@ -30,6 +30,37 @@ fn error(source: &str) -> (SourceFile, RuntimeError) {
 }
 
 #[test]
+fn formatting_preserves_error_kind_frames_and_relocates_source_spans() {
+    let legacy = "def inner() { return 1 / 0 }\ndef outer() { return inner() }\nouter()\n";
+    let (before, original) = error(legacy);
+    let opaal_syntax::FormatOutcome::Complete(formatted) =
+        opaal_syntax::format_source_opaal(&before)
+    else {
+        panic!("the complete source must format");
+    };
+    let (after, rewritten) = error(&formatted);
+    assert_eq!(original.kind(), rewritten.kind());
+    assert_eq!(before.slice(original.span()), after.slice(rewritten.span()));
+    assert_ne!(original.span().start(), rewritten.span().start());
+    assert_eq!(original.frames().len(), rewritten.frames().len());
+    for (left, right) in original.frames().iter().zip(rewritten.frames()) {
+        assert_eq!(left.callee(), right.callee());
+        assert_eq!(
+            before.slice(left.call_site()),
+            after.slice(right.call_site())
+        );
+    }
+    let caught = "def identity() { try { throw 'fault' } catch error { return 5 } }\nidentity()\n";
+    assert_eq!(run(caught).1.unwrap(), Value::Int(5));
+    let file = SourceFile::new(SourceId::new(1), "caught.opaal", caught);
+    let opaal_syntax::FormatOutcome::Complete(formatted) = opaal_syntax::format_source_opaal(&file)
+    else {
+        panic!("the caught Error source must format");
+    };
+    assert_eq!(run(&formatted).1.unwrap(), Value::Int(5));
+}
+
+#[test]
 fn top_level_error_has_no_frames() {
     // An unknown variable read at the top level never entered a call, so its
     // trace is empty and its primary span still points at the failing read.

@@ -2,14 +2,16 @@
 import std::outcome as outcome
 import './support/facade.opaal' as api
 
-def select(result: outcome::Result[Int, String]) -> Int {
+def select(result: outcome::Result[Int, String]) -> Int
+{
     match result {
         outcome::Result::Ok(value) => { return value }
         outcome::Result::Err(_) => { return 0 }
     }
 }
 
-def option_value(option: api::outcome::Option[Int]) -> Int {
+def option_value(option: api::outcome::Option[Int]) -> Int
+{
     match option {
         api::outcome::Option::Some(value) => { return value }
         api::outcome::Option::None => { return 0 }

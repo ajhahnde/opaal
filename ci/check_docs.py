@@ -18,10 +18,41 @@ ROOT_GUIDES = (
 )
 WEBSITE = "https://opaal-lang.org/docs/"
 LINK = re.compile(r"(?<!!)\[[^]]*\]\(([^)]+)\)")
-OPAAL_FENCE = re.compile(r"(?m)^```opaal[^\n]*\n(.*?)^```", re.DOTALL)
+FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
+
+
+def opaal_fences(text: str) -> list[tuple[int, str]]:
+    """Return source offsets/text for fenced OPAAL blocks, including unclosed blocks."""
+    result = []
+    opening = None
+    offset = start = 0
+    language = ""
+    for line in text.splitlines(keepends=True):
+        match = FENCE.match(line.rstrip("\r\n"))
+        if match:
+            marker, info = match.groups()
+            if opening is None:
+                opening = marker
+                language = info.strip().split()[0] if info.strip() else ""
+                start = offset + len(line)
+            elif (marker[0] == opening[0] and len(marker) >= len(opening)
+                  and not info.strip()):
+                if language == "opaal":
+                    result.append((start, text[start:offset]))
+                opening = None
+        offset += len(line)
+    if opening is not None and language == "opaal":
+        result.append((start, text[start:]))
+    return result
 
 
 def markdown_pages(root: Path) -> list[Path]:
+    if (root / ".git").exists():
+        names = subprocess.check_output(
+            ["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", "*.md"],
+            cwd=root,
+        ).decode().split("\0")
+        return sorted({root / name for name in names if name and (root / name).is_file()})
     pages = [root / name for name in ROOT_GUIDES if name.endswith(".md")]
     for folder in ("benchmarks", "fuzz", "tests"):
         pages.extend((root / folder).rglob("*.md"))
@@ -72,7 +103,7 @@ def check_examples(root: Path, binary: Path) -> list[str]:
     example = root / "examples/language-foundation.opaal"
     for args in (("format", "--check", str(example)), ("check", str(example)),
                  (str(example),)):
-        result = subprocess.run([str(binary), *args], cwd=root, capture_output=True, text=True)
+        result = subprocess.run([str(binary), *args], cwd=root, capture_output=True, text=True, timeout=30)
         if result.returncode:
             detail = (result.stderr or result.stdout).strip().splitlines()
             errors.append(f"{example.relative_to(root)}: {' '.join(args)} failed: "
@@ -80,14 +111,15 @@ def check_examples(root: Path, binary: Path) -> list[str]:
     with tempfile.TemporaryDirectory(prefix="opaal-repository-docs-") as directory:
         for page in markdown_pages(root):
             content = page.read_text(encoding="utf-8")
-            for index, match in enumerate(OPAAL_FENCE.finditer(content)):
+            for index, (offset, source) in enumerate(opaal_fences(content)):
                 path = Path(directory) / f"example-{index}.opaal"
-                path.write_text(match.group(1), encoding="utf-8")
-                result = subprocess.run([str(binary), "format", "--check", str(path)],
-                                        cwd=root, capture_output=True, text=True)
-                if result.returncode:
-                    line = content.count("\n", 0, match.start(1)) + 1
-                    errors.append(f"{page.relative_to(root)}:{line}: OPAAL example format failed")
+                path.write_text(source, encoding="utf-8")
+                for args in (("format", "--check", str(path)), ("check", str(path)), (str(path),)):
+                    result = subprocess.run([str(binary), *args], cwd=root,
+                                            capture_output=True, text=True, timeout=30)
+                    if result.returncode:
+                        line = content.count("\n", 0, offset) + 1
+                        errors.append(f"{page.relative_to(root)}:{line}: OPAAL example {args[0]} failed")
     return errors
 
 

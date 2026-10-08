@@ -6,7 +6,8 @@ enum Selection[T] {
     Empty,
 }
 
-def tail[T](items: List[T]) -> Selection[List[T]] {
+def tail[T](items: List[T]) -> Selection[List[T]]
+{
     match items {
         [] => { return Selection::Empty }
         [first, ...rest] => { return Selection::Selected(rest) }

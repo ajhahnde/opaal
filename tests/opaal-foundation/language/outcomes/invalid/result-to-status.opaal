@@ -1,7 +1,8 @@
 
 import std::outcome as outcome
 
-def accept_status(value: Status) -> Status {
+def accept_status(value: Status) -> Status
+{
     return value
 }
 

@@ -1,0 +1,11 @@
+action readiness() -> Int
+effects {
+}
+{
+    def result() -> Int
+    {
+        return 5
+    }
+    return result()
+}
+task verify = readiness

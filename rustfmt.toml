@@ -1,3 +1,4 @@
+# Rust formatting defaults for the OPAAL workspace.
 edition = "2024"
 max_width = 100
 use_field_init_shorthand = true

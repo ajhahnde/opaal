@@ -1,7 +1,8 @@
 
 import './support/facade.opaal' as api
 
-def inspect(box: api::model::Box[Int]) -> Int {
+def inspect(box: api::model::Box[Int]) -> Int
+{
     let api::model::Box { value: value } = box
     return value
 }

@@ -135,6 +135,13 @@ Usage:
 
 Paths must be explicit regular .opaal files. Directories, final symlinks, stdin,
 globs, recursion, and import traversal are not supported.
+
+Named function and action bodies use separate brace lines; effects requests
+retain their semicolons. Existing same-line declarations remain executable.
+Check is read-only, silent on success, and reports FMT001 for noncanonical source.
+Write preflights all operands, then atomically replaces each changed file while
+preserving mode bits. A later replacement failure can leave earlier files changed.
+After a rewrite, regenerate project plans before accepting and executing them.
 ";
 
 const PLAN_HELP: &str = "Inspect the OPAAL planning boundary without execution

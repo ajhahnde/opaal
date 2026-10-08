@@ -2,11 +2,13 @@
 import './support/facade.opaal' as api
 import std::value as value
 
-def direct() -> Int {
+def direct() -> Int
+{
     return value::length(["one", "two"])
 }
 
-def reexported() -> Int {
+def reexported() -> Int
+{
     return api::value::length(["one", "two"])
 }
 

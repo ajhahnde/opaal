@@ -4,6 +4,8 @@ All notable changes to OPAAL are documented here.
 
 ## [Unreleased]
 
+## [1.2.0]
+
 ### Added
 
 - Add pure `std::math` scalar operations: homogeneous Int/Float `abs`, `min`,
@@ -23,6 +25,10 @@ All notable changes to OPAAL are documented here.
 
 ### Changed
 
+- Canonicalize named function and action declarations with separate body braces,
+  preserving comments, documentation and effect semicolons. Existing same-line
+  declarations remain valid; CLI check/write and editor formatting share one
+  style. Piped interactive input now continues incomplete declarations.
 - Avoid repeated defining-source parsing in warmed function and callback calls,
   preserving live action permission checks and existing capsule bytes.
 - Support local module imports in CLI interactive sessions while retaining

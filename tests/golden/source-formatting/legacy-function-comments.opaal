@@ -1,0 +1,11 @@
+##Typed identity.
+def typed(value:String)->String # signature
+# before body
+
+{ # body-open
+return value } # body-close
+def untyped() # signature
+# before body
+
+{ # body-open
+return 5 } # body-close

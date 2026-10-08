@@ -32,6 +32,14 @@ use opaal_syntax::{SourceFile, SourceId};
 
 struct FixtureModules;
 
+struct SourcePair<'a>(&'a str);
+
+impl ModuleSourceLoader for SourcePair<'_> {
+    fn load(&self, _module: &ModuleId) -> Result<Vec<u8>, ModuleSourceError> {
+        Ok(self.0.as_bytes().to_vec())
+    }
+}
+
 struct NoExecutables;
 
 #[derive(Default)]
@@ -307,6 +315,60 @@ fn pure_opaal_process_execution_refuses_before_probe_or_spawn() {
     assert_eq!(probe.probes.load(Ordering::SeqCst), 0);
     assert_eq!(platform.spawns.load(Ordering::SeqCst), 0);
     assert!(output.is_empty());
+}
+
+#[test]
+fn formatting_preserves_checked_result_status_and_process_refusal() {
+    for (index, text) in [
+        "import std::outcome as outcome\ndef domain() -> outcome::Result[Int, String] { return outcome::Result::Err[Int, String]('domain') }\ndomain()\n",
+        "def code() -> Int { return 7 }\ncode()\nexit 7\n",
+        "def code() -> Int { return 7 }\n^tool {code()}\n",
+    ].into_iter().enumerate() {
+        let source = SourceFile::new(SourceId::new(1), "pair.opaal", text);
+        let opaal_syntax::FormatOutcome::Complete(formatted) = opaal_syntax::format_source_opaal(&source) else {
+            panic!("the source pair must format");
+        };
+        assert_ne!(text, formatted);
+        let mut observations = Vec::new();
+        for text in [text, formatted.as_str()] {
+            let sources = SourcePair(text);
+            let program = ModuleProgramLoader::new(&FixtureModules, &sources)
+                .analyze_with_commands(&outcome_root().join("pair.opaal"), &standard_registry());
+            assert!(program.issues().is_empty(), "{:?}", program.issues());
+            let probe = ToolExecutable::default();
+            let platform = StatusPlatform::new(7);
+            let mut output = Vec::new();
+            let outcome = execute_module_program_outcome(
+                program.program().unwrap(), &[], &outcome_root(),
+                &mut Environment::from_snapshot([("PATH", "/bin")]),
+                &standard_registry(), &probe, &SessionOptions::default(), &platform,
+                Arc::new(FakeClock::new()), &mut output,
+            );
+            assert!(output.is_empty());
+            assert!(outcome.evidence().is_empty());
+            assert_eq!(probe.probes.load(Ordering::SeqCst), 0);
+            assert_eq!(platform.spawns.load(Ordering::SeqCst), 0);
+            match outcome.primary() {
+                PrimaryOutcome::Completed(completion) if index < 2 => {
+                    if index == 0 {
+                        let Value::Variant(value) = completion.value() else { panic!("expected domain Result"); };
+                        assert_eq!(value.constructor(), "Err");
+                        assert_eq!(value.payload(), &[Value::string("domain")]);
+                        assert!(completion.status().is_none());
+                    } else {
+                        assert_eq!(completion.status().and_then(opaal_runtime::Status::code), Some(7));
+                    }
+                    observations.push(completion.clone());
+                }
+                PrimaryOutcome::Refused(refusal) if index == 2 => {
+                    assert_eq!(refusal.reason(), RefusalReason::Unsupported);
+                    assert_eq!(refusal.operation(), "process execution");
+                }
+                other => panic!("unexpected pair outcome: {other:?}"),
+            }
+        }
+        if index < 2 { assert_eq!(observations[0], observations[1]); }
+    }
 }
 
 #[test]

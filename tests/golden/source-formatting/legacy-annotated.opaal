@@ -1,0 +1,7 @@
+action annotated()->Int # signature
+effects{ # effects-open
+clock.wall; # request
+} # effects-close
+# before body
+{ # body-open
+return 1 } # body-close

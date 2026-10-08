@@ -5,7 +5,8 @@ import std::data as data
 import std::value as value
 export { build, render }
 
-def normalize(job: Record) -> Record {
+def normalize(job: Record) -> Record
+{
     let name = string::trim(job.name)
     let job_status: String = job.status
     let conclusion: String = record::get_or(job, "conclusion", "")
@@ -22,11 +23,13 @@ def normalize(job: Record) -> Record {
     return record::set(titled, "conclusion", conclusion)
 }
 
-def failed(job: Record) -> Bool {
+def failed(job: Record) -> Bool
+{
     return (job.status == "completed" && job.conclusion != "success" && job.conclusion != "skipped" && job.conclusion != "neutral")
 }
 
-def build(document: Record) -> Record {
+def build(document: Record) -> Record
+{
     let jobs = list::map[Any, Record](document.jobs, {|job: Any| -> Record normalize(job)})
     let failures = list::filter[Record](jobs, failed)
     let pending = list::filter[Record](jobs, {|job: Record| -> Bool job.status != "completed"})
@@ -36,7 +39,8 @@ def build(document: Record) -> Record {
     return ({ total: value::length[Record](jobs), failed: count, pending: value::length[Record](pending), failures: selected })
 }
 
-def render(report: Record) -> String {
+def render(report: Record) -> String
+{
     let lines = list::map[Record, String](report.failures, {|job: Record| -> String string::join([string::decode_utf8(data::json_encode(job.name)), " : ", job.conclusion], "")})
     return string::join(["failed=", string::decode_utf8(data::json_encode(report.failed)), ", pending=", string::decode_utf8(data::json_encode(report.pending)), "\n", string::join(lines, "\n")], "")
 }

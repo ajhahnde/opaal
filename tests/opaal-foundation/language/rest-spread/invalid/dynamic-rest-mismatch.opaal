@@ -1,5 +1,6 @@
 
-def tail(items) {
+def tail(items)
+{
     let [first, ...rest] = items
     return rest
 }

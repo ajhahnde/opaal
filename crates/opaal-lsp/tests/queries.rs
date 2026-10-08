@@ -953,6 +953,102 @@ fn formatting_returns_zero_or_one_full_document_edit() {
 }
 
 #[test]
+fn declaration_formatting_uses_shared_bytes_encoding_and_snapshot_controls() {
+    use opaal_syntax::{FormatOutcome, format_source_opaal};
+
+    let directory = TestDirectory::new();
+    let uri = directory.uri("declarations.opaal");
+    let text = "def identity(value:String)->String { return value }\n# 界🙂";
+    let source = SourceFile::new(SourceId::new(0), "declarations.opaal", text);
+    let FormatOutcome::Complete(expected) = format_source_opaal(&source) else {
+        panic!("complete fixture");
+    };
+    for encoding in [PositionEncoding::Utf8, PositionEncoding::Utf16] {
+        let mut workspace = Workspace::new();
+        workspace.open(uri.clone(), 1, text.into()).unwrap();
+        let params = json!({"textDocument": {"uri": uri.as_str()}, "options": {"tabSize": 8, "insertSpaces": false}});
+        let edits = request(
+            &workspace,
+            encoding,
+            &RequestControl::new(),
+            "textDocument/formatting",
+            params.clone(),
+        )
+        .unwrap();
+        assert_eq!(edits.as_array().unwrap().len(), 1);
+        assert_eq!(edits[0]["newText"], expected);
+        assert_eq!(
+            edits[0]["range"]["end"],
+            position(text, text.len(), encoding)
+        );
+
+        let pending = prepare_request(
+            &workspace.diagnostic_snapshot(),
+            encoding,
+            RequestControl::new(),
+            "textDocument/formatting",
+            &params,
+        );
+        workspace.change(&uri, Some(2), expected.clone()).unwrap();
+        assert!(
+            pending.finish(&workspace).is_err(),
+            "stale formatting must not edit the new version"
+        );
+        assert_eq!(
+            request(
+                &workspace,
+                encoding,
+                &RequestControl::new(),
+                "textDocument/formatting",
+                params.clone()
+            )
+            .unwrap(),
+            json!([])
+        );
+        for (version, invalid) in [(3, "def waiting()\n"), (4, "| broken\n")] {
+            workspace
+                .change(&uri, Some(version), invalid.into())
+                .unwrap();
+            assert_eq!(
+                request(
+                    &workspace,
+                    encoding,
+                    &RequestControl::new(),
+                    "textDocument/formatting",
+                    params.clone()
+                )
+                .unwrap(),
+                json!([])
+            );
+        }
+        let cancelled = RequestControl::new();
+        cancelled.cancel();
+        assert!(
+            request(
+                &workspace,
+                encoding,
+                &cancelled,
+                "textDocument/formatting",
+                params.clone()
+            )
+            .is_err()
+        );
+        workspace.close(&uri).unwrap();
+        assert_eq!(
+            request(
+                &workspace,
+                encoding,
+                &RequestControl::new(),
+                "textDocument/formatting",
+                params
+            )
+            .unwrap(),
+            json!([])
+        );
+    }
+}
+
+#[test]
 fn invalid_positions_fail_while_unopened_or_dynamic_targets_use_standard_empty_shapes() {
     let directory = TestDirectory::new();
     let uri = directory.uri("main.opaal");

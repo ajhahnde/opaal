@@ -1,5 +1,6 @@
 
-def empty[T]() -> List[T] {
+def empty[T]() -> List[T]
+{
     return []
 }
 

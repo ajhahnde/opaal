@@ -716,6 +716,31 @@ fn incomplete_source_keeps_reading_under_the_continuation_prompt() {
 }
 
 #[test]
+fn named_function_signature_body_and_invalid_next_token_submit_once() {
+    for input in [
+        "def identity(value: String)\r{\rreturn value\r}\r",
+        "def identity(value: String) -> String # signature\r{\rreturn value\r}\r",
+    ] {
+        let mut editor = editor(input.as_bytes());
+        assert_eq!(
+            editor.read_line(&EditorPrompt::default()).unwrap(),
+            EditorEvent::Submitted(input.trim_end_matches('\r').replace('\r', "\n"))
+        );
+        assert!(String::from_utf8_lossy(editor.drawn()).contains("...> "));
+    }
+    let mut invalid = editor(b"def missing()\rlet next = 1\r");
+    assert_eq!(
+        invalid.read_line(&EditorPrompt::default()).unwrap(),
+        EditorEvent::Submitted("def missing()\nlet next = 1".into())
+    );
+    let mut cancelled = editor(b"def missing()\r{\r\x03");
+    assert_eq!(
+        cancelled.read_line(&EditorPrompt::default()).unwrap(),
+        EditorEvent::Cancelled
+    );
+}
+
+#[test]
 fn an_incomplete_submission_can_be_edited_across_lines() {
     let mut editor = editor(b"if true {\recho no\x1b[A\x05 # yes\x1b[B\r}\r");
 
