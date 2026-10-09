@@ -2160,7 +2160,7 @@
     },
     {
       "path": "crates/opaal-cli/tests/terminal_editor_pty.rs",
-      "sha256": "fb379c01d637d635e7894d7a3a32195e42433124e310de9848f843856fb05870",
+      "sha256": "992ab286db755479ee96c7f3741b898502e6f59c1dbf7af71d625d86a07f3673",
       "source_markers": 6,
       "constructors_or_assertions": [
         "named_declaration_continues_through_separate_body_and_can_be_cancelled",
