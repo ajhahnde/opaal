@@ -88,9 +88,12 @@ impl FormatLayout {
                     for request in &action.effects {
                         self.newline_after.insert(request.span.end());
                     }
-                    // Retain action-body spacing, including effect argument blocks.
                     self.spacing(
-                        tokens_in(tokens, statement.span().start(), statement.span().end()),
+                        tokens_in(
+                            tokens,
+                            action.effects_span.start(),
+                            action.effects_span.end(),
+                        ),
                         action.effects_span.start(),
                     );
                     for token in tokens_in(

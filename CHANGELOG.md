@@ -16,6 +16,10 @@ All notable changes to OPAAL are documented here.
   sampled values, derived payloads and their digests for the whole affected run.
   Existing tasks continue to use v2 artifacts.
 
+### Fixed
+
+- Preserve punctuation inside command words when formatting action bodies.
+
 ## [1.2.0]
 
 ### Added
