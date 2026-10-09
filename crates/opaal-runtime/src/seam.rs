@@ -151,6 +151,12 @@ impl DownstreamCallMetadata {
         self
     }
 
+    pub(crate) fn with_declared_request(mut self, request: CapabilityRequest) -> Self {
+        self.effects = EffectSet::new([request.clone()]);
+        self.capability_request = Some(request);
+        self
+    }
+
     pub(crate) fn with_project_task(
         mut self,
         project: ProjectId,

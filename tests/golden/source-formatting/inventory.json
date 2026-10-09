@@ -88,6 +88,53 @@
       "assertion": "crates/opaal-cli/tests/direct_external_golden.rs"
     },
     {
+      "path": "tests/golden/random-values/callback.opaal",
+      "role": "refused",
+      "reason": "Pure/callback entropy calls refuse even when no draw is needed.",
+      "assertion": "ci/qualify_random_values.py",
+      "sha256": "a67fa36cc09b1624f3d59ec4a63a39381039829ba6e32157843e0c5535eda731"
+    },
+    {
+      "path": "tests/golden/random-values/count.opaal",
+      "role": "runtime-negative",
+      "reason": "Expected Random domain Error; no successful output.",
+      "assertion": "ci/qualify_random_values.py",
+      "sha256": "51c6ee3d1997d3682a95696047878c4ae9cb9c8bcf3e3bdc34facd94ed5b79e2"
+    },
+    {
+      "path": "tests/golden/random-values/excess.opaal",
+      "role": "runtime-negative",
+      "reason": "Expected Random domain Error; no successful output.",
+      "assertion": "ci/qualify_random_values.py",
+      "sha256": "1ba8babf8273f94c59c029c9f625056be1b75e6123895bd482aff4f376f0f12a"
+    },
+    {
+      "path": "tests/golden/random-values/interval.opaal",
+      "role": "runtime-negative",
+      "reason": "Expected Random domain Error; no successful output.",
+      "assertion": "ci/qualify_random_values.py",
+      "sha256": "9df98f9aed7351b2ca377d8571ff7c9fff7012a253e14fb2adaa124102f84e5e"
+    },
+    {
+      "path": "tests/golden/random-values/pure.opaal",
+      "role": "refused",
+      "reason": "Pure/callback entropy calls refuse even when no draw is needed.",
+      "assertion": "ci/qualify_random_values.py",
+      "sha256": "c238cad22e70c421ac3413bff18e6f2f5e33c2016e9444392a9632818a9c4e18"
+    },
+    {
+      "path": "tests/golden/random-values/source.opaal",
+      "role": "positive",
+      "reason": "Bounded random source workflow; no declaration layout migration is needed.",
+      "assertion": "crates/opaal-cli/tests/random_golden.rs"
+    },
+    {
+      "path": "tests/golden/random-values/tasks.opaal",
+      "role": "positive",
+      "reason": "Checked bounded Random fixture.",
+      "assertion": "ci/qualify_random_values.py"
+    },
+    {
       "path": "tests/golden/release-readiness/release-readiness.opaal",
       "role": "positive",
       "reason": "Controlled candidate readiness workflow.",
@@ -942,6 +989,9 @@
       "path": "tests/golden/data-processing/README.md"
     },
     {
+      "path": "tests/golden/random-values/README.md"
+    },
+    {
       "path": "tests/opaal-foundation/workflow/README.md"
     }
   ],
@@ -1067,7 +1117,7 @@
     },
     {
       "path": "ci/check_product.py",
-      "sha256": "da1217a42c4215de7436207b42171b85be101a8278012a84d90acbdeb9fe8949",
+      "sha256": "211ec0e816f83f1262e6a2b500a9d46f5473842b0a12ad616b5f4a4b2c748fcb",
       "source_markers": 15,
       "constructors_or_assertions": [
         "command_json",
@@ -1137,7 +1187,7 @@
     },
     {
       "path": "ci/package_data_processing.py",
-      "sha256": "9b9fffbc2a4b270030e1b7e3962d72ccde8b656dab150ba3eaa300ec945f3a2d",
+      "sha256": "7428831623adfbd9ddcc17d947ec39f60b3c8534cc5d135edadf2a4d1faaf842",
       "source_markers": 4,
       "constructors_or_assertions": [
         "digest",
@@ -1148,6 +1198,17 @@
       "role": "source-infrastructure",
       "reason": "Source adapter, loader, parser, generator or qualification owner; listed constructors/assertions own any embedded buffers rather than a blanket source rewrite.",
       "assertion": "cargo test --workspace --locked and Python CI validator suite"
+    },
+    {
+      "path": "ci/package_random_values.py",
+      "sha256": "b9efe1fb6720f8a0f43ebbc8487f5162ed0be58d2c75ee2f6531ea7417e894a3",
+      "source_markers": 1,
+      "constructors_or_assertions": [
+        "main"
+      ],
+      "role": "source-infrastructure",
+      "reason": "Packages or replays identity-bound Random fixtures outside the checkout.",
+      "assertion": "ci/package_random_values.py"
     },
     {
       "path": "ci/package_release.py",
@@ -1174,7 +1235,7 @@
     },
     {
       "path": "ci/qualify_data_processing.py",
-      "sha256": "9725ff0d55b7a8c39a7a983c8adcb945e879f5cbaed909f00cf7ceee3d76b850",
+      "sha256": "7de8159bbe36010164740db362bb7fe574ec2f57be4df2bcbda2283681afb680",
       "source_markers": 23,
       "constructors_or_assertions": [
         "command",
@@ -1246,6 +1307,40 @@
       "role": "source-infrastructure",
       "reason": "Source adapter, loader, parser, generator or qualification owner; listed constructors/assertions own any embedded buffers rather than a blanket source rewrite.",
       "assertion": "cargo test --workspace --locked and Python CI validator suite"
+    },
+    {
+      "path": "ci/qualify_random_failures.py",
+      "sha256": "1255fcfa52d08b33bbfb3338becc2e976791e2908e69aac2acaa60667c6908b7",
+      "source_markers": 13,
+      "constructors_or_assertions": [
+        "children",
+        "limited_sink",
+        "main",
+        "plan",
+        "qualify",
+        "reaped",
+        "retain",
+        "run",
+        "sha"
+      ],
+      "role": "positive-generator",
+      "reason": "Generates controlled Random projects to qualify actual native worker and journal failure outcomes.",
+      "assertion": "ci/qualify_random_failures.py"
+    },
+    {
+      "path": "ci/qualify_random_values.py",
+      "sha256": "03b04bfac5ab63f357e88e1ab26e6801a95e4f5b34aeddde29600b15501fe844",
+      "source_markers": 10,
+      "constructors_or_assertions": [
+        "byte_count",
+        "domains",
+        "main",
+        "qualify",
+        "run"
+      ],
+      "role": "source-infrastructure",
+      "reason": "Packages or replays identity-bound Random fixtures outside the checkout.",
+      "assertion": "ci/qualify_random_values.py"
     },
     {
       "path": "ci/qualify_source_formatting.py",
@@ -1322,7 +1417,7 @@
     },
     {
       "path": "ci/tests/test_check_product.py",
-      "sha256": "30012cf3d947a21a63005673ce36adaf60fe42ad93456e42021300ecefa2d1b2",
+      "sha256": "584623388a78a106355a09558a4f1e7d77943f178d12ee4481b6a1f9e0f2f495",
       "source_markers": 23,
       "constructors_or_assertions": [
         "runner",
@@ -1413,6 +1508,30 @@
       "role": "mixed-test-buffers",
       "reason": "Retain complete, legacy, invalid and incomplete source buffers and their source-position assertions; canonical output is asserted only by formatting owners.",
       "assertion": "ci/tests/test_qualify_operational_core.py"
+    },
+    {
+      "path": "ci/tests/test_random_failures.py",
+      "sha256": "ca537cd89b662e52fcc8c3486f36926ef43e8d8293c7639f43e961c94aa8b848",
+      "source_markers": 2,
+      "constructors_or_assertions": [
+        "test_linux_children_use_the_exact_parent_and_handle_an_exited_parent",
+        "test_reap_check_rejects_a_live_child_and_does_not_hide_permission_failures"
+      ],
+      "role": "source-infrastructure",
+      "reason": "Checks exact child identification and reap failures used by native qualification.",
+      "assertion": "ci/tests/test_random_failures.py"
+    },
+    {
+      "path": "ci/tests/test_random_values_candidate.py",
+      "sha256": "e58c9678d412e03db8669535888f03770c9357ee38886e1f425ba7c2ce2650db",
+      "source_markers": 2,
+      "constructors_or_assertions": [
+        "test_byte_rendering_counts_escaped_values_and_rejects_incomplete_escapes",
+        "test_domains_reject_upper_bounds_nonfinite_and_nonlattice_samples"
+      ],
+      "role": "mixed-test-buffers",
+      "reason": "Random qualification constructs and checks bounded test inputs.",
+      "assertion": "ci/tests/test_random_values_candidate.py"
     },
     {
       "path": "ci/tests/test_report_performance.py",
@@ -1524,7 +1643,7 @@
     },
     {
       "path": "crates/opaal-cli/src/main.rs",
-      "sha256": "c0d0a0bd941289fc92f86b93111918ad97afc5e059c2d10d8e34567fc110c47a",
+      "sha256": "e3256628144d0b64c566ad0af3ec7cdcdedf07b787e64aea9dae6f1967338565",
       "source_markers": 5,
       "constructors_or_assertions": [
         "module constants/imports",
@@ -1536,7 +1655,7 @@
     },
     {
       "path": "crates/opaal-cli/src/project.rs",
-      "sha256": "4191223f52a4458d6634ee267aafe25d752119490e42fa75a652bf739f2eed74",
+      "sha256": "5b1363d0f2339c64c9ee0382cca59f0f9370cadbd87755986b374288a69c4b3c",
       "source_markers": 7,
       "constructors_or_assertions": [
         "create_journal",
@@ -1827,7 +1946,7 @@
     },
     {
       "path": "crates/opaal-cli/tests/interactive_session.rs",
-      "sha256": "35fad20a2d69602c34ad317b5561657856a4d2b5696bf9183d7e15c2370c42c2",
+      "sha256": "01ea975947a0eeb6f0af513310a63f0aacde0becae631586812e7715d256f2ac",
       "source_markers": 0,
       "constructors_or_assertions": [
         "a_failed_diagnostic_flush_is_not_reported_recursively",
@@ -1849,6 +1968,7 @@
         "fatal_cleanup",
         "fatal_interactive_exit_hangs_up_jobs_before_reporting_status_one",
         "flush",
+        "host_failure_retains_primary_and_cleanup_when_program_output_flush_fails",
         "live_job_refusal_names_the_explicit_force_command_for_every_job",
         "new",
         "next_notice",
@@ -1952,6 +2072,35 @@
       "assertion": "crates/opaal-cli/tests/pty.rs"
     },
     {
+      "path": "crates/opaal-cli/tests/random_golden.rs",
+      "sha256": "55911ed2cdce9fc3aef6ffadf432badd8c5837e856ea21c657817b1ff39c6b02",
+      "source_markers": 26,
+      "constructors_or_assertions": [
+        "controlled_fixture",
+        "controlled_native_calls_bind_selected_grants_and_emit_only_progress",
+        "domain_errors_pure_wrappers_and_imported_initializers_fail_without_output",
+        "native_calls_share_the_cumulative_host_byte_ceiling",
+        "native_process_receives_random_argv_but_audit_omits_payloads_and_digests",
+        "nested_random_derived_http_methods_bodies_and_errors_never_enter_evidence",
+        "public_source_uses_the_real_same_image_worker_and_checks_domains",
+        "untaken_entropy_declaration_projects_sibling_paths_payloads_and_errors"
+      ],
+      "role": "mixed-test-buffers",
+      "reason": "Random contract or native host test owner; preserve scripted source, refusal, diagnostic and malformed-input assertions.",
+      "assertion": "crates/opaal-cli/tests/random_golden.rs"
+    },
+    {
+      "path": "crates/opaal-cli/tests/random_native.rs",
+      "sha256": "82891c97c104a92fc1936598ee80d89168f3e654091bb1916042ad9dbca64fc5",
+      "source_markers": 1,
+      "constructors_or_assertions": [
+        "qualify"
+      ],
+      "role": "mixed-test-buffers",
+      "reason": "Real native backend error/cancellation and cleanup fault-return assertions combined with actual bounded journal persistence failure; static project fixtures and metadata-only audit assertions.",
+      "assertion": "crates/opaal-cli/tests/random_native.rs"
+    },
+    {
       "path": "crates/opaal-cli/tests/source_identity.rs",
       "sha256": "d76713f27cd40a8ac74ba52ab85d7bf219bfe71ca7ec54fb0207957a27e8dc57",
       "source_markers": 5,
@@ -2022,7 +2171,7 @@
     },
     {
       "path": "crates/opaal-cli/tests/terminal_editor_pty.rs",
-      "sha256": "d7f396328f1996dcd21661ecd6845d645ff333d4463022996a324f0c78b44a04",
+      "sha256": "992ab286db755479ee96c7f3741b898502e6f59c1dbf7af71d625d86a07f3673",
       "source_markers": 6,
       "constructors_or_assertions": [
         "named_declaration_continues_through_separate_body_and_can_be_cancelled",
@@ -2034,7 +2183,7 @@
     },
     {
       "path": "crates/opaal-lsp/src/query.rs",
-      "sha256": "9ca6fb1d2024cb819d134668c24f4dea7f13f0cf547b724c8bf5c1bc5d77990e",
+      "sha256": "8cb0ea23cf20f623c33c9512713b3e22f8da383296504584ed6e931c52ac28d9",
       "source_markers": 1,
       "constructors_or_assertions": [
         "request_source"
@@ -2075,8 +2224,8 @@
     },
     {
       "path": "crates/opaal-lsp/tests/queries.rs",
-      "sha256": "11809210efaf975f6a11319afcaa1e7a1511f6d404acaf88ae387f383bbe9a0e",
-      "source_markers": 46,
+      "sha256": "b6b7727225051de393d4a3733e3a6c44a871a4082b275679a99ad65d19ac9709",
+      "source_markers": 49,
       "constructors_or_assertions": [
         "callback_operation_signatures_show_relations_and_argument_positions",
         "complete_report_and_policy_observers_resolve_the_same_source_operations",
@@ -2091,6 +2240,7 @@
         "list_query_and_order_signatures_expose_option_and_ordered_constraints",
         "math_aliases_signatures_completion_and_diagnostics_use_the_shared_catalog",
         "position",
+        "random_reexports_signatures_effect_hover_and_completion_use_the_shared_catalog",
         "record_signatures_hover_and_completion_share_the_structural_contract",
         "semantic_completion_hover_and_signature_help_use_shared_program_data",
         "string_operation_signatures_expose_every_argument_and_active_parameter",
@@ -2244,6 +2394,49 @@
       "assertion": "crates/opaal-platform-posix/tests/fixtures/signal_guard.rs"
     },
     {
+      "path": "crates/opaal-platform-posix/tests/fixtures/standard_host.rs",
+      "sha256": "a6075eebd2529be7ded4d9a6dec2d6a9f7e9a75fead5e8fa9b52a4f579b680ce",
+      "source_markers": 0,
+      "constructors_or_assertions": [
+        "assert_ancillary_truncated",
+        "assert_failed_spawn_released",
+        "assert_interrupted",
+        "assert_reaped",
+        "enable",
+        "interrupt_wait",
+        "load_library",
+        "main",
+        "mark_debugged",
+        "parent_sentinels_and_mask",
+        "peak_rss_bytes",
+        "set_auto_reaping",
+        "truncate_ancillary",
+        "worker_boundary"
+      ],
+      "role": "mixed-test-buffers",
+      "reason": "Random contract or native host test owner; preserve scripted source, refusal, diagnostic and malformed-input assertions.",
+      "assertion": "crates/opaal-platform-posix/tests/fixtures/standard_host.rs"
+    },
+    {
+      "path": "crates/opaal-platform-posix/tests/fixtures/standard_host_faults.rs",
+      "sha256": "6b0d3f29c85e89a2f9af7fd22ea1e4c7e703fbe34acc419ef860fe7ddd78ca2f",
+      "source_markers": 0,
+      "constructors_or_assertions": [
+        "descriptors",
+        "frame",
+        "parent",
+        "send_descriptor",
+        "send_descriptors",
+        "valid_worker_inputs",
+        "wait_for_teardown",
+        "worker",
+        "worker_inputs"
+      ],
+      "role": "mixed-test-buffers",
+      "reason": "Isolated native fixture builds malformed frames and descriptor transfers to verify rejection, zero returned partial bytes and owned teardown.",
+      "assertion": "crates/opaal-platform-posix/tests/standard_host_worker.rs"
+    },
+    {
       "path": "crates/opaal-platform-posix/tests/operational_adapters.rs",
       "sha256": "acf58d4bcbde8bdf4913d1b72896e53abf014be87caf0986dad8d09742a83445",
       "source_markers": 0,
@@ -2345,6 +2538,29 @@
       "assertion": "crates/opaal-platform-posix/tests/posix.rs"
     },
     {
+      "path": "crates/opaal-platform-posix/tests/standard_host_worker.rs",
+      "sha256": "7406f4a8be4668581223608e9e24cabfd737897089d1c4cabb6045a9a409f4e9",
+      "source_markers": 0,
+      "constructors_or_assertions": [
+        "a_debugged_image_refuses_before_launch",
+        "a_live_non_system_library_refuses_host_capture",
+        "cancellation_terminates_and_reaps_with_inherited_signal_mask",
+        "failed_maintained_backend_discards_partial_bytes_and_reaps",
+        "hostile_protocol_missing_ready_and_received_descriptors_reap_without_retry",
+        "live_reaper_change_refuses_before_launch",
+        "maintained_backend_internal_retries_remain_under_the_original_deadline",
+        "maximum_bytes_acknowledgements_fit_one_operation_interval",
+        "production_worker_refuses_hostile_binding_fill_ack_and_ancillary_records",
+        "racing_path_replacement_cannot_resume_a_different_image",
+        "replaced_or_deleted_executable_cannot_launch_a_different_worker_image",
+        "same_image_worker_fills_acknowledges_and_reaps",
+        "sustained_signal_interruptions_do_not_extend_blocked_fill_cancellation"
+      ],
+      "role": "mixed-test-buffers",
+      "reason": "Random contract or native host test owner; preserve scripted source, refusal, diagnostic and malformed-input assertions.",
+      "assertion": "crates/opaal-platform-posix/tests/standard_host_worker.rs"
+    },
+    {
       "path": "crates/opaal-platform/tests/platform.rs",
       "sha256": "0a1ee97fabbb7a02715822cc30c05300aa81df160485d292e2a73d30645072cd",
       "source_markers": 0,
@@ -2431,7 +2647,7 @@
     },
     {
       "path": "crates/opaal-runtime/src/eval.rs",
-      "sha256": "d84d406a2d509440315b6b3773c5e7bda51cf802c9afe847441e6b9996a2d139",
+      "sha256": "bb439b1c34a812d32c46efbc07bb07265b6130da9466d69415be10bc0b7cfe1f",
       "source_markers": 16,
       "constructors_or_assertions": [
         "ambient_process_policy_propagates_into_lazy_transform_closures",
@@ -2449,7 +2665,7 @@
     },
     {
       "path": "crates/opaal-runtime/src/eval/data_operations.rs",
-      "sha256": "684bfd93680745faba640675e32e0ef3392c302ecff80a61ea4fea0f1e6850db",
+      "sha256": "e816729d12174606da8e26de3f66328b47dfc1c7a312ed5a8322437850c60781",
       "source_markers": 4,
       "constructors_or_assertions": [
         "execute_chain",
@@ -2461,7 +2677,7 @@
     },
     {
       "path": "crates/opaal-runtime/src/eval/list_operations.rs",
-      "sha256": "46012ebbc6ac1b3aa2656f5b02b2ad819540db635c10105a1897c3c195c2b9c2",
+      "sha256": "9cbbd2f6fa057aa7d6c04dc6a17be027e1484d152fb8f877b45e2c4c52e5ef24",
       "source_markers": 2,
       "constructors_or_assertions": [
         "run"
@@ -2472,7 +2688,7 @@
     },
     {
       "path": "crates/opaal-runtime/src/eval/record_operations.rs",
-      "sha256": "3f0051317b89c5c11c1ba1addd2da08ee96f30b5608dfa49cc84b09b60241d40",
+      "sha256": "a6922fb1d77bb953e4583b5b3785885ed205abd2fc37d1b57fa94ad1dee10545",
       "source_markers": 2,
       "constructors_or_assertions": [
         "run"
@@ -2483,7 +2699,7 @@
     },
     {
       "path": "crates/opaal-runtime/src/eval/string_operations.rs",
-      "sha256": "91031326a8000e7732e6e14bb6f315200df160c2dec0f682d55769fd777d51ea",
+      "sha256": "6ea24cbc54fc6edd95dca025000bcff13a6c1343a4b452f13598879537ca18ec",
       "source_markers": 2,
       "constructors_or_assertions": [
         "run"
@@ -2494,7 +2710,7 @@
     },
     {
       "path": "crates/opaal-runtime/src/eval/tests/callable_classification.rs",
-      "sha256": "40b576a965f08fe295a4e3b1e5061789a4027dcb825451d37c0fa54a8a73bb92",
+      "sha256": "00463a731de44c418e64bc649c7712d903d52d70eccc721ed24e9584c95c2c09",
       "source_markers": 80,
       "constructors_or_assertions": [
         "closures_and_repeated_calls_keep_fact_and_parse_count",
@@ -2520,7 +2736,7 @@
     },
     {
       "path": "crates/opaal-runtime/src/eval/tests/numeric_operations.rs",
-      "sha256": "a7527d46c5545ef23e7d1a69153410af730165ea2085c2cc502e1d92a0d1a5c8",
+      "sha256": "a7cf912db545912e754aa19128ba31a809b411df3cd8eca0619041c1c229bd56",
       "source_markers": 4,
       "constructors_or_assertions": [
         "execute",
@@ -2530,6 +2746,21 @@
       "role": "mixed-test-buffers",
       "reason": "Retain complete, legacy, invalid and incomplete source buffers and their source-position assertions; canonical output is asserted only by formatting owners.",
       "assertion": "crates/opaal-runtime/src/eval/tests/numeric_operations.rs"
+    },
+    {
+      "path": "crates/opaal-runtime/src/eval/tests/random_operations.rs",
+      "sha256": "a09498b5f3d5f51b51045383af7b2bc3fe57bad1f5318d32f4c3e62d99db66e2",
+      "source_markers": 6,
+      "constructors_or_assertions": [
+        "declared_action_uses_the_same_operation_and_rejects_a_wrong_host_result",
+        "load",
+        "program",
+        "pure_functions_callbacks_empty_actions_aliases_and_startup_never_invoke_the_host",
+        "reexports_preserve_host_identity_and_language_catches_do_not_restore_entropy"
+      ],
+      "role": "mixed-test-buffers",
+      "reason": "Random contract or native host test owner; preserve scripted source, refusal, diagnostic and malformed-input assertions.",
+      "assertion": "crates/opaal-runtime/src/eval/tests/random_operations.rs"
     },
     {
       "path": "crates/opaal-runtime/src/execute.rs",
@@ -2547,7 +2778,7 @@
     },
     {
       "path": "crates/opaal-runtime/src/help.rs",
-      "sha256": "cdba3668e9b7a682f81fed6ac05bb8d90995058776837bbe21f91ec1f7d7762d",
+      "sha256": "64c4f5f8e80218afe3b484ff0a4d8740f4545655d96292cf692dc283256fd0d7",
       "source_markers": 6,
       "constructors_or_assertions": [
         "catalog_uses_visible_binding_shadowing_and_omits_opaque_callables"
@@ -2558,7 +2789,7 @@
     },
     {
       "path": "crates/opaal-runtime/src/module.rs",
-      "sha256": "cfb3619265567bbf6f9fe3ed7894580d8edf3981ceaa19830c57a3547f593414",
+      "sha256": "64e6c9507ecca8b2a46139dfcb8c082dbf8c62574d5049692cd97fed17cb5e27",
       "source_markers": 19,
       "constructors_or_assertions": [
         "analyze_interactive_with_control",
@@ -2600,7 +2831,7 @@
     },
     {
       "path": "crates/opaal-runtime/src/script.rs",
-      "sha256": "5f17c4b92e6aadc709ff63c235415f47cd00eccab7691724d1972bfa0a57489b",
+      "sha256": "4dfcca3b16e1b707ea36109fadea4973c727e899be166f702d8dcc2d80b029ba",
       "source_markers": 6,
       "constructors_or_assertions": [
         "ambient_script_connects_an_external_stage_to_a_named_transform",
@@ -2615,7 +2846,7 @@
     },
     {
       "path": "crates/opaal-runtime/src/session.rs",
-      "sha256": "c174eafb99d8c2a6725a93fadb8f74ffb441291fa1b5627a3f2b3a341263d92b",
+      "sha256": "3c75804030452f34991e452d54dcf00bd902de7c4cf29545990f5e98827a423b",
       "source_markers": 14,
       "constructors_or_assertions": [
         "ambient_admits",
@@ -3175,11 +3406,12 @@
     },
     {
       "path": "crates/opaal-runtime/tests/project_contract.rs",
-      "sha256": "760694ce3a86ad0e00ea85995c53cbf12f20cea08cee192a1990fb2ab2b0ae63",
-      "source_markers": 22,
+      "sha256": "ff79401b173cedae0127562378e240e43b4fe154a190faad76278afc38341654",
+      "source_markers": 28,
       "constructors_or_assertions": [
         "controlled_project_analysis_shares_cli_modules_and_honors_cancellation",
         "effect_closure_uses_project_identity_instead_of_local_alias_spelling",
+        "entropy_effect_and_selected_environment_grant_use_only_evaluation_scope",
         "explicit_project_task_and_documents_bind_without_execution",
         "load",
         "operational_standard_signatures_expose_nominal_values_and_project_identities",
@@ -3191,6 +3423,101 @@
       "role": "mixed-test-buffers",
       "reason": "Retain complete, legacy, invalid and incomplete source buffers and their source-position assertions; canonical output is asserted only by formatting owners.",
       "assertion": "crates/opaal-runtime/tests/project_contract.rs"
+    },
+    {
+      "path": "crates/opaal-runtime/tests/random_authority.rs",
+      "sha256": "39c3a9a1e2afaf7a5fc6cf3ba2790a2db6b722a1f35e07fdf91b173dda1d7098",
+      "source_markers": 0,
+      "constructors_or_assertions": [
+        "another_evaluations_host_cannot_be_retargeted",
+        "default_script_and_retained_session_embeddings_refuse_without_a_binding",
+        "deny_unknown_unsupported_and_missing_binding_refuse_even_no_draw_calls",
+        "is_executable",
+        "unavailable_or_closed_binding_refuses_empty_and_width_one_without_drawing"
+      ],
+      "role": "mixed-test-buffers",
+      "reason": "Random contract or native host test owner; preserve scripted source, refusal, diagnostic and malformed-input assertions.",
+      "assertion": "crates/opaal-runtime/tests/random_authority.rs"
+    },
+    {
+      "path": "crates/opaal-runtime/tests/random_controlled.rs",
+      "sha256": "d4152c4f125260e5712d9f1c75d87ff7e6ff688a7f0cd0248fa117d072dff276",
+      "source_markers": 16,
+      "constructors_or_assertions": [
+        "admission_persistence_consumes_the_original_operation_deadline",
+        "before_failure_does_no_host_work_and_after_failure_preserves_primary",
+        "catches_do_not_restore_consumed_entropy_budget",
+        "controlled_project_returns_exact_reference_values_with_only_progress_evidence",
+        "cumulative_limits_survive_calls_and_cleanup_stays_secondary_to_cancellation",
+        "nested_calls_share_one_host_and_settle_candidate_reservations",
+        "no_draw_calls_still_require_declared_grant_and_exact_host_binding",
+        "random_derived_process_arguments_and_failed_payloads_are_projected_before_hashing",
+        "run",
+        "simultaneous_entropy_cleanup_and_journal_failures_keep_fixed_secondary_evidence"
+      ],
+      "role": "mixed-test-buffers",
+      "reason": "Controlled Random contract tests retain valid action bodies, grant refusals, cumulative limits and injected journal/cleanup failures.",
+      "assertion": "crates/opaal-runtime/tests/random_controlled.rs"
+    },
+    {
+      "path": "crates/opaal-runtime/tests/random_golden.rs",
+      "sha256": "62394d26770070a2c2b5d290a25de67f7e0bfe2047b464d516e0cb679d690c03",
+      "source_markers": 6,
+      "constructors_or_assertions": [
+        "explicitly_declared_entropy_actions_use_the_bound_root",
+        "imported_initializers_and_pure_bodies_cannot_acquire_the_root_binding",
+        "load"
+      ],
+      "role": "mixed-test-buffers",
+      "reason": "Random contract or native host test owner; preserve scripted source, refusal, diagnostic and malformed-input assertions.",
+      "assertion": "crates/opaal-runtime/tests/random_golden.rs"
+    },
+    {
+      "path": "crates/opaal-runtime/tests/random_limits.rs",
+      "sha256": "5960232b48e2b5865bb8f742e9b5edf890f4e11a25feb8b222933ff4d5707158",
+      "source_markers": 0,
+      "constructors_or_assertions": [
+        "adapter_primary_and_cleanup_diagnostics_use_existing_secret_redaction",
+        "cancellation_after_an_acknowledged_fill_keeps_progress_and_cleanup_secondary",
+        "cancellation_between_calls_closes_the_existing_worker_without_more_entropy",
+        "confirmed_fill_survives_acknowledgement_failure_without_a_returned_value",
+        "cumulative_host_bytes_stop_at_exact_first_excess_and_never_restore_after_catch",
+        "failure_is_uncertain_in_full_and_never_retried_or_returned_as_bytes",
+        "fills_are_bounded_and_retention_and_host_admission_precede_work",
+        "original_operation_timeout_is_sticky_and_returns_no_partial_value",
+        "proven_unstarted_fill_releases_host_capacity_and_cleanup_stays_secondary",
+        "rejection_and_chunks_share_the_original_narrowed_deadline",
+        "rejection_stops_at_candidate_and_narrower_byte_or_work_limits"
+      ],
+      "role": "mixed-test-buffers",
+      "reason": "Random contract or native host test owner; preserve scripted source, refusal, diagnostic and malformed-input assertions.",
+      "assertion": "crates/opaal-runtime/tests/random_limits.rs"
+    },
+    {
+      "path": "crates/opaal-runtime/tests/random_observers.rs",
+      "sha256": "b76549120d75058f2856f216ca380d3b637255bb3ebd8dcd67f7f3e63e079d86",
+      "source_markers": 4,
+      "constructors_or_assertions": [
+        "catalog_checker_help_and_reexports_share_exact_effectful_signatures",
+        "initializer_summary_traces_wrappers_to_the_canonical_entropy_effect"
+      ],
+      "role": "mixed-test-buffers",
+      "reason": "Random contract or native host test owner; preserve scripted source, refusal, diagnostic and malformed-input assertions.",
+      "assertion": "crates/opaal-runtime/tests/random_observers.rs"
+    },
+    {
+      "path": "crates/opaal-runtime/tests/random_sampling.rs",
+      "sha256": "81ef7b3021218cf88260c868b9e0da24e82374618f289fd5c2f9204e948022ca",
+      "source_markers": 0,
+      "constructors_or_assertions": [
+        "domains_and_wrong_signatures_fail_before_entropy",
+        "exhaustive_reduced_word_model_has_equal_counts_for_every_interval",
+        "full_signed_intervals_power_of_two_crossing_zero_and_endpoints",
+        "reference_words_rejection_lattice_bytes_and_no_draw"
+      ],
+      "role": "mixed-test-buffers",
+      "reason": "Random contract or native host test owner; preserve scripted source, refusal, diagnostic and malformed-input assertions.",
+      "assertion": "crates/opaal-runtime/tests/random_sampling.rs"
     },
     {
       "path": "crates/opaal-runtime/tests/runtime_errors.rs",
@@ -3305,6 +3632,18 @@
       "assertion": "crates/opaal-runtime/tests/support/numeric.rs"
     },
     {
+      "path": "crates/opaal-runtime/tests/support/random.rs",
+      "sha256": "c140d85eb8f6cce9f0a596d9df3f3a19634a3b2c15c992c062a9309a37056f9a",
+      "source_markers": 2,
+      "constructors_or_assertions": [
+        "load",
+        "try_load"
+      ],
+      "role": "mixed-test-buffers",
+      "reason": "Random contract or native host test owner; preserve scripted source, refusal, diagnostic and malformed-input assertions.",
+      "assertion": "crates/opaal-runtime/tests/support/random.rs"
+    },
+    {
       "path": "crates/opaal-runtime/tests/values.rs",
       "sha256": "06f04072d98df490ce596045830358f5961999ff68904a0f141dd16e8486711c",
       "source_markers": 0,
@@ -3326,11 +3665,12 @@
     },
     {
       "path": "crates/opaal-runtime/tests/workflow_artifacts.rs",
-      "sha256": "139c2b23ed9037d1438fa0cd808a235bc6acf0f5c04584ddda6f64be37032e65",
-      "source_markers": 6,
+      "sha256": "f9519e9f7f2ae59994ee781a6d7eb8d79f50afb3c97e9b1b45f9c38e5f2e9648",
+      "source_markers": 7,
       "constructors_or_assertions": [
         "journal_chain_projects_complete_redacted_evidence",
         "journal_lifecycle_refuses_bad_attempts_nodes_and_open_boundaries",
+        "metadata_chain",
         "plan_document",
         "task"
       ],
@@ -3659,6 +3999,15 @@
       "assertion": "fuzz/fuzz_targets/parser.rs"
     },
     {
+      "path": "fuzz/fuzz_targets/random_limits.rs",
+      "sha256": "aad9990cf11ecf5ad839111922a61443f1faea337f93df5dcd498b1cdfa8acbc",
+      "source_markers": 0,
+      "constructors_or_assertions": [],
+      "role": "mixed-test-buffers",
+      "reason": "Random qualification constructs and checks bounded test inputs.",
+      "assertion": "fuzz/fuzz_targets/random_limits.rs"
+    },
+    {
       "path": "fuzz/fuzz_targets/resources.rs",
       "sha256": "7ad0df915af7742587ff1b6f09e3b195f0b3c4a885f1eb381e83217b9d2cf3b5",
       "source_markers": 3,
@@ -3683,7 +4032,7 @@
     },
     {
       "path": "fuzz/run-campaign.sh",
-      "sha256": "c4e29200034c6d84f573de444190adc027f7a6e035d32c106c8cd3695c12e9fe",
+      "sha256": "90c9fe314f38bc1743216ea9f177308f462d3b256f2d7b96c85835bae61add66",
       "source_markers": 0,
       "constructors_or_assertions": [],
       "role": "source-infrastructure",
@@ -3692,7 +4041,7 @@
     },
     {
       "path": "fuzz/run-smoke.sh",
-      "sha256": "a13c661b879e11c8545ccc3df0e2fd9c6c5b43abd23b4fc12c8cc53da811110c",
+      "sha256": "48d30d8c07121225d20834cf7ba845cd1b9618cbc2525a2a45cd12178d385261",
       "source_markers": 1,
       "constructors_or_assertions": [
         "module constants/imports"
@@ -3822,6 +4171,18 @@
       "role": "mixed-test-buffers",
       "reason": "Conservative test owner includes helper-based source buffers, partial completion inputs and non-source harnesses; the named tests/assertions retain their exact contracts.",
       "assertion": "tests/golden/numeric-operations/reference.py"
+    },
+    {
+      "path": "tests/golden/random-values/reference.py",
+      "sha256": "c0d5dc920043c73cfc2c81c41d23c5ac1673602ac64f9a81f9dd5c2a8891d5f7",
+      "source_markers": 2,
+      "constructors_or_assertions": [
+        "sample_int",
+        "self_check"
+      ],
+      "role": "positive-generator",
+      "reason": "Independent system-entropy workaround and assert-based rejection oracle.",
+      "assertion": "tests/golden/random-values/reference.py"
     },
     {
       "path": "tests/golden/release-readiness/readiness-probe/src/lib.rs",
@@ -4130,6 +4491,258 @@
         "numeric_operations_limits"
       ],
       "sha256": "3a92ceeb3eb8ff70f27295452f41772cfef2b8f8c1c2cb2fc587c6335c6f6ffa"
+    },
+    {
+      "path": "fuzz/seeds/random_limits/operation-0-limit-0",
+      "targets": [
+        "random_limits"
+      ],
+      "sha256": "79fb6483837aaa2d947bf8a3a15af78a02a75a60fe02d4d0248fa73bbc9793bc"
+    },
+    {
+      "path": "fuzz/seeds/random_limits/operation-0-limit-1",
+      "targets": [
+        "random_limits"
+      ],
+      "sha256": "2d0cb978733ba94b7bcd542ef966bd1e4c34a8fbd65d8767790c5434f4f89e0e"
+    },
+    {
+      "path": "fuzz/seeds/random_limits/operation-0-limit-2",
+      "targets": [
+        "random_limits"
+      ],
+      "sha256": "ad7cfa8fb451e252f624ad781eb59bd23ae3a0ac1607b6019e3d154a4005270b"
+    },
+    {
+      "path": "fuzz/seeds/random_limits/operation-0-limit-3",
+      "targets": [
+        "random_limits"
+      ],
+      "sha256": "8984a225d099e035cf6a444cee4bb7436ed7ae08f1cf94fe8d9d17ce8a4da2ca"
+    },
+    {
+      "path": "fuzz/seeds/random_limits/operation-0-limit-4",
+      "targets": [
+        "random_limits"
+      ],
+      "sha256": "c176cbf8a6036e36be42f67fb4c5f9e2e7ec85d9b72afc5c909328e0761d7317"
+    },
+    {
+      "path": "fuzz/seeds/random_limits/operation-0-limit-5",
+      "targets": [
+        "random_limits"
+      ],
+      "sha256": "a226f00490bdf4fbcee92bd8e266c0a36c2d5b3e3d4223bea508c64677bafcf5"
+    },
+    {
+      "path": "fuzz/seeds/random_limits/operation-0-limit-6",
+      "targets": [
+        "random_limits"
+      ],
+      "sha256": "6499205ee147bc6040dd7f0a2c217c91bae41c22299e134d5a9b87ea18feb96a"
+    },
+    {
+      "path": "fuzz/seeds/random_limits/operation-0-limit-7",
+      "targets": [
+        "random_limits"
+      ],
+      "sha256": "4c161988cecf616a5d97fec7f0719caa1b57e32e5058a56fca1a6658d52c1c70"
+    },
+    {
+      "path": "fuzz/seeds/random_limits/operation-1-limit-0",
+      "targets": [
+        "random_limits"
+      ],
+      "sha256": "b55f9a67d76cf9c25aac7ba6627516754c2fcd149bc2c3022681e08d8d272222"
+    },
+    {
+      "path": "fuzz/seeds/random_limits/operation-1-limit-1",
+      "targets": [
+        "random_limits"
+      ],
+      "sha256": "95abb30f792960508a3c74de9b9407bc409c98c58386d33c9b0d907b2610febd"
+    },
+    {
+      "path": "fuzz/seeds/random_limits/operation-1-limit-2",
+      "targets": [
+        "random_limits"
+      ],
+      "sha256": "4e128f3992c1707af3f2ca97aa66b03ef8ecf9172878b6df6a1025d0db113285"
+    },
+    {
+      "path": "fuzz/seeds/random_limits/operation-1-limit-3",
+      "targets": [
+        "random_limits"
+      ],
+      "sha256": "6139075fc919cd587de856ea2fa539d8cf22e052fcf3f735e8c1b10977652d55"
+    },
+    {
+      "path": "fuzz/seeds/random_limits/operation-1-limit-4",
+      "targets": [
+        "random_limits"
+      ],
+      "sha256": "a0837cb7855924c959f5b12953f140e6fe6cf2f9b006bb4c80282e5f8e427106"
+    },
+    {
+      "path": "fuzz/seeds/random_limits/operation-1-limit-5",
+      "targets": [
+        "random_limits"
+      ],
+      "sha256": "d6adeb7eff3b05b4c9435870c0a7cd6693c05e53ef8a3861ca632c8830611e3d"
+    },
+    {
+      "path": "fuzz/seeds/random_limits/operation-1-limit-6",
+      "targets": [
+        "random_limits"
+      ],
+      "sha256": "796395c3c8c6f4485df78d38b6f0a3f9d57049f9f8e94e2a1776a904e539e5ab"
+    },
+    {
+      "path": "fuzz/seeds/random_limits/operation-1-limit-7",
+      "targets": [
+        "random_limits"
+      ],
+      "sha256": "661855eee6310ebf770e2dbcd39ab31170b72a501f6b22be6292b14f46905165"
+    },
+    {
+      "path": "fuzz/seeds/random_limits/operation-2-limit-0",
+      "targets": [
+        "random_limits"
+      ],
+      "sha256": "e2c5d9e879966805ca40d492a47d5c196263c6dbf6e84d42535fea60e4946728"
+    },
+    {
+      "path": "fuzz/seeds/random_limits/operation-2-limit-1",
+      "targets": [
+        "random_limits"
+      ],
+      "sha256": "0898ad6a05b022f672fd13afcfdc23c34e794425833fe97c172650cea4de5614"
+    },
+    {
+      "path": "fuzz/seeds/random_limits/operation-2-limit-2",
+      "targets": [
+        "random_limits"
+      ],
+      "sha256": "fefe66d53078e1c129d304a3f97129b92cee144c3cc0d71e093e40a38bcda29b"
+    },
+    {
+      "path": "fuzz/seeds/random_limits/operation-2-limit-3",
+      "targets": [
+        "random_limits"
+      ],
+      "sha256": "4672bad578a7cb7a2e3bb85129fbbd8c6a6ddce7cb5569acd77474f6cd984da0"
+    },
+    {
+      "path": "fuzz/seeds/random_limits/operation-2-limit-4",
+      "targets": [
+        "random_limits"
+      ],
+      "sha256": "3867c07b6acf4a30cfdc6da0c6a110d8392e78e81b737260ce04c1dae9546f5f"
+    },
+    {
+      "path": "fuzz/seeds/random_limits/operation-2-limit-5",
+      "targets": [
+        "random_limits"
+      ],
+      "sha256": "63efd4fa518d98bba68210c0a1f03567dfbb4249cdf078b477a11eefb0e71fcc"
+    },
+    {
+      "path": "fuzz/seeds/random_limits/operation-2-limit-6",
+      "targets": [
+        "random_limits"
+      ],
+      "sha256": "457f34a2da5aaac1df4be2b8b0483ec453da74021b3a5024a6be80d26fb96b87"
+    },
+    {
+      "path": "fuzz/seeds/random_limits/operation-2-limit-7",
+      "targets": [
+        "random_limits"
+      ],
+      "sha256": "9a5447fa1f6c4b5c0163e73a082c7560e5e75b96ddc59df90270f93f39f4b525"
+    },
+    {
+      "path": "fuzz/seeds/random_limits/protocol-0-rights-0.seed",
+      "targets": [
+        "random_limits"
+      ],
+      "sha256": "87373ff4fe1f66b017037229b575926fb17c1acb3c096ca720f19e5569da1b06"
+    },
+    {
+      "path": "fuzz/seeds/random_limits/protocol-0-rights-1.seed",
+      "targets": [
+        "random_limits"
+      ],
+      "sha256": "fb961cb7087d1609ae4a6245f80cd1521eafda82bc94c632f6810b99bcc3fbfe"
+    },
+    {
+      "path": "fuzz/seeds/random_limits/protocol-0-rights-2.seed",
+      "targets": [
+        "random_limits"
+      ],
+      "sha256": "1e1694abcbc28bb637c81a56d13fcea5a68282b44c2434d23ba6e9998fddaa0a"
+    },
+    {
+      "path": "fuzz/seeds/random_limits/protocol-0-rights-3.seed",
+      "targets": [
+        "random_limits"
+      ],
+      "sha256": "41ae05543100187c9848d3305ecdfd815da8c28ba76538c50405809b5ed71c13"
+    },
+    {
+      "path": "fuzz/seeds/random_limits/protocol-1-rights-0.seed",
+      "targets": [
+        "random_limits"
+      ],
+      "sha256": "e9d0d003b6bbb573ddabad6176da9c119754c8af447511e33186229304c60a7f"
+    },
+    {
+      "path": "fuzz/seeds/random_limits/protocol-1-rights-1.seed",
+      "targets": [
+        "random_limits"
+      ],
+      "sha256": "b0520dd262c9403c29c05ff1a007d6ed0742304032a31bdca87e98528280f3b7"
+    },
+    {
+      "path": "fuzz/seeds/random_limits/protocol-1-rights-2.seed",
+      "targets": [
+        "random_limits"
+      ],
+      "sha256": "3854411d618a899c14f48cb35fafc9fd01ce2accb81787b64ffcfb06de9df094"
+    },
+    {
+      "path": "fuzz/seeds/random_limits/protocol-1-rights-3.seed",
+      "targets": [
+        "random_limits"
+      ],
+      "sha256": "ccb630195c6eb81eb6456af7a4fdaaa1bf0f9c14296ec5ea88064f0a3a3f6b44"
+    },
+    {
+      "path": "fuzz/seeds/random_limits/protocol-2-rights-0.seed",
+      "targets": [
+        "random_limits"
+      ],
+      "sha256": "0fc65f00810e026143154565679f0b9f89a107948a93d93b1c6e3ffbd11ca97d"
+    },
+    {
+      "path": "fuzz/seeds/random_limits/protocol-2-rights-1.seed",
+      "targets": [
+        "random_limits"
+      ],
+      "sha256": "fd10024a424ec6a5ec7e5ddbd921dc94cc9e1611d322b512449b4b978e7e779a"
+    },
+    {
+      "path": "fuzz/seeds/random_limits/protocol-2-rights-2.seed",
+      "targets": [
+        "random_limits"
+      ],
+      "sha256": "c8460cfb9f19a294df965ed80832c22ae532b757e1e6f7a0c52ff2e742e47169"
+    },
+    {
+      "path": "fuzz/seeds/random_limits/protocol-2-rights-3.seed",
+      "targets": [
+        "random_limits"
+      ],
+      "sha256": "c9b057f5b460fa22c8b14b0324487b5408a279d77bb155c975973c8cf1b0c528"
     },
     {
       "path": "tests/golden/source-formatting/action-comments.opaal",

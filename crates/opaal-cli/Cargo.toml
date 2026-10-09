@@ -79,7 +79,14 @@ reedline = { version = "=0.49.0", default-features = false, features = ["externa
 # The PTY acceptance harness composes a pseudoterminal from rustix directly
 # rather than pulling a new crate; these features stay out of the shipped binary.
 [target.'cfg(any(target_os = "macos", target_os = "linux"))'.dev-dependencies]
+getrandom = "=0.4.3"
+libc = "0.2"
 rustix = { version = "=1.1.5", features = ["fs", "process", "pty", "termios"] }
+
+[[test]]
+name = "random_native"
+path = "tests/random_native.rs"
+harness = false
 
 [lints]
 workspace = true

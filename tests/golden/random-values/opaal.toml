@@ -1,0 +1,11 @@
+schema_version = 1
+[project]
+name = "random_sample"
+root_module = "tasks.opaal"
+required_opaal = ">=1.3.0,<2.0.0"
+[paths]
+root = "."
+evidence = "sample.output"
+[environments.ci]
+authority = "authority.toml"
+tool_lock = "tools.toml"

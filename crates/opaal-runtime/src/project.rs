@@ -1317,7 +1317,7 @@ fn validate_authority_scope(
                     .is_some_and(|id| manifest.secrets.contains_key(id))
                     && manifest.endpoints.contains_key(endpoint)
             }),
-        "clock.wall" | "clock.monotonic" => scope == "evaluation",
+        "clock.wall" | "clock.monotonic" | "entropy.system" => scope == "evaluation",
         _ => false,
     };
     if valid {
@@ -2110,7 +2110,9 @@ fn bind_project_effect(
             }
             format!("secret.{secret}@endpoint.{endpoint}")
         }
-        "clock.wall" | "clock.monotonic" if references.is_empty() => "evaluation".to_owned(),
+        "clock.wall" | "clock.monotonic" | "entropy.system" if references.is_empty() => {
+            "evaluation".to_owned()
+        }
         _ => {
             return Err(ProjectError::new(
                 "ACT005",

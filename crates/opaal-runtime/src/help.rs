@@ -64,6 +64,13 @@ pub fn render_module_operation_help(operation: &OperationDescriptor) -> Vec<u8> 
     for signature in operation.signature_labels() {
         output.push_str(&format!("  signature: {signature}\n"));
     }
+    if operation
+        .downstream()
+        .effects()
+        .contains(&crate::authority::CapabilityRequest::entropy_system())
+    {
+        output.push_str("  effect: entropy.system (evaluation)\n");
+    }
     output.push_str(&format!("  documentation: {}\n", operation.documentation()));
     output.into_bytes()
 }

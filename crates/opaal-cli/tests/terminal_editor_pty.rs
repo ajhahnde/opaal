@@ -22,7 +22,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use rustix::fs::{Mode, OFlags, open};
+use rustix::fs::{Mode, OFlags, fcntl_getfl, open};
 use rustix::pty::{OpenptFlags, grantpt, openpt, ptsname, unlockpt};
 use rustix::termios::{Winsize, tcsetwinsize};
 
@@ -64,10 +64,19 @@ impl Pty {
         );
         tcsetwinsize(&control_user, winsize(24, 80)).expect("initial winsize");
 
+        // Raw input changes status flags; a separate open keeps output blocking.
+        let input_user = File::from(
+            open(
+                name.as_c_str(),
+                OFlags::RDWR | OFlags::NOCTTY,
+                Mode::empty(),
+            )
+            .expect("open independent pty input"),
+        );
         let mut command = Command::new(binary);
         command
             .env("TERM", "xterm-256color")
-            .stdin(Stdio::from(control_user.try_clone().expect("clone stdin")))
+            .stdin(Stdio::from(input_user))
             .stdout(Stdio::from(control_user.try_clone().expect("clone stdout")))
             .stderr(Stdio::from(control_user.try_clone().expect("clone stderr")));
         for (name, value) in environment {
@@ -396,6 +405,55 @@ fn interactive_project_spelling_is_a_language_error_not_a_project_command() {
     pty.await_prompt_after("error[RUN001]");
     pty.send(b"\x04");
     assert_eq!(pty.wait_exit(), 0);
+}
+
+#[test]
+fn random_cells_retain_values_and_restore_the_editor_after_domain_errors() {
+    let work = unique_dir("random-values");
+    let state = work.to_str().unwrap();
+    let mut pty = Pty::spawn_with_env(
+        OPAAL,
+        &[("XDG_STATE_HOME", state), ("XDG_CONFIG_HOME", state)],
+    );
+    pty.wait_for(">> ");
+    for cell in [
+        "import std::random as random",
+        "let shard = random::int(0, 4)",
+        "let fraction = random::float()",
+        "let identifier = random::bytes(3)",
+    ] {
+        pty.send(format!("{cell}\r").as_bytes());
+        pty.await_prompt_after(cell);
+    }
+    for cell in [
+        "shard >= 0",
+        "shard < 4",
+        "fraction >= 0.0",
+        "fraction < 1.0",
+    ] {
+        let mark = pty.mark();
+        pty.send(format!("{cell}\r").as_bytes());
+        pty.wait_for_from(mark, "true");
+        pty.await_prompt_after("true");
+    }
+    pty.send(b"identifier\r");
+    pty.await_prompt_after("identifier");
+    assert!(!pty.rendered_from(0).contains("error["));
+    for cell in ["random::int(4, 4)", "random::bytes(-1)"] {
+        let mark = pty.mark();
+        pty.send(format!("{cell}\r").as_bytes());
+        pty.wait_for_from(mark, "RANDOM001");
+        pty.await_prompt_after("RANDOM001");
+    }
+    pty.send(b"let single = random::int(7, 8)\r");
+    pty.await_prompt_after("let single");
+    let mark = pty.mark();
+    pty.send(b"single\r");
+    pty.wait_for_from(mark, "7");
+    pty.await_prompt_after("single");
+    exit_cleanly(&mut pty);
+    drop(pty);
+    fs::remove_dir_all(work).unwrap();
 }
 
 #[test]
@@ -741,6 +799,12 @@ fn configured_and_safe_prompts_reach_the_portable_editor() {
 fn portable_editor_restores_terminal_mode_after_each_read() {
     let mut pty = Pty::spawn_with_env(FIXTURE, &[("OPAAL_TEST_TERMINAL_RESTORE", "1")]);
     pty.wait_for(">> ");
+    assert!(
+        !fcntl_getfl(pty.control_user.as_ref().unwrap())
+            .unwrap()
+            .contains(OFlags::NONBLOCK),
+        "raw input mode made the fixture output nonblocking"
+    );
     pty.send(b"one edit\r");
     pty.wait_for("terminal-restored=true");
     assert_eq!(pty.wait_exit(), 0);

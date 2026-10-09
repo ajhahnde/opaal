@@ -1,0 +1,13 @@
+import std::random as random
+
+let shard = random::int(0, 4)
+let fraction = random::float()
+let identifier = random::bytes(16)
+let empty = random::bytes(0)
+mut invalid = 0
+try {
+    let ignored = random::int(4, 4)
+} catch error {
+    invalid = -1
+}
+^printf "shard=%s fraction=%s\n" {shard} {fraction}

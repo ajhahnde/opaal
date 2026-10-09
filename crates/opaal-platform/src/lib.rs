@@ -14,6 +14,7 @@
 //! environment, and path bytes survive without lossy UTF-8 conversion.
 
 pub mod operational;
+pub mod standard_host;
 
 use std::any::Any;
 use std::ffi::{OsStr, OsString};
@@ -167,11 +168,13 @@ pub enum AuthorityEffect {
     ClockWall,
     /// Observing monotonic time.
     ClockMonotonic,
+    /// System entropy for the current evaluation.
+    EntropySystem,
 }
 
 impl AuthorityEffect {
     /// Every operational effect, in stable declaration order.
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 8] = [
         Self::FilesystemRead,
         Self::FilesystemWrite,
         Self::ProcessRun,
@@ -179,6 +182,7 @@ impl AuthorityEffect {
         Self::SecretReveal,
         Self::ClockWall,
         Self::ClockMonotonic,
+        Self::EntropySystem,
     ];
 
     const fn index(self) -> usize {

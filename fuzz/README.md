@@ -1,6 +1,6 @@
 # Fuzz targets
 
-The separate unpublished `opaal-fuzz` package owns seven targets:
+The separate unpublished `opaal-fuzz` package owns eight targets:
 
 - `lexer` checks lossless tokenization and progress;
 - `parser` checks parsing, complete-source formatting/reparsing, resolved AST
@@ -12,10 +12,17 @@ The separate unpublished `opaal-fuzz` package owns seven targets:
   generous runs;
 - `numeric_operations_limits` checks finite bit patterns, complete numeric
   tuples, homogeneous dispatch and scalar work/cancellation limits; and
+- `random_limits` checks interval/lattice/byte results, candidate and byte/work
+  admission, full-fill uncertainty, cancellation, closed v3 artifact readers,
+  and native BIND/FILL/ACK records with unexpected ancillary descriptors; and
 - `secret_sinks` checks raw and encoded secret redaction.
 
-Invalid UTF-8 is rejected through the normal source boundary. Targets launch no
-process and perform no platform I/O.
+Invalid UTF-8 is rejected through the normal source boundary. The Random target
+also uses the isolated native fixture built by the campaign scripts. Each
+selected input drives a production worker, with bounded protocol waits and
+owned teardown; the fixture asserts descriptor preservation and exact reap.
+The subprocess protocol is exercised by mutations without coverage feedback
+from inside that subprocess. Other targets launch no process or platform I/O.
 
 Install cargo-fuzz and a nightly toolchain, then run every target from the
 repository root:

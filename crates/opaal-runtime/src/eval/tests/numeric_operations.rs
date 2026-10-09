@@ -40,6 +40,7 @@ impl EvaluationHost for CountingHost {
         _: &ModuleId,
         _: &str,
         _: Vec<Value>,
+        _: &mut ResourceBudget,
     ) -> Option<Result<Value, OperationalModuleError>> {
         self.operations += 1;
         panic!("math must not invoke an operational host")
@@ -87,6 +88,7 @@ fn execute(body: &str) -> (Value, CountingHost) {
         current_result_type: None,
         current_type_arguments: BTreeMap::new(),
         budgeted_callback: false,
+        standard_effects_allowed: true,
         cancel: CancellationToken::never(),
         budget: &mut budget,
         host: &mut host,
@@ -197,6 +199,7 @@ fn reconstructed_numeric_callbacks_preserve_aliases_and_generic_dispatch() {
             current_result_type: None,
             current_type_arguments: BTreeMap::new(),
             budgeted_callback: false,
+            standard_effects_allowed: true,
             cancel: CancellationToken::never(),
             budget: &mut budget,
             host: &mut host,
@@ -265,6 +268,7 @@ fn scalar_admission_charges_call_and_candidates_before_domain_evaluation() {
                 current_result_type: None,
                 current_type_arguments: BTreeMap::new(),
                 budgeted_callback: false,
+                standard_effects_allowed: true,
                 cancel: CancellationToken::never(),
                 budget: &mut budget,
                 host: &mut host,

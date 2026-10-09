@@ -63,5 +63,12 @@ test = false
 doc = false
 bench = false
 
+[[bin]]
+name = "random_limits"
+path = "fuzz_targets/random_limits.rs"
+test = false
+doc = false
+bench = false
+
 [workspace]
 members = ["."]

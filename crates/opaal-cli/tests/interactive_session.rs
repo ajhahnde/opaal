@@ -443,6 +443,41 @@ fn a_failed_program_output_flush_is_a_fatal_interactive_failure() {
 }
 
 #[test]
+fn host_failure_retains_primary_and_cleanup_when_program_output_flush_fails() {
+    struct FailedHost;
+    impl InteractiveEvaluator for FailedHost {
+        fn evaluate(
+            &mut self,
+            _source: &str,
+            _output: &mut dyn Write,
+        ) -> Result<EvaluationControl, InteractiveEvaluationError> {
+            Err(InteractiveEvaluationError::HostFailure(
+                "primary failure\ncleanup failure\n".to_owned(),
+            ))
+        }
+    }
+
+    for fail_flush in [false, true] {
+        let mut editor = ScriptedEditor::new([EditorEvent::Submitted("sample".to_owned())]);
+        let mut output = RecordingWriter::new(CallLog::default());
+        output.fail_flush = fail_flush;
+        let mut diagnostics = Vec::new();
+        let exit = run_interactive_driver(
+            &mut editor,
+            &mut FailedHost,
+            &EditorPrompt::default(),
+            &mut output,
+            &mut diagnostics,
+        );
+        assert_eq!(exit, HostExit::Failure);
+        assert_eq!(editor.prompts.len(), 1);
+        let diagnostic = String::from_utf8(diagnostics).unwrap();
+        assert!(diagnostic.starts_with("opaal: primary failure\ncleanup failure\n"));
+        assert_eq!(diagnostic.contains("scripted flush failure"), fail_flush);
+    }
+}
+
+#[test]
 fn ctrl_c_reprompts_without_evaluation_and_empty_ctrl_d_exits() {
     let prompt = EditorPrompt::default();
     let mut editor = ScriptedEditor::new([

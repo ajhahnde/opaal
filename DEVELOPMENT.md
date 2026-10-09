@@ -135,6 +135,52 @@ process boundary. The harness uses only synthetic inputs and a TLS loopback
 server. See [Qualifying the operational core](RELEASING.md) for the
 scenario and evidence boundary.
 
+## Random qualification
+
+For macOS builds, apply the native image policy before running or packaging
+the CLI and its host fixture. This uses an ad-hoc signature and no signing key:
+
+```sh
+cargo test --workspace --locked --no-run
+codesign --force --sign - --options kill target/debug/opaal target/debug/opaal-standard-host-fixture
+for binary in target/debug/deps/opaal-* target/debug/deps/opaal_standard_host_fixture-*; do
+    [ -f "$binary" ] && [ -x "$binary" ] || continue
+    codesign --force --sign - --options kill "$binary"
+done
+```
+
+Apply the same option to `target/release/opaal` after release-mode builds. The
+test compilation must finish before signing. Cargo restores visible programs
+from the hashed copies even on a cached run. Compiling a different selection
+of packages can replace those copies, so sign again after rebuilding. The
+worker requires valid code with invalidation termination enabled; an ordinary
+linker signature does not guarantee that policy on every supported macOS host.
+
+```sh
+cargo test -p opaal-platform-posix --test standard_host_worker --locked
+cargo test -p opaal-runtime --test random_sampling --test random_authority --test random_limits --test random_controlled --test random_observers --test random_golden --locked
+cargo test -p opaal-cli --test random_golden --test terminal_editor_pty --locked
+python3 ci/qualify_random_values.py --binary-directory target/debug --expected-source "$(git rev-parse HEAD)" --platform macos-arm64 --report dist/random-working.json
+python3 ci/qualify_random_failures.py --binary target/debug/opaal --output dist/random-failures
+```
+
+Use `linux-x86_64` for Linux qualification. Working mode records dirty-source
+identity and never claims committed archive evidence. The exact committed
+both-host candidate jobs package `tests/golden/random-values` with
+`ci/package_random_values.py` and pass both the fixture and program archives to
+the qualifier. It checks real source domains, retained interactive cells and
+help, pure/domain refusal, controlled progress and metadata-only v3 inspection,
+and stale-source refusal outside the checkout. No version or publication is
+performed. The [Random fixture guide](tests/golden/random-values/README.md)
+explains the first-release floor and the independent Python reference.
+
+A manual CI run on the candidate branch also runs `random-native-linux`.
+It exercises the native host and CLI tests, real worker and maintained-probe
+failures with failed journal persistence, and records maximum byte-fill timing
+and process resources. Its artifact retains logs even after failure. This lane
+complements the regular workspace, policy, fuzz and archive jobs; it does not
+infer performance guarantees or replace missing failure scenarios.
+
 ## Fuzzing
 
 Install cargo-fuzz and a nightly Rust toolchain, then run:

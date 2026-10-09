@@ -86,12 +86,12 @@ publish = false
             "    runs-on: ubuntu-24.04\n"
             "    ref: ${{ github.event.pull_request.head.sha || github.sha }}\n"
             "    run: cargo build --release --workspace --locked\n"
-            "    ci/package_data_processing.py ci/qualify_data_processing.py --expected-source actions/upload-artifact@\n"
+            "    ci/package_data_processing.py ci/qualify_data_processing.py ci/package_random_values.py ci/qualify_random_values.py --fixtures --expected-source actions/upload-artifact@\n"
             "  data-processing-macos:\n"
             "    runs-on: macos-15\n"
             "    ref: ${{ github.event.pull_request.head.sha || github.sha }}\n"
             "    run: cargo build --release --workspace --locked\n"
-            "    ci/package_data_processing.py ci/qualify_data_processing.py --expected-source actions/upload-artifact@\n",
+            "    ci/package_data_processing.py ci/qualify_data_processing.py ci/package_random_values.py ci/qualify_random_values.py --fixtures --expected-source actions/upload-artifact@\n",
         )
         self.write(
             ".github/workflows/release.yml",

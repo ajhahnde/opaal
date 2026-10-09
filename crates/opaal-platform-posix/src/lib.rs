@@ -8,6 +8,7 @@
 //! adapters remain separate and own their own policy and qualification state.
 
 pub mod operational;
+pub mod standard_host;
 
 use std::any::Any;
 use std::collections::BTreeSet;
@@ -375,6 +376,7 @@ impl Platform for PosixPlatform {
             | opaal_platform::AuthorityEffect::SecretReveal
             | opaal_platform::AuthorityEffect::ClockWall
             | opaal_platform::AuthorityEffect::ClockMonotonic => AuthorityEnforcement::Enforced,
+            opaal_platform::AuthorityEffect::EntropySystem => AuthorityEnforcement::Enforced,
         }
     }
 

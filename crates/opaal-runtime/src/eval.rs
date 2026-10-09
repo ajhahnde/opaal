@@ -1487,7 +1487,7 @@ impl ResourceBudget {
     }
 
     /// Charges one step, returning `false` when the budget is exhausted.
-    fn charge(&mut self) -> bool {
+    pub(crate) fn charge(&mut self) -> bool {
         if let Some(limit) = self.step_limit {
             if self.used_steps >= limit {
                 return false;
@@ -1511,7 +1511,7 @@ impl ResourceBudget {
         true
     }
 
-    fn charge_collection_bytes(&mut self, amount: usize) -> bool {
+    pub(crate) fn charge_collection_bytes(&mut self, amount: usize) -> bool {
         let Ok(amount) = u64::try_from(amount) else {
             return false;
         };
@@ -1766,11 +1766,20 @@ pub(crate) trait EvaluationHost {
         false
     }
 
+    fn permits_entropy_action(&self) -> bool {
+        false
+    }
+
+    fn metadata_only(&self) -> bool {
+        false
+    }
+
     fn invoke_operational(
         &mut self,
         _module: &ModuleId,
         _operation: &str,
         _arguments: Vec<Value>,
+        _budget: &mut ResourceBudget,
     ) -> Option<Result<Value, OperationalModuleError>> {
         None
     }
@@ -1829,6 +1838,9 @@ struct ControlledEvaluationHost<'environment, 'operations> {
 }
 
 impl EvaluationHost for ControlledEvaluationHost<'_, '_> {
+    fn metadata_only(&self) -> bool {
+        self.operations.metadata_only()
+    }
     fn environment(&mut self) -> &mut Environment {
         self.environment
     }
@@ -1850,8 +1862,9 @@ impl EvaluationHost for ControlledEvaluationHost<'_, '_> {
         module: &ModuleId,
         operation: &str,
         arguments: Vec<Value>,
+        budget: &mut ResourceBudget,
     ) -> Option<Result<Value, OperationalModuleError>> {
-        Some(self.operations.invoke(module, operation, arguments))
+        Some(self.operations.invoke(module, operation, arguments, budget))
     }
 
     fn action_start(&mut self, action: &ActionId) -> Option<Result<(), OperationalModuleError>> {
@@ -2029,11 +2042,8 @@ pub(crate) fn evaluate_in_environment_owned_with_binding_types(
             Ok(Completion::Cancelled(cancellation))
         }
         Err(HostedEvaluationFailure::Runtime(error)) => Err(error),
-        Ok(
-            HostedEvaluationOutcome::Refused(_)
-            | HostedEvaluationOutcome::Exit(_)
-            | HostedEvaluationOutcome::Stopped(_),
-        )
+        Ok(HostedEvaluationOutcome::Refused(refusal)) => Err(policy_refusal_error(refusal)),
+        Ok(HostedEvaluationOutcome::Exit(_) | HostedEvaluationOutcome::Stopped(_))
         | Err(HostedEvaluationFailure::Output(_)) => {
             unreachable!("the pure evaluation host cannot produce session outcomes")
         }
@@ -2113,6 +2123,7 @@ pub(crate) fn evaluate_with_host_and_budget(
         current_result_type: None,
         current_type_arguments: BTreeMap::new(),
         budgeted_callback: false,
+        standard_effects_allowed: true,
         cancel: limits.cancel.clone(),
         budget,
         host,
@@ -2204,6 +2215,7 @@ pub(crate) fn evaluate_closure_argument_with_binding_types(
         current_result_type: None,
         current_type_arguments: BTreeMap::new(),
         budgeted_callback: false,
+        standard_effects_allowed: true,
         cancel: limits.cancel,
         budget: &mut budget,
         host: &mut host,
@@ -2287,6 +2299,7 @@ pub(crate) fn apply_callable_with_budget(
         current_result_type: None,
         current_type_arguments: BTreeMap::new(),
         budgeted_callback: false,
+        standard_effects_allowed: true,
         cancel: limits.cancel.clone(),
         budget,
         host: &mut host,
@@ -2359,6 +2372,7 @@ pub(crate) fn apply_callable_with_controlled_host_and_budget(
         current_result_type: None,
         current_type_arguments: BTreeMap::new(),
         budgeted_callback: false,
+        standard_effects_allowed: true,
         cancel: limits.cancel.clone(),
         budget,
         host: &mut host,
@@ -2505,6 +2519,7 @@ pub(crate) fn expand_word_with_context_and_policy(
         current_result_type: None,
         current_type_arguments: BTreeMap::new(),
         budgeted_callback: false,
+        standard_effects_allowed: true,
         cancel: limits.cancel.clone(),
         budget: &mut budget,
         host: &mut host,
@@ -2591,6 +2606,7 @@ pub(crate) fn expand_spread_with_context_and_policy(
         current_result_type: None,
         current_type_arguments: BTreeMap::new(),
         budgeted_callback: false,
+        standard_effects_allowed: true,
         cancel: limits.cancel.clone(),
         budget: &mut budget,
         host: &mut host,
@@ -2657,6 +2673,7 @@ struct Evaluator<'budget, 'host> {
     current_result_type: Option<ValueType>,
     current_type_arguments: BTreeMap<String, ValueType>,
     budgeted_callback: bool,
+    standard_effects_allowed: bool,
     cancel: CancellationToken,
     budget: &'budget mut ResourceBudget,
     host: &'host mut dyn EvaluationHost,
@@ -3688,6 +3705,16 @@ impl Evaluator<'_, '_> {
                 .iter()
                 .map(|segment| self.text(segment.span()))
                 .collect::<Vec<_>>();
+            if let Some(operation) = self
+                .binding_types
+                .qualified_operation(self.source.id(), &segments)
+                && operation.purity()
+                    == crate::operation::OperationPurity::RequiresAuthorityContract
+            {
+                return Err(
+                    self.unsupported("operational function alias without host identity", span)
+                );
+            }
             if let Some((nominal, constructor)) = self
                 .binding_types
                 .qualified_variant(self.source.id(), &segments)
@@ -4190,6 +4217,10 @@ impl Evaluator<'_, '_> {
                 Abort::Cancelled(Cancellation::new(reason, span))
             }
             OperationalModuleError::Invalid {
+                code: "RESOURCE_LIMIT",
+                ..
+            } => self.error(RuntimeErrorKind::ResourceBudgetExceeded, span),
+            OperationalModuleError::Invalid {
                 code: "EXECUTE_STALE",
                 ..
             } => Abort::Refused(Refusal::new(
@@ -4559,7 +4590,9 @@ impl Evaluator<'_, '_> {
                     .iter()
                     .map(|argument| self.expression(argument, scope))
                     .collect::<Eval<Vec<_>>>()?;
-                let Some(result) = self.host.invoke_operational(&module, &operation, arguments)
+                let Some(result) =
+                    self.host
+                        .invoke_operational(&module, &operation, arguments, self.budget)
                 else {
                     return Err(Abort::Refused(Refusal::new(
                         RefusalReason::Unsupported,
@@ -5176,7 +5209,21 @@ impl Evaluator<'_, '_> {
         explicit_type_arguments: Option<Vec<ValueType>>,
         expected_result: Option<&ValueType>,
     ) -> Eval<(Value, ValueType)> {
-        if function.effect_requirement() && !self.host.permits_controlled_action() {
+        let entropy_action = self.host.permits_entropy_action()
+            && function
+                .binding_types
+                .function_signature(function.family.source.id(), function.family.origin_span)
+                .is_some_and(|signature| {
+                    !signature.declared_effects().is_empty()
+                        && signature
+                            .declared_effects()
+                            .iter()
+                            .all(|effect| effect.capability() == "entropy.system")
+                });
+        if function.effect_requirement()
+            && !self.host.permits_controlled_action()
+            && !entropy_action
+        {
             return Err(Abort::Refused(Refusal::new(
                 RefusalReason::Unsupported,
                 "effectful action execution",
@@ -5252,6 +5299,18 @@ impl Evaluator<'_, '_> {
             });
         let caller_type_arguments =
             std::mem::replace(&mut self.current_type_arguments, defining_types);
+        let caller_standard_effects = self.standard_effects_allowed;
+        self.standard_effects_allowed = caller_standard_effects
+            && action.is_some()
+            && function
+                .binding_types
+                .function_signature(function.family.source.id(), function.family.origin_span)
+                .is_some_and(|signature| {
+                    signature
+                        .declared_effects()
+                        .iter()
+                        .any(|effect| effect.capability() == "entropy.system")
+                });
         let mut result = (|| {
             for (parameter, argument) in function.parameters.iter().zip(arguments) {
                 let expected =
@@ -5325,9 +5384,13 @@ impl Evaluator<'_, '_> {
                     "success",
                     "ACTION000",
                     "action completed",
-                    crate::data::json_encode(value)
-                        .ok()
-                        .map(|bytes| crate::workflow::digest_bytes(&bytes)),
+                    if self.host.metadata_only() {
+                        None
+                    } else {
+                        crate::data::json_encode(value)
+                            .ok()
+                            .map(|bytes| crate::workflow::digest_bytes(&bytes))
+                    },
                     false,
                 ),
                 Err(Abort::Error(error)) => SourceActionOutcome::new(
@@ -5373,13 +5436,16 @@ impl Evaluator<'_, '_> {
                     false,
                 ),
             };
-            if let Some(Err(error)) = self.host.action_end(action, outcome) {
+            if let Some(Err(error)) = self.host.action_end(action, outcome)
+                && result.is_ok()
+            {
                 result = Err(self.operational_abort(error, span));
             }
         }
         self.source = caller_source;
         self.binding_types = caller_binding_types;
         self.current_type_arguments = caller_type_arguments;
+        self.standard_effects_allowed = caller_standard_effects;
         self.budget.leave_call();
         result.map(|value| (value, result_type))
     }
@@ -6234,6 +6300,7 @@ fn decode_double_escape(raw: &str) -> String {
 mod tests {
     mod callable_classification;
     mod numeric_operations;
+    mod random_operations;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use opaal_platform::{DirectoryEntry, DirectoryEntryKind, DirectoryReadError};
@@ -6317,6 +6384,7 @@ mod tests {
             _module: &ModuleId,
             _operation: &str,
             _arguments: Vec<Value>,
+            _budget: &mut ResourceBudget,
         ) -> Option<Result<Value, OperationalModuleError>> {
             self.calls.operational.fetch_add(1, Ordering::Relaxed);
             None
@@ -6645,6 +6713,7 @@ mod tests {
             current_result_type: None,
             current_type_arguments: BTreeMap::new(),
             budgeted_callback: false,
+            standard_effects_allowed: true,
             cancel: CancellationToken::never(),
             budget: &mut budget,
             host: &mut host,

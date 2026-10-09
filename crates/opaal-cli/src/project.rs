@@ -13,6 +13,7 @@ use opaal_platform::AuthorityEffect;
 use opaal_platform::operational::{OperationalAdapter as _, supports_exact_process_execution};
 use opaal_platform_posix::PosixPlatform;
 use opaal_platform_posix::operational::PosixOperationalAdapter;
+use opaal_platform_posix::standard_host::PosixStandardHost;
 use opaal_runtime::Environment;
 use opaal_runtime::authority::{
     AuthorityContext, AuthorityRule as RuntimeAuthorityRule, AuthorityVerdict, CapabilityRequest,
@@ -26,6 +27,7 @@ use opaal_runtime::module::{
     ActionId, ActionSignature, ModuleCanonicalizer, ModuleId, ModuleOrigin, ModulePathError,
     ModuleSourceError, ModuleSourceLoader, ValueType,
 };
+use opaal_runtime::operational::random::{RandomLimits, RandomState};
 use opaal_runtime::operational::source::{
     ControlledSourceOperations, SourceActionOutcome, SourceClock, SourceEffectEvent,
     SourceEffectJournal, SourceEffectOutcome, SourceEffectResult, SourceOperation,
@@ -967,9 +969,7 @@ fn rendered_operation(value: &Value) -> Result<String, ProjectFrontendError> {
             escaped_text(value["tool"].as_str().expect("validated tool")),
             value["argv_count"].as_u64().expect("validated argv count"),
             value["argv_bytes"].as_u64().expect("validated argv bytes"),
-            value["argv_digest"]
-                .as_str()
-                .expect("validated argv digest"),
+            nullable_text(&value["argv_digest"]),
             rendered_argv(&value["argv"]),
             nullable_number(&value["status"]),
             nullable_number(&value["stdout_bytes"]),
@@ -979,7 +979,7 @@ fn rendered_operation(value: &Value) -> Result<String, ProjectFrontendError> {
         "http" => format!(
             "{operation} endpoint={} method={} status={} body-bytes={} evidence={}",
             escaped_text(value["endpoint"].as_str().expect("validated endpoint")),
-            escaped_text(value["method"].as_str().expect("validated method")),
+            escaped_text(nullable_text(&value["method"])),
             nullable_number(&value["status"]),
             nullable_number(&value["body_bytes"]),
             nullable_text(&value["evidence_digest"])
@@ -994,6 +994,17 @@ fn rendered_operation(value: &Value) -> Result<String, ProjectFrontendError> {
             escaped_text(value["endpoint"].as_str().expect("validated endpoint")),
             escaped_text(value["header"].as_str().expect("validated header")),
             nullable_text(&value["evidence_digest"])
+        ),
+        "entropy" | "standard-stream" => format!(
+            "{operation} requested-bytes={} admitted-bytes={} confirmed-bytes={} uncertain-bytes-upper-bound={}",
+            value["requested_bytes"]
+                .as_u64()
+                .expect("validated requested bytes"),
+            value["admitted_bytes"]
+                .as_u64()
+                .expect("validated admitted bytes"),
+            nullable_number(&value["confirmed_bytes"]),
+            nullable_number(&value["uncertain_bytes_upper_bound"])
         ),
         _ => unreachable!("validated operation kind"),
     })
@@ -1062,7 +1073,7 @@ fn rendered_scope(value: &Value) -> Result<String, ProjectFrontendError> {
                         .as_str()
                         .expect("validated endpoint scope")
                 ),
-                escaped_text(value["method"].as_str().expect("validated method scope"))
+                escaped_text(nullable_text(&value["method"]))
             ),
             "secret-sink" => format!(
                 "secret={} endpoint={} header={}",
@@ -1078,12 +1089,16 @@ fn rendered_scope(value: &Value) -> Result<String, ProjectFrontendError> {
                 "clock={}",
                 value["clock"].as_str().expect("validated clock scope")
             ),
+            "evaluation" => "evaluation".to_owned(),
             _ => unreachable!("validated scope kind"),
         },
     )
 }
 
 fn rendered_native_path(value: &Value) -> Result<String, ProjectFrontendError> {
+    if value.is_null() {
+        return Ok("none".to_owned());
+    }
     let path = path_from_native_value(value).map_err(workflow_contract)?;
     let mut rendered = String::from("unix:b\"");
     for byte in path.as_os_str().as_bytes() {
@@ -1478,7 +1493,7 @@ pub fn plan_explicit_project(
     } else {
         refused_outcome("PLAN001", "static project check refused execution")
     };
-    let document = json!({
+    let mut document = json!({
         "schema":"opaal.plan.v2",
         "schema_version":2,
         "created_at":created_at,
@@ -1496,6 +1511,7 @@ pub fn plan_explicit_project(
         "actions":actions,
         "outcome":plan_outcome
     });
+    select_standard_host_policy(&mut document, "opaal.plan.v3");
     let plan = PlanArtifact::seal(document).map_err(workflow_contract)?;
     filesystem.write_exclusive_atomic(&request.out, plan.bytes())?;
     Ok(ProjectFrontendRun {
@@ -1677,6 +1693,7 @@ pub fn execute_explicit_plan(
     }
 
     let plan_value = plan.value();
+    let metadata_only = plan_value.get("standard_host").is_some();
     let project_value = &plan_value["project"];
     let planned_root = path_from_native_value(&project_value["root"]).map_err(workflow_contract)?;
     let manifest_path =
@@ -1849,7 +1866,7 @@ pub fn execute_explicit_plan(
         ));
     }
     let started_at = timestamp_from_unix_nanos(started_nanos).map_err(workflow_contract)?;
-    let header = json!({
+    let mut header = json!({
         "plan_digest":plan.digest(),
         "accepted_plan_digest":request.accept,
         "authority_digest":digest_bytes(&authority_bytes),
@@ -1859,6 +1876,9 @@ pub fn execute_explicit_plan(
         "child_environment_digest":project_value["child_environment_digest"],
         "started_at":started_at
     });
+    if let Some(policy) = plan_value.get("standard_host") {
+        header["standard_host"] = policy.clone();
+    }
     let mut journal = filesystem.create_journal(&journal_path, &run_id, header)?;
     let mut runtime_rules = Vec::new();
     for rule in authority.rules() {
@@ -1877,10 +1897,12 @@ pub fn execute_explicit_plan(
         Some(Deadline::at(execution_deadline)),
     );
     let effects = EffectSet::new(
-        check
-            .task()
-            .effects()
+        reachable
             .iter()
+            .map(|action| project.action_effects(action).map_err(frontend_contract))
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .flatten()
             .map(|effect| runtime_requests(project.manifest(), effect.capability(), effect.scope()))
             .collect::<Result<Vec<_>, _>>()?
             .into_iter()
@@ -1902,7 +1924,7 @@ pub fn execute_explicit_plan(
     {
         let attempt = process_budget.attempts();
         let scope = json!({"kind":"tool","tool":tool_id});
-        let operation = maintained_probe_operation(&tools, tool_id)
+        let operation = maintained_probe_operation(&tools, tool_id, metadata_only)
             .map_err(|error| execute_error(error.code(), error.to_string()))?;
         journal.append(
             "effect-before",
@@ -1910,7 +1932,7 @@ pub fn execute_explicit_plan(
                 "action_node_id":action_node_id,
                 "effect":"process.run",
                 "scope":scope,
-                "operation":source_operation_value(&operation, None),
+                "operation":source_operation_value(&operation, None, metadata_only),
                 "verdict":"granted-unenforced",
                 "attempt":attempt
             }),
@@ -1931,11 +1953,17 @@ pub fn execute_explicit_plan(
             executable_file,
         ) {
             Ok(result) => {
-                let evidence = digest_value(&json!({
-                    "stdout":digest_bytes(result.stdout()),
-                    "stderr":digest_bytes(result.stderr())
-                }))
-                .map_err(workflow_contract)?;
+                let evidence = if metadata_only {
+                    None
+                } else {
+                    Some(
+                        digest_value(&json!({
+                            "stdout":digest_bytes(result.stdout()),
+                            "stderr":digest_bytes(result.stderr())
+                        }))
+                        .map_err(workflow_contract)?,
+                    )
+                };
                 let result_metadata = SourceEffectResult::Process {
                     status: result.status().code(),
                     stdout_bytes: Some(u64::try_from(result.stdout().len()).map_err(|_| {
@@ -1944,7 +1972,7 @@ pub fn execute_explicit_plan(
                     stderr_bytes: Some(u64::try_from(result.stderr().len()).map_err(|_| {
                         execute_error("OPERATION005", "process stderr byte count overflow")
                     })?),
-                    evidence_digest: Some(evidence.clone()),
+                    evidence_digest: evidence.clone(),
                 };
                 journal.append(
                     "effect-after",
@@ -1952,7 +1980,7 @@ pub fn execute_explicit_plan(
                         "action_node_id":action_node_id,
                         "effect":"process.run",
                         "scope":scope,
-                        "operation":source_operation_value(&operation, Some(&result_metadata)),
+                        "operation":source_operation_value(&operation, Some(&result_metadata), metadata_only),
                         "attempt":attempt,
                         "outcome":success_outcome("EXECUTE_PROBE", "maintained tool probe succeeded"),
                         "evidence_digest":evidence
@@ -1961,26 +1989,26 @@ pub fn execute_explicit_plan(
             }
             Err(error) => {
                 let partial = process_budget.attempts() > before;
-                let outcome = outcome_value(
-                    "refused",
-                    "EXECUTE_STALE",
+                let outcome = probe_failure_outcome(
+                    &error,
                     &operational.redact_text(&error.to_string()),
-                    None,
-                    None,
                     partial,
+                    metadata_only,
                 );
-                journal.append(
-                    "effect-after",
-                    json!({
-                        "action_node_id":action_node_id,
-                        "effect":"process.run",
-                        "scope":scope,
-                        "operation":source_operation_value(&operation, None),
-                        "attempt":attempt,
-                        "outcome":outcome,
-                        "evidence_digest":null
-                    }),
-                )?;
+                journal
+                    .append(
+                        "effect-after",
+                        json!({
+                            "action_node_id":action_node_id,
+                            "effect":"process.run",
+                            "scope":scope,
+                            "operation":source_operation_value(&operation, None, metadata_only),
+                            "attempt":attempt,
+                            "outcome":outcome,
+                            "evidence_digest":null
+                        }),
+                    )
+                    .map_err(|error| journal_failure(&outcome, error, metadata_only))?;
                 return finish_execution_journal(&mut journal, outcome, Vec::new(), &adapter);
             }
         }
@@ -2001,7 +2029,7 @@ pub fn execute_explicit_plan(
         .collect::<Result<BTreeMap<_, _>, ProjectFrontendError>>()?;
     let mut environment = Environment::new();
     let mut action_output = Vec::new();
-    let outcome = {
+    let (outcome, host_cleanup) = {
         let mut effect_journal = RuntimeEffectJournal {
             journal: &mut journal,
         };
@@ -2024,7 +2052,16 @@ pub fn execute_explicit_plan(
             process_budget,
             secret_binding,
         );
-        execute_project_task_outcome(
+        if metadata_only {
+            let host = PosixStandardHost::for_cli(evaluation.get())
+                .ok()
+                .map(|host| Box::new(host) as Box<dyn opaal_platform::standard_host::StandardHost>);
+            operations = operations.with_random(
+                RandomState::new(host, RandomLimits::default())
+                    .map_err(|error| execute_error(error.code(), error.to_string()))?,
+            );
+        }
+        let outcome = execute_project_task_outcome(
             &project,
             check.task(),
             arguments,
@@ -2038,7 +2075,8 @@ pub fn execute_explicit_plan(
             cancellation,
             &mut operations,
             &mut action_output,
-        )
+        );
+        (outcome, operations.finish_standard_host())
     };
     let partial = match outcome.primary() {
         PrimaryOutcome::Completed(_) => outcome
@@ -2047,15 +2085,48 @@ pub fn execute_explicit_plan(
             .any(|evidence| matches!(evidence, OutcomeEvidence::PartialEffect(_))),
         _ => !outcome.evidence().is_empty(),
     };
-    let primary_value = script_outcome_value(outcome.primary(), &operational, partial);
+    let primary_value =
+        script_outcome_value(outcome.primary(), &operational, partial, metadata_only);
     let (primary, evidence, _) = outcome.into_parts();
     let finished = operational.finish(primary, evidence);
-    let cleanup = append_cleanup_events(&mut journal, finished.downstream().cleanup())?;
+    let next_cleanup_ordinal = finished
+        .downstream()
+        .cleanup()
+        .iter()
+        .map(|outcome| u64::from(outcome.resource().ordinal()) + 1)
+        .max()
+        .unwrap_or(0);
+    let mut cleanup = append_cleanup_events(&mut journal, finished.downstream().cleanup())
+        .map_err(|error| journal_failure(&primary_value, error, metadata_only))?;
+    for (index, error) in host_cleanup.into_iter().enumerate() {
+        let ordinal = next_cleanup_ordinal + index as u64;
+        let outcome = outcome_value(
+            "cleanup-failed",
+            error.code(),
+            "standard host cleanup failed",
+            None,
+            None,
+            false,
+        );
+        journal
+            .append(
+                "cleanup",
+                json!({
+                    "action_node_id":null,
+                    "resource_id":format!("standard-host-{:016x}-{ordinal:06}", evaluation.get()),
+                    "ordinal":ordinal,
+                    "outcome":outcome
+                }),
+            )
+            .map_err(|error| journal_failure(&primary_value, error, metadata_only))?;
+        cleanup.push(outcome);
+    }
     finish_execution_journal(&mut journal, primary_value, cleanup, &adapter)
 }
 
 fn verify_plan_check_identity(plan: &Value, check: &Value) -> Result<(), ProjectFrontendError> {
     for field in [
+        "standard_host",
         "toolchain",
         "project",
         "task",
@@ -2345,6 +2416,7 @@ fn runtime_requests(
         }
         ("clock.wall", "evaluation") => vec![Ok(CapabilityRequest::clock_wall())],
         ("clock.monotonic", "evaluation") => vec![Ok(CapabilityRequest::clock_monotonic())],
+        ("entropy.system", "evaluation") => vec![Ok(CapabilityRequest::entropy_system())],
         _ => {
             return Err(execute_error(
                 "EXECUTE007",
@@ -2436,6 +2508,7 @@ fn script_outcome_value(
     >,
     operational: &OperationalContext,
     partial: bool,
+    metadata_only: bool,
 ) -> Value {
     match primary {
         PrimaryOutcome::Completed(completion) => {
@@ -2451,9 +2524,13 @@ fn script_outcome_value(
                     partial,
                 );
             }
-            let value_digest = data::json_encode(completion.value())
-                .ok()
-                .map(|bytes| digest_bytes(&bytes));
+            let value_digest = if metadata_only {
+                None
+            } else {
+                data::json_encode(completion.value())
+                    .ok()
+                    .map(|bytes| digest_bytes(&bytes))
+            };
             outcome_value(
                 "success",
                 "EXECUTE000",
@@ -2517,6 +2594,32 @@ fn outcome_value(
     })
 }
 
+fn probe_failure_outcome(
+    error: &opaal_runtime::operational::ModuleError,
+    message: &str,
+    partial: bool,
+    metadata_only: bool,
+) -> Value {
+    let cancelled =
+        metadata_only && matches!(error, opaal_runtime::operational::ModuleError::Cancelled(_));
+    outcome_value(
+        if cancelled { "cancelled" } else { "refused" },
+        if cancelled {
+            "EXECUTE_CANCELLED"
+        } else {
+            "EXECUTE_STALE"
+        },
+        if metadata_only {
+            opaal_runtime::workflow::METADATA_ONLY_MESSAGE
+        } else {
+            message
+        },
+        None,
+        None,
+        partial,
+    )
+}
+
 fn finish_execution_journal(
     journal: &mut SyncedJournal,
     primary: Value,
@@ -2529,20 +2632,44 @@ fn finish_execution_journal(
         .any(|outcome| outcome["class"] == "cleanup-failed");
     let finished_at = adapter
         .wall_time_unix_nanos()
-        .map_err(|error| execute_error("EXECUTE005", error.to_string()))?;
-    journal.append(
-        "terminal",
-        json!({
-            "finished_at":timestamp_from_unix_nanos(finished_at).map_err(workflow_contract)?,
-            "primary":primary,
-            "cleanup":cleanup,
-            "complete":true
-        }),
-    )?;
+        .map_err(|error| execute_error("EXECUTE005", error.to_string()))
+        .and_then(|nanos| timestamp_from_unix_nanos(nanos).map_err(workflow_contract))
+        .map_err(|error| journal_failure(&primary, error, journal.metadata_only))?;
+    let metadata_only = journal.metadata_only;
+    let retained_primary = primary.clone();
+    journal
+        .append(
+            "terminal",
+            json!({
+                "finished_at":finished_at,
+                "primary":primary,
+                "cleanup":cleanup,
+                "complete":true
+            }),
+        )
+        .map_err(|error| journal_failure(&retained_primary, error, metadata_only))?;
     Ok(ExecuteFrontendRun {
         output: format!("run {} {class}\n", journal.run_id).into_bytes(),
         successful: class == "success" && !cleanup_failed,
     })
+}
+
+fn journal_failure(
+    primary: &Value,
+    error: ProjectFrontendError,
+    metadata_only: bool,
+) -> ProjectFrontendError {
+    if !metadata_only {
+        return error;
+    }
+    execute_error(
+        "JOURNAL005",
+        format!(
+            "primary outcome {}[{}]; journal evidence is incomplete or unavailable",
+            primary["class"].as_str().unwrap_or("error"),
+            primary["code"].as_str().unwrap_or("EXECUTE_HOST")
+        ),
+    )
 }
 
 fn append_cleanup_events(
@@ -2620,6 +2747,7 @@ struct SyncedJournal {
     file: File,
     chain: JournalChain,
     failed: bool,
+    metadata_only: bool,
 }
 
 struct RuntimeEffectJournal<'journal> {
@@ -2675,8 +2803,8 @@ impl SourceEffectJournal for RuntimeEffectJournal<'_> {
                 json!({
                     "action_node_id":event.action_node_id(),
                     "effect":authority_effect_name(event.request().effect()),
-                    "scope":runtime_scope_value(event.request()),
-                    "operation":source_operation_value(event.operation(), None),
+                    "scope":runtime_scope_value(event.request(), self.journal.metadata_only),
+                    "operation":source_operation_value(event.operation(), None, self.journal.metadata_only),
                     "verdict":authority_verdict_name(verdict),
                     "attempt":event.attempt()
                 }),
@@ -2695,8 +2823,8 @@ impl SourceEffectJournal for RuntimeEffectJournal<'_> {
                 json!({
                     "action_node_id":event.action_node_id(),
                     "effect":authority_effect_name(event.request().effect()),
-                    "scope":runtime_scope_value(event.request()),
-                    "operation":source_operation_value(event.operation(), outcome.result()),
+                    "scope":runtime_scope_value(event.request(), self.journal.metadata_only),
+                    "operation":source_operation_value(event.operation(), outcome.result(), self.journal.metadata_only),
                     "attempt":event.attempt(),
                     "outcome":outcome_value(
                         outcome.class(),
@@ -2716,8 +2844,27 @@ impl SourceEffectJournal for RuntimeEffectJournal<'_> {
 fn source_operation_value(
     operation: &SourceOperation,
     result: Option<&SourceEffectResult>,
+    metadata_only: bool,
 ) -> Value {
     match operation {
+        SourceOperation::Entropy {
+            operation,
+            requested_bytes,
+            admitted_bytes,
+        } => {
+            let progress = match result {
+                Some(SourceEffectResult::Entropy(progress)) => Some(progress),
+                _ => None,
+            };
+            json!({
+                "kind":"entropy", "operation":operation, "effect":"entropy.system",
+                "requested_bytes":requested_bytes,
+                "admitted_bytes":progress.map_or(*admitted_bytes, |p| p.admitted_bytes as u64),
+                "confirmed_bytes":progress.map(|p| p.confirmed_bytes),
+                "uncertain_bytes_upper_bound":progress.map(|p| p.uncertain_bytes_upper_bound),
+                "eof":null
+            })
+        }
         SourceOperation::Filesystem {
             operation,
             relative_path,
@@ -2732,7 +2879,7 @@ fn source_operation_value(
             json!({
                 "kind":"filesystem",
                 "operation":operation,
-                "relative_path":native_path(relative_path),
+                "relative_path":if metadata_only { Value::Null } else { native_path(relative_path) },
                 "bytes":bytes,
                 "evidence_digest":evidence_digest
             })
@@ -2776,8 +2923,8 @@ fn source_operation_value(
                 "tool":tool,
                 "argv_count":argv_count,
                 "argv_bytes":argv_bytes,
-                "argv_digest":argv_digest,
-                "argv":argv,
+                "argv_digest":if metadata_only { None } else { argv_digest.as_ref() },
+                "argv":if metadata_only { Vec::new() } else { argv },
                 "status":status,
                 "stdout_bytes":stdout_bytes,
                 "stderr_bytes":stderr_bytes,
@@ -2801,7 +2948,7 @@ fn source_operation_value(
                 "kind":"http",
                 "operation":operation,
                 "endpoint":endpoint,
-                "method":method,
+                "method":if metadata_only { None } else { Some(method) },
                 "status":status,
                 "body_bytes":body_bytes,
                 "evidence_digest":evidence_digest
@@ -2850,6 +2997,7 @@ fn authority_effect_name(effect: AuthorityEffect) -> &'static str {
         AuthorityEffect::SecretReveal => "secret.reveal",
         AuthorityEffect::ClockWall => "clock.wall",
         AuthorityEffect::ClockMonotonic => "clock.monotonic",
+        AuthorityEffect::EntropySystem => "entropy.system",
     }
 }
 
@@ -2863,14 +3011,14 @@ fn authority_verdict_name(verdict: AuthorityVerdict) -> &'static str {
     }
 }
 
-fn runtime_scope_value(request: &CapabilityRequest) -> Value {
+fn runtime_scope_value(request: &CapabilityRequest, metadata_only: bool) -> Value {
     match request.scope() {
         CapabilityScope::ProjectPath(path) => {
             json!({"kind":"project-path","path":native_path(path)})
         }
         CapabilityScope::Tool(tool) => json!({"kind":"tool","tool":tool}),
         CapabilityScope::Endpoint { endpoint, method } => {
-            json!({"kind":"endpoint","endpoint":endpoint,"method":method})
+            json!({"kind":"endpoint","endpoint":endpoint,"method":if metadata_only { None } else { Some(method) }})
         }
         CapabilityScope::SecretSink {
             secret,
@@ -2882,6 +3030,9 @@ fn runtime_scope_value(request: &CapabilityRequest) -> Value {
             "endpoint":endpoint,
             "header":header
         }),
+        CapabilityScope::Evaluation if request.effect() == AuthorityEffect::EntropySystem => {
+            json!({"kind":"evaluation"})
+        }
         CapabilityScope::Evaluation => json!({
             "kind":"clock",
             "clock":match request.effect() {
@@ -2894,7 +3045,19 @@ fn runtime_scope_value(request: &CapabilityRequest) -> Value {
 }
 
 impl SyncedJournal {
-    fn append(&mut self, kind: &str, payload: Value) -> Result<(), ProjectFrontendError> {
+    fn append(&mut self, kind: &str, mut payload: Value) -> Result<(), ProjectFrontendError> {
+        if self.metadata_only {
+            for field in ["outcome", "primary"] {
+                if let Some(outcome) = payload.get_mut(field) {
+                    project_metadata_outcome(outcome);
+                }
+            }
+            if let Some(cleanup) = payload.get_mut("cleanup").and_then(Value::as_array_mut) {
+                for outcome in cleanup {
+                    project_metadata_outcome(outcome);
+                }
+            }
+        }
         if self.failed {
             return Err(execute_error(
                 "JOURNAL005",
@@ -3219,7 +3382,7 @@ fn build_check_artifact(
     } else {
         refused_outcome("CHECK005", "project task authority check refused execution")
     };
-    let document = json!({
+    let mut document = json!({
         "schema":"opaal.check.v2",
         "schema_version":2,
         "toolchain":{"version":opaal_runtime::version()},
@@ -3233,6 +3396,7 @@ fn build_check_artifact(
         "findings":findings,
         "outcome":outcome
     });
+    select_standard_host_policy(&mut document, "opaal.check.v3");
     let artifact = CheckArtifact::seal(document).map_err(workflow_contract)?;
     Ok(BuiltCheckArtifact { artifact, tls_ca })
 }
@@ -3607,10 +3771,47 @@ fn scope_values(
     if scope == "evaluation" && effect == "clock.monotonic" {
         return Ok(vec![json!({"kind":"clock","clock":"monotonic"})]);
     }
+    if scope == "evaluation" && effect == "entropy.system" {
+        return Ok(vec![json!({"kind":"evaluation"})]);
+    }
     Err(frontend_contract(ProjectError::new(
         "ACT005",
         format!("unsupported workflow scope `{scope}` for `{effect}`"),
     )))
+}
+
+fn select_standard_host_policy(document: &mut Value, schema: &str) {
+    let roles = document["authority"]["requests"]
+        .as_array()
+        .expect("constructed requests")
+        .iter()
+        .filter_map(|request| request["effect"].as_str())
+        .filter(|effect| {
+            matches!(
+                *effect,
+                "entropy.system" | "stdin.read" | "stdout.write" | "stderr.write"
+            )
+        })
+        .collect::<BTreeSet<_>>();
+    if roles.is_empty() {
+        return;
+    }
+    let roles = roles.into_iter().map(str::to_owned).collect::<Vec<_>>();
+    document["schema"] = json!(schema);
+    document["schema_version"] = json!(3);
+    document["standard_host"] = json!({
+        "evidence_policy":"metadata-only", "roles":roles,
+        "max_call_bytes":1048576, "max_host_bytes":8388608,
+        "max_integer_candidates":128, "operation_timeout_ms":30000,
+        "poll_interval_ms":25, "term_grace_ms":100, "max_chunk_bytes":65536
+    });
+}
+
+fn project_metadata_outcome(outcome: &mut Value) {
+    if !outcome.is_null() {
+        outcome["message"] = json!(opaal_runtime::workflow::METADATA_ONLY_MESSAGE);
+        outcome["value_digest"] = Value::Null;
+    }
 }
 
 fn success_outcome(code: &str, message: &str) -> Value {
@@ -3902,6 +4103,7 @@ impl HostProjectFilesystem {
             open_relative_output_parent(&self.root_directory, relative, &candidate)
                 .map_err(frontend_contract)?;
         require_absent_output(&parent, &name, &candidate).map_err(frontend_contract)?;
+        let metadata_only = header.get("standard_host").is_some();
         let (chain, header_line) =
             JournalChain::begin(run_id, header).map_err(workflow_contract)?;
         let temporary = OsString::from(format!(
@@ -3943,6 +4145,7 @@ impl HostProjectFilesystem {
             file,
             chain,
             failed: false,
+            metadata_only,
         })
     }
 }
@@ -4350,6 +4553,106 @@ mod tests {
     use super::*;
 
     static NEXT: AtomicU64 = AtomicU64::new(0);
+
+    #[test]
+    fn text_inspection_accepts_both_closed_v3_transfer_kinds() {
+        for (kind, operation, effect) in [
+            ("entropy", "std::random::bytes", "entropy.system"),
+            ("standard-stream", "std::io::read_stdin", "stdin.read"),
+        ] {
+            let descriptor = json!({
+                "kind":kind, "operation":operation, "effect":effect,
+                "requested_bytes":9, "admitted_bytes":9,
+                "confirmed_bytes":8, "uncertain_bytes_upper_bound":0,
+                "eof":if kind == "standard-stream" { json!(true) } else { Value::Null }
+            });
+            let rendered = rendered_operation(&descriptor).unwrap();
+            assert!(rendered.contains(operation));
+            assert!(rendered.contains("confirmed-bytes=8"));
+        }
+    }
+
+    #[test]
+    fn metadata_http_scope_omits_the_dynamic_method() {
+        let request = CapabilityRequest::network_http("api", "METHOD-SENTINEL").unwrap();
+        let scope = runtime_scope_value(&request, true);
+        assert_eq!(
+            scope,
+            json!({"kind":"endpoint", "endpoint":"api", "method":null})
+        );
+        assert!(!scope.to_string().contains("METHOD-SENTINEL"));
+        assert_eq!(
+            runtime_scope_value(&request, false)["method"],
+            "METHOD-SENTINEL"
+        );
+    }
+
+    #[test]
+    fn cancelled_probe_retains_primary_when_its_evidence_fails() {
+        let error = opaal_runtime::operational::ModuleError::Cancelled(
+            opaal_runtime::eval::CancelReason::Timeout,
+        );
+        let primary = probe_failure_outcome(&error, "payload-canary", true, true);
+        assert_eq!(primary["class"], "cancelled");
+        assert_eq!(primary["code"], "EXECUTE_CANCELLED");
+        assert_eq!(
+            primary["message"],
+            opaal_runtime::workflow::METADATA_ONLY_MESSAGE
+        );
+        assert_eq!(primary["partial"], true);
+        let failure = journal_failure(&primary, execute_error("JOURNAL005", "sink-canary"), true);
+        assert!(failure.rendered.contains("cancelled[EXECUTE_CANCELLED]"));
+        assert!(!failure.rendered.contains("canary"));
+        let legacy = probe_failure_outcome(&error, "legacy message", true, false);
+        assert_eq!(legacy["class"], "refused");
+        assert_eq!(legacy["code"], "EXECUTE_STALE");
+        assert_eq!(legacy["message"], "legacy message");
+    }
+
+    #[test]
+    fn terminal_persistence_failure_retains_primary_class_without_its_payload() {
+        for invalid_timestamp in [false, true] {
+            let temporary = TempDirectory::new();
+            let path = temporary.0.join("journal.jsonl");
+            fs::write(&path, b"").unwrap();
+            let mut document = json!({"authority":{"requests":[{"effect":"entropy.system"}]}});
+            select_standard_host_policy(&mut document, "opaal.plan.v3");
+            let digest = format!("sha256:{}", "1".repeat(64));
+            let header = json!({
+                "plan_digest":digest, "accepted_plan_digest":digest, "authority_digest":digest,
+                "project_digest":digest, "environment_digest":digest, "tool_lock_digest":digest,
+                "child_environment_digest":digest, "started_at":"2026-10-08T00:00:00.000000000Z",
+                "standard_host":document["standard_host"]
+            });
+            let run_id = "0123456789abcdef0123456789abcdef";
+            let (chain, _) = JournalChain::begin(run_id, header).unwrap();
+            let mut journal = SyncedJournal {
+                run_id: run_id.to_owned(),
+                file: File::open(path).unwrap(),
+                chain,
+                failed: false,
+                metadata_only: true,
+            };
+            let primary = outcome_value(
+                "cancelled",
+                "EXECUTE_CANCELLED",
+                "payload-canary",
+                None,
+                None,
+                true,
+            );
+            let adapter = opaal_platform::operational::FakeOperationalAdapter::new();
+            if invalid_timestamp {
+                adapter.set_times(i128::MAX, 0);
+            }
+            let error =
+                finish_execution_journal(&mut journal, primary, Vec::new(), &adapter).unwrap_err();
+            assert!(error.rendered.contains("cancelled[EXECUTE_CANCELLED]"));
+            assert!(error.rendered.contains("incomplete or unavailable"));
+            assert!(!error.rendered.contains("payload-canary"));
+            assert_eq!(journal.failed, !invalid_timestamp);
+        }
+    }
 
     struct TempDirectory(PathBuf);
 

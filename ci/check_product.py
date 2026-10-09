@@ -27,13 +27,16 @@ WORKSPACE_PACKAGES = {
 }
 PRIMARY_BINARIES = {"opaal", "opaal-language-server"}
 FUZZ_TARGETS = {
-    "lexer", "parser", "expander", "resources", "data_operations_limits", "numeric_operations_limits", "secret_sinks"
+    "lexer", "parser", "expander", "resources", "data_operations_limits", "numeric_operations_limits", "random_limits", "secret_sinks"
 }
 FUZZ_PATH_PACKAGES = {"opaal-platform", "opaal-runtime", "opaal-syntax"}
 QUALIFICATION_FILES = {
     "ci/package_data_processing.py",
     "ci/qualify_data_processing.py",
     "ci/tests/test_data_processing_candidate.py",
+    "ci/package_random_values.py",
+    "ci/qualify_random_values.py",
+    "ci/tests/test_random_values_candidate.py",
     "ci/qualify_operational_core.py",
     "ci/tests/test_qualify_operational_core.py",
     "RELEASING.md",
@@ -418,6 +421,7 @@ def source_problems(root: Path, *, run: Run = run_command) -> list[str]:
                     "ref: ${{ github.event.pull_request.head.sha || github.sha }}",
                     "cargo build --release --workspace --locked", "ci/package_data_processing.py",
                     "ci/qualify_data_processing.py", "--expected-source", "actions/upload-artifact@",
+                    "ci/package_random_values.py", "ci/qualify_random_values.py", "--fixtures",
                 )
             ):
                 problems.append(f"CI does not build/qualify/retain data-processing candidates on {candidate_host}")

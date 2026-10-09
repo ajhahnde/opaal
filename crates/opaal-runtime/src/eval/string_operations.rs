@@ -176,6 +176,45 @@ impl Evaluator<'_, '_> {
                 span,
             ));
         }
+        if descriptor.purity() == crate::operation::OperationPurity::RequiresAuthorityContract {
+            if !self.standard_effects_allowed
+                || matches!(
+                    self.host.policy(),
+                    super::EvaluationPolicy::PureOpaal | super::EvaluationPolicy::Startup
+                )
+            {
+                return Err(super::Abort::Refused(crate::outcome::Refusal::new(
+                    crate::outcome::RefusalReason::Unsupported,
+                    "operational standard module in pure evaluation",
+                    span,
+                )));
+            }
+            let result_type = candidates[0].result().clone();
+            let Some(result) = self.host.invoke_operational(
+                descriptor.id().module(),
+                descriptor.id().name(),
+                arguments,
+                self.budget,
+            ) else {
+                return Err(super::Abort::Refused(crate::outcome::Refusal::new(
+                    crate::outcome::RefusalReason::Unsupported,
+                    "unbound operational standard module",
+                    span,
+                )));
+            };
+            let value = result.map_err(|error| self.operational_abort(error, span))?;
+            if !result_type.accepts(&value) {
+                return Err(self.error(
+                    RuntimeErrorKind::FunctionResultTypeMismatch {
+                        expected: result_type,
+                        actual: value.family_name(),
+                    },
+                    span,
+                ));
+            }
+            self.check_cancel(span)?;
+            return Ok(value);
+        }
         if descriptor.implementation().is_math() {
             self.check_cancel(span)?;
             let result = crate::operation::numeric_operation(descriptor, &arguments)
@@ -460,6 +499,7 @@ mod tests {
             current_result_type: None,
             current_type_arguments: std::collections::BTreeMap::new(),
             budgeted_callback: false,
+            standard_effects_allowed: true,
             cancel,
             budget,
             host: &mut host,
