@@ -648,6 +648,28 @@ task sample = sample
     );
     let authority = std::fs::read_to_string(work.0.join("authority.toml")).unwrap();
     work.write("authority.toml", format!("{authority}\n[[rules]]\ndecision = \"grant\"\neffect = \"process.run\"\nscope = \"tool.git\"\nrequired_enforcement = \"acknowledge-unenforced\"\n"));
+    work.write("empty.gitconfig", "");
+    let variables = [
+        ("HOME", work.0.as_path()),
+        ("TMPDIR", work.0.as_path()),
+        ("PATH", Path::new("/usr/bin:/bin")),
+        ("CARGO_HOME", work.0.as_path()),
+        ("RUSTC", Path::new("/usr/bin/false")),
+        ("RUSTDOC", Path::new("/usr/bin/false")),
+        ("LC_ALL", Path::new("C")),
+        ("TZ", Path::new("UTC")),
+        ("CARGO_NET_OFFLINE", Path::new("true")),
+        ("GIT_CONFIG_NOSYSTEM", Path::new("1")),
+        ("GIT_CONFIG_GLOBAL", work.0.join("empty.gitconfig").as_path()),
+    ]
+    .into_iter()
+    .map(|(name, value)| {
+        format!(
+            "[[child_environment.variables]]\nname = \"{name}\"\nvalue = {{ encoding = \"base64url-nopad\", platform = \"unix\", value = \"{}\" }}\n",
+            opaal_runtime::workflow::native_path(value)["value"].as_str().unwrap()
+        )
+    })
+    .collect::<String>();
     work.write(
         "tools.toml",
         format!(
@@ -657,6 +679,7 @@ environment = "ci"
 platform = "x86_64-unknown-linux-gnu"
 [child_environment]
 inherit = []
+{variables}
 [[tools]]
 id = "git"
 adapter = "git"

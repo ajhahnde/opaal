@@ -102,7 +102,10 @@ def qualify(archive: Path | None, fixtures: Path | None, binaries: Path | None,
         for path in sorted(work.glob("*.opaal")):
             success(run("format", "--check", path.name), f"format {path.name}")
         success(run("check", "source.opaal"), "source check")
-        shown = success(run("source.opaal"), "complete source")
+        source_result = run("source.opaal")
+        require(source_result.returncode == 0 and not source_result.stderr,
+                f"complete source: exit={source_result.returncode}, stderr={source_result.stderr!r}")
+        shown = source_result.stdout
         match = re.fullmatch(rb"shard=([0-3]) fraction=([^\n]+)\n", shown)
         require(match is not None, "source output differs")
         domains(match[1].decode(), match[2].decode())

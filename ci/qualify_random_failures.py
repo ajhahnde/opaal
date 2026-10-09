@@ -20,10 +20,12 @@ if __package__:
     from .check_source_formatting import public_paths
     from .package_release import ROOT, VERSION
     from .qualify_data_processing import require
+    from .qualify_operational_core import Tool, sanitized_environment, tool_lock_text
 else:
     from check_source_formatting import public_paths
     from package_release import ROOT, VERSION
     from qualify_data_processing import require
+    from qualify_operational_core import Tool, sanitized_environment, tool_lock_text
 
 RUN_ID = "0123456789abcdef0123456789abcdef"
 
@@ -180,16 +182,11 @@ int main(void) {
             manifest.write_text(manifest.read_text() + '\n[tools.git]\nadapter = "git"\nversion = ">=2.50.0,<3.0.0"\n')
             authority = work / "authority.toml"
             authority.write_text(authority.read_text() + '\n[[rules]]\ndecision = "grant"\neffect = "process.run"\nscope = "tool.git"\nrequired_enforcement = "acknowledge-unenforced"\n')
-            from base64 import urlsafe_b64encode
-            path = urlsafe_b64encode(os.fsencode(tool)).decode().rstrip("=")
+            probe_tool = Tool("git", "git", tool, "2.50.0", f"sha256:{sha(tool.read_bytes())}")
+            environment = sanitized_environment(work, [probe_tool], Path("/usr/bin/false"), Path("/usr/bin/false"))
             tools = work / "tools.toml"
-            tools.write_text(tools.read_text().replace("tools = []\n", "") + f'''\n[[tools]]
-id = "git"
-adapter = "git"
-path = {{ encoding = "base64url-nopad", platform = "unix", value = "{path}" }}
-version = "2.50.0"
-digest = "sha256:{sha(tool.read_bytes())}"
-''')
+            tools.write_text(tool_lock_text("x86_64-unknown-linux-gnu", environment, [probe_tool]).replace(
+                'project = "opaal_golden_readiness"', 'project = "sample"'))
             (work / "tasks.opaal").write_text("""import std::random as random
 import std::process as process
 import project::tools as tools

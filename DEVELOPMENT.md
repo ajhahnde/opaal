@@ -137,6 +137,17 @@ scenario and evidence boundary.
 
 ## Random qualification
 
+For macOS builds, apply the native image policy before running or packaging
+the CLI and its host fixture. This uses an ad-hoc signature and no signing key:
+
+```sh
+codesign --force --sign - --options kill target/debug/opaal target/debug/opaal-standard-host-fixture
+```
+
+Apply the same option to `target/release/opaal` after release-mode builds. The
+worker requires valid code with invalidation termination enabled; an ordinary
+linker signature does not guarantee that policy on every supported macOS host.
+
 ```sh
 cargo test -p opaal-platform-posix --test standard_host_worker --locked
 cargo test -p opaal-runtime --test random_sampling --test random_authority --test random_limits --test random_controlled --test random_observers --test random_golden --locked

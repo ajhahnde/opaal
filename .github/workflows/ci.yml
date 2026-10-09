@@ -152,6 +152,17 @@ jobs:
       - name: Build the optimized non-publishing candidate
         run: cargo build --release --locked -p opaal-cli --bin opaal
 
+      - name: Build native test programs before signing
+        run: cargo build --workspace --locked
+
+      - name: Enforce native image invalidation policy
+        run: |
+          for binary in target/debug/opaal target/debug/opaal-standard-host-fixture target/release/opaal; do
+            codesign --display --verbose=4 "$binary"
+            codesign --force --sign - --options kill "$binary"
+            codesign --verify --strict "$binary"
+          done
+
       - name: Test the complete workspace on macOS
         run: cargo test --workspace --locked --no-fail-fast
 
@@ -278,6 +289,11 @@ jobs:
         run: rustup show active-toolchain || rustup toolchain install
       - name: Build the candidate programs
         run: cargo build --release --workspace --locked
+      - name: Enforce native image invalidation policy before packaging
+        run: |
+          codesign --display --verbose=4 target/release/opaal
+          codesign --force --sign - --options kill target/release/opaal
+          codesign --verify --strict target/release/opaal
       - name: Check the classified source formatting inventory
         run: python3 ci/check_source_formatting.py --cli target/release/opaal
       - name: Package the exact programs and examples
@@ -318,6 +334,7 @@ jobs:
             --expected-source "$(git rev-parse HEAD)" --platform macos-arm64 \
             --report dist/random-values-macos.json
       - name: Retain candidate identity and qualification evidence
+        if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: data-processing-macos

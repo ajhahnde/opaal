@@ -1310,7 +1310,7 @@
     },
     {
       "path": "ci/qualify_random_failures.py",
-      "sha256": "14589033f2568f231ed1a8fe109ecaa97468eda96292a2e76cf0cb83d4ef2b60",
+      "sha256": "392c80605b29500177f03cbf7011c27b3d3e7adca315eeb23936b1a0bb3fbf49",
       "source_markers": 13,
       "constructors_or_assertions": [
         "children",
@@ -1329,7 +1329,7 @@
     },
     {
       "path": "ci/qualify_random_values.py",
-      "sha256": "a2dad2b0fecfd22288e857005475cf46ef04597d14c6f42d99852c219c505b6d",
+      "sha256": "03b04bfac5ab63f357e88e1ab26e6801a95e4f5b34aeddde29600b15501fe844",
       "source_markers": 10,
       "constructors_or_assertions": [
         "byte_count",
@@ -2073,7 +2073,7 @@
     },
     {
       "path": "crates/opaal-cli/tests/random_golden.rs",
-      "sha256": "7e7a39d605c85fe0a2ebb1c7cc82a61512670147084ad660310233e62ab6814d",
+      "sha256": "55911ed2cdce9fc3aef6ffadf432badd8c5837e856ea21c657817b1ff39c6b02",
       "source_markers": 26,
       "constructors_or_assertions": [
         "controlled_fixture",
@@ -2408,7 +2408,7 @@
     },
     {
       "path": "crates/opaal-platform-posix/tests/fixtures/standard_host_faults.rs",
-      "sha256": "15880a2f0c21fc1775addf6678b46c51fab16ca7b26d7a8032eacda2add822db",
+      "sha256": "6b0d3f29c85e89a2f9af7fd22ea1e4c7e703fbe34acc419ef860fe7ddd78ca2f",
       "source_markers": 0,
       "constructors_or_assertions": [
         "descriptors",

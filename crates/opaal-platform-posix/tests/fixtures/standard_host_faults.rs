@@ -217,6 +217,7 @@ pub fn parent() {
             FillProgress::NotStarted
         );
         host.close().unwrap();
+        drop(host);
         super::checks::truncate_ancillary(false);
         if cfg!(target_os = "linux") && evaluation == 120 {
             super::checks::assert_ancillary_truncated();
