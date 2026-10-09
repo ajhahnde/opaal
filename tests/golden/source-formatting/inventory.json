@@ -3404,9 +3404,10 @@
     },
     {
       "path": "crates/opaal-syntax/tests/formatter.rs",
-      "sha256": "db9ff0bd93e20da4f9753497afe9e5edb94e0c53279c2215fea3387b5870dcef",
-      "source_markers": 51,
+      "sha256": "d17796b7b97229d9291de96cb48fddc27a45a31e92d86b9fd2dde30242a74d25",
+      "source_markers": 53,
       "constructors_or_assertions": [
+        "action_layout_preserves_punctuation_inside_command_words",
         "canonical_goldens_and_bounded_large_sources_roundtrip",
         "comment_continuation_and_long_signatures_keep_source_wrapping",
         "every_declaration_block_is_visited_and_other_braces_keep_their_policy",
