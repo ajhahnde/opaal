@@ -141,10 +141,18 @@ For macOS builds, apply the native image policy before running or packaging
 the CLI and its host fixture. This uses an ad-hoc signature and no signing key:
 
 ```sh
+cargo test --workspace --locked --no-run
 codesign --force --sign - --options kill target/debug/opaal target/debug/opaal-standard-host-fixture
+for binary in target/debug/deps/opaal-* target/debug/deps/opaal_standard_host_fixture-*; do
+    [ -f "$binary" ] && [ -x "$binary" ] || continue
+    codesign --force --sign - --options kill "$binary"
+done
 ```
 
 Apply the same option to `target/release/opaal` after release-mode builds. The
+test compilation must finish before signing. Cargo restores visible programs
+from the hashed copies even on a cached run. Compiling a different selection
+of packages can replace those copies, so sign again after rebuilding. The
 worker requires valid code with invalidation termination enabled; an ordinary
 linker signature does not guarantee that policy on every supported macOS host.
 

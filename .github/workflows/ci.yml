@@ -152,12 +152,14 @@ jobs:
       - name: Build the optimized non-publishing candidate
         run: cargo build --release --locked -p opaal-cli --bin opaal
 
-      - name: Build native test programs before signing
-        run: cargo build --workspace --locked
+      - name: Compile workspace tests before signing
+        run: cargo test --workspace --locked --no-run
 
       - name: Enforce native image invalidation policy
         run: |
-          for binary in target/debug/opaal target/debug/opaal-standard-host-fixture target/release/opaal; do
+          # Cargo restores visible binaries from these copies even on a cached run.
+          for binary in target/debug/opaal target/debug/opaal-standard-host-fixture target/debug/deps/opaal-* target/debug/deps/opaal_standard_host_fixture-* target/release/opaal; do
+            [ -f "$binary" ] && [ -x "$binary" ] || continue
             codesign --display --verbose=4 "$binary"
             codesign --force --sign - --options kill "$binary"
             codesign --verify --strict "$binary"

@@ -186,7 +186,7 @@ int main(void) {
             environment = sanitized_environment(work, [probe_tool], Path("/usr/bin/false"), Path("/usr/bin/false"))
             tools = work / "tools.toml"
             tools.write_text(tool_lock_text("x86_64-unknown-linux-gnu", environment, [probe_tool]).replace(
-                'project = "opaal_golden_readiness"', 'project = "sample"'))
+                'project = "opaal_golden_readiness"', 'project = "random_sample"'))
             (work / "tasks.opaal").write_text("""import std::random as random
 import std::process as process
 import project::tools as tools
