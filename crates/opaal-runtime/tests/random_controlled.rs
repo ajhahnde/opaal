@@ -179,6 +179,60 @@ fn execute(
 }
 
 #[test]
+fn controlled_project_returns_exact_reference_values_with_only_progress_evidence() {
+    use opaal_runtime::{FiniteFloat, Record, Value};
+
+    let mut journal = Journal::default();
+    let (outcome, script, cleanup) = run(
+        r#"
+action sample() -> Record effects { entropy.system(); } {
+    let shard = random::int(0, 3)
+    let fraction = random::float()
+    let identifier = random::bytes(3)
+    let empty = random::bytes(0)
+    let single = random::int(7, 8)
+    return ({ shard: shard, fraction: fraction, identifier: identifier, empty: empty, single: single })
+}
+"#,
+        Harness::new(&[0, 5, u64::MAX], &[0, 1, 2]),
+        &mut journal,
+    );
+    let expected = Value::Record(
+        Record::new(vec![
+            ("shard".into(), Value::Int(2)),
+            (
+                "fraction".into(),
+                Value::Float(FiniteFloat::new(1.0 - 2.0_f64.powi(-53)).unwrap()),
+            ),
+            ("identifier".into(), Value::bytes(vec![0, 1, 2])),
+            ("empty".into(), Value::bytes(vec![])),
+            ("single".into(), Value::Int(7)),
+        ])
+        .unwrap(),
+    );
+    assert!(
+        matches!(outcome.primary(), PrimaryOutcome::Completed(value) if value.value() == &expected)
+    );
+    assert!(cleanup.is_empty());
+    let script = script.lock().unwrap();
+    assert_eq!(script.fills, [8, 8, 8, 3]);
+    assert!(script.bytes.is_empty());
+    assert_eq!(script.closed, 1);
+    assert_eq!(journal.events.len(), 5);
+    for ((_, outcome), count) in journal.events.iter().zip([16, 8, 3, 0, 0]) {
+        let Some(SourceEffectResult::Entropy(progress)) = outcome.result() else {
+            panic!("entropy progress")
+        };
+        assert_eq!(progress.admitted_bytes, count);
+        assert_eq!(progress.confirmed_bytes, count);
+        assert_eq!(progress.uncertain_bytes_upper_bound, 0);
+        assert!(outcome.value_digest().is_none());
+    }
+    assert_eq!(journal.actions.len(), 1);
+    assert!(journal.actions[0].outcome().value_digest().is_none());
+}
+
+#[test]
 fn nested_calls_share_one_host_and_settle_candidate_reservations() {
     let mut journal = Journal::default();
     let (outcome, script, cleanup) = run(

@@ -3441,12 +3441,13 @@
     },
     {
       "path": "crates/opaal-runtime/tests/random_controlled.rs",
-      "sha256": "99b63d0266a45f356fcb1043bbc77cac9efdf0d304cdf4bf2d60b1bb8c30b7ef",
-      "source_markers": 15,
+      "sha256": "d4152c4f125260e5712d9f1c75d87ff7e6ff688a7f0cd0248fa117d072dff276",
+      "source_markers": 16,
       "constructors_or_assertions": [
         "admission_persistence_consumes_the_original_operation_deadline",
         "before_failure_does_no_host_work_and_after_failure_preserves_primary",
         "catches_do_not_restore_consumed_entropy_budget",
+        "controlled_project_returns_exact_reference_values_with_only_progress_evidence",
         "cumulative_limits_survive_calls_and_cleanup_stays_secondary_to_cancellation",
         "nested_calls_share_one_host_and_settle_candidate_reservations",
         "no_draw_calls_still_require_declared_grant_and_exact_host_binding",
@@ -3460,7 +3461,7 @@
     },
     {
       "path": "crates/opaal-runtime/tests/random_golden.rs",
-      "sha256": "001f90bf6170fa213dfe7b28d9fbbdfcc6d460c09521f3a1ca1c416f7e99f350",
+      "sha256": "62394d26770070a2c2b5d290a25de67f7e0bfe2047b464d516e0cb679d690c03",
       "source_markers": 6,
       "constructors_or_assertions": [
         "explicitly_declared_entropy_actions_use_the_bound_root",

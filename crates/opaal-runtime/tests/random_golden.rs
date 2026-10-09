@@ -173,12 +173,34 @@ fn explicitly_declared_entropy_actions_use_the_bound_root() {
 fn each_retained_cell_owns_a_fresh_binding_without_ambient_inheritance() {
     let mut session = Session::from_ambient_snapshot(snapshot(), SessionOptions::default());
     let source = support::Source(String::new());
-    for (body, tail, expected) in [
-        ("import std::random as random", vec![], Value::Null),
-        ("let bytes = random::bytes(2)", vec![0, 1], Value::Null),
-        ("bytes", vec![], Value::bytes(vec![0, 1])),
+    let fraction = Value::Float(opaal_runtime::FiniteFloat::new(1.0 - 2.0_f64.powi(-53)).unwrap());
+    for (body, words, tail, expected) in [
+        ("import std::random as random", vec![], vec![], Value::Null),
+        (
+            "let shard = random::int(0, 3)",
+            vec![0, 5],
+            vec![],
+            Value::Null,
+        ),
+        ("shard", vec![], vec![], Value::Int(2)),
+        (
+            "let fraction = random::float()",
+            vec![u64::MAX],
+            vec![],
+            Value::Null,
+        ),
+        ("fraction", vec![], vec![], fraction),
+        (
+            "let bytes = random::bytes(3)",
+            vec![],
+            vec![0, 1, 2],
+            Value::Null,
+        ),
+        ("bytes", vec![], vec![], Value::bytes(vec![0, 1, 2])),
+        ("random::bytes(0)", vec![], vec![], Value::bytes(vec![])),
+        ("random::int(7, 8)", vec![], vec![], Value::Int(7)),
     ] {
-        let harness = Harness::new(&[], &tail);
+        let harness = Harness::new(&words, &tail);
         let script = harness.script.clone();
         let platform = harness.platform;
         let result = session
@@ -195,7 +217,14 @@ fn each_retained_cell_owns_a_fresh_binding_without_ambient_inheritance() {
             )
             .unwrap();
         assert_eq!(result, (SubmitOutcome::Continued, expected));
-        assert_eq!(script.lock().unwrap().closed, 1);
+        let script = script.lock().unwrap();
+        let mut fills = vec![8; words.len()];
+        if !tail.is_empty() {
+            fills.push(tail.len());
+        }
+        assert_eq!(script.fills, fills);
+        assert!(script.bytes.is_empty());
+        assert_eq!(script.closed, 1);
     }
     let result = session
         .submit_with_source_loader(
