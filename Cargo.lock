@@ -481,6 +481,8 @@ name = "opaal-cli"
 version = "1.2.0"
 dependencies = [
  "fd-lock",
+ "getrandom 0.4.3",
+ "libc",
  "nu-ansi-term",
  "opaal-platform",
  "opaal-platform-posix",

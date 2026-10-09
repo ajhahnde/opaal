@@ -2090,6 +2090,17 @@
       "assertion": "crates/opaal-cli/tests/random_golden.rs"
     },
     {
+      "path": "crates/opaal-cli/tests/random_native.rs",
+      "sha256": "82891c97c104a92fc1936598ee80d89168f3e654091bb1916042ad9dbca64fc5",
+      "source_markers": 1,
+      "constructors_or_assertions": [
+        "qualify"
+      ],
+      "role": "mixed-test-buffers",
+      "reason": "Real native backend error/cancellation and cleanup fault-return assertions combined with actual bounded journal persistence failure; static project fixtures and metadata-only audit assertions.",
+      "assertion": "crates/opaal-cli/tests/random_native.rs"
+    },
+    {
       "path": "crates/opaal-cli/tests/source_identity.rs",
       "sha256": "d76713f27cd40a8ac74ba52ab85d7bf219bfe71ca7ec54fb0207957a27e8dc57",
       "source_markers": 5,
@@ -2384,7 +2395,7 @@
     },
     {
       "path": "crates/opaal-platform-posix/tests/fixtures/standard_host.rs",
-      "sha256": "e0b4249dc1a317146e61a23ff55b8c32b60e303c4ce2e145818d491d78af36fe",
+      "sha256": "a6075eebd2529be7ded4d9a6dec2d6a9f7e9a75fead5e8fa9b52a4f579b680ce",
       "source_markers": 0,
       "constructors_or_assertions": [
         "assert_ancillary_truncated",

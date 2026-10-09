@@ -244,7 +244,7 @@ fn main() {
 }
 
 #[allow(unsafe_code)]
-mod checks {
+pub(crate) mod checks {
     pub fn peak_rss_bytes() -> (u64, u64) {
         // SAFETY: the isolated fixture supplies exact rusage buffers; its only
         // reaped child is the entropy worker, so CHILDREN measures that owner.
@@ -454,7 +454,7 @@ mod checks {
 
 #[cfg(target_os = "macos")]
 #[allow(unsafe_code)]
-mod blocked_library {
+pub(crate) mod blocked_library {
     static ENABLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
     pub fn enable(evaluation: u64) {
         ENABLED.store(
@@ -500,7 +500,7 @@ mod blocked_library {
 
 #[cfg(target_os = "linux")]
 #[allow(unsafe_code)]
-mod blocked_library {
+pub(crate) mod blocked_library {
     use std::os::fd::{FromRawFd, OwnedFd};
     static LISTENER: std::sync::OnceLock<OwnedFd> = std::sync::OnceLock::new();
 
