@@ -65,6 +65,22 @@ fn roundtrip(text: &str) -> String {
 }
 
 #[test]
+fn action_layout_preserves_punctuation_inside_command_words() {
+    for command in [",eturn value", "echo key:value a,b"] {
+        for source in [
+            format!("action sample() -> Int effects {{}} {{ {command} }}\n"),
+            format!("action sample() -> Int effects {{}} {{ if true {{ {command} }} }}\n"),
+        ] {
+            let formatted = roundtrip(&source);
+            assert!(formatted.contains(command), "{formatted}");
+        }
+    }
+    roundtrip(
+        "##Keep the same value.\naction identity(value:String)->String # signature\neffects{ clock.wall; # declaration only\n}\n# body comment\n{ ,eturn value }\n",
+    );
+}
+
+#[test]
 fn semantic_oracle_detects_changed_spellings_structure_and_documentation_attachment() {
     use opaal_syntax::{ParseOutcome, parse_opaal};
     let signature = |text: &str| {

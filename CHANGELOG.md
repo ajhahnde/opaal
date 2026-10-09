@@ -4,6 +4,10 @@ All notable changes to OPAAL are documented here.
 
 ## [Unreleased]
 
+### Fixed
+
+- Preserve punctuation inside command words when formatting action bodies.
+
 ## [1.2.0]
 
 ### Added
