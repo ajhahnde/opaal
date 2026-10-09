@@ -379,7 +379,14 @@ pub(super) fn receive(socket: &UnixDatagram, bytes: &mut [u8]) -> io::Result<usi
                 && (*ancillary).cmsg_type == libc::SCM_RIGHTS
             {
                 let header = libc::CMSG_LEN(0) as usize;
-                let count = ((*ancillary).cmsg_len as usize).saturating_sub(header)
+                // A truncated record can retain its original cmsg_len.
+                let offset = ancillary as usize - control.as_ptr() as usize;
+                let available = (message.msg_controllen as usize)
+                    .min(std::mem::size_of_val(&control))
+                    .saturating_sub(offset);
+                let count = ((*ancillary).cmsg_len as usize)
+                    .min(available)
+                    .saturating_sub(header)
                     / std::mem::size_of::<i32>();
                 for index in 0..count {
                     let fd = std::ptr::read_unaligned(

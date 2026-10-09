@@ -465,6 +465,52 @@ fn cstring(bytes: &[u8], offset: usize) -> Result<&str, OperationalError> {
 mod tests {
     use super::*;
     #[test]
+    fn mach_load_commands_reject_environment_search_overrides_and_malformed_layouts() {
+        fn image(command: u32, name: &str) -> Vec<u8> {
+            let mut commands = Vec::new();
+            for (tag, name) in [(0xe_u32, "/usr/lib/dyld"), (command, name)] {
+                let offset = if tag == 0xe { 12 } else { 24 };
+                let size = (offset + name.len() + 1).next_multiple_of(4);
+                let mut body = vec![0; size];
+                body[..4].copy_from_slice(&tag.to_le_bytes());
+                body[4..8].copy_from_slice(&(size as u32).to_le_bytes());
+                body[8..12].copy_from_slice(&(offset as u32).to_le_bytes());
+                body[offset..offset + name.len()].copy_from_slice(name.as_bytes());
+                commands.extend(body);
+            }
+            let mut bytes = vec![0; 32];
+            bytes[..4].copy_from_slice(&[0xcf, 0xfa, 0xed, 0xfe]);
+            bytes[4..8].copy_from_slice(&0x100000c_u32.to_le_bytes());
+            bytes[12..16].copy_from_slice(&2_u32.to_le_bytes());
+            bytes[16..20].copy_from_slice(&2_u32.to_le_bytes());
+            bytes[20..24].copy_from_slice(&(commands.len() as u32).to_le_bytes());
+            bytes.extend(commands);
+            bytes
+        }
+        let valid = image(0xc, "/usr/lib/libSystem.B.dylib");
+        assert!(verify_mach(&valid).is_ok());
+        for command in [0x8000001c, 0x27, 0x6, 0x10] {
+            assert!(verify_mach(&image(command, "/usr/lib/libSystem.B.dylib")).is_err());
+        }
+        for command in [0xc, 0x80000018, 0x8000001f, 0x20, 0x80000023] {
+            for path in [
+                "@rpath/libSystem.B.dylib",
+                "/tmp/libSystem.B.dylib",
+                "/usr/lib/../local/library",
+            ] {
+                assert!(verify_mach(&image(command, path)).is_err());
+            }
+        }
+        for (offset, number) in [(16, 3), (20, 65537), (36, 7), (40, u32::MAX)] {
+            let mut changed = valid.clone();
+            changed[offset..offset + 4].copy_from_slice(&number.to_le_bytes());
+            assert!(verify_mach(&changed).is_err());
+        }
+        for size in 0..valid.len() {
+            assert!(verify_mach(&valid[..size]).is_err());
+        }
+    }
+    #[test]
     fn loader_paths_refuse_relative_override_and_traversal() {
         for path in [
             "@rpath/libfoo.dylib",

@@ -236,3 +236,44 @@ fn timeout_and_secondary_cleanup_preserve_the_primary_without_raw_diagnostics() 
     assert_eq!(script.fills, [2]);
     assert_eq!(script.closed, 1);
 }
+
+#[test]
+fn ambient_help_renders_each_entropy_signature_without_drawing() {
+    let mut session = Session::from_ambient_snapshot(snapshot(), SessionOptions::default());
+    let source = support::Source(String::new());
+    for cell in [
+        "import std::random as draw",
+        "help draw::int",
+        "help draw::float",
+        "help draw::bytes",
+    ] {
+        let harness = Harness::new(&[], &[]);
+        let script = harness.script.clone();
+        let platform = harness.platform;
+        let mut output = Vec::new();
+        let result = session
+            .submit_with_source_loader_and_random(
+                "cell",
+                cell,
+                &source,
+                &source,
+                &mut binding(harness),
+                &NoExecutables,
+                &platform,
+                &FakeClock::new(),
+                &mut output,
+            )
+            .unwrap();
+        assert_eq!(result.0, SubmitOutcome::Continued);
+        if cell.starts_with("help") {
+            let text = String::from_utf8(output).unwrap();
+            assert!(text.contains(&format!(
+                "std::random::{}",
+                cell.strip_prefix("help draw::").unwrap()
+            )));
+            assert!(text.contains("effect: entropy.system (evaluation)"));
+        }
+        assert!(script.lock().unwrap().fills.is_empty());
+        assert_eq!(script.lock().unwrap().closed, 1);
+    }
+}

@@ -1770,6 +1770,10 @@ pub(crate) trait EvaluationHost {
         false
     }
 
+    fn metadata_only(&self) -> bool {
+        false
+    }
+
     fn invoke_operational(
         &mut self,
         _module: &ModuleId,
@@ -1834,6 +1838,9 @@ struct ControlledEvaluationHost<'environment, 'operations> {
 }
 
 impl EvaluationHost for ControlledEvaluationHost<'_, '_> {
+    fn metadata_only(&self) -> bool {
+        self.operations.metadata_only()
+    }
     fn environment(&mut self) -> &mut Environment {
         self.environment
     }
@@ -5377,9 +5384,13 @@ impl Evaluator<'_, '_> {
                     "success",
                     "ACTION000",
                     "action completed",
-                    crate::data::json_encode(value)
-                        .ok()
-                        .map(|bytes| crate::workflow::digest_bytes(&bytes)),
+                    if self.host.metadata_only() {
+                        None
+                    } else {
+                        crate::data::json_encode(value)
+                            .ok()
+                            .map(|bytes| crate::workflow::digest_bytes(&bytes))
+                    },
                     false,
                 ),
                 Err(Abort::Error(error)) => SourceActionOutcome::new(
@@ -5425,7 +5436,9 @@ impl Evaluator<'_, '_> {
                     false,
                 ),
             };
-            if let Some(Err(error)) = self.host.action_end(action, outcome) {
+            if let Some(Err(error)) = self.host.action_end(action, outcome)
+                && result.is_ok()
+            {
                 result = Err(self.operational_abort(error, span));
             }
         }

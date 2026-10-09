@@ -93,6 +93,58 @@ impl RandomState {
         self.consumed_bytes
     }
 
+    /// Validate and reserve a call without starting entropy work.
+    pub fn admission(
+        &self,
+        context: &OperationalContext,
+        effects: &EffectSet,
+        platform: &dyn Platform,
+        operation: &str,
+        arguments: &[Value],
+    ) -> Result<EntropyProgress, ModuleError> {
+        if let Some(reason) = context.poll_cancellation() {
+            return Err(ModuleError::Cancelled(reason));
+        }
+        let call = RandomCall::parse(operation, arguments, self.limits.max_call_bytes)?;
+        authorize(
+            context,
+            effects,
+            &CapabilityRequest::entropy_system(),
+            platform,
+        )?;
+        let host =
+            self.host
+                .as_ref()
+                .filter(|host| host.available())
+                .ok_or(ModuleError::Authority {
+                    verdict: AuthorityVerdict::Unsupported,
+                })?;
+        if host.evaluation() != context.authority().evaluation().get() {
+            return Err(ModuleError::invalid(
+                "EXECUTE_STALE",
+                "entropy host belongs to another evaluation",
+            ));
+        }
+        let requested_bytes = call.requested_bytes(self.limits.max_integer_candidates);
+        let remaining = self
+            .limits
+            .max_host_bytes
+            .saturating_sub(self.consumed_bytes);
+        let admitted_bytes = match call {
+            RandomCall::Int { width, .. } if width > 1 => requested_bytes.min(remaining / 8 * 8),
+            _ if requested_bytes <= remaining => requested_bytes,
+            _ => return Err(limit()),
+        };
+        if requested_bytes > 0 && admitted_bytes == 0 {
+            return Err(limit());
+        }
+        Ok(EntropyProgress {
+            requested_bytes,
+            admitted_bytes,
+            ..EntropyProgress::default()
+        })
+    }
+
     /// Drain one fixed cleanup diagnostic beside the original operation result.
     pub fn take_cleanup_error(&mut self) -> Option<opaal_platform::operational::OperationalError> {
         self.cleanup_error.take()
@@ -115,7 +167,35 @@ impl RandomState {
         operation: &str,
         arguments: &[Value],
     ) -> Result<Value, ModuleError> {
-        let result = self.invoke_call(context, effects, platform, budget, operation, arguments);
+        let deadline = self.operation_deadline(context);
+        self.invoke_with_deadline(
+            context, effects, platform, budget, operation, arguments, deadline,
+        )
+    }
+
+    pub(crate) fn operation_deadline(&self, context: &OperationalContext) -> Deadline {
+        context
+            .cancellation()
+            .operation_deadline(self.limits.operation_timeout)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn invoke_with_deadline(
+        &mut self,
+        context: &OperationalContext,
+        effects: &EffectSet,
+        platform: &dyn Platform,
+        budget: &mut ResourceBudget,
+        operation: &str,
+        arguments: &[Value],
+        deadline: Deadline,
+    ) -> Result<Value, ModuleError> {
+        let result = self.invoke_call(
+            context, effects, platform, budget, operation, arguments, deadline,
+        );
+        // Release unused candidate reservations; evidence counts actual fills.
+        self.progress.admitted_bytes =
+            self.progress.confirmed_bytes + self.progress.uncertain_bytes_upper_bound;
         if matches!(result, Err(ModuleError::Cancelled(_)))
             && let Some(mut host) = self.host.take()
             && let Err(error) = host.close()
@@ -129,6 +209,7 @@ impl RandomState {
         result
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn invoke_call(
         &mut self,
         context: &OperationalContext,
@@ -137,61 +218,18 @@ impl RandomState {
         budget: &mut ResourceBudget,
         operation: &str,
         arguments: &[Value],
+        deadline: Deadline,
     ) -> Result<Value, ModuleError> {
         self.progress = EntropyProgress::default();
-        if let Some(reason) = context.poll_cancellation() {
-            return Err(ModuleError::Cancelled(reason));
-        }
+        self.progress = self.admission(context, effects, platform, operation, arguments)?;
         let call = RandomCall::parse(operation, arguments, self.limits.max_call_bytes)?;
-        self.progress.requested_bytes = call.requested_bytes(self.limits.max_integer_candidates);
-        authorize(
-            context,
-            effects,
-            &CapabilityRequest::entropy_system(),
-            platform,
-        )?;
-        let host = self.host.as_ref().ok_or(ModuleError::Authority {
-            verdict: AuthorityVerdict::Unsupported,
-        })?;
-        if !host.available() {
-            return Err(ModuleError::Authority {
-                verdict: AuthorityVerdict::Unsupported,
-            });
-        }
-        if host.evaluation() != context.authority().evaluation().get() {
-            return Err(ModuleError::invalid(
-                "EXECUTE_STALE",
-                "entropy host belongs to another evaluation",
-            ));
-        }
-        let deadline = context
-            .cancellation()
-            .operation_deadline(self.limits.operation_timeout);
         poll(context, deadline)?;
         charge(budget)?;
-        let remaining = self
-            .limits
-            .max_host_bytes
-            .saturating_sub(self.consumed_bytes);
-        let requested = self.progress.requested_bytes;
-        let admitted = match call {
-            RandomCall::Int { width, .. } if width > 1 => requested.min(remaining / 8 * 8),
-            _ => {
-                if requested > remaining {
-                    return Err(limit());
-                }
-                requested
-            }
-        };
-        if requested > 0 && admitted == 0 {
-            return Err(limit());
-        }
         if let RandomCall::Bytes(count) = call
             && !budget.charge_collection_bytes(count)
         {
             return Err(limit());
         }
-        self.progress.admitted_bytes = admitted;
         match call {
             RandomCall::Int { min, width: 1 } => Ok(Value::Int(min)),
             RandomCall::Int { min, width } => {

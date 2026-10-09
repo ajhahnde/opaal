@@ -135,6 +135,33 @@ process boundary. The harness uses only synthetic inputs and a TLS loopback
 server. See [Qualifying the operational core](RELEASING.md) for the
 scenario and evidence boundary.
 
+## Random qualification
+
+```sh
+cargo test -p opaal-platform-posix --test standard_host_worker --locked
+cargo test -p opaal-runtime --test random_sampling --test random_authority --test random_limits --test random_controlled --test random_observers --test random_golden --locked
+cargo test -p opaal-cli --test random_golden --test terminal_editor_pty --locked
+python3 ci/qualify_random_values.py --binary-directory target/debug --expected-source "$(git rev-parse HEAD)" --platform macos-arm64 --report dist/random-working.json
+python3 ci/qualify_random_failures.py --binary target/debug/opaal --output dist/random-failures
+```
+
+Use `linux-x86_64` for Linux qualification. Working mode records dirty-source
+identity and never claims committed archive evidence. The exact committed
+both-host candidate jobs package `tests/golden/random-values` with
+`ci/package_random_values.py` and pass both the fixture and program archives to
+the qualifier. It checks real source domains, retained interactive cells and
+help, pure/domain refusal, controlled progress and metadata-only v3 inspection,
+and stale-source refusal outside the checkout. No version or publication is
+performed. The [Random fixture guide](tests/golden/random-values/README.md)
+explains the first-release floor and the independent Python reference.
+
+A manual CI run on the candidate branch also runs `random-native-linux`.
+It exercises the native host and CLI tests, real worker and maintained-probe
+failures with failed journal persistence, and records maximum byte-fill timing
+and process resources. Its artifact retains logs even after failure. This lane
+complements the regular workspace, policy, fuzz and archive jobs; it does not
+infer performance guarantees or replace missing failure scenarios.
+
 ## Fuzzing
 
 Install cargo-fuzz and a nightly Rust toolchain, then run:

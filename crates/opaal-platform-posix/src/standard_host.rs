@@ -381,6 +381,88 @@ fn io_error(error: io::Error) -> OperationalError {
 mod tests {
     use super::*;
     #[test]
+    fn live_transport_backpressure_cancels_and_resumes_without_replaying_datagrams() {
+        let (sender, receiver) = UnixDatagram::pair().unwrap();
+        sender.set_nonblocking(true).unwrap();
+        native::protect_socket(&sender).unwrap();
+        let bytes = [0x47; 256];
+        let mut queued = 0;
+        let blocked = loop {
+            match sender.send(&bytes) {
+                Ok(256) => queued += 1,
+                Err(error)
+                    if error.kind() == io::ErrorKind::WouldBlock
+                        || error.raw_os_error() == Some(libc::ENOBUFS) =>
+                {
+                    break error.kind();
+                }
+                result => panic!("unexpected queue result: {result:?}"),
+            }
+            assert!(queued < 65536);
+        };
+        assert!(queued > 0);
+        let started = Instant::now();
+        let error = send_bytes(&sender, &bytes, &|| {
+            started.elapsed() >= Duration::from_millis(40)
+        })
+        .unwrap_err();
+        assert_eq!(
+            error.kind(),
+            if blocked == io::ErrorKind::WouldBlock {
+                OperationalErrorKind::Cancelled
+            } else {
+                OperationalErrorKind::Io(blocked)
+            }
+        );
+        assert!(started.elapsed() < Duration::from_secs(1));
+
+        receiver
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        if blocked != io::ErrorKind::WouldBlock {
+            for _ in 0..queued {
+                assert_eq!(receiver.recv(&mut [0; 256]).unwrap(), 256);
+            }
+            queued = 0;
+        }
+        let drain = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(40));
+            for _ in 0..=queued {
+                let mut received = [0; 256];
+                assert_eq!(receiver.recv(&mut received).unwrap(), 256);
+                assert_eq!(received, bytes);
+            }
+            receiver.set_nonblocking(true).unwrap();
+            assert_eq!(
+                receiver.recv(&mut [0; 256]).unwrap_err().kind(),
+                io::ErrorKind::WouldBlock
+            );
+        });
+        let started = Instant::now();
+        send_bytes(&sender, &bytes, &|| {
+            started.elapsed() >= Duration::from_secs(1)
+        })
+        .unwrap();
+        drain.join().unwrap();
+    }
+
+    #[test]
+    fn deterministic_hostile_headers_preserve_closed_decode_invariants() {
+        let mut state = 71_u64;
+        for index in 0..1000 {
+            state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
+            let mut bytes =
+                Frame::new(1 + (index % 6) as u16, 71, state, (index % 257) as u32).encode();
+            bytes[(state as usize) % HEADER_BYTES] ^= (state >> 32) as u8;
+            if let Ok(frame) = Frame::decode(&bytes) {
+                assert_eq!(frame.encode(), bytes);
+                assert!((BIND..=FAILED).contains(&frame.tag));
+                assert_ne!(frame.evaluation, 0);
+                assert!(frame.bytes <= 256);
+            }
+        }
+    }
+    #[test]
     fn frames_are_closed_bounded_and_identity_preserving() {
         let frame = Frame::new(FILL, 71, 1, 256);
         assert_eq!(Frame::decode(&frame.encode()).unwrap(), frame);

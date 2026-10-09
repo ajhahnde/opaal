@@ -1,0 +1,7 @@
+import std::random as random
+
+def pure() -> Int
+{
+    return random::int(7, 8)
+}
+pure()

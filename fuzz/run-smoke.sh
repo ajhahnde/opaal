@@ -15,6 +15,7 @@ script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
 repository_root=$(cd "$script_dir/.." && pwd -P)
 nightly_cargo=$(rustup which --toolchain nightly cargo)
 nightly_directory=$(dirname -- "$nightly_cargo")
+cargo build --manifest-path "$repository_root/Cargo.toml" -p opaal-platform-posix --bin opaal-standard-host-fixture --locked
 export PATH="$nightly_directory:${PATH:-}"
 
 work=$(mktemp -d "${TMPDIR:-/tmp}/opaal-fuzz.XXXXXX")
@@ -55,14 +56,14 @@ corpus_roots=(
   "$repository_root/tests/opaal-foundation/language/types/invalid"
 )
 
-for target in lexer parser expander resources data_operations_limits numeric_operations_limits secret_sinks; do
+for target in lexer parser expander resources data_operations_limits numeric_operations_limits random_limits secret_sinks; do
   corpus="$work/$target"
   mkdir "$corpus"
   seeds=("${corpus_roots[@]}")
   if [ "$target" = parser ]; then
     seeds+=("$work/source-formatting")
   fi
-  if [ "$target" = data_operations_limits ] || [ "$target" = numeric_operations_limits ]; then
+  if [ "$target" = data_operations_limits ] || [ "$target" = numeric_operations_limits ] || [ "$target" = random_limits ]; then
     seeds=("$script_dir/seeds/$target")
   fi
   python3 - "$target" "${seeds[@]}" <<'PY'

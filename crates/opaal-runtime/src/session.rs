@@ -865,7 +865,10 @@ impl Session {
                             &binding_types,
                         )
                         && (policy == EvaluationPolicy::PureOpaal
-                            || operation.implementation().is_math()) =>
+                            || operation.implementation().is_math()
+                            || operation.downstream().effects().contains(
+                                &crate::authority::CapabilityRequest::entropy_system(),
+                            )) =>
                 {
                     output
                         .write_all(&render_module_operation_help(&operation))

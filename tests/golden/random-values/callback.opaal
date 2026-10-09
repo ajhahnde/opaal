@@ -1,0 +1,4 @@
+import std::random as random
+
+let callback = {|| random::bytes(0)}
+callback()

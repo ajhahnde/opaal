@@ -248,8 +248,8 @@ fn v1_future_and_unbound_secret_artifacts_are_rejected() {
     );
 
     let mut future_plan = plan_document();
-    future_plan["schema"] = Value::String("opaal.plan.v3".to_owned());
-    future_plan["schema_version"] = Value::from(3_u64);
+    future_plan["schema"] = Value::String("opaal.plan.v4".to_owned());
+    future_plan["schema_version"] = Value::from(4_u64);
     assert_eq!(
         PlanArtifact::seal(future_plan).unwrap_err().code(),
         "ARTIFACT006"
@@ -258,7 +258,7 @@ fn v1_future_and_unbound_secret_artifacts_are_rejected() {
     let (chain, journal) =
         JournalChain::begin("00000000000000000000000000000009", header(&digest('5'))).unwrap();
     assert!(!chain.is_terminal());
-    for unsupported in ["opaal.run-journal.v1", "opaal.run-journal.v3"] {
+    for unsupported in ["opaal.run-journal.v1", "opaal.run-journal.v4"] {
         let bytes = String::from_utf8(journal.clone())
             .unwrap()
             .replace("opaal.run-journal.v2", unsupported)
@@ -267,7 +267,7 @@ fn v1_future_and_unbound_secret_artifacts_are_rejected() {
     }
 
     let audit = audit_journal(&journal).unwrap();
-    for unsupported in ["opaal.audit.v1", "opaal.audit.v3"] {
+    for unsupported in ["opaal.audit.v1", "opaal.audit.v4"] {
         let bytes = String::from_utf8(audit.bytes().to_vec())
             .unwrap()
             .replace("opaal.audit.v2", unsupported)
@@ -947,4 +947,594 @@ fn native_paths_and_wall_time_use_the_exact_persisted_spelling() {
         timestamp_from_unix_nanos(1_709_164_800_123_456_789).unwrap(),
         "2024-02-29T00:00:00.123456789Z"
     );
+}
+
+fn standard_host() -> Value {
+    json!({
+        "evidence_policy":"metadata-only", "roles":["entropy.system"],
+        "max_call_bytes":1048576, "max_host_bytes":8388608,
+        "max_integer_candidates":128, "operation_timeout_ms":30000,
+        "poll_interval_ms":25, "term_grace_ms":100, "max_chunk_bytes":65536
+    })
+}
+
+fn random_document(mut document: Value, schema: &str) -> Value {
+    document["schema"] = json!(schema);
+    document["schema_version"] = json!(3);
+    document["standard_host"] = standard_host();
+    let request = json!({"effect":"entropy.system", "scope":{"kind":"evaluation"}, "verdict":"granted-enforced"});
+    document["authority"]["rules"] = json!([{
+        "effect":"entropy.system", "scope":{"kind":"evaluation"},
+        "decision":"grant", "required_enforcement":"enforced"
+    }]);
+    document["authority"]["requests"] = json!([request]);
+    if let Some(actions) = document.get_mut("actions").and_then(Value::as_array_mut) {
+        actions[0]["requests"] = json!([request]);
+    }
+    document
+}
+
+fn metadata_outcome(class: &str) -> Value {
+    outcome(
+        class,
+        "EFFECT000",
+        opaal_runtime::workflow::METADATA_ONLY_MESSAGE,
+    )
+}
+
+fn entropy_operation(requested: u64, admitted: u64, progress: Option<(u64, u64)>) -> Value {
+    json!({
+        "kind":"entropy", "operation":"std::random::bytes", "effect":"entropy.system",
+        "requested_bytes":requested, "admitted_bytes":admitted,
+        "confirmed_bytes":progress.map(|counts| counts.0),
+        "uncertain_bytes_upper_bound":progress.map(|counts| counts.1), "eof":null
+    })
+}
+
+fn metadata_chain(policy: Value) -> (JournalChain, Vec<u8>) {
+    let mut payload = header(&digest('5'));
+    payload["standard_host"] = policy;
+    let (mut chain, mut bytes) =
+        JournalChain::begin("00000000000000000000000000000011", payload).unwrap();
+    bytes.extend(
+        chain
+            .append(
+                "action-start",
+                json!({
+                    "action_node_id":format!("{}#000000", digest('5')),
+                    "action_id":"/project/tasks.opaal::ready", "contract_digest":digest('5')
+                }),
+            )
+            .unwrap(),
+    );
+    (chain, bytes)
+}
+
+fn entropy_after(operation: Value, class: &str) -> Value {
+    json!({
+        "action_node_id":format!("{}#000000", digest('5')), "effect":"entropy.system",
+        "scope":{"kind":"evaluation"}, "operation":operation, "attempt":0,
+        "outcome":metadata_outcome(class), "evidence_digest":null
+    })
+}
+
+#[test]
+fn v3_entropy_progress_cannot_raise_admission_or_exceed_one_fill() {
+    for (name, requested, before_admitted, confirmed, uncertain, class) in [
+        ("bytes", 8, 0, 8, 0, "success"),
+        ("bytes", 512, 512, 0, 512, "cancelled"),
+        ("int", 1024, 1024, 1, 0, "cancelled"),
+        ("int", 1024, 1024, 0, 16, "cancelled"),
+        ("float", 8, 8, 1, 7, "cancelled"),
+    ] {
+        let (mut chain, mut bytes) = metadata_chain(standard_host());
+        let mut before = entropy_operation(requested, before_admitted, None);
+        before["operation"] = json!(format!("std::random::{name}"));
+        bytes.extend(
+            chain
+                .append(
+                    "effect-before",
+                    effect_before(
+                        "entropy.system",
+                        json!({"kind":"evaluation"}),
+                        before.clone(),
+                    ),
+                )
+                .unwrap(),
+        );
+        let mut operation = before;
+        operation["admitted_bytes"] = json!(confirmed + uncertain);
+        operation["confirmed_bytes"] = json!(confirmed);
+        operation["uncertain_bytes_upper_bound"] = json!(uncertain);
+        let mut after = entropy_after(operation, class);
+        after["outcome"]["partial"] = json!(class != "success");
+        let checkpoint = chain.clone();
+        let result = chain.append("effect-after", after.clone());
+        assert!(
+            result.is_err(),
+            "{name}: {confirmed} confirmed, {uncertain} uncertain"
+        );
+        assert_eq!(chain, checkpoint);
+
+        let last: Value = serde_json::from_slice(
+            bytes
+                .split(|byte| *byte == b'\n')
+                .rfind(|line| !line.is_empty())
+                .unwrap(),
+        )
+        .unwrap();
+        let mut forged = json!({"schema":"opaal.run-journal.v3", "schema_version":3,
+            "run_id":last["run_id"], "seq":last["seq"].as_u64().unwrap()+1,
+            "kind":"effect-after", "previous":last["digest"], "payload":after});
+        forged["digest"] = json!(digest_value(&forged).unwrap());
+        bytes.extend(serde_json::to_vec(&forged).unwrap());
+        bytes.push(b'\n');
+        assert!(audit_journal(&bytes).is_err());
+    }
+}
+
+#[test]
+fn v3_static_artifacts_bind_exact_reachable_roles_and_policy() {
+    let check = CheckArtifact::seal(random_document(check_document(), "opaal.check.v3")).unwrap();
+    assert_eq!(CheckArtifact::parse(check.bytes()).unwrap(), check);
+    let document = random_document(plan_document(), "opaal.plan.v3");
+    let plan = PlanArtifact::seal(document.clone()).unwrap();
+    assert_eq!(PlanArtifact::parse(plan.bytes()).unwrap(), plan);
+    assert!(plan.is_executable());
+    let mut lower = document.clone();
+    lower["standard_host"]["max_host_bytes"] = json!(0);
+    assert_ne!(PlanArtifact::seal(lower).unwrap().digest(), plan.digest());
+
+    for field in ["schema", "schema_version", "standard_host"] {
+        let mut missing = document.clone();
+        missing.as_object_mut().unwrap().remove(field);
+        assert!(PlanArtifact::seal(missing).is_err(), "missing {field}");
+    }
+    for roles in [
+        json!([]),
+        json!(["stdout.write"]),
+        json!(["entropy.system", "entropy.system"]),
+        json!(["unknown"]),
+    ] {
+        let mut invalid = document.clone();
+        invalid["standard_host"]["roles"] = roles;
+        assert!(PlanArtifact::seal(invalid).is_err());
+    }
+    for field in [
+        "max_call_bytes",
+        "max_host_bytes",
+        "max_integer_candidates",
+        "operation_timeout_ms",
+        "poll_interval_ms",
+        "term_grace_ms",
+        "max_chunk_bytes",
+    ] {
+        let mut raised = document.clone();
+        raised["standard_host"][field] =
+            json!(document["standard_host"][field].as_u64().unwrap() + 1);
+        assert!(PlanArtifact::seal(raised).is_err(), "raised {field}");
+        let mut negative = document.clone();
+        negative["standard_host"][field] = json!(-1);
+        assert!(PlanArtifact::seal(negative).is_err(), "negative {field}");
+    }
+    for (field, value) in [
+        ("evidence_policy", json!("full")),
+        ("payload", json!("sentinel")),
+    ] {
+        let mut invalid = document.clone();
+        invalid["standard_host"][field] = value;
+        assert!(PlanArtifact::seal(invalid).is_err());
+    }
+    let mut v2 = document.clone();
+    v2["schema"] = json!("opaal.plan.v2");
+    v2["schema_version"] = json!(2);
+    v2.as_object_mut().unwrap().remove("standard_host");
+    assert!(PlanArtifact::seal(v2).is_err());
+    let mut wrong_scope = document.clone();
+    wrong_scope["authority"]["rules"][0]["scope"] = json!({"kind":"clock", "clock":"wall"});
+    assert!(PlanArtifact::seal(wrong_scope).is_err());
+    let mut unenforced = document;
+    unenforced["authority"]["rules"][0]["required_enforcement"] = json!("acknowledged-unenforced");
+    assert!(PlanArtifact::seal(unenforced).is_err());
+    for outcome_path in ["outcome", "actions"] {
+        let mut invalid = random_document(plan_document(), "opaal.plan.v3");
+        if outcome_path == "outcome" {
+            invalid["outcome"]["value_digest"] = json!(digest('a'));
+        } else {
+            invalid["actions"][0]["outcome"]["value_digest"] = json!(digest('a'));
+        }
+        assert!(PlanArtifact::seal(invalid).is_err());
+    }
+}
+
+#[test]
+fn v3_journal_preserves_safe_progress_and_policy_through_audit() {
+    let (mut chain, mut bytes) = metadata_chain(standard_host());
+    bytes.extend(
+        chain
+            .append(
+                "effect-before",
+                effect_before(
+                    "entropy.system",
+                    json!({"kind":"evaluation"}),
+                    entropy_operation(16, 16, None),
+                ),
+            )
+            .unwrap(),
+    );
+    let mut after = entropy_after(entropy_operation(16, 16, Some((8, 8))), "cancelled");
+    after["outcome"]["partial"] = json!(true);
+    bytes.extend(chain.append("effect-after", after).unwrap());
+    let mut primary = metadata_outcome("cancelled");
+    primary["partial"] = json!(true);
+    bytes.extend(
+        chain
+            .append(
+                "action-end",
+                json!({"action_node_id":format!("{}#000000", digest('5')), "outcome":primary}),
+            )
+            .unwrap(),
+    );
+    bytes.extend(
+        chain
+            .append(
+                "terminal",
+                json!({
+                    "finished_at":"2026-09-09T08:02:00.000000000Z", "primary":primary,
+                    "cleanup":[], "complete":true
+                }),
+            )
+            .unwrap(),
+    );
+    let audit = audit_journal(&bytes).unwrap();
+    assert_eq!(audit.value()["schema"], "opaal.audit.v3");
+    assert_eq!(audit.value()["standard_host"], standard_host());
+    assert_eq!(
+        audit.value()["events"][2]["payload"]["operation"]["uncertain_bytes_upper_bound"],
+        8
+    );
+    assert_eq!(AuditArtifact::parse(audit.bytes()).unwrap(), audit);
+    assert!(audit.is_complete());
+    // V2 bytes retain their version; changing only an identity is never an upgrade.
+    let mixed = String::from_utf8(bytes).unwrap().replacen(
+        "opaal.run-journal.v3",
+        "opaal.run-journal.v2",
+        1,
+    );
+    assert!(audit_journal(mixed.as_bytes()).is_err());
+}
+
+#[test]
+fn v3_progress_refuses_forged_counts_results_and_payload_extensions() {
+    let (chain, _) = metadata_chain(standard_host());
+    for (field, value) in [
+        ("admitted_bytes", json!(9)),
+        ("confirmed_bytes", json!(0)),
+        ("eof", json!(true)),
+        ("bound", json!(123)),
+        ("payload_digest", json!(digest('a'))),
+        ("operation", json!("std::random::unknown")),
+        ("effect", json!("stdout.write")),
+    ] {
+        let mut operation = entropy_operation(8, 8, None);
+        operation[field] = value;
+        assert!(
+            chain
+                .clone()
+                .append(
+                    "effect-before",
+                    effect_before("entropy.system", json!({"kind":"evaluation"}), operation)
+                )
+                .is_err(),
+            "before {field}"
+        );
+    }
+    let mut admitted = chain.clone();
+    admitted
+        .append(
+            "effect-before",
+            effect_before(
+                "entropy.system",
+                json!({"kind":"evaluation"}),
+                entropy_operation(8, 8, None),
+            ),
+        )
+        .unwrap();
+    for (confirmed, uncertain, class, partial) in [
+        (9, 0, "success", false),
+        (8, 1, "success", false),
+        (7, 1, "success", false),
+        (8, 0, "success", true),
+        (0, 8, "cancelled", false),
+        (8, 0, "refused", true),
+    ] {
+        let mut after = entropy_after(entropy_operation(8, 8, Some((confirmed, uncertain))), class);
+        after["outcome"]["partial"] = json!(partial);
+        assert!(
+            admitted.clone().append("effect-after", after).is_err(),
+            "{confirmed} {uncertain} {class}"
+        );
+    }
+    let mut unknown = entropy_after(entropy_operation(8, 8, None), "cancelled");
+    unknown["outcome"]["partial"] = json!(true);
+    assert!(admitted.append("effect-after", unknown).is_err());
+
+    let mut narrow = standard_host();
+    narrow["max_call_bytes"] = json!(7);
+    let (mut narrow, _) = metadata_chain(narrow);
+    assert!(
+        narrow
+            .append(
+                "effect-before",
+                effect_before(
+                    "entropy.system",
+                    json!({"kind":"evaluation"}),
+                    entropy_operation(8, 8, None)
+                )
+            )
+            .is_err()
+    );
+    let mut absent = standard_host();
+    absent["roles"] = json!(["stdout.write"]);
+    let (mut absent, _) = metadata_chain(absent);
+    assert!(
+        absent
+            .append(
+                "effect-before",
+                effect_before(
+                    "entropy.system",
+                    json!({"kind":"evaluation"}),
+                    entropy_operation(0, 0, None)
+                )
+            )
+            .is_err()
+    );
+}
+
+#[test]
+fn v3_http_scope_cannot_retain_the_dynamic_method() {
+    let (mut chain, _) = metadata_chain(standard_host());
+    let event = effect_before(
+        "network.http",
+        json!({"kind":"endpoint", "endpoint":"api", "method":"METHOD-SENTINEL"}),
+        json!({"kind":"http", "operation":"std::http::request", "endpoint":"api", "method":null, "status":null, "body_bytes":null, "evidence_digest":null}),
+    );
+    assert!(chain.append("effect-before", event).is_err());
+}
+
+#[test]
+fn v3_metadata_policy_covers_ordinary_sibling_actions_and_secondaries() {
+    let (chain, _) = metadata_chain(standard_host());
+    for class in ["success", "error", "cancelled", "refused", "cleanup-failed"] {
+        for (field, value) in [
+            ("message", json!("payload-sentinel")),
+            ("value_digest", json!(digest('b'))),
+        ] {
+            let mut outcome = metadata_outcome(class);
+            outcome[field] = value;
+            assert!(chain.clone().append("action-end", json!({"action_node_id":format!("{}#000000", digest('5')), "outcome":outcome})).is_err());
+        }
+    }
+    // An untaken entropy branch still requires metadata-only ordinary effects.
+    for (effect, scope, safe, field, unsafe_value) in [
+        (
+            "clock.wall",
+            json!({"kind":"clock", "clock":"wall"}),
+            clock_operation(None),
+            "evidence_digest",
+            json!(digest('c')),
+        ),
+        (
+            "filesystem.read",
+            json!({"kind":"project-path", "path":native_path()}),
+            json!({"kind":"filesystem", "operation":"std::filesystem::read", "relative_path":null, "bytes":null, "evidence_digest":null}),
+            "relative_path",
+            encode_native_path(Path::new("payload-sentinel")),
+        ),
+        (
+            "process.run",
+            json!({"kind":"tool", "tool":"rust"}),
+            json!({"kind":"process", "operation":"std::process::run", "tool":"rust", "argv_count":1, "argv_bytes":16, "argv_digest":null, "argv":[], "status":null, "stdout_bytes":null, "stderr_bytes":null, "evidence_digest":null}),
+            "argv_digest",
+            json!(digest('d')),
+        ),
+        (
+            "network.http",
+            json!({"kind":"endpoint", "endpoint":"api", "method":null}),
+            json!({"kind":"http", "operation":"std::http::request", "endpoint":"api", "method":null, "status":null, "body_bytes":null, "evidence_digest":null}),
+            "method",
+            json!("payload-sentinel"),
+        ),
+    ] {
+        chain
+            .clone()
+            .append(
+                "effect-before",
+                effect_before(effect, scope.clone(), safe.clone()),
+            )
+            .unwrap();
+        let mut unsafe_operation = safe;
+        unsafe_operation[field] = unsafe_value;
+        assert!(
+            chain
+                .clone()
+                .append(
+                    "effect-before",
+                    effect_before(effect, scope, unsafe_operation)
+                )
+                .is_err(),
+            "{field}"
+        );
+    }
+    let mut ended = chain;
+    ended.append("action-end", json!({"action_node_id":format!("{}#000000", digest('5')), "outcome":metadata_outcome("success")})).unwrap();
+    let mut secondary = metadata_outcome("cleanup-failed");
+    secondary["message"] = json!("secondary-sentinel");
+    assert!(ended.append("cleanup", json!({"action_node_id":null, "resource_id":"worker", "ordinal":0, "outcome":secondary})).is_err());
+}
+
+#[test]
+fn v3_admission_settlement_and_cumulative_limits_survive_audit() {
+    let mut policy = standard_host();
+    policy["max_host_bytes"] = json!(8);
+    let (mut chain, mut bytes) = metadata_chain(policy);
+    bytes.extend(
+        chain
+            .append(
+                "effect-before",
+                effect_before(
+                    "entropy.system",
+                    json!({"kind":"evaluation"}),
+                    entropy_operation(8, 8, None),
+                ),
+            )
+            .unwrap(),
+    );
+    bytes.extend(
+        chain
+            .append(
+                "effect-after",
+                entropy_after(entropy_operation(8, 8, Some((8, 0))), "success"),
+            )
+            .unwrap(),
+    );
+    let mut second_before = effect_before(
+        "entropy.system",
+        json!({"kind":"evaluation"}),
+        entropy_operation(1, 0, None),
+    );
+    second_before["attempt"] = json!(1);
+    bytes.extend(chain.append("effect-before", second_before).unwrap());
+    let mut second_after = entropy_after(entropy_operation(1, 1, Some((1, 0))), "success");
+    second_after["attempt"] = json!(1);
+    let checkpoint = chain.clone();
+    assert!(chain.append("effect-after", second_after.clone()).is_err());
+    assert_eq!(chain, checkpoint);
+    // A correctly hashed hostile suffix must also fail the reader's budget gate.
+    let last: Value = serde_json::from_slice(
+        bytes
+            .split(|byte| *byte == b'\n')
+            .rfind(|line| !line.is_empty())
+            .unwrap(),
+    )
+    .unwrap();
+    let mut forged = json!({"schema":"opaal.run-journal.v3", "schema_version":3,
+        "run_id":last["run_id"], "seq":last["seq"].as_u64().unwrap()+1,
+        "kind":"effect-after", "previous":last["digest"], "payload":second_after});
+    forged["digest"] = json!(digest_value(&forged).unwrap());
+    bytes.extend(serde_json::to_vec(&forged).unwrap());
+    bytes.push(b'\n');
+    assert!(audit_journal(&bytes).is_err());
+}
+
+#[test]
+fn v3_open_admissions_remain_within_the_cumulative_host_limit() {
+    let mut policy = standard_host();
+    policy["max_host_bytes"] = json!(8);
+    let (mut chain, mut bytes) = metadata_chain(policy);
+    bytes.extend(
+        chain
+            .append(
+                "effect-before",
+                effect_before(
+                    "entropy.system",
+                    json!({"kind":"evaluation"}),
+                    entropy_operation(4, 4, None),
+                ),
+            )
+            .unwrap(),
+    );
+    bytes.extend(
+        chain
+            .append(
+                "effect-after",
+                entropy_after(entropy_operation(4, 4, Some((4, 0))), "success"),
+            )
+            .unwrap(),
+    );
+    let mut before = effect_before(
+        "entropy.system",
+        json!({"kind":"evaluation"}),
+        entropy_operation(5, 5, None),
+    );
+    before["attempt"] = json!(1);
+    let checkpoint = chain.clone();
+    assert!(chain.append("effect-before", before.clone()).is_err());
+    assert_eq!(chain, checkpoint);
+
+    let last: Value = serde_json::from_slice(
+        bytes
+            .split(|byte| *byte == b'\n')
+            .rfind(|line| !line.is_empty())
+            .unwrap(),
+    )
+    .unwrap();
+    let mut forged = json!({"schema":"opaal.run-journal.v3", "schema_version":3,
+        "run_id":last["run_id"], "seq":last["seq"].as_u64().unwrap()+1,
+        "kind":"effect-before", "previous":last["digest"], "payload":before});
+    forged["digest"] = json!(digest_value(&forged).unwrap());
+    let mut hostile = bytes.clone();
+    hostile.extend(serde_json::to_vec(&forged).unwrap());
+    hostile.push(b'\n');
+    assert!(audit_journal(&hostile).is_err());
+
+    before["operation"]["requested_bytes"] = json!(4);
+    before["operation"]["admitted_bytes"] = json!(4);
+    bytes.extend(chain.append("effect-before", before).unwrap());
+    let audit = audit_journal(&bytes).unwrap();
+    assert!(!audit.is_complete());
+    let mut forged = audit.value().clone();
+    forged["standard_host"]["max_host_bytes"] = json!(7);
+    forged.as_object_mut().unwrap().remove("digest");
+    forged["digest"] = json!(digest_value(&forged).unwrap());
+    assert!(AuditArtifact::parse(&serde_json::to_vec(&forged).unwrap()).is_err());
+}
+
+#[test]
+fn v3_scalar_and_stream_descriptors_have_closed_roles_and_count_rules() {
+    for (operation_name, effect, requested, confirmed, eof) in [
+        ("std::random::int", "entropy.system", 1024, 8, Value::Null),
+        ("std::random::int", "entropy.system", 0, 0, Value::Null),
+        ("std::random::float", "entropy.system", 8, 8, Value::Null),
+        ("std::io::read_stdin", "stdin.read", 9, 8, json!(true)),
+        ("std::io::println", "stdout.write", 1, 1, Value::Null),
+        ("std::io::eprintln", "stderr.write", 1, 1, Value::Null),
+        ("std::io::print", "stdout.write", 0, 0, Value::Null),
+        ("std::io::eprint", "stderr.write", 0, 0, Value::Null),
+        ("std::io::write_stdout", "stdout.write", 8, 8, Value::Null),
+        ("std::io::write_stderr", "stderr.write", 8, 8, Value::Null),
+    ] {
+        let mut policy = standard_host();
+        policy["roles"] = json!([effect]);
+        let (mut chain, mut bytes) = metadata_chain(policy);
+        let mut before = entropy_operation(requested, requested, None);
+        before["operation"] = json!(operation_name);
+        before["effect"] = json!(effect);
+        before["kind"] = json!(if effect == "entropy.system" {
+            "entropy"
+        } else {
+            "standard-stream"
+        });
+        bytes.extend(
+            chain
+                .append(
+                    "effect-before",
+                    effect_before(effect, json!({"kind":"evaluation"}), before.clone()),
+                )
+                .unwrap(),
+        );
+        let mut after = before;
+        after["admitted_bytes"] = json!(confirmed);
+        after["confirmed_bytes"] = json!(confirmed);
+        after["uncertain_bytes_upper_bound"] = json!(0);
+        after["eof"] = eof;
+        let mut payload = entropy_after(after, "success");
+        payload["effect"] = json!(effect);
+        let mut invalid = payload.clone();
+        invalid["operation"]["confirmed_bytes"] = json!(u64::MAX);
+        invalid["operation"]["uncertain_bytes_upper_bound"] = json!(1);
+        assert!(chain.clone().append("effect-after", invalid).is_err());
+        bytes.extend(chain.append("effect-after", payload).unwrap());
+        audit_journal(&bytes).unwrap();
+    }
 }

@@ -4,6 +4,18 @@ All notable changes to OPAAL are documented here.
 
 ## [Unreleased]
 
+### Added
+
+- Add bounded `std::random::int`, `float`, and `bytes` under explicit
+  `entropy.system` authority. Ordinary native CLI and interactive calls use an
+  owned same-image entropy worker; controlled tasks require declared effects
+  and selected environment grants. Pure functions, callbacks and imported
+  initializers refuse entropy, including calls that draw no bytes.
+- Add metadata-only v3 check, plan, journal and audit artifacts for tasks that
+  declare entropy. Routine evidence retains progress and outcomes, omitting
+  sampled values, derived payloads and their digests for the whole affected run.
+  Existing tasks continue to use v2 artifacts.
+
 ## [1.2.0]
 
 ### Added

@@ -1,0 +1,3 @@
+import std::random as random
+
+random::bytes(1048577)

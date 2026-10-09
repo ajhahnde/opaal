@@ -101,6 +101,14 @@ jobs:
       - name: Exercise the supported fuzz targets
         run: fuzz/run-smoke.sh 1000
 
+      - name: Repeat Random fuzzing with a fixed seed
+        if: github.event_name == 'workflow_dispatch'
+        shell: bash
+        run: |
+          corpus=$(mktemp -d)
+          trap 'rm -rf "$corpus"' EXIT
+          cargo +nightly fuzz run --fuzz-dir fuzz random_limits "$corpus" fuzz/seeds/random_limits -- -runs=1000 -seed=1 -max_len=4096 -timeout=10 -rss_limit_mb=2048
+
   operational-core-linux:
     name: operational-core-linux
     runs-on: ubuntu-24.04
@@ -153,6 +161,51 @@ jobs:
       - name: Validate the full macOS performance profile
         run: python3 benchmarks/run.py --profile qualification
 
+  random-native-linux:
+    name: random-native-linux
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - name: Record source, kernel and toolchain identity
+        run: |
+          mkdir -p dist/random-native-linux
+          git rev-parse HEAD > dist/random-native-linux/source.txt
+          uname -a > dist/random-native-linux/host.txt
+          rustup show active-toolchain || rustup toolchain install
+          rustc -vV > dist/random-native-linux/toolchain.txt
+      - name: Build native qualification programs
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo build --release --locked -p opaal-cli --bin opaal -p opaal-platform-posix --bin opaal-standard-host-fixture 2>&1 | tee dist/random-native-linux/build.log
+          sha256sum target/release/opaal target/release/opaal-standard-host-fixture > dist/random-native-linux/program-hashes.txt
+      - name: Qualify native host and public Random boundaries
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo test --locked -p opaal-platform-posix --test standard_host_worker -- --test-threads=1 2>&1 | tee dist/random-native-linux/native.log
+          cargo test --locked -p opaal-cli --test random_golden -- --test-threads=1 2>&1 | tee dist/random-native-linux/cli.log
+      - name: Qualify actual native failures with failed journal persistence
+        run: python3 ci/qualify_random_failures.py --binary target/release/opaal --output dist/random-native-linux
+      - name: Observe maximum byte fill timing and process resources
+        shell: bash
+        run: |
+          for sample in 1 2 3 4 5; do
+            /usr/bin/time -v target/release/opaal-standard-host-fixture maximum > "dist/random-native-linux/maximum-${sample}.log" 2>&1
+          done
+      - name: Retain native qualification evidence even after failure
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: random-native-linux
+          path: dist/random-native-linux/
+          if-no-files-found: error
+
   data-processing-linux:
     name: data-processing-linux
     runs-on: ubuntu-24.04
@@ -195,6 +248,16 @@ jobs:
             --archive "dist/opaal-v${candidate_version}-linux-x86_64.tar.gz" \
             --expected-source "$(git rev-parse HEAD)" --platform linux-x86_64 \
             --report dist/numeric-operations-linux.json
+      - name: Package the exact Random fixtures
+        run: python3 ci/package_random_values.py
+      - name: Qualify bounded Random outside the checkout
+        run: |
+          candidate_version=$(python3 -c 'from ci.package_release import VERSION; print(VERSION)')
+          python3 ci/qualify_random_values.py \
+            --archive "dist/opaal-v${candidate_version}-linux-x86_64.tar.gz" \
+            --fixtures "dist/opaal-v${candidate_version}-random-values.tar.gz" \
+            --expected-source "$(git rev-parse HEAD)" --platform linux-x86_64 \
+            --report dist/random-values-linux.json
       - name: Retain candidate identity and qualification evidence
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -244,6 +307,16 @@ jobs:
             --archive "dist/opaal-v${candidate_version}-macos-arm64.tar.gz" \
             --expected-source "$(git rev-parse HEAD)" --platform macos-arm64 \
             --report dist/numeric-operations-macos.json
+      - name: Package the exact Random fixtures
+        run: python3 ci/package_random_values.py
+      - name: Qualify bounded Random outside the checkout
+        run: |
+          candidate_version=$(python3 -c 'from ci.package_release import VERSION; print(VERSION)')
+          python3 ci/qualify_random_values.py \
+            --archive "dist/opaal-v${candidate_version}-macos-arm64.tar.gz" \
+            --fixtures "dist/opaal-v${candidate_version}-random-values.tar.gz" \
+            --expected-source "$(git rev-parse HEAD)" --platform macos-arm64 \
+            --report dist/random-values-macos.json
       - name: Retain candidate identity and qualification evidence
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:

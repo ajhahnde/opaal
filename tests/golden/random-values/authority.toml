@@ -1,0 +1,8 @@
+schema_version = 1
+project = "random_sample"
+environment = "ci"
+[[rules]]
+decision = "grant"
+effect = "entropy.system"
+scope = "evaluation"
+required_enforcement = "enforced"

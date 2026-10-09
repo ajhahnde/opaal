@@ -18,6 +18,7 @@ use crate::project::{MaintainedAdapter, ProjectManifest, ToolLock};
 use crate::security::{MAX_SECRET_BYTES, Secret, SecretId};
 use crate::{NativePath, NominalRecordValue, Record, Status, Value};
 
+use super::random::{EntropyProgress, RandomState};
 use super::{ModuleError, filesystem, http, integrity, path, process, time, url, version};
 
 const MAX_JOURNAL_MESSAGE_BYTES: usize = 4 * 1024;
@@ -56,6 +57,11 @@ impl SourceEffectEvent {
 /// Closed, redaction-safe identity for one controlled source operation.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SourceOperation {
+    Entropy {
+        operation: String,
+        requested_bytes: u64,
+        admitted_bytes: u64,
+    },
     Filesystem {
         operation: String,
         relative_path: PathBuf,
@@ -65,7 +71,7 @@ pub enum SourceOperation {
         tool: String,
         argv_count: u64,
         argv_bytes: u64,
-        argv_digest: String,
+        argv_digest: Option<String>,
         argv: Vec<SourceProcessArgument>,
     },
     Http {
@@ -101,6 +107,7 @@ pub enum SourceClock {
 /// Result metadata which may safely complete an operation descriptor.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SourceEffectResult {
+    Entropy(EntropyProgress),
     Filesystem {
         bytes: Option<u64>,
         evidence_digest: Option<String>,
@@ -127,6 +134,7 @@ pub enum SourceEffectResult {
 impl SourceOperation {
     fn empty_result(&self) -> SourceEffectResult {
         match self {
+            Self::Entropy { .. } => SourceEffectResult::Entropy(EntropyProgress::default()),
             Self::Filesystem { .. } => SourceEffectResult::Filesystem {
                 bytes: None,
                 evidence_digest: None,
@@ -155,6 +163,7 @@ impl SourceOperation {
 impl SourceEffectResult {
     fn evidence_digest(&self) -> Option<&str> {
         match self {
+            Self::Entropy(_) => None,
             Self::Filesystem {
                 evidence_digest, ..
             }
@@ -281,6 +290,10 @@ pub(crate) enum SourceOperationalEvidence {
 /// Evaluator-facing interface. Only the accepted-plan executor constructs an
 /// implementation; every ordinary evaluator host returns no bridge.
 pub(crate) trait SourceOperationalHost {
+    fn metadata_only(&self) -> bool {
+        false
+    }
+
     fn action_start(&mut self, action: &ActionId) -> Result<(), ModuleError>;
 
     fn action_end(
@@ -367,6 +380,8 @@ pub struct ControlledSourceOperations<'a> {
     secret_input_id: Option<String>,
     secret_input: Option<&'a mut dyn Read>,
     evidence: Vec<SourceOperationalEvidence>,
+    metadata_only: bool,
+    random: Option<RandomState>,
 }
 
 impl<'a> ControlledSourceOperations<'a> {
@@ -411,7 +426,37 @@ impl<'a> ControlledSourceOperations<'a> {
             secret_input_id,
             secret_input,
             evidence: Vec::new(),
+            metadata_only: effects
+                .iter()
+                .any(|request| request.effect() == opaal_platform::AuthorityEffect::EntropySystem),
+            random: None,
         }
+    }
+
+    /// Bind one evaluation-owned host; language checkpoints never copy it.
+    #[must_use]
+    pub fn with_random(mut self, random: RandomState) -> Self {
+        self.random = Some(random);
+        self
+    }
+
+    pub fn finish_standard_host(&mut self) -> Vec<ModuleError> {
+        let mut errors = Vec::new();
+        if let Some(random) = &mut self.random {
+            if random.take_cleanup_error().is_some() {
+                errors.push(ModuleError::invalid(
+                    "OPERATION004",
+                    "standard host cleanup failed",
+                ));
+            }
+            if random.close().is_err() {
+                errors.push(ModuleError::invalid(
+                    "OPERATION004",
+                    "standard host cleanup failed",
+                ));
+            }
+        }
+        errors
     }
 
     fn materialize_secret(&mut self, secret_id: &SecretId) -> Result<(), ModuleError> {
@@ -466,9 +511,6 @@ impl<'a> ControlledSourceOperations<'a> {
             .ok_or_else(|| {
                 ModuleError::invalid("JOURNAL006", "effect occurred outside an action boundary")
             })?;
-        for (_, attempted) in &mut self.action_stack {
-            *attempted = true;
-        }
         let attempt = self.next_attempt;
         self.next_attempt = self
             .next_attempt
@@ -483,13 +525,21 @@ impl<'a> ControlledSourceOperations<'a> {
         self.journal
             .before(&event, verdict)
             .map_err(|message| ModuleError::invalid("JOURNAL005", message))?;
+        for (_, attempted) in &mut self.action_stack {
+            *attempted = true;
+        }
 
         match invoke(self) {
             Ok((value, status, result)) => {
                 let outcome = SourceEffectOutcome {
                     class: "success",
                     code: "EFFECT000".to_owned(),
-                    message: "effect completed".to_owned(),
+                    message: if self.metadata_only {
+                        crate::workflow::METADATA_ONLY_MESSAGE
+                    } else {
+                        "effect completed"
+                    }
+                    .to_owned(),
                     status: status.as_ref().and_then(Status::code),
                     value_digest: result.evidence_digest().map(str::to_owned),
                     result: Some(result),
@@ -509,7 +559,21 @@ impl<'a> ControlledSourceOperations<'a> {
                 Ok(value)
             }
             Err(error) => {
-                let partial = matches!(error, ModuleError::Adapter(_));
+                let result = match &event.operation {
+                    SourceOperation::Entropy { .. } => SourceEffectResult::Entropy(
+                        self.random
+                            .as_ref()
+                            .expect("bound entropy state")
+                            .progress(),
+                    ),
+                    _ => event.operation.empty_result(),
+                };
+                let partial = match &result {
+                    SourceEffectResult::Entropy(progress) => {
+                        progress.confirmed_bytes > 0 || progress.uncertain_bytes_upper_bound > 0
+                    }
+                    _ => matches!(error, ModuleError::Adapter(_)),
+                };
                 let class = match &error {
                     ModuleError::Authority { .. } => "refused",
                     ModuleError::Invalid {
@@ -522,15 +586,22 @@ impl<'a> ControlledSourceOperations<'a> {
                 let outcome = SourceEffectOutcome {
                     class,
                     code: error.code().to_owned(),
-                    message: bounded_message(&self.context.redact_text(&error.to_string())),
+                    message: if self.metadata_only {
+                        crate::workflow::METADATA_ONLY_MESSAGE.to_owned()
+                    } else {
+                        bounded_message(&self.context.redact_text(&error.to_string()))
+                    },
                     status: None,
                     value_digest: None,
-                    result: Some(event.operation.empty_result()),
+                    result: Some(result),
                     partial,
                 };
-                self.journal
-                    .after(&event, &outcome)
-                    .map_err(|message| ModuleError::invalid("JOURNAL005", message))?;
+                if self.journal.after(&event, &outcome).is_err() {
+                    self.evidence.push(SourceOperationalEvidence::Partial {
+                        operation: operation.to_owned(),
+                        detail: "effect failed and its journal record failed".to_owned(),
+                    });
+                }
                 if partial {
                     self.evidence.push(SourceOperationalEvidence::Partial {
                         operation: operation.to_owned(),
@@ -579,14 +650,19 @@ impl<'a> ControlledSourceOperations<'a> {
                         maximum,
                         &mut this.read_budget,
                     )?;
-                    let digest = integrity::sha256(&value);
                     let resolved = if target.is_absolute() {
                         path::normalize(&target)
                     } else {
                         path::normalize(&this.manifest.root().join(&target))
                     }?;
+                    let digest =
+                        if this.metadata_only && !this.planned_inputs.contains_key(&resolved) {
+                            None
+                        } else {
+                            Some(integrity::sha256(&value))
+                        };
                     if let Some(expected) = this.planned_inputs.get(&resolved)
-                        && expected != &digest
+                        && Some(expected) != digest.as_ref()
                     {
                         return Err(ModuleError::invalid(
                             "EXECUTE_STALE",
@@ -601,7 +677,7 @@ impl<'a> ControlledSourceOperations<'a> {
                         None,
                         SourceEffectResult::Filesystem {
                             bytes: Some(bytes),
-                            evidence_digest: Some(digest),
+                            evidence_digest: if this.metadata_only { None } else { digest },
                         },
                     ))
                 })
@@ -639,7 +715,8 @@ impl<'a> ControlledSourceOperations<'a> {
                             None,
                             SourceEffectResult::Filesystem {
                                 bytes: Some(bytes),
-                                evidence_digest: Some(integrity::sha256(&payload)),
+                                evidence_digest: (!this.metadata_only)
+                                    .then(|| integrity::sha256(&payload)),
                             },
                         ))
                     },
@@ -655,12 +732,12 @@ impl<'a> ControlledSourceOperations<'a> {
                     let value =
                         time::wall_now(this.context, this.effects, this.platform, this.adapter)?
                             .to_string();
-                    let digest = integrity::sha256(value.as_bytes());
+                    let digest = (!this.metadata_only).then(|| integrity::sha256(value.as_bytes()));
                     Ok((
                         nominal_record("time", "Timestamp", vec![("_value", Value::string(value))]),
                         None,
                         SourceEffectResult::Clock {
-                            evidence_digest: Some(digest),
+                            evidence_digest: digest,
                         },
                     ))
                 })
@@ -731,7 +808,7 @@ impl<'a> ControlledSourceOperations<'a> {
                 let argv = string_list(&arguments, 1)?;
                 let request =
                     CapabilityRequest::process_run(tool.clone()).map_err(invalid_request)?;
-                let descriptor = process_descriptor(self.tools, &tool, &argv)?;
+                let descriptor = process_descriptor(self.tools, &tool, &argv, self.metadata_only)?;
                 self.effect(request, "std::process::run", descriptor, |this| {
                     let refs = argv.iter().map(String::as_str).collect::<Vec<_>>();
                     let executable_file = this.executable_files.get(&tool).ok_or_else(|| {
@@ -756,7 +833,8 @@ impl<'a> ControlledSourceOperations<'a> {
                         executable_file,
                     )?;
                     let status = result.status().clone();
-                    let digest = integrity::sha256(&[result.stdout(), result.stderr()].concat());
+                    let digest = (!this.metadata_only)
+                        .then(|| integrity::sha256(&[result.stdout(), result.stderr()].concat()));
                     let stdout_bytes = u64::try_from(result.stdout().len()).map_err(|_| {
                         ModuleError::invalid("OPERATION005", "process stdout byte count overflow")
                     })?;
@@ -779,7 +857,7 @@ impl<'a> ControlledSourceOperations<'a> {
                             status: status.code(),
                             stdout_bytes: Some(stdout_bytes),
                             stderr_bytes: Some(stderr_bytes),
-                            evidence_digest: Some(digest),
+                            evidence_digest: digest,
                         },
                     ))
                 })
@@ -900,12 +978,13 @@ impl<'a> ControlledSourceOperations<'a> {
                                     http::MAX_HTTP_DURATION,
                                     &mut this.http_budget,
                                 )?;
-                                let digest = integrity::sha256(response.body());
+                                let digest = (!this.metadata_only)
+                                    .then(|| integrity::sha256(response.body()));
                                 Ok((
                                     response,
                                     None,
                                     SourceEffectResult::SecretReveal {
-                                        evidence_digest: Some(digest),
+                                        evidence_digest: digest,
                                     },
                                 ))
                             })?
@@ -926,7 +1005,7 @@ impl<'a> ControlledSourceOperations<'a> {
                             &mut this.http_budget,
                         )?,
                     };
-                    let digest = integrity::sha256(response.body());
+                    let digest = (!this.metadata_only).then(|| integrity::sha256(response.body()));
                     let status = response.status();
                     let body_bytes = u64::try_from(response.body().len()).map_err(|_| {
                         ModuleError::invalid("OPERATION005", "HTTP body byte count overflow")
@@ -959,7 +1038,7 @@ impl<'a> ControlledSourceOperations<'a> {
                         SourceEffectResult::Http {
                             status: Some(status),
                             body_bytes: Some(body_bytes),
-                            evidence_digest: Some(digest),
+                            evidence_digest: digest,
                         },
                     ))
                 })
@@ -972,7 +1051,19 @@ impl<'a> ControlledSourceOperations<'a> {
     }
 }
 
+impl Drop for ControlledSourceOperations<'_> {
+    fn drop(&mut self) {
+        if let Some(random) = &mut self.random {
+            let _ = random.close();
+        }
+    }
+}
+
 impl SourceOperationalHost for ControlledSourceOperations<'_> {
+    fn metadata_only(&self) -> bool {
+        self.metadata_only
+    }
+
     fn action_start(&mut self, action: &ActionId) -> Result<(), ModuleError> {
         let node = self.action_nodes.get(action).cloned().ok_or_else(|| {
             ModuleError::invalid("JOURNAL006", "action is absent from the accepted plan")
@@ -1017,12 +1108,20 @@ impl SourceOperationalHost for ControlledSourceOperations<'_> {
                 attempted,
             );
         }
+        if self.metadata_only {
+            outcome.0.message = crate::workflow::METADATA_ONLY_MESSAGE.to_owned();
+            outcome.0.value_digest = None;
+        }
         let node = self.action_nodes.get(action).ok_or_else(|| {
             ModuleError::invalid("JOURNAL006", "action is absent from the accepted plan")
         })?;
-        self.journal
-            .action_end(node, &outcome)
-            .map_err(|message| ModuleError::invalid("JOURNAL005", message))?;
+        if let Err(message) = self.journal.action_end(node, &outcome) {
+            self.evidence.push(SourceOperationalEvidence::Partial {
+                operation: action.qualified_name(),
+                detail: "action outcome journal record failed".to_owned(),
+            });
+            return Err(ModuleError::invalid("JOURNAL005", message));
+        }
         if unused_secret {
             return Err(ModuleError::invalid(
                 "EXECUTE_UNUSED_SECRET",
@@ -1037,7 +1136,7 @@ impl SourceOperationalHost for ControlledSourceOperations<'_> {
         module: &ModuleId,
         operation: &str,
         arguments: Vec<Value>,
-        _budget: &mut crate::eval::ResourceBudget,
+        budget: &mut crate::eval::ResourceBudget,
     ) -> Result<Value, ModuleError> {
         let ModuleOrigin::Standard { namespace, module } = module.origin() else {
             return Err(ModuleError::invalid(
@@ -1050,6 +1149,44 @@ impl SourceOperationalHost for ControlledSourceOperations<'_> {
                 "OPERATION001",
                 "operation is not in std",
             ));
+        }
+        if module == "random" {
+            self.metadata_only = true;
+            let random = self.random.as_ref().ok_or(ModuleError::Authority {
+                verdict: AuthorityVerdict::Unsupported,
+            })?;
+            let admission = random.admission(
+                self.context,
+                self.effects,
+                self.platform,
+                operation,
+                &arguments,
+            )?;
+            let deadline = random.operation_deadline(self.context);
+            let name = format!("std::random::{operation}");
+            let descriptor = SourceOperation::Entropy {
+                operation: name.clone(),
+                requested_bytes: admission.requested_bytes as u64,
+                admitted_bytes: admission.admitted_bytes as u64,
+            };
+            return self.effect(
+                CapabilityRequest::entropy_system(),
+                &name,
+                descriptor,
+                |this| {
+                    let random = this.random.as_mut().expect("bound entropy state");
+                    let value = random.invoke_with_deadline(
+                        this.context,
+                        this.effects,
+                        this.platform,
+                        budget,
+                        operation,
+                        &arguments,
+                        deadline,
+                    )?;
+                    Ok((value, None, SourceEffectResult::Entropy(random.progress())))
+                },
+            );
         }
         self.invoke_inner(module, operation, arguments)
     }
@@ -1080,6 +1217,7 @@ fn process_descriptor(
     tools: &ToolLock,
     tool_id: &str,
     arguments: &[String],
+    metadata_only: bool,
 ) -> Result<SourceOperation, ModuleError> {
     let tool = tools.tools().get(tool_id).ok_or_else(|| {
         ModuleError::invalid("PROCESS004", format!("unknown locked tool `{tool_id}`"))
@@ -1096,19 +1234,27 @@ fn process_descriptor(
             .checked_add(bytes)
             .ok_or_else(|| ModuleError::invalid("OPERATION005", "process argv byte overflow"))
     })?;
-    let argv_digest = digest_native_argv(&native_argv)?;
-    let argv = native_argv
-        .iter()
-        .map(|argument| {
-            let bytes = argument.as_os_str().as_bytes();
-            Ok(SourceProcessArgument::Redacted {
-                bytes: u64::try_from(bytes.len()).map_err(|_| {
-                    ModuleError::invalid("OPERATION005", "process argument byte overflow")
-                })?,
-                digest: integrity::sha256(bytes),
+    let argv_digest = if metadata_only {
+        None
+    } else {
+        Some(digest_native_argv(&native_argv)?)
+    };
+    let argv = if metadata_only {
+        Vec::new()
+    } else {
+        native_argv
+            .iter()
+            .map(|argument| {
+                let bytes = argument.as_os_str().as_bytes();
+                Ok(SourceProcessArgument::Redacted {
+                    bytes: u64::try_from(bytes.len()).map_err(|_| {
+                        ModuleError::invalid("OPERATION005", "process argument byte overflow")
+                    })?,
+                    digest: integrity::sha256(bytes),
+                })
             })
-        })
-        .collect::<Result<Vec<_>, ModuleError>>()?;
+            .collect::<Result<Vec<_>, ModuleError>>()?
+    };
     Ok(SourceOperation::Process {
         operation: "std::process::run".to_owned(),
         tool: tool_id.to_owned(),
@@ -1123,6 +1269,7 @@ fn process_descriptor(
 pub fn maintained_probe_operation(
     tools: &ToolLock,
     tool_id: &str,
+    metadata_only: bool,
 ) -> Result<SourceOperation, ModuleError> {
     let tool = tools.tools().get(tool_id).ok_or_else(|| {
         ModuleError::invalid("PROCESS004", format!("unknown locked tool `{tool_id}`"))
@@ -1143,24 +1290,30 @@ pub fn maintained_probe_operation(
             .checked_add(bytes)
             .ok_or_else(|| ModuleError::invalid("OPERATION005", "process argv byte overflow"))
     })?;
-    let executable = native_argv[0].as_os_str().as_bytes();
-    let mut argv = Vec::with_capacity(native_argv.len());
-    argv.push(SourceProcessArgument::Redacted {
-        bytes: u64::try_from(executable.len())
-            .map_err(|_| ModuleError::invalid("OPERATION005", "process argument overflow"))?,
-        digest: integrity::sha256(executable),
-    });
-    argv.extend(
-        fixed
-            .iter()
-            .map(|argument| SourceProcessArgument::Public((*argument).to_owned())),
-    );
+    let mut argv = Vec::new();
+    if !metadata_only {
+        let executable = native_argv[0].as_os_str().as_bytes();
+        argv.push(SourceProcessArgument::Redacted {
+            bytes: u64::try_from(executable.len())
+                .map_err(|_| ModuleError::invalid("OPERATION005", "process argument overflow"))?,
+            digest: integrity::sha256(executable),
+        });
+        argv.extend(
+            fixed
+                .iter()
+                .map(|argument| SourceProcessArgument::Public((*argument).to_owned())),
+        );
+    }
     Ok(SourceOperation::Process {
         operation: "std::process::probe".to_owned(),
         tool: tool_id.to_owned(),
         argv_count,
         argv_bytes,
-        argv_digest: digest_native_argv(&native_argv)?,
+        argv_digest: if metadata_only {
+            None
+        } else {
+            Some(digest_native_argv(&native_argv)?)
+        },
         argv,
     })
 }
