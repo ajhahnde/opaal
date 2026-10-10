@@ -1,0 +1,9 @@
+import './report.opaal' as report
+export { evaluate }
+
+def evaluate(document: Record) -> Record
+{
+    let summary = report::build(document)
+    let passed = (summary.failed == 0 && summary.pending == 0)
+    return ({ report: summary, passed: passed })
+}

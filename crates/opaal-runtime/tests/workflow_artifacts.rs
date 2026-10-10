@@ -1010,6 +1010,42 @@ fn metadata_chain(policy: Value) -> (JournalChain, Vec<u8>) {
     (chain, bytes)
 }
 
+#[test]
+fn v3_receipt_evidence_failure_is_closed_and_survives_incomplete_audit() {
+    let record = json!({"category":"receipt", "code":"JOURNAL005"});
+    let (mut chain, mut bytes) = metadata_chain(standard_host());
+    bytes.extend(chain.append("evidence-failure", record.clone()).unwrap());
+    let audit = audit_journal(&bytes).unwrap();
+    assert!(!audit.is_complete());
+    assert_eq!(audit.value()["events"][1]["payload"], record);
+    assert_eq!(AuditArtifact::parse(audit.bytes()).unwrap(), audit);
+    for invalid in [
+        json!({"category":"receipt", "code":"JOURNAL005", "message":"payload-canary"}),
+        json!({"category":"payload-canary", "code":"JOURNAL005"}),
+        json!({"category":"receipt", "code":"payload-canary"}),
+        json!({"category":"receipt"}),
+    ] {
+        assert!(chain.clone().append("evidence-failure", invalid).is_err());
+    }
+    let (mut legacy, _) =
+        JournalChain::begin("00000000000000000000000000000011", header(&digest('5'))).unwrap();
+    assert!(legacy.append("evidence-failure", record.clone()).is_err());
+    let primary = metadata_outcome("error");
+    bytes.extend(
+        chain
+            .append(
+                "action-end",
+                json!({"action_node_id":format!("{}#000000", digest('5')), "outcome":primary}),
+            )
+            .unwrap(),
+    );
+    bytes.extend(chain.append("terminal", json!({"finished_at":"2026-09-09T08:02:00.000000000Z", "primary":primary, "cleanup":[], "complete":true})).unwrap());
+    let completed = audit_journal(&bytes).unwrap();
+    assert!(completed.is_complete());
+    assert_eq!(completed.value()["primary"], primary);
+    assert!(chain.append("evidence-failure", record).is_err());
+}
+
 fn entropy_after(operation: Value, class: &str) -> Value {
     json!({
         "action_node_id":format!("{}#000000", digest('5')), "effect":"entropy.system",

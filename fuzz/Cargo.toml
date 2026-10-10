@@ -72,3 +72,10 @@ bench = false
 
 [workspace]
 members = ["."]
+
+[[bin]]
+name = "stdio_limits"
+path = "fuzz_targets/stdio_limits.rs"
+test = false
+doc = false
+bench = false

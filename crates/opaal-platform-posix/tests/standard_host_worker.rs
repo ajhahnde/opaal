@@ -1,6 +1,42 @@
 #![forbid(unsafe_code)]
 use std::process::Command;
 
+#[test]
+fn hostile_stream_progress_preserves_confirmed_counts_and_recoverable_roles() {
+    let result = Command::new(env!("CARGO_BIN_EXE_opaal-standard-host-fixture"))
+        .arg("stream-protocol")
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert_eq!(
+        result.stdout,
+        b"standard stream progress, acknowledgement and reap passed\n"
+    );
+    assert!(result.stderr.is_empty());
+}
+
+#[test]
+fn native_streams_preserve_exact_bytes_flags_and_owned_teardown() {
+    let result = Command::new(env!("CARGO_BIN_EXE_opaal-standard-host-fixture"))
+        .arg("streams")
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert_eq!(
+        result.stdout,
+        b"standard streams bytes, failures and reap passed\n"
+    );
+    assert!(result.stderr.is_empty());
+}
+
 #[cfg(target_os = "macos")]
 #[test]
 fn a_debugged_image_refuses_before_launch() {

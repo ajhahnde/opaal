@@ -7,7 +7,7 @@ use opaal_platform::{
 use opaal_runtime::Value;
 use opaal_runtime::authority::{AuthorityContext, AuthorityVerdict, EffectSet};
 use opaal_runtime::operational::ModuleError;
-use opaal_runtime::operational::random::{RandomLimits, RandomState};
+use opaal_runtime::operational::standard::{StandardLimits, StandardState};
 use support::Harness;
 
 struct NoExecutables;
@@ -133,7 +133,7 @@ fn deny_unknown_unsupported_and_missing_binding_refuse_even_no_draw_calls() {
                 AuthorityVerdict::Unsupported
             }
             _ => {
-                h.state = RandomState::new(None, RandomLimits::default()).unwrap();
+                h.state = StandardState::new(None, StandardLimits::default()).unwrap();
                 AuthorityVerdict::Unsupported
             }
         };
@@ -152,12 +152,12 @@ fn deny_unknown_unsupported_and_missing_binding_refuse_even_no_draw_calls() {
 #[test]
 fn another_evaluations_host_cannot_be_retargeted() {
     let mut h = Harness::new(&[], &[]);
-    h.state = RandomState::new(
+    h.state = StandardState::new(
         Some(Box::new(support::Host {
             script: h.script.clone(),
             evaluation: 72,
         })),
-        RandomLimits::default(),
+        StandardLimits::default(),
     )
     .unwrap();
     assert_eq!(

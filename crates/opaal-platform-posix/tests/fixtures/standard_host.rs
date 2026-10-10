@@ -2,6 +2,7 @@ use opaal_platform::standard_host::StandardHost;
 use opaal_platform_posix::standard_host::{PosixStandardHost, worker_entry};
 
 mod standard_host_faults;
+mod standard_streams;
 
 fn main() {
     let arguments = std::env::args_os().collect::<Vec<_>>();
@@ -16,6 +17,17 @@ fn main() {
     }
     if let Some(code) = worker_entry(&arguments) {
         std::process::exit(code);
+    }
+    if arguments.get(1).is_some_and(|arg| arg == "streams") {
+        standard_streams::run();
+        checks::assert_reaped();
+        println!("standard streams bytes, failures and reap passed");
+        return;
+    }
+    if arguments.get(1).is_some_and(|arg| arg == "stream-protocol") {
+        standard_host_faults::stream_parent();
+        println!("standard stream progress, acknowledgement and reap passed");
+        return;
     }
     if arguments.get(1).is_some_and(|arg| arg == "protocol") {
         standard_host_faults::parent();
@@ -271,6 +283,22 @@ pub(crate) mod checks {
         std::sync::atomic::AtomicBool::new(false);
     static TRUNCATE_ANCILLARY: std::sync::atomic::AtomicBool =
         std::sync::atomic::AtomicBool::new(false);
+    static CANCEL_AFTER_RECORD: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    static RECORD_CANCELLED: std::sync::atomic::AtomicBool =
+        std::sync::atomic::AtomicBool::new(false);
+    static CANCEL_POLLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+    pub fn cancel_after_record(evaluation: u64) {
+        RECORD_CANCELLED.store(false, std::sync::atomic::Ordering::Relaxed);
+        CANCEL_POLLS.store(0, std::sync::atomic::Ordering::Relaxed);
+        CANCEL_AFTER_RECORD.store(evaluation, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    pub fn record_cancelled() -> bool {
+        // Let the received record pass its trailing poll; cancel the next ACK poll.
+        RECORD_CANCELLED.load(std::sync::atomic::Ordering::Relaxed)
+            && CANCEL_POLLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed) > 0
+    }
 
     #[unsafe(no_mangle)]
     unsafe extern "C" fn recvmsg(
@@ -297,6 +325,23 @@ pub(crate) mod checks {
             let result = original(fd, message, flags);
             if result >= 0 && (*message).msg_flags & libc::MSG_CTRUNC != 0 {
                 ANCILLARY_TRUNCATED.store(true, std::sync::atomic::Ordering::Relaxed);
+            }
+            let evaluation = CANCEL_AFTER_RECORD.load(std::sync::atomic::Ordering::Relaxed);
+            if result > 0 && evaluation != 0 && (*message).msg_iovlen == 1 {
+                let iov = &*(*message).msg_iov;
+                let bytes = std::slice::from_raw_parts(
+                    iov.iov_base.cast::<u8>(),
+                    (result as usize).min(iov.iov_len),
+                );
+                if (evaluation == 146 && bytes.len() == 3)
+                    || (matches!(evaluation, 145 | 147)
+                        && bytes.len() == 36
+                        && &bytes[..8] == b"OPAALSH\0"
+                        && bytes[10..12] == 10_u16.to_be_bytes()
+                        && bytes[12..20] == evaluation.to_be_bytes())
+                {
+                    RECORD_CANCELLED.store(true, std::sync::atomic::Ordering::Relaxed);
+                }
             }
             result
         }

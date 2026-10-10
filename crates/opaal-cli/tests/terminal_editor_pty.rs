@@ -220,6 +220,24 @@ impl Pty {
         self.wait_for_from(mark, ">> ")
     }
 
+    fn await_cooked_input(&self) {
+        let deadline = Instant::now() + TIMEOUT;
+        loop {
+            let mode = rustix::termios::tcgetattr(self.control_user.as_ref().unwrap()).unwrap();
+            if mode
+                .local_modes
+                .contains(rustix::termios::LocalModes::ICANON)
+            {
+                return;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "editor did not lend cooked input"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+
     /// Wait for a prompt drawn after the last occurrence of `needle`.
     ///
     /// A byte offset cannot synchronize on this: the editor redraws the whole
@@ -405,6 +423,58 @@ fn interactive_project_spelling_is_a_language_error_not_a_project_command() {
     pty.await_prompt_after("error[RUN001]");
     pty.send(b"\x04");
     assert_eq!(pty.wait_exit(), 0);
+}
+
+#[test]
+fn standard_input_leases_end_at_ctrl_d_and_leave_later_cells_readable() {
+    let mut pty = Pty::spawn(OPAAL);
+    pty.wait_for(">> ");
+    for cell in ["import std::io as io", "import std::string as string"] {
+        pty.send(format!("{cell}\r").as_bytes());
+        pty.await_prompt_after(cell);
+    }
+    for (name, text) in [("first", "first-data"), ("second", "second-data")] {
+        let mark = pty.mark();
+        pty.send(format!("let {name} = io::read_stdin(128)\r").as_bytes());
+        pty.await_cooked_input();
+        pty.send(format!("{text}\n").as_bytes());
+        pty.send(b"\x04");
+        pty.wait_for_after_from(mark, text, ">> ");
+        let mark = pty.mark();
+        pty.send(format!("io::print(string::decode_utf8({name}))\r").as_bytes());
+        pty.wait_for_after_from(mark, &format!("decode_utf8({name})"), text);
+        pty.await_prompt_after(text);
+    }
+    let mark = pty.mark();
+    pty.send(b"io::read_stdin(-1)\r");
+    pty.wait_for_from(mark, "IO001");
+    pty.await_prompt_after("IO001");
+    let mark = pty.mark();
+    pty.send(b"io::eprintln('diagnostic-restored')\r");
+    pty.wait_for_after_from(mark, "eprintln", "diagnostic-restored");
+    pty.await_prompt_after("diagnostic-restored");
+    exit_cleanly(&mut pty);
+}
+
+#[test]
+fn ctrl_c_cancels_a_blocked_terminal_read_and_restores_the_editor() {
+    let mut pty = Pty::spawn(OPAAL);
+    pty.wait_for(">> ");
+    pty.send(b"import std::io as io\r");
+    pty.await_prompt_after("as io");
+    let mark = pty.mark();
+    pty.send(b"io::read_stdin(128)\r");
+    pty.await_cooked_input();
+    let started = Instant::now();
+    pty.send(b"\x03");
+    pty.wait_for_from(mark, "cancelled[Requested]");
+    pty.await_prompt_after("cancelled[Requested]");
+    assert!(started.elapsed() < Duration::from_secs(2));
+    let mark = pty.mark();
+    pty.send(b"io::println('after-cancel')\r");
+    pty.wait_for_after_from(mark, "println", "after-cancel");
+    pty.await_prompt_after("after-cancel");
+    exit_cleanly(&mut pty);
 }
 
 #[test]

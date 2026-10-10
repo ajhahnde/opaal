@@ -158,7 +158,7 @@ fn execute(
         Default::default(),
         None,
     )
-    .with_random(h.state);
+    .with_standard_host(h.state);
     let outcome = execute_project_task_outcome(
         project,
         task,
@@ -354,7 +354,7 @@ fn no_draw_calls_still_require_declared_grant_and_exact_host_binding() {
                 )
             }
             _ => {
-                h.state = opaal_runtime::operational::random::RandomState::new(
+                h.state = opaal_runtime::operational::standard::StandardState::new(
                     Some(Box::new(support::Host {
                         script: h.script.clone(),
                         evaluation: 72,
@@ -377,7 +377,7 @@ fn no_draw_calls_still_require_declared_grant_and_exact_host_binding() {
 #[test]
 fn catches_do_not_restore_consumed_entropy_budget() {
     let mut h = Harness::new(&[], &[]);
-    h.limits(opaal_runtime::operational::random::RandomLimits {
+    h.limits(opaal_runtime::operational::standard::StandardLimits {
         max_host_bytes: 16,
         ..Default::default()
     });
@@ -403,7 +403,7 @@ action sample() -> Float effects { entropy.system(); } {
 #[test]
 fn cumulative_limits_survive_calls_and_cleanup_stays_secondary_to_cancellation() {
     let mut h = Harness::new(&[1, 2], &[]);
-    h.limits(opaal_runtime::operational::random::RandomLimits {
+    h.limits(opaal_runtime::operational::standard::StandardLimits {
         max_host_bytes: 16,
         ..Default::default()
     });

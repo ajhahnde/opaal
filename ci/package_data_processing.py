@@ -54,6 +54,7 @@ def package_examples(root: Path, paths: list[str], source: str, *,
     if SOURCE.fullmatch(source) is None or (directory, name) not in {
         (EXAMPLES, "data-processing"), ("tests/golden/source-formatting", "source-formatting"),
         ("tests/golden/random-values", "random-values"),
+        ("tests/golden/standard-input-output", "standard-input-output"),
     }:
         raise ValueError("invalid fixture source or bundle name")
     prefix = f"opaal-v{VERSION}-{name}"
@@ -84,7 +85,8 @@ def package_examples(root: Path, paths: list[str], source: str, *,
         f"{digest(archive.read_bytes())}  {archive.name}\n", encoding="ascii"
     )
     kind = {EXAMPLES: "examples", "tests/golden/source-formatting": "formatting-fixtures",
-            "tests/golden/random-values": "random-fixtures"}[directory]
+            "tests/golden/random-values": "random-fixtures",
+            "tests/golden/standard-input-output": "stdio-fixtures"}[directory]
     write_manifest(archive, kind=kind,
                    source=source, platform="portable")
     return archive

@@ -65,6 +65,15 @@ class SourceInventoryTests(unittest.TestCase):
         self.write("new/guide.md", "  ~~~opaal\n2\n  ~~~\n")
         self.assertIn("fence: changed identity/content", "\n".join(checker.check(self.root, self.binary, self.inventory)))
 
+    def test_deleted_tracked_owner_reports_missing_classification_without_a_read_error(self) -> None:
+        self.write("crates/source.rs", 'fn source() { SourceFile::new(0, "test", "1"); }\n')
+        subprocess.run(["git", "add", "crates/source.rs"], cwd=self.root, check=True)
+        inventory = self.census()
+        (self.root / "crates/source.rs").unlink()
+        self.assertNotIn("crates/source.rs", checker.public_paths(self.root))
+        errors = checker.check(self.root, self.binary, inventory)
+        self.assertIn("embedded owner: missing", "\n".join(errors))
+
     def test_embedded_sources_and_non_opaal_seeds_are_discovered(self) -> None:
         self.write("crates/sample.rs", 'fn oracle() { SourceFile::new(0, "test", "1"); }\n')
         self.write("crates/tests/helper.rs", 'fn helper() { value("1 + 2"); }\n')

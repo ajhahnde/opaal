@@ -177,7 +177,10 @@ impl Evaluator<'_, '_> {
             ));
         }
         if descriptor.purity() == crate::operation::OperationPurity::RequiresAuthorityContract {
-            if !self.standard_effects_allowed
+            if self
+                .standard_effects
+                .as_ref()
+                .is_some_and(crate::authority::EffectSet::is_empty)
                 || matches!(
                     self.host.policy(),
                     super::EvaluationPolicy::PureOpaal | super::EvaluationPolicy::Startup
@@ -186,6 +189,18 @@ impl Evaluator<'_, '_> {
                 return Err(super::Abort::Refused(crate::outcome::Refusal::new(
                     crate::outcome::RefusalReason::Unsupported,
                     "operational standard module in pure evaluation",
+                    span,
+                )));
+            }
+            if let Some(effects) = &self.standard_effects
+                && descriptor
+                    .downstream()
+                    .capability_request()
+                    .is_none_or(|request| !effects.contains(request))
+            {
+                return Err(super::Abort::Refused(crate::outcome::Refusal::new(
+                    crate::outcome::RefusalReason::Unknown,
+                    "undeclared standard host effect",
                     span,
                 )));
             }
@@ -499,7 +514,7 @@ mod tests {
             current_result_type: None,
             current_type_arguments: std::collections::BTreeMap::new(),
             budgeted_callback: false,
-            standard_effects_allowed: true,
+            standard_effects: None,
             cancel,
             budget,
             host: &mut host,

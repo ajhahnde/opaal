@@ -56,7 +56,7 @@ pub enum CapabilityScope {
         /// Canonical header name.
         header: String,
     },
-    /// The current evaluation's clock.
+    /// The current evaluation's clock or standard host.
     Evaluation,
 }
 
@@ -183,6 +183,45 @@ impl CapabilityRequest {
         Self {
             effect: AuthorityEffect::EntropySystem,
             scope: CapabilityScope::Evaluation,
+        }
+    }
+
+    /// Request reading the bound input endpoint for this evaluation.
+    #[must_use]
+    pub const fn stdin_read() -> Self {
+        Self {
+            effect: AuthorityEffect::StdinRead,
+            scope: CapabilityScope::Evaluation,
+        }
+    }
+
+    /// Request writing the bound output endpoint for this evaluation.
+    #[must_use]
+    pub const fn stdout_write() -> Self {
+        Self {
+            effect: AuthorityEffect::StdoutWrite,
+            scope: CapabilityScope::Evaluation,
+        }
+    }
+
+    /// Request writing the bound diagnostic endpoint for this evaluation.
+    #[must_use]
+    pub const fn stderr_write() -> Self {
+        Self {
+            effect: AuthorityEffect::StderrWrite,
+            scope: CapabilityScope::Evaluation,
+        }
+    }
+
+    /// Normalize one recognized evaluation-scoped standard host declaration.
+    #[must_use]
+    pub fn standard_host(capability: &str) -> Option<Self> {
+        match capability {
+            "entropy.system" => Some(Self::entropy_system()),
+            "stdin.read" => Some(Self::stdin_read()),
+            "stdout.write" => Some(Self::stdout_write()),
+            "stderr.write" => Some(Self::stderr_write()),
+            _ => None,
         }
     }
 

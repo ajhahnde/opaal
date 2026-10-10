@@ -1,13 +1,15 @@
-//! Same-image entropy worker. The supervisor owns the child and control socket;
-//! no source, environment, standard stream or capsule descriptor enters it.
+//! Same-image standard host worker. Only explicitly lent stream endpoints enter
+//! it after READY; the supervisor owns the child and private control socket.
 
 use std::io;
-use std::os::fd::{AsRawFd, FromRawFd};
+use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd};
 use std::os::unix::net::UnixDatagram;
 use std::time::{Duration, Instant};
 
 use opaal_platform::operational::{OperationalError, OperationalErrorKind};
-use opaal_platform::standard_host::{FillError, StandardHost, validate_fill};
+use opaal_platform::standard_host::{
+    FillError, MAX_STREAM_CHUNK_BYTES, StandardHost, StandardStream, TransferError, validate_fill,
+};
 
 mod image;
 #[allow(unsafe_code)]
@@ -23,6 +25,14 @@ const FILL: u16 = 3;
 const DATA: u16 = 4;
 const ACK: u16 = 5;
 const FAILED: u16 = 6;
+const READ: u16 = 7;
+const WRITE_OUT: u16 = 8;
+const WRITE_ERR: u16 = 9;
+const PROGRESS: u16 = 10;
+const INTERRUPTED: u16 = 11;
+const WOULD_BLOCK: u16 = 12;
+const BROKEN_PIPE: u16 = 13;
+const IO_FAILED: u16 = 14;
 
 /// Explicit native CLI binding; an arbitrary embedding must supply its own
 /// qualified worker entry point and child ownership instead of using this.
@@ -32,6 +42,9 @@ pub struct PosixStandardHost {
     worker: Option<Worker>,
     request: u64,
     closed: bool,
+    endpoints: [Option<native::Endpoint>; 3],
+    terminal_lease: Option<native::TerminalLease>,
+    signal_lease: Option<native::SignalLease>,
 }
 
 impl PosixStandardHost {
@@ -46,6 +59,151 @@ impl PosixStandardHost {
             worker: None,
             request: 0,
             closed: false,
+            endpoints: [None, None, None],
+            terminal_lease: None,
+            signal_lease: None,
+        })
+    }
+
+    /// Capture an explicitly lent pipe/file before evaluation starts. Terminals
+    /// require the frontend's editor restoration lease and are not admitted here.
+    pub fn bind_stream(
+        &mut self,
+        stream: StandardStream,
+        descriptor: BorrowedFd<'_>,
+    ) -> Result<(), OperationalError> {
+        let slot = &mut self.endpoints[stream as usize];
+        if self.closed || self.worker.is_some() || slot.is_some() {
+            return Err(unsupported());
+        }
+        *slot = Some(native::Endpoint::capture(descriptor, stream, false)?);
+        Ok(())
+    }
+
+    /// Lend a foreground terminal after the frontend has stopped reading and
+    /// restored cooked mode. The parent retains restoration through worker reap.
+    pub fn bind_terminal_stream(
+        &mut self,
+        stream: StandardStream,
+        descriptor: BorrowedFd<'_>,
+    ) -> Result<(), OperationalError> {
+        if self.closed
+            || self.worker.is_some()
+            || self.endpoints[stream as usize].is_some()
+            || !crate::terminal_mode::is_terminal(descriptor)
+        {
+            return Err(unsupported());
+        }
+        let endpoint = native::Endpoint::capture(descriptor, stream, true)?;
+        if self.terminal_lease.is_none() {
+            self.terminal_lease = Some(native::TerminalLease::acquire()?);
+        }
+        self.terminal_lease
+            .as_mut()
+            .expect("owned terminal lease")
+            .capture(descriptor)?;
+        self.endpoints[stream as usize] = Some(endpoint);
+        Ok(())
+    }
+
+    /// Capture invocation termination signals before CLI evaluation starts.
+    /// The host restores dispositions only after worker reap and terminal cleanup.
+    pub fn capture_cancellation_signals(
+        &mut self,
+    ) -> Result<Box<dyn Fn() -> bool + Send + Sync>, OperationalError> {
+        if self.closed || self.worker.is_some() || self.signal_lease.is_some() {
+            return Err(unsupported());
+        }
+        let lease = native::SignalLease::capture()?;
+        let cancelled = lease.cancellation();
+        self.signal_lease = Some(lease);
+        Ok(cancelled)
+    }
+
+    fn transfer(
+        &mut self,
+        stream: StandardStream,
+        bytes: &mut [u8],
+        output: Option<&[u8]>,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<usize, TransferError> {
+        let length = output.map_or(bytes.len(), <[u8]>::len);
+        if length == 0 || length > MAX_STREAM_CHUNK_BYTES || !self.stream_available(stream) {
+            return Err(TransferError::not_started(unsupported()));
+        }
+        let mut progress = 0;
+        let mut admitted = false;
+        let mut eof = None;
+        let mut acknowledged = false;
+        let result = (|| {
+            self.launch(cancelled)?;
+            let endpoint = self.endpoints[stream as usize]
+                .as_ref()
+                .ok_or_else(unsupported)?;
+            endpoint.revalidate()?;
+            self.request = self.request.checked_add(1).ok_or_else(protocol)?;
+            let tag = match stream {
+                StandardStream::Stdin => READ,
+                StandardStream::Stdout => WRITE_OUT,
+                StandardStream::Stderr => WRITE_ERR,
+            };
+            let worker = self.worker.as_mut().expect("owned READY worker");
+            // Until an accepted response, the one lent syscall may consume its
+            // entire admission, including cancellation during control delivery.
+            send_endpoint(
+                worker.socket(),
+                Frame::new(tag, self.evaluation, self.request, length as u32),
+                endpoint,
+                cancelled,
+            )?;
+            admitted = true;
+            if let Some(output) = output {
+                send_payload(worker.socket(), output, cancelled)?;
+            }
+            let frame = worker.receive(cancelled)?;
+            if frame.evaluation != self.evaluation || frame.request != self.request {
+                return Err(protocol());
+            }
+            let transfer_error = match frame.tag {
+                PROGRESS if frame.bytes as usize <= length => None,
+                INTERRUPTED if frame.bytes == 0 => Some(io::ErrorKind::Interrupted),
+                WOULD_BLOCK if frame.bytes == 0 => Some(io::ErrorKind::WouldBlock),
+                BROKEN_PIPE if frame.bytes == 0 => Some(io::ErrorKind::BrokenPipe),
+                IO_FAILED if frame.bytes == 0 => Some(io::ErrorKind::Other),
+                _ => return Err(protocol()),
+            };
+            progress = frame.bytes as usize;
+            admitted = false;
+            if output.is_none() && frame.tag == PROGRESS && frame.bytes == 0 {
+                eof = Some(true);
+            }
+            if output.is_none() && frame.bytes > 0 {
+                worker.receive_payload(&mut bytes[..frame.bytes as usize], cancelled)?;
+            }
+            worker.send(Frame::new(ACK, self.evaluation, self.request, 0), cancelled)?;
+            acknowledged = true;
+            match transfer_error {
+                Some(kind) => Err(OperationalError::new(
+                    OperationalErrorKind::Io(kind),
+                    "standard stream syscall failed",
+                )),
+                None => Ok(progress),
+            }
+        })();
+        result.map_err(|error| {
+            let cleanup_error = if acknowledged {
+                None
+            } else {
+                self.close().err()
+            };
+            bytes.fill(0);
+            TransferError {
+                error,
+                confirmed_bytes: progress,
+                uncertain_bytes_upper_bound: if admitted { length } else { 0 },
+                eof,
+                cleanup_error,
+            }
         })
     }
 
@@ -116,7 +274,9 @@ impl PosixStandardHost {
         {
             return Err(FillError::attempted(protocol()));
         }
-        receive_bytes(worker.socket(), destination, cancelled).map_err(FillError::attempted)?;
+        worker
+            .receive_bytes(destination, cancelled)
+            .map_err(FillError::attempted)?;
         // The full success response is accepted. Failure to acknowledge the
         // next request cannot make that already confirmed fill uncertain.
         worker
@@ -132,6 +292,33 @@ impl StandardHost for PosixStandardHost {
 
     fn available(&self) -> bool {
         !self.closed && native::check_parent().is_ok()
+    }
+
+    fn stream_available(&self, stream: StandardStream) -> bool {
+        self.available()
+            && self.endpoints[stream as usize]
+                .as_ref()
+                .is_some_and(|endpoint| endpoint.revalidate().is_ok())
+    }
+
+    fn read(
+        &mut self,
+        bytes: &mut [u8],
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<usize, TransferError> {
+        self.transfer(StandardStream::Stdin, bytes, None, cancelled)
+    }
+
+    fn write(
+        &mut self,
+        stream: StandardStream,
+        bytes: &[u8],
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<usize, TransferError> {
+        if stream == StandardStream::Stdin {
+            return Err(TransferError::not_started(unsupported()));
+        }
+        self.transfer(stream, &mut [], Some(bytes), cancelled)
     }
 
     fn fill(
@@ -158,10 +345,20 @@ impl StandardHost for PosixStandardHost {
 
     fn close(&mut self) -> Result<(), OperationalError> {
         self.closed = true;
-        if let Some(mut worker) = self.worker.take() {
-            worker.close()?;
-        }
-        Ok(())
+        let worker = self
+            .worker
+            .take()
+            .map_or(Ok(()), |mut worker| worker.close());
+        let terminal = self
+            .terminal_lease
+            .take()
+            .map_or(Ok(()), |mut lease| lease.restore());
+        let signals = self
+            .signal_lease
+            .take()
+            .map_or(Ok(()), |mut lease| lease.restore());
+        self.endpoints = [None, None, None];
+        worker.and(terminal).and(signals)
     }
 }
 
@@ -185,8 +382,34 @@ impl Worker {
     }
     fn receive(&mut self, cancelled: &dyn Fn() -> bool) -> Result<Frame, OperationalError> {
         let mut bytes = [0; HEADER_BYTES];
-        receive_bytes(self.socket(), &mut bytes, cancelled)?;
+        self.receive_bytes(&mut bytes, cancelled)?;
         Frame::decode(&bytes)
+    }
+    fn receive_bytes(
+        &mut self,
+        bytes: &mut [u8],
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<(), OperationalError> {
+        if self.pid.is_none() {
+            poll_cancel(cancelled)?;
+            return Err(protocol());
+        }
+        receive_bytes(
+            self.socket.as_ref().expect("live worker control socket"),
+            bytes,
+            cancelled,
+            &mut self.pid,
+        )
+    }
+    fn receive_payload(
+        &mut self,
+        bytes: &mut [u8],
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<(), OperationalError> {
+        for chunk in bytes.chunks_mut(1024) {
+            self.receive_bytes(chunk, cancelled)?;
+        }
+        Ok(())
     }
     fn close(&mut self) -> Result<(), OperationalError> {
         drop(self.socket.take());
@@ -241,7 +464,15 @@ impl Frame {
             request: u64::from_be_bytes(bytes[20..28].try_into().expect("fixed slice")),
             bytes: u32::from_be_bytes(bytes[28..32].try_into().expect("fixed slice")),
         };
-        if !(BIND..=FAILED).contains(&frame.tag) || frame.evaluation == 0 || frame.bytes > 256 {
+        let ceiling = if matches!(frame.tag, READ | WRITE_OUT | WRITE_ERR | PROGRESS) {
+            MAX_STREAM_CHUNK_BYTES
+        } else {
+            256
+        };
+        if !(BIND..=IO_FAILED).contains(&frame.tag)
+            || frame.evaluation == 0
+            || frame.bytes as usize > ceiling
+        {
             return Err(protocol());
         }
         Ok(frame)
@@ -265,7 +496,7 @@ fn run_worker() -> Result<(), OperationalError> {
     native::prepare_worker()?;
     let socket = native::control_socket()?;
     let mut header = [0; HEADER_BYTES];
-    receive_bytes(&socket, &mut header, &|| false)?;
+    receive_bytes(&socket, &mut header, &|| false, &mut None)?;
     let binding = Frame::decode(&header)?;
     if binding != Frame::new(BIND, binding.evaluation, 0, 0) {
         return Err(protocol());
@@ -277,10 +508,18 @@ fn run_worker() -> Result<(), OperationalError> {
     )?;
     let mut request = 0_u64;
     loop {
-        receive_bytes(&socket, &mut header, &|| false)?;
+        let endpoint = native::receive_endpoint(&socket, &mut header).map_err(io_error)?;
         let frame = Frame::decode(&header)?;
         request = request.checked_add(1).ok_or_else(protocol)?;
-        if frame.tag != FILL || frame.evaluation != binding.evaluation || frame.request != request {
+        if frame.evaluation != binding.evaluation || frame.request != request {
+            return Err(protocol());
+        }
+        if matches!(frame.tag, READ | WRITE_OUT | WRITE_ERR) {
+            let endpoint = endpoint.ok_or_else(protocol)?;
+            stream_request(&socket, frame, endpoint)?;
+            continue;
+        }
+        if frame.tag != FILL || endpoint.is_some() {
             return Err(protocol());
         }
         validate_fill(frame.bytes as usize)?;
@@ -302,11 +541,114 @@ fn run_worker() -> Result<(), OperationalError> {
         )?;
         send_bytes(&socket, payload, &|| false)?;
         payload.fill(0);
-        receive_bytes(&socket, &mut header, &|| false)?;
+        receive_bytes(&socket, &mut header, &|| false, &mut None)?;
         if Frame::decode(&header)? != Frame::new(ACK, binding.evaluation, request, 0) {
             return Err(protocol());
         }
     }
+}
+
+fn stream_request(
+    socket: &UnixDatagram,
+    frame: Frame,
+    descriptor: OwnedFd,
+) -> Result<(), OperationalError> {
+    if frame.bytes == 0 {
+        return Err(protocol());
+    }
+    let stream = match frame.tag {
+        READ => StandardStream::Stdin,
+        WRITE_OUT => StandardStream::Stdout,
+        WRITE_ERR => StandardStream::Stderr,
+        _ => return Err(protocol()),
+    };
+    let endpoint = native::Endpoint::capture(descriptor.as_fd(), stream, true)?;
+    drop(descriptor);
+    let mut storage = [0; MAX_STREAM_CHUNK_BYTES];
+    let payload = &mut storage[..frame.bytes as usize];
+    if frame.tag != READ {
+        receive_payload(socket, payload, &|| false)?;
+    }
+    endpoint.revalidate()?;
+    let result = native::stream_syscall(endpoint.as_fd(), frame.tag == READ, payload);
+    let (tag, count) = match result {
+        Ok(count) => (PROGRESS, count),
+        Err(error) => (
+            match error.kind() {
+                io::ErrorKind::Interrupted => INTERRUPTED,
+                io::ErrorKind::WouldBlock => {
+                    native::wait_endpoint(endpoint.as_fd(), frame.tag == READ)?;
+                    WOULD_BLOCK
+                }
+                io::ErrorKind::BrokenPipe => BROKEN_PIPE,
+                _ => IO_FAILED,
+            },
+            0,
+        ),
+    };
+    drop(endpoint);
+    send_bytes(
+        socket,
+        &Frame::new(tag, frame.evaluation, frame.request, count as u32).encode(),
+        &|| false,
+    )?;
+    if frame.tag == READ && count > 0 {
+        send_payload(socket, &payload[..count], &|| false)?;
+    }
+    payload.fill(0);
+    let mut header = [0; HEADER_BYTES];
+    receive_bytes(socket, &mut header, &|| false, &mut None)?;
+    if Frame::decode(&header)? != Frame::new(ACK, frame.evaluation, frame.request, 0) {
+        return Err(protocol());
+    }
+    Ok(())
+}
+
+fn send_endpoint(
+    socket: &UnixDatagram,
+    frame: Frame,
+    endpoint: &native::Endpoint,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<(), OperationalError> {
+    loop {
+        poll_cancel(cancelled)?;
+        match native::send_endpoint(socket, &frame.encode(), endpoint.as_fd()) {
+            Ok(count) if count == HEADER_BYTES => return Ok(()),
+            Ok(_) => return Err(protocol()),
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                native::wait(socket, libc::POLLOUT, POLL_INTERVAL)?
+            }
+            Err(error) if error.raw_os_error() == Some(libc::ENOBUFS) => {
+                // Darwin can report a full datagram queue despite POLLOUT.
+                std::thread::sleep(POLL_INTERVAL);
+            }
+            Err(error) => return Err(io_error(error)),
+        }
+    }
+}
+
+fn send_payload(
+    socket: &UnixDatagram,
+    bytes: &[u8],
+    cancelled: &dyn Fn() -> bool,
+) -> Result<(), OperationalError> {
+    // Darwin's datagram ceiling is smaller than a host syscall chunk.
+    for chunk in bytes.chunks(1024) {
+        send_bytes(socket, chunk, cancelled)?;
+    }
+    Ok(())
+}
+
+fn receive_payload(
+    socket: &UnixDatagram,
+    bytes: &mut [u8],
+    cancelled: &dyn Fn() -> bool,
+) -> Result<(), OperationalError> {
+    for chunk in bytes.chunks_mut(1024) {
+        receive_bytes(socket, chunk, cancelled, &mut None)?;
+    }
+    Ok(())
 }
 
 fn send_bytes(
@@ -324,6 +666,10 @@ fn send_bytes(
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
                 native::wait(socket, libc::POLLOUT, POLL_INTERVAL)?
             }
+            Err(error) if error.raw_os_error() == Some(libc::ENOBUFS) => {
+                // Darwin can report a full datagram queue despite POLLOUT.
+                std::thread::sleep(POLL_INTERVAL);
+            }
             Err(error) => return Err(io_error(error)),
         }
     }
@@ -333,7 +679,9 @@ fn receive_bytes(
     socket: &UnixDatagram,
     bytes: &mut [u8],
     cancelled: &dyn Fn() -> bool,
+    peer: &mut Option<libc::pid_t>,
 ) -> Result<(), OperationalError> {
+    let monitor_peer = peer.is_some();
     loop {
         poll_cancel(cancelled)?;
         match native::receive(socket, bytes) {
@@ -342,6 +690,17 @@ fn receive_bytes(
             Ok(_) => return Err(protocol()),
             Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                // A closed Linux datagram peer does not make recv report EOF.
+                if monitor_peer && peer.is_none() {
+                    return Err(protocol());
+                }
+                if let Some(pid) = *peer
+                    && native::wait_child(pid, true)?
+                {
+                    *peer = None;
+                    // A final record can arrive between recv and waitpid.
+                    continue;
+                }
                 native::wait(socket, libc::POLLIN, POLL_INTERVAL)?
             }
             Err(error) => return Err(io_error(error)),
@@ -381,6 +740,24 @@ fn io_error(error: io::Error) -> OperationalError {
 mod tests {
     use super::*;
     #[test]
+    fn reaped_worker_receives_preserve_cancellation_precedence() {
+        let (socket, _peer) = UnixDatagram::pair().unwrap();
+        let mut worker = Worker {
+            socket: Some(socket),
+            pid: None,
+        };
+        for (cancelled, expected) in [
+            (false, OperationalErrorKind::Protocol),
+            (true, OperationalErrorKind::Cancelled),
+        ] {
+            let error = worker
+                .receive_bytes(&mut [0; HEADER_BYTES], &|| cancelled)
+                .unwrap_err();
+            assert_eq!(error.kind(), expected);
+        }
+    }
+
+    #[test]
     fn live_transport_backpressure_cancels_and_resumes_without_replaying_datagrams() {
         let (sender, receiver) = UnixDatagram::pair().unwrap();
         sender.set_nonblocking(true).unwrap();
@@ -406,14 +783,7 @@ mod tests {
             started.elapsed() >= Duration::from_millis(40)
         })
         .unwrap_err();
-        assert_eq!(
-            error.kind(),
-            if blocked == io::ErrorKind::WouldBlock {
-                OperationalErrorKind::Cancelled
-            } else {
-                OperationalErrorKind::Io(blocked)
-            }
-        );
+        assert_eq!(error.kind(), OperationalErrorKind::Cancelled);
         assert!(started.elapsed() < Duration::from_secs(1));
 
         receiver
@@ -456,9 +826,9 @@ mod tests {
             bytes[(state as usize) % HEADER_BYTES] ^= (state >> 32) as u8;
             if let Ok(frame) = Frame::decode(&bytes) {
                 assert_eq!(frame.encode(), bytes);
-                assert!((BIND..=FAILED).contains(&frame.tag));
+                assert!((BIND..=IO_FAILED).contains(&frame.tag));
                 assert_ne!(frame.evaluation, 0);
-                assert!(frame.bytes <= 256);
+                assert!(frame.bytes <= MAX_STREAM_CHUNK_BYTES as u32);
             }
         }
     }
@@ -482,11 +852,11 @@ mod tests {
         let mut excess = Frame::new(FILL, 71, 1, 8).encode().to_vec();
         excess.push(0);
         sender.send(&excess).unwrap();
-        assert!(receive_bytes(&receiver, &mut header, &|| false).is_err());
+        assert!(receive_bytes(&receiver, &mut header, &|| false, &mut None).is_err());
         sender.send(&[0; HEADER_BYTES - 1]).unwrap();
-        assert!(receive_bytes(&receiver, &mut header, &|| false).is_err());
+        assert!(receive_bytes(&receiver, &mut header, &|| false, &mut None).is_err());
         sender.send(&Frame::new(FILL, 71, 1, 8).encode()).unwrap();
-        receive_bytes(&receiver, &mut header, &|| false).unwrap();
+        receive_bytes(&receiver, &mut header, &|| false, &mut None).unwrap();
         assert_eq!(Frame::decode(&header).unwrap(), Frame::new(FILL, 71, 1, 8));
     }
 }

@@ -1,0 +1,7 @@
+failed=6, pending=0
+"action_required" : action_required
+"cancelled" : cancelled
+"failure" : failure
+"stale" : stale
+"startup_failure" : startup_failure
+"timed_out" : timed_out

@@ -17,6 +17,9 @@ source code, contributor information, and maintainer guides.
 
 This source tree targets OPAAL 1.2.0 with practical data processing, scalar
 math, canonical declaration formatting and reduced function-call overhead.
+Unreleased additions include bounded Random and native standard streams; the
+[processor and CI job-check references](tests/golden/standard-input-output/README.md)
+describe the new APIs, authority, limits and separate execution receipts.
 
 The [changelog](CHANGELOG.md) records changes by release. Follow the
 [download and installation guide](https://opaal-lang.org/download/) for Linux
@@ -88,7 +91,8 @@ process.
 - `opaal execute --plan PATH --accept DIGEST ... --journal PATH` revalidates
   and, on a supported execution host, runs exactly one accepted project plan
   under its plan-bound authority and writes a synced hash-chained journal; the
-  run ID may be supplied or securely generated.
+  run ID may be supplied or securely generated. Stream-output tasks require
+  `--receipt-out PATH` to keep administrative evidence separate from data.
 - `opaal audit --project opaal.toml --journal PATH --out PATH` validates a
   journal without executing or resuming work and publishes a complete or
   incomplete canonical audit; `opaal audit inspect PATH` validates and renders
@@ -117,7 +121,7 @@ to pathname process execution.
 | `crates/opaal-platform-posix/` | macOS/Linux shell and maintained operational adapters plus observation fixtures |
 | `crates/opaal-cli/` | Command-line, project workflow, checker, formatter, and interactive frontends |
 | `crates/opaal-lsp/` | Non-executing Language Server Protocol adapter |
-| `fuzz/` | Separate unpublished package with five fuzz targets |
+| `fuzz/` | Separate unpublished package with bounded parser, evaluator, authority and native-protocol fuzz targets |
 
 The Cargo workspace has exactly six members. The fuzz package has its own
 workspace so nightly instrumentation does not change the normal locked graph.

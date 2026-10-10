@@ -1068,6 +1068,9 @@ fn effect_list(summary: &opaal_runtime::module::ModuleEffectSummary) -> String {
 const fn effect_name(effect: ModuleEffect) -> &'static str {
     match effect {
         ModuleEffect::EntropySystem => "entropy.system",
+        ModuleEffect::StdinRead => "stdin.read",
+        ModuleEffect::StdoutWrite => "stdout.write",
+        ModuleEffect::StderrWrite => "stderr.write",
         ModuleEffect::WorkingDirectory => "working directory",
         ModuleEffect::ChildEnvironment => "child environment",
         ModuleEffect::Status => "status",

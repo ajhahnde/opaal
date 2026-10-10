@@ -170,11 +170,17 @@ pub enum AuthorityEffect {
     ClockMonotonic,
     /// System entropy for the current evaluation.
     EntropySystem,
+    /// Reading the evaluation-bound input endpoint.
+    StdinRead,
+    /// Writing the evaluation-bound output endpoint.
+    StdoutWrite,
+    /// Writing the evaluation-bound diagnostic endpoint.
+    StderrWrite,
 }
 
 impl AuthorityEffect {
     /// Every operational effect, in stable declaration order.
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 11] = [
         Self::FilesystemRead,
         Self::FilesystemWrite,
         Self::ProcessRun,
@@ -183,6 +189,9 @@ impl AuthorityEffect {
         Self::ClockWall,
         Self::ClockMonotonic,
         Self::EntropySystem,
+        Self::StdinRead,
+        Self::StdoutWrite,
+        Self::StderrWrite,
     ];
 
     const fn index(self) -> usize {
@@ -213,7 +222,7 @@ pub enum AuthorityScope<'a> {
         /// Canonical header name.
         header: &'a str,
     },
-    /// The current evaluation's clock.
+    /// The current evaluation's clock or standard host.
     Evaluation,
 }
 

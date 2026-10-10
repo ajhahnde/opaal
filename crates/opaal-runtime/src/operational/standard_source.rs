@@ -1,4 +1,4 @@
-//! Explicit entropy binding for one source root or interactive submission.
+//! Explicit standard host binding for one source root or interactive submission.
 
 use std::sync::Arc;
 
@@ -12,25 +12,25 @@ use crate::lifetime::Deadline;
 use crate::module::{ModuleId, ModuleOrigin};
 
 use super::ModuleError;
-use super::random::RandomState;
+use super::standard::StandardState;
 
 /// A caller-owned explicit grant and adapter, consumed by one evaluation.
 /// Language checkpoints and retained sessions never copy this binding.
-pub struct RandomBinding {
+pub struct StandardBinding {
     context: OperationalContext,
-    state: RandomState,
+    state: StandardState,
     pub(crate) cancellation: CancellationToken,
     cleanup_errors: Vec<ModuleError>,
 }
 
-impl RandomBinding {
+impl StandardBinding {
     #[must_use]
     pub fn new(
         authority: AuthorityContext,
         cancellation: CancellationToken,
         clock: Arc<dyn Clock>,
         deadline: Option<Deadline>,
-        state: RandomState,
+        state: StandardState,
     ) -> Self {
         Self {
             context: OperationalContext::new(authority, cancellation.clone(), clock, deadline),
@@ -48,19 +48,37 @@ impl RandomBinding {
         budget: &mut ResourceBudget,
         platform: &dyn Platform,
     ) -> Option<Result<Value, ModuleError>> {
-        if !matches!(module.origin(), ModuleOrigin::Standard { namespace, module }
-            if namespace == "std" && module == "random")
-        {
+        let ModuleOrigin::Standard { namespace, module } = module.origin() else {
+            return None;
+        };
+        if namespace != "std" {
             return None;
         }
-        Some(self.state.invoke(
-            &self.context,
-            &EffectSet::new([CapabilityRequest::entropy_system()]),
-            platform,
-            budget,
-            operation,
-            arguments,
-        ))
+        let effects = EffectSet::new([
+            CapabilityRequest::entropy_system(),
+            CapabilityRequest::stdin_read(),
+            CapabilityRequest::stdout_write(),
+            CapabilityRequest::stderr_write(),
+        ]);
+        match module.as_str() {
+            "random" => Some(self.state.invoke(
+                &self.context,
+                &effects,
+                platform,
+                budget,
+                operation,
+                arguments,
+            )),
+            "io" => Some(self.state.invoke_stdio(
+                &self.context,
+                &effects,
+                platform,
+                budget,
+                operation,
+                arguments,
+            )),
+            _ => None,
+        }
     }
 
     /// Return ordered fixed cleanup diagnostics beside the primary result.
@@ -78,7 +96,7 @@ impl RandomBinding {
     }
 }
 
-impl Drop for RandomBinding {
+impl Drop for StandardBinding {
     fn drop(&mut self) {
         let _ = self.state.close();
     }

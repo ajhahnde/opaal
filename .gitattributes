@@ -1,3 +1,5 @@
 # Golden text reports retain the empty failures section's final blank line.
 tests/golden/data-processing/valid/empty.expected.txt whitespace=-blank-at-eof
 tests/golden/data-processing/valid/pending.expected.txt whitespace=-blank-at-eof
+tests/golden/standard-input-output/ci-job-check/valid/empty.expected.txt whitespace=-blank-at-eof
+tests/golden/standard-input-output/ci-job-check/valid/pending.expected.txt whitespace=-blank-at-eof

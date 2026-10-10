@@ -376,7 +376,10 @@ impl Platform for PosixPlatform {
             | opaal_platform::AuthorityEffect::SecretReveal
             | opaal_platform::AuthorityEffect::ClockWall
             | opaal_platform::AuthorityEffect::ClockMonotonic => AuthorityEnforcement::Enforced,
-            opaal_platform::AuthorityEffect::EntropySystem => AuthorityEnforcement::Enforced,
+            opaal_platform::AuthorityEffect::EntropySystem
+            | opaal_platform::AuthorityEffect::StdinRead
+            | opaal_platform::AuthorityEffect::StdoutWrite
+            | opaal_platform::AuthorityEffect::StderrWrite => AuthorityEnforcement::Enforced,
         }
     }
 

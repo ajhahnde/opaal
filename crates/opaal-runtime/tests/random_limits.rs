@@ -3,30 +3,30 @@
 mod support;
 use opaal_runtime::Value;
 use opaal_runtime::eval::ResourceBudget;
-use opaal_runtime::operational::random::{MAX_CALL_BYTES, RandomLimits};
+use opaal_runtime::operational::standard::{MAX_CALL_BYTES, StandardLimits};
 use support::Harness;
 
 #[test]
 fn rejection_stops_at_candidate_and_narrower_byte_or_work_limits() {
     for (limits, budget, expected) in [
-        (RandomLimits::default(), ResourceBudget::opaal(), 128),
+        (StandardLimits::default(), ResourceBudget::opaal(), 128),
         (
-            RandomLimits {
+            StandardLimits {
                 max_integer_candidates: 3,
-                ..RandomLimits::default()
+                ..StandardLimits::default()
             },
             ResourceBudget::opaal(),
             3,
         ),
         (
-            RandomLimits {
+            StandardLimits {
                 max_host_bytes: 16,
-                ..RandomLimits::default()
+                ..StandardLimits::default()
             },
             ResourceBudget::opaal(),
             2,
         ),
-        (RandomLimits::default(), ResourceBudget::steps(9), 2),
+        (StandardLimits::default(), ResourceBudget::steps(9), 2),
     ] {
         let mut h = Harness::new(&[], &[]);
         h.script.lock().unwrap().repeat = Some(0);
@@ -66,9 +66,9 @@ fn fills_are_bounded_and_retention_and_host_admission_precede_work() {
     );
     assert!(h.fills().is_empty());
     let mut h = Harness::new(&[], &[]);
-    h.limits(RandomLimits {
+    h.limits(StandardLimits {
         max_host_bytes: 3,
-        ..RandomLimits::default()
+        ..StandardLimits::default()
     });
     assert_eq!(h.invoke("float", &[]).unwrap_err().code(), "RESOURCE_LIMIT");
     assert!(h.fills().is_empty());

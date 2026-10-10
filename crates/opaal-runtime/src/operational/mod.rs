@@ -23,9 +23,10 @@ pub mod http;
 pub mod integrity;
 pub mod path;
 pub mod process;
-pub mod random;
-pub mod random_source;
 pub mod source;
+pub mod standard;
+pub mod standard_source;
+pub mod stdio;
 pub mod time;
 pub mod url;
 pub mod version;
@@ -40,8 +41,9 @@ pub const MAX_PROCESS_OUTPUT_BYTES: usize = opaal_platform::operational::MAX_PRO
 /// The names are stable semantic identities for inspection and later
 /// controlled execution. They are not ambient globals. Pure data source calls
 /// are compiled operations and bypass the authority host.
-pub const STANDARD_MODULES: [&str; 10] = [
+pub const STANDARD_MODULES: [&str; 11] = [
     "std::random",
+    "std::io",
     "std::data",
     "std::path",
     "std::filesystem",
