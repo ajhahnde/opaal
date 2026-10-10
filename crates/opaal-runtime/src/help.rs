@@ -64,12 +64,15 @@ pub fn render_module_operation_help(operation: &OperationDescriptor) -> Vec<u8> 
     for signature in operation.signature_labels() {
         output.push_str(&format!("  signature: {signature}\n"));
     }
-    if operation
-        .downstream()
-        .effects()
-        .contains(&crate::authority::CapabilityRequest::entropy_system())
-    {
-        output.push_str("  effect: entropy.system (evaluation)\n");
+    for request in operation.downstream().effects().iter() {
+        let effect = match request.effect() {
+            opaal_platform::AuthorityEffect::EntropySystem => "entropy.system",
+            opaal_platform::AuthorityEffect::StdinRead => "stdin.read",
+            opaal_platform::AuthorityEffect::StdoutWrite => "stdout.write",
+            opaal_platform::AuthorityEffect::StderrWrite => "stderr.write",
+            _ => continue,
+        };
+        output.push_str(&format!("  effect: {effect} (evaluation)\n"));
     }
     output.push_str(&format!("  documentation: {}\n", operation.documentation()));
     output.into_bytes()

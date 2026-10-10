@@ -1334,7 +1334,7 @@ impl Clock for FakeClock {
 #[derive(Clone)]
 pub struct CancellationToken {
     is_cancelled: Arc<dyn Fn() -> bool + Send + Sync>,
-    reason: CancelReason,
+    reason: Arc<AtomicU8>,
 }
 
 impl CancellationToken {
@@ -1343,7 +1343,7 @@ impl CancellationToken {
     pub fn never() -> Self {
         Self {
             is_cancelled: Arc::new(|| false),
-            reason: CancelReason::Requested,
+            reason: Arc::new(AtomicU8::new(0)),
         }
     }
 
@@ -1352,7 +1352,7 @@ impl CancellationToken {
     pub fn from_fn(predicate: impl Fn() -> bool + Send + Sync + 'static) -> Self {
         Self {
             is_cancelled: Arc::new(predicate),
-            reason: CancelReason::Requested,
+            reason: Arc::new(AtomicU8::new(0)),
         }
     }
 
@@ -1361,7 +1361,34 @@ impl CancellationToken {
     pub fn deadline<C: Clock + 'static>(clock: C, deadline: Instant) -> Self {
         Self {
             is_cancelled: Arc::new(move || clock.now() >= deadline),
-            reason: CancelReason::Timeout,
+            reason: Arc::new(AtomicU8::new(1)),
+        }
+    }
+
+    /// Adds a requested-cancellation signal and retains the first observed reason.
+    #[must_use]
+    pub fn with_requested_cancellation(
+        self,
+        predicate: impl Fn() -> bool + Send + Sync + 'static,
+    ) -> Self {
+        let reason = Arc::new(AtomicU8::new(2));
+        let observed = reason.clone();
+        Self {
+            is_cancelled: Arc::new(move || {
+                if observed.load(Ordering::SeqCst) != 2 {
+                    return true;
+                }
+                let next = if predicate() {
+                    0
+                } else if self.is_cancelled() {
+                    u8::from(self.reason() == CancelReason::Timeout)
+                } else {
+                    return false;
+                };
+                let _ = observed.compare_exchange(2, next, Ordering::SeqCst, Ordering::SeqCst);
+                true
+            }),
+            reason,
         }
     }
 
@@ -1373,8 +1400,12 @@ impl CancellationToken {
 
     /// The reason this token reports when it trips.
     #[must_use]
-    pub const fn reason(&self) -> CancelReason {
-        self.reason
+    pub fn reason(&self) -> CancelReason {
+        if self.reason.load(Ordering::SeqCst) == 1 {
+            CancelReason::Timeout
+        } else {
+            CancelReason::Requested
+        }
     }
 }
 
@@ -1382,7 +1413,7 @@ impl fmt::Debug for CancellationToken {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("CancellationToken")
-            .field("reason", &self.reason)
+            .field("reason", &self.reason())
             .finish_non_exhaustive()
     }
 }
@@ -1766,7 +1797,7 @@ pub(crate) trait EvaluationHost {
         false
     }
 
-    fn permits_entropy_action(&self) -> bool {
+    fn permits_standard_action(&self) -> bool {
         false
     }
 
@@ -2123,7 +2154,7 @@ pub(crate) fn evaluate_with_host_and_budget(
         current_result_type: None,
         current_type_arguments: BTreeMap::new(),
         budgeted_callback: false,
-        standard_effects_allowed: true,
+        standard_effects: None,
         cancel: limits.cancel.clone(),
         budget,
         host,
@@ -2215,7 +2246,7 @@ pub(crate) fn evaluate_closure_argument_with_binding_types(
         current_result_type: None,
         current_type_arguments: BTreeMap::new(),
         budgeted_callback: false,
-        standard_effects_allowed: true,
+        standard_effects: None,
         cancel: limits.cancel,
         budget: &mut budget,
         host: &mut host,
@@ -2299,7 +2330,7 @@ pub(crate) fn apply_callable_with_budget(
         current_result_type: None,
         current_type_arguments: BTreeMap::new(),
         budgeted_callback: false,
-        standard_effects_allowed: true,
+        standard_effects: None,
         cancel: limits.cancel.clone(),
         budget,
         host: &mut host,
@@ -2372,7 +2403,7 @@ pub(crate) fn apply_callable_with_controlled_host_and_budget(
         current_result_type: None,
         current_type_arguments: BTreeMap::new(),
         budgeted_callback: false,
-        standard_effects_allowed: true,
+        standard_effects: None,
         cancel: limits.cancel.clone(),
         budget,
         host: &mut host,
@@ -2519,7 +2550,7 @@ pub(crate) fn expand_word_with_context_and_policy(
         current_result_type: None,
         current_type_arguments: BTreeMap::new(),
         budgeted_callback: false,
-        standard_effects_allowed: true,
+        standard_effects: None,
         cancel: limits.cancel.clone(),
         budget: &mut budget,
         host: &mut host,
@@ -2606,7 +2637,7 @@ pub(crate) fn expand_spread_with_context_and_policy(
         current_result_type: None,
         current_type_arguments: BTreeMap::new(),
         budgeted_callback: false,
-        standard_effects_allowed: true,
+        standard_effects: None,
         cancel: limits.cancel.clone(),
         budget: &mut budget,
         host: &mut host,
@@ -2673,7 +2704,7 @@ struct Evaluator<'budget, 'host> {
     current_result_type: Option<ValueType>,
     current_type_arguments: BTreeMap<String, ValueType>,
     budgeted_callback: bool,
-    standard_effects_allowed: bool,
+    standard_effects: Option<crate::authority::EffectSet>,
     cancel: CancellationToken,
     budget: &'budget mut ResourceBudget,
     host: &'host mut dyn EvaluationHost,
@@ -5209,20 +5240,22 @@ impl Evaluator<'_, '_> {
         explicit_type_arguments: Option<Vec<ValueType>>,
         expected_result: Option<&ValueType>,
     ) -> Eval<(Value, ValueType)> {
-        let entropy_action = self.host.permits_entropy_action()
+        let standard_action = self.host.permits_standard_action()
             && function
                 .binding_types
                 .function_signature(function.family.source.id(), function.family.origin_span)
                 .is_some_and(|signature| {
                     !signature.declared_effects().is_empty()
-                        && signature
-                            .declared_effects()
-                            .iter()
-                            .all(|effect| effect.capability() == "entropy.system")
+                        && signature.declared_effects().iter().all(|effect| {
+                            matches!(
+                                effect.capability(),
+                                "entropy.system" | "stdin.read" | "stdout.write" | "stderr.write"
+                            )
+                        })
                 });
         if function.effect_requirement()
             && !self.host.permits_controlled_action()
-            && !entropy_action
+            && !standard_action
         {
             return Err(Abort::Refused(Refusal::new(
                 RefusalReason::Unsupported,
@@ -5299,18 +5332,22 @@ impl Evaluator<'_, '_> {
             });
         let caller_type_arguments =
             std::mem::replace(&mut self.current_type_arguments, defining_types);
-        let caller_standard_effects = self.standard_effects_allowed;
-        self.standard_effects_allowed = caller_standard_effects
-            && action.is_some()
-            && function
-                .binding_types
-                .function_signature(function.family.source.id(), function.family.origin_span)
-                .is_some_and(|signature| {
-                    signature
-                        .declared_effects()
-                        .iter()
-                        .any(|effect| effect.capability() == "entropy.system")
-                });
+        let caller_standard_effects = self.standard_effects.take();
+        let declared = function
+            .binding_types
+            .function_signature(function.family.source.id(), function.family.origin_span)
+            .filter(|_| action.is_some())
+            .into_iter()
+            .flat_map(|signature| signature.declared_effects())
+            .filter_map(|effect| {
+                crate::authority::CapabilityRequest::standard_host(effect.capability())
+            })
+            .filter(|request| {
+                caller_standard_effects
+                    .as_ref()
+                    .is_none_or(|effects| effects.contains(request))
+            });
+        self.standard_effects = Some(crate::authority::EffectSet::new(declared));
         let mut result = (|| {
             for (parameter, argument) in function.parameters.iter().zip(arguments) {
                 let expected =
@@ -5445,7 +5482,7 @@ impl Evaluator<'_, '_> {
         self.source = caller_source;
         self.binding_types = caller_binding_types;
         self.current_type_arguments = caller_type_arguments;
-        self.standard_effects_allowed = caller_standard_effects;
+        self.standard_effects = caller_standard_effects;
         self.budget.leave_call();
         result.map(|value| (value, result_type))
     }
@@ -6713,7 +6750,7 @@ mod tests {
             current_result_type: None,
             current_type_arguments: BTreeMap::new(),
             budgeted_callback: false,
-            standard_effects_allowed: true,
+            standard_effects: None,
             cancel: CancellationToken::never(),
             budget: &mut budget,
             host: &mut host,

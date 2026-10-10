@@ -1317,7 +1317,8 @@ fn validate_authority_scope(
                     .is_some_and(|id| manifest.secrets.contains_key(id))
                     && manifest.endpoints.contains_key(endpoint)
             }),
-        "clock.wall" | "clock.monotonic" | "entropy.system" => scope == "evaluation",
+        "clock.wall" | "clock.monotonic" | "entropy.system" | "stdin.read" | "stdout.write"
+        | "stderr.write" => scope == "evaluation",
         _ => false,
     };
     if valid {
@@ -2110,7 +2111,10 @@ fn bind_project_effect(
             }
             format!("secret.{secret}@endpoint.{endpoint}")
         }
-        "clock.wall" | "clock.monotonic" | "entropy.system" if references.is_empty() => {
+        "clock.wall" | "clock.monotonic" | "entropy.system" | "stdin.read" | "stdout.write"
+        | "stderr.write"
+            if references.is_empty() =>
+        {
             "evaluation".to_owned()
         }
         _ => {

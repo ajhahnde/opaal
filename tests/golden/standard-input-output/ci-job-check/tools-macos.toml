@@ -1,0 +1,7 @@
+schema_version = 1
+project = "stdio_sample"
+environment = "ci"
+platform = "aarch64-apple-darwin"
+tools = []
+[child_environment]
+inherit = []

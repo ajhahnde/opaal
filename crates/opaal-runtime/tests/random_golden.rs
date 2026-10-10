@@ -9,11 +9,11 @@ use opaal_runtime::authority::{
     AuthorityContext, AuthorityRule, CapabilityRequest, EvaluationContextId, RequiredEnforcement,
 };
 use opaal_runtime::eval::{CancelReason, CancellationToken, FakeClock};
-use opaal_runtime::operational::random_source::RandomBinding;
+use opaal_runtime::operational::standard_source::StandardBinding;
 use opaal_runtime::outcome::{OutcomeEvidence, PrimaryOutcome};
 use opaal_runtime::plan::SessionOptions;
 use opaal_runtime::script::{
-    ScriptExecutionOutcome, execute_ambient_module_program_outcome_with_random,
+    ScriptExecutionOutcome, execute_ambient_module_program_outcome_with_standard_host,
 };
 use opaal_runtime::session::{Session, SubmitOutcome};
 use opaal_runtime::{HostEnvironmentLimits, NativeSessionSnapshot, Value};
@@ -35,8 +35,8 @@ fn snapshot() -> NativeSessionSnapshot {
     .unwrap()
 }
 
-fn binding(harness: Harness) -> RandomBinding {
-    RandomBinding::new(
+fn binding(harness: Harness) -> StandardBinding {
+    StandardBinding::new(
         AuthorityContext::new(
             EvaluationContextId::new(71).unwrap(),
             [AuthorityRule::grant(
@@ -56,7 +56,7 @@ fn run(body: &str, harness: Harness) -> ScriptExecutionOutcome {
     let program = support::load(body);
     let platform = harness.platform;
     let clock = harness.clock.clone();
-    execute_ambient_module_program_outcome_with_random(
+    execute_ambient_module_program_outcome_with_standard_host(
         &program,
         &[],
         snapshot(),
@@ -137,7 +137,7 @@ fn imported_initializers_and_pure_bodies_cannot_acquire_the_root_binding() {
         .load(Path::new("/random/main.opaal"))
         .unwrap();
     let platform = harness.platform;
-    let outcome = execute_ambient_module_program_outcome_with_random(
+    let outcome = execute_ambient_module_program_outcome_with_standard_host(
         &program,
         &[],
         snapshot(),
@@ -204,7 +204,7 @@ fn each_retained_cell_owns_a_fresh_binding_without_ambient_inheritance() {
         let script = harness.script.clone();
         let platform = harness.platform;
         let result = session
-            .submit_with_source_loader_and_random(
+            .submit_with_source_loader_and_standard_host(
                 "cell",
                 body,
                 &source,
@@ -281,7 +281,7 @@ fn ambient_help_renders_each_entropy_signature_without_drawing() {
         let platform = harness.platform;
         let mut output = Vec::new();
         let result = session
-            .submit_with_source_loader_and_random(
+            .submit_with_source_loader_and_standard_host(
                 "cell",
                 cell,
                 &source,

@@ -3,7 +3,7 @@
 use libfuzzer_sys::fuzz_target;
 use opaal_runtime::Value;
 use opaal_runtime::eval::ResourceBudget;
-use opaal_runtime::operational::random::{RandomLimits, RandomState};
+use opaal_runtime::operational::standard::{StandardLimits, StandardState};
 use opaal_runtime::workflow::{CheckArtifact, PlanArtifact, audit_journal};
 
 #[path = "../../crates/opaal-runtime/tests/support/random.rs"]
@@ -58,11 +58,11 @@ fuzz_target!(|data: &[u8]| {
     let mut generous = prepare();
     let expected = generous.invoke(name, &arguments);
     let mut limited = prepare();
-    limited.limits(RandomLimits {
+    limited.limits(StandardLimits {
         max_call_bytes: usize::from(bytes[2]) * 4,
         max_host_bytes: usize::from(bytes[3]) * 8,
         max_integer_candidates: usize::from(bytes[4] % 129),
-        ..RandomLimits::default()
+        ..StandardLimits::default()
     });
     limited.budget =
         ResourceBudget::steps(u64::from(bytes[5])).with_collection_bytes(u64::from(bytes[6]) * 4);
@@ -125,11 +125,11 @@ fuzz_target!(|data: &[u8]| {
     assert!(cancelled.fills().is_empty());
     assert_eq!(cancelled.script.lock().unwrap().closed, 1);
     assert!(
-        RandomState::new(
+        StandardState::new(
             None,
-            RandomLimits {
+            StandardLimits {
                 max_integer_candidates: 129,
-                ..RandomLimits::default()
+                ..StandardLimits::default()
             }
         )
         .is_err()

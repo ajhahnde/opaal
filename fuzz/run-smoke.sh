@@ -56,14 +56,14 @@ corpus_roots=(
   "$repository_root/tests/opaal-foundation/language/types/invalid"
 )
 
-for target in lexer parser expander resources data_operations_limits numeric_operations_limits random_limits secret_sinks; do
+for target in lexer parser expander resources data_operations_limits numeric_operations_limits random_limits stdio_limits secret_sinks; do
   corpus="$work/$target"
   mkdir "$corpus"
   seeds=("${corpus_roots[@]}")
   if [ "$target" = parser ]; then
     seeds+=("$work/source-formatting")
   fi
-  if [ "$target" = data_operations_limits ] || [ "$target" = numeric_operations_limits ] || [ "$target" = random_limits ]; then
+  if [ "$target" = data_operations_limits ] || [ "$target" = numeric_operations_limits ] || [ "$target" = random_limits ] || [ "$target" = stdio_limits ]; then
     seeds=("$script_dir/seeds/$target")
   fi
   python3 - "$target" "${seeds[@]}" <<'PY'

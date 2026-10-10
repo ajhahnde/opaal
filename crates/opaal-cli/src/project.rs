@@ -4,6 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::{OsStr, OsString};
 use std::fs::File;
 use std::io::{Read, Write};
+use std::os::fd::AsFd;
 use std::os::unix::ffi::{OsStrExt as _, OsStringExt as _};
 use std::os::unix::fs::MetadataExt as _;
 use std::path::{Component, Path, PathBuf};
@@ -27,12 +28,12 @@ use opaal_runtime::module::{
     ActionId, ActionSignature, ModuleCanonicalizer, ModuleId, ModuleOrigin, ModulePathError,
     ModuleSourceError, ModuleSourceLoader, ValueType,
 };
-use opaal_runtime::operational::random::{RandomLimits, RandomState};
 use opaal_runtime::operational::source::{
     ControlledSourceOperations, SourceActionOutcome, SourceClock, SourceEffectEvent,
     SourceEffectJournal, SourceEffectOutcome, SourceEffectResult, SourceOperation,
     SourceProcessArgument, maintained_probe_operation,
 };
+use opaal_runtime::operational::standard::{RoleProgress, StandardLimits, StandardState};
 use opaal_runtime::operational::{data, process};
 use opaal_runtime::outcome::{OutcomeEvidence, PrimaryOutcome};
 use opaal_runtime::plan::SessionOptions;
@@ -198,6 +199,7 @@ pub struct ExecuteProjectRequest {
     run_id: Option<String>,
     secret_stdin: Option<String>,
     journal: PathBuf,
+    receipt_out: Option<PathBuf>,
 }
 
 impl ExecuteProjectRequest {
@@ -215,7 +217,14 @@ impl ExecuteProjectRequest {
             run_id,
             secret_stdin,
             journal,
+            receipt_out: None,
         }
+    }
+
+    #[must_use]
+    pub fn with_receipt_out(mut self, receipt_out: Option<PathBuf>) -> Self {
+        self.receipt_out = receipt_out;
+        self
     }
 }
 
@@ -223,6 +232,7 @@ impl ExecuteProjectRequest {
 pub struct ExecuteFrontendRun {
     output: Vec<u8>,
     successful: bool,
+    receipt: Option<Value>,
 }
 
 impl ExecuteFrontendRun {
@@ -234,6 +244,11 @@ impl ExecuteFrontendRun {
     #[must_use]
     pub const fn is_successful(&self) -> bool {
         self.successful
+    }
+
+    #[must_use]
+    pub fn receipt(&self) -> Option<&Value> {
+        self.receipt.as_ref()
     }
 }
 
@@ -1694,6 +1709,22 @@ pub fn execute_explicit_plan(
 
     let plan_value = plan.value();
     let metadata_only = plan_value.get("standard_host").is_some();
+    let roles = plan_value["standard_host"]["roles"]
+        .as_array()
+        .map_or(&[][..], Vec::as_slice);
+    let has_role = |role: &str| roles.iter().any(|value| value == role);
+    if request.secret_stdin.is_some() && has_role("stdin.read") {
+        return Err(execute_error(
+            "EXECUTE008",
+            "--secret-stdin conflicts with reachable stdin.read",
+        ));
+    }
+    if (has_role("stdout.write") || has_role("stderr.write")) && request.receipt_out.is_none() {
+        return Err(execute_error(
+            "EXECUTE004",
+            "stream output requires --receipt-out",
+        ));
+    }
     let project_value = &plan_value["project"];
     let planned_root = path_from_native_value(&project_value["root"]).map_err(workflow_contract)?;
     let manifest_path =
@@ -1879,102 +1910,178 @@ pub fn execute_explicit_plan(
     if let Some(policy) = plan_value.get("standard_host") {
         header["standard_host"] = policy.clone();
     }
-    let mut journal = filesystem.create_journal(&journal_path, &run_id, header)?;
-    let mut runtime_rules = Vec::new();
-    for rule in authority.rules() {
-        runtime_rules.extend(runtime_authority_rules(project.manifest(), rule)?);
+    if roles.iter().any(|role| role != "entropy.system") {
+        preflight_stream_channels(plan_value, &plan_file, &executable_files)?;
     }
-    let evaluation = evaluation_id(&run_id)?;
-    let execution_clock = SystemClock::new();
-    let execution_deadline = Instant::from_nanos(10 * 60 * 1_000_000_000);
-    let cancellation = CancellationToken::deadline(execution_clock.clone(), execution_deadline);
-    let operational_clock = Arc::new(execution_clock.clone());
-    let mut operational = OperationalContext::new(
-        AuthorityContext::new(evaluation, runtime_rules)
-            .map_err(|error| execute_error("EXECUTE007", error.to_string()))?,
-        cancellation.clone(),
-        operational_clock,
-        Some(Deadline::at(execution_deadline)),
-    );
-    let effects = EffectSet::new(
-        reachable
+    let receipt = request
+        .receipt_out
+        .as_ref()
+        .map(|path| {
+            let path = filesystem
+                .resolve_output_path(path)
+                .map_err(frontend_contract)?;
+            if path == journal_path {
+                return Err(execute_error(
+                    "EXECUTE004",
+                    "receipt and journal paths must differ",
+                ));
+            }
+            filesystem.create_receipt(&path)
+        })
+        .transpose()?;
+    let mut journal = filesystem.create_journal(&journal_path, &run_id, header)?;
+    let result = (|| {
+        let mut runtime_rules = Vec::new();
+        for rule in authority.rules() {
+            runtime_rules.extend(runtime_authority_rules(project.manifest(), rule)?);
+        }
+        let evaluation = evaluation_id(&run_id)?;
+        let execution_clock = SystemClock::new();
+        let execution_deadline = Instant::from_nanos(10 * 60 * 1_000_000_000);
+        let mut cancellation =
+            CancellationToken::deadline(execution_clock.clone(), execution_deadline);
+        let standard_host = if metadata_only {
+            let mut host = PosixStandardHost::for_cli(evaluation.get()).ok();
+            if roles.iter().any(|role| role != "entropy.system") {
+                let binding = host
+                    .as_mut()
+                    .ok_or_else(|| {
+                        execute_error("EXECUTE004", "standard stream backend is unavailable")
+                    })
+                    .and_then(|host| {
+                        bind_controlled_streams(host, roles)?;
+                        let signal = host.capture_cancellation_signals().map_err(|_| {
+                            execute_error("EXECUTE004", "stream cancellation lease is unavailable")
+                        })?;
+                        cancellation = cancellation.clone().with_requested_cancellation(signal);
+                        Ok(())
+                    });
+                if binding.is_err() {
+                    let outcome = outcome_value(
+                        "refused",
+                        "EXECUTE_REFUSED",
+                        "stream binding is unavailable",
+                        None,
+                        None,
+                        false,
+                    );
+                    journal.primary = Some(outcome.clone());
+                    let cleanup = host
+                        .as_mut()
+                        .and_then(|host| {
+                            opaal_platform::standard_host::StandardHost::close(host).err()
+                        })
+                        .map(|_| {
+                            outcome_value(
+                                "cleanup-failed",
+                                "OPERATION004",
+                                "standard host cleanup failed",
+                                None,
+                                None,
+                                false,
+                            )
+                        })
+                        .into_iter()
+                        .collect();
+                    drop(host);
+                    let cleanup =
+                        append_standard_host_cleanup(&mut journal, evaluation, 0, cleanup)?;
+                    return finish_execution_journal(&mut journal, outcome, cleanup, &adapter);
+                }
+            }
+            host.map(|host| Box::new(host) as Box<dyn opaal_platform::standard_host::StandardHost>)
+        } else {
+            None
+        };
+        let operational_clock = Arc::new(execution_clock.clone());
+        let mut operational = OperationalContext::new(
+            AuthorityContext::new(evaluation, runtime_rules)
+                .map_err(|error| execute_error("EXECUTE007", error.to_string()))?,
+            cancellation.clone(),
+            operational_clock,
+            Some(Deadline::at(execution_deadline)),
+        );
+        let effects = EffectSet::new(
+            reachable
+                .iter()
+                .map(|action| project.action_effects(action).map_err(frontend_contract))
+                .collect::<Result<Vec<_>, _>>()?
+                .into_iter()
+                .flatten()
+                .map(|effect| {
+                    runtime_requests(project.manifest(), effect.capability(), effect.scope())
+                })
+                .collect::<Result<Vec<_>, _>>()?
+                .into_iter()
+                .flatten(),
+        );
+        let platform = PosixPlatform;
+        let required_tools = check
+            .task()
+            .effects()
             .iter()
-            .map(|action| project.action_effects(action).map_err(frontend_contract))
-            .collect::<Result<Vec<_>, _>>()?
-            .into_iter()
-            .flatten()
-            .map(|effect| runtime_requests(project.manifest(), effect.capability(), effect.scope()))
-            .collect::<Result<Vec<_>, _>>()?
-            .into_iter()
-            .flatten(),
-    );
-    let platform = PosixPlatform;
-    let required_tools = check
-        .task()
-        .effects()
-        .iter()
-        .filter(|effect| effect.capability() == "process.run")
-        .filter_map(|effect| effect.scope().strip_prefix("tool."))
-        .collect::<BTreeSet<_>>();
-    let mut process_budget = process::ProcessBudget::default();
-    for tool_id in tools
-        .tools()
-        .keys()
-        .filter(|tool_id| required_tools.contains(tool_id.as_str()))
-    {
-        let attempt = process_budget.attempts();
-        let scope = json!({"kind":"tool","tool":tool_id});
-        let operation = maintained_probe_operation(&tools, tool_id, metadata_only)
-            .map_err(|error| execute_error(error.code(), error.to_string()))?;
-        journal.append(
-            "effect-before",
-            json!({
-                "action_node_id":action_node_id,
-                "effect":"process.run",
-                "scope":scope,
-                "operation":source_operation_value(&operation, None, metadata_only),
-                "verdict":"granted-unenforced",
-                "attempt":attempt
-            }),
-        )?;
-        let before = process_budget.attempts();
-        let executable_file = executable_files
-            .get(tool_id)
-            .ok_or_else(|| stale(format!("tool executable `{tool_id}` is absent")))?;
-        match process::probe_retained(
-            &operational,
-            &effects,
-            &platform,
-            &adapter,
-            &tools,
-            tool_id,
-            project.manifest().root(),
-            &mut process_budget,
-            executable_file,
-        ) {
-            Ok(result) => {
-                let evidence = if metadata_only {
-                    None
-                } else {
-                    Some(
-                        digest_value(&json!({
-                            "stdout":digest_bytes(result.stdout()),
-                            "stderr":digest_bytes(result.stderr())
-                        }))
-                        .map_err(workflow_contract)?,
-                    )
-                };
-                let result_metadata = SourceEffectResult::Process {
-                    status: result.status().code(),
-                    stdout_bytes: Some(u64::try_from(result.stdout().len()).map_err(|_| {
-                        execute_error("OPERATION005", "process stdout byte count overflow")
-                    })?),
-                    stderr_bytes: Some(u64::try_from(result.stderr().len()).map_err(|_| {
-                        execute_error("OPERATION005", "process stderr byte count overflow")
-                    })?),
-                    evidence_digest: evidence.clone(),
-                };
-                journal.append(
+            .filter(|effect| effect.capability() == "process.run")
+            .filter_map(|effect| effect.scope().strip_prefix("tool."))
+            .collect::<BTreeSet<_>>();
+        let mut process_budget = process::ProcessBudget::default();
+        for tool_id in tools
+            .tools()
+            .keys()
+            .filter(|tool_id| required_tools.contains(tool_id.as_str()))
+        {
+            let attempt = process_budget.attempts();
+            let scope = json!({"kind":"tool","tool":tool_id});
+            let operation = maintained_probe_operation(&tools, tool_id, metadata_only)
+                .map_err(|error| execute_error(error.code(), error.to_string()))?;
+            journal.append(
+                "effect-before",
+                json!({
+                    "action_node_id":action_node_id,
+                    "effect":"process.run",
+                    "scope":scope,
+                    "operation":source_operation_value(&operation, None, metadata_only),
+                    "verdict":"granted-unenforced",
+                    "attempt":attempt
+                }),
+            )?;
+            let before = process_budget.attempts();
+            let executable_file = executable_files
+                .get(tool_id)
+                .ok_or_else(|| stale(format!("tool executable `{tool_id}` is absent")))?;
+            match process::probe_retained(
+                &operational,
+                &effects,
+                &platform,
+                &adapter,
+                &tools,
+                tool_id,
+                project.manifest().root(),
+                &mut process_budget,
+                executable_file,
+            ) {
+                Ok(result) => {
+                    let evidence = if metadata_only {
+                        None
+                    } else {
+                        Some(
+                            digest_value(&json!({
+                                "stdout":digest_bytes(result.stdout()),
+                                "stderr":digest_bytes(result.stderr())
+                            }))
+                            .map_err(workflow_contract)?,
+                        )
+                    };
+                    let result_metadata = SourceEffectResult::Process {
+                        status: result.status().code(),
+                        stdout_bytes: Some(u64::try_from(result.stdout().len()).map_err(|_| {
+                            execute_error("OPERATION005", "process stdout byte count overflow")
+                        })?),
+                        stderr_bytes: Some(u64::try_from(result.stderr().len()).map_err(|_| {
+                            execute_error("OPERATION005", "process stderr byte count overflow")
+                        })?),
+                        evidence_digest: evidence.clone(),
+                    };
+                    journal.append(
                     "effect-after",
                     json!({
                         "action_node_id":action_node_id,
@@ -1986,142 +2093,149 @@ pub fn execute_explicit_plan(
                         "evidence_digest":evidence
                     }),
                 )?;
-            }
-            Err(error) => {
-                let partial = process_budget.attempts() > before;
-                let outcome = probe_failure_outcome(
-                    &error,
-                    &operational.redact_text(&error.to_string()),
-                    partial,
-                    metadata_only,
-                );
-                journal
-                    .append(
-                        "effect-after",
-                        json!({
-                            "action_node_id":action_node_id,
-                            "effect":"process.run",
-                            "scope":scope,
-                            "operation":source_operation_value(&operation, None, metadata_only),
-                            "attempt":attempt,
-                            "outcome":outcome,
-                            "evidence_digest":null
-                        }),
-                    )
-                    .map_err(|error| journal_failure(&outcome, error, metadata_only))?;
-                return finish_execution_journal(&mut journal, outcome, Vec::new(), &adapter);
+                }
+                Err(error) => {
+                    let partial = process_budget.attempts() > before;
+                    let outcome = probe_failure_outcome(
+                        &error,
+                        &operational.redact_text(&error.to_string()),
+                        partial,
+                        metadata_only,
+                    );
+                    journal.primary = Some(outcome.clone());
+                    journal
+                        .append(
+                            "effect-after",
+                            json!({
+                                "action_node_id":action_node_id,
+                                "effect":"process.run",
+                                "scope":scope,
+                                "operation":source_operation_value(&operation, None, metadata_only),
+                                "attempt":attempt,
+                                "outcome":outcome,
+                                "evidence_digest":null
+                            }),
+                        )
+                        .map_err(|error| journal_failure(&outcome, error, metadata_only))?;
+                    return finish_execution_journal(&mut journal, outcome, Vec::new(), &adapter);
+                }
             }
         }
-    }
 
-    let arguments = execution_argument_values(&check, plan_value)?;
-    let planned_inputs = plan_value["inputs"]
-        .as_array()
-        .expect("validated plan inputs are an array")
-        .iter()
-        .filter(|input| input["binding"] == "file")
-        .map(|input| {
-            Ok((
-                path_from_native_value(&input["path"]).map_err(workflow_contract)?,
-                required_plan_string(input, "digest")?.to_owned(),
-            ))
-        })
-        .collect::<Result<BTreeMap<_, _>, ProjectFrontendError>>()?;
-    let mut environment = Environment::new();
-    let mut action_output = Vec::new();
-    let (outcome, host_cleanup) = {
-        let mut effect_journal = RuntimeEffectJournal {
-            journal: &mut journal,
-        };
-        let secret_binding = request
-            .secret_stdin
-            .clone()
-            .map(|id| (id, &mut *secret_input as &mut dyn Read));
-        let mut operations = ControlledSourceOperations::new(
-            &mut operational,
-            &effects,
-            project.manifest(),
-            &tools,
-            &executable_files,
-            &platform,
-            &adapter,
-            &tls_ca,
-            &mut effect_journal,
-            action_nodes,
-            planned_inputs,
-            process_budget,
-            secret_binding,
-        );
-        if metadata_only {
-            let host = PosixStandardHost::for_cli(evaluation.get())
-                .ok()
-                .map(|host| Box::new(host) as Box<dyn opaal_platform::standard_host::StandardHost>);
-            operations = operations.with_random(
-                RandomState::new(host, RandomLimits::default())
-                    .map_err(|error| execute_error(error.code(), error.to_string()))?,
-            );
-        }
-        let outcome = execute_project_task_outcome(
-            &project,
-            check.task(),
-            arguments,
-            project.manifest().root(),
-            &mut environment,
-            &standard_registry(),
-            &NoExecutableProbe,
-            &SessionOptions::default(),
-            &platform,
-            Arc::new(execution_clock),
-            cancellation,
-            &mut operations,
-            &mut action_output,
-        );
-        (outcome, operations.finish_standard_host())
-    };
-    let partial = match outcome.primary() {
-        PrimaryOutcome::Completed(_) => outcome
-            .evidence()
+        let arguments = execution_argument_values(&check, plan_value)?;
+        let planned_inputs = plan_value["inputs"]
+            .as_array()
+            .expect("validated plan inputs are an array")
             .iter()
-            .any(|evidence| matches!(evidence, OutcomeEvidence::PartialEffect(_))),
-        _ => !outcome.evidence().is_empty(),
-    };
-    let primary_value =
-        script_outcome_value(outcome.primary(), &operational, partial, metadata_only);
-    let (primary, evidence, _) = outcome.into_parts();
-    let finished = operational.finish(primary, evidence);
-    let next_cleanup_ordinal = finished
-        .downstream()
-        .cleanup()
-        .iter()
-        .map(|outcome| u64::from(outcome.resource().ordinal()) + 1)
-        .max()
-        .unwrap_or(0);
-    let mut cleanup = append_cleanup_events(&mut journal, finished.downstream().cleanup())
-        .map_err(|error| journal_failure(&primary_value, error, metadata_only))?;
-    for (index, error) in host_cleanup.into_iter().enumerate() {
-        let ordinal = next_cleanup_ordinal + index as u64;
-        let outcome = outcome_value(
-            "cleanup-failed",
-            error.code(),
-            "standard host cleanup failed",
-            None,
-            None,
-            false,
+            .filter(|input| input["binding"] == "file")
+            .map(|input| {
+                Ok((
+                    path_from_native_value(&input["path"]).map_err(workflow_contract)?,
+                    required_plan_string(input, "digest")?.to_owned(),
+                ))
+            })
+            .collect::<Result<BTreeMap<_, _>, ProjectFrontendError>>()?;
+        let mut environment = Environment::new();
+        let mut action_output = Vec::new();
+        let (outcome, host_cleanup, progress) = {
+            let mut effect_journal = RuntimeEffectJournal {
+                journal: &mut journal,
+            };
+            let secret_binding = request
+                .secret_stdin
+                .clone()
+                .map(|id| (id, &mut *secret_input as &mut dyn Read));
+            let mut operations = ControlledSourceOperations::new(
+                &mut operational,
+                &effects,
+                project.manifest(),
+                &tools,
+                &executable_files,
+                &platform,
+                &adapter,
+                &tls_ca,
+                &mut effect_journal,
+                action_nodes,
+                planned_inputs,
+                process_budget,
+                secret_binding,
+            );
+            if metadata_only {
+                operations = operations.with_standard_host(
+                    StandardState::new(standard_host, StandardLimits::default())
+                        .map_err(|error| execute_error(error.code(), error.to_string()))?,
+                );
+            }
+            let outcome = execute_project_task_outcome(
+                &project,
+                check.task(),
+                arguments,
+                project.manifest().root(),
+                &mut environment,
+                &standard_registry(),
+                &NoExecutableProbe,
+                &SessionOptions::default(),
+                &platform,
+                Arc::new(execution_clock),
+                cancellation,
+                &mut operations,
+                &mut action_output,
+            );
+            let cleanup = operations.finish_standard_host();
+            (outcome, cleanup, operations.standard_host_progress())
+        };
+        journal.progress = progress;
+        let partial = match outcome.primary() {
+            PrimaryOutcome::Completed(_) => outcome
+                .evidence()
+                .iter()
+                .any(|evidence| matches!(evidence, OutcomeEvidence::PartialEffect(_))),
+            _ => !outcome.evidence().is_empty(),
+        };
+        let primary_value =
+            script_outcome_value(outcome.primary(), &operational, partial, metadata_only);
+        journal.primary = Some(primary_value.clone());
+        let (primary, evidence, _) = outcome.into_parts();
+        let finished = operational.finish(primary, evidence);
+        let next_cleanup_ordinal = finished
+            .downstream()
+            .cleanup()
+            .iter()
+            .map(|outcome| u64::from(outcome.resource().ordinal()) + 1)
+            .max()
+            .unwrap_or(0);
+        let host_cleanup = host_cleanup
+            .into_iter()
+            .map(|error| {
+                outcome_value(
+                    "cleanup-failed",
+                    error.code(),
+                    "standard host cleanup failed",
+                    None,
+                    None,
+                    false,
+                )
+            })
+            .collect::<Vec<_>>();
+        let host_cleanup = append_standard_host_cleanup(
+            &mut journal,
+            evaluation,
+            next_cleanup_ordinal,
+            host_cleanup,
         );
-        journal
-            .append(
-                "cleanup",
-                json!({
-                    "action_node_id":null,
-                    "resource_id":format!("standard-host-{:016x}-{ordinal:06}", evaluation.get()),
-                    "ordinal":ordinal,
-                    "outcome":outcome
-                }),
-            )
-            .map_err(|error| journal_failure(&primary_value, error, metadata_only))?;
-        cleanup.push(outcome);
+        let resource_cleanup = append_cleanup_events(&mut journal, finished.downstream().cleanup());
+        let mut cleanup =
+            host_cleanup.map_err(|error| journal_failure(&primary_value, error, metadata_only))?;
+        cleanup.extend(
+            resource_cleanup
+                .map_err(|error| journal_failure(&primary_value, error, metadata_only))?,
+        );
+        finish_execution_journal(&mut journal, primary_value, cleanup, &adapter)
+    })();
+    match receipt {
+        Some(receipt) => Ok(finish_receipt(receipt, plan.digest(), &mut journal, result)),
+        None => result,
     }
-    finish_execution_journal(&mut journal, primary_value, cleanup, &adapter)
 }
 
 fn verify_plan_check_identity(plan: &Value, check: &Value) -> Result<(), ProjectFrontendError> {
@@ -2417,6 +2531,9 @@ fn runtime_requests(
         ("clock.wall", "evaluation") => vec![Ok(CapabilityRequest::clock_wall())],
         ("clock.monotonic", "evaluation") => vec![Ok(CapabilityRequest::clock_monotonic())],
         ("entropy.system", "evaluation") => vec![Ok(CapabilityRequest::entropy_system())],
+        ("stdin.read", "evaluation") => vec![Ok(CapabilityRequest::stdin_read())],
+        ("stdout.write", "evaluation") => vec![Ok(CapabilityRequest::stdout_write())],
+        ("stderr.write", "evaluation") => vec![Ok(CapabilityRequest::stderr_write())],
         _ => {
             return Err(execute_error(
                 "EXECUTE007",
@@ -2626,6 +2743,8 @@ fn finish_execution_journal(
     cleanup: Vec<Value>,
     adapter: &dyn opaal_platform::operational::OperationalAdapter,
 ) -> Result<ExecuteFrontendRun, ProjectFrontendError> {
+    journal.primary = Some(primary.clone());
+    journal.cleanup = cleanup.clone();
     let class = required_plan_string(&primary, "class")?.to_owned();
     let cleanup_failed = cleanup
         .iter()
@@ -2648,9 +2767,11 @@ fn finish_execution_journal(
             }),
         )
         .map_err(|error| journal_failure(&retained_primary, error, metadata_only))?;
+    journal.complete = true;
     Ok(ExecuteFrontendRun {
         output: format!("run {} {class}\n", journal.run_id).into_bytes(),
         successful: class == "success" && !cleanup_failed,
+        receipt: None,
     })
 }
 
@@ -2676,15 +2797,18 @@ fn append_cleanup_events(
     journal: &mut SyncedJournal,
     outcomes: &[opaal_runtime::lifetime::CleanupOutcome],
 ) -> Result<Vec<Value>, ProjectFrontendError> {
-    let mut values = Vec::with_capacity(outcomes.len());
-    for cleanup in outcomes {
-        let resource = cleanup.resource();
-        let outcome = match cleanup.status() {
+    let values = outcomes
+        .iter()
+        .map(|cleanup| match cleanup.status() {
             CleanupStatus::Succeeded => success_outcome("CLEANUP000", "resource cleanup succeeded"),
             CleanupStatus::Failed(message) => {
                 outcome_value("cleanup-failed", "CLEANUP001", message, None, None, false)
             }
-        };
+        })
+        .collect::<Vec<_>>();
+    journal.cleanup.extend(values.clone());
+    for (cleanup, outcome) in outcomes.iter().zip(&values) {
+        let resource = cleanup.resource();
         journal.append(
             "cleanup",
             json!({
@@ -2698,9 +2822,29 @@ fn append_cleanup_events(
                 "outcome":outcome
             }),
         )?;
-        values.push(outcome);
     }
     Ok(values)
+}
+
+fn append_standard_host_cleanup(
+    journal: &mut SyncedJournal,
+    evaluation: EvaluationContextId,
+    next_ordinal: u64,
+    outcomes: Vec<Value>,
+) -> Result<Vec<Value>, ProjectFrontendError> {
+    journal.cleanup.extend(outcomes.clone());
+    for (index, outcome) in outcomes.iter().enumerate() {
+        let ordinal = next_ordinal + (outcomes.len() - index - 1) as u64;
+        journal.append(
+            "cleanup",
+            json!({
+                "action_node_id":null,
+                "resource_id":format!("standard-host-{:016x}-{ordinal:06}", evaluation.get()),
+                "ordinal":ordinal, "outcome":outcome
+            }),
+        )?;
+    }
+    Ok(outcomes)
 }
 
 fn bounded_public_message(message: &str) -> String {
@@ -2748,6 +2892,264 @@ struct SyncedJournal {
     chain: JournalChain,
     failed: bool,
     metadata_only: bool,
+    primary: Option<Value>,
+    cleanup: Vec<Value>,
+    progress: RoleProgress,
+    complete: bool,
+}
+
+trait ReceiptFile: Write {
+    fn sync_all(&self) -> std::io::Result<()>;
+}
+
+impl ReceiptFile for File {
+    fn sync_all(&self) -> std::io::Result<()> {
+        File::sync_all(self)
+    }
+}
+
+struct ReceiptSink<F = File> {
+    file: F,
+    parent: File,
+}
+
+fn finish_receipt(
+    mut sink: ReceiptSink<impl ReceiptFile>,
+    plan_digest: &str,
+    journal: &mut SyncedJournal,
+    result: Result<ExecuteFrontendRun, ProjectFrontendError>,
+) -> ExecuteFrontendRun {
+    let mut primary = journal.primary.clone().unwrap_or_else(|| {
+        outcome_value(
+            "error",
+            "EXECUTE_HOST",
+            "execution failed",
+            None,
+            None,
+            false,
+        )
+    });
+    project_metadata_outcome(&mut primary);
+    let counts = |counts: opaal_runtime::operational::standard::TransferCounts| {
+        json!({
+            "confirmed_bytes":counts.confirmed_bytes,
+            "uncertain_bytes_upper_bound":counts.uncertain_bytes_upper_bound
+        })
+    };
+    let progress = journal.progress;
+    let mut secondary = journal
+        .cleanup
+        .iter()
+        .filter(|outcome| outcome["class"] == "cleanup-failed")
+        .map(|outcome| json!({"category":"cleanup", "code":outcome["code"]}))
+        .collect::<Vec<_>>();
+    if result.is_err() {
+        secondary.push(json!({"category":"journal", "code":"JOURNAL005"}));
+    }
+    let transferred = [
+        progress.entropy,
+        progress.stdin,
+        progress.stdout,
+        progress.stderr,
+    ]
+    .iter()
+    .any(|counts| counts.confirmed_bytes > 0 || counts.uncertain_bytes_upper_bound > 0);
+    if result.is_err() && transferred {
+        primary["partial"] = json!(true);
+    }
+    let mut receipt = json!({
+        "schema":"opaal.execution-receipt.v1", "schema_version":1,
+        "run_id":journal.run_id, "plan_digest":plan_digest,
+        "primary":primary, "secondary":secondary,
+        "progress":{
+            "entropy.system":counts(progress.entropy), "stdin.read":counts(progress.stdin),
+            "stdout.write":counts(progress.stdout), "stderr.write":counts(progress.stderr)
+        },
+        "omitted_secondary_count":0,
+        "journal_state":if journal.failed { "unavailable" } else if journal.complete { "complete" } else { "incomplete" }
+    });
+    bound_receipt_secondaries(&mut receipt);
+    let mut successful = result.as_ref().is_ok_and(ExecuteFrontendRun::is_successful)
+        && receipt["omitted_secondary_count"] == 0;
+    let bytes = serde_json::to_vec(&receipt).expect("receipt metadata is serializable");
+    let persisted = if bytes.len() < opaal_runtime::workflow::MAX_ARTIFACT_BYTES {
+        sink.file
+            .write_all(&bytes)
+            .and_then(|()| sink.file.write_all(b"\n"))
+            .and_then(|()| sink.file.flush())
+            .and_then(|()| sink.file.sync_all())
+            .and_then(|()| sink.parent.sync_all())
+    } else {
+        Err(std::io::Error::other("receipt exceeds its byte limit"))
+    };
+    if persisted.is_err() {
+        successful = false;
+        if transferred {
+            receipt["primary"]["partial"] = json!(true);
+        }
+        receipt["secondary"]
+            .as_array_mut()
+            .expect("receipt secondaries")
+            .push(json!({"category":"receipt", "code":"JOURNAL005"}));
+        if journal.metadata_only && !journal.failed && !journal.complete {
+            if journal
+                .append(
+                    "evidence-failure",
+                    json!({"category":"receipt", "code":"JOURNAL005"}),
+                )
+                .is_err()
+                && !receipt["secondary"]
+                    .as_array()
+                    .expect("receipt secondaries")
+                    .iter()
+                    .any(|record| record["category"] == "journal")
+            {
+                receipt["secondary"]
+                    .as_array_mut()
+                    .expect("receipt secondaries")
+                    .push(json!({"category":"journal", "code":"JOURNAL005"}));
+            }
+            if journal.failed {
+                receipt["journal_state"] = json!("unavailable");
+            }
+        }
+        bound_receipt_secondaries(&mut receipt);
+    }
+    ExecuteFrontendRun {
+        output: Vec::new(),
+        successful,
+        receipt: Some(receipt),
+    }
+}
+
+fn bound_receipt_secondaries(receipt: &mut Value) {
+    let previous = receipt["omitted_secondary_count"].as_u64().unwrap_or(0);
+    let records = receipt["secondary"]
+        .as_array_mut()
+        .expect("receipt secondaries");
+    let maximum = opaal_runtime::workflow::MAX_ARTIFACT_ENTRIES;
+    records.retain(|record| record["code"] != "EXECUTE_EVIDENCE_OVERFLOW");
+    if previous > 0 || records.len() > maximum {
+        let omitted = records.len().saturating_sub(maximum - 1);
+        records.truncate(maximum - 1);
+        records.push(json!({"category":"evidence", "code":"EXECUTE_EVIDENCE_OVERFLOW"}));
+        receipt["omitted_secondary_count"] = json!(previous + omitted as u64);
+    }
+}
+
+fn bind_controlled_streams(
+    host: &mut PosixStandardHost,
+    roles: &[Value],
+) -> Result<(), ProjectFrontendError> {
+    use opaal_platform::standard_host::StandardStream;
+    use std::io::IsTerminal;
+    let stdin = std::io::stdin();
+    let stdout = std::io::stdout();
+    let stderr = std::io::stderr();
+    for (effect, role, descriptor, terminal) in [
+        (
+            "stdin.read",
+            StandardStream::Stdin,
+            stdin.as_fd(),
+            stdin.is_terminal(),
+        ),
+        (
+            "stdout.write",
+            StandardStream::Stdout,
+            stdout.as_fd(),
+            stdout.is_terminal(),
+        ),
+        (
+            "stderr.write",
+            StandardStream::Stderr,
+            stderr.as_fd(),
+            stderr.is_terminal(),
+        ),
+    ] {
+        if roles.iter().any(|value| value == effect) {
+            let binding = if terminal {
+                host.bind_terminal_stream(role, descriptor)
+            } else {
+                host.bind_stream(role, descriptor)
+            };
+            binding.map_err(|_| {
+                execute_error(
+                    "EXECUTE004",
+                    "declared data channel is unavailable or occupied",
+                )
+            })?;
+        }
+    }
+    Ok(())
+}
+
+fn preflight_stream_channels(
+    plan: &Value,
+    plan_file: &File,
+    executable_files: &BTreeMap<String, File>,
+) -> Result<(), ProjectFrontendError> {
+    use std::io::IsTerminal;
+    let stdin = std::io::stdin();
+    let stdout = std::io::stdout();
+    let stderr = std::io::stderr();
+    let roles = plan["standard_host"]["roles"]
+        .as_array()
+        .expect("validated roles");
+    let mut channels = Vec::new();
+    for (effect, descriptor, terminal) in [
+        ("stdin.read", stdin.as_fd(), stdin.is_terminal()),
+        ("stdout.write", stdout.as_fd(), stdout.is_terminal()),
+        ("stderr.write", stderr.as_fd(), stderr.is_terminal()),
+    ] {
+        if roles.iter().any(|value| value == effect) {
+            let stat = rustix::fs::fstat(descriptor)
+                .map_err(|_| execute_error("EXECUTE004", "data channel identity is unavailable"))?;
+            channels.push((effect, stat.st_dev, stat.st_ino, terminal));
+        }
+    }
+    for channel in &channels {
+        if channel.0 != "stdin.read"
+            && !channel.3
+            && channels.iter().any(|other| {
+                other.0 == "stdin.read" && (channel.1, channel.2) == (other.1, other.2)
+            })
+        {
+            return Err(execute_error(
+                "EXECUTE004",
+                "input and output data channels collide",
+            ));
+        }
+    }
+    let check_file = |file: &File| {
+        let metadata = rustix::fs::fstat(file)
+            .map_err(|_| execute_error("EXECUTE004", "control identity is unavailable"))?;
+        if channels
+            .iter()
+            .any(|channel| (channel.1, channel.2) == (metadata.st_dev, metadata.st_ino))
+        {
+            return Err(execute_error(
+                "EXECUTE004",
+                "data channel collides with a control or input file",
+            ));
+        }
+        Ok(())
+    };
+    check_file(plan_file)?;
+    for observation in plan["observations"]
+        .as_array()
+        .expect("validated observations")
+    {
+        if !observation["path"].is_null() {
+            let path = path_from_native_value(&observation["path"]).map_err(workflow_contract)?;
+            let (_, file) =
+                open_absolute_file_with_parent_nofollow(&path).map_err(frontend_contract)?;
+            check_file(&file)?;
+        }
+    }
+    for file in executable_files.values() {
+        check_file(file)?;
+    }
+    Ok(())
 }
 
 struct RuntimeEffectJournal<'journal> {
@@ -2847,6 +3249,25 @@ fn source_operation_value(
     metadata_only: bool,
 ) -> Value {
     match operation {
+        SourceOperation::StandardStream {
+            operation,
+            effect,
+            requested_bytes,
+            admitted_bytes,
+        } => {
+            let progress = match result {
+                Some(SourceEffectResult::StandardStream(progress)) => Some(progress),
+                _ => None,
+            };
+            json!({
+                "kind":"standard-stream", "operation":operation, "effect":authority_effect_name(*effect),
+                "requested_bytes":requested_bytes,
+                "admitted_bytes":progress.map_or(*admitted_bytes, |p| p.admitted_bytes as u64),
+                "confirmed_bytes":progress.map(|p| p.confirmed_bytes),
+                "uncertain_bytes_upper_bound":progress.map(|p| p.uncertain_bytes_upper_bound),
+                "eof":progress.and_then(|p| p.eof)
+            })
+        }
         SourceOperation::Entropy {
             operation,
             requested_bytes,
@@ -2998,6 +3419,9 @@ fn authority_effect_name(effect: AuthorityEffect) -> &'static str {
         AuthorityEffect::ClockWall => "clock.wall",
         AuthorityEffect::ClockMonotonic => "clock.monotonic",
         AuthorityEffect::EntropySystem => "entropy.system",
+        AuthorityEffect::StdinRead => "stdin.read",
+        AuthorityEffect::StdoutWrite => "stdout.write",
+        AuthorityEffect::StderrWrite => "stderr.write",
     }
 }
 
@@ -3030,7 +3454,15 @@ fn runtime_scope_value(request: &CapabilityRequest, metadata_only: bool) -> Valu
             "endpoint":endpoint,
             "header":header
         }),
-        CapabilityScope::Evaluation if request.effect() == AuthorityEffect::EntropySystem => {
+        CapabilityScope::Evaluation
+            if matches!(
+                request.effect(),
+                AuthorityEffect::EntropySystem
+                    | AuthorityEffect::StdinRead
+                    | AuthorityEffect::StdoutWrite
+                    | AuthorityEffect::StderrWrite
+            ) =>
+        {
             json!({"kind":"evaluation"})
         }
         CapabilityScope::Evaluation => json!({
@@ -3771,7 +4203,12 @@ fn scope_values(
     if scope == "evaluation" && effect == "clock.monotonic" {
         return Ok(vec![json!({"kind":"clock","clock":"monotonic"})]);
     }
-    if scope == "evaluation" && effect == "entropy.system" {
+    if scope == "evaluation"
+        && matches!(
+            effect,
+            "entropy.system" | "stdin.read" | "stdout.write" | "stderr.write"
+        )
+    {
         return Ok(vec![json!({"kind":"evaluation"})]);
     }
     Err(frontend_contract(ProjectError::new(
@@ -4146,6 +4583,37 @@ impl HostProjectFilesystem {
             chain,
             failed: false,
             metadata_only,
+            primary: None,
+            cleanup: Vec::new(),
+            progress: RoleProgress::default(),
+            complete: false,
+        })
+    }
+
+    fn create_receipt(&self, candidate: &Path) -> Result<ReceiptSink, ProjectFrontendError> {
+        let relative = candidate
+            .strip_prefix(&self.root)
+            .map_err(|_| execute_error("EXECUTE004", "receipt path escapes the project root"))?;
+        let (parent, name) = open_relative_output_parent(&self.root_directory, relative, candidate)
+            .map_err(frontend_contract)?;
+        require_absent_output(&parent, &name, candidate).map_err(frontend_contract)?;
+        let descriptor = rustix::fs::openat(
+            &parent,
+            &name,
+            rustix::fs::OFlags::WRONLY
+                | rustix::fs::OFlags::CREATE
+                | rustix::fs::OFlags::EXCL
+                | rustix::fs::OFlags::NOFOLLOW
+                | rustix::fs::OFlags::CLOEXEC,
+            rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
+        )
+        .map_err(|_| execute_error("EXECUTE004", "receipt sink cannot be created exclusively"))?;
+        parent
+            .sync_all()
+            .map_err(|_| execute_error("EXECUTE004", "receipt creation could not be persisted"))?;
+        Ok(ReceiptSink {
+            file: File::from(descriptor),
+            parent,
         })
     }
 }
@@ -4554,6 +5022,164 @@ mod tests {
 
     static NEXT: AtomicU64 = AtomicU64::new(0);
 
+    fn standard_test_header() -> Value {
+        let mut document = json!({"authority":{"requests":[{"effect":"stdout.write"}]}});
+        select_standard_host_policy(&mut document, "opaal.plan.v3");
+        let digest = format!("sha256:{}", "1".repeat(64));
+        json!({
+            "plan_digest":digest, "accepted_plan_digest":digest, "authority_digest":digest,
+            "project_digest":digest, "environment_digest":digest, "tool_lock_digest":digest,
+            "child_environment_digest":digest, "started_at":"2026-10-08T00:00:00.000000000Z",
+            "standard_host":document["standard_host"]
+        })
+    }
+
+    #[test]
+    fn simultaneous_evidence_creation_has_one_winner_and_never_truncates() {
+        for receipt in [false, true] {
+            let temporary = TempDirectory::new();
+            let filesystem = HostProjectFilesystem::new(
+                temporary.0.clone(),
+                File::open(&temporary.0).unwrap(),
+                ControlReadBudget::default(),
+            );
+            let path = temporary.0.join("evidence");
+            let barrier = std::sync::Barrier::new(8);
+            let winners = std::thread::scope(|scope| {
+                let workers = (0..8)
+                    .map(|_| {
+                        scope.spawn(|| {
+                            barrier.wait();
+                            if receipt {
+                                filesystem
+                                    .create_receipt(&path)
+                                    .map(|mut sink| {
+                                        sink.file.write_all(b"winner-sentinel").unwrap();
+                                        sink.file.sync_all().unwrap();
+                                    })
+                                    .is_ok()
+                            } else {
+                                filesystem
+                                    .create_journal(
+                                        &path,
+                                        "0123456789abcdef0123456789abcdef",
+                                        standard_test_header(),
+                                    )
+                                    .is_ok()
+                            }
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                workers
+                    .into_iter()
+                    .map(|worker| worker.join().unwrap())
+                    .filter(|won| *won)
+                    .count()
+            });
+            assert_eq!(winners, 1);
+            let bytes = fs::read(&path).unwrap();
+            if receipt {
+                assert_eq!(bytes, b"winner-sentinel");
+                assert!(filesystem.create_receipt(&path).is_err());
+            } else {
+                assert!(!audit_journal(&bytes).unwrap().is_complete());
+                assert!(
+                    filesystem
+                        .create_journal(
+                            &path,
+                            "0123456789abcdef0123456789abcdef",
+                            standard_test_header()
+                        )
+                        .is_err()
+                );
+            }
+            assert_eq!(fs::read(&path).unwrap(), bytes);
+            assert_eq!(fs::metadata(&path).unwrap().mode() & 0o777, 0o600);
+            assert_eq!(fs::read_dir(&temporary.0).unwrap().count(), 1);
+        }
+    }
+
+    #[test]
+    fn host_and_resource_cleanup_are_contiguous_lifo_and_retained_after_sink_failure() {
+        use opaal_runtime::lifetime::{ResourceOwnerId, ResourceScope};
+        use opaal_runtime::security::SecretStore;
+        for fails in [false, true] {
+            let temporary = TempDirectory::new();
+            let filesystem = HostProjectFilesystem::new(
+                temporary.0.clone(),
+                File::open(&temporary.0).unwrap(),
+                ControlReadBudget::default(),
+            );
+            let path = temporary.0.join("journal.jsonl");
+            let mut journal = filesystem
+                .create_journal(
+                    &path,
+                    "0123456789abcdef0123456789abcdef",
+                    standard_test_header(),
+                )
+                .unwrap();
+            let evaluation = EvaluationContextId::new(1).unwrap();
+            let mut resources = ResourceScope::new(ResourceOwnerId::new(evaluation));
+            resources.register(|| Ok(())).unwrap();
+            resources
+                .register(|| Err("resource-payload-canary".to_owned()))
+                .unwrap();
+            let resource_cleanup = resources.close(&SecretStore::new());
+            let host_cleanup = vec![
+                outcome_value(
+                    "cleanup-failed",
+                    "OPERATION004",
+                    "host-payload-canary",
+                    None,
+                    None,
+                    false
+                );
+                2
+            ];
+            if fails {
+                journal.file = File::open(&path).unwrap();
+            }
+            let host = append_standard_host_cleanup(&mut journal, evaluation, 2, host_cleanup);
+            let resource = append_cleanup_events(&mut journal, &resource_cleanup);
+            assert_eq!(journal.cleanup.len(), 4);
+            assert_eq!(journal.cleanup[0]["code"], "OPERATION004");
+            assert_eq!(journal.cleanup[2]["code"], "CLEANUP001");
+            if fails {
+                assert!(host.is_err() && resource.is_err());
+                assert!(journal.failed);
+            } else {
+                let cleanup = [host.unwrap(), resource.unwrap()].concat();
+                let adapter = opaal_platform::operational::FakeOperationalAdapter::new();
+                adapter.set_times(
+                    unix_nanos_from_timestamp("2026-10-08T00:00:00.000000000Z").unwrap(),
+                    0,
+                );
+                let run = finish_execution_journal(
+                    &mut journal,
+                    success_outcome("EXECUTE_SUCCESS", "primary-payload-canary"),
+                    cleanup,
+                    &adapter,
+                )
+                .unwrap();
+                assert!(!run.is_successful());
+                let audit = audit_journal(&fs::read(&path).unwrap()).unwrap();
+                assert!(audit.is_complete());
+                assert_eq!(
+                    audit.value()["events"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .filter(|event| event["kind"] == "cleanup")
+                        .map(|event| event["payload"]["ordinal"].as_u64().unwrap())
+                        .collect::<Vec<_>>(),
+                    vec![3, 2, 1, 0]
+                );
+                assert_eq!(audit.value()["primary"]["class"], "success");
+                assert!(!audit.value().to_string().contains("canary"));
+            }
+        }
+    }
+
     #[test]
     fn text_inspection_accepts_both_closed_v3_transfer_kinds() {
         for (kind, operation, effect) in [
@@ -4628,10 +5254,14 @@ mod tests {
             let (chain, _) = JournalChain::begin(run_id, header).unwrap();
             let mut journal = SyncedJournal {
                 run_id: run_id.to_owned(),
-                file: File::open(path).unwrap(),
+                file: File::open(&path).unwrap(),
                 chain,
                 failed: false,
                 metadata_only: true,
+                primary: None,
+                cleanup: Vec::new(),
+                progress: RoleProgress::default(),
+                complete: false,
             };
             let primary = outcome_value(
                 "cancelled",
@@ -4651,6 +5281,223 @@ mod tests {
             assert!(error.rendered.contains("incomplete or unavailable"));
             assert!(!error.rendered.contains("payload-canary"));
             assert_eq!(journal.failed, !invalid_timestamp);
+            journal.progress.stdout.confirmed_bytes = 7;
+            journal.progress.stdin.uncertain_bytes_upper_bound = 3;
+            let run = finish_receipt(
+                ReceiptSink {
+                    file: File::open(&path).unwrap(),
+                    parent: File::open(&temporary.0).unwrap(),
+                },
+                &format!("sha256:{}", "1".repeat(64)),
+                &mut journal,
+                Err(error),
+            );
+            assert!(!run.is_successful());
+            assert!(run.output().is_empty());
+            let receipt = run.receipt().unwrap();
+            assert_eq!(receipt["primary"]["class"], "cancelled");
+            assert_eq!(receipt["primary"]["code"], "EXECUTE_CANCELLED");
+            assert_eq!(receipt["primary"]["value_digest"], Value::Null);
+            assert_eq!(receipt["journal_state"], "unavailable");
+            assert_eq!(receipt["progress"]["stdout.write"]["confirmed_bytes"], 7);
+            assert_eq!(
+                receipt["progress"]["stdin.read"]["uncertain_bytes_upper_bound"],
+                3
+            );
+            assert_eq!(
+                receipt["secondary"],
+                json!([
+                    {"category":"journal", "code":"JOURNAL005"},
+                    {"category":"receipt", "code":"JOURNAL005"}
+                ])
+            );
+            assert!(!receipt.to_string().contains("canary"));
+        }
+    }
+
+    #[test]
+    fn receipt_secondary_overflow_retains_bounded_order_and_reports_omissions() {
+        let maximum = opaal_runtime::workflow::MAX_ARTIFACT_ENTRIES;
+        let mut receipt = json!({"secondary":vec![json!({"category":"cleanup", "code":"CLEANUP001"}); maximum + 2], "omitted_secondary_count":0});
+        bound_receipt_secondaries(&mut receipt);
+        assert_eq!(receipt["secondary"].as_array().unwrap().len(), maximum);
+        assert_eq!(receipt["omitted_secondary_count"], 3);
+        receipt["secondary"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"category":"receipt", "code":"JOURNAL005"}));
+        bound_receipt_secondaries(&mut receipt);
+        assert_eq!(receipt["omitted_secondary_count"], 4);
+        assert_eq!(receipt["secondary"].as_array().unwrap().len(), maximum);
+        assert_eq!(
+            receipt["secondary"][maximum - 1]["code"],
+            "EXECUTE_EVIDENCE_OVERFLOW"
+        );
+    }
+
+    struct FaultReceiptFile {
+        fault: &'static str,
+        calls: Arc<Mutex<Vec<&'static str>>>,
+    }
+
+    impl Write for FaultReceiptFile {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            let mut calls = self.calls.lock().unwrap();
+            calls.push("write");
+            if self.fault == "partial-write" && calls.len() == 1 {
+                return Ok(bytes.len().min(2));
+            }
+            if matches!(self.fault, "write" | "partial-write") {
+                Err(io::Error::other("receipt-payload-canary"))
+            } else {
+                Ok(bytes.len())
+            }
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            self.calls.lock().unwrap().push("flush");
+            if self.fault == "flush" {
+                Err(io::Error::other("receipt-payload-canary"))
+            } else {
+                Ok(())
+            }
+        }
+    }
+
+    impl ReceiptFile for FaultReceiptFile {
+        fn sync_all(&self) -> io::Result<()> {
+            self.calls.lock().unwrap().push("sync");
+            if self.fault == "sync" {
+                Err(io::Error::other("receipt-payload-canary"))
+            } else {
+                Ok(())
+            }
+        }
+    }
+
+    #[test]
+    fn receipt_faults_preserve_primary_and_record_only_in_available_open_journals() {
+        for state in ["open", "complete", "unavailable", "fails-with-receipt"] {
+            for class in ["success", "error", "cancelled", "refused"] {
+                for fault in ["write", "partial-write", "flush", "sync", "parent"] {
+                    let temporary = TempDirectory::new();
+                    let mut document =
+                        json!({"authority":{"requests":[{"effect":"stdout.write"}]}});
+                    select_standard_host_policy(&mut document, "opaal.plan.v3");
+                    let digest = format!("sha256:{}", "1".repeat(64));
+                    let header = json!({
+                        "plan_digest":digest, "accepted_plan_digest":digest, "authority_digest":digest,
+                        "project_digest":digest, "environment_digest":digest, "tool_lock_digest":digest,
+                        "child_environment_digest":digest, "started_at":"2026-10-08T00:00:00.000000000Z",
+                        "standard_host":document["standard_host"]
+                    });
+                    let (chain, bytes) =
+                        JournalChain::begin("0123456789abcdef0123456789abcdef", header).unwrap();
+                    let path = temporary.0.join("journal.jsonl");
+                    fs::write(&path, bytes).unwrap();
+                    let primary = outcome_value(
+                        class,
+                        "EXECUTE_TEST",
+                        "primary-payload-canary",
+                        None,
+                        None,
+                        false,
+                    );
+                    let mut journal = SyncedJournal {
+                        run_id: "0123456789abcdef0123456789abcdef".to_owned(),
+                        file: fs::OpenOptions::new().append(true).open(&path).unwrap(),
+                        chain,
+                        failed: false,
+                        metadata_only: true,
+                        primary: Some(primary.clone()),
+                        cleanup: Vec::new(),
+                        progress: RoleProgress::default(),
+                        complete: false,
+                    };
+                    journal.progress.stdout.confirmed_bytes = 7;
+                    journal.progress.stdin.uncertain_bytes_upper_bound = 3;
+                    if state == "complete" {
+                        journal.append("terminal", json!({"finished_at":"2026-10-08T00:00:00.000000000Z", "primary":primary, "cleanup":[], "complete":true})).unwrap();
+                        journal.complete = true;
+                    } else if state == "unavailable" {
+                        journal.failed = true;
+                    } else if state == "fails-with-receipt" {
+                        journal.file = File::open(&path).unwrap();
+                    }
+                    let before = fs::read(&path).unwrap();
+                    let calls = Arc::new(Mutex::new(Vec::new()));
+                    let result = if state == "complete" {
+                        Ok(ExecuteFrontendRun {
+                            output: Vec::new(),
+                            successful: class == "success",
+                            receipt: None,
+                        })
+                    } else {
+                        Err(execute_error("JOURNAL005", "journal-payload-canary"))
+                    };
+                    let run = finish_receipt(
+                        ReceiptSink {
+                            file: FaultReceiptFile {
+                                fault,
+                                calls: calls.clone(),
+                            },
+                            parent: File::open(if fault == "parent" {
+                                Path::new("/dev/null")
+                            } else {
+                                &temporary.0
+                            })
+                            .unwrap(),
+                        },
+                        &digest,
+                        &mut journal,
+                        result,
+                    );
+                    assert!(!run.is_successful());
+                    assert!(run.output().is_empty());
+                    let receipt = run.receipt().unwrap();
+                    assert_eq!(receipt["primary"]["class"], class);
+                    assert_eq!(receipt["primary"]["code"], "EXECUTE_TEST");
+                    assert_eq!(receipt["primary"]["partial"], true);
+                    assert_eq!(receipt["progress"]["stdout.write"]["confirmed_bytes"], 7);
+                    assert_eq!(
+                        receipt["progress"]["stdin.read"]["uncertain_bytes_upper_bound"],
+                        3
+                    );
+                    assert!(!receipt.to_string().contains("canary"));
+                    let expected_state = match state {
+                        "open" => "incomplete",
+                        "complete" => "complete",
+                        _ => "unavailable",
+                    };
+                    assert_eq!(receipt["journal_state"], expected_state);
+                    let expected_secondary = if state == "complete" {
+                        json!([{"category":"receipt", "code":"JOURNAL005"}])
+                    } else {
+                        json!([{"category":"journal", "code":"JOURNAL005"}, {"category":"receipt", "code":"JOURNAL005"}])
+                    };
+                    assert_eq!(receipt["secondary"], expected_secondary);
+                    let expected_calls = match fault {
+                        "write" => vec!["write"],
+                        "partial-write" => vec!["write", "write"],
+                        "flush" => vec!["write", "write", "flush"],
+                        _ => vec!["write", "write", "flush", "sync"],
+                    };
+                    assert_eq!(*calls.lock().unwrap(), expected_calls);
+                    let after = fs::read(&path).unwrap();
+                    let audit = audit_journal(&after).unwrap();
+                    if state == "open" {
+                        assert_ne!(before, after);
+                        assert_eq!(audit.value()["events"][0]["kind"], "evidence-failure");
+                        assert_eq!(
+                            audit.value()["events"][0]["payload"],
+                            json!({"category":"receipt", "code":"JOURNAL005"})
+                        );
+                        assert!(!audit.is_complete());
+                    } else {
+                        assert_eq!(before, after);
+                    }
+                }
+            }
         }
     }
 

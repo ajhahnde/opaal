@@ -386,7 +386,7 @@ mod tests {
             current_result_type: None,
             current_type_arguments: BTreeMap::new(),
             budgeted_callback: false,
-            standard_effects_allowed: true,
+            standard_effects: None,
             cancel,
             budget,
             host: &mut host,

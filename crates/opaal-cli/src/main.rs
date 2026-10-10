@@ -3,6 +3,7 @@
 use std::env;
 use std::ffi::OsStr;
 use std::io::{self, IsTerminal, Write};
+use std::os::fd::AsFd;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
@@ -35,12 +36,12 @@ use opaal_runtime::authority::{
 use opaal_runtime::eval::SystemClock;
 use opaal_runtime::eval::{CancellationToken, Clock};
 use opaal_runtime::module::ModuleProgramLoader;
-use opaal_runtime::operational::random::{RandomLimits, RandomState};
-use opaal_runtime::operational::random_source::RandomBinding;
+use opaal_runtime::operational::standard::{StandardLimits, StandardState};
+use opaal_runtime::operational::standard_source::StandardBinding;
 use opaal_runtime::outcome::{OutcomeEvidence, PrimaryOutcome};
 use opaal_runtime::plan::SessionOptions;
 use opaal_runtime::script::{
-    ScriptError, ScriptExecutionOutcome, execute_ambient_module_program_outcome_with_random,
+    ScriptError, ScriptExecutionOutcome, execute_ambient_module_program_outcome_with_standard_host,
 };
 use opaal_runtime::session::{BackgroundFailure, Session, SubmitError, SubmitOutcome};
 use opaal_runtime::{NativeSessionSnapshot, Status, Value};
@@ -59,7 +60,7 @@ Usage:
   opaal plan --project opaal.toml --task TASK --environment ID [--input NAME=VALUE | --input-file NAME=PATH]... --expires-in SECONDSs --out PATH
   opaal plan inspect PATH
   opaal plan --help
-  opaal execute --plan PATH --accept DIGEST [--run-id ID] [--secret-stdin ID] --journal PATH
+  opaal execute --plan PATH --accept DIGEST [--run-id ID] [--secret-stdin ID] --journal PATH [--receipt-out PATH]
   opaal execute --help
   opaal audit --project opaal.toml --journal PATH --out PATH
   opaal audit inspect PATH
@@ -163,13 +164,17 @@ redacted human view. Invalid, old, future, or tampered artifacts are not rendere
 const EXECUTE_HELP: &str = "Execute one explicitly accepted OPAAL plan
 
 Usage:
-  opaal execute --plan PATH --accept sha256:DIGEST [--run-id ID] [--secret-stdin ID] --journal PATH
+  opaal execute --plan PATH --accept sha256:DIGEST [--run-id ID] [--secret-stdin ID] --journal PATH [--receipt-out PATH]
   opaal execute --help
 
 Acceptance belongs only to this request. Execution revalidates every bound
 identity before affected work and writes an exclusive hash-chained journal.
 The run ID is generated when omitted. --secret-stdin is omitted for a
 secret-free plan and must name the exact requirement for a one-secret plan.
+Plans declaring stream output require --receipt-out, an exclusive new file in
+the project. Data stdout/stderr contain only program output; safe outcome and
+transfer counts go to the receipt. --secret-stdin conflicts with stdin.read.
+Require both a successful command and a valid receipt to establish success.
 ";
 
 const AUDIT_HELP: &str = "Audit one OPAAL run journal without execution
@@ -232,7 +237,8 @@ fn main() -> ExitCode {
             run_id,
             secret_stdin,
             journal,
-        } => run_execute(plan, accept, run_id, secret_stdin, journal),
+            receipt_out,
+        } => run_execute(plan, accept, run_id, secret_stdin, journal, receipt_out),
         Mode::AuditHelp => emit_report(HostReport::success(AUDIT_HELP.as_bytes())),
         Mode::AuditInspect { path } => run_audit_inspect(path),
         Mode::Audit {
@@ -417,11 +423,13 @@ fn run_execute(
     run_id: Option<String>,
     secret_stdin: Option<String>,
     journal: PathBuf,
+    receipt_out: Option<PathBuf>,
 ) -> ExitCode {
-    let request = ExecuteProjectRequest::new(plan, accept, run_id, secret_stdin, journal);
+    let request = ExecuteProjectRequest::new(plan, accept, run_id, secret_stdin, journal)
+        .with_receipt_out(receipt_out);
     let stdin = io::stdin();
     let is_terminal = stdin.is_terminal();
-    let mut input = stdin.lock();
+    let mut input = stdin;
     match execute_explicit_plan(&request, is_terminal, &mut input) {
         Ok(run) if run.is_successful() => emit_report(HostReport::success(run.output())),
         Ok(run) => {
@@ -459,14 +467,14 @@ fn run_script(path: &Path, arguments: &[String]) -> ExitCode {
         }
     };
     let clock = Arc::new(SystemClock::new());
-    let mut random = match random_binding(clock.clone()) {
+    let mut standard = match standard_binding(clock.clone(), true) {
         Ok(binding) => binding,
         Err(error) => {
             return emit_report(HostReport::failure(format!("opaal: {error}\n").as_bytes()));
         }
     };
     let mut output = io::stdout();
-    let outcome = execute_ambient_module_program_outcome_with_random(
+    let outcome = execute_ambient_module_program_outcome_with_standard_host(
         &program,
         arguments,
         snapshot,
@@ -476,7 +484,7 @@ fn run_script(path: &Path, arguments: &[String]) -> ExitCode {
         &PosixPlatform,
         clock,
         &mut output,
-        &mut random,
+        &mut standard,
     );
     let flush = output.flush();
     finish_script_outcome_report(outcome, flush)
@@ -509,6 +517,7 @@ fn run_interactive_with_editor(editor: &mut dyn LineEditor) -> ExitCode {
     let mut evaluator = OpaalEvaluator {
         session,
         clock: SystemClock::new(),
+        lend_stdin: io::stdin().is_terminal() && io::stdout().is_terminal(),
     };
     let mut output = io::stdout();
     let mut diagnostics = io::stderr();
@@ -527,6 +536,7 @@ fn run_interactive_with_editor(editor: &mut dyn LineEditor) -> ExitCode {
 struct OpaalEvaluator {
     session: Session,
     clock: SystemClock,
+    lend_stdin: bool,
 }
 
 impl InteractiveEvaluator for OpaalEvaluator {
@@ -542,16 +552,16 @@ impl InteractiveEvaluator for OpaalEvaluator {
         source: &str,
         output: &mut dyn Write,
     ) -> Result<EvaluationControl, InteractiveEvaluationError> {
-        let mut random = random_binding(Arc::new(self.clock.clone()))
+        let mut standard = standard_binding(Arc::new(self.clock.clone()), self.lend_stdin)
             .map_err(|error| InteractiveDiagnostic::new(format!("opaal: {error}\n")))?;
         let outcome = self
             .session
-            .submit_with_source_loader_and_random(
+            .submit_with_source_loader_and_standard_host(
                 source_name(),
                 source,
                 &HostCheckFilesystem,
                 &HostCheckFilesystem,
-                &mut random,
+                &mut standard,
                 &PosixPlatform,
                 &PosixPlatform,
                 &self.clock,
@@ -588,7 +598,7 @@ impl InteractiveEvaluator for OpaalEvaluator {
                 Err(InteractiveEvaluationError::ProgramOutput(error))
             }
         };
-        let cleanup = random.take_cleanup_errors();
+        let cleanup = standard.take_cleanup_errors();
         if cleanup.is_empty() {
             return result;
         }
@@ -607,9 +617,10 @@ impl InteractiveEvaluator for OpaalEvaluator {
     }
 }
 
-fn random_binding(
+fn standard_binding(
     clock: Arc<dyn Clock>,
-) -> Result<RandomBinding, opaal_runtime::operational::ModuleError> {
+    lend_stdin: bool,
+) -> Result<StandardBinding, opaal_runtime::operational::ModuleError> {
     static NEXT_EVALUATION: AtomicU64 = AtomicU64::new(1);
     let evaluation = NEXT_EVALUATION
         .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
@@ -623,21 +634,48 @@ fn random_binding(
         })?;
     let authority = AuthorityContext::new(
         evaluation,
-        [AuthorityRule::grant(
-            CapabilityRequest::entropy_system(),
-            RequiredEnforcement::Enforced,
-        )],
+        [
+            Some(CapabilityRequest::entropy_system()),
+            lend_stdin.then(CapabilityRequest::stdin_read),
+            Some(CapabilityRequest::stdout_write()),
+            Some(CapabilityRequest::stderr_write()),
+        ]
+        .into_iter()
+        .flatten()
+        .map(|request| AuthorityRule::grant(request, RequiredEnforcement::Enforced)),
     )
-    .expect("one explicit evaluation entropy grant");
-    // Construction verifies the native backend but starts no worker. An
-    // unavailable backend refuses only a reached Random call, even no-draw calls.
+    .expect("distinct explicit standard host grants");
+    // Construction and binding start no worker; an unavailable role refuses
+    // only when reached, including calls that transfer no bytes.
+    let mut cancellation = CancellationToken::never();
     let host = PosixStandardHost::for_cli(evaluation.get())
         .ok()
-        .map(|host| Box::new(host) as Box<dyn opaal_platform::standard_host::StandardHost>);
-    let state = RandomState::new(host, RandomLimits::default())?;
-    Ok(RandomBinding::new(
+        .and_then(|mut host| {
+            cancellation = CancellationToken::from_fn(host.capture_cancellation_signals().ok()?);
+            use opaal_platform::standard_host::StandardStream;
+            let stdin = io::stdin();
+            let stdout = io::stdout();
+            let stderr = io::stderr();
+            for (role, descriptor, terminal) in [
+                (StandardStream::Stdin, stdin.as_fd(), stdin.is_terminal()),
+                (StandardStream::Stdout, stdout.as_fd(), stdout.is_terminal()),
+                (StandardStream::Stderr, stderr.as_fd(), stderr.is_terminal()),
+            ] {
+                if role == StandardStream::Stdin && !lend_stdin {
+                    continue;
+                }
+                let _ = if terminal {
+                    host.bind_terminal_stream(role, descriptor)
+                } else {
+                    host.bind_stream(role, descriptor)
+                };
+            }
+            Some(Box::new(host) as Box<dyn opaal_platform::standard_host::StandardHost>)
+        });
+    let state = StandardState::new(host, StandardLimits::default())?;
+    Ok(StandardBinding::new(
         authority,
-        CancellationToken::never(),
+        cancellation,
         clock,
         None,
         state,

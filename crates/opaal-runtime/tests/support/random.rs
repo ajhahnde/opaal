@@ -14,7 +14,7 @@ use opaal_runtime::authority::{
 use opaal_runtime::context::OperationalContext;
 use opaal_runtime::eval::{CancellationToken, FakeClock, ResourceBudget};
 use opaal_runtime::operational::ModuleError;
-use opaal_runtime::operational::random::{RandomLimits, RandomState};
+use opaal_runtime::operational::standard::{StandardLimits, StandardState};
 
 pub struct Source(pub String);
 impl opaal_runtime::module::ModuleCanonicalizer for Source {
@@ -139,7 +139,7 @@ pub struct Harness {
     pub context: OperationalContext,
     pub effects: EffectSet,
     pub platform: FakePlatform,
-    pub state: RandomState,
+    pub state: StandardState,
     pub budget: ResourceBudget,
     pub script: Arc<Mutex<Script>>,
     pub clock: Arc<FakeClock>,
@@ -177,12 +177,12 @@ impl Harness {
                 Capabilities::full(),
                 AuthorityProfile::enforced(),
             ),
-            state: RandomState::new(
+            state: StandardState::new(
                 Some(Box::new(Host {
                     script: script.clone(),
                     evaluation: 71,
                 })),
-                RandomLimits::default(),
+                StandardLimits::default(),
             )
             .unwrap(),
             budget: ResourceBudget::opaal(),
@@ -200,8 +200,8 @@ impl Harness {
             arguments,
         )
     }
-    pub fn limits(&mut self, limits: RandomLimits) {
-        self.state = RandomState::new(
+    pub fn limits(&mut self, limits: StandardLimits) {
+        self.state = StandardState::new(
             Some(Box::new(Host {
                 script: self.script.clone(),
                 evaluation: 71,

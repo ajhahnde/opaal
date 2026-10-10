@@ -1,0 +1,18 @@
+schema_version = 1
+project = "stdio_sample"
+environment = "ci"
+[[rules]]
+decision = "grant"
+effect = "stdin.read"
+scope = "evaluation"
+required_enforcement = "enforced"
+[[rules]]
+decision = "grant"
+effect = "stdout.write"
+scope = "evaluation"
+required_enforcement = "enforced"
+[[rules]]
+decision = "grant"
+effect = "stderr.write"
+scope = "evaluation"
+required_enforcement = "enforced"

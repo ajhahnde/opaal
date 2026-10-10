@@ -5,10 +5,10 @@
 //! never a `RuntimeError` and never a script value.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use opaal_runtime::eval::{
-    CancelReason, CancellationToken, Completion, evaluate_with_cancellation,
+    CancelReason, CancellationToken, Completion, FakeClock, Instant, evaluate_with_cancellation,
 };
 use opaal_runtime::{ScopeStack, Value};
 use opaal_syntax::{ParseOutcome, SourceFile, SourceId, parse_opaal};
@@ -34,6 +34,7 @@ mut total = 0
 for n in [1, 2, 3] {
     total = total + n
 }
+
 total";
     let (_file, completion) = run(source, &CancellationToken::never());
     match completion {
@@ -41,6 +42,37 @@ total";
         Completion::Cancelled(cancellation) => {
             panic!("unexpected cancellation: {cancellation:?}")
         }
+    }
+}
+
+#[test]
+fn composed_signal_and_deadline_keep_the_first_reason_across_clones() {
+    for requested_first in [false, true] {
+        let clock = FakeClock::new();
+        let requested = Arc::new(AtomicBool::new(false));
+        let signal = requested.clone();
+        let token = CancellationToken::deadline(clock.clone(), Instant::from_nanos(10))
+            .with_requested_cancellation(move || signal.load(Ordering::SeqCst));
+        let peer = token.clone();
+        assert!(!token.is_cancelled());
+        if requested_first {
+            requested.store(true, Ordering::SeqCst);
+        } else {
+            clock.advance(10);
+        }
+        let expected = if requested_first {
+            CancelReason::Requested
+        } else {
+            CancelReason::Timeout
+        };
+        let (_, completion) = run("while true {\n}", &token);
+        assert!(
+            matches!(completion, Completion::Cancelled(cancellation) if cancellation.reason() == expected)
+        );
+        clock.advance(10);
+        requested.store(!requested_first, Ordering::SeqCst);
+        assert!(peer.is_cancelled());
+        assert_eq!(peer.reason(), expected);
     }
 }
 

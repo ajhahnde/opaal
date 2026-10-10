@@ -255,6 +255,42 @@
       "assertion": "ci/qualify_source_formatting.py"
     },
     {
+      "path": "tests/golden/standard-input-output/ci-job-check/assess.opaal",
+      "role": "positive",
+      "reason": "Canonical native processor or CI assessment reference; typed project tasks run only through the explicit project route.",
+      "assertion": "ci/qualify_standard_input_output.py"
+    },
+    {
+      "path": "tests/golden/standard-input-output/ci-job-check/report.opaal",
+      "role": "positive",
+      "reason": "Canonical native processor or CI assessment reference; typed project tasks run only through the explicit project route.",
+      "assertion": "ci/qualify_standard_input_output.py"
+    },
+    {
+      "path": "tests/golden/standard-input-output/ci-job-check/source.opaal",
+      "role": "positive",
+      "reason": "Canonical native processor or CI assessment reference; typed project tasks run only through the explicit project route.",
+      "assertion": "ci/qualify_standard_input_output.py"
+    },
+    {
+      "path": "tests/golden/standard-input-output/ci-job-check/tasks.opaal",
+      "role": "positive",
+      "reason": "Canonical native processor or CI assessment reference; typed project tasks run only through the explicit project route.",
+      "assertion": "ci/qualify_standard_input_output.py"
+    },
+    {
+      "path": "tests/golden/standard-input-output/source.opaal",
+      "role": "positive",
+      "reason": "Canonical native processor or CI assessment reference; typed project tasks run only through the explicit project route.",
+      "assertion": "ci/qualify_standard_input_output.py"
+    },
+    {
+      "path": "tests/golden/standard-input-output/tasks.opaal",
+      "role": "positive",
+      "reason": "Canonical native processor or CI assessment reference; typed project tasks run only through the explicit project route.",
+      "assertion": "ci/qualify_standard_input_output.py"
+    },
+    {
       "path": "tests/opaal-foundation/language/grammar/complete/declaration-first.opaal",
       "role": "positive",
       "reason": "complete corpus role; owning manifest expectation: -",
@@ -992,6 +1028,12 @@
       "path": "tests/golden/random-values/README.md"
     },
     {
+      "path": "tests/golden/standard-input-output/README.md"
+    },
+    {
+      "path": "tests/golden/standard-input-output/ci-job-check/README.md"
+    },
+    {
       "path": "tests/opaal-foundation/workflow/README.md"
     }
   ],
@@ -1117,7 +1159,7 @@
     },
     {
       "path": "ci/check_product.py",
-      "sha256": "211ec0e816f83f1262e6a2b500a9d46f5473842b0a12ad616b5f4a4b2c748fcb",
+      "sha256": "a11e20fe85d869db5b44739b3a85b079ed1a6339421b47db5fa6e219d19723b7",
       "source_markers": 15,
       "constructors_or_assertions": [
         "command_json",
@@ -1151,7 +1193,7 @@
     },
     {
       "path": "ci/check_source_formatting.py",
-      "sha256": "1d59307cdda5696a6593cc947bff504c2c4d33b4f12932feef2b24dad6586c53",
+      "sha256": "e05a567ff77e4864e9ebbc64ef8c07e320e4b44a5ae628825061df9ff24f92b0",
       "source_markers": 12,
       "constructors_or_assertions": [
         "check",
@@ -1187,7 +1229,7 @@
     },
     {
       "path": "ci/package_data_processing.py",
-      "sha256": "7428831623adfbd9ddcc17d947ec39f60b3c8534cc5d135edadf2a4d1faaf842",
+      "sha256": "53d689f354d40c5b366bd106c1bbc2f9d1708a6317e6c1f42d96fe37908fb54c",
       "source_markers": 4,
       "constructors_or_assertions": [
         "digest",
@@ -1234,8 +1276,20 @@
       "assertion": "ci/qualify_source_formatting.py and ci/tests/test_source_formatting.py"
     },
     {
+      "path": "ci/package_standard_input_output.py",
+      "sha256": "6e749c44f435b8595f49edff80287c4f385693de226cb8ea9748dec061fd6f4a",
+      "source_markers": 3,
+      "constructors_or_assertions": [
+        "check_copies",
+        "main"
+      ],
+      "role": "source-infrastructure",
+      "reason": "Packages or replays exact native processor and CI assessment references, preserving core-copy and acquisition/evidence gates.",
+      "assertion": "ci/tests/test_standard_input_output_candidate.py"
+    },
+    {
       "path": "ci/qualify_data_processing.py",
-      "sha256": "7de8159bbe36010164740db362bb7fe574ec2f57be4df2bcbda2283681afb680",
+      "sha256": "e34b78cdfa7ce9296a3ecbfb6d215199ddc65c1150d5d9a722d3f12971b616d3",
       "source_markers": 23,
       "constructors_or_assertions": [
         "command",
@@ -1367,6 +1421,40 @@
       "role": "source-infrastructure",
       "reason": "Frozen qualification runner or fixture packager; legacy/negative/runtime buffers are intentional and exact canonical output, nonexecution, stale/fresh plans and observer fields are asserted during replay.",
       "assertion": "ci/qualify_source_formatting.py and ci/tests/test_source_formatting.py"
+    },
+    {
+      "path": "ci/qualify_standard_input_output.py",
+      "sha256": "4201c5d404ccabd234f5758733a34a3923791b3e320dcd29aab8a56dde16d96b",
+      "source_markers": 14,
+      "constructors_or_assertions": [
+        "assessment",
+        "main",
+        "qualify",
+        "references",
+        "run"
+      ],
+      "role": "source-infrastructure",
+      "reason": "Packages or replays exact native processor and CI assessment references, preserving core-copy and acquisition/evidence gates.",
+      "assertion": "ci/tests/test_standard_input_output_candidate.py"
+    },
+    {
+      "path": "ci/qualify_standard_io_failures.py",
+      "sha256": "1685903c69ea35431a5d9b3380048d9dd88b5f06d5ff4b18d96e88ef2257fa1e",
+      "source_markers": 11,
+      "constructors_or_assertions": [
+        "apply",
+        "execute",
+        "limited_sink",
+        "main",
+        "plan",
+        "qualify",
+        "retain",
+        "run",
+        "stop"
+      ],
+      "role": "positive-generator",
+      "reason": "Generates controlled standard-stream projects for real transfers, interruption, exact reap and bounded journal persistence failures.",
+      "assertion": "ci/qualify_standard_io_failures.py"
     },
     {
       "path": "ci/tests/test_check_benchmarks.py",
@@ -1551,13 +1639,14 @@
     },
     {
       "path": "ci/tests/test_source_formatting.py",
-      "sha256": "b3ac17d0c843d7387a810a442322fb74b4f6cb6995f26d9fc3f35bc02fff61cc",
-      "source_markers": 19,
+      "sha256": "3a25c0c0e2e136e3c54654067d4b2b2361ce64e7195037fb201825f46387e685",
+      "source_markers": 21,
       "constructors_or_assertions": [
         "census",
         "setUp",
         "tearDown",
         "test_added_missing_and_duplicate_sources_fail",
+        "test_deleted_tracked_owner_reports_missing_classification_without_a_read_error",
         "test_embedded_sources_and_non_opaal_seeds_are_discovered",
         "test_fixture_bytes_roles_and_symlinks_fail_closed",
         "test_new_markdown_directory_and_changed_fence_fail",
@@ -1568,6 +1657,20 @@
       "role": "mixed-test-buffers",
       "reason": "Retain complete, legacy, invalid and incomplete source buffers and their source-position assertions; canonical output is asserted only by formatting owners.",
       "assertion": "ci/tests/test_source_formatting.py"
+    },
+    {
+      "path": "ci/tests/test_standard_input_output_candidate.py",
+      "sha256": "780897b89ecb9b85de4e98921029e5fc806fa7e016da516a2921eaea19b17cea",
+      "source_markers": 6,
+      "constructors_or_assertions": [
+        "read",
+        "test_policy_only_passes_without_failed_or_pending_jobs",
+        "test_project_ci_never_accepts_a_bool_without_successful_matching_evidence",
+        "test_report_core_copy_must_match_maintained_owner"
+      ],
+      "role": "mixed-test-buffers",
+      "reason": "I/O contract or native fault assertions retain scripted actions, legacy layout, refused contexts, cancellation and hostile descriptor/protocol inputs.",
+      "assertion": "ci/tests/test_standard_input_output_candidate.py"
     },
     {
       "path": "crates/opaal-cli/src/check/json.rs",
@@ -1585,7 +1688,7 @@
     },
     {
       "path": "crates/opaal-cli/src/cli.rs",
-      "sha256": "89074540c89fd7f8025642bf0887b0f6f4b777b1f28d9a948e575ebf20613834",
+      "sha256": "193497816959a5a5acc47af23770d3c67a5533025f58195606cfefed456ef7e4",
       "source_markers": 10,
       "constructors_or_assertions": [
         "check_and_plan_require_one_explicit_source",
@@ -1643,7 +1746,7 @@
     },
     {
       "path": "crates/opaal-cli/src/main.rs",
-      "sha256": "e3256628144d0b64c566ad0af3ec7cdcdedf07b787e64aea9dae6f1967338565",
+      "sha256": "8d0fb6fcee559332ec3ede96b2775bfd19aef00058ee817666062a7d7341c32c",
       "source_markers": 5,
       "constructors_or_assertions": [
         "module constants/imports",
@@ -1655,7 +1758,7 @@
     },
     {
       "path": "crates/opaal-cli/src/project.rs",
-      "sha256": "5b1363d0f2339c64c9ee0382cca59f0f9370cadbd87755986b374288a69c4b3c",
+      "sha256": "b64d9ac1087c76427542d11b6a47fad45c143865338d1d4e07c08263dfd5a7ef",
       "source_markers": 7,
       "constructors_or_assertions": [
         "create_journal",
@@ -1992,6 +2095,32 @@
       "assertion": "crates/opaal-cli/tests/interactive_session.rs"
     },
     {
+      "path": "crates/opaal-cli/tests/io_golden.rs",
+      "sha256": "aa586a010280dea6ddd2556966e8963b80bdd5150594114b0220a4eb7f024423",
+      "source_markers": 13,
+      "constructors_or_assertions": [
+        "a_closed_stdout_is_catchable_and_leaves_stderr_and_entropy_available",
+        "controlled",
+        "controlled_preflight_refuses_before_consuming_input_or_creating_a_journal",
+        "source",
+        "text_helpers_emit_only_the_requested_lf_and_pure_calls_refuse"
+      ],
+      "role": "mixed-test-buffers",
+      "reason": "I/O contract or native fault assertions retain scripted actions, legacy layout, refused contexts, cancellation and hostile descriptor/protocol inputs.",
+      "assertion": "crates/opaal-cli/tests/io_golden.rs"
+    },
+    {
+      "path": "crates/opaal-cli/tests/io_receipt_native.rs",
+      "sha256": "9fd0633d3c9db8d7c7def74e15bb3f5d0be5d3fa02c6b31abeeb4d8f7be4a478",
+      "source_markers": 1,
+      "constructors_or_assertions": [
+        "qualify"
+      ],
+      "role": "mixed-test-buffers",
+      "reason": "I/O contract or native fault assertions retain scripted actions, legacy layout, refused contexts, cancellation and hostile descriptor/protocol inputs.",
+      "assertion": "crates/opaal-cli/tests/io_receipt_native.rs"
+    },
+    {
       "path": "crates/opaal-cli/tests/live_completion_snapshots.rs",
       "sha256": "f0ae98f964de42a69809b6e8a4dc32197da77434a3a8be894335fa6025f1ca26",
       "source_markers": 5,
@@ -2171,7 +2300,7 @@
     },
     {
       "path": "crates/opaal-cli/tests/terminal_editor_pty.rs",
-      "sha256": "992ab286db755479ee96c7f3741b898502e6f59c1dbf7af71d625d86a07f3673",
+      "sha256": "35d241ca707c4f6c6861bffbb85ad7e467917cdde2a620822e90d4c539a525f7",
       "source_markers": 6,
       "constructors_or_assertions": [
         "named_declaration_continues_through_separate_body_and_can_be_cancelled",
@@ -2183,7 +2312,7 @@
     },
     {
       "path": "crates/opaal-lsp/src/query.rs",
-      "sha256": "8cb0ea23cf20f623c33c9512713b3e22f8da383296504584ed6e931c52ac28d9",
+      "sha256": "9bf6cc9011c65a12173539ed320ef197449b78d08feb5b7cef78465877e0a7cf",
       "source_markers": 1,
       "constructors_or_assertions": [
         "request_source"
@@ -2224,8 +2353,8 @@
     },
     {
       "path": "crates/opaal-lsp/tests/queries.rs",
-      "sha256": "b6b7727225051de393d4a3733e3a6c44a871a4082b275679a99ad65d19ac9709",
-      "source_markers": 49,
+      "sha256": "33b72525f2e751f98e365d71a1f1c368c9152a2614eb54c1b84d32478e276a9e",
+      "source_markers": 50,
       "constructors_or_assertions": [
         "callback_operation_signatures_show_relations_and_argument_positions",
         "complete_report_and_policy_observers_resolve_the_same_source_operations",
@@ -2243,6 +2372,7 @@
         "random_reexports_signatures_effect_hover_and_completion_use_the_shared_catalog",
         "record_signatures_hover_and_completion_share_the_structural_contract",
         "semantic_completion_hover_and_signature_help_use_shared_program_data",
+        "stdio_signatures_and_effect_hover_use_the_shared_catalog_without_transfer",
         "string_operation_signatures_expose_every_argument_and_active_parameter",
         "string_signature_keeps_the_last_parameter_active_before_the_closing_parenthesis",
         "structured_error_catch_binding_is_shared_by_completion_and_hover"
@@ -2395,13 +2525,14 @@
     },
     {
       "path": "crates/opaal-platform-posix/tests/fixtures/standard_host.rs",
-      "sha256": "a6075eebd2529be7ded4d9a6dec2d6a9f7e9a75fead5e8fa9b52a4f579b680ce",
+      "sha256": "c20fdb4f4b802af38c2c42b15438244288806efc6256ef2e0e478919500f0c3b",
       "source_markers": 0,
       "constructors_or_assertions": [
         "assert_ancillary_truncated",
         "assert_failed_spawn_released",
         "assert_interrupted",
         "assert_reaped",
+        "cancel_after_record",
         "enable",
         "interrupt_wait",
         "load_library",
@@ -2409,6 +2540,7 @@
         "mark_debugged",
         "parent_sentinels_and_mask",
         "peak_rss_bytes",
+        "record_cancelled",
         "set_auto_reaping",
         "truncate_ancillary",
         "worker_boundary"
@@ -2419,7 +2551,7 @@
     },
     {
       "path": "crates/opaal-platform-posix/tests/fixtures/standard_host_faults.rs",
-      "sha256": "6b0d3f29c85e89a2f9af7fd22ea1e4c7e703fbe34acc419ef860fe7ddd78ca2f",
+      "sha256": "917cfcc193a6b6ca084f25a9526317cf4f295fbb48e9b5731ee88d97a69c88cf",
       "source_markers": 0,
       "constructors_or_assertions": [
         "descriptors",
@@ -2427,6 +2559,9 @@
         "parent",
         "send_descriptor",
         "send_descriptors",
+        "send_file_descriptors",
+        "stream_parent",
+        "stream_worker",
         "valid_worker_inputs",
         "wait_for_teardown",
         "worker",
@@ -2435,6 +2570,20 @@
       "role": "mixed-test-buffers",
       "reason": "Isolated native fixture builds malformed frames and descriptor transfers to verify rejection, zero returned partial bytes and owned teardown.",
       "assertion": "crates/opaal-platform-posix/tests/standard_host_worker.rs"
+    },
+    {
+      "path": "crates/opaal-platform-posix/tests/fixtures/standard_streams.rs",
+      "sha256": "afeef4c6c2c0be8d132610048b9c0ba12716d283c8c0f72bfa1390ae54e60f23",
+      "source_markers": 0,
+      "constructors_or_assertions": [
+        "enable_syscall_fault",
+        "flags",
+        "pipe",
+        "run"
+      ],
+      "role": "mixed-test-buffers",
+      "reason": "I/O contract or native fault assertions retain scripted actions, legacy layout, refused contexts, cancellation and hostile descriptor/protocol inputs.",
+      "assertion": "crates/opaal-platform-posix/tests/fixtures/standard_streams.rs"
     },
     {
       "path": "crates/opaal-platform-posix/tests/operational_adapters.rs",
@@ -2539,7 +2688,7 @@
     },
     {
       "path": "crates/opaal-platform-posix/tests/standard_host_worker.rs",
-      "sha256": "7406f4a8be4668581223608e9e24cabfd737897089d1c4cabb6045a9a409f4e9",
+      "sha256": "e4e8fddb31acb2e7ffaeb25b697cab46c4e636c0207c7b895b703aed4c2d4c72",
       "source_markers": 0,
       "constructors_or_assertions": [
         "a_debugged_image_refuses_before_launch",
@@ -2547,9 +2696,11 @@
         "cancellation_terminates_and_reaps_with_inherited_signal_mask",
         "failed_maintained_backend_discards_partial_bytes_and_reaps",
         "hostile_protocol_missing_ready_and_received_descriptors_reap_without_retry",
+        "hostile_stream_progress_preserves_confirmed_counts_and_recoverable_roles",
         "live_reaper_change_refuses_before_launch",
         "maintained_backend_internal_retries_remain_under_the_original_deadline",
         "maximum_bytes_acknowledgements_fit_one_operation_interval",
+        "native_streams_preserve_exact_bytes_flags_and_owned_teardown",
         "production_worker_refuses_hostile_binding_fill_ack_and_ancillary_records",
         "racing_path_replacement_cannot_resume_a_different_image",
         "replaced_or_deleted_executable_cannot_launch_a_different_worker_image",
@@ -2647,7 +2798,7 @@
     },
     {
       "path": "crates/opaal-runtime/src/eval.rs",
-      "sha256": "bb439b1c34a812d32c46efbc07bb07265b6130da9466d69415be10bc0b7cfe1f",
+      "sha256": "8bae3dc26bd2e37074944bdae870f1d6c45c898860f70a104bc0cbe057fac840",
       "source_markers": 16,
       "constructors_or_assertions": [
         "ambient_process_policy_propagates_into_lazy_transform_closures",
@@ -2665,7 +2816,7 @@
     },
     {
       "path": "crates/opaal-runtime/src/eval/data_operations.rs",
-      "sha256": "e816729d12174606da8e26de3f66328b47dfc1c7a312ed5a8322437850c60781",
+      "sha256": "33406eeaa29263f4c7c917519e91ae2a4878511c137f653c2ad6c1ce25dc43f3",
       "source_markers": 4,
       "constructors_or_assertions": [
         "execute_chain",
@@ -2677,7 +2828,7 @@
     },
     {
       "path": "crates/opaal-runtime/src/eval/list_operations.rs",
-      "sha256": "9cbbd2f6fa057aa7d6c04dc6a17be027e1484d152fb8f877b45e2c4c52e5ef24",
+      "sha256": "c833b1e421c25cc11bdfc9eff85a231fbcac5899d1028bc0ecbd6f55d7b13b00",
       "source_markers": 2,
       "constructors_or_assertions": [
         "run"
@@ -2688,7 +2839,7 @@
     },
     {
       "path": "crates/opaal-runtime/src/eval/record_operations.rs",
-      "sha256": "a6922fb1d77bb953e4583b5b3785885ed205abd2fc37d1b57fa94ad1dee10545",
+      "sha256": "ddfcc96de8d374ff57f4e872bf89abe675179149024b22b46c23834e286ab8d5",
       "source_markers": 2,
       "constructors_or_assertions": [
         "run"
@@ -2699,7 +2850,7 @@
     },
     {
       "path": "crates/opaal-runtime/src/eval/string_operations.rs",
-      "sha256": "6ea24cbc54fc6edd95dca025000bcff13a6c1343a4b452f13598879537ca18ec",
+      "sha256": "307613247693f0408875c61d90368f268199b889da9e3d74ccdb6c62ecf48d8a",
       "source_markers": 2,
       "constructors_or_assertions": [
         "run"
@@ -2710,7 +2861,7 @@
     },
     {
       "path": "crates/opaal-runtime/src/eval/tests/callable_classification.rs",
-      "sha256": "00463a731de44c418e64bc649c7712d903d52d70eccc721ed24e9584c95c2c09",
+      "sha256": "77f92df6cdf6395fa61defa550eb4952f923a517fe6e73c46f08be14fc67529f",
       "source_markers": 80,
       "constructors_or_assertions": [
         "closures_and_repeated_calls_keep_fact_and_parse_count",
@@ -2736,7 +2887,7 @@
     },
     {
       "path": "crates/opaal-runtime/src/eval/tests/numeric_operations.rs",
-      "sha256": "a7cf912db545912e754aa19128ba31a809b411df3cd8eca0619041c1c229bd56",
+      "sha256": "9e385efb8f4b834822d5dfc45f3ebe7f21cd1b2a4378e36cb6e9b69198084a90",
       "source_markers": 4,
       "constructors_or_assertions": [
         "execute",
@@ -2749,7 +2900,7 @@
     },
     {
       "path": "crates/opaal-runtime/src/eval/tests/random_operations.rs",
-      "sha256": "a09498b5f3d5f51b51045383af7b2bc3fe57bad1f5318d32f4c3e62d99db66e2",
+      "sha256": "5831ec235eb6331e005e77809cfad7dedefbb0fb95ccd5e4d6e17a50f5264a38",
       "source_markers": 6,
       "constructors_or_assertions": [
         "declared_action_uses_the_same_operation_and_rejects_a_wrong_host_result",
@@ -2778,7 +2929,7 @@
     },
     {
       "path": "crates/opaal-runtime/src/help.rs",
-      "sha256": "64c4f5f8e80218afe3b484ff0a4d8740f4545655d96292cf692dc283256fd0d7",
+      "sha256": "222b2c2ec8fbe5334feeda446fccf8572928f893b345d39f7d8908bbc03834da",
       "source_markers": 6,
       "constructors_or_assertions": [
         "catalog_uses_visible_binding_shadowing_and_omits_opaque_callables"
@@ -2789,7 +2940,7 @@
     },
     {
       "path": "crates/opaal-runtime/src/module.rs",
-      "sha256": "64e6c9507ecca8b2a46139dfcb8c082dbf8c62574d5049692cd97fed17cb5e27",
+      "sha256": "45a4e77356358b22ef8b17ee0dffe3fc461360610086e8bc1ce589ab779ee7d1",
       "source_markers": 19,
       "constructors_or_assertions": [
         "analyze_interactive_with_control",
@@ -2831,7 +2982,7 @@
     },
     {
       "path": "crates/opaal-runtime/src/script.rs",
-      "sha256": "4dfcca3b16e1b707ea36109fadea4973c727e899be166f702d8dcc2d80b029ba",
+      "sha256": "11ab574df0533615c3c9c24edde9e0d939190d64bd003fd148a72f1ff54d0427",
       "source_markers": 6,
       "constructors_or_assertions": [
         "ambient_script_connects_an_external_stage_to_a_named_transform",
@@ -2846,7 +2997,7 @@
     },
     {
       "path": "crates/opaal-runtime/src/session.rs",
-      "sha256": "3c75804030452f34991e452d54dcf00bd902de7c4cf29545990f5e98827a423b",
+      "sha256": "1e3d867aeeff7af375545d3163734e9eea01e663841a34c43d01929ab3177c37",
       "source_markers": 14,
       "constructors_or_assertions": [
         "ambient_admits",
@@ -2942,7 +3093,7 @@
     },
     {
       "path": "crates/opaal-runtime/tests/cancellation.rs",
-      "sha256": "d642dd450bb74b61c6ffc657d0e5a1e5ab4a3fd3159325ddcc813f04659fd9b0",
+      "sha256": "c148538b4113e310c5a67d7f1e18fe8adb09a43d80e46180a38e5ac1e38d88f5",
       "source_markers": 3,
       "constructors_or_assertions": [
         "f",
@@ -3426,7 +3577,7 @@
     },
     {
       "path": "crates/opaal-runtime/tests/random_authority.rs",
-      "sha256": "39c3a9a1e2afaf7a5fc6cf3ba2790a2db6b722a1f35e07fdf91b173dda1d7098",
+      "sha256": "c5132266e85999b4fb5d8fa35636bd9bc5ff908f7794f8291607e6c939b64c16",
       "source_markers": 0,
       "constructors_or_assertions": [
         "another_evaluations_host_cannot_be_retargeted",
@@ -3441,7 +3592,7 @@
     },
     {
       "path": "crates/opaal-runtime/tests/random_controlled.rs",
-      "sha256": "d4152c4f125260e5712d9f1c75d87ff7e6ff688a7f0cd0248fa117d072dff276",
+      "sha256": "e9753e6e6609630bff85a358e8ff6804306a037cfd845fc0cf4f9a4f1d729e57",
       "source_markers": 16,
       "constructors_or_assertions": [
         "admission_persistence_consumes_the_original_operation_deadline",
@@ -3461,7 +3612,7 @@
     },
     {
       "path": "crates/opaal-runtime/tests/random_golden.rs",
-      "sha256": "62394d26770070a2c2b5d290a25de67f7e0bfe2047b464d516e0cb679d690c03",
+      "sha256": "539e8411e0598d7c9ce9b91ba9b0c2bdd979fb1a4a189c05c5287f4f1b32727e",
       "source_markers": 6,
       "constructors_or_assertions": [
         "explicitly_declared_entropy_actions_use_the_bound_root",
@@ -3474,7 +3625,7 @@
     },
     {
       "path": "crates/opaal-runtime/tests/random_limits.rs",
-      "sha256": "5960232b48e2b5865bb8f742e9b5edf890f4e11a25feb8b222933ff4d5707158",
+      "sha256": "fc157d738ec6ee6f42bfdb98b63ab4f4d710e839d41c73701be026cd5a88da67",
       "source_markers": 0,
       "constructors_or_assertions": [
         "adapter_primary_and_cleanup_diagnostics_use_existing_secret_redaction",
@@ -3596,6 +3747,96 @@
       "assertion": "crates/opaal-runtime/tests/spread.rs"
     },
     {
+      "path": "crates/opaal-runtime/tests/stdio_authority.rs",
+      "sha256": "ed99e6ed5cd6231ef4bf1c9febdd5fe4d8a84257ffea45b0fb8a116deb2acc12",
+      "source_markers": 0,
+      "constructors_or_assertions": [
+        "a_bound_endpoint_cannot_be_retargeted_to_another_evaluation_or_reused_after_close",
+        "separate_denied_undeclared_unsupported_and_occupied_streams_never_transfer"
+      ],
+      "role": "mixed-test-buffers",
+      "reason": "I/O contract or native fault assertions retain scripted actions, legacy layout, refused contexts, cancellation and hostile descriptor/protocol inputs.",
+      "assertion": "crates/opaal-runtime/tests/stdio_authority.rs"
+    },
+    {
+      "path": "crates/opaal-runtime/tests/stdio_controlled.rs",
+      "sha256": "2e21d412dba0b3297eb5a1e0c95ff263b5cbecf174a5a7da140ae989da073acd",
+      "source_markers": 1,
+      "constructors_or_assertions": [
+        "run"
+      ],
+      "role": "mixed-test-buffers",
+      "reason": "I/O contract or native fault assertions retain scripted actions, legacy layout, refused contexts, cancellation and hostile descriptor/protocol inputs.",
+      "assertion": "crates/opaal-runtime/tests/stdio_controlled.rs"
+    },
+    {
+      "path": "crates/opaal-runtime/tests/stdio_failure.rs",
+      "sha256": "906897f9c790f5847d2205011b1df4419ebfcad969d0e4ecdee3e5690734ab40",
+      "source_markers": 0,
+      "constructors_or_assertions": [
+        "acknowledged_eof_survives_a_later_transport_failure_without_a_partial_value",
+        "broken_pipe_zero_write_and_failed_read_have_no_successful_partial_value",
+        "impossible_progress_refuses_and_charges_one_uncertain_chunk_then_closes",
+        "interrupted_and_nonblocking_attempts_retry_only_pending_bytes_with_fresh_work",
+        "role_totals_survive_multiple_calls_eof_and_a_later_failed_transfer"
+      ],
+      "role": "mixed-test-buffers",
+      "reason": "I/O contract or native fault assertions retain scripted actions, legacy layout, refused contexts, cancellation and hostile descriptor/protocol inputs.",
+      "assertion": "crates/opaal-runtime/tests/stdio_failure.rs"
+    },
+    {
+      "path": "crates/opaal-runtime/tests/stdio_golden.rs",
+      "sha256": "1189edab5c94a5c9772c296aba3c25a94b5c6a95e773b2d63ee10bd5b5042eb8",
+      "source_markers": 5,
+      "constructors_or_assertions": [
+        "declared_action_runs_and_catching_overflow_does_not_restore_consumed_input",
+        "pure_functions_callbacks_and_undeclared_actions_refuse_before_transfer",
+        "undeclared_sibling_or_nested_streams_and_entropy_cannot_borrow_another_effect"
+      ],
+      "role": "mixed-test-buffers",
+      "reason": "I/O contract or native fault assertions retain scripted actions, legacy layout, refused contexts, cancellation and hostile descriptor/protocol inputs.",
+      "assertion": "crates/opaal-runtime/tests/stdio_golden.rs"
+    },
+    {
+      "path": "crates/opaal-runtime/tests/stdio_lifetime.rs",
+      "sha256": "64a231e856055f840a71539b00950a10ddef425cfdad307d1cf079ddc6ddc037",
+      "source_markers": 0,
+      "constructors_or_assertions": [
+        "deadline_after_confirmed_transfer_preserves_primary_progress_and_cleanup",
+        "entropy_input_and_both_outputs_share_one_nonrestorable_byte_counter",
+        "read_reserves_probe_releases_unused_bytes_and_charges_retention_once",
+        "retention_work_and_repeated_empty_probes_fail_before_the_next_transfer"
+      ],
+      "role": "mixed-test-buffers",
+      "reason": "I/O contract or native fault assertions retain scripted actions, legacy layout, refused contexts, cancellation and hostile descriptor/protocol inputs.",
+      "assertion": "crates/opaal-runtime/tests/stdio_lifetime.rs"
+    },
+    {
+      "path": "crates/opaal-runtime/tests/stdio_observers.rs",
+      "sha256": "6014e9a748b01d884a33f07799c058862302b7e59639caa850acd1c635011c53",
+      "source_markers": 4,
+      "constructors_or_assertions": [
+        "seven_shared_signatures_reexports_help_and_effects_are_nonexecuting",
+        "wrong_types_arity_generics_and_result_types_fail_without_endpoint_access"
+      ],
+      "role": "mixed-test-buffers",
+      "reason": "I/O contract or native fault assertions retain scripted actions, legacy layout, refused contexts, cancellation and hostile descriptor/protocol inputs.",
+      "assertion": "crates/opaal-runtime/tests/stdio_observers.rs"
+    },
+    {
+      "path": "crates/opaal-runtime/tests/stdio_values.rs",
+      "sha256": "e8178dfcc0f2a9a7eb70bc19b204ee414c9647166c4fa360f41d1b8fdee4d945",
+      "source_markers": 0,
+      "constructors_or_assertions": [
+        "raw_reads_observe_empty_exact_cap_first_excess_and_sequential_eof",
+        "text_raw_and_lf_output_keep_exact_bytes_and_distinct_sinks",
+        "wrong_signatures_and_encoded_cap_including_lf_fail_before_transfer"
+      ],
+      "role": "mixed-test-buffers",
+      "reason": "I/O contract or native fault assertions retain scripted actions, legacy layout, refused contexts, cancellation and hostile descriptor/protocol inputs.",
+      "assertion": "crates/opaal-runtime/tests/stdio_values.rs"
+    },
+    {
       "path": "crates/opaal-runtime/tests/stream.rs",
       "sha256": "35e241c1757d1c456209ff03b09302d31a58595c8e5a84849b2c65e722afb5d7",
       "source_markers": 2,
@@ -3633,7 +3874,7 @@
     },
     {
       "path": "crates/opaal-runtime/tests/support/random.rs",
-      "sha256": "c140d85eb8f6cce9f0a596d9df3f3a19634a3b2c15c992c062a9309a37056f9a",
+      "sha256": "d823dc7406f98ece8e8eb130311bc22622579871a61ccf44bd030061a90b6344",
       "source_markers": 2,
       "constructors_or_assertions": [
         "load",
@@ -3642,6 +3883,18 @@
       "role": "mixed-test-buffers",
       "reason": "Random contract or native host test owner; preserve scripted source, refusal, diagnostic and malformed-input assertions.",
       "assertion": "crates/opaal-runtime/tests/support/random.rs"
+    },
+    {
+      "path": "crates/opaal-runtime/tests/support/stdio.rs",
+      "sha256": "5938ecfce5702ad3817a021e0186619789092b9470d7f92df5d9f3310f0dabcd",
+      "source_markers": 2,
+      "constructors_or_assertions": [
+        "load",
+        "try_load"
+      ],
+      "role": "mixed-test-buffers",
+      "reason": "I/O contract or native fault assertions retain scripted actions, legacy layout, refused contexts, cancellation and hostile descriptor/protocol inputs.",
+      "assertion": "crates/opaal-runtime/tests/support/stdio.rs"
     },
     {
       "path": "crates/opaal-runtime/tests/values.rs",
@@ -3665,7 +3918,7 @@
     },
     {
       "path": "crates/opaal-runtime/tests/workflow_artifacts.rs",
-      "sha256": "f9519e9f7f2ae59994ee781a6d7eb8d79f50afb3c97e9b1b45f9c38e5f2e9648",
+      "sha256": "d7641e26c2be3df95e2a167b3fe14d8ace2c59af14bfc16fde7c0c09b551ddb6",
       "source_markers": 7,
       "constructors_or_assertions": [
         "journal_chain_projects_complete_redacted_evidence",
@@ -4000,7 +4253,7 @@
     },
     {
       "path": "fuzz/fuzz_targets/random_limits.rs",
-      "sha256": "aad9990cf11ecf5ad839111922a61443f1faea337f93df5dcd498b1cdfa8acbc",
+      "sha256": "48d52496da19b977b17737d1bd20e71b289e6cc5efe18a4f19330841023a5bbe",
       "source_markers": 0,
       "constructors_or_assertions": [],
       "role": "mixed-test-buffers",
@@ -4031,6 +4284,15 @@
       "assertion": "fuzz/fuzz_targets/secret_sinks.rs"
     },
     {
+      "path": "fuzz/fuzz_targets/stdio_limits.rs",
+      "sha256": "2f7dd67cc4787589df7595a58800349d8c46b64acd51c46b2ca3e15257d58735",
+      "source_markers": 0,
+      "constructors_or_assertions": [],
+      "role": "mixed-test-buffers",
+      "reason": "I/O contract or native fault assertions retain scripted actions, legacy layout, refused contexts, cancellation and hostile descriptor/protocol inputs.",
+      "assertion": "fuzz/fuzz_targets/stdio_limits.rs"
+    },
+    {
       "path": "fuzz/run-campaign.sh",
       "sha256": "90c9fe314f38bc1743216ea9f177308f462d3b256f2d7b96c85835bae61add66",
       "source_markers": 0,
@@ -4041,7 +4303,7 @@
     },
     {
       "path": "fuzz/run-smoke.sh",
-      "sha256": "48d30d8c07121225d20834cf7ba845cd1b9618cbc2525a2a45cd12178d385261",
+      "sha256": "610d563d6b2057a48015dedb94ff3eb17018dda04eba39aa898bb13c68d96936",
       "source_markers": 1,
       "constructors_or_assertions": [
         "module constants/imports"
@@ -4195,6 +4457,35 @@
       "role": "mixed-test-buffers",
       "reason": "Conservative test owner includes helper-based source buffers, partial completion inputs and non-source harnesses; the named tests/assertions retain their exact contracts.",
       "assertion": "tests/golden/release-readiness/readiness-probe/src/lib.rs"
+    },
+    {
+      "path": "tests/golden/standard-input-output/ci-job-check/ci.py",
+      "sha256": "a647c08015a817ea5f51e7404ee3dec35d3502480f61bfb7735a1b891ed6c7df",
+      "source_markers": 1,
+      "constructors_or_assertions": [
+        "module constants/imports"
+      ],
+      "role": "source-infrastructure",
+      "reason": "Offline producer and source/project CI drivers keep acquisition, assessment and validated execution evidence distinct.",
+      "assertion": "ci/qualify_standard_input_output.py"
+    },
+    {
+      "path": "tests/golden/standard-input-output/ci-job-check/producer.py",
+      "sha256": "cf9504d73c8b917912f587ea73029d3eee779e1d2d20aa8a56ee8bab9372dc74",
+      "source_markers": 0,
+      "constructors_or_assertions": [],
+      "role": "source-infrastructure",
+      "reason": "Offline producer and source/project CI drivers keep acquisition, assessment and validated execution evidence distinct.",
+      "assertion": "ci/qualify_standard_input_output.py"
+    },
+    {
+      "path": "tests/golden/standard-input-output/ci-job-check/project-ci.py",
+      "sha256": "d710cabc7c93f67ffbe62cb1e271d3a8fbe3651f7c7fe8433d180ab47ed909db",
+      "source_markers": 0,
+      "constructors_or_assertions": [],
+      "role": "source-infrastructure",
+      "reason": "Offline producer and source/project CI drivers keep acquisition, assessment and validated execution evidence distinct.",
+      "assertion": "ci/qualify_standard_input_output.py"
     }
   ],
   "seeds": [
@@ -4743,6 +5034,594 @@
         "random_limits"
       ],
       "sha256": "c9b057f5b460fa22c8b14b0324487b5408a279d77bb155c975973c8cf1b0c528"
+    },
+    {
+      "path": "fuzz/seeds/stdio_limits/operation-0-limit-0",
+      "targets": [
+        "stdio_limits"
+      ],
+      "sha256": "d28a576951b6900d030a8f65a1aad8ee4818f9b203200faf4386cbb6bb0152ff"
+    },
+    {
+      "path": "fuzz/seeds/stdio_limits/operation-0-limit-1",
+      "targets": [
+        "stdio_limits"
+      ],
+      "sha256": "861d0962f8925de89b6dad8b2eff3efb4da3fbdfe0f951f9e6c17b1113abaffc"
+    },
+    {
+      "path": "fuzz/seeds/stdio_limits/operation-0-limit-2",
+      "targets": [
+        "stdio_limits"
+      ],
+      "sha256": "4168c57c4010bcae8a2f9997092e1fac027a4da7c19ba6390ecc2b2453ff86f4"
+    },
+    {
+      "path": "fuzz/seeds/stdio_limits/operation-0-limit-3",
+      "targets": [
+        "stdio_limits"
+      ],
+      "sha256": "fd52ac6bea6db172d83e5034204770a98b45acbb6959c23f1de0d2fb94bfc963"
+    },
+    {
+      "path": "fuzz/seeds/stdio_limits/operation-0-limit-4",
+      "targets": [
+        "stdio_limits"
+      ],
+      "sha256": "72a9fe8fc39ff89a59eb02614c29787a8491031b292fc0d549d77f1b37da43b5"
+    },
+    {
+      "path": "fuzz/seeds/stdio_limits/operation-0-limit-5",
+      "targets": [
+        "stdio_limits"
+      ],
+      "sha256": "4100963e90eaff1ea890535454355a423fd35ebfebe4c9e406451bafd76f7f2e"
+    },
+    {
+      "path": "fuzz/seeds/stdio_limits/operation-0-limit-6",
+      "targets": [
+        "stdio_limits"
+      ],
+      "sha256": "7bf514ee08af354b7d66259baeaf511ee7412a19bb07e356e29f156374327cfc"
+    },
+    {
+      "path": "fuzz/seeds/stdio_limits/operation-0-limit-7",
+      "targets": [
+        "stdio_limits"
+      ],
+      "sha256": "215a9b1dd7d54de1efa68dec441b53642043d8f94e504e271c2b7928ddf01229"
+    },
+    {
+      "path": "fuzz/seeds/stdio_limits/operation-1-limit-0",
+      "targets": [
+        "stdio_limits"
+      ],
+      "sha256": "b44e69794dfccaf71e4141661f68ff7a09b671e897d79b0036c779f978d9ebbe"
+    },
+    {
+      "path": "fuzz/seeds/stdio_limits/operation-1-limit-1",
+      "targets": [
+        "stdio_limits"
+      ],
+      "sha256": "1eaf29ee9dd881499748e5a64f448fa5c897c9541c0e787b68de2a1df098d4e7"
+    },
+    {
+      "path": "fuzz/seeds/stdio_limits/operation-1-limit-2",
+      "targets": [
+        "stdio_limits"
+      ],
+      "sha256": "ccd9efa3194dcc17e3b1eb8f0ae5bc7d6684dd76c9513f690e17131a7f98ab2d"
+    },
+    {
+      "path": "fuzz/seeds/stdio_limits/operation-1-limit-3",
+      "targets": [
+        "stdio_limits"
+      ],
+      "sha256": "cdbed36eb4404adb567b1200916cb4e089fc2fe36f907e88b2d4c23d4106776c"
+    },
+    {
+      "path": "fuzz/seeds/stdio_limits/operation-1-limit-4",
+      "targets": [
+        "stdio_limits"
+      ],
+      "sha256": "ea359288110eac2a46bb34d912eae98b544a2cce3323b89f663432accab563ac"
+    },
+    {
+      "path": "fuzz/seeds/stdio_limits/operation-1-limit-5",
+      "targets": [
+        "stdio_limits"
+      ],
+      "sha256": "686aa40ac060eec9681be7c6498e188a34aee49fb09c7a2f7626c446c535e94a"
+    },
+    {
+      "path": "fuzz/seeds/stdio_limits/operation-1-limit-6",
+      "targets": [
+        "stdio_limits"
+      ],
+      "sha256": "44800a24aedbc5ce7e45e03bb5ba3b418a691b7116bc532dfa387db8d2720e44"
+    },
+    {
+      "path": "fuzz/seeds/stdio_limits/operation-1-limit-7",
+      "targets": [
+        "stdio_limits"
+      ],
+      "sha256": "a21b08c1b89dbdcd02dd9baa8b546b13b078037bf1c4b4789bccb646f7b20e65"
+    },
+    {
+      "path": "fuzz/seeds/stdio_limits/operation-2-limit-0",
+      "targets": [
+        "stdio_limits"
+      ],
+      "sha256": "c0438d2080c521d8eff8ffc71a307f6f5839f613d630354831021a15511ef7fe"
+    },
+    {
+      "path": "fuzz/seeds/stdio_limits/operation-2-limit-1",
+      "targets": [
+        "stdio_limits"
+      ],
+      "sha256": "e9638465eef95668697dee637a6b598b4f98d0a22985f48dd4652296f757e50a"
+    },
+    {
+      "path": "fuzz/seeds/stdio_limits/operation-2-limit-2",
+      "targets": [
+        "stdio_limits"
+      ],
+      "sha256": "72aaa087b5a950e286a559672ccf9b559abd67fff3a221ab97940a69163048e4"
+    },
+    {
+      "path": "fuzz/seeds/stdio_limits/operation-2-limit-3",
+      "targets": [
+        "stdio_limits"
+      ],
+      "sha256": "4dbf8fa2c9d60a1d526169d52f610f2f07fb350197ac424ed11303427f5a9d87"
+    },
+    {
+      "path": "fuzz/seeds/stdio_limits/operation-2-limit-4",
+      "targets": [
+        "stdio_limits"
+      ],
+      "sha256": "90365e10e20d3d1ea973a9ee71e7ed06cfa50c184442fba06c58ebaf48f6391c"
+    },
+    {
+      "path": "fuzz/seeds/stdio_limits/operation-2-limit-5",
+      "targets": [
+        "stdio_limits"
+      ],
+      "sha256": "e2b4618b33fc449d3b1e787e0933f3e7583b071d1728bbacdc717d6ada8c955e"
+    },
+    {
+      "path": "fuzz/seeds/stdio_limits/operation-2-limit-6",
+      "targets": [
+        "stdio_limits"
+      ],
+      "sha256": "922283ec67da4184566cdbba90bc41319fb5369fd6b106d6e8153c395e032284"
+    },
+    {
+      "path": "fuzz/seeds/stdio_limits/operation-2-limit-7",
+      "targets": [
+        "stdio_limits"
+      ],
+      "sha256": "6272421278d80392cf212220a186f2415318fae5e83cdabab8359702c92c0b3e"
+    },
+    {
+      "path": "fuzz/seeds/stdio_limits/operation-3-limit-0",
+      "targets": [
+        "stdio_limits"
+      ],
+      "sha256": "ec1ca15af0934a19c8a277da26100f1cef6e670d3283ad957e95148478906801"
+    },
+    {
+      "path": "fuzz/seeds/stdio_limits/operation-3-limit-1",
+      "targets": [
+        "stdio_limits"
+      ],
+      "sha256": "3898d14084378ca162fd85ac1166cd90a3d4ebb759cd6817664be1c559612399"
+    },
+    {
+      "path": "fuzz/seeds/stdio_limits/operation-3-limit-2",
+      "targets": [
+        "stdio_limits"
+      ],
+      "sha256": "dcb3c6ad738f9fb194d32a306bd8ce912ee28a0df7a9456635ab9fd90ab5083d"
+    },
+    {
+      "path": "fuzz/seeds/stdio_limits/operation-3-limit-3",
+      "targets": [
+        "stdio_limits"
+      ],
+      "sha256": "baaadab5b41f7d5d802bc7f2dc1c68690a8e9f9692fe64d534120e61a2c60005"
+    },
+    {
+      "path": "fuzz/seeds/stdio_limits/operation-3-limit-4",
+      "targets": [
+        "stdio_limits"
+      ],
+      "sha256": "9bb014e7712c08ce3513f626015b299d706c8ca26709b6cb0f2fafe8f9d98aee"
+    },
+    {
+      "path": "fuzz/seeds/stdio_limits/operation-3-limit-5",
+      "targets": [
+        "stdio_limits"
+      ],
+      "sha256": "a8a5b1fe337ab98144f124d363fd321138cd31b55de9cef01f5c99ab96f7fa27"
+    },
+    {
+      "path": "fuzz/seeds/stdio_limits/operation-3-limit-6",
+      "targets": [
+        "stdio_limits"
+      ],
+      "sha256": "7fa03631a56c97002177de285cc1abea229f02995ef525e7dbe631241b48b874"
+    },
+    {
+      "path": "fuzz/seeds/stdio_limits/operation-3-limit-7",
+      "targets": [
+        "stdio_limits"
+      ],
+      "sha256": "b7f7f4160540fc1c6d4ebdf10038b28690a0d320fdbcd60e6bf960194c0d0578"
+    },
+    {
+      "path": "fuzz/seeds/stdio_limits/operation-4-limit-0",
+      "targets": [
+        "stdio_limits"
+      ],
+      "sha256": "2d7cf76ee8a6e74545aed5583b12f90ccf29bbde2ea51da1532206344e5b169e"
+    },
+    {
+      "path": "fuzz/seeds/stdio_limits/operation-4-limit-1",
+      "targets": [
+        "stdio_limits"
+      ],
+      "sha256": "9fc7885f45ea674393460aa18841008faf1256d389504b7444fdfd5e0e9073fa"
+    },
+    {
+      "path": "fuzz/seeds/stdio_limits/operation-4-limit-2",
+      "targets": [
+        "stdio_limits"
+      ],
+      "sha256": "62af72853a0b2c110f3f49b92ca787ce3a3dc1ad8551da267a0796ed8cf24fb1"
+    },
+    {
+      "path": "fuzz/seeds/stdio_limits/operation-4-limit-3",
+      "targets": [
+        "stdio_limits"
+      ],
+      "sha256": "67c236e5363f367d17883428b68dd96549a0ae66188c24e5c63a3d57fb96e5bf"
+    },
+    {
+      "path": "fuzz/seeds/stdio_limits/operation-4-limit-4",
+      "targets": [
+        "stdio_limits"
+      ],
+      "sha256": "d4a09ecf981906f91eec9e89e10629e5006299ff425ebb7a199a1247138418ef"
+    },
+    {
+      "path": "fuzz/seeds/stdio_limits/operation-4-limit-5",
+      "targets": [
+        "stdio_limits"
+      ],
+      "sha256": "67510d66ac3956b6fd68e4fc63313351483c5a33bf7f068b5b5d10e01d37df38"
+    },
+    {
+      "path": "fuzz/seeds/stdio_limits/operation-4-limit-6",
+      "targets": [
+        "stdio_limits"
+      ],
+      "sha256": "8a02e69e00e030d7c21eeb9ed0c8327e83ee31ca250b3b853742a2ce20c75bef"
+    },
+    {
+      "path": "fuzz/seeds/stdio_limits/operation-4-limit-7",
+      "targets": [
+        "stdio_limits"
+      ],
+      "sha256": "b466402f411c24a861f03ade2dc9a401a3d83db15f9dc07121811c51ad9e0291"
+    },
+    {
+      "path": "fuzz/seeds/stdio_limits/operation-5-limit-0",
+      "targets": [
+        "stdio_limits"
+      ],
+      "sha256": "e1f12f9d4a72a98698b5bfb46f8a6a9af0f3048dafa85c66aeb4a8409dbdbe92"
+    },
+    {
+      "path": "fuzz/seeds/stdio_limits/operation-5-limit-1",
+      "targets": [
+        "stdio_limits"
+      ],
+      "sha256": "1beaf89066782a7afbb5f3f3d28254fbf481d491a8a0f6010399d9887d72fddd"
+    },
+    {
+      "path": "fuzz/seeds/stdio_limits/operation-5-limit-2",
+      "targets": [
+        "stdio_limits"
+      ],
+      "sha256": "4843f15e03dec47fc8f9e3c17b7bb4ced44d61c997f202295aa433686121f57b"
+    },
+    {
+      "path": "fuzz/seeds/stdio_limits/operation-5-limit-3",
+      "targets": [
+        "stdio_limits"
+      ],
+      "sha256": "a6a6fc8403da07a94010e5e630a6bc0258735e14556534c982a08127184580e6"
+    },
+    {
+      "path": "fuzz/seeds/stdio_limits/operation-5-limit-4",
+      "targets": [
+        "stdio_limits"
+      ],
+      "sha256": "6331fe61a3b97864234d07fb5f3164a0e2eb1a7fc7cf37ddff6db93e6add1f62"
+    },
+    {
+      "path": "fuzz/seeds/stdio_limits/operation-5-limit-5",
+      "targets": [
+        "stdio_limits"
+      ],
+      "sha256": "7bdbf060e5de418088558d242684be3bb95863fd1ee13cb9b10b03c5fd24416a"
+    },
+    {
+      "path": "fuzz/seeds/stdio_limits/operation-5-limit-6",
+      "targets": [
+        "stdio_limits"
+      ],
+      "sha256": "c4c4ab0e9fdad8112867c158e5f099dd8f616a63742160a583e4983c3cc0f498"
+    },
+    {
+      "path": "fuzz/seeds/stdio_limits/operation-5-limit-7",
+      "targets": [
+        "stdio_limits"
+      ],
+      "sha256": "de88fd3ea07628261f473190a863e64449d90b48eafaf61de317911cf9b66f07"
+    },
+    {
+      "path": "fuzz/seeds/stdio_limits/operation-6-limit-0",
+      "targets": [
+        "stdio_limits"
+      ],
+      "sha256": "3f4271f525308d63e18c700ec675ebb7076ae0a2217f10ee79d1564a35bc588b"
+    },
+    {
+      "path": "fuzz/seeds/stdio_limits/operation-6-limit-1",
+      "targets": [
+        "stdio_limits"
+      ],
+      "sha256": "445668cca73e70b16b3d9f4b735dd659b7735d0fe97087a1f4ba928dafa651f5"
+    },
+    {
+      "path": "fuzz/seeds/stdio_limits/operation-6-limit-2",
+      "targets": [
+        "stdio_limits"
+      ],
+      "sha256": "158ccf686828f60691362e9964772b48748dfc4e5bc1a69b84b2d5c976e63593"
+    },
+    {
+      "path": "fuzz/seeds/stdio_limits/operation-6-limit-3",
+      "targets": [
+        "stdio_limits"
+      ],
+      "sha256": "652db3ef52401c5aa120746da040cbdb253f5f4f5c81e5dd58cdc511ad831a51"
+    },
+    {
+      "path": "fuzz/seeds/stdio_limits/operation-6-limit-4",
+      "targets": [
+        "stdio_limits"
+      ],
+      "sha256": "f925c5fee70475eb1fe771c31e1cc1d746cf6fa476f3e216e08726b12dd437a7"
+    },
+    {
+      "path": "fuzz/seeds/stdio_limits/operation-6-limit-5",
+      "targets": [
+        "stdio_limits"
+      ],
+      "sha256": "b877c5333e11e839b8ff49cb8e8ed45f981380e57cb682be92287c458e9369df"
+    },
+    {
+      "path": "fuzz/seeds/stdio_limits/operation-6-limit-6",
+      "targets": [
+        "stdio_limits"
+      ],
+      "sha256": "7adfcd0096523f2ef29c509983bfd56e9b94ec5d68249e22a88dc5bf727c7909"
+    },
+    {
+      "path": "fuzz/seeds/stdio_limits/operation-6-limit-7",
+      "targets": [
+        "stdio_limits"
+      ],
+      "sha256": "f21edddd3d2996c75a0b05d866aee05cd3368c78ac9aa8a130115f4f1a3044d1"
+    },
+    {
+      "path": "fuzz/seeds/stdio_limits/protocol-0-rights-0.seed",
+      "targets": [
+        "stdio_limits"
+      ],
+      "sha256": "6da7954708a658f74245203f9aaff034ac285e7d48deb0f873f90a7212aef4d7"
+    },
+    {
+      "path": "fuzz/seeds/stdio_limits/protocol-0-rights-1.seed",
+      "targets": [
+        "stdio_limits"
+      ],
+      "sha256": "9d2cffe743ecfd35095e3740b8b0c5fc699ea4b6310a5cb9d90fdf17ab2dfaf7"
+    },
+    {
+      "path": "fuzz/seeds/stdio_limits/protocol-0-rights-2.seed",
+      "targets": [
+        "stdio_limits"
+      ],
+      "sha256": "b96d64f09860794166ed4711eb157b57266374141ab83c4982324e99c67cc711"
+    },
+    {
+      "path": "fuzz/seeds/stdio_limits/protocol-0-rights-3.seed",
+      "targets": [
+        "stdio_limits"
+      ],
+      "sha256": "bc0bc6fd36fc7aeac19feb7022afccc9abd3e44a42b9f12bea12f2bcd0f8286e"
+    },
+    {
+      "path": "fuzz/seeds/stdio_limits/protocol-1-rights-0.seed",
+      "targets": [
+        "stdio_limits"
+      ],
+      "sha256": "43f2c8976197d0c852feb202e2de6bcb9ac21e388c31c0faed803b1bdcf76f4a"
+    },
+    {
+      "path": "fuzz/seeds/stdio_limits/protocol-1-rights-1.seed",
+      "targets": [
+        "stdio_limits"
+      ],
+      "sha256": "693b9175e216fb73d54b5110b41d6b945a8ee30557ba229f5e5722a1de0d6b55"
+    },
+    {
+      "path": "fuzz/seeds/stdio_limits/protocol-1-rights-2.seed",
+      "targets": [
+        "stdio_limits"
+      ],
+      "sha256": "00a5ff08252609b88c547ecddf44762058d16156c96d64588aba58dfcb888369"
+    },
+    {
+      "path": "fuzz/seeds/stdio_limits/protocol-1-rights-3.seed",
+      "targets": [
+        "stdio_limits"
+      ],
+      "sha256": "a9c3c0b2a12462e75887a85b0be0acd0fac05490864b5f2fe7594ce472ff260f"
+    },
+    {
+      "path": "fuzz/seeds/stdio_limits/protocol-2-rights-0.seed",
+      "targets": [
+        "stdio_limits"
+      ],
+      "sha256": "1fdef6fbd0c4d1f37999e8c7fc69931be877f22adc9fcfd2f8bce6d9dfc9c8c9"
+    },
+    {
+      "path": "fuzz/seeds/stdio_limits/protocol-2-rights-1.seed",
+      "targets": [
+        "stdio_limits"
+      ],
+      "sha256": "a0d715a7e7aa8540e0f23927d353bdc659831cd9d4ab145282d5e940a74a6c51"
+    },
+    {
+      "path": "fuzz/seeds/stdio_limits/protocol-2-rights-2.seed",
+      "targets": [
+        "stdio_limits"
+      ],
+      "sha256": "8eb8af894307f9bd7aa9b7a4265a5c70aebe87dedc8c92b741f267a5bef3b9c0"
+    },
+    {
+      "path": "fuzz/seeds/stdio_limits/protocol-2-rights-3.seed",
+      "targets": [
+        "stdio_limits"
+      ],
+      "sha256": "91503df2ea5827f72fdc8b96fd1d446b6242ad7904013001b2fa12200e284932"
+    },
+    {
+      "path": "fuzz/seeds/stdio_limits/protocol-3-rights-0.seed",
+      "targets": [
+        "stdio_limits"
+      ],
+      "sha256": "7430299583750f61e089e75f90756707cea46c3d4d5d1b0f0f9711d1d40cc855"
+    },
+    {
+      "path": "fuzz/seeds/stdio_limits/protocol-3-rights-1.seed",
+      "targets": [
+        "stdio_limits"
+      ],
+      "sha256": "3b1937279452f28d8be1281e6720fe029ee510d25354d1a96d8e4e0d37e4c956"
+    },
+    {
+      "path": "fuzz/seeds/stdio_limits/protocol-3-rights-2.seed",
+      "targets": [
+        "stdio_limits"
+      ],
+      "sha256": "f16497da7238e84bfd0eeb580f6add71fcfd0aef497c2cb4441aa0654480fdd7"
+    },
+    {
+      "path": "fuzz/seeds/stdio_limits/protocol-3-rights-3.seed",
+      "targets": [
+        "stdio_limits"
+      ],
+      "sha256": "9a43c00216b224489497efebdcca76934c8b3f9d4067f5c875abb8ffaa1c50cf"
+    },
+    {
+      "path": "fuzz/seeds/stdio_limits/protocol-4-rights-0.seed",
+      "targets": [
+        "stdio_limits"
+      ],
+      "sha256": "eaa7ca36acd67714c051fa86799c0f88729b364158b2ed0e22c9c1c6ed3be209"
+    },
+    {
+      "path": "fuzz/seeds/stdio_limits/protocol-4-rights-1.seed",
+      "targets": [
+        "stdio_limits"
+      ],
+      "sha256": "449e5daa887b8d0b4299edeccbe096c56dc42bb367b2dee8f08060bb18de5270"
+    },
+    {
+      "path": "fuzz/seeds/stdio_limits/protocol-4-rights-2.seed",
+      "targets": [
+        "stdio_limits"
+      ],
+      "sha256": "7b5fa431d00d7b50151e77523a481c6ab7472bc057b146a1ebba7cd9871add8d"
+    },
+    {
+      "path": "fuzz/seeds/stdio_limits/protocol-4-rights-3.seed",
+      "targets": [
+        "stdio_limits"
+      ],
+      "sha256": "5f1cc08a29b3d3a974e94ba0fe04a5a6f259ab3eb516df33661d6b8931c2e8d9"
+    },
+    {
+      "path": "fuzz/seeds/stdio_limits/protocol-5-rights-0.seed",
+      "targets": [
+        "stdio_limits"
+      ],
+      "sha256": "d803a3de151733cb59a5d6c38b22a458eff9b838ba5d69f65c27289d1a7bb060"
+    },
+    {
+      "path": "fuzz/seeds/stdio_limits/protocol-5-rights-1.seed",
+      "targets": [
+        "stdio_limits"
+      ],
+      "sha256": "82a65c539de6aade645428651d53f1111e4192b01e56a813ac0c954789029006"
+    },
+    {
+      "path": "fuzz/seeds/stdio_limits/protocol-5-rights-2.seed",
+      "targets": [
+        "stdio_limits"
+      ],
+      "sha256": "f6b4488541229244cd37f25e4e2aaf6501e405ea8d48961d95e23e70047172a3"
+    },
+    {
+      "path": "fuzz/seeds/stdio_limits/protocol-5-rights-3.seed",
+      "targets": [
+        "stdio_limits"
+      ],
+      "sha256": "944ef981f306079e47309069d154dad01be7fa874f31e82be685bf306c2670e3"
+    },
+    {
+      "path": "fuzz/seeds/stdio_limits/protocol-6-rights-0.seed",
+      "targets": [
+        "stdio_limits"
+      ],
+      "sha256": "5a741707312d59ebb7c6cbd7f5154f3b54e482e50bfb828256f4ea21c1e7e639"
+    },
+    {
+      "path": "fuzz/seeds/stdio_limits/protocol-6-rights-1.seed",
+      "targets": [
+        "stdio_limits"
+      ],
+      "sha256": "6f53c45b80771023869f52659cdcb54b4ec07c0c882012b88cff619a4a934ba3"
+    },
+    {
+      "path": "fuzz/seeds/stdio_limits/protocol-6-rights-2.seed",
+      "targets": [
+        "stdio_limits"
+      ],
+      "sha256": "f29c35d7d1989f12a049d90ec7ec1a3758d37c897d058b6868b289064a4cea38"
+    },
+    {
+      "path": "fuzz/seeds/stdio_limits/protocol-6-rights-3.seed",
+      "targets": [
+        "stdio_limits"
+      ],
+      "sha256": "d61a5c38a8d466896ca24785ca39e8fae0650d2324ccd3006d02b23163aaa43d"
     },
     {
       "path": "tests/golden/source-formatting/action-comments.opaal",

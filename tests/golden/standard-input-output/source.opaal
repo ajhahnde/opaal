@@ -1,0 +1,7 @@
+import std::io as io
+import std::string as string
+
+let bytes = io::read_stdin(4096)
+let text = string::decode_utf8(bytes)
+io::print(text)
+io::eprintln("processed")

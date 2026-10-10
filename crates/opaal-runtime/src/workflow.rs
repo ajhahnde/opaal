@@ -109,7 +109,7 @@ fn validate_standard_host(value: &Value) -> Result<(), WorkflowArtifactError> {
             "standard host role",
         )?;
     }
-    use crate::operational::random::{MAX_CALL_BYTES, MAX_HOST_BYTES, MAX_INTEGER_CANDIDATES};
+    use crate::operational::standard::{MAX_CALL_BYTES, MAX_HOST_BYTES, MAX_INTEGER_CANDIDATES};
     for (name, ceiling, positive) in [
         ("max_call_bytes", MAX_CALL_BYTES as u64, false),
         ("max_host_bytes", MAX_HOST_BYTES as u64, false),
@@ -831,6 +831,7 @@ impl JournalLifecycle {
                 }
                 self.terminal = true;
             }
+            "evidence-failure" => {}
             _ => return Err(journal_corrupt("unknown journal event kind")),
         }
         Ok(())
@@ -1285,6 +1286,13 @@ fn validate_transfer_operation(
         {
             return Err(journal_corrupt(
                 "entropy progress exceeds one admitted fill",
+            ));
+        }
+        if kind == "standard-stream"
+            && uncertain > opaal_platform::standard_host::MAX_STREAM_CHUNK_BYTES as u64
+        {
+            return Err(journal_corrupt(
+                "stream progress exceeds one admitted chunk",
             ));
         }
     } else {
@@ -2809,6 +2817,19 @@ fn validate_journal_payload(
             }
             Ok(())
         }
+        "evidence-failure" if version == 3 => {
+            exact_keys(object, &["category", "code"], "evidence failure")?;
+            one_of(
+                required_string(object, "category")?,
+                &["receipt"],
+                "evidence category",
+            )?;
+            one_of(
+                required_string(object, "code")?,
+                &["JOURNAL005"],
+                "evidence code",
+            )
+        }
         "cleanup" => {
             exact_keys(
                 object,
@@ -3897,4 +3918,33 @@ fn journal_limit() -> WorkflowArtifactError {
 }
 fn journal_corrupt(message: impl Into<String>) -> WorkflowArtifactError {
     WorkflowArtifactError::new("JOURNAL003", message)
+}
+
+#[cfg(test)]
+mod standard_stream_projection_tests {
+    use super::*;
+
+    #[test]
+    fn stream_uncertainty_is_at_most_one_chunk_and_has_no_payload_extensions() {
+        let mut operation = serde_json::json!({
+            "kind":"standard-stream", "operation":"std::io::write_stdout", "effect":"stdout.write",
+            "requested_bytes":65537, "admitted_bytes":65537, "confirmed_bytes":0,
+            "uncertain_bytes_upper_bound":65536, "eof":null
+        });
+        assert!(
+            validate_transfer_operation("stdout.write", operation.as_object().unwrap(), true)
+                .is_ok()
+        );
+        operation["uncertain_bytes_upper_bound"] = serde_json::json!(65537);
+        assert!(
+            validate_transfer_operation("stdout.write", operation.as_object().unwrap(), true)
+                .is_err()
+        );
+        operation["uncertain_bytes_upper_bound"] = serde_json::json!(0);
+        operation["payload_digest"] = serde_json::json!("sha256:forbidden");
+        assert!(
+            validate_transfer_operation("stdout.write", operation.as_object().unwrap(), true)
+                .is_err()
+        );
+    }
 }

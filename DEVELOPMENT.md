@@ -143,7 +143,7 @@ the CLI and its host fixture. This uses an ad-hoc signature and no signing key:
 ```sh
 cargo test --workspace --locked --no-run
 codesign --force --sign - --options kill target/debug/opaal target/debug/opaal-standard-host-fixture
-for binary in target/debug/deps/opaal-* target/debug/deps/opaal_standard_host_fixture-*; do
+for binary in target/debug/deps/opaal-* target/debug/deps/opaal_standard_host_fixture-* target/debug/deps/random_native-* target/debug/deps/io_receipt_native-*; do
     [ -f "$binary" ] && [ -x "$binary" ] || continue
     codesign --force --sign - --options kill "$binary"
 done
@@ -180,6 +180,41 @@ failures with failed journal persistence, and records maximum byte-fill timing
 and process resources. Its artifact retains logs even after failure. This lane
 complements the regular workspace, policy, fuzz and archive jobs; it does not
 infer performance guarantees or replace missing failure scenarios.
+
+## Standard-stream qualification
+
+Use the same macOS image signing policy as Random after compiling the CLI and
+native fixture. Exercise the processor, controlled receipt and shared native
+protocol routes:
+
+```sh
+cargo test -p opaal-runtime --test stdio_values --test stdio_failure --test stdio_authority --test stdio_lifetime --test stdio_controlled --test stdio_observers --test stdio_golden --locked
+cargo test -p opaal-platform-posix --test standard_host_worker --locked
+cargo test -p opaal-cli --test io_golden --test io_receipt_native --test data_processing_golden --test terminal_editor_pty --locked
+python3 ci/qualify_standard_input_output.py --binary-directory target/debug --expected-source "$(git rev-parse HEAD)" --platform macos-arm64 --report dist/stdio-working.json
+python3 ci/qualify_standard_io_failures.py --binary target/debug/opaal --output dist/stdio-failures
+```
+
+Use `linux-x86_64` on Linux. Working mode records an exact dirty-source snapshot
+and binary hashes; it supplies no committed-package claim. Both candidate jobs
+package the [self-contained references](tests/golden/standard-input-output/README.md)
+with `ci/package_standard_input_output.py` and replay those exact fixtures and
+program archives outside the checkout. Copies of the maintained report core
+and input corpus must match byte-for-byte before packaging. Qualification runs
+the documented source and project CI drivers, all report policy/error fixtures,
+and a complete producer output followed by exit 7 with zero processor launches.
+
+The native fault harness retains receipts/journals/audits and validates blocked
+read cancellation, worker death, exact reap and real file write limits. A file
+size limit proves that tested write failure, without establishing disk-full or
+quota support. Injected syscall/receipt stages are reported separately from
+actual kernel failures. Hosted configuration alone is no passing evidence.
+The `io_receipt_native` fixture independently limits the receipt's regular-file
+write after the journal completes. File/parent sync tests substitute owned pipe
+descriptors after the final receipt write and exercise the kernel sync error;
+they do not establish regular-filesystem EIO or power-loss durability. Each
+success/Error primary retains exact earlier output counts, empty administrative
+streams and owned worker reap, while receipt failure makes the run unsuccessful.
 
 ## Fuzzing
 

@@ -65,7 +65,7 @@ use crate::module::{
     ModuleAliasRegistry, ModuleCanonicalizer, ModuleSourceLoader, RuntimeBindingTypes,
 };
 use crate::operation::OperationDescriptor;
-use crate::operational::random_source::RandomBinding;
+use crate::operational::standard_source::StandardBinding;
 use crate::outcome::{Refusal, RefusalReason};
 use crate::plan::{
     ChildStartBudget, ExecutionPlan, InternalStdoutRoute, PlannedResolution, PlannedStage,
@@ -448,16 +448,16 @@ impl Session {
         )
     }
 
-    /// Submit one cell with an explicit evaluation-owned entropy binding.
+    /// Submit one cell with an explicit evaluation-owned standard host binding.
     /// Initializers remain pure; the worker is closed before this returns.
     #[allow(clippy::too_many_arguments)]
-    pub fn submit_with_source_loader_and_random(
+    pub fn submit_with_source_loader_and_standard_host(
         &mut self,
         name: impl Into<String>,
         text: impl Into<String>,
         canonicalizer: &dyn ModuleCanonicalizer,
         source_loader: &dyn ModuleSourceLoader,
-        random: &mut RandomBinding,
+        random: &mut StandardBinding,
         probe: &dyn ExecutableProbe,
         platform: &dyn Platform,
         clock: &dyn Clock,
@@ -494,7 +494,7 @@ impl Session {
         platform: &dyn Platform,
         clock: &dyn Clock,
         output: &mut dyn Write,
-        random: Option<&mut RandomBinding>,
+        random: Option<&mut StandardBinding>,
     ) -> Result<(SubmitOutcome, Value), SubmitError> {
         let id = u32::try_from(self.next_source)
             .ok()
@@ -707,7 +707,7 @@ impl Session {
         platform: &dyn Platform,
         clock: &dyn Clock,
         output: &mut dyn Write,
-        random: Option<&mut RandomBinding>,
+        random: Option<&mut StandardBinding>,
     ) -> Result<(SubmitOutcome, ScopeStack, Value), SubmitError> {
         std::mem::swap(&mut self.scope, &mut scope);
         let outcome = self.submit_parsed(
@@ -744,7 +744,7 @@ impl Session {
         clock: &dyn Clock,
         output: &mut dyn Write,
         imports: Option<&PreparedImports>,
-        mut random: Option<&mut RandomBinding>,
+        mut random: Option<&mut StandardBinding>,
     ) -> Result<(SubmitOutcome, Value), SubmitError> {
         let source_file = source.as_ref();
         let binding_types =
@@ -866,9 +866,7 @@ impl Session {
                         )
                         && (policy == EvaluationPolicy::PureOpaal
                             || operation.implementation().is_math()
-                            || operation.downstream().effects().contains(
-                                &crate::authority::CapabilityRequest::entropy_system(),
-                            )) =>
+                            || !operation.downstream().effects().is_empty()) =>
                 {
                     output
                         .write_all(&render_module_operation_help(&operation))
@@ -1352,7 +1350,7 @@ struct SessionEvaluationHost<'session> {
     output: &'session mut dyn Write,
     policy: EvaluationPolicy,
     child_starts: &'session mut ChildStartBudget,
-    random: Option<&'session mut RandomBinding>,
+    random: Option<&'session mut StandardBinding>,
 }
 
 impl EvaluationHost for SessionEvaluationHost<'_> {
@@ -1368,7 +1366,7 @@ impl EvaluationHost for SessionEvaluationHost<'_> {
         self.policy
     }
 
-    fn permits_entropy_action(&self) -> bool {
+    fn permits_standard_action(&self) -> bool {
         self.random.is_some() && self.policy == EvaluationPolicy::AmbientProcess
     }
 

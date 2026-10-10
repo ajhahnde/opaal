@@ -8,7 +8,7 @@ use crate::module::{
     ModuleCanonicalizer, ModulePathError, ModuleProgram, ModuleProgramLoader, ModuleSourceError,
     ModuleSourceLoader,
 };
-use crate::operational::random::{RandomLimits, RandomState};
+use crate::operational::standard::{StandardLimits, StandardState};
 use opaal_platform::standard_host::{FillError, StandardHost};
 use opaal_platform::{AuthorityProfile, Capabilities, FakePlatform};
 use std::collections::VecDeque;
@@ -68,7 +68,7 @@ impl StandardHost for Entropy {
 struct Host {
     environment: Environment,
     context: OperationalContext,
-    random: RandomState,
+    random: StandardState,
     platform: FakePlatform,
     fills: Arc<AtomicUsize>,
     calls: usize,
@@ -92,7 +92,7 @@ impl Host {
                 Arc::new(FakeClock::new()),
                 None,
             ),
-            random: RandomState::new(
+            random: StandardState::new(
                 Some(Box::new(Entropy {
                     bytes: words
                         .iter()
@@ -101,7 +101,7 @@ impl Host {
                         .collect(),
                     fills: fills.clone(),
                 })),
-                RandomLimits::default(),
+                StandardLimits::default(),
             )
             .unwrap(),
             platform: FakePlatform::with_authority_profile(

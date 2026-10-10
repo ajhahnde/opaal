@@ -88,5 +88,10 @@ name = "random_native"
 path = "tests/random_native.rs"
 harness = false
 
+[[test]]
+name = "io_receipt_native"
+path = "tests/io_receipt_native.rs"
+harness = false
+
 [lints]
 workspace = true

@@ -4,7 +4,7 @@ use std::os::unix::net::UnixDatagram;
 use std::time::{Duration, Instant};
 
 use opaal_platform::operational::OperationalErrorKind;
-use opaal_platform::standard_host::{FillProgress, StandardHost};
+use opaal_platform::standard_host::{FillProgress, StandardHost, StandardStream};
 use opaal_platform_posix::standard_host::PosixStandardHost;
 
 fn frame(tag: u16, evaluation: u64, request: u64, count: u32) -> Vec<u8> {
@@ -30,6 +30,10 @@ pub fn worker() {
     let evaluation = u64::from_be_bytes(binding[12..20].try_into().unwrap());
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     super::blocked_library::enable(evaluation);
+    super::standard_streams::enable_syscall_fault(evaluation);
+    if (130..=147).contains(&evaluation) {
+        stream_worker(evaluation, binding);
+    }
     if !(100..=120).contains(&evaluation) || binding.as_slice() != frame(1, evaluation, 0, 0) {
         return;
     }
@@ -119,6 +123,162 @@ fn wait_for_teardown() -> ! {
 }
 
 #[allow(unsafe_code)]
+fn stream_worker(evaluation: u64, mut binding: [u8; 36]) -> ! {
+    // SAFETY: this selected fixture worker adopts its sole control socket once.
+    let socket = unsafe { UnixDatagram::from_raw_fd(8) };
+    assert_eq!(socket.recv(&mut binding).unwrap(), 36);
+    socket.send(&frame(2, evaluation, 0, 0)).unwrap();
+    let mut request = [0; 36];
+    assert_eq!(socket.recv(&mut request).unwrap(), 36);
+    let write = matches!(evaluation, 144 | 147);
+    assert_eq!(
+        request.as_slice(),
+        frame(if write { 8 } else { 7 }, evaluation, 1, 8)
+    );
+    if write {
+        assert_eq!(socket.recv(&mut [0; 8]).unwrap(), 8);
+    }
+    let mut response = frame(10, evaluation, 1, 8);
+    match evaluation {
+        130 => response[19] ^= 1,
+        131 => response[27] = 2,
+        132 => response[31] = 9,
+        133 => response = frame(2, evaluation, 0, 0),
+        134 => response = frame(11, evaluation, 1, 1),
+        135 => {
+            response.pop();
+        }
+        136 => {
+            send_descriptor(&socket, &response);
+            wait_for_teardown();
+        }
+        139 | 144 | 145 => response = frame(10, evaluation, 1, 0),
+        146 | 147 => response = frame(10, evaluation, 1, 3),
+        140..=143 => response = frame(evaluation as u16 - 129, evaluation, 1, 0),
+        _ => {}
+    }
+    socket.send(&response).unwrap();
+    match evaluation {
+        137 => {
+            socket.send(&[0x47; 7]).unwrap();
+        }
+        138 => {}
+        146 => {
+            socket.send(&[0x47; 3]).unwrap();
+        }
+        139..=144 => {
+            let mut ack = [0; 36];
+            assert_eq!(socket.recv(&mut ack).unwrap(), 36);
+            assert_eq!(ack.as_slice(), frame(5, evaluation, 1, 0));
+            assert_eq!(socket.recv(&mut request).unwrap(), 36);
+            assert_eq!(request.as_slice(), frame(3, evaluation, 2, 8));
+            socket.send(&frame(4, evaluation, 2, 8)).unwrap();
+            socket.send(&[0x47; 8]).unwrap();
+            assert_eq!(socket.recv(&mut ack).unwrap(), 36);
+            assert_eq!(ack.as_slice(), frame(5, evaluation, 2, 0));
+        }
+        _ => {}
+    }
+    wait_for_teardown();
+}
+
+pub fn stream_parent() {
+    use std::os::fd::AsFd;
+    drop(PosixStandardHost::for_cli(71).unwrap());
+    let before = descriptors();
+    for evaluation in 130..=147 {
+        super::checks::cancel_after_record(if evaluation >= 145 { evaluation } else { 0 });
+        let mut host = PosixStandardHost::for_cli(evaluation).unwrap();
+        // Bind an ordinary file: the replacement worker supplies only control faults.
+        let file = std::fs::File::open(std::env::current_exe().unwrap()).unwrap();
+        let stream = if matches!(evaluation, 144 | 147) {
+            StandardStream::Stdout
+        } else {
+            StandardStream::Stdin
+        };
+        if stream == StandardStream::Stdin {
+            host.bind_stream(stream, file.as_fd()).unwrap();
+        } else {
+            let (reader, writer) = super::standard_streams::pipe();
+            host.bind_stream(stream, writer.as_fd()).unwrap();
+            drop((reader, writer));
+        }
+        let started = Instant::now();
+        let cancelled =
+            || super::checks::record_cancelled() || started.elapsed() >= Duration::from_secs(1);
+        let mut bytes = [0xa5; 8];
+        let result = if stream == StandardStream::Stdin {
+            host.read(&mut bytes, &cancelled)
+        } else {
+            host.write(stream, &[0x47; 8], &cancelled)
+        };
+        match evaluation {
+            139 | 144 => assert_eq!(result.unwrap(), 0),
+            140..=143 => {
+                let error = result.unwrap_err();
+                assert_eq!(
+                    error.error.kind(),
+                    OperationalErrorKind::Io(
+                        [
+                            std::io::ErrorKind::Interrupted,
+                            std::io::ErrorKind::WouldBlock,
+                            std::io::ErrorKind::BrokenPipe,
+                            std::io::ErrorKind::Other,
+                        ][(evaluation - 140) as usize]
+                    )
+                );
+                assert_eq!(error.confirmed_bytes, 0);
+                assert_eq!(error.uncertain_bytes_upper_bound, 0);
+                assert_eq!(error.eof, None);
+                assert!(error.cleanup_error.is_none());
+            }
+            _ => {
+                let error = result.unwrap_err();
+                assert_eq!(
+                    error.error.kind(),
+                    match evaluation {
+                        136 => OperationalErrorKind::Io(std::io::ErrorKind::InvalidData),
+                        138 | 145..=147 => OperationalErrorKind::Cancelled,
+                        _ => OperationalErrorKind::Protocol,
+                    },
+                    "evaluation {evaluation}: {error:?}"
+                );
+                assert_eq!(
+                    error.confirmed_bytes,
+                    match evaluation {
+                        137 | 138 => 8,
+                        146 | 147 => 3,
+                        _ => 0,
+                    }
+                );
+                assert_eq!(
+                    error.uncertain_bytes_upper_bound,
+                    if evaluation >= 137 { 0 } else { 8 }
+                );
+                assert_eq!(error.eof, if evaluation == 145 { Some(true) } else { None });
+                assert!(error.cleanup_error.is_none());
+                assert_eq!(bytes, if evaluation == 147 { [0xa5; 8] } else { [0; 8] });
+                assert!(!host.available());
+            }
+        }
+        if (139..=144).contains(&evaluation) {
+            assert!(host.available());
+            host.fill(&mut bytes, &|| false).unwrap();
+            assert_eq!(bytes, [0x47; 8]);
+        }
+        host.close().unwrap();
+        drop((host, file));
+        super::checks::cancel_after_record(0);
+        super::checks::assert_reaped();
+        assert_eq!(
+            descriptors(),
+            before,
+            "descriptor leak at evaluation {evaluation}"
+        );
+    }
+}
+
+#[allow(unsafe_code)]
 fn send_descriptor(socket: &UnixDatagram, bytes: &[u8]) {
     send_descriptors(socket, bytes, 1);
 }
@@ -126,6 +286,11 @@ fn send_descriptor(socket: &UnixDatagram, bytes: &[u8]) {
 #[allow(unsafe_code)]
 fn send_descriptors(socket: &UnixDatagram, bytes: &[u8], count: usize) {
     let file = std::fs::File::open("/dev/null").unwrap();
+    send_file_descriptors(socket, bytes, &file, count);
+}
+
+#[allow(unsafe_code)]
+fn send_file_descriptors(socket: &UnixDatagram, bytes: &[u8], file: &impl AsRawFd, count: usize) {
     // SAFETY: aligned control storage holds one SCM_RIGHTS record; the byte
     // buffer and borrowed file stay live through this single sendmsg call.
     unsafe {
@@ -250,9 +415,9 @@ pub fn worker_inputs(input: Option<&[u8]>) {
     drop(PosixStandardHost::for_cli(71).unwrap());
     let before = descriptors();
     let cases = if let Some(input) = input {
-        vec![(usize::from(input.first().copied().unwrap_or(0) % 3), 15)]
+        vec![(usize::from(input.first().copied().unwrap_or(0) % 7), 15)]
     } else {
-        (0..3)
+        (0..7)
             .flat_map(|stage| (0..15).map(move |mutation| (stage, mutation)))
             .collect()
     };
@@ -306,13 +471,40 @@ pub fn worker_inputs(input: Option<&[u8]>) {
                 assert_eq!(socket.recv(&mut header)?, 36);
                 assert_eq!(header.as_slice(), frame(2, 71, 0, 0));
             }
-            if stage > 1 {
+            if stage == 2 {
                 socket.send(&frame(3, 71, 1, 8))?;
                 assert_eq!(socket.recv(&mut header)?, 36);
                 assert_eq!(header.as_slice(), frame(4, 71, 1, 8));
                 assert_eq!(socket.recv(&mut [0; 8])?, 8);
             }
-            let (tag, request, count) = [(1, 0, 0), (3, 1, 8), (5, 1, 0)][stage];
+            if matches!(stage, 4 | 6) {
+                use std::io::Write;
+                let (reader, writer) = super::standard_streams::pipe();
+                if stage == 4 {
+                    let mut writer = std::fs::File::from(writer);
+                    writer.write_all(&[0x47; 8])?;
+                    send_file_descriptors(&socket, &frame(7, 71, 1, 8), &reader, 1);
+                    assert_eq!(socket.recv(&mut header)?, 36);
+                    assert_eq!(header.as_slice(), frame(10, 71, 1, 8));
+                    let mut payload = [0; 8];
+                    assert_eq!(socket.recv(&mut payload)?, 8);
+                    assert_eq!(payload, [0x47; 8]);
+                } else {
+                    send_file_descriptors(&socket, &frame(8, 71, 1, 8), &writer, 1);
+                    socket.send(&[0x47; 8])?;
+                    assert_eq!(socket.recv(&mut header)?, 36);
+                    assert_eq!(header.as_slice(), frame(10, 71, 1, 8));
+                }
+            }
+            let (tag, request, count) = [
+                (1, 0, 0),
+                (3, 1, 8),
+                (5, 1, 0),
+                (7, 1, 8),
+                (5, 1, 0),
+                (8, 1, 8),
+                (5, 1, 0),
+            ][stage];
             let mut bytes = if let Some(input) = input {
                 input.get(2..).unwrap_or_default().to_vec()
             } else {
@@ -321,7 +513,7 @@ pub fn worker_inputs(input: Option<&[u8]>) {
             if input.is_some()
                 && stage == 0
                 && bytes.len() >= 20
-                && (100..=120).contains(&u64::from_be_bytes(bytes[12..20].try_into().unwrap()))
+                && matches!(u64::from_be_bytes(bytes[12..20].try_into().unwrap()), 100..=120 | 130..=147 | 200..=204)
             {
                 // Keep fuzzed bindings out of this image's supervisor fault modes.
                 bytes[12..20].copy_from_slice(&71_u64.to_be_bytes());
@@ -386,7 +578,7 @@ pub fn worker_inputs(input: Option<&[u8]>) {
                     assert_eq!(socket.recv(&mut vec![0; count as usize])?, count as usize);
                     socket.send(&frame(5, 71, 1, 0))?;
                     socket.send(b"invalid")?;
-                } else if stage == 2 && bytes == frame(5, 71, 1, 0) {
+                } else if matches!(stage, 2 | 4 | 6) && bytes == frame(5, 71, 1, 0) {
                     socket.send(b"invalid")?;
                 }
             }
@@ -425,6 +617,11 @@ pub fn valid_worker_inputs() {
     {
         let mut input = vec![stage as u8, 0];
         input.extend(frame(tag, 71, request, count));
+        worker_inputs(Some(&input));
+    }
+    for stage in [4, 6] {
+        let mut input = vec![stage, 0];
+        input.extend(frame(5, 71, 1, 0));
         worker_inputs(Some(&input));
     }
 }

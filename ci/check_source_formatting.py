@@ -32,7 +32,8 @@ def public_paths(root: Path) -> list[str]:
     result = subprocess.check_output(
         ["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"], cwd=root,
     ).decode().split("\0")
-    return sorted(set(filter(None, result)))
+    return sorted({name for name in result if name and
+                   ((root / name).exists() or (root / name).is_symlink())})
 
 
 def fences(root: Path, paths: list[str]) -> list[dict]:

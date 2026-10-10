@@ -284,6 +284,94 @@ fn random_reexports_signatures_effect_hover_and_completion_use_the_shared_catalo
 }
 
 #[test]
+fn stdio_signatures_and_effect_hover_use_the_shared_catalog_without_transfer() {
+    let directory = TestDirectory::new();
+    let uri = directory.uri("stdio.opaal");
+    for (call, signature, effect) in [
+        (
+            "read_stdin(0)",
+            "std::io::read_stdin(max_bytes: Int) -> Bytes",
+            "stdin.read",
+        ),
+        (
+            "print('x')",
+            "std::io::print(text: String) -> Null",
+            "stdout.write",
+        ),
+        (
+            "println('x')",
+            "std::io::println(text: String) -> Null",
+            "stdout.write",
+        ),
+        (
+            "eprint('x')",
+            "std::io::eprint(text: String) -> Null",
+            "stderr.write",
+        ),
+        (
+            "eprintln('x')",
+            "std::io::eprintln(text: String) -> Null",
+            "stderr.write",
+        ),
+        (
+            "write_stdout(input)",
+            "std::io::write_stdout(bytes: Bytes) -> Null",
+            "stdout.write",
+        ),
+        (
+            "write_stderr(input)",
+            "std::io::write_stderr(bytes: Bytes) -> Null",
+            "stderr.write",
+        ),
+    ] {
+        let text =
+            format!("import std::io as io\nlet input: Bytes = io::read_stdin(0)\nio::{call}\n");
+        let mut workspace = Workspace::new();
+        workspace.open(uri.clone(), 1, text.clone()).unwrap();
+        let offset = text.rfind(call).unwrap();
+        let signatures = request(
+            &workspace,
+            PositionEncoding::Utf16,
+            &RequestControl::new(),
+            "textDocument/signatureHelp",
+            positional(
+                &uri,
+                &text,
+                offset + call.find('(').unwrap() + 1,
+                PositionEncoding::Utf16,
+            ),
+        )
+        .unwrap();
+        assert_eq!(signatures["signatures"].as_array().unwrap().len(), 1);
+        assert_eq!(signatures["signatures"][0]["label"], signature);
+        let hover = request(
+            &workspace,
+            PositionEncoding::Utf16,
+            &RequestControl::new(),
+            "textDocument/hover",
+            positional(&uri, &text, offset + 1, PositionEncoding::Utf16),
+        )
+        .unwrap();
+        assert!(
+            hover["contents"]["value"]
+                .as_str()
+                .unwrap()
+                .contains(effect)
+        );
+        let analysis = workspace
+            .diagnostic_snapshot()
+            .analyze_diagnostics(PositionEncoding::Utf16)
+            .unwrap();
+        assert!(
+            analysis
+                .documents()
+                .iter()
+                .all(|document| document.diagnostics().is_empty())
+        );
+    }
+}
+
+#[test]
 fn string_operation_signatures_expose_every_argument_and_active_parameter() {
     let directory = TestDirectory::new();
     let uri = directory.uri("main.opaal");

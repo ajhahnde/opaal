@@ -58,6 +58,7 @@ pub enum Mode {
         run_id: Option<String>,
         secret_stdin: Option<String>,
         journal: PathBuf,
+        receipt_out: Option<PathBuf>,
     },
     AuditHelp,
     AuditInspect {
@@ -357,6 +358,7 @@ where
     let mut run_id = None;
     let mut secret_stdin = None;
     let mut journal = None;
+    let mut receipt_out = None;
     let mut index = 0;
     while index < arguments.len() {
         let option = arguments[index].to_str().ok_or_else(|| {
@@ -371,6 +373,9 @@ where
                 set_text_option(&mut secret_stdin, "--secret-stdin", &arguments, &mut index)?
             }
             "--journal" => set_path_option(&mut journal, "--journal", &arguments, &mut index)?,
+            "--receipt-out" => {
+                set_path_option(&mut receipt_out, "--receipt-out", &arguments, &mut index)?
+            }
             value => {
                 return Err(CliError::InvalidProjectArgument(format!(
                     "unexpected execute argument '{value}'"
@@ -385,6 +390,7 @@ where
             run_id,
             secret_stdin,
             journal: required_option(journal, "--journal")?,
+            receipt_out,
         },
     })
 }
@@ -1061,6 +1067,7 @@ mod tests {
                 run_id: Some("00000000000000000000000000000001".to_owned()),
                 secret_stdin: Some("token".to_owned()),
                 journal: PathBuf::from("run.jsonl"),
+                receipt_out: None,
             }
         );
         assert_eq!(

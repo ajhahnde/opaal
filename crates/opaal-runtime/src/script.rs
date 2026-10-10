@@ -12,10 +12,10 @@ use crate::eval::{
     HostedEvaluationOutcome, ResourceBudget, apply_callable_with_controlled_host_and_budget,
 };
 use crate::module::{ModuleId, ModuleOrigin, ModuleProgram, ModuleSourceRegistry, NominalTypeId};
-use crate::operational::random_source::RandomBinding;
 use crate::operational::source::{
     ControlledSourceOperations, SourceOperationalEvidence, SourceOperationalHost,
 };
+use crate::operational::standard_source::StandardBinding;
 use crate::outcome::{
     CompletedEvidence, ExecutionOutcome, FatalHostFailure, FatalHostFailureKind, OutcomeEvidence,
     PartialEffectEvidence, PrimaryOutcome,
@@ -215,10 +215,10 @@ pub fn execute_ambient_module_program_outcome(
     )
 }
 
-/// Execute a CLI root with an explicit entropy binding. Imported initializers
+/// Execute a CLI root with an explicit standard host binding. Imported initializers
 /// receive no binding; cleanup is retained beside the original primary.
 #[allow(clippy::too_many_arguments)]
-pub fn execute_ambient_module_program_outcome_with_random(
+pub fn execute_ambient_module_program_outcome_with_standard_host(
     program: &ModuleProgram,
     script_arguments: &[String],
     snapshot: NativeSessionSnapshot,
@@ -228,11 +228,11 @@ pub fn execute_ambient_module_program_outcome_with_random(
     platform: &dyn Platform,
     clock: Arc<dyn Clock>,
     output: &mut dyn Write,
-    random: &mut RandomBinding,
+    random: &mut StandardBinding,
 ) -> ScriptExecutionOutcome {
     let (cwd, mut environment) = snapshot.into_parts();
     let limits = EvalLimits::ambient_process(random.cancellation.clone(), ResourceBudget::opaal());
-    execute_module_program_with_random(
+    execute_module_program_with_standard_host(
         program,
         script_arguments,
         &cwd,
@@ -265,7 +265,7 @@ pub fn execute_module_program_outcome_with_limits(
     output: &mut dyn Write,
     limits: &EvalLimits,
 ) -> ScriptExecutionOutcome {
-    execute_module_program_with_random(
+    execute_module_program_with_standard_host(
         program,
         script_arguments,
         cwd,
@@ -282,7 +282,7 @@ pub fn execute_module_program_outcome_with_limits(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn execute_module_program_with_random(
+fn execute_module_program_with_standard_host(
     program: &ModuleProgram,
     script_arguments: &[String],
     cwd: &Path,
@@ -294,7 +294,7 @@ fn execute_module_program_with_random(
     clock: Arc<dyn Clock>,
     output: &mut dyn Write,
     limits: &EvalLimits,
-    mut random: Option<&mut RandomBinding>,
+    mut random: Option<&mut StandardBinding>,
 ) -> ScriptExecutionOutcome {
     let structured_outcomes = true;
     let mut session = Session::with_scope_and_registry(

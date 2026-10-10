@@ -6,13 +6,25 @@ All notable changes to OPAAL are documented here.
 
 ### Added
 
+- Add bounded `std::io::read_stdin`, byte `write_stdout`/`write_stderr` and
+  String `print`/`println`/`eprint`/`eprintln`. Native source and terminal
+  sessions bind distinct endpoints; controlled actions require declared
+  `stdin.read`, `stdout.write`, and `stderr.write` effects and separate grants.
+  Reads fail without returning truncated values; partial/uncertain transfers
+  remain consumed and are never automatically replayed.
+- Add exclusive `--receipt-out` execution receipts for stream-output tasks,
+  carrying safe outcomes and cumulative progress separately from data channels.
+  I/O tasks share Random's metadata-only v3 evidence and host byte budget.
+- Add self-contained processor and CI job-check references with strict JSON,
+  successful acquisition before launch, explicit domain policy and distinct
+  source/controlled exit mapping, plus both-host fixture archive qualification.
 - Add bounded `std::random::int`, `float`, and `bytes` under explicit
   `entropy.system` authority. Ordinary native CLI and interactive calls use an
   owned same-image entropy worker; controlled tasks require declared effects
   and selected environment grants. Pure functions, callbacks and imported
   initializers refuse entropy, including calls that draw no bytes.
 - Add metadata-only v3 check, plan, journal and audit artifacts for tasks that
-  declare entropy. Routine evidence retains progress and outcomes, omitting
+  declare entropy or standard streams. Routine evidence retains progress and outcomes, omitting
   sampled values, derived payloads and their digests for the whole affected run.
   Existing tasks continue to use v2 artifacts.
 

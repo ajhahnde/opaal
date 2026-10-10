@@ -757,6 +757,7 @@ pub(crate) enum StandardOperation {
     RandomInt,
     RandomFloat,
     RandomBytes,
+    Io,
     Abs,
     Min,
     Max,
@@ -940,6 +941,71 @@ pub fn standard_operation(module: &ModuleId, name: &str) -> Option<OperationDesc
         descriptor
             .validate()
             .expect("compiled random descriptors must be valid");
+        return Some(descriptor);
+    }
+    if standard == "io" {
+        use crate::authority::CapabilityRequest;
+        let (parameter, argument_type, result, request, documentation) = match name {
+            "read_stdin" => (
+                "max_bytes",
+                ValueType::Int,
+                ValueType::Bytes,
+                CapabilityRequest::stdin_read(),
+                "Read raw stdin through EOF within an explicit cap from 0 through 1048576 bytes. Reserve cap+1 for the excess probe; excess raises IO002 without a truncated value.",
+            ),
+            "print" | "println" => (
+                "text",
+                ValueType::String,
+                ValueType::Null,
+                CapabilityRequest::stdout_write(),
+                "Write exact UTF-8 text to stdout. println appends exactly one LF, even to empty or already LF-terminated text; print adds nothing.",
+            ),
+            "eprint" | "eprintln" => (
+                "text",
+                ValueType::String,
+                ValueType::Null,
+                CapabilityRequest::stderr_write(),
+                "Write exact UTF-8 text to stderr. eprintln appends exactly one LF, even to empty or already LF-terminated text; eprint adds nothing.",
+            ),
+            "write_stdout" => (
+                "bytes",
+                ValueType::Bytes,
+                ValueType::Null,
+                CapabilityRequest::stdout_write(),
+                "Write exact raw bytes to stdout, with no added newline. String is rejected before transfer.",
+            ),
+            "write_stderr" => (
+                "bytes",
+                ValueType::Bytes,
+                ValueType::Null,
+                CapabilityRequest::stderr_write(),
+                "Write exact raw bytes to stderr, with no added newline. String is rejected before transfer.",
+            ),
+            _ => return None,
+        };
+        let effect = match request.effect() {
+            opaal_platform::AuthorityEffect::StdinRead => "stdin.read",
+            opaal_platform::AuthorityEffect::StdoutWrite => "stdout.write",
+            opaal_platform::AuthorityEffect::StderrWrite => "stderr.write",
+            _ => unreachable!("I/O descriptors request only standard streams"),
+        };
+        let descriptor = OperationDescriptor {
+            id: OperationId::new(module.clone(), name),
+            type_parameters: Vec::new(),
+            overloads: vec![OperationOverload::values(
+                vec![(parameter, argument_type)],
+                result,
+            )],
+            documentation: format!(
+                "{documentation} Requires {effect} in evaluation scope, an exact grant and an explicitly bound cancellable endpoint, including empty calls. Pure functions, callbacks, initializers and default embeddings refuse. Writes preflight at most 1048576 encoded bytes including LF; calls share entropy/input/output byte and work limits. Broken Pipe raises IO003 and zero-write IO004. Failed or cancelled reads return no partial value; consumed/emitted or uncertain bytes cannot be rolled back or automatically replayed. No formatting, coercion, capture, handles or pipeline form."
+            ),
+            purity: OperationPurity::RequiresAuthorityContract,
+            downstream: DownstreamCallMetadata::foundation().with_declared_request(request),
+            implementation: StandardOperation::Io,
+        };
+        descriptor
+            .validate()
+            .expect("compiled I/O descriptors must be valid");
         return Some(descriptor);
     }
     if standard == "math" {
@@ -1399,6 +1465,13 @@ pub(crate) fn standard_operations(module: &ModuleId) -> Vec<OperationDescriptor>
         "int",
         "float",
         "bytes",
+        "read_stdin",
+        "print",
+        "println",
+        "eprint",
+        "eprintln",
+        "write_stdout",
+        "write_stderr",
         "abs",
         "min",
         "max",

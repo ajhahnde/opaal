@@ -101,13 +101,16 @@ jobs:
       - name: Exercise the supported fuzz targets
         run: fuzz/run-smoke.sh 1000
 
-      - name: Repeat Random fuzzing with a fixed seed
+      - name: Repeat Random and I/O fuzzing with a fixed seed
         if: github.event_name == 'workflow_dispatch'
         shell: bash
         run: |
           corpus=$(mktemp -d)
           trap 'rm -rf "$corpus"' EXIT
-          cargo +nightly fuzz run --fuzz-dir fuzz random_limits "$corpus" fuzz/seeds/random_limits -- -runs=1000 -seed=1 -max_len=4096 -timeout=10 -rss_limit_mb=2048
+          for target in random_limits stdio_limits; do
+            mkdir "$corpus/$target"
+            cargo +nightly fuzz run --fuzz-dir fuzz "$target" "$corpus/$target" "fuzz/seeds/$target" -- -runs=1000 -seed=1 -max_len=4096 -timeout=10 -rss_limit_mb=2048
+          done
 
   operational-core-linux:
     name: operational-core-linux
@@ -158,7 +161,7 @@ jobs:
       - name: Enforce native image invalidation policy
         run: |
           # Cargo restores visible binaries from these copies even on a cached run.
-          for binary in target/debug/opaal target/debug/opaal-standard-host-fixture target/debug/deps/opaal-* target/debug/deps/opaal_standard_host_fixture-* target/debug/deps/random_native-* target/release/opaal; do
+          for binary in target/debug/opaal target/debug/opaal-standard-host-fixture target/debug/deps/opaal-* target/debug/deps/opaal_standard_host_fixture-* target/debug/deps/random_native-* target/debug/deps/io_receipt_native-* target/release/opaal; do
             [ -f "$binary" ] && [ -x "$binary" ] || continue
             codesign --display --verbose=4 "$binary"
             codesign --force --sign - --options kill "$binary"
@@ -272,6 +275,18 @@ jobs:
             --fixtures "dist/opaal-v${candidate_version}-random-values.tar.gz" \
             --expected-source "$(git rev-parse HEAD)" --platform linux-x86_64 \
             --report dist/random-values-linux.json
+      - name: Package the exact standard-stream references
+        run: python3 ci/package_standard_input_output.py
+      - name: Qualify the processor and CI job check outside the checkout
+        run: |
+          candidate_version=$(python3 -c 'from ci.package_release import VERSION; print(VERSION)')
+          python3 ci/qualify_standard_input_output.py \
+            --archive "dist/opaal-v${candidate_version}-linux-x86_64.tar.gz" \
+            --fixtures "dist/opaal-v${candidate_version}-standard-input-output.tar.gz" \
+            --expected-source "$(git rev-parse HEAD)" --platform linux-x86_64 \
+            --report dist/standard-input-output-linux.json
+      - name: Qualify native standard I/O and failed journal persistence
+        run: python3 ci/qualify_standard_io_failures.py --binary target/release/opaal --output dist/standard-io-native-linux
       - name: Retain candidate identity and qualification evidence
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -336,6 +351,18 @@ jobs:
             --fixtures "dist/opaal-v${candidate_version}-random-values.tar.gz" \
             --expected-source "$(git rev-parse HEAD)" --platform macos-arm64 \
             --report dist/random-values-macos.json
+      - name: Package the exact standard-stream references
+        run: python3 ci/package_standard_input_output.py
+      - name: Qualify the processor and CI job check outside the checkout
+        run: |
+          candidate_version=$(python3 -c 'from ci.package_release import VERSION; print(VERSION)')
+          python3 ci/qualify_standard_input_output.py \
+            --archive "dist/opaal-v${candidate_version}-macos-arm64.tar.gz" \
+            --fixtures "dist/opaal-v${candidate_version}-standard-input-output.tar.gz" \
+            --expected-source "$(git rev-parse HEAD)" --platform macos-arm64 \
+            --report dist/standard-input-output-macos.json
+      - name: Qualify native standard I/O and failed journal persistence
+        run: python3 ci/qualify_standard_io_failures.py --binary target/release/opaal --output dist/standard-io-native-macos
       - name: Retain candidate identity and qualification evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

@@ -1,9 +1,9 @@
-//! Bounded system sampling under explicit evaluation authority.
+//! One evaluation-owned host, byte counter and bounded system sampling.
 
 use std::time::Duration;
 
-use opaal_platform::Platform;
 use opaal_platform::standard_host::{FillProgress, MAX_ENTROPY_FILL_BYTES, StandardHost};
+use opaal_platform::{AuthorityEffect, Platform};
 
 use crate::Value;
 use crate::authority::{AuthorityVerdict, CapabilityRequest, EffectSet};
@@ -21,14 +21,14 @@ pub const OPERATION_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Only lower limits may be injected; production ceilings cannot be raised.
 #[derive(Clone, Copy, Debug)]
-pub struct RandomLimits {
+pub struct StandardLimits {
     pub max_call_bytes: usize,
     pub max_host_bytes: usize,
     pub max_integer_candidates: usize,
     pub operation_timeout: Duration,
 }
 
-impl Default for RandomLimits {
+impl Default for StandardLimits {
     fn default() -> Self {
         Self {
             max_call_bytes: MAX_CALL_BYTES,
@@ -39,29 +39,46 @@ impl Default for RandomLimits {
     }
 }
 
-/// Counts describe admitted fills, never internal library syscalls or payloads.
+/// Counts describe admitted host transfers, never payloads or entropy library syscalls.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct EntropyProgress {
+pub struct HostProgress {
     pub requested_bytes: usize,
     pub admitted_bytes: usize,
     pub confirmed_bytes: usize,
     pub uncertain_bytes_upper_bound: usize,
+    pub eof: Option<bool>,
+}
+
+/// Cumulative confirmed/uncertain transfers survive caught errors and cleanup.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct TransferCounts {
+    pub confirmed_bytes: usize,
+    pub uncertain_bytes_upper_bound: usize,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct RoleProgress {
+    pub entropy: TransferCounts,
+    pub stdin: TransferCounts,
+    pub stdout: TransferCounts,
+    pub stderr: TransferCounts,
 }
 
 /// One serialized host and cumulative byte counter for a logical evaluation.
 /// Catchable language checkpoints must not clone or restore this state.
-pub struct RandomState {
-    host: Option<Box<dyn StandardHost>>,
-    limits: RandomLimits,
-    consumed_bytes: usize,
-    progress: EntropyProgress,
-    cleanup_error: Option<opaal_platform::operational::OperationalError>,
+pub struct StandardState {
+    pub(super) host: Option<Box<dyn StandardHost>>,
+    pub(super) limits: StandardLimits,
+    pub(super) consumed_bytes: usize,
+    pub(super) progress: HostProgress,
+    role_progress: RoleProgress,
+    pub(super) cleanup_error: Option<opaal_platform::operational::OperationalError>,
 }
 
-impl RandomState {
+impl StandardState {
     pub fn new(
         host: Option<Box<dyn StandardHost>>,
-        limits: RandomLimits,
+        limits: StandardLimits,
     ) -> Result<Self, ModuleError> {
         if limits.max_call_bytes > MAX_CALL_BYTES
             || limits.max_host_bytes > MAX_HOST_BYTES
@@ -71,26 +88,44 @@ impl RandomState {
         {
             return Err(ModuleError::invalid(
                 "OPERATION001",
-                "invalid entropy limits",
+                "invalid standard host limits",
             ));
         }
         Ok(Self {
             host,
             limits,
             consumed_bytes: 0,
-            progress: EntropyProgress::default(),
+            progress: HostProgress::default(),
+            role_progress: RoleProgress::default(),
             cleanup_error: None,
         })
     }
 
     #[must_use]
-    pub const fn progress(&self) -> EntropyProgress {
+    pub const fn progress(&self) -> HostProgress {
         self.progress
     }
 
     #[must_use]
     pub const fn consumed_bytes(&self) -> usize {
         self.consumed_bytes
+    }
+
+    #[must_use]
+    pub const fn role_progress(&self) -> RoleProgress {
+        self.role_progress
+    }
+
+    pub(super) fn record_progress(&mut self, effect: AuthorityEffect) {
+        let counts = match effect {
+            AuthorityEffect::EntropySystem => &mut self.role_progress.entropy,
+            AuthorityEffect::StdinRead => &mut self.role_progress.stdin,
+            AuthorityEffect::StdoutWrite => &mut self.role_progress.stdout,
+            AuthorityEffect::StderrWrite => &mut self.role_progress.stderr,
+            _ => unreachable!("standard host transfer role"),
+        };
+        counts.confirmed_bytes += self.progress.confirmed_bytes;
+        counts.uncertain_bytes_upper_bound += self.progress.uncertain_bytes_upper_bound;
     }
 
     /// Validate and reserve a call without starting entropy work.
@@ -101,7 +136,7 @@ impl RandomState {
         platform: &dyn Platform,
         operation: &str,
         arguments: &[Value],
-    ) -> Result<EntropyProgress, ModuleError> {
+    ) -> Result<HostProgress, ModuleError> {
         if let Some(reason) = context.poll_cancellation() {
             return Err(ModuleError::Cancelled(reason));
         }
@@ -138,10 +173,10 @@ impl RandomState {
         if requested_bytes > 0 && admitted_bytes == 0 {
             return Err(limit());
         }
-        Ok(EntropyProgress {
+        Ok(HostProgress {
             requested_bytes,
             admitted_bytes,
-            ..EntropyProgress::default()
+            ..HostProgress::default()
         })
     }
 
@@ -196,6 +231,7 @@ impl RandomState {
         // Release unused candidate reservations; evidence counts actual fills.
         self.progress.admitted_bytes =
             self.progress.confirmed_bytes + self.progress.uncertain_bytes_upper_bound;
+        self.record_progress(AuthorityEffect::EntropySystem);
         if matches!(result, Err(ModuleError::Cancelled(_)))
             && let Some(mut host) = self.host.take()
             && let Err(error) = host.close()
@@ -220,7 +256,7 @@ impl RandomState {
         arguments: &[Value],
         deadline: Deadline,
     ) -> Result<Value, ModuleError> {
-        self.progress = EntropyProgress::default();
+        self.progress = HostProgress::default();
         self.progress = self.admission(context, effects, platform, operation, arguments)?;
         let call = RandomCall::parse(operation, arguments, self.limits.max_call_bytes)?;
         poll(context, deadline)?;
@@ -398,17 +434,17 @@ impl RandomCall {
     }
 }
 
-fn limit() -> ModuleError {
+pub(super) fn limit() -> ModuleError {
     ModuleError::invalid("RESOURCE_LIMIT", "evaluation resource budget exhausted")
 }
-fn charge(budget: &mut ResourceBudget) -> Result<(), ModuleError> {
+pub(super) fn charge(budget: &mut ResourceBudget) -> Result<(), ModuleError> {
     if budget.charge() {
         Ok(())
     } else {
         Err(limit())
     }
 }
-fn poll(context: &OperationalContext, deadline: Deadline) -> Result<(), ModuleError> {
+pub(super) fn poll(context: &OperationalContext, deadline: Deadline) -> Result<(), ModuleError> {
     context
         .cancellation()
         .poll_until(deadline)

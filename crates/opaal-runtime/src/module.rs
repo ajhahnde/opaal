@@ -2808,7 +2808,8 @@ fn normalize_declared_effect(
     let expected = match capability.as_str() {
         "filesystem.read" | "filesystem.write" | "process.run" | "network.http" => 1,
         "secret.reveal" => 2,
-        "clock.wall" | "clock.monotonic" | "entropy.system" => 0,
+        "clock.wall" | "clock.monotonic" | "entropy.system" | "stdin.read" | "stdout.write"
+        | "stderr.write" => 0,
         _ => {
             return Err(Box::new(ModuleActionError::UnknownCapability {
                 module: entry.module().clone(),
@@ -7224,7 +7225,7 @@ impl<'a> SignatureValidator<'a> {
         matches!(
             owner.origin(),
             ModuleOrigin::Standard { namespace, module }
-                if namespace == "std" && matches!(module.as_str(), "value" | "string" | "list" | "record" | "data" | "math" | "random")
+                if namespace == "std" && matches!(module.as_str(), "value" | "string" | "list" | "record" | "data" | "math" | "random" | "io")
         )
         .then(|| self.text(operation.span()).to_owned())
     }
@@ -8693,6 +8694,12 @@ impl ModuleSourceRegistry {
 pub enum ModuleEffect {
     /// System entropy requested by a compiled operation.
     EntropySystem,
+    /// Reading the evaluation-owned standard input.
+    StdinRead,
+    /// Writing the evaluation-owned standard output.
+    StdoutWrite,
+    /// Writing the evaluation-owned standard error.
+    StderrWrite,
     /// A change to the session-owned logical working directory.
     WorkingDirectory,
     /// A change to the child environment shared by the program session.
@@ -9264,12 +9271,17 @@ impl<'a> StaticEffectAnalyzer<'a> {
             if let ExpressionKind::Qualified(name) = callee.kind()
                 && let Some(operation) = self.qualified_operation(name)
             {
-                if operation
-                    .downstream()
-                    .effects()
-                    .contains(&crate::authority::CapabilityRequest::entropy_system())
-                {
-                    self.summary.push(ModuleEffect::EntropySystem, call_span);
+                for request in operation.downstream().effects().iter() {
+                    let effect = match request.effect() {
+                        opaal_platform::AuthorityEffect::EntropySystem => {
+                            ModuleEffect::EntropySystem
+                        }
+                        opaal_platform::AuthorityEffect::StdinRead => ModuleEffect::StdinRead,
+                        opaal_platform::AuthorityEffect::StdoutWrite => ModuleEffect::StdoutWrite,
+                        opaal_platform::AuthorityEffect::StderrWrite => ModuleEffect::StderrWrite,
+                        _ => continue,
+                    };
+                    self.summary.push(effect, call_span);
                 }
                 return;
             }
@@ -11348,6 +11360,7 @@ fn is_standard_module(namespace: &str, module: &str) -> bool {
             "value"
                 | "math"
                 | "random"
+                | "io"
                 | "string"
                 | "list"
                 | "record"

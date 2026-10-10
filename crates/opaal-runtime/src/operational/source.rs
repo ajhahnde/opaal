@@ -18,7 +18,7 @@ use crate::project::{MaintainedAdapter, ProjectManifest, ToolLock};
 use crate::security::{MAX_SECRET_BYTES, Secret, SecretId};
 use crate::{NativePath, NominalRecordValue, Record, Status, Value};
 
-use super::random::{EntropyProgress, RandomState};
+use super::standard::{HostProgress, StandardState};
 use super::{ModuleError, filesystem, http, integrity, path, process, time, url, version};
 
 const MAX_JOURNAL_MESSAGE_BYTES: usize = 4 * 1024;
@@ -57,6 +57,12 @@ impl SourceEffectEvent {
 /// Closed, redaction-safe identity for one controlled source operation.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SourceOperation {
+    StandardStream {
+        operation: String,
+        effect: opaal_platform::AuthorityEffect,
+        requested_bytes: u64,
+        admitted_bytes: u64,
+    },
     Entropy {
         operation: String,
         requested_bytes: u64,
@@ -107,7 +113,8 @@ pub enum SourceClock {
 /// Result metadata which may safely complete an operation descriptor.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SourceEffectResult {
-    Entropy(EntropyProgress),
+    StandardStream(HostProgress),
+    Entropy(HostProgress),
     Filesystem {
         bytes: Option<u64>,
         evidence_digest: Option<String>,
@@ -134,7 +141,10 @@ pub enum SourceEffectResult {
 impl SourceOperation {
     fn empty_result(&self) -> SourceEffectResult {
         match self {
-            Self::Entropy { .. } => SourceEffectResult::Entropy(EntropyProgress::default()),
+            Self::StandardStream { .. } => {
+                SourceEffectResult::StandardStream(HostProgress::default())
+            }
+            Self::Entropy { .. } => SourceEffectResult::Entropy(HostProgress::default()),
             Self::Filesystem { .. } => SourceEffectResult::Filesystem {
                 bytes: None,
                 evidence_digest: None,
@@ -163,7 +173,7 @@ impl SourceOperation {
 impl SourceEffectResult {
     fn evidence_digest(&self) -> Option<&str> {
         match self {
-            Self::Entropy(_) => None,
+            Self::Entropy(_) | Self::StandardStream(_) => None,
             Self::Filesystem {
                 evidence_digest, ..
             }
@@ -381,7 +391,7 @@ pub struct ControlledSourceOperations<'a> {
     secret_input: Option<&'a mut dyn Read>,
     evidence: Vec<SourceOperationalEvidence>,
     metadata_only: bool,
-    random: Option<RandomState>,
+    random: Option<StandardState>,
 }
 
 impl<'a> ControlledSourceOperations<'a> {
@@ -426,16 +436,22 @@ impl<'a> ControlledSourceOperations<'a> {
             secret_input_id,
             secret_input,
             evidence: Vec::new(),
-            metadata_only: effects
-                .iter()
-                .any(|request| request.effect() == opaal_platform::AuthorityEffect::EntropySystem),
+            metadata_only: effects.iter().any(|request| {
+                matches!(
+                    request.effect(),
+                    opaal_platform::AuthorityEffect::EntropySystem
+                        | opaal_platform::AuthorityEffect::StdinRead
+                        | opaal_platform::AuthorityEffect::StdoutWrite
+                        | opaal_platform::AuthorityEffect::StderrWrite
+                )
+            }),
             random: None,
         }
     }
 
     /// Bind one evaluation-owned host; language checkpoints never copy it.
     #[must_use]
-    pub fn with_random(mut self, random: RandomState) -> Self {
+    pub fn with_standard_host(mut self, random: StandardState) -> Self {
         self.random = Some(random);
         self
     }
@@ -457,6 +473,14 @@ impl<'a> ControlledSourceOperations<'a> {
             }
         }
         errors
+    }
+
+    #[must_use]
+    pub fn standard_host_progress(&self) -> super::standard::RoleProgress {
+        self.random.as_ref().map_or_else(
+            super::standard::RoleProgress::default,
+            StandardState::role_progress,
+        )
     }
 
     fn materialize_secret(&mut self, secret_id: &SecretId) -> Result<(), ModuleError> {
@@ -560,6 +584,12 @@ impl<'a> ControlledSourceOperations<'a> {
             }
             Err(error) => {
                 let result = match &event.operation {
+                    SourceOperation::StandardStream { .. } => SourceEffectResult::StandardStream(
+                        self.random
+                            .as_ref()
+                            .expect("bound standard host state")
+                            .progress(),
+                    ),
                     SourceOperation::Entropy { .. } => SourceEffectResult::Entropy(
                         self.random
                             .as_ref()
@@ -569,7 +599,8 @@ impl<'a> ControlledSourceOperations<'a> {
                     _ => event.operation.empty_result(),
                 };
                 let partial = match &result {
-                    SourceEffectResult::Entropy(progress) => {
+                    SourceEffectResult::Entropy(progress)
+                    | SourceEffectResult::StandardStream(progress) => {
                         progress.confirmed_bytes > 0 || progress.uncertain_bytes_upper_bound > 0
                     }
                     _ => matches!(error, ModuleError::Adapter(_)),
@@ -1150,12 +1181,18 @@ impl SourceOperationalHost for ControlledSourceOperations<'_> {
                 "operation is not in std",
             ));
         }
-        if module == "random" {
+        if matches!(module.as_str(), "random" | "io") {
             self.metadata_only = true;
             let random = self.random.as_ref().ok_or(ModuleError::Authority {
                 verdict: AuthorityVerdict::Unsupported,
             })?;
-            let admission = random.admission(
+            let admission_fn = if module == "io" {
+                StandardState::stdio_admission
+            } else {
+                StandardState::admission
+            };
+            let admission = admission_fn(
+                random,
                 self.context,
                 self.effects,
                 self.platform,
@@ -1163,30 +1200,55 @@ impl SourceOperationalHost for ControlledSourceOperations<'_> {
                 &arguments,
             )?;
             let deadline = random.operation_deadline(self.context);
-            let name = format!("std::random::{operation}");
-            let descriptor = SourceOperation::Entropy {
-                operation: name.clone(),
-                requested_bytes: admission.requested_bytes as u64,
-                admitted_bytes: admission.admitted_bytes as u64,
+            let name = format!("std::{module}::{operation}");
+            let module_id = ModuleId::standard("std", module);
+            let operation_descriptor = crate::operation::standard_operation(&module_id, operation)
+                .ok_or_else(|| {
+                    ModuleError::invalid("OPERATION001", "unknown standard host operation")
+                })?;
+            let request = operation_descriptor
+                .downstream()
+                .capability_request()
+                .expect("standard host request")
+                .clone();
+            let descriptor = if module == "io" {
+                SourceOperation::StandardStream {
+                    operation: name.clone(),
+                    effect: request.effect(),
+                    requested_bytes: admission.requested_bytes as u64,
+                    admitted_bytes: admission.admitted_bytes as u64,
+                }
+            } else {
+                SourceOperation::Entropy {
+                    operation: name.clone(),
+                    requested_bytes: admission.requested_bytes as u64,
+                    admitted_bytes: admission.admitted_bytes as u64,
+                }
             };
-            return self.effect(
-                CapabilityRequest::entropy_system(),
-                &name,
-                descriptor,
-                |this| {
-                    let random = this.random.as_mut().expect("bound entropy state");
-                    let value = random.invoke_with_deadline(
-                        this.context,
-                        this.effects,
-                        this.platform,
-                        budget,
-                        operation,
-                        &arguments,
-                        deadline,
-                    )?;
-                    Ok((value, None, SourceEffectResult::Entropy(random.progress())))
-                },
-            );
+            return self.effect(request, &name, descriptor, |this| {
+                let random = this.random.as_mut().expect("bound entropy state");
+                let invoke_fn = if module == "io" {
+                    StandardState::invoke_stdio_with_deadline
+                } else {
+                    StandardState::invoke_with_deadline
+                };
+                let value = invoke_fn(
+                    random,
+                    this.context,
+                    this.effects,
+                    this.platform,
+                    budget,
+                    operation,
+                    &arguments,
+                    deadline,
+                )?;
+                let result = if module == "io" {
+                    SourceEffectResult::StandardStream(random.progress())
+                } else {
+                    SourceEffectResult::Entropy(random.progress())
+                };
+                Ok((value, None, result))
+            });
         }
         self.invoke_inner(module, operation, arguments)
     }
