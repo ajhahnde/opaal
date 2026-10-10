@@ -15,7 +15,7 @@ from typing import Callable, Sequence
 
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "1.2.0"
+VERSION = "1.3.0"
 REPOSITORY = "https://github.com/ajhahnde/opaal"
 WORKSPACE_PACKAGES = {
     "crates/opaal-syntax": "opaal-syntax",
@@ -444,10 +444,9 @@ def source_problems(root: Path, *, run: Run = run_command) -> list[str]:
         detail = benchmark.stderr.decode(errors="replace").strip()
         problems.append(f"benchmark contract validation failed: {detail}")
 
-    readme = (root / "README.md").read_text(encoding="utf-8", errors="replace")
     changelog = (root / "CHANGELOG.md").read_text(encoding="utf-8", errors="replace")
-    if VERSION not in readme or "[Unreleased]" not in changelog:
-        problems.append("README and changelog must identify the current release line")
+    if "## [Unreleased]" not in changelog or f"## [{VERSION}]" not in changelog:
+        problems.append("changelog must retain Unreleased and identify the current release line")
     return sorted(set(problems))
 
 

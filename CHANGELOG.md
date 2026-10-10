@@ -4,6 +4,8 @@ All notable changes to OPAAL are documented here.
 
 ## [Unreleased]
 
+## [1.3.0]
+
 ### Added
 
 - Add bounded `std::io::read_stdin`, byte `write_stdout`/`write_stderr` and

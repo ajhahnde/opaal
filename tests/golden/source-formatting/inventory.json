@@ -1041,7 +1041,7 @@
     {
       "path": "README.md",
       "ordinal": 0,
-      "sha256": "cfa7bc567885b594169a162cfa4fb10cafc74f9292dde7888440a129b8f388b0"
+      "sha256": "44cbe638c74f00faa7c80b3315131545548d99c92eef316a0be5253d1cbcfec2"
     }
   ],
   "embedded_owners": [
@@ -1159,7 +1159,7 @@
     },
     {
       "path": "ci/check_product.py",
-      "sha256": "a11e20fe85d869db5b44739b3a85b079ed1a6339421b47db5fa6e219d19723b7",
+      "sha256": "98a495cae6251a53b02ca040129bfcc671cf69d0ce062310da912854195c25c8",
       "source_markers": 15,
       "constructors_or_assertions": [
         "command_json",
@@ -1254,7 +1254,7 @@
     },
     {
       "path": "ci/package_release.py",
-      "sha256": "e5bf3df5fb227c27681f28cd5a2a975a187991760eb60c71b5c06a41fe8f9eda",
+      "sha256": "30a5d9434ece2d6553798454e947df982a46a53ab2d2f3f18da83fbe0ba6937a",
       "source_markers": 2,
       "constructors_or_assertions": [
         "main",
@@ -1505,14 +1505,15 @@
     },
     {
       "path": "ci/tests/test_check_product.py",
-      "sha256": "584623388a78a106355a09558a4f1e7d77943f178d12ee4481b6a1f9e0f2f495",
-      "source_markers": 23,
+      "sha256": "a495915d4e4e9de40621d564560a6e22c1cf215ed2356b1fcd684313cb2cf107",
+      "source_markers": 24,
       "constructors_or_assertions": [
         "runner",
         "setUp",
         "tearDown",
         "test_accepts_exact_current_product_and_release_candidate",
         "test_allows_literal_dollars_and_the_classified_negative_fixture",
+        "test_changelog_requires_unreleased_and_current_release_sections",
         "test_rejects_applying_retained_host_budget_to_shared_macos_ci",
         "test_rejects_removed_language_syntax_and_handlers",
         "test_rejects_source_directives",
@@ -1569,7 +1570,7 @@
     },
     {
       "path": "ci/tests/test_package_release.py",
-      "sha256": "494c35e89e2096f2b4d6a95f34b2a5cc11e0b03987e79b12b4a2c4af358d6374",
+      "sha256": "95f4de7cc5283456f9ff0d57a510d30357816d0cdaf2941d4bd96e7723d0a2c6",
       "source_markers": 2,
       "constructors_or_assertions": [
         "test_archive_contains_exact_programs_and_checksum",
@@ -1932,7 +1933,7 @@
     },
     {
       "path": "crates/opaal-cli/tests/e2e.rs",
-      "sha256": "3db73d0a8270a27b5b2410515bceabb2e2d3c1efb44af2ee842435a0c2bec607",
+      "sha256": "cee526068dc15f1ac67c898c57f39b4235f95cdc58fba14f5e827bb11c089afd",
       "source_markers": 12,
       "constructors_or_assertions": [
         "a_former_header_receives_only_an_ordinary_unknown_name_error",
@@ -2170,7 +2171,7 @@
     },
     {
       "path": "crates/opaal-cli/tests/project_frontend.rs",
-      "sha256": "03ade5bc4da852d405462aa4161ad41bb194dc3db37c324ca175f1528a22717d",
+      "sha256": "370a2f00906723aaa53b9485f8d1cce9e3d1b2aadf15614e231f285dba2c2efb",
       "source_markers": 34,
       "constructors_or_assertions": [
         "accepted_execution_revalidates_probes_refuses_unused_secret_and_audits",
@@ -2220,7 +2221,7 @@
     },
     {
       "path": "crates/opaal-cli/tests/random_native.rs",
-      "sha256": "82891c97c104a92fc1936598ee80d89168f3e654091bb1916042ad9dbca64fc5",
+      "sha256": "7631661ff5c4db4ae94bbe7a54850f8c0a93c797a693285a0c784cd03a78f76c",
       "source_markers": 1,
       "constructors_or_assertions": [
         "qualify"
