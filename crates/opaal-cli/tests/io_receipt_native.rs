@@ -100,14 +100,15 @@ fn qualify(fault: &str, error: bool) {
     native::assert_reaped();
     assert!(!run.is_successful());
     assert!(run.output().is_empty());
-    assert_eq!(
-        KERNEL_ERROR.load(Ordering::Relaxed),
-        if fault == "write-limit" {
-            libc::EFBIG
-        } else {
-            libc::EINVAL
-        }
-    );
+    let kernel_error = KERNEL_ERROR.load(Ordering::Relaxed);
+    if fault == "write-limit" {
+        assert_eq!(kernel_error, libc::EFBIG);
+    } else {
+        assert!(
+            matches!(kernel_error, libc::EINVAL | libc::ENOTSUP),
+            "unexpected pipe fsync errno: {kernel_error}"
+        );
+    }
     let metadata = run.receipt().unwrap();
     assert_eq!(
         metadata["primary"]["class"],

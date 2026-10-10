@@ -2111,7 +2111,7 @@
     },
     {
       "path": "crates/opaal-cli/tests/io_receipt_native.rs",
-      "sha256": "9fd0633d3c9db8d7c7def74e15bb3f5d0be5d3fa02c6b31abeeb4d8f7be4a478",
+      "sha256": "b1dc4d0274604e830fbab046a31f2b4c699bf366e0dbb9e1a5f7db973ee5e979",
       "source_markers": 1,
       "constructors_or_assertions": [
         "qualify"
@@ -2551,7 +2551,7 @@
     },
     {
       "path": "crates/opaal-platform-posix/tests/fixtures/standard_host_faults.rs",
-      "sha256": "917cfcc193a6b6ca084f25a9526317cf4f295fbb48e9b5731ee88d97a69c88cf",
+      "sha256": "a0c41164524abb4a0839343316ad17bac752a511d199b307813e473e8092fc79",
       "source_markers": 0,
       "constructors_or_assertions": [
         "descriptors",

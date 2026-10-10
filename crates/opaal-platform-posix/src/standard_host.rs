@@ -178,11 +178,7 @@ impl PosixStandardHost {
                 eof = Some(true);
             }
             if output.is_none() && frame.bytes > 0 {
-                receive_payload(
-                    worker.socket(),
-                    &mut bytes[..frame.bytes as usize],
-                    cancelled,
-                )?;
+                worker.receive_payload(&mut bytes[..frame.bytes as usize], cancelled)?;
             }
             worker.send(Frame::new(ACK, self.evaluation, self.request, 0), cancelled)?;
             acknowledged = true;
@@ -278,7 +274,9 @@ impl PosixStandardHost {
         {
             return Err(FillError::attempted(protocol()));
         }
-        receive_bytes(worker.socket(), destination, cancelled).map_err(FillError::attempted)?;
+        worker
+            .receive_bytes(destination, cancelled)
+            .map_err(FillError::attempted)?;
         // The full success response is accepted. Failure to acknowledge the
         // next request cannot make that already confirmed fill uncertain.
         worker
@@ -384,8 +382,34 @@ impl Worker {
     }
     fn receive(&mut self, cancelled: &dyn Fn() -> bool) -> Result<Frame, OperationalError> {
         let mut bytes = [0; HEADER_BYTES];
-        receive_bytes(self.socket(), &mut bytes, cancelled)?;
+        self.receive_bytes(&mut bytes, cancelled)?;
         Frame::decode(&bytes)
+    }
+    fn receive_bytes(
+        &mut self,
+        bytes: &mut [u8],
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<(), OperationalError> {
+        if self.pid.is_none() {
+            poll_cancel(cancelled)?;
+            return Err(protocol());
+        }
+        receive_bytes(
+            self.socket.as_ref().expect("live worker control socket"),
+            bytes,
+            cancelled,
+            &mut self.pid,
+        )
+    }
+    fn receive_payload(
+        &mut self,
+        bytes: &mut [u8],
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<(), OperationalError> {
+        for chunk in bytes.chunks_mut(1024) {
+            self.receive_bytes(chunk, cancelled)?;
+        }
+        Ok(())
     }
     fn close(&mut self) -> Result<(), OperationalError> {
         drop(self.socket.take());
@@ -472,7 +496,7 @@ fn run_worker() -> Result<(), OperationalError> {
     native::prepare_worker()?;
     let socket = native::control_socket()?;
     let mut header = [0; HEADER_BYTES];
-    receive_bytes(&socket, &mut header, &|| false)?;
+    receive_bytes(&socket, &mut header, &|| false, &mut None)?;
     let binding = Frame::decode(&header)?;
     if binding != Frame::new(BIND, binding.evaluation, 0, 0) {
         return Err(protocol());
@@ -517,7 +541,7 @@ fn run_worker() -> Result<(), OperationalError> {
         )?;
         send_bytes(&socket, payload, &|| false)?;
         payload.fill(0);
-        receive_bytes(&socket, &mut header, &|| false)?;
+        receive_bytes(&socket, &mut header, &|| false, &mut None)?;
         if Frame::decode(&header)? != Frame::new(ACK, binding.evaluation, request, 0) {
             return Err(protocol());
         }
@@ -573,7 +597,7 @@ fn stream_request(
     }
     payload.fill(0);
     let mut header = [0; HEADER_BYTES];
-    receive_bytes(socket, &mut header, &|| false)?;
+    receive_bytes(socket, &mut header, &|| false, &mut None)?;
     if Frame::decode(&header)? != Frame::new(ACK, frame.evaluation, frame.request, 0) {
         return Err(protocol());
     }
@@ -622,7 +646,7 @@ fn receive_payload(
     cancelled: &dyn Fn() -> bool,
 ) -> Result<(), OperationalError> {
     for chunk in bytes.chunks_mut(1024) {
-        receive_bytes(socket, chunk, cancelled)?;
+        receive_bytes(socket, chunk, cancelled, &mut None)?;
     }
     Ok(())
 }
@@ -655,7 +679,9 @@ fn receive_bytes(
     socket: &UnixDatagram,
     bytes: &mut [u8],
     cancelled: &dyn Fn() -> bool,
+    peer: &mut Option<libc::pid_t>,
 ) -> Result<(), OperationalError> {
+    let monitor_peer = peer.is_some();
     loop {
         poll_cancel(cancelled)?;
         match native::receive(socket, bytes) {
@@ -664,6 +690,17 @@ fn receive_bytes(
             Ok(_) => return Err(protocol()),
             Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                // A closed Linux datagram peer does not make recv report EOF.
+                if monitor_peer && peer.is_none() {
+                    return Err(protocol());
+                }
+                if let Some(pid) = *peer
+                    && native::wait_child(pid, true)?
+                {
+                    *peer = None;
+                    // A final record can arrive between recv and waitpid.
+                    continue;
+                }
                 native::wait(socket, libc::POLLIN, POLL_INTERVAL)?
             }
             Err(error) => return Err(io_error(error)),
@@ -702,6 +739,24 @@ fn io_error(error: io::Error) -> OperationalError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn reaped_worker_receives_preserve_cancellation_precedence() {
+        let (socket, _peer) = UnixDatagram::pair().unwrap();
+        let mut worker = Worker {
+            socket: Some(socket),
+            pid: None,
+        };
+        for (cancelled, expected) in [
+            (false, OperationalErrorKind::Protocol),
+            (true, OperationalErrorKind::Cancelled),
+        ] {
+            let error = worker
+                .receive_bytes(&mut [0; HEADER_BYTES], &|| cancelled)
+                .unwrap_err();
+            assert_eq!(error.kind(), expected);
+        }
+    }
+
     #[test]
     fn live_transport_backpressure_cancels_and_resumes_without_replaying_datagrams() {
         let (sender, receiver) = UnixDatagram::pair().unwrap();
@@ -797,11 +852,11 @@ mod tests {
         let mut excess = Frame::new(FILL, 71, 1, 8).encode().to_vec();
         excess.push(0);
         sender.send(&excess).unwrap();
-        assert!(receive_bytes(&receiver, &mut header, &|| false).is_err());
+        assert!(receive_bytes(&receiver, &mut header, &|| false, &mut None).is_err());
         sender.send(&[0; HEADER_BYTES - 1]).unwrap();
-        assert!(receive_bytes(&receiver, &mut header, &|| false).is_err());
+        assert!(receive_bytes(&receiver, &mut header, &|| false, &mut None).is_err());
         sender.send(&Frame::new(FILL, 71, 1, 8).encode()).unwrap();
-        receive_bytes(&receiver, &mut header, &|| false).unwrap();
+        receive_bytes(&receiver, &mut header, &|| false, &mut None).unwrap();
         assert_eq!(Frame::decode(&header).unwrap(), Frame::new(FILL, 71, 1, 8));
     }
 }

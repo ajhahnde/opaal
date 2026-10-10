@@ -288,6 +288,7 @@ jobs:
       - name: Qualify native standard I/O and failed journal persistence
         run: python3 ci/qualify_standard_io_failures.py --binary target/release/opaal --output dist/standard-io-native-linux
       - name: Retain candidate identity and qualification evidence
+        if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: data-processing-linux

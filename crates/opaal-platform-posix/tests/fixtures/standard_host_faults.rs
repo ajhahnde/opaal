@@ -31,7 +31,7 @@ pub fn worker() {
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     super::blocked_library::enable(evaluation);
     super::standard_streams::enable_syscall_fault(evaluation);
-    if (130..=147).contains(&evaluation) {
+    if (130..=149).contains(&evaluation) {
         stream_worker(evaluation, binding);
     }
     if !(100..=120).contains(&evaluation) || binding.as_slice() != frame(1, evaluation, 0, 0) {
@@ -138,6 +138,9 @@ fn stream_worker(evaluation: u64, mut binding: [u8; 36]) -> ! {
     if write {
         assert_eq!(socket.recv(&mut [0; 8]).unwrap(), 8);
     }
+    if evaluation == 148 {
+        std::process::exit(0);
+    }
     let mut response = frame(10, evaluation, 1, 8);
     match evaluation {
         130 => response[19] ^= 1,
@@ -158,6 +161,9 @@ fn stream_worker(evaluation: u64, mut binding: [u8; 36]) -> ! {
         _ => {}
     }
     socket.send(&response).unwrap();
+    if evaluation == 149 {
+        std::process::exit(0);
+    }
     match evaluation {
         137 => {
             socket.send(&[0x47; 7]).unwrap();
@@ -186,8 +192,12 @@ pub fn stream_parent() {
     use std::os::fd::AsFd;
     drop(PosixStandardHost::for_cli(71).unwrap());
     let before = descriptors();
-    for evaluation in 130..=147 {
-        super::checks::cancel_after_record(if evaluation >= 145 { evaluation } else { 0 });
+    for evaluation in 130..=149 {
+        super::checks::cancel_after_record(if (145..=147).contains(&evaluation) {
+            evaluation
+        } else {
+            0
+        });
         let mut host = PosixStandardHost::for_cli(evaluation).unwrap();
         // Bind an ordinary file: the replacement worker supplies only control faults.
         let file = std::fs::File::open(std::env::current_exe().unwrap()).unwrap();
@@ -239,6 +249,7 @@ pub fn stream_parent() {
                     match evaluation {
                         136 => OperationalErrorKind::Io(std::io::ErrorKind::InvalidData),
                         138 | 145..=147 => OperationalErrorKind::Cancelled,
+                        148 | 149 => error.error.kind(),
                         _ => OperationalErrorKind::Protocol,
                     },
                     "evaluation {evaluation}: {error:?}"
@@ -246,15 +257,25 @@ pub fn stream_parent() {
                 assert_eq!(
                     error.confirmed_bytes,
                     match evaluation {
-                        137 | 138 => 8,
+                        137 | 138 | 149 => 8,
                         146 | 147 => 3,
                         _ => 0,
                     }
                 );
                 assert_eq!(
                     error.uncertain_bytes_upper_bound,
-                    if evaluation >= 137 { 0 } else { 8 }
+                    if evaluation >= 137 && evaluation != 148 {
+                        0
+                    } else {
+                        8
+                    }
                 );
+                if matches!(evaluation, 148 | 149) {
+                    assert!(matches!(
+                        error.error.kind(),
+                        OperationalErrorKind::Protocol | OperationalErrorKind::Io(_)
+                    ));
+                }
                 assert_eq!(error.eof, if evaluation == 145 { Some(true) } else { None });
                 assert!(error.cleanup_error.is_none());
                 assert_eq!(bytes, if evaluation == 147 { [0xa5; 8] } else { [0; 8] });
@@ -362,7 +383,7 @@ pub fn parent() {
         if evaluation == 111 {
             assert!(matches!(
                 kind,
-                OperationalErrorKind::Cancelled | OperationalErrorKind::Io(_)
+                OperationalErrorKind::Protocol | OperationalErrorKind::Io(_)
             ));
         }
         assert_eq!(

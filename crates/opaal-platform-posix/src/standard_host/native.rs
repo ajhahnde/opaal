@@ -581,7 +581,7 @@ fn signal(pid: libc::pid_t, signal: libc::c_int) -> Result<(), OperationalError>
     }
     Ok(())
 }
-fn wait_child(pid: libc::pid_t, nohang: bool) -> Result<bool, OperationalError> {
+pub(super) fn wait_child(pid: libc::pid_t, nohang: bool) -> Result<bool, OperationalError> {
     loop {
         let mut status = 0;
         // SAFETY: waitpid is restricted to the owned child; status is one
