@@ -105,8 +105,8 @@ publish = false
         self.write("ci/check_benchmarks.py", "# fixture\n")
         for path in checker.QUALIFICATION_FILES:
             self.write(path, "fixture\n")
-        self.write("README.md", f"OPAAL {checker.VERSION} is unreleased.\n")
-        self.write("CHANGELOG.md", "# Changelog\n\n## [Unreleased]\n")
+        self.write("README.md", "# OPAAL\n\nA language for automation.\n")
+        self.write("CHANGELOG.md", f"# Changelog\n\n## [Unreleased]\n\n## [{checker.VERSION}]\n")
         self.write("SECURITY.md", "# Security\n")
 
     def tearDown(self) -> None:
@@ -159,6 +159,15 @@ publish = false
         self.assertIn("removed API remains: LanguageIdentity", findings)
         self.assertIn("removed API remains: OPAAL_V1", findings)
         self.assertIn("source-generation wording remains", findings)
+
+    def test_changelog_requires_unreleased_and_current_release_sections(self) -> None:
+        for content in (f"## [{checker.VERSION}]\n", "## [Unreleased]\n\n## [0.0.0]\n"):
+            with self.subTest(content=content):
+                self.write("CHANGELOG.md", content)
+                self.assertIn(
+                    "changelog must retain Unreleased and identify the current release line",
+                    checker.source_problems(self.root, run=self.runner),
+                )
 
     def test_requires_candidate_build_identity_qualification_and_retention(self) -> None:
         path = self.root / ".github/workflows/ci.yml"

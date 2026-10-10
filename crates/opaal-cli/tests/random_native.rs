@@ -46,7 +46,7 @@ fn qualify(cancelled: bool, cleanup_failed: bool) {
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/golden/random-values");
     for name in ["opaal.toml", "authority.toml"] {
         let text = std::fs::read_to_string(fixtures.join(name)).unwrap();
-        work.write(name, text.replace(">=1.3.0", ">=1.2.0"));
+        work.write(name, text);
     }
     let target = if cfg!(target_os = "macos") {
         "macos"
