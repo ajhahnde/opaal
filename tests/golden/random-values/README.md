@@ -47,10 +47,11 @@ opaal plan --project opaal.toml --task sample --environment ci --expires-in 900s
 Pass the exact `digest` from `sample.plan.json` to `execute --accept`, choosing
 an unused journal path. Execute returns the existing plain run receipt; the
 sampled Record is available to an explicitly receiving runtime caller. Routine
-v3 evidence omits sampled values and their digests, dynamic bounds, derived
+v4 run/audit evidence omits sampled values and their digests, dynamic bounds, derived
 paths, process arguments, HTTP methods/payloads and error text for the whole run.
 Counts and branch outcomes remain observable: metadata-only evidence is not a
-secrecy or noninterference guarantee. Existing tasks without entropy remain v2.
+secrecy or noninterference guarantee. Check/plan versions remain v2 without
+standard-host roles and v3 with them; all new run/audit evidence uses v4.
 
 ```sh
 opaal execute --plan sample.plan.json --accept "$PLAN_DIGEST" --journal sample.run.jsonl

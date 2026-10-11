@@ -502,6 +502,224 @@ fn task_inspect_reports_the_shared_action_contract() {
 }
 
 #[test]
+fn task_discovery_shares_closed_sorted_static_metadata() {
+    let (project, manifest) = path_fixture();
+    project.write("tasks.opaal", &r#"let never = 1 / 0
+## Unicode résumé and control CONTROL text.
+action inspect_path(repo: Path) -> Path
+effects {}
+{
+    repo
+}
+action typed(n: Null, b: Bool, i: Int, f: Float, s: String, bytes: Bytes, d: Duration, size: ByteSize, record: Record) -> Bool
+effects {}
+{
+    true
+}
+task zulu = inspect_path
+task alpha = typed
+"#.replace("CONTROL", "\u{1b}"));
+    // Discovery needs neither environment files nor an executable tool.
+    fs::remove_file(project.0.join("authority.toml")).unwrap();
+    fs::remove_file(project.0.join("tools.toml")).unwrap();
+    let args = [
+        OsStr::new("task"),
+        OsStr::new("list"),
+        OsStr::new("--project"),
+        manifest.as_os_str(),
+        OsStr::new("--format"),
+        OsStr::new("json"),
+    ];
+    let output = opaal(args);
+    assert!(output.status.success(), "{output:?}");
+    assert!(output.stderr.is_empty());
+    assert_eq!(output.stdout.last(), Some(&b'\n'));
+    assert!(!output.stdout.contains(&0x1b));
+    assert_eq!(opaal(args).stdout, output.stdout);
+    let view: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        view.as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        [
+            "environments",
+            "project",
+            "schema",
+            "schema_version",
+            "targets",
+            "tasks",
+            "tools"
+        ]
+    );
+    assert_eq!(view["schema"], "opaal.project-inspection.v1");
+    assert_eq!(view["schema_version"], 1);
+    assert_eq!(
+        view["project"]["manifest_path"],
+        opaal_runtime::workflow::native_path(&manifest)
+    );
+    assert_eq!(view["tasks"][0]["id"], "path_demo::alpha");
+    assert_eq!(view["tasks"][1]["id"], "path_demo::zulu");
+    let parameters = view["tasks"][0]["parameters"].as_array().unwrap();
+    assert_eq!(
+        parameters
+            .iter()
+            .map(|p| p["type"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        [
+            "Null", "Bool", "Int", "Float", "String", "Bytes", "Duration", "ByteSize", "Record"
+        ]
+    );
+    for parameter in &parameters[..8] {
+        assert_eq!(parameter["binding_forms"], serde_json::json!(["value"]));
+    }
+    assert_eq!(parameters[8]["binding_forms"], serde_json::json!([]));
+    assert_eq!(
+        view["tasks"][1]["parameters"][0]["binding_forms"],
+        serde_json::json!(["value", "file"])
+    );
+    assert_eq!(view["targets"], serde_json::json!([]));
+    assert_eq!(view["tools"][0]["id"], "path_demo::tool::git");
+    assert_eq!(view["environments"][0]["id"], "path_demo::environment::ci");
+    let inspect = opaal([
+        OsStr::new("task"),
+        OsStr::new("inspect"),
+        OsStr::new("--project"),
+        manifest.as_os_str(),
+        OsStr::new("zulu"),
+        OsStr::new("--format"),
+        OsStr::new("json"),
+    ]);
+    assert!(inspect.status.success(), "{inspect:?}");
+    let one: serde_json::Value = serde_json::from_slice(&inspect.stdout).unwrap();
+    assert_eq!(one["tasks"], serde_json::json!([view["tasks"][1]]));
+    for key in [
+        "schema",
+        "schema_version",
+        "project",
+        "tools",
+        "targets",
+        "environments",
+    ] {
+        assert_eq!(view[key], one[key]);
+    }
+    let text = opaal([
+        OsStr::new("task"),
+        OsStr::new("list"),
+        OsStr::new("--project"),
+        manifest.as_os_str(),
+    ]);
+    assert!(text.status.success(), "{text:?}");
+    assert!(!text.stdout.contains(&0x1b));
+    assert!(
+        String::from_utf8(text.stdout)
+            .unwrap()
+            .contains("Unicode résumé and control \\u{1b} text.")
+    );
+    let missing = opaal([
+        OsStr::new("task"),
+        OsStr::new("inspect"),
+        OsStr::new("--project"),
+        manifest.as_os_str(),
+        OsStr::new("missing"),
+        OsStr::new("--format"),
+        OsStr::new("json"),
+    ]);
+    assert!(!missing.status.success());
+    assert!(missing.stdout.is_empty());
+    project.write("tasks.opaal", "let never = 1 / 0\n");
+    let empty = opaal(args);
+    assert!(empty.status.success(), "{empty:?}");
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&empty.stdout).unwrap()["tasks"],
+        serde_json::json!([])
+    );
+}
+
+#[test]
+fn digest_view_requires_successful_exclusive_plan_persistence() {
+    let (project, manifest) = path_fixture();
+    let path = project.0.join("digest.plan.json");
+    let args = [
+        OsStr::new("plan"),
+        OsStr::new("--project"),
+        manifest.as_os_str(),
+        OsStr::new("--task"),
+        OsStr::new("secretfree"),
+        OsStr::new("--environment"),
+        OsStr::new("ci"),
+        OsStr::new("--input"),
+        OsStr::new("repo=."),
+        OsStr::new("--expires-in"),
+        OsStr::new("900s"),
+        OsStr::new("--out"),
+        path.as_os_str(),
+        OsStr::new("--format"),
+        OsStr::new("digest"),
+    ];
+    let output = opaal(args);
+    assert!(output.status.success(), "{output:?}");
+    assert!(output.stderr.is_empty());
+    let bytes = fs::read(&path).unwrap();
+    let plan = opaal_runtime::workflow::PlanArtifact::parse(&bytes).unwrap();
+    assert_eq!(output.stdout, format!("{}\n", plan.digest()).as_bytes());
+    let failed = opaal(args);
+    assert!(!failed.status.success());
+    assert!(failed.stdout.is_empty());
+    assert_eq!(fs::read(&path).unwrap(), bytes);
+    fs::remove_file(&path).unwrap();
+    project.write(
+        "tasks.opaal",
+        r#"import project::context as project
+action inspect_path(repo: Path) -> Path
+effects { filesystem.read(project::root); }
+{
+    repo
+}
+
+task secretfree = inspect_path
+"#,
+    );
+    let refused = opaal(args);
+    assert!(!refused.status.success(), "{refused:?}");
+    assert!(refused.stdout.is_empty());
+    let plan = opaal_runtime::workflow::PlanArtifact::parse(&fs::read(&path).unwrap()).unwrap();
+    assert!(!plan.is_executable());
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn task_inspection_json_preserves_native_manifest_bytes() {
+    let (mut project, _) = path_fixture();
+    let mut bytes = project.0.clone().into_os_string().into_vec();
+    bytes.push(0xff);
+    let native = PathBuf::from(OsString::from_vec(bytes));
+    fs::rename(&project.0, &native).unwrap();
+    project.0 = native;
+    let manifest = project.0.join("opaal.toml");
+    let output = opaal([
+        OsStr::new("task"),
+        OsStr::new("list"),
+        OsStr::new("--project"),
+        manifest.as_os_str(),
+        OsStr::new("--format"),
+        OsStr::new("json"),
+    ]);
+    assert!(output.status.success(), "{output:?}");
+    let view: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        opaal_runtime::workflow::path_from_native_value(&view["project"]["manifest_path"]).unwrap(),
+        manifest
+    );
+    let run = opaal_cli::project::inspect_project(
+        &opaal_cli::project::InspectProjectRequest::list(manifest).with_json(),
+    )
+    .unwrap();
+    assert_eq!(output.stdout, run.output());
+}
+
+#[test]
 fn project_check_is_silent_and_performs_no_tool_or_action_execution() {
     let (project, manifest, _authority, _tools) = fixture();
     let marker = project.0.join("marker");

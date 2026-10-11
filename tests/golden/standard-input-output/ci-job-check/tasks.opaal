@@ -3,7 +3,7 @@ import std::data as data
 import std::io as io
 export { run }
 
-action run() -> Record
+action run() -> Bool
 effects {
     stdin.read();
     stdout.write();
@@ -13,6 +13,6 @@ effects {
     let input = io::read_stdin(65536)
     let result = assess::evaluate(data::json_decode(input))
     io::write_stdout(data::json_encode(result))
-    return result
+    return result.passed
 }
 task sample = run

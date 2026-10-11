@@ -1,7 +1,8 @@
 # CI job check
 
-This self-contained offline example requires the native standard-stream APIs
-in OPAAL 1.3.0. Set up the candidate programs as described in the
+This self-contained offline example uses native standard-stream APIs.
+The controlled CI route requires a build supporting `execute --require-true`;
+OPAAL 1.3.0 rejects that option safely. Set up the candidate programs as described in the
 [standard-stream guide](../README.md), then enter this directory. No account,
 network, or repository checkout is needed.
 
@@ -51,19 +52,34 @@ Copy the matching `tools-linux.toml` or `tools-macos.toml` to `tools.toml`.
 In a fresh directory, restore the producer's successful exit and run:
 
 ```sh
-python3 project-ci.py
-opaal audit --project opaal.toml --journal ci.run.jsonl --out ci.audit.json
+opaal task list --project opaal.toml
+opaal task inspect --project opaal.toml sample --format json
+sh project-ci.sh
 opaal audit inspect ci.audit.json
 ```
 
-The driver acquires input, checks and plans the declared task, accepts its exact
-digest, and writes a separate journal and receipt. Use a fresh directory or new
-run paths for each execution; existing evidence is never overwritten.
-For queued jobs the action succeeds as domain data: execution exit zero,
-successful receipt, `passed:false` output. Only after validating execution and
-receipt identity, complete journal state and absence of secondary failures does
-CI map that Bool to exit 1. Invalid input is an action Error, produces no report
-and CI exits 1. The driver uses fixed diagnostics for failed evidence and keeps
-administrative text out of the language's streams. The three declared roles
-retain distinct grants and counts, including zero stderr transfers. Receipt
-values/digests remain suppressed; inspect safe outcome/progress metadata.
+The shell acquires input before any task work, discovers/checks/plans the task,
+accepts the persisted digest, and runs `execute --require-true` with mandatory
+receipt evidence. It suppresses successful administrative output and leaves
+stdout/stderr for the program. Use a fresh directory or fresh evidence paths
+for each run; existing evidence is never overwritten.
+
+The action prints the same JSON and returns `result.passed` as Bool. The CLI
+observes that value after owned cleanup and evidence persistence: true exits 0,
+false exits 1. A negative check still has primary `success` and a false
+assessment. Invalid input, refusal, timeout, output/cleanup or evidence failure
+exits 2. Requested cancellation retains 130 even if later evidence fails.
+Producer exit 7 maps to outer exit 2 with `acquisition failed`, and no task
+journal or receipt. Printed bytes never decide the result. Ordinary execute
+without the selector still exits 0 for a completed false Bool.
+
+Journal/audit v4 and receipt v2 record `result_policy`, nullable Bool assessment,
+and typed primary `cancel_reason`. An assessment alone cannot prove success;
+require complete matching evidence and no secondary failures or omissions.
+Incomplete audits have null assessment; a cancelled action-end without terminal
+may have unknown null reason. Complete cancellation evidence requires requested
+or timeout. The three stream roles retain separate grants and byte counts.
+Recoverable Errors explicitly caught by ordinary tasks may still return Bool;
+this reference propagates every acquisition/decode Error. Failed output remains
+non-pass even when caught. Legacy artifacts retain their original meanings;
+new toolchains emit the new versions without rewriting old evidence.

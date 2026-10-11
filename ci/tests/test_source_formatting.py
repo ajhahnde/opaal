@@ -23,6 +23,9 @@ class SourceInventoryTests(unittest.TestCase):
         self.binary = Path(self.temporary.name) / "opaal"
         self.binary.write_text("#!/bin/sh\nexit 0\n")
         self.binary.chmod(0o755)
+        docs = patch("ci.check_source_formatting.check_docs.check_examples", return_value=[])
+        docs.start()
+        self.addCleanup(docs.stop)
         self.inventory = self.census()
 
     def tearDown(self) -> None:

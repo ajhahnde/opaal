@@ -1142,7 +1142,7 @@
     },
     {
       "path": "ci/check_docs.py",
-      "sha256": "f93cc614d76bbc0f3a368a74a77645757d6f699049f08414da1c46fab16748a8",
+      "sha256": "a6419f08bcb7d34e0f84bf4dcfa0b71720daa4c02f778152b0e48b2f16bfd3e7",
       "source_markers": 9,
       "constructors_or_assertions": [
         "check_examples",
@@ -1322,7 +1322,7 @@
     },
     {
       "path": "ci/qualify_operational_core.py",
-      "sha256": "522eeaadf6c4260f11618e4685814137dd8471f2d4f4677111f7a1081692d37a",
+      "sha256": "745e265b32613d3929d692ec436896a7db0287283648474467bb8da53b2bc30a",
       "source_markers": 34,
       "constructors_or_assertions": [
         "__init__",
@@ -1383,7 +1383,7 @@
     },
     {
       "path": "ci/qualify_random_values.py",
-      "sha256": "03b04bfac5ab63f357e88e1ab26e6801a95e4f5b34aeddde29600b15501fe844",
+      "sha256": "e0f45fadab0eb104f414bf9262c3a78b59a51c4509216ca150b36dd31e6112df",
       "source_markers": 10,
       "constructors_or_assertions": [
         "byte_count",
@@ -1424,7 +1424,7 @@
     },
     {
       "path": "ci/qualify_standard_input_output.py",
-      "sha256": "4201c5d404ccabd234f5758733a34a3923791b3e320dcd29aab8a56dde16d96b",
+      "sha256": "892bc1d73baee6331f62e2d112aecee60fbb57ed9a176649ee5b444f88ebf4fd",
       "source_markers": 14,
       "constructors_or_assertions": [
         "assessment",
@@ -1439,7 +1439,7 @@
     },
     {
       "path": "ci/qualify_standard_io_failures.py",
-      "sha256": "1685903c69ea35431a5d9b3380048d9dd88b5f06d5ff4b18d96e88ef2257fa1e",
+      "sha256": "47c57febd243521fe87c5bf617f6f63f700700f65da770ba47fd5bc6b0ab9fa8",
       "source_markers": 11,
       "constructors_or_assertions": [
         "apply",
@@ -1640,7 +1640,7 @@
     },
     {
       "path": "ci/tests/test_source_formatting.py",
-      "sha256": "3a25c0c0e2e136e3c54654067d4b2b2361ce64e7195037fb201825f46387e685",
+      "sha256": "3b59b7c60b9b85554976bbabf3678c4d0576f38579095f9015aa9bc3b9e4e65e",
       "source_markers": 21,
       "constructors_or_assertions": [
         "census",
@@ -1661,12 +1661,11 @@
     },
     {
       "path": "ci/tests/test_standard_input_output_candidate.py",
-      "sha256": "780897b89ecb9b85de4e98921029e5fc806fa7e016da516a2921eaea19b17cea",
-      "source_markers": 6,
+      "sha256": "a678ab65801bb4e60725e88cda19857293eb8988c2484d42ed59dec994d23f15",
+      "source_markers": 5,
       "constructors_or_assertions": [
-        "read",
+        "test_native_driver_preserves_exit_precedence_and_exclusive_acquisition",
         "test_policy_only_passes_without_failed_or_pending_jobs",
-        "test_project_ci_never_accepts_a_bool_without_successful_matching_evidence",
         "test_report_core_copy_must_match_maintained_owner"
       ],
       "role": "mixed-test-buffers",
@@ -1689,12 +1688,13 @@
     },
     {
       "path": "crates/opaal-cli/src/cli.rs",
-      "sha256": "193497816959a5a5acc47af23770d3c67a5533025f58195606cfefed456ef7e4",
-      "source_markers": 10,
+      "sha256": "c90786c6fc18f9cbf6a5f79511568002f93ea52570f660f7e122883707352e70",
+      "source_markers": 11,
       "constructors_or_assertions": [
         "check_and_plan_require_one_explicit_source",
         "format_requires_one_operation_and_at_least_one_path",
-        "script_path_and_arguments_are_lossless_and_ordered"
+        "script_path_and_arguments_are_lossless_and_ordered",
+        "task_discovery_and_digest_options_are_explicit_and_closed"
       ],
       "role": "source-infrastructure",
       "reason": "Source adapter, loader, parser, generator or qualification owner; listed constructors/assertions own any embedded buffers rather than a blanket source rewrite.",
@@ -1747,7 +1747,7 @@
     },
     {
       "path": "crates/opaal-cli/src/main.rs",
-      "sha256": "8d0fb6fcee559332ec3ede96b2775bfd19aef00058ee817666062a7d7341c32c",
+      "sha256": "16c4b77511b20c86eef56f1cb6f5ea05a34bd0fb379cf432e72eec667b7bbc63",
       "source_markers": 5,
       "constructors_or_assertions": [
         "module constants/imports",
@@ -1759,7 +1759,7 @@
     },
     {
       "path": "crates/opaal-cli/src/project.rs",
-      "sha256": "b64d9ac1087c76427542d11b6a47fad45c143865338d1d4e07c08263dfd5a7ef",
+      "sha256": "47e65418f6c6e74464a6e3e3eb506fa364cbd2fab28ceea085eb3b4650691d80",
       "source_markers": 7,
       "constructors_or_assertions": [
         "create_journal",
@@ -2097,7 +2097,7 @@
     },
     {
       "path": "crates/opaal-cli/tests/io_golden.rs",
-      "sha256": "aa586a010280dea6ddd2556966e8963b80bdd5150594114b0220a4eb7f024423",
+      "sha256": "14b66466d664993c90c1f3086e19f37a52957ab78e31922d030a5ed8106a4690",
       "source_markers": 13,
       "constructors_or_assertions": [
         "a_closed_stdout_is_catchable_and_leaves_stderr_and_entropy_available",
@@ -2112,7 +2112,7 @@
     },
     {
       "path": "crates/opaal-cli/tests/io_receipt_native.rs",
-      "sha256": "b1dc4d0274604e830fbab046a31f2b4c699bf366e0dbb9e1a5f7db973ee5e979",
+      "sha256": "a65b12c00574388e70ca94a58c362a329cea640a0f35982ca46a26a3f5376cb0",
       "source_markers": 1,
       "constructors_or_assertions": [
         "qualify"
@@ -2131,6 +2131,18 @@
       "role": "mixed-test-buffers",
       "reason": "Retain complete, legacy, invalid and incomplete source buffers and their source-position assertions; canonical output is asserted only by formatting owners.",
       "assertion": "crates/opaal-cli/tests/live_completion_snapshots.rs"
+    },
+    {
+      "path": "crates/opaal-cli/tests/native_ci_outcomes.rs",
+      "sha256": "8af2008682191731876c9ea957efab3974ce054a3eb9258069d6c621aa13cbd8",
+      "source_markers": 4,
+      "constructors_or_assertions": [
+        "project",
+        "signature_receipt_stale_and_refused_preflight_have_no_task_effects"
+      ],
+      "role": "mixed-test-buffers",
+      "reason": "Native CI outcome and persistence cases cover typed selection, legacy formats and safe failures.",
+      "assertion": "crates/opaal-cli/tests/native_ci_outcomes.rs"
     },
     {
       "path": "crates/opaal-cli/tests/numeric_golden.rs",
@@ -2171,12 +2183,13 @@
     },
     {
       "path": "crates/opaal-cli/tests/project_frontend.rs",
-      "sha256": "370a2f00906723aaa53b9485f8d1cce9e3d1b2aadf15614e231f285dba2c2efb",
-      "source_markers": 34,
+      "sha256": "d09a8dd62d89dd1d71360c44ff51f0a182a1a550f649e554cec80be272faad4a",
+      "source_markers": 40,
       "constructors_or_assertions": [
         "accepted_execution_revalidates_probes_refuses_unused_secret_and_audits",
         "accepted_execution_runs_the_maintained_readiness_modules",
         "caught_adapter_failure_finishes_successfully_with_partial_evidence",
+        "digest_view_requires_successful_exclusive_plan_persistence",
         "fixture",
         "inherited_secret_declarations_are_one_requirement_not_a_repeated_reveal",
         "many_secret_fixture",
@@ -2184,7 +2197,8 @@
         "path_fixture",
         "project_reads_never_follow_manifest_parent_or_source_symlinks",
         "repeated_reveal_and_multiple_sinks_are_valid_refused_artifacts",
-        "runtime_help_uses_the_shared_action_identity_and_effects"
+        "runtime_help_uses_the_shared_action_identity_and_effects",
+        "task_discovery_shares_closed_sorted_static_metadata"
       ],
       "role": "mixed-test-buffers",
       "reason": "Retain complete, legacy, invalid and incomplete source buffers and their source-position assertions; canonical output is asserted only by formatting owners.",
@@ -2203,7 +2217,7 @@
     },
     {
       "path": "crates/opaal-cli/tests/random_golden.rs",
-      "sha256": "55911ed2cdce9fc3aef6ffadf432badd8c5837e856ea21c657817b1ff39c6b02",
+      "sha256": "220566109bbcbe4abb0126cb94f6b9141f7383520729dbb381a16d7b000b6fce",
       "source_markers": 26,
       "constructors_or_assertions": [
         "controlled_fixture",
@@ -2221,7 +2235,7 @@
     },
     {
       "path": "crates/opaal-cli/tests/random_native.rs",
-      "sha256": "7631661ff5c4db4ae94bbe7a54850f8c0a93c797a693285a0c784cd03a78f76c",
+      "sha256": "f3759802a32e63c22ebb547ee9b403a3d429d4a6b6a124bb711ce8127b0391bb",
       "source_markers": 1,
       "constructors_or_assertions": [
         "qualify"
@@ -3558,7 +3572,7 @@
     },
     {
       "path": "crates/opaal-runtime/tests/project_contract.rs",
-      "sha256": "ff79401b173cedae0127562378e240e43b4fe154a190faad76278afc38341654",
+      "sha256": "bd6fb220a9e7f5df53ed3bd3a9582a19052465e8b4bed01be37742d50108abdc",
       "source_markers": 28,
       "constructors_or_assertions": [
         "controlled_project_analysis_shares_cli_modules_and_honors_cancellation",
@@ -3570,7 +3584,7 @@
         "project_identities_require_explicit_imports_and_context_paths_remain_project_bound",
         "project_loading_rejects_unknown_bare_command_heads",
         "task_inputs_are_bounded_and_checked_against_the_declared_type",
-        "tasks_refuse_parameter_types_without_an_exact_input_spelling"
+        "tasks_inspect_but_cannot_bind_parameter_types_without_an_exact_input_spelling"
       ],
       "role": "mixed-test-buffers",
       "reason": "Retain complete, legacy, invalid and incomplete source buffers and their source-position assertions; canonical output is asserted only by formatting owners.",
@@ -3931,6 +3945,24 @@
       "role": "mixed-test-buffers",
       "reason": "Retain complete, legacy, invalid and incomplete source buffers and their source-position assertions; canonical output is asserted only by formatting owners.",
       "assertion": "crates/opaal-runtime/tests/workflow_artifacts.rs"
+    },
+    {
+      "path": "crates/opaal-runtime/tests/workflow_contract.rs",
+      "sha256": "cb09a0df839feed289bb758a918870fe518cc9b11086c14f0b5ab63eba4d2261",
+      "source_markers": 0,
+      "constructors_or_assertions": [
+        "cancellation_reason_is_unknown_only_in_incomplete_audit_without_terminal",
+        "current_complete_and_incomplete_evidence_preserves_independent_assessment",
+        "current_policy_primary_and_assessment_are_closed_and_consistent",
+        "header",
+        "legacy_and_current_receipts_are_explicit_and_hostile_forms_refuse",
+        "primary",
+        "receipt",
+        "terminal"
+      ],
+      "role": "mixed-test-buffers",
+      "reason": "Native CI outcome and persistence cases cover typed selection, legacy formats and safe failures.",
+      "assertion": "crates/opaal-runtime/tests/workflow_contract.rs"
     },
     {
       "path": "crates/opaal-syntax/src/completion.rs",
@@ -4480,12 +4512,12 @@
       "assertion": "ci/qualify_standard_input_output.py"
     },
     {
-      "path": "tests/golden/standard-input-output/ci-job-check/project-ci.py",
-      "sha256": "d710cabc7c93f67ffbe62cb1e271d3a8fbe3651f7c7fe8433d180ab47ed909db",
+      "path": "tests/golden/standard-input-output/ci-job-check/project-ci.sh",
+      "sha256": "6a7d0a245435849f61e82e7920367e6d766f08e311e2d196db565b0441829fc4",
       "source_markers": 0,
       "constructors_or_assertions": [],
       "role": "source-infrastructure",
-      "reason": "Offline producer and source/project CI drivers keep acquisition, assessment and validated execution evidence distinct.",
+      "reason": "Native CI outcome and persistence cases cover typed selection, legacy formats and safe failures.",
       "assertion": "ci/qualify_standard_input_output.py"
     }
   ],

@@ -54,13 +54,14 @@ Usage:
   opaal check [--] SOURCE
   opaal check --project opaal.toml --task TASK --environment ID [--input NAME=VALUE | --input-file NAME=PATH]... [--format json]
   opaal check --help
-  opaal task inspect --project opaal.toml TASK
+  opaal task inspect --project opaal.toml TASK [--format json]
+  opaal task list --project opaal.toml [--format json]
   opaal task --help
   opaal plan [--] SOURCE
-  opaal plan --project opaal.toml --task TASK --environment ID [--input NAME=VALUE | --input-file NAME=PATH]... --expires-in SECONDSs --out PATH
+  opaal plan --project opaal.toml --task TASK --environment ID [--input NAME=VALUE | --input-file NAME=PATH]... --expires-in SECONDSs --out PATH [--format digest]
   opaal plan inspect PATH
   opaal plan --help
-  opaal execute --plan PATH --accept DIGEST [--run-id ID] [--secret-stdin ID] --journal PATH [--receipt-out PATH]
+  opaal execute --plan PATH --accept DIGEST [--run-id ID] [--secret-stdin ID] --journal PATH [--receipt-out PATH] [--require-true]
   opaal execute --help
   opaal audit --project opaal.toml --journal PATH --out PATH
   opaal audit inspect PATH
@@ -120,11 +121,17 @@ a Path parameter.
 const TASK_HELP: &str = "Inspect typed tasks without executing them
 
 Usage:
-  opaal task inspect --project opaal.toml TASK
+  opaal task inspect --project opaal.toml TASK [--format json]
+  opaal task list --project opaal.toml [--format json]
   opaal task --help
 
 The exact manifest path is required. Inspection reads only the explicit project
-source closure and reports the task's shared action signature and effect identities.
+source closure and reports shared task/action identities, typed parameters and
+binding forms, result, documentation, effects, tools, and environments. Listing
+sorts tasks by qualified identity; an empty list succeeds. JSON uses the closed
+opaal.project-inspection.v1 schema, version 1, and ends with LF. Tools are
+manifest requirements, not observations of installed executables. Discovery never
+runs initializers or tools and never searches upward or reads account settings.
 ";
 
 const FORMAT_HELP: &str = "Check or rewrite OPAAL source formatting
@@ -149,7 +156,7 @@ const PLAN_HELP: &str = "Inspect the OPAAL planning boundary without execution
 
 Usage:
   opaal plan [--] SOURCE
-  opaal plan --project opaal.toml --task TASK --environment ID [--input NAME=VALUE | --input-file NAME=PATH]... --expires-in SECONDSs --out PATH
+  opaal plan --project opaal.toml --task TASK --environment ID [--input NAME=VALUE | --input-file NAME=PATH]... --expires-in SECONDSs --out PATH [--format digest]
   opaal plan inspect PATH
   opaal plan --help
 
@@ -157,6 +164,9 @@ The source form remains a host-free refusal. The project form writes one
 identity-bound canonical plan without executing the task, probing a tool,
 materializing a secret, or contacting an endpoint. The environment selects
 authority and tools, and input binding modes match project check.
+--format digest prints only sha256:HEX and LF after an executable plan is
+persisted successfully. Refusal or persistence failure prints no digest. Supply
+that exact digest explicitly to execute --accept; output grants no authority.
 The inspect form validates one canonical plan and prints a bounded, deterministic,
 redacted human view. Invalid, old, future, or tampered artifacts are not rendered.
 ";
@@ -164,7 +174,7 @@ redacted human view. Invalid, old, future, or tampered artifacts are not rendere
 const EXECUTE_HELP: &str = "Execute one explicitly accepted OPAAL plan
 
 Usage:
-  opaal execute --plan PATH --accept sha256:DIGEST [--run-id ID] [--secret-stdin ID] --journal PATH [--receipt-out PATH]
+  opaal execute --plan PATH --accept sha256:DIGEST [--run-id ID] [--secret-stdin ID] --journal PATH [--receipt-out PATH] [--require-true]
   opaal execute --help
 
 Acceptance belongs only to this request. Execution revalidates every bound
@@ -174,7 +184,14 @@ secret-free plan and must name the exact requirement for a one-secret plan.
 Plans declaring stream output require --receipt-out, an exclusive new file in
 the project. Data stdout/stderr contain only program output; safe outcome and
 transfer counts go to the receipt. --secret-stdin conflicts with stdin.read.
-Require both a successful command and a valid receipt to establish success.
+--require-true requires a statically and dynamically Bool task and --receipt-out.
+After owned cleanup and evidence persistence, true exits 0 and false exits 1.
+Operational/type/evidence failures exit 2; requested cancellation retains 130
+even if evidence later fails. Timeout exits 2. Ordinary execute keeps its exit
+policy. The selector observes the returned value, never stdout/stderr. Explicitly
+caught recoverable Errors may still yield a valid Bool; sticky refusal and
+cancellation remain failures. A candidate alone does not prove success.
+New runs emit journal/audit v4 and receipt v2; legacy artifacts remain readable.
 ";
 
 const AUDIT_HELP: &str = "Audit one OPAAL run journal without execution
@@ -218,7 +235,15 @@ fn main() -> ExitCode {
             format_json,
         } => run_project_checker(project, task, environment, inputs, format_json),
         Mode::TaskHelp => emit_report(HostReport::success(TASK_HELP.as_bytes())),
-        Mode::TaskInspect { project, task } => run_task_inspect(project, task),
+        Mode::TaskInspect {
+            project,
+            task,
+            format_json,
+        } => run_task_inspect(project, Some(task), format_json),
+        Mode::TaskList {
+            project,
+            format_json,
+        } => run_task_inspect(project, None, format_json),
         Mode::PlanHelp => emit_report(HostReport::success(PLAN_HELP.as_bytes())),
         Mode::PlanInspect { path } => run_plan_inspect(path),
         Mode::Plan { source } => run_planner(source),
@@ -229,7 +254,16 @@ fn main() -> ExitCode {
             inputs,
             expires_in_seconds,
             out,
-        } => run_project_planner(project, task, environment, inputs, expires_in_seconds, out),
+            format_digest,
+        } => run_project_planner(
+            project,
+            task,
+            environment,
+            inputs,
+            expires_in_seconds,
+            out,
+            format_digest,
+        ),
         Mode::ExecuteHelp => emit_report(HostReport::success(EXECUTE_HELP.as_bytes())),
         Mode::Execute {
             plan,
@@ -238,7 +272,16 @@ fn main() -> ExitCode {
             secret_stdin,
             journal,
             receipt_out,
-        } => run_execute(plan, accept, run_id, secret_stdin, journal, receipt_out),
+            require_true,
+        } => run_execute(
+            plan,
+            accept,
+            run_id,
+            secret_stdin,
+            journal,
+            receipt_out,
+            require_true,
+        ),
         Mode::AuditHelp => emit_report(HostReport::success(AUDIT_HELP.as_bytes())),
         Mode::AuditInspect { path } => run_audit_inspect(path),
         Mode::Audit {
@@ -295,8 +338,17 @@ fn run_checker(source: PathBuf, format_json: bool) -> ExitCode {
     }
 }
 
-fn run_task_inspect(project: PathBuf, task: String) -> ExitCode {
-    match inspect_project(&InspectProjectRequest::new(project, task)) {
+fn run_task_inspect(project: PathBuf, task: Option<String>, format_json: bool) -> ExitCode {
+    let request = match task {
+        Some(task) => InspectProjectRequest::new(project, task),
+        None => InspectProjectRequest::list(project),
+    };
+    let request = if format_json {
+        request.with_json()
+    } else {
+        request
+    };
+    match inspect_project(&request) {
         Ok(run) => emit_report(HostReport::success(run.output())),
         Err(error) => emit_report(HostReport::failure(error.rendered().as_bytes())),
     }
@@ -367,6 +419,7 @@ fn run_project_planner(
     inputs: Vec<ProjectInputBinding>,
     expires_in_seconds: u64,
     out: PathBuf,
+    format_digest: bool,
 ) -> ExitCode {
     let request = PlanProjectRequest::with_bindings(
         project,
@@ -376,6 +429,11 @@ fn run_project_planner(
         expires_in_seconds,
         out,
     );
+    let request = if format_digest {
+        request.with_digest()
+    } else {
+        request
+    };
     match plan_explicit_project(&request) {
         Ok(run) if run.is_successful() => emit_report(HostReport::success(run.output())),
         Ok(run) => {
@@ -417,6 +475,7 @@ fn run_audit_inspect(path: PathBuf) -> ExitCode {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_execute(
     plan: PathBuf,
     accept: String,
@@ -424,20 +483,32 @@ fn run_execute(
     secret_stdin: Option<String>,
     journal: PathBuf,
     receipt_out: Option<PathBuf>,
+    require_true: bool,
 ) -> ExitCode {
     let request = ExecuteProjectRequest::new(plan, accept, run_id, secret_stdin, journal)
-        .with_receipt_out(receipt_out);
+        .with_receipt_out(receipt_out)
+        .with_require_true(require_true);
     let stdin = io::stdin();
     let is_terminal = stdin.is_terminal();
     let mut input = stdin;
     match execute_explicit_plan(&request, is_terminal, &mut input) {
-        Ok(run) if run.is_successful() => emit_report(HostReport::success(run.output())),
         Ok(run) => {
-            let failed = Status::exit(1, opaal_runtime::Duration::ZERO)
-                .expect("one is a valid failed-execution status");
-            emit_report(HostReport::completed(&failed, run.output()))
+            let status = Status::exit(i64::from(run.exit_code()), opaal_runtime::Duration::ZERO)
+                .expect("execution exit fits a status");
+            emit_report(HostReport::completed(&status, run.output()))
         }
-        Err(error) => emit_report(HostReport::failure(error.rendered().as_bytes())),
+        Err(error) => {
+            let status = Status::exit(
+                if require_true { 2 } else { 1 },
+                opaal_runtime::Duration::ZERO,
+            )
+            .expect("failure exit fits a status");
+            emit_report(HostReport::completed_with_diagnostic(
+                &status,
+                b"",
+                error.rendered().as_bytes(),
+            ))
+        }
     }
 }
 

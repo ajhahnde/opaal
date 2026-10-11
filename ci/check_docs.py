@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import subprocess
 import sys
@@ -100,6 +101,25 @@ def check_links(root: Path) -> list[str]:
 
 def check_examples(root: Path, binary: Path) -> list[str]:
     errors = []
+    manifest = root / "tests/golden/standard-input-output/ci-job-check/opaal.toml"
+    for command in (("task", "list"), ("task", "inspect")):
+        args = [*command, "--project", str(manifest)]
+        if command[-1] == "inspect":
+            args.append("sample")
+        result = subprocess.run([str(binary), *args, "--format", "json"], cwd=root,
+                                capture_output=True, text=True, timeout=30)
+        try:
+            view = json.loads(result.stdout)
+            valid = (result.returncode == 0 and not result.stderr
+                     and result.stdout.endswith("\n")
+                     and view["schema"] == "opaal.project-inspection.v1"
+                     and view["schema_version"] == 1
+                     and [task["id"] for task in view["tasks"]] == ["stdio_sample::sample"]
+                     and view["tasks"][0]["result"] == "Bool")
+        except (ValueError, KeyError, TypeError, IndexError):
+            valid = False
+        if not valid:
+            errors.append(f"job-check: {' '.join(command)} JSON example failed")
     example = root / "examples/language-foundation.opaal"
     for args in (("format", "--check", str(example)), ("check", str(example)),
                  (str(example),)):

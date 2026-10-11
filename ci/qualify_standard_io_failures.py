@@ -68,15 +68,15 @@ def qualify(binary: Path, output: Path) -> dict:
             (work / "plan.json").unlink(missing_ok=True)
             (work / "tasks.opaal").write_text(
                 "import std::io as io\nimport std::random as random\nimport std::string as string\n"
-                "action sample() -> Null effects { entropy.system(); stdin.read(); stdout.write(); stderr.write(); } {\n"
-                + body + "\n}\ntask sample = sample\n")
+                "action sample() -> Bool effects { entropy.system(); stdin.read(); stdout.write(); stderr.write(); } {\n"
+                + body.replace("return ", "") + "\nreturn true\n}\ntask sample = sample\n")
             result = run("plan", "--project", "opaal.toml", "--task", "sample", "--environment", "ci",
                          "--expires-in", "900s", "--out", "plan.json")
             require(result.returncode == 0, f"plan failed: {result.stderr!r}")
             document = json.loads((work / "plan.json").read_bytes())
             require(document["schema"] == "opaal.plan.v3", "plan is not metadata-only")
             return ["execute", "--plan", "plan.json", "--accept", document["digest"],
-                    "--run-id", RUN_ID], document["digest"]
+                    "--run-id", RUN_ID, "--require-true"], document["digest"]
 
         def limited_sink(limit):
             def apply():
@@ -96,6 +96,10 @@ def qualify(binary: Path, output: Path) -> dict:
             document = json.loads(receipt_bytes)
             require(document["run_id"] == RUN_ID and document["plan_digest"] == digest,
                     "receipt identity differs")
+            require(document["schema"] == "opaal.execution-receipt.v2"
+                    and document["result_policy"] == "require-true", "selected receipt format differs")
+            require(document["assessment"] == ({"kind": "bool", "value": True}
+                    if document["primary"]["class"] == "success" else None), "assessment differs")
             require((document["primary"]["class"] == "success" and not document["secondary"])
                     == (exit_code == 0), "receipt and command outcome disagree")
             audit = run("audit", "--project", "opaal.toml", "--journal", f"{name}.jsonl",
@@ -156,7 +160,7 @@ def qualify(binary: Path, output: Path) -> dict:
             ("empty-eof", "io::write_stdout(io::read_stdin(0))\nreturn io::write_stdout(io::read_stdin(0))", b"", None, "success"),
         ]:
             stdout, stderr, code, digest = execute(name, body, data, closed=closed)
-            require(not stdout and (code == 0) == (error == "success"), f"{name} exit/data differs")
+            require(not stdout and code == (0 if error == "success" else 2), f"{name} exit/data differs")
             document, _ = retain(name, stdout, stderr, code, digest)
             require(document["primary"]["class"] == error, f"{name} primary differs")
             consumed = {"overflow": 5, "invalid-utf8": 1}.get(name, 0)
@@ -207,11 +211,14 @@ def qualify(binary: Path, output: Path) -> dict:
             finally:
                 stop(child)
             reaped(worker)
+            require(child.returncode == (2 if kill_worker else 130), "selected interruption exit differs")
             require(not stdout, "cancelled read emitted partial data")
             document, journal = retain(name, b"ready", stderr, child.returncode, digest,
                                        complete=not fail_journal)
             require(document["primary"]["class"] == ("error" if kill_worker else "cancelled"),
                     "interruption primary was replaced")
+            require(document["primary"]["cancel_reason"] == (None if kill_worker else "requested"),
+                    "typed cancellation reason differs")
             require(document["progress"]["stdout.write"]["confirmed_bytes"] == 5,
                     "earlier output count was lost")
             require(document["progress"]["stdin.read"]["confirmed_bytes"] == 0 and
@@ -225,7 +232,7 @@ def qualify(binary: Path, output: Path) -> dict:
 
         name = "journal-creation-failure"
         stdout, stderr, code, _ = execute(name, "return io::print('native-stream-payload-canary')", limit=0)
-        require(code > 0 and not stdout and b"JOURNAL005" in stderr and CANARY not in stderr,
+        require(code == 2 and not stdout and b"JOURNAL005" in stderr and CANARY not in stderr,
                 "pre-admission journal failure differs")
         require(not (work / f"{name}.jsonl").exists() and not (work / f"{name}.receipt.json").read_bytes(),
                 "pre-admission sink failure persisted unexpected evidence")

@@ -105,8 +105,8 @@ fn controlled_binary_streams_keep_receipts_separate_and_total_all_calls() {
     assert_eq!(result.stderr, input);
     let receipt: serde_json::Value =
         serde_json::from_slice(&std::fs::read(work.0.join("receipt.json")).unwrap()).unwrap();
-    assert_eq!(receipt["schema"], "opaal.execution-receipt.v1");
-    assert_eq!(receipt["schema_version"], 1);
+    assert_eq!(receipt["schema"], "opaal.execution-receipt.v2");
+    assert_eq!(receipt["schema_version"], 2);
     assert_eq!(receipt["run_id"], "0123456789abcdef0123456789abcdef");
     assert_eq!(receipt["plan_digest"], digest);
     assert_eq!(receipt["primary"]["class"], "success");

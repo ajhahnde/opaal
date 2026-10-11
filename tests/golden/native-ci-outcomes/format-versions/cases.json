@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "legacy": [
+    "opaal.run-journal.v2",
+    "opaal.audit.v2",
+    "opaal.run-journal.v3",
+    "opaal.audit.v3",
+    "opaal.execution-receipt.v1"
+  ],
+  "current": [
+    "opaal.run-journal.v4",
+    "opaal.audit.v4",
+    "opaal.execution-receipt.v2"
+  ],
+  "owners": [
+    "crates/opaal-runtime/tests/workflow_artifacts.rs",
+    "crates/opaal-runtime/tests/workflow_contract.rs"
+  ],
+  "assertions": [
+    "closed schema and explicit dispatch",
+    "hash-chain and canonical JSON",
+    "primary and assessment independently retained",
+    "incomplete audit never infers assessment",
+    "unknown null cancellation reason only in incomplete audit without terminal",
+    "typed requested/timeout required for complete cancellation and receipts",
+    "missing duplicate unknown future truncated tampered forms refuse",
+    "no overwrite migration or replay"
+  ]
+}

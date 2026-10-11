@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "schema": "opaal.project-inspection.v1",
+  "tests": [
+    "task_discovery_shares_closed_sorted_static_metadata",
+    "digest_view_requires_successful_exclusive_plan_persistence",
+    "task_inspection_json_preserves_native_manifest_bytes",
+    "project_check_is_silent_and_performs_no_tool_or_action_execution",
+    "project_discovery_is_explicit_and_fail_closed",
+    "project_reads_never_follow_manifest_parent_or_source_symlinks"
+  ],
+  "owner": "crates/opaal-cli/tests/project_frontend.rs",
+  "assertions": [
+    "zero initializer/tool execution or environment reads",
+    "sorted zero/one/many task views",
+    "shared list/inspect identity and typed parameter binding metadata",
+    "escaped bounded text and JSON with LF",
+    "lossless native manifest paths",
+    "persisted executable digest only; refusal and exclusive failure emit none"
+  ]
+}

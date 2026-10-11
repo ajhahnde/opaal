@@ -59,7 +59,7 @@ fn qualify(cancelled: bool, cleanup_failed: bool) {
     );
     let count = if cancelled { 251 } else { 250 };
     work.write("tasks.opaal", format!(
-        "import std::random as random\naction sample() -> Bytes effects {{ entropy.system(); }} {{ return random::bytes({count}) }}\ntask sample = sample\n"
+        "import std::random as random\naction sample() -> Bool effects {{ entropy.system(); }} {{ let sample = random::bytes({count})\nreturn true }}\ntask sample = sample\n"
     ));
     let manifest = work.0.join("opaal.toml");
     let plan = work.0.join("sample.plan.json");
@@ -97,7 +97,13 @@ fn qualify(cancelled: bool, cleanup_failed: bool) {
                 Some("0123456789abcdef0123456789abcdef".into()),
                 None,
                 journal.clone(),
-            ),
+            )
+            .with_require_true(!sink_failed)
+            .with_receipt_out(if sink_failed {
+                None
+            } else {
+                Some(work.0.join("receipt.json"))
+            }),
             false,
             &mut std::io::empty(),
         );
@@ -134,7 +140,20 @@ fn qualify(cancelled: bool, cleanup_failed: bool) {
             );
             assert_eq!(bytes.len() as u64, sink_limit.unwrap());
         } else {
-            assert!(!result.unwrap().is_successful());
+            let run = result.unwrap();
+            assert!(!run.is_successful());
+            assert_eq!(run.exit_code(), 2);
+            let receipt = run.receipt().unwrap();
+            assert_eq!(receipt["result_policy"], "require-true");
+            assert_eq!(receipt["assessment"], Value::Null);
+            assert_eq!(
+                receipt["primary"]["cancel_reason"],
+                if cancelled {
+                    serde_json::json!("timeout")
+                } else {
+                    Value::Null
+                }
+            );
             let outcome = &rows.last().unwrap()["payload"]["primary"];
             assert_eq!(outcome["code"], primary);
             assert!(outcome["value_digest"].is_null());
@@ -155,12 +174,27 @@ fn qualify(cancelled: bool, cleanup_failed: bool) {
             if cleanup_failed {
                 assert_eq!(cleanup[0]["class"], "cleanup-failed");
             }
+            let prefix: u64 = bytes
+                .split_inclusive(|byte| *byte == b'\n')
+                .take(3)
+                .map(|line| line.len() as u64)
+                .sum();
+            // The ordinary fault run has a shorter result-policy header.
+            let mut ordinary_header = rows[0]["payload"].clone();
+            ordinary_header["result_policy"] = serde_json::json!("execution");
+            let (_, ordinary_bytes) = opaal_runtime::workflow::JournalChain::begin(
+                "0123456789abcdef0123456789abcdef",
+                ordinary_header,
+            )
+            .unwrap();
             sink_limit = Some(
-                bytes
-                    .split_inclusive(|byte| *byte == b'\n')
-                    .take(3)
-                    .map(|line| line.len() as u64)
-                    .sum(),
+                prefix
+                    - bytes
+                        .split_inclusive(|byte| *byte == b'\n')
+                        .next()
+                        .unwrap()
+                        .len() as u64
+                    + ordinary_bytes.len() as u64,
             );
         }
         let audit = work.0.join(if sink_failed {
