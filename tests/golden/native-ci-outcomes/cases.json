@@ -1,0 +1,59 @@
+{
+  "schema_version": 1,
+  "cases": [
+    {
+      "id": "true",
+      "body": "return true",
+      "exit": 0,
+      "primary": "success",
+      "assessment": true,
+      "stdout": ""
+    },
+    {
+      "id": "false",
+      "body": "return false",
+      "exit": 1,
+      "primary": "success",
+      "assessment": false,
+      "stdout": ""
+    },
+    {
+      "id": "printed-true",
+      "body": "io::print('true'); return false",
+      "exit": 1,
+      "primary": "success",
+      "assessment": false,
+      "stdout": "true"
+    },
+    {
+      "id": "error",
+      "body": "throw 'failure'; return true",
+      "exit": 2,
+      "primary": "error",
+      "assessment": null,
+      "stdout": ""
+    },
+    {
+      "id": "caught",
+      "body": "try { throw 'recoverable' } catch error { }; return true",
+      "exit": 0,
+      "primary": "success",
+      "assessment": true,
+      "stdout": ""
+    }
+  ],
+  "coverage": {
+    "ordinary-false": "crates/opaal-cli/tests/native_ci_outcomes.rs:ordinary_false_keeps_success_and_no_assessment",
+    "signature-receipt-stale-refusal": "crates/opaal-cli/tests/native_ci_outcomes.rs:signature_receipt_stale_and_refused_preflight_have_no_task_effects",
+    "uncaught-and-caught-output-failure": "crates/opaal-cli/tests/native_ci_outcomes.rs:broken_output_cannot_pass_even_when_its_error_is_caught",
+    "requested-cancellation": "crates/opaal-cli/tests/native_ci_outcomes.rs:requested_cancellation_of_blocked_input_retains_130_and_typed_reason",
+    "typed-timeout-and-owned-cleanup": "crates/opaal-cli/tests/random_native.rs",
+    "cleanup-and-terminal-failure-with-both-candidates": "crates/opaal-cli/src/project.rs:selected_finish_retains_candidates_through_cleanup_and_terminal_failure",
+    "receipt-write-partial-flush-sync-parent-failure": "crates/opaal-cli/src/project.rs:receipt_faults_preserve_primary_and_record_only_in_available_open_journals",
+    "native-receipt-failure": "crates/opaal-cli/tests/io_receipt_native.rs",
+    "status-error-refusal-omission-precedence": "crates/opaal-cli/src/project.rs:selected_exit_retains_cancellation_and_rejects_failed_or_incomplete_evidence",
+    "native-journal-creation-worker-death-signal-with-journal-failure": "ci/qualify_standard_io_failures.py",
+    "job-check-positive-negative-invalid-acquisition": "ci/qualify_standard_input_output.py",
+    "outer-audit-cancellation-and-exclusive-acquisition": "ci/tests/test_standard_input_output_candidate.py"
+  }
+}

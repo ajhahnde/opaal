@@ -89,9 +89,9 @@ transfer, a receipt or journal failure makes execution unsuccessful without
 replaying output. A failed receipt may be empty, incomplete, or unsynced; do not
 accept it as durable success. If both sinks fail, detailed evidence may be lost.
 
-These tasks use v3 check/plan/journal/audit identities and metadata-only evidence
+These tasks use v3 check/plan identities, v4 journal/audit identities and metadata-only evidence
 for the whole run: no input/output, derived values, error text or payload digests.
-Receipts use `opaal.execution-receipt.v1`, bind run ID and plan digest, and retain
+Receipts use `opaal.execution-receipt.v2`, bind run ID and plan digest, and retain
 primary/secondary outcomes and cumulative confirmed/uncertain counts for input,
 both outputs and entropy. Old-effect v2 artifacts remain inspectable. New
 effects in v2, mixed/future schemas and stale/corrupt identities fail closed.

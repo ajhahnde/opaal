@@ -363,7 +363,7 @@ class Qualification:
         )
         audit = Path("target/opaal-golden/secretfree.audit.json")
         self.cli("audit", "--project", "opaal.toml", "--journal", str(journal), "--out", str(audit))
-        value = exact_schema(self.project / audit, "opaal.audit.v2")
+        value = exact_schema(self.project / audit, "opaal.audit.v4")
         if value.get("completeness") != "complete":
             fail("secret-free execution did not produce a complete audit")
         self.inspect_twice("audit", audit)
@@ -378,7 +378,7 @@ class Qualification:
             "audit", "--project", "opaal.toml", "--journal", str(truncated),
             "--out", str(incomplete), expected=1,
         )
-        incomplete_value = exact_schema(self.project / incomplete, "opaal.audit.v2")
+        incomplete_value = exact_schema(self.project / incomplete, "opaal.audit.v4")
         if incomplete_value.get("completeness") != "incomplete":
             fail("a valid truncated journal was not classified as incomplete")
         self.inspect_twice("audit", incomplete)
@@ -482,7 +482,7 @@ class Qualification:
             fail("readiness evidence did not retain the HTTP status")
         audit = Path("target/opaal-golden/release.audit.json")
         self.cli("audit", "--project", "opaal.toml", "--journal", str(journal), "--out", str(audit))
-        audit_value = exact_schema(self.project / audit, "opaal.audit.v2")
+        audit_value = exact_schema(self.project / audit, "opaal.audit.v4")
         if audit_value.get("completeness") != "complete":
             fail("readiness workflow did not produce a complete audit")
         audit_view = self.inspect_twice("audit", audit)

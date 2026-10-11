@@ -108,7 +108,7 @@ fn journal_records(work: &ReportDir) -> Vec<serde_json::Value> {
     let bytes = std::fs::read(work.0.join("sample.run.jsonl")).unwrap();
     let audit = opaal_runtime::workflow::audit_journal(&bytes).unwrap();
     assert!(audit.is_complete());
-    assert_eq!(audit.value()["schema"], "opaal.audit.v3");
+    assert_eq!(audit.value()["schema"], "opaal.audit.v4");
     success(&work.run(&[
         "audit",
         "--project",

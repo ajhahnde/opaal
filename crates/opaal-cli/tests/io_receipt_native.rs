@@ -65,8 +65,8 @@ fn qualify(fault: &str, error: bool) {
         std::fs::read(fixtures.join(format!("tools-{target}.toml"))).unwrap(),
     );
     work.write("tasks.opaal", format!(
-        "import std::io as io\naction run() -> Null effects {{ stdout.write(); }} {{ io::print('{CANARY}')\n{} }}\ntask sample = run\n",
-        if error { "throw 'error-payload-canary'" } else { "return null" }
+        "import std::io as io\naction run() -> Bool effects {{ stdout.write(); }} {{ io::print('{CANARY}')\n{} }}\ntask sample = run\n",
+        if error { "throw 'error-payload-canary'" } else { "return true" }
     ));
     let plan = work.0.join("plan.json");
     plan_explicit_project(&PlanProjectRequest::new(
@@ -92,13 +92,15 @@ fn qualify(fault: &str, error: bool) {
             None,
             journal.clone(),
         )
-        .with_receipt_out(Some(receipt.clone())),
+        .with_receipt_out(Some(receipt.clone()))
+        .with_require_true(true),
         false,
         &mut std::io::empty(),
     )
     .unwrap();
     native::assert_reaped();
     assert!(!run.is_successful());
+    assert_eq!(run.exit_code(), 2);
     assert!(run.output().is_empty());
     let kernel_error = KERNEL_ERROR.load(Ordering::Relaxed);
     if fault == "write-limit" {
@@ -110,6 +112,15 @@ fn qualify(fault: &str, error: bool) {
         );
     }
     let metadata = run.receipt().unwrap();
+    assert_eq!(metadata["result_policy"], "require-true");
+    assert_eq!(
+        metadata["assessment"],
+        if error {
+            Value::Null
+        } else {
+            serde_json::json!({"kind":"bool", "value":true})
+        }
+    );
     assert_eq!(
         metadata["primary"]["class"],
         if error { "error" } else { "success" }

@@ -137,7 +137,7 @@ def references(binary: Path, inputs: Path, directory: Path, target: str) -> list
             result = run(sample, "execute", "--plan", "plan.json", "--accept", plan["digest"],
                          "--run-id", run_id, "--journal", name + ".jsonl", "--receipt-out", name + ".receipt.json", stdin=payload)
             receipt = json.loads((sample / (name + ".receipt.json")).read_bytes())
-            require(receipt["schema"] == "opaal.execution-receipt.v1" and receipt["schema_version"] == 1
+            require(receipt["schema"] == "opaal.execution-receipt.v2" and receipt["schema_version"] == 2
                     and receipt["run_id"] == run_id and receipt["plan_digest"] == plan["digest"], "receipt identity differs")
             require(result.returncode == (0 if primary == "success" else 1) and result.stdout == expected
                     and result.stderr == (b"processed\n" if name == "processor" else b""), "controlled streams/exit differ")
@@ -146,7 +146,7 @@ def references(binary: Path, inputs: Path, directory: Path, target: str) -> list
                     and receipt["journal_state"] == "complete", "controlled outcome differs")
             success(run(sample, "audit", *base[:2], "--journal", name + ".jsonl", "--out", name + ".audit.json"), "audit")
             audit = json.loads((sample / (name + ".audit.json")).read_bytes())
-            require(audit["schema"] == "opaal.audit.v3" and audit["completeness"] == "complete"
+            require(audit["schema"] == "opaal.audit.v4" and audit["completeness"] == "complete"
                     and audit["primary"] == receipt["primary"], "audit and receipt differ")
             for role, count in [("stdin.read", min(len(payload), 4097) if sample == work else len(payload)),
                                 ("stdout.write", len(expected)), ("stderr.write", 10 if name == "processor" else 0)]:
@@ -160,15 +160,22 @@ def references(binary: Path, inputs: Path, directory: Path, target: str) -> list
         ("positive", b'{"jobs":[]}', 0, assessment({"failed": 0, "failures": [], "pending": 0, "total": 0})),
         ("negative", b'{"jobs":[{"name":"build","status":"queued"}]}', 1,
          assessment({"failed": 0, "failures": [], "pending": 1, "total": 1})),
-        ("invalid", b'{"jobs":null}', 1, b""),
+        ("invalid", b'{"jobs":null}', 2, b""),
+        ("acquisition", b'{"jobs":[]}', 2, b""),
     ]:
         driver = directory / ("driver-" + name)
         shutil.copytree(ci, driver)
         (driver / "jobs.json").write_bytes(payload)
-        result = command([sys.executable, "project-ci.py"], driver, environment)
+        if name == "acquisition":
+            source = driver / "producer.py"
+            source.write_text(source.read_text().replace("sys.exit(0)", "sys.exit(7)"))
+        result = command(["sh", "project-ci.sh"], driver, environment)
         require(result.returncode == exit_code and result.stdout == expected
-                and result.stderr == (b"project check failed; inspect the journal and receipt\n" if name == "invalid" else b""),
-                "documented controlled CI exit mapping differs")
+                and result.stderr == (b"acquisition failed\n" if name == "acquisition" else b""),
+                f"documented controlled CI {name} exit mapping differs: {result.returncode}, {result.stdout!r}, {result.stderr!r}")
+        if name == "acquisition":
+            require(not (driver / "ci.run.jsonl").exists() and not (driver / "ci.receipt.json").exists(),
+                    "failed acquisition launched a task")
     return ["canonical source check/format", "exact processor UTF8/empty/cap/Broken Pipe",
             "all report policy and invalid input fixtures", "documented CI first use",
             "full bytes plus producer exit 7: zero processor launches",

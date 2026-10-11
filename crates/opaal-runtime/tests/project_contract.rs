@@ -597,7 +597,7 @@ task release = ready
 }
 
 #[test]
-fn tasks_refuse_parameter_types_without_an_exact_input_spelling() {
+fn tasks_inspect_but_cannot_bind_parameter_types_without_an_exact_input_spelling() {
     let manifest =
         parse_project_manifest(Path::new("/project/opaal.toml"), MANIFEST.as_bytes()).unwrap();
     let source = br#"action ready(candidate: List[String]) -> String effects {} { return "ready" }
@@ -608,10 +608,30 @@ task release = ready
         source.to_vec(),
     )]));
 
-    let error = load_project_program(manifest, &sources, &sources).unwrap_err();
-    let opaal_runtime::project::ProjectProgramError::Contract(error) = error else {
-        panic!("expected a task contract error");
-    };
+    let project = load_project_program(manifest, &sources, &sources).unwrap();
+    let parameter = &project
+        .task("release")
+        .unwrap()
+        .action()
+        .callable()
+        .parameters()[0];
+    assert_eq!(
+        parameter.value_type(),
+        &ValueType::List(Box::new(ValueType::String))
+    );
+    assert!(opaal_runtime::project::task_input_binding_forms(parameter.value_type()).is_empty());
+    let authority =
+        parse_authority_document(project.manifest(), "ci", AUTHORITY.as_bytes()).unwrap();
+    let tools = parse_tool_lock(project.manifest(), "ci", LOCK.as_bytes()).unwrap();
+    let error = check_project(
+        &project,
+        "release",
+        "ci",
+        &authority,
+        &tools,
+        [("candidate".to_owned(), "[]".to_owned())],
+    )
+    .unwrap_err();
     assert_eq!(error.code(), "TASK005");
 }
 

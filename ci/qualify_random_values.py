@@ -146,7 +146,7 @@ def qualify(archive: Path | None, fixtures: Path | None, binaries: Path | None,
         success(run("audit", "--project", "opaal.toml", "--journal", "sample.run.jsonl", "--out", "sample.audit.json"), "audit")
         success(run("audit", "inspect", "sample.audit.json"), "audit inspect")
         audit = json.loads((work / "sample.audit.json").read_bytes())
-        require(audit["schema"] == "opaal.audit.v3" and audit["completeness"] == "complete" and
+        require(audit["schema"] == "opaal.audit.v4" and audit["completeness"] == "complete" and
                 audit["primary"]["class"] == "success", "audit outcome differs")
         records = [json.loads(line) for line in (work / "sample.run.jsonl").read_bytes().splitlines()]
         after = [row["payload"] for row in records if row.get("kind") == "effect-after"]

@@ -1950,21 +1950,6 @@ fn collect_tasks(
                 .expect("task name belongs to root source")
                 .to_owned();
             let action = resolve_task_action(entry.module(), entry.source(), task, modules)?;
-            if let Some(parameter) = action
-                .callable()
-                .parameters()
-                .iter()
-                .find(|parameter| !is_task_input_type(parameter.value_type()))
-            {
-                return Err(ProjectError::new(
-                    "TASK005",
-                    format!(
-                        "task `{name}` parameter `{}` has type `{}`, which has no exact name=value representation",
-                        parameter.name(),
-                        parameter.value_type()
-                    ),
-                ));
-            }
             let effects = action
                 .effects()
                 .iter()
@@ -1989,19 +1974,21 @@ fn collect_tasks(
     Ok(tasks)
 }
 
-fn is_task_input_type(value_type: &ValueType) -> bool {
-    matches!(
-        value_type,
+/// Exact lexical/file binding forms available to static task discovery and checking.
+#[must_use]
+pub fn task_input_binding_forms(value_type: &ValueType) -> &'static [&'static str] {
+    match value_type {
+        ValueType::Path => &["value", "file"],
         ValueType::Null
-            | ValueType::Bool
-            | ValueType::Int
-            | ValueType::Float
-            | ValueType::String
-            | ValueType::Bytes
-            | ValueType::Path
-            | ValueType::Duration
-            | ValueType::ByteSize
-    )
+        | ValueType::Bool
+        | ValueType::Int
+        | ValueType::Float
+        | ValueType::String
+        | ValueType::Bytes
+        | ValueType::Duration
+        | ValueType::ByteSize => &["value"],
+        _ => &[],
+    }
 }
 
 fn resolve_task_action<'a>(
@@ -2262,6 +2249,24 @@ pub fn check_project(
         ));
     }
     let task = project.task(task)?;
+    if let Some(parameter) = task
+        .action()
+        .callable()
+        .parameters()
+        .iter()
+        .find(|parameter| task_input_binding_forms(parameter.value_type()).is_empty())
+    {
+        return Err(ProjectError::new(
+            "TASK005",
+            format!(
+                "task `{}` parameter `{}` has type `{}`, which has no exact name=value representation",
+                task.id().name(),
+                parameter.name(),
+                parameter.value_type()
+            ),
+        ));
+    }
+
     let mut supplied = BTreeMap::new();
     for (name, value) in inputs {
         if supplied.contains_key(&name) {

@@ -35,6 +35,11 @@ pub enum Mode {
     TaskInspect {
         project: PathBuf,
         task: String,
+        format_json: bool,
+    },
+    TaskList {
+        project: PathBuf,
+        format_json: bool,
     },
     PlanHelp,
     PlanInspect {
@@ -50,6 +55,7 @@ pub enum Mode {
         inputs: Vec<ProjectInputBinding>,
         expires_in_seconds: u64,
         out: PathBuf,
+        format_digest: bool,
     },
     ExecuteHelp,
     Execute {
@@ -59,6 +65,7 @@ pub enum Mode {
         secret_stdin: Option<String>,
         journal: PathBuf,
         receipt_out: Option<PathBuf>,
+        require_true: bool,
     },
     AuditHelp,
     AuditInspect {
@@ -288,6 +295,7 @@ fn parse_project_plan_args(arguments: &[OsString]) -> Result<Invocation, CliErro
     let mut inputs = Vec::new();
     let mut expires_in_seconds = None;
     let mut out = None;
+    let mut format_digest = false;
     let mut index = 0;
     while index < arguments.len() {
         let option = arguments[index].to_str().ok_or_else(|| {
@@ -319,6 +327,17 @@ fn parse_project_plan_args(arguments: &[OsString]) -> Result<Invocation, CliErro
                 expires_in_seconds = Some(seconds);
             }
             "--out" => set_path_option(&mut out, "--out", arguments, &mut index)?,
+            "--format" => {
+                if format_digest {
+                    return Err(CliError::DuplicateOption("--format"));
+                }
+                if text_option_value("--format", arguments, &mut index)? != "digest" {
+                    return Err(CliError::InvalidProjectArgument(
+                        "--format supports only 'digest'".to_owned(),
+                    ));
+                }
+                format_digest = true;
+            }
             "--help" if arguments.len() == 1 => {
                 return Ok(Invocation {
                     mode: Mode::PlanHelp,
@@ -339,6 +358,7 @@ fn parse_project_plan_args(arguments: &[OsString]) -> Result<Invocation, CliErro
             inputs,
             expires_in_seconds: required_option(expires_in_seconds, "--expires-in")?,
             out: required_option(out, "--out")?,
+            format_digest,
         },
     })
 }
@@ -359,6 +379,7 @@ where
     let mut secret_stdin = None;
     let mut journal = None;
     let mut receipt_out = None;
+    let mut require_true = false;
     let mut index = 0;
     while index < arguments.len() {
         let option = arguments[index].to_str().ok_or_else(|| {
@@ -373,6 +394,7 @@ where
                 set_text_option(&mut secret_stdin, "--secret-stdin", &arguments, &mut index)?
             }
             "--journal" => set_path_option(&mut journal, "--journal", &arguments, &mut index)?,
+            "--require-true" if !require_true => require_true = true,
             "--receipt-out" => {
                 set_path_option(&mut receipt_out, "--receipt-out", &arguments, &mut index)?
             }
@@ -383,6 +405,11 @@ where
             }
         }
     }
+    if require_true && receipt_out.is_none() {
+        return Err(CliError::InvalidProjectArgument(
+            "--require-true requires --receipt-out".to_owned(),
+        ));
+    }
     Ok(Invocation {
         mode: Mode::Execute {
             plan: required_option(plan, "--plan")?,
@@ -391,6 +418,7 @@ where
             secret_stdin,
             journal: required_option(journal, "--journal")?,
             receipt_out,
+            require_true,
         },
     })
 }
@@ -514,39 +542,61 @@ where
             mode: Mode::TaskHelp,
         });
     }
-    if arguments.first().and_then(|value| value.to_str()) != Some("inspect") {
-        return Err(CliError::InvalidProjectArgument(
-            "task requires `inspect --project opaal.toml TASK`".to_owned(),
-        ));
-    }
-    let mut project = None;
-    let mut task = None;
-    let mut index = 1;
-    while index < arguments.len() {
-        if arguments[index] == "--project" {
-            index += 1;
-            if project.is_some() {
-                return Err(CliError::DuplicateOption("--project"));
-            }
-            project = Some(PathBuf::from(arguments.get(index).ok_or_else(|| {
-                CliError::InvalidProjectArgument("--project requires a path".to_owned())
-            })?));
-            index += 1;
-        } else if task.is_none() {
-            task = Some(arguments[index].clone().into_string().map_err(|_| {
-                CliError::InvalidProjectArgument("task name must be UTF-8".to_owned())
-            })?);
-            index += 1;
-        } else {
+    let list = match arguments.first().and_then(|value| value.to_str()) {
+        Some("list") => true,
+        Some("inspect") => false,
+        _ => {
             return Err(CliError::InvalidProjectArgument(
-                "task inspect accepts exactly one task name".to_owned(),
+                "task requires 'list' or 'inspect'".to_owned(),
             ));
         }
+    };
+    let mut project = None;
+    let mut task = None;
+    let mut format_json = false;
+    let mut index = 1;
+    while index < arguments.len() {
+        match arguments[index].to_str() {
+            Some("--project") => {
+                index += 1;
+                set_path_option(&mut project, "--project", &arguments, &mut index)?;
+            }
+            Some("--format") => {
+                index += 1;
+                if format_json {
+                    return Err(CliError::DuplicateOption("--format"));
+                }
+                if text_option_value("--format", &arguments, &mut index)? != "json" {
+                    return Err(CliError::InvalidProjectArgument(
+                        "--format supports only 'json'".to_owned(),
+                    ));
+                }
+                format_json = true;
+            }
+            Some(name) if !list && task.is_none() && !name.starts_with('-') => {
+                task = Some(name.to_owned());
+                index += 1;
+            }
+            _ => {
+                return Err(CliError::InvalidProjectArgument(
+                    "unexpected task argument".to_owned(),
+                ));
+            }
+        }
     }
+    let project = required_option(project, "--project")?;
     Ok(Invocation {
-        mode: Mode::TaskInspect {
-            project: required_option(project, "--project")?,
-            task: required_option(task, "TASK")?,
+        mode: if list {
+            Mode::TaskList {
+                project,
+                format_json,
+            }
+        } else {
+            Mode::TaskInspect {
+                project,
+                task: required_option(task, "TASK")?,
+                format_json,
+            }
         },
     })
 }
@@ -972,6 +1022,7 @@ mod tests {
             Mode::TaskInspect {
                 project: PathBuf::from("opaal.toml"),
                 task: "release".to_owned(),
+                format_json: false,
             }
         );
         assert_eq!(
@@ -1013,6 +1064,95 @@ mod tests {
     }
 
     #[test]
+    fn task_discovery_and_digest_options_are_explicit_and_closed() {
+        assert_eq!(
+            parse(&[
+                "task",
+                "list",
+                "--project",
+                "opaal.toml",
+                "--format",
+                "json"
+            ])
+            .unwrap()
+            .mode,
+            Mode::TaskList {
+                project: PathBuf::from("opaal.toml"),
+                format_json: true
+            }
+        );
+        assert_eq!(
+            parse(&[
+                "task",
+                "inspect",
+                "--format",
+                "json",
+                "--project",
+                "opaal.toml",
+                "release"
+            ])
+            .unwrap()
+            .mode,
+            Mode::TaskInspect {
+                project: PathBuf::from("opaal.toml"),
+                task: "release".to_owned(),
+                format_json: true
+            }
+        );
+        for args in [
+            vec!["task", "list"],
+            vec!["task", "list", "--project", "opaal.toml", "extra"],
+            vec!["task", "inspect", "--project", "opaal.toml"],
+            vec!["task", "inspect", "--project", "opaal.toml", "--unknown"],
+            vec!["task", "list", "--project", "opaal.toml", "--format", "xml"],
+            vec![
+                "task",
+                "list",
+                "--project",
+                "opaal.toml",
+                "--format",
+                "json",
+                "--format",
+                "json",
+            ],
+            vec!["plan", "source.opaal", "--format", "digest"],
+        ] {
+            assert!(parse(&args).is_err(), "{args:?}");
+        }
+        let args = [
+            "plan",
+            "--project",
+            "opaal.toml",
+            "--task",
+            "release",
+            "--environment",
+            "ci",
+            "--expires-in",
+            "900s",
+            "--out",
+            "plan.json",
+            "--format",
+            "digest",
+        ];
+        assert!(matches!(
+            parse(&args).unwrap().mode,
+            Mode::ProjectPlan {
+                format_digest: true,
+                ..
+            }
+        ));
+        let mut duplicate = args.to_vec();
+        duplicate.extend(["--format", "digest"]);
+        assert_eq!(
+            parse(&duplicate),
+            Err(CliError::DuplicateOption("--format"))
+        );
+        let mut invalid = args.to_vec();
+        *invalid.last_mut().unwrap() = "json";
+        assert!(parse(&invalid).is_err());
+    }
+
+    #[test]
     fn plan_execute_and_audit_require_every_explicit_control_identity() {
         assert_eq!(
             parse(&[
@@ -1042,6 +1182,7 @@ mod tests {
                 )],
                 expires_in_seconds: 900,
                 out: PathBuf::from("release.plan.json"),
+                format_digest: false,
             }
         );
         assert_eq!(
@@ -1068,6 +1209,7 @@ mod tests {
                 secret_stdin: Some("token".to_owned()),
                 journal: PathBuf::from("run.jsonl"),
                 receipt_out: None,
+                require_true: false,
             }
         );
         assert_eq!(

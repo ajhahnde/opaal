@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import tempfile
 import unittest
-import io
 import json
-import runpy
+import os
+import shutil
 import subprocess
+import sys
 from pathlib import Path
-from unittest.mock import Mock, patch
 
 from ci.tests import test_data_processing_candidate as candidates
 from ci.package_standard_input_output import ROOT, check_copies
@@ -21,6 +21,39 @@ class StdioFixtureIdentityTests(candidates.CandidateIdentityTests):
 
 
 class CiReferenceTests(unittest.TestCase):
+    def test_native_driver_preserves_exit_precedence_and_exclusive_acquisition(self):
+        for selected, audit, expected in [(0, 0, 0), (1, 0, 1), (2, 0, 2),
+                                           (130, 0, 130), (0, 1, 2), (1, 1, 2), (130, 1, 130)]:
+            with self.subTest(selected=selected, audit=audit), tempfile.TemporaryDirectory() as temporary:
+                work = Path(temporary)
+                shutil.copyfile(ROOT / "tests/golden/standard-input-output/ci-job-check/project-ci.sh", work / "project-ci.sh")
+                (work / "producer.py").write_text("print('input')\n")
+                binary = work / "opaal"
+                binary.write_text(f"#!{sys.executable}\n" +
+                    "import os,sys\nfrom pathlib import Path\n"
+                    "with Path('calls').open('a') as calls: calls.write(sys.argv[1]+'\\n')\n"
+                    "if sys.argv[1] == 'plan': print('sha256:'+'1'*64)\n"
+                    "if sys.argv[1] == 'execute': sys.exit(int(os.environ['SELECTED_EXIT']))\n"
+                    "if sys.argv[1] == 'audit': sys.exit(int(os.environ['AUDIT_EXIT']))\n")
+                binary.chmod(0o755)
+                environment = {"PATH": str(work) + os.pathsep + str(Path(sys.executable).parent) + os.pathsep + os.defpath,
+                               "SELECTED_EXIT": str(selected), "AUDIT_EXIT": str(audit)}
+                result = subprocess.run(["/bin/sh", "project-ci.sh"], cwd=work, env=environment, capture_output=True, timeout=10)
+                self.assertEqual(result.returncode, expected, result.stderr)
+                self.assertEqual(result.stdout, b"")
+                self.assertEqual((work / "calls").read_text().splitlines(), ["task", "task", "check", "plan", "execute", "audit"])
+                (work / "calls").unlink()
+                for state in ["existing", "dangling-symlink"]:
+                    acquired = work / "acquired.json"
+                    acquired.unlink(missing_ok=True)
+                    if state == "existing": acquired.write_bytes(b"keep")
+                    else: acquired.symlink_to(work / "untouched")
+                    result = subprocess.run(["/bin/sh", "project-ci.sh"], cwd=work, env=environment, capture_output=True, timeout=10)
+                    self.assertEqual(result.returncode, 2)
+                    self.assertFalse((work / "calls").exists())
+                    self.assertFalse((work / "untouched").exists())
+                    if state == "existing": self.assertEqual(acquired.read_bytes(), b"keep")
+
     def test_policy_only_passes_without_failed_or_pending_jobs(self):
         for failed, pending, passed in [(0, 0, True), (1, 0, False), (0, 1, False)]:
             report = {"failed": failed, "pending": pending, "total": 1, "failures": []}
@@ -42,36 +75,6 @@ class CiReferenceTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "maintained owner"):
                 check_copies(root, root / "reference")
 
-    def test_project_ci_never_accepts_a_bool_without_successful_matching_evidence(self):
-        driver = ROOT / "tests/golden/standard-input-output/ci-job-check/project-ci.py"
-        receipt = {"schema": "opaal.execution-receipt.v1", "schema_version": 1,
-                   "run_id": "0123456789abcdef0123456789abcdef", "plan_digest": "accepted",
-                   "primary": {"class": "success", "value_digest": None}, "secondary": [],
-                   "journal_state": "complete", "omitted_secondary_count": 0}
-        cases = [(0, b"", receipt, True, 0), (0, b"", receipt, False, 1),
-                 (1, b"", receipt, True, 1), (0, b"unexpected", receipt, True, 1),
-                 (0, b"", receipt, "true", 1)]
-        for key, value in [("run_id", "stale"), ("plan_digest", "stale"),
-                           ("journal_state", "unavailable"), ("omitted_secondary_count", 1),
-                           ("secondary", [{"category": "receipt", "code": "JOURNAL005"}]),
-                           ("primary", {"class": "error", "value_digest": None})]:
-            cases.append((0, b"", dict(receipt, **{key: value}), True, 1))
-        for code, stderr, evidence, passed, expected in cases:
-            with self.subTest(code=code, evidence=evidence, passed=passed):
-                output = json.dumps({"passed": passed, "report": {}}).encode()
-                results = [subprocess.CompletedProcess([], 0, b"input", b""),
-                           subprocess.CompletedProcess([], 0), subprocess.CompletedProcess([], 0),
-                           subprocess.CompletedProcess([], code, output, stderr)]
-                def read(path):
-                    return json.dumps({"digest": "accepted"} if path.name == "ci.plan.json" else evidence).encode()
-                stdout = Mock(buffer=io.BytesIO())
-                with patch("subprocess.run", side_effect=results), patch.object(Path, "read_bytes", read), \
-                        patch("sys.stdout", stdout), patch("sys.stderr", io.StringIO()), \
-                        self.assertRaises(SystemExit) as exit_code:
-                    runpy.run_path(str(driver), run_name="__main__")
-                self.assertEqual(exit_code.exception.code, expected)
-                accepted = code == 0 and not stderr and evidence == receipt and type(passed) is bool
-                self.assertEqual(stdout.buffer.getvalue(), output if accepted else b"")
 
 
 if __name__ == "__main__":

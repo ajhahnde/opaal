@@ -216,6 +216,52 @@ they do not establish regular-filesystem EIO or power-loss durability. Each
 success/Error primary retains exact earlier output counts, empty administrative
 streams and owned worker reap, while receipt failure makes the run unsuccessful.
 
+## Static task discovery and plan digests
+
+Inspect the checked-in job-check project with the built client:
+
+```sh
+target/debug/opaal task list --project tests/golden/standard-input-output/ci-job-check/opaal.toml --format json
+target/debug/opaal task inspect --project tests/golden/standard-input-output/ci-job-check/opaal.toml sample --format json
+```
+
+Both commands use the closed `opaal.project-inspection.v1` schema, version 1,
+and emit one JSON object followed by LF. Listing sorts tasks by qualified ID;
+inspection selects one task from the same view. Parameters retain declaration
+order and show exact types and supported `value`/`file` bindings. An unsupported
+parameter has an empty binding list and remains refused by project checking.
+Effects, tool requirements, and environments come from static project metadata;
+discovery never executes initializers or tools. The manifest path uses the
+lossless native-path encoding. Omit `--format json` for escaped human text.
+
+For project planning, `--format digest` prints exactly `sha256:HEX` followed by
+LF after successfully persisting an executable plan to its exclusive output
+path. Refused plans and persistence failures return nonzero and emit no digest.
+Supply that digest explicitly to `execute --accept`; displaying it grants no
+authority. Other plan output retains its human form.
+
+Native CI selection uses `execute --require-true` with mandatory `--receipt-out`.
+The task must statically and dynamically return Bool. After owned cleanup and
+evidence persistence, true exits 0, false exits 1, operational/type/evidence
+failure exits 2, requested cancellation exits 130, and timeout exits 2.
+Ordinary execute keeps its previous exit policy. Printed bytes never select an
+assessment. Journal/audit v4 and receipt v2 record policy, nullable assessment,
+and typed cancellation reason separately from primary execution; incomplete
+audits cannot establish a pass. Legacy v2/v3 artifacts and receipt v1 remain
+explicit read formats, with no automatic rewriting or replay.
+
+```sh
+cargo test -p opaal-cli --test native_ci_outcomes --locked
+cargo test -p opaal-runtime --test workflow_contract --test workflow_artifacts --locked
+```
+
+The existing receipt fault tests cover selected candidates and cancellation
+through write/partial-write/flush/sync failures. The native I/O fault qualifier
+now checks selected exits, including cancellation with unavailable journal
+evidence. The [job-check reference](tests/golden/standard-input-output/ci-job-check/README.md)
+uses the native command sequence and keeps Python only as the external input
+producer and independent observer. OPAAL 1.3.0 rejects the new option safely.
+
 ## Fuzzing
 
 Install cargo-fuzz and a nightly Rust toolchain, then run:

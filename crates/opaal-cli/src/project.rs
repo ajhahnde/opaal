@@ -22,7 +22,7 @@ use opaal_runtime::authority::{
 };
 use opaal_runtime::builtin::standard_registry;
 use opaal_runtime::context::OperationalContext;
-use opaal_runtime::eval::{CancellationToken, Instant, SystemClock};
+use opaal_runtime::eval::{CancelReason, CancellationToken, Instant, SystemClock};
 use opaal_runtime::lifetime::{CleanupStatus, Deadline};
 use opaal_runtime::module::{
     ActionId, ActionSignature, ModuleCanonicalizer, ModuleId, ModuleOrigin, ModulePathError,
@@ -85,13 +85,33 @@ impl ControlReadBudget {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct InspectProjectRequest {
     manifest: PathBuf,
-    task: String,
+    task: Option<String>,
+    format_json: bool,
 }
 
 impl InspectProjectRequest {
     #[must_use]
     pub fn new(manifest: PathBuf, task: String) -> Self {
-        Self { manifest, task }
+        Self {
+            manifest,
+            task: Some(task),
+            format_json: false,
+        }
+    }
+
+    #[must_use]
+    pub fn list(manifest: PathBuf) -> Self {
+        Self {
+            manifest,
+            task: None,
+            format_json: false,
+        }
+    }
+
+    #[must_use]
+    pub fn with_json(mut self) -> Self {
+        self.format_json = true;
+        self
     }
 }
 
@@ -149,6 +169,7 @@ pub struct PlanProjectRequest {
     inputs: Vec<ProjectInputBinding>,
     expires_in_seconds: u64,
     out: PathBuf,
+    format_digest: bool,
 }
 
 impl PlanProjectRequest {
@@ -188,7 +209,14 @@ impl PlanProjectRequest {
             inputs,
             expires_in_seconds,
             out,
+            format_digest: false,
         }
+    }
+
+    #[must_use]
+    pub fn with_digest(mut self) -> Self {
+        self.format_digest = true;
+        self
     }
 }
 
@@ -200,6 +228,7 @@ pub struct ExecuteProjectRequest {
     secret_stdin: Option<String>,
     journal: PathBuf,
     receipt_out: Option<PathBuf>,
+    require_true: bool,
 }
 
 impl ExecuteProjectRequest {
@@ -218,6 +247,7 @@ impl ExecuteProjectRequest {
             secret_stdin,
             journal,
             receipt_out: None,
+            require_true: false,
         }
     }
 
@@ -226,12 +256,19 @@ impl ExecuteProjectRequest {
         self.receipt_out = receipt_out;
         self
     }
+
+    #[must_use]
+    pub fn with_require_true(mut self, require_true: bool) -> Self {
+        self.require_true = require_true;
+        self
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ExecuteFrontendRun {
     output: Vec<u8>,
     successful: bool,
+    exit_code: u8,
     receipt: Option<Value>,
 }
 
@@ -244,6 +281,12 @@ impl ExecuteFrontendRun {
     #[must_use]
     pub const fn is_successful(&self) -> bool {
         self.successful
+    }
+
+    /// Selected CI exit, or the ordinary execution success/failure exit.
+    #[must_use]
+    pub const fn exit_code(&self) -> u8 {
+        self.exit_code
     }
 
     #[must_use]
@@ -1175,64 +1218,134 @@ pub fn inspect_project(
     request: &InspectProjectRequest,
 ) -> Result<ProjectFrontendRun, ProjectFrontendError> {
     let (project, _, _) = load_explicit_project(&request.manifest)?;
-    let task = project.task(&request.task).map_err(frontend_contract)?;
-    let callable = task.action().callable();
-    let mut output = format!(
-        "task {}\naction {}\nsignature {}(",
-        task.id().qualified_name(),
-        task.action().id().qualified_name(),
-        callable.name(),
-    );
-    for (index, parameter) in callable.parameters().iter().enumerate() {
-        if index != 0 {
-            output.push_str(", ");
+    let tasks = match request.task.as_deref() {
+        Some(name) => vec![project.task(name).map_err(frontend_contract)?],
+        None => project.tasks().values().collect(),
+    };
+    let tasks = tasks.iter().map(|task| {
+        let callable = task.action().callable();
+        let parameters = callable.parameters().iter().map(|parameter| {
+            let forms = opaal_runtime::project::task_input_binding_forms(parameter.value_type());
+            json!({"name":parameter.name(), "type":parameter.value_type().to_string(), "binding_forms":forms})
+        }).collect::<Vec<_>>();
+        let mut effects = task.effects().iter().map(|effect| json!({"capability":effect.capability(), "scope":effect.scope()})).collect::<Vec<_>>();
+        effects.sort_by(|left, right| {
+            (left["capability"].as_str(), left["scope"].as_str()).cmp(&(right["capability"].as_str(), right["scope"].as_str()))
+        });
+        json!({
+            "id":task.id().qualified_name(), "action":task.action().id().qualified_name(),
+            "contract_digest":qualified_digest(task.action().id().contract_digest()),
+            "documentation":callable.documentation().map(|documentation| documentation.text()),
+            "parameters":parameters, "result":callable.result().to_string(),
+            "effects":effects
+        })
+    }).collect::<Vec<_>>();
+    let view = json!({
+        "schema":"opaal.project-inspection.v1", "schema_version":1,
+        "project":{"name":project.manifest().name(), "manifest_path":native_path(project.manifest().manifest_path())},
+        "tasks":tasks, "targets":[],
+        "tools":project.manifest().tools().values().map(|tool| json!({"id":tool.id().qualified_name(), "adapter":tool.adapter().name(), "version":tool.version().to_string()})).collect::<Vec<_>>(),
+        "environments":project.manifest().environments().values().map(|environment| json!({"id":environment.id().qualified_name()})).collect::<Vec<_>>()
+    });
+    let output = if request.format_json {
+        let mut output = serde_json::to_vec(&view).map_err(|_| inspect_limit())?;
+        if output.len() >= MAX_INSPECT_OUTPUT_BYTES {
+            return Err(inspect_limit());
         }
-        output.push_str(parameter.name());
-        output.push_str(": ");
-        output.push_str(&parameter.value_type().to_string());
-    }
-    output.push_str(") -> ");
-    output.push_str(&callable.result().to_string());
-    output.push('\n');
-    output.push_str("contract sha256:");
-    output.push_str(task.action().id().contract_digest());
-    output.push('\n');
-    if let Some(documentation) = callable.documentation()
-        && !documentation.is_empty()
-    {
-        output.push_str("documentation\n");
-        for line in documentation.text().lines() {
-            output.push_str("  ");
-            output.push_str(line);
-            output.push('\n');
+        output.push(b'\n');
+        output
+    } else {
+        let mut output = BoundedText::new();
+        for task in view["tasks"].as_array().expect("task rows") {
+            output.line(format!(
+                "task {}",
+                escaped_text(task["id"].as_str().expect("task id"))
+            ))?;
+            output.line(format!(
+                "action {}",
+                escaped_text(task["action"].as_str().expect("action id"))
+            ))?;
+            let name = task["action"]
+                .as_str()
+                .expect("action id")
+                .rsplit("::")
+                .next()
+                .expect("action name");
+            let parameters = task["parameters"]
+                .as_array()
+                .expect("parameters")
+                .iter()
+                .map(|parameter| {
+                    format!(
+                        "{}: {}",
+                        parameter["name"].as_str().expect("name"),
+                        parameter["type"].as_str().expect("type")
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            output.line(format!(
+                "signature {}({}) -> {}",
+                escaped_text(name),
+                escaped_text(&parameters),
+                escaped_text(task["result"].as_str().expect("result"))
+            ))?;
+            output.line(format!(
+                "contract {}",
+                task["contract_digest"].as_str().expect("digest")
+            ))?;
+            if let Some(documentation) = task["documentation"]
+                .as_str()
+                .filter(|text| !text.is_empty())
+            {
+                output.line("documentation")?;
+                output.line(format!("  {}", escaped_text(documentation)))?;
+            }
+            output.line("parameters")?;
+            for parameter in task["parameters"].as_array().expect("parameters") {
+                output.line(format!(
+                    "  {}: {} [{}]",
+                    escaped_text(parameter["name"].as_str().expect("name")),
+                    escaped_text(parameter["type"].as_str().expect("type")),
+                    parameter["binding_forms"]
+                        .as_array()
+                        .expect("forms")
+                        .iter()
+                        .map(|form| form.as_str().expect("form"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ))?;
+            }
+            output.line("effects")?;
+            for effect in task["effects"].as_array().expect("effects") {
+                output.line(format!(
+                    "  {} {}",
+                    escaped_text(effect["capability"].as_str().expect("capability")),
+                    escaped_text(effect["scope"].as_str().expect("scope"))
+                ))?;
+            }
         }
-    }
-    output.push_str("effects\n");
-    for effect in task.effects() {
-        output.push_str("  ");
-        output.push_str(effect.capability());
-        output.push(' ');
-        output.push_str(effect.scope());
-        output.push('\n');
-    }
-    output.push_str("tools\n");
-    for tool in project.manifest().tools().values() {
-        output.push_str("  ");
-        output.push_str(&tool.id().qualified_name());
-        output.push(' ');
-        output.push_str(tool.adapter().name());
-        output.push(' ');
-        output.push_str(&tool.version().to_string());
-        output.push('\n');
-    }
-    output.push_str("environments\n");
-    for environment in project.manifest().environments().values() {
-        output.push_str("  ");
-        output.push_str(&environment.id().qualified_name());
-        output.push('\n');
-    }
+        output.line("tools")?;
+        for tool in view["tools"].as_array().expect("tools") {
+            output.line(format!(
+                "  {} {} {}",
+                escaped_text(tool["id"].as_str().expect("id")),
+                escaped_text(tool["adapter"].as_str().expect("adapter")),
+                escaped_text(tool["version"].as_str().expect("version"))
+            ))?;
+        }
+        output.line("targets")?;
+        output.line("environments")?;
+        for environment in view["environments"].as_array().expect("environments") {
+            output.line(format!(
+                "  {}",
+                escaped_text(environment["id"].as_str().expect("id"))
+            ))?;
+        }
+        output.finish()
+    };
     Ok(ProjectFrontendRun {
-        output: output.into_bytes(),
+        output,
         diagnostic: Vec::new(),
         successful: true,
     })
@@ -1530,12 +1643,20 @@ pub fn plan_explicit_project(
     let plan = PlanArtifact::seal(document).map_err(workflow_contract)?;
     filesystem.write_exclusive_atomic(&request.out, plan.bytes())?;
     Ok(ProjectFrontendRun {
-        output: format!(
-            "plan {}{}\n",
-            plan.digest(),
-            if executable { "" } else { " refused" }
-        )
-        .into_bytes(),
+        output: if request.format_digest {
+            if executable {
+                format!("{}\n", plan.digest()).into_bytes()
+            } else {
+                Vec::new()
+            }
+        } else {
+            format!(
+                "plan {}{}\n",
+                plan.digest(),
+                if executable { "" } else { " refused" }
+            )
+            .into_bytes()
+        },
         diagnostic: if executable {
             Vec::new()
         } else {
@@ -1684,6 +1805,12 @@ pub fn execute_explicit_plan(
     secret_input_is_terminal: bool,
     secret_input: &mut dyn Read,
 ) -> Result<ExecuteFrontendRun, ProjectFrontendError> {
+    if request.require_true && request.receipt_out.is_none() {
+        return Err(execute_error(
+            "EXECUTE_TYPE",
+            "--require-true requires --receipt-out",
+        ));
+    }
     let control_reads = ControlReadBudget::default();
     let plan_path = absolute_lexical(&request.plan).map_err(frontend_contract)?;
     let (_, plan_file) =
@@ -1809,6 +1936,12 @@ pub fn execute_explicit_plan(
         runtime_inputs,
     )
     .map_err(frontend_contract)?;
+    if request.require_true && check.task().action().callable().result() != &ValueType::Bool {
+        return Err(execute_error(
+            "EXECUTE_TYPE",
+            "--require-true requires a Bool task result",
+        ));
+    }
     let current_check = build_check_artifact(
         &project,
         &filesystem,
@@ -1905,7 +2038,8 @@ pub fn execute_explicit_plan(
         "environment_digest":project_value["environment_digest"],
         "tool_lock_digest":digest_bytes(&tools_bytes),
         "child_environment_digest":project_value["child_environment_digest"],
-        "started_at":started_at
+        "started_at":started_at,
+        "result_policy":if request.require_true { "require-true" } else { "execution" }
     });
     if let Some(policy) = plan_value.get("standard_host") {
         header["standard_host"] = policy.clone();
@@ -2102,7 +2236,16 @@ pub fn execute_explicit_plan(
                         partial,
                         metadata_only,
                     );
-                    journal.primary = Some(outcome.clone());
+                    let mut primary = outcome.clone();
+                    if let opaal_runtime::operational::ModuleError::Cancelled(reason) = &error {
+                        journal.cancel_reason = Some(*reason);
+                        if request.require_true {
+                            primary["class"] = json!("cancelled");
+                            primary["code"] = json!("EXECUTE_CANCELLED");
+                        }
+                    }
+                    primary["cancel_reason"] = cancel_reason_value(journal.cancel_reason, &primary);
+                    journal.primary = Some(primary.clone());
                     journal
                         .append(
                             "effect-after",
@@ -2117,7 +2260,7 @@ pub fn execute_explicit_plan(
                             }),
                         )
                         .map_err(|error| journal_failure(&outcome, error, metadata_only))?;
-                    return finish_execution_journal(&mut journal, outcome, Vec::new(), &adapter);
+                    return finish_execution_journal(&mut journal, primary, Vec::new(), &adapter);
                 }
             }
         }
@@ -2192,8 +2335,30 @@ pub fn execute_explicit_plan(
                 .any(|evidence| matches!(evidence, OutcomeEvidence::PartialEffect(_))),
             _ => !outcome.evidence().is_empty(),
         };
-        let primary_value =
+        let mut primary_value =
             script_outcome_value(outcome.primary(), &operational, partial, metadata_only);
+        if let PrimaryOutcome::Cancelled(cancellation) = outcome.primary() {
+            journal.cancel_reason = Some(cancellation.reason());
+        }
+        if request.require_true && primary_value["class"] == "success" {
+            match outcome.primary() {
+                PrimaryOutcome::Completed(completion) => match completion.value() {
+                    opaal_runtime::Value::Bool(value) => journal.assessment = Some(*value),
+                    _ => {
+                        primary_value = outcome_value(
+                            "error",
+                            "EXECUTE_TYPE",
+                            "selected task did not return Bool",
+                            None,
+                            None,
+                            partial,
+                        )
+                    }
+                },
+                _ => unreachable!("success is a completed task"),
+            }
+        }
+        primary_value["cancel_reason"] = cancel_reason_value(journal.cancel_reason, &primary_value);
         journal.primary = Some(primary_value.clone());
         let (primary, evidence, _) = outcome.into_parts();
         let finished = operational.finish(primary, evidence);
@@ -2737,12 +2902,51 @@ fn probe_failure_outcome(
     )
 }
 
+fn cancel_reason_value(reason: Option<CancelReason>, primary: &Value) -> Value {
+    if primary["class"] != "cancelled" {
+        return Value::Null;
+    }
+    match reason {
+        Some(CancelReason::Requested) => json!("requested"),
+        Some(CancelReason::Timeout) => json!("timeout"),
+        _ => Value::Null,
+    }
+}
+
+fn assessment_value(assessment: Option<bool>) -> Value {
+    assessment.map_or(Value::Null, |value| json!({"kind":"bool", "value":value}))
+}
+
+fn selected_exit(receipt: &Value, evidence_succeeded: bool) -> u8 {
+    if receipt["primary"]["class"] == "cancelled"
+        && receipt["primary"]["cancel_reason"] == "requested"
+    {
+        return 130;
+    }
+    if !evidence_succeeded
+        || receipt["primary"]["class"] != "success"
+        || receipt["journal_state"] != "complete"
+        || receipt["omitted_secondary_count"] != 0
+        || receipt["secondary"]
+            .as_array()
+            .is_none_or(|records| !records.is_empty())
+    {
+        return 2;
+    }
+    match receipt["assessment"]["value"].as_bool() {
+        Some(true) => 0,
+        Some(false) => 1,
+        None => 2,
+    }
+}
+
 fn finish_execution_journal(
     journal: &mut SyncedJournal,
-    primary: Value,
+    mut primary: Value,
     cleanup: Vec<Value>,
     adapter: &dyn opaal_platform::operational::OperationalAdapter,
 ) -> Result<ExecuteFrontendRun, ProjectFrontendError> {
+    primary["cancel_reason"] = cancel_reason_value(journal.cancel_reason, &primary);
     journal.primary = Some(primary.clone());
     journal.cleanup = cleanup.clone();
     let class = required_plan_string(&primary, "class")?.to_owned();
@@ -2763,7 +2967,8 @@ fn finish_execution_journal(
                 "finished_at":finished_at,
                 "primary":primary,
                 "cleanup":cleanup,
-                "complete":true
+                "complete":true,
+                "assessment":assessment_value(journal.assessment)
             }),
         )
         .map_err(|error| journal_failure(&retained_primary, error, metadata_only))?;
@@ -2771,6 +2976,11 @@ fn finish_execution_journal(
     Ok(ExecuteFrontendRun {
         output: format!("run {} {class}\n", journal.run_id).into_bytes(),
         successful: class == "success" && !cleanup_failed,
+        exit_code: if class == "success" && !cleanup_failed {
+            0
+        } else {
+            1
+        },
         receipt: None,
     })
 }
@@ -2892,6 +3102,10 @@ struct SyncedJournal {
     chain: JournalChain,
     failed: bool,
     metadata_only: bool,
+    require_true: bool,
+    assessment: Option<bool>,
+    cancel_reason: Option<CancelReason>,
+    output_failed: bool,
     primary: Option<Value>,
     cleanup: Vec<Value>,
     progress: RoleProgress,
@@ -2929,6 +3143,7 @@ fn finish_receipt(
             false,
         )
     });
+    primary["cancel_reason"] = cancel_reason_value(journal.cancel_reason, &primary);
     project_metadata_outcome(&mut primary);
     let counts = |counts: opaal_runtime::operational::standard::TransferCounts| {
         json!({
@@ -2943,6 +3158,9 @@ fn finish_receipt(
         .filter(|outcome| outcome["class"] == "cleanup-failed")
         .map(|outcome| json!({"category":"cleanup", "code":outcome["code"]}))
         .collect::<Vec<_>>();
+    if journal.require_true && journal.output_failed {
+        secondary.push(json!({"category":"evidence", "code":"EXECUTE_OUTPUT"}));
+    }
     if result.is_err() {
         secondary.push(json!({"category":"journal", "code":"JOURNAL005"}));
     }
@@ -2958,7 +3176,9 @@ fn finish_receipt(
         primary["partial"] = json!(true);
     }
     let mut receipt = json!({
-        "schema":"opaal.execution-receipt.v1", "schema_version":1,
+        "schema":"opaal.execution-receipt.v2", "schema_version":2,
+        "result_policy":if journal.require_true { "require-true" } else { "execution" },
+        "assessment":assessment_value(journal.assessment),
         "run_id":journal.run_id, "plan_digest":plan_digest,
         "primary":primary, "secondary":secondary,
         "progress":{
@@ -2970,7 +3190,11 @@ fn finish_receipt(
     });
     bound_receipt_secondaries(&mut receipt);
     let mut successful = result.as_ref().is_ok_and(ExecuteFrontendRun::is_successful)
-        && receipt["omitted_secondary_count"] == 0;
+        && receipt["omitted_secondary_count"] == 0
+        && receipt["secondary"]
+            .as_array()
+            .expect("receipt secondaries")
+            .is_empty();
     let bytes = serde_json::to_vec(&receipt).expect("receipt metadata is serializable");
     let persisted = if bytes.len() < opaal_runtime::workflow::MAX_ARTIFACT_BYTES {
         sink.file
@@ -3015,9 +3239,17 @@ fn finish_receipt(
         }
         bound_receipt_secondaries(&mut receipt);
     }
+    let exit_code = if journal.require_true {
+        selected_exit(&receipt, successful)
+    } else if successful {
+        0
+    } else {
+        1
+    };
     ExecuteFrontendRun {
         output: Vec::new(),
         successful,
+        exit_code,
         receipt: Some(receipt),
     }
 }
@@ -3219,6 +3451,13 @@ impl SourceEffectJournal for RuntimeEffectJournal<'_> {
         event: &SourceEffectEvent,
         outcome: &SourceEffectOutcome,
     ) -> Result<(), String> {
+        if matches!(
+            event.request().effect(),
+            AuthorityEffect::StdoutWrite | AuthorityEffect::StderrWrite
+        ) && outcome.class() != "success"
+        {
+            self.journal.output_failed = true;
+        }
         self.journal
             .append(
                 "effect-after",
@@ -4541,6 +4780,7 @@ impl HostProjectFilesystem {
                 .map_err(frontend_contract)?;
         require_absent_output(&parent, &name, &candidate).map_err(frontend_contract)?;
         let metadata_only = header.get("standard_host").is_some();
+        let require_true = header["result_policy"] == "require-true";
         let (chain, header_line) =
             JournalChain::begin(run_id, header).map_err(workflow_contract)?;
         let temporary = OsString::from(format!(
@@ -4583,6 +4823,10 @@ impl HostProjectFilesystem {
             chain,
             failed: false,
             metadata_only,
+            require_true,
+            assessment: None,
+            cancel_reason: None,
+            output_failed: false,
             primary: None,
             cleanup: Vec::new(),
             progress: RoleProgress::default(),
@@ -5030,7 +5274,7 @@ mod tests {
             "plan_digest":digest, "accepted_plan_digest":digest, "authority_digest":digest,
             "project_digest":digest, "environment_digest":digest, "tool_lock_digest":digest,
             "child_environment_digest":digest, "started_at":"2026-10-08T00:00:00.000000000Z",
-            "standard_host":document["standard_host"]
+            "standard_host":document["standard_host"], "result_policy":"execution"
         })
     }
 
@@ -5248,7 +5492,7 @@ mod tests {
                 "plan_digest":digest, "accepted_plan_digest":digest, "authority_digest":digest,
                 "project_digest":digest, "environment_digest":digest, "tool_lock_digest":digest,
                 "child_environment_digest":digest, "started_at":"2026-10-08T00:00:00.000000000Z",
-                "standard_host":document["standard_host"]
+                "standard_host":document["standard_host"], "result_policy":"execution"
             });
             let run_id = "0123456789abcdef0123456789abcdef";
             let (chain, _) = JournalChain::begin(run_id, header).unwrap();
@@ -5258,6 +5502,10 @@ mod tests {
                 chain,
                 failed: false,
                 metadata_only: true,
+                require_true: false,
+                assessment: None,
+                cancel_reason: Some(CancelReason::Requested),
+                output_failed: false,
                 primary: None,
                 cleanup: Vec::new(),
                 progress: RoleProgress::default(),
@@ -5335,6 +5583,134 @@ mod tests {
         );
     }
 
+    #[test]
+    fn selected_finish_retains_candidates_through_cleanup_and_terminal_failure() {
+        for candidate in [false, true] {
+            for fault in ["none", "cleanup", "terminal"] {
+                let temporary = TempDirectory::new();
+                let path = temporary.0.join("run.jsonl");
+                let mut document = json!({"authority":{"requests":[{"effect":"entropy.system"}]}});
+                select_standard_host_policy(&mut document, "opaal.plan.v3");
+                let digest = format!("sha256:{}", "1".repeat(64));
+                let header = json!({"plan_digest":digest, "accepted_plan_digest":digest, "authority_digest":digest,
+                    "project_digest":digest, "environment_digest":digest, "tool_lock_digest":digest,
+                    "child_environment_digest":digest, "started_at":"1970-01-01T00:00:00.000000000Z",
+                    "standard_host":document["standard_host"], "result_policy":"require-true"});
+                let (chain, bytes) = JournalChain::begin(&"1".repeat(32), header).unwrap();
+                fs::write(&path, bytes).unwrap();
+                let mut journal = SyncedJournal {
+                    run_id: "1".repeat(32),
+                    file: fs::OpenOptions::new().append(true).open(&path).unwrap(),
+                    chain,
+                    failed: false,
+                    metadata_only: true,
+                    require_true: true,
+                    assessment: Some(candidate),
+                    cancel_reason: None,
+                    output_failed: false,
+                    primary: None,
+                    cleanup: Vec::new(),
+                    progress: RoleProgress::default(),
+                    complete: false,
+                };
+                let cleanup = if fault == "cleanup" {
+                    append_standard_host_cleanup(
+                        &mut journal,
+                        evaluation_id(&"1".repeat(32)).unwrap(),
+                        0,
+                        vec![outcome_value(
+                            "cleanup-failed",
+                            "CLEANUP001",
+                            "cleanup failed",
+                            None,
+                            None,
+                            false,
+                        )],
+                    )
+                    .unwrap()
+                } else {
+                    Vec::new()
+                };
+                if fault == "terminal" {
+                    journal.file = File::open(&path).unwrap();
+                }
+                let result = finish_execution_journal(
+                    &mut journal,
+                    success_outcome("EXECUTE000", "completed"),
+                    cleanup,
+                    &opaal_platform::operational::FakeOperationalAdapter::new(),
+                );
+                let run = finish_receipt(
+                    ReceiptSink {
+                        file: File::create(temporary.0.join("receipt.json")).unwrap(),
+                        parent: File::open(&temporary.0).unwrap(),
+                    },
+                    &digest,
+                    &mut journal,
+                    result,
+                );
+                assert_eq!(
+                    run.exit_code(),
+                    if fault == "none" {
+                        if candidate { 0 } else { 1 }
+                    } else {
+                        2
+                    }
+                );
+                assert_eq!(run.is_successful(), fault == "none");
+                let receipt = run.receipt().unwrap();
+                assert_eq!(receipt["primary"]["class"], "success");
+                assert_eq!(receipt["assessment"], assessment_value(Some(candidate)));
+                let audit = audit_journal(&fs::read(&path).unwrap()).unwrap();
+                assert_eq!(audit.is_complete(), fault != "terminal");
+                assert_eq!(
+                    audit.value()["assessment"],
+                    if fault == "terminal" {
+                        Value::Null
+                    } else {
+                        assessment_value(Some(candidate))
+                    }
+                );
+                let bytes = fs::read(temporary.0.join("receipt.json")).unwrap();
+                assert_eq!(
+                    opaal_runtime::workflow::parse_execution_receipt(&bytes).unwrap(),
+                    *receipt
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn selected_exit_retains_cancellation_and_rejects_failed_or_incomplete_evidence() {
+        let mut receipt = json!({"primary":{"class":"success", "cancel_reason":null},
+            "assessment":{"kind":"bool","value":true}, "secondary":[],
+            "journal_state":"complete", "omitted_secondary_count":0});
+        assert_eq!(selected_exit(&receipt, true), 0);
+        receipt["assessment"]["value"] = json!(false);
+        assert_eq!(selected_exit(&receipt, true), 1);
+        for class in ["status", "error", "refused", "partial", "cleanup-failed"] {
+            receipt["primary"]["class"] = json!(class);
+            assert_eq!(selected_exit(&receipt, true), 2);
+        }
+        receipt["primary"]["class"] = json!("success");
+        assert_eq!(selected_exit(&receipt, false), 2);
+        receipt["journal_state"] = json!("incomplete");
+        assert_eq!(selected_exit(&receipt, true), 2);
+        receipt["journal_state"] = json!("complete");
+        receipt["secondary"] = json!([{"category":"cleanup", "code":"CLEANUP001"}]);
+        assert_eq!(selected_exit(&receipt, true), 2);
+        receipt["secondary"] = json!([]);
+        receipt["omitted_secondary_count"] = json!(1);
+        assert_eq!(selected_exit(&receipt, true), 2);
+        receipt["primary"]["class"] = json!("cancelled");
+        for reason in [json!("timeout"), Value::Null, json!("future")] {
+            receipt["primary"]["cancel_reason"] = reason;
+            assert_eq!(selected_exit(&receipt, false), 2);
+        }
+        receipt["primary"]["cancel_reason"] = json!("requested");
+        assert_eq!(selected_exit(&receipt, false), 130);
+    }
+
     struct FaultReceiptFile {
         fault: &'static str,
         calls: Arc<Mutex<Vec<&'static str>>>,
@@ -5377,124 +5753,144 @@ mod tests {
 
     #[test]
     fn receipt_faults_preserve_primary_and_record_only_in_available_open_journals() {
-        for state in ["open", "complete", "unavailable", "fails-with-receipt"] {
-            for class in ["success", "error", "cancelled", "refused"] {
-                for fault in ["write", "partial-write", "flush", "sync", "parent"] {
-                    let temporary = TempDirectory::new();
-                    let mut document =
-                        json!({"authority":{"requests":[{"effect":"stdout.write"}]}});
-                    select_standard_host_policy(&mut document, "opaal.plan.v3");
-                    let digest = format!("sha256:{}", "1".repeat(64));
-                    let header = json!({
-                        "plan_digest":digest, "accepted_plan_digest":digest, "authority_digest":digest,
-                        "project_digest":digest, "environment_digest":digest, "tool_lock_digest":digest,
-                        "child_environment_digest":digest, "started_at":"2026-10-08T00:00:00.000000000Z",
-                        "standard_host":document["standard_host"]
-                    });
-                    let (chain, bytes) =
-                        JournalChain::begin("0123456789abcdef0123456789abcdef", header).unwrap();
-                    let path = temporary.0.join("journal.jsonl");
-                    fs::write(&path, bytes).unwrap();
-                    let primary = outcome_value(
-                        class,
-                        "EXECUTE_TEST",
-                        "primary-payload-canary",
-                        None,
-                        None,
-                        false,
-                    );
-                    let mut journal = SyncedJournal {
-                        run_id: "0123456789abcdef0123456789abcdef".to_owned(),
-                        file: fs::OpenOptions::new().append(true).open(&path).unwrap(),
-                        chain,
-                        failed: false,
-                        metadata_only: true,
-                        primary: Some(primary.clone()),
-                        cleanup: Vec::new(),
-                        progress: RoleProgress::default(),
-                        complete: false,
-                    };
-                    journal.progress.stdout.confirmed_bytes = 7;
-                    journal.progress.stdin.uncertain_bytes_upper_bound = 3;
-                    if state == "complete" {
-                        journal.append("terminal", json!({"finished_at":"2026-10-08T00:00:00.000000000Z", "primary":primary, "cleanup":[], "complete":true})).unwrap();
-                        journal.complete = true;
-                    } else if state == "unavailable" {
-                        journal.failed = true;
-                    } else if state == "fails-with-receipt" {
-                        journal.file = File::open(&path).unwrap();
-                    }
-                    let before = fs::read(&path).unwrap();
-                    let calls = Arc::new(Mutex::new(Vec::new()));
-                    let result = if state == "complete" {
-                        Ok(ExecuteFrontendRun {
-                            output: Vec::new(),
-                            successful: class == "success",
-                            receipt: None,
-                        })
-                    } else {
-                        Err(execute_error("JOURNAL005", "journal-payload-canary"))
-                    };
-                    let run = finish_receipt(
-                        ReceiptSink {
-                            file: FaultReceiptFile {
-                                fault,
-                                calls: calls.clone(),
-                            },
-                            parent: File::open(if fault == "parent" {
-                                Path::new("/dev/null")
-                            } else {
-                                &temporary.0
-                            })
-                            .unwrap(),
-                        },
-                        &digest,
-                        &mut journal,
-                        result,
-                    );
-                    assert!(!run.is_successful());
-                    assert!(run.output().is_empty());
-                    let receipt = run.receipt().unwrap();
-                    assert_eq!(receipt["primary"]["class"], class);
-                    assert_eq!(receipt["primary"]["code"], "EXECUTE_TEST");
-                    assert_eq!(receipt["primary"]["partial"], true);
-                    assert_eq!(receipt["progress"]["stdout.write"]["confirmed_bytes"], 7);
-                    assert_eq!(
-                        receipt["progress"]["stdin.read"]["uncertain_bytes_upper_bound"],
-                        3
-                    );
-                    assert!(!receipt.to_string().contains("canary"));
-                    let expected_state = match state {
-                        "open" => "incomplete",
-                        "complete" => "complete",
-                        _ => "unavailable",
-                    };
-                    assert_eq!(receipt["journal_state"], expected_state);
-                    let expected_secondary = if state == "complete" {
-                        json!([{"category":"receipt", "code":"JOURNAL005"}])
-                    } else {
-                        json!([{"category":"journal", "code":"JOURNAL005"}, {"category":"receipt", "code":"JOURNAL005"}])
-                    };
-                    assert_eq!(receipt["secondary"], expected_secondary);
-                    let expected_calls = match fault {
-                        "write" => vec!["write"],
-                        "partial-write" => vec!["write", "write"],
-                        "flush" => vec!["write", "write", "flush"],
-                        _ => vec!["write", "write", "flush", "sync"],
-                    };
-                    assert_eq!(*calls.lock().unwrap(), expected_calls);
-                    let after = fs::read(&path).unwrap();
-                    let audit = audit_journal(&after).unwrap();
-                    if state == "open" {
-                        assert_ne!(before, after);
-                        assert_eq!(audit.value()["events"][0]["kind"], "evidence-failure");
-                        assert_eq!(
-                            audit.value()["events"][0]["payload"],
-                            json!({"category":"receipt", "code":"JOURNAL005"})
+        for candidate in [None, Some(false), Some(true)] {
+            let require_true = candidate.is_some();
+            for state in ["open", "complete", "unavailable", "fails-with-receipt"] {
+                for class in ["success", "error", "cancelled", "refused"] {
+                    for fault in ["write", "partial-write", "flush", "sync", "parent"] {
+                        let temporary = TempDirectory::new();
+                        let mut document =
+                            json!({"authority":{"requests":[{"effect":"stdout.write"}]}});
+                        select_standard_host_policy(&mut document, "opaal.plan.v3");
+                        let digest = format!("sha256:{}", "1".repeat(64));
+                        let header = json!({
+                            "plan_digest":digest, "accepted_plan_digest":digest, "authority_digest":digest,
+                            "project_digest":digest, "environment_digest":digest, "tool_lock_digest":digest,
+                            "child_environment_digest":digest, "started_at":"2026-10-08T00:00:00.000000000Z",
+                            "standard_host":document["standard_host"], "result_policy":if require_true { "require-true" } else { "execution" }
+                        });
+                        let (chain, bytes) =
+                            JournalChain::begin("0123456789abcdef0123456789abcdef", header)
+                                .unwrap();
+                        let path = temporary.0.join("journal.jsonl");
+                        fs::write(&path, bytes).unwrap();
+                        let primary = outcome_value(
+                            class,
+                            "EXECUTE_TEST",
+                            "primary-payload-canary",
+                            None,
+                            None,
+                            false,
                         );
-                        assert!(!audit.is_complete());
-                    } else {
-                        assert_eq!(before, after);
+                        let mut journal = SyncedJournal {
+                            run_id: "0123456789abcdef0123456789abcdef".to_owned(),
+                            file: fs::OpenOptions::new().append(true).open(&path).unwrap(),
+                            chain,
+                            failed: false,
+                            metadata_only: true,
+                            require_true,
+                            assessment: if class == "success" { candidate } else { None },
+                            cancel_reason: Some(CancelReason::Requested),
+                            output_failed: false,
+                            primary: Some(primary.clone()),
+                            cleanup: Vec::new(),
+                            progress: RoleProgress::default(),
+                            complete: false,
+                        };
+                        journal.progress.stdout.confirmed_bytes = 7;
+                        journal.progress.stdin.uncertain_bytes_upper_bound = 3;
+                        if state == "complete" {
+                            journal.append("terminal", json!({"finished_at":"2026-10-08T00:00:00.000000000Z", "primary":{
+                            "class":class,"code":"EXECUTE_TEST","message":"primary-payload-canary",
+                            "status":null,"value_digest":null,"partial":false,
+                            "cancel_reason":if class == "cancelled" {json!("requested")} else {Value::Null}
+                        }, "cleanup":[], "complete":true,"assessment":assessment_value(journal.assessment)})).unwrap();
+                            journal.complete = true;
+                        } else if state == "unavailable" {
+                            journal.failed = true;
+                        } else if state == "fails-with-receipt" {
+                            journal.file = File::open(&path).unwrap();
+                        }
+                        let before = fs::read(&path).unwrap();
+                        let calls = Arc::new(Mutex::new(Vec::new()));
+                        let result = if state == "complete" {
+                            Ok(ExecuteFrontendRun {
+                                output: Vec::new(),
+                                successful: class == "success",
+                                exit_code: if class == "success" { 0 } else { 1 },
+                                receipt: None,
+                            })
+                        } else {
+                            Err(execute_error("JOURNAL005", "journal-payload-canary"))
+                        };
+                        let run = finish_receipt(
+                            ReceiptSink {
+                                file: FaultReceiptFile {
+                                    fault,
+                                    calls: calls.clone(),
+                                },
+                                parent: File::open(if fault == "parent" {
+                                    Path::new("/dev/null")
+                                } else {
+                                    &temporary.0
+                                })
+                                .unwrap(),
+                            },
+                            &digest,
+                            &mut journal,
+                            result,
+                        );
+                        assert!(!run.is_successful());
+                        if require_true {
+                            assert_eq!(run.exit_code(), if class == "cancelled" { 130 } else { 2 });
+                        }
+                        assert_eq!(
+                            run.receipt().unwrap()["assessment"],
+                            assessment_value(journal.assessment)
+                        );
+                        assert!(run.output().is_empty());
+                        let receipt = run.receipt().unwrap();
+                        assert_eq!(receipt["primary"]["class"], class);
+                        assert_eq!(receipt["primary"]["code"], "EXECUTE_TEST");
+                        assert_eq!(receipt["primary"]["partial"], true);
+                        assert_eq!(receipt["progress"]["stdout.write"]["confirmed_bytes"], 7);
+                        assert_eq!(
+                            receipt["progress"]["stdin.read"]["uncertain_bytes_upper_bound"],
+                            3
+                        );
+                        assert!(!receipt.to_string().contains("canary"));
+                        let expected_state = match state {
+                            "open" => "incomplete",
+                            "complete" => "complete",
+                            _ => "unavailable",
+                        };
+                        assert_eq!(receipt["journal_state"], expected_state);
+                        let expected_secondary = if state == "complete" {
+                            json!([{"category":"receipt", "code":"JOURNAL005"}])
+                        } else {
+                            json!([{"category":"journal", "code":"JOURNAL005"}, {"category":"receipt", "code":"JOURNAL005"}])
+                        };
+                        assert_eq!(receipt["secondary"], expected_secondary);
+                        let expected_calls = match fault {
+                            "write" => vec!["write"],
+                            "partial-write" => vec!["write", "write"],
+                            "flush" => vec!["write", "write", "flush"],
+                            _ => vec!["write", "write", "flush", "sync"],
+                        };
+                        assert_eq!(*calls.lock().unwrap(), expected_calls);
+                        let after = fs::read(&path).unwrap();
+                        let audit = audit_journal(&after).unwrap();
+                        if state == "open" {
+                            assert_ne!(before, after);
+                            assert_eq!(audit.value()["events"][0]["kind"], "evidence-failure");
+                            assert_eq!(
+                                audit.value()["events"][0]["payload"],
+                                json!({"category":"receipt", "code":"JOURNAL005"})
+                            );
+                            assert!(!audit.is_complete());
+                        } else {
+                            assert_eq!(before, after);
+                        }
                     }
                 }
             }

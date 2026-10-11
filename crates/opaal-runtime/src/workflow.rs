@@ -49,6 +49,9 @@ const STANDARD_HOST_ROLES: &[&str] = &[
 fn schema_version(schema: &str, version: u64, v2: &str) -> Result<u64, WorkflowArtifactError> {
     if (version == 2 && schema == v2)
         || (version == 3 && schema.strip_suffix(".v3") == v2.strip_suffix(".v2"))
+        || (version == 4
+            && matches!(v2, JOURNAL_SCHEMA | AUDIT_SCHEMA)
+            && schema.strip_suffix(".v4") == v2.strip_suffix(".v2"))
     {
         Ok(version)
     } else {
@@ -66,8 +69,14 @@ fn versioned_keys(
     version: u64,
 ) -> Result<(), WorkflowArtifactError> {
     let mut keys = keys.to_vec();
-    if version == 3 {
+    if version == 3 || (version == 4 && object.contains_key("standard_host")) {
         keys.push("standard_host");
+    }
+    if version == 4 {
+        keys.push("result_policy");
+        if context == "audit artifact" {
+            keys.push("assessment");
+        }
     }
     exact_keys(object, &keys, context)
 }
@@ -519,6 +528,7 @@ pub struct JournalChain {
     run_id: String,
     version: u64,
     standard_host: Option<Value>,
+    result_policy: Option<String>,
     next_sequence: u64,
     previous: Option<String>,
     lines: usize,
@@ -557,13 +567,19 @@ impl JournalChain {
         header_payload: Value,
     ) -> Result<(Self, Vec<u8>), WorkflowArtifactError> {
         validate_run_id(run_id)?;
-        let version = if header_payload.get("standard_host").is_some() {
+        let version = if header_payload.get("result_policy").is_some() {
+            4
+        } else if header_payload.get("standard_host").is_some() {
             3
         } else {
             2
         };
         validate_journal_payload("header", &header_payload, version)?;
         let standard_host = header_payload.get("standard_host").cloned();
+        let result_policy = header_payload
+            .get("result_policy")
+            .and_then(Value::as_str)
+            .map(str::to_owned);
         let (line, digest) = seal_journal_line(run_id, 0, "header", None, header_payload, version)?;
         if line.len() > MAX_JOURNAL_BYTES - JOURNAL_TERMINAL_RESERVE_BYTES {
             return Err(journal_limit());
@@ -572,6 +588,7 @@ impl JournalChain {
             run_id: run_id.to_owned(),
             version,
             standard_host,
+            result_policy,
             next_sequence: 1,
             previous: Some(digest),
             lines: 1,
@@ -599,6 +616,11 @@ impl JournalChain {
         }
         validate_journal_payload(kind, &payload, self.version)?;
         validate_host_event(kind, &payload, self.standard_host.as_ref())?;
+        if kind == "terminal"
+            && let Some(policy) = &self.result_policy
+        {
+            validate_assessment(policy, &payload["primary"], &payload["assessment"], true)?;
+        }
         let previous = self
             .previous
             .as_deref()
@@ -974,7 +996,9 @@ pub fn audit_journal(bytes: &[u8]) -> Result<AuditArtifact, WorkflowArtifactErro
     audit.insert(
         "schema".to_owned(),
         Value::String(
-            if version == 3 {
+            if version == 4 {
+                "opaal.audit.v4"
+            } else if version == 3 {
                 "opaal.audit.v3"
             } else {
                 AUDIT_SCHEMA
@@ -1017,6 +1041,14 @@ pub fn audit_journal(bytes: &[u8]) -> Result<AuditArtifact, WorkflowArtifactErro
         ),
     );
     audit.insert("events".to_owned(), Value::Array(events));
+    if version == 4 {
+        if !terminal_seen && !primary.is_null() {
+            primary["cancel_reason"] = Value::Null;
+        }
+        audit.insert("result_policy".to_owned(), header["result_policy"].clone());
+        let assessment = events_assessment(&audit["events"]);
+        audit.insert("assessment".to_owned(), assessment);
+    }
     audit.insert("primary".to_owned(), primary);
     audit.insert("cleanup".to_owned(), Value::Array(cleanup));
     audit.insert("journal_terminal_digest".to_owned(), terminal_digest);
@@ -1108,6 +1140,9 @@ fn validate_host_event(
     payload: &Value,
     policy: Option<&Value>,
 ) -> Result<(), WorkflowArtifactError> {
+    if !matches!(kind, "header" | "terminal" | "evidence-failure") {
+        validate_journal_payload(kind, payload, if policy.is_some() { 3 } else { 2 })?;
+    }
     let Some(policy) = policy else {
         return Ok(());
     };
@@ -2501,6 +2536,145 @@ fn validate_outcome(value: &Value) -> Result<(), WorkflowArtifactError> {
     Ok(())
 }
 
+/// Read a closed legacy or current receipt without changing its meaning.
+/// Receipts are canonical JSON followed by LF and grant no authority.
+pub fn parse_execution_receipt(bytes: &[u8]) -> Result<Value, WorkflowArtifactError> {
+    if bytes.len() > MAX_ARTIFACT_BYTES {
+        return Err(journal_limit());
+    }
+    let encoded = bytes
+        .strip_suffix(b"\n")
+        .ok_or_else(|| journal_corrupt("receipt requires final LF"))?;
+    let value: Value =
+        serde_json::from_slice(encoded).map_err(|_| journal_corrupt("invalid receipt JSON"))?;
+    validate_depth(&value, 0)?;
+    if canonical_bytes(&value)? != encoded {
+        return Err(journal_corrupt("receipt is not canonical JSON"));
+    }
+    let object = as_object(&value, "receipt")?;
+    let version = required_u64(object, "schema_version")?;
+    let mut keys = vec![
+        "schema",
+        "schema_version",
+        "run_id",
+        "plan_digest",
+        "primary",
+        "secondary",
+        "progress",
+        "omitted_secondary_count",
+        "journal_state",
+    ];
+    match (required_string(object, "schema")?, version) {
+        ("opaal.execution-receipt.v1", 1) => validate_outcome(required(object, "primary")?)?,
+        ("opaal.execution-receipt.v2", 2) => {
+            keys.extend(["result_policy", "assessment"]);
+            validate_current_primary(required(object, "primary")?, false)?;
+            validate_assessment(
+                required_string(object, "result_policy")?,
+                required(object, "primary")?,
+                required(object, "assessment")?,
+                true,
+            )?;
+        }
+        _ => return Err(journal_corrupt("unsupported receipt schema or version")),
+    }
+    exact_keys(object, &keys, "receipt")?;
+    validate_run_id(required_string(object, "run_id")?)?;
+    required_digest(object, "plan_digest")?;
+    validate_metadata_outcome(required(object, "primary")?)?;
+    bounded_array(object, "secondary", |record| {
+        let record = as_object(record, "secondary")?;
+        exact_keys(record, &["category", "code"], "secondary")?;
+        one_of(
+            required_string(record, "category")?,
+            &["cleanup", "journal", "receipt", "evidence"],
+            "secondary category",
+        )?;
+        validate_id(required_string(record, "code")?)
+    })?;
+    required_u64(object, "omitted_secondary_count")?;
+    one_of(
+        required_string(object, "journal_state")?,
+        &["complete", "incomplete", "unavailable"],
+        "journal state",
+    )?;
+    let progress = required_object(object, "progress")?;
+    exact_keys(progress, STANDARD_HOST_ROLES, "receipt progress")?;
+    for counts in progress.values() {
+        let counts = as_object(counts, "transfer counts")?;
+        exact_keys(
+            counts,
+            &["confirmed_bytes", "uncertain_bytes_upper_bound"],
+            "transfer counts",
+        )?;
+        required_u64(counts, "confirmed_bytes")?;
+        required_u64(counts, "uncertain_bytes_upper_bound")?;
+    }
+    Ok(value)
+}
+
+fn validate_result_policy(policy: &str) -> Result<(), WorkflowArtifactError> {
+    one_of(policy, &["execution", "require-true"], "result policy")
+}
+
+fn validate_current_primary(value: &Value, incomplete: bool) -> Result<(), WorkflowArtifactError> {
+    let mut legacy = as_object(value, "primary")?.clone();
+    let reason = required(&legacy, "cancel_reason")?;
+    if required_string(&legacy, "class")? == "cancelled" {
+        if !(incomplete && reason.is_null()) {
+            one_of(
+                reason
+                    .as_str()
+                    .ok_or_else(|| journal_corrupt("cancel reason must be typed"))?,
+                &["requested", "timeout"],
+                "cancel reason",
+            )?;
+        }
+    } else if !reason.is_null() {
+        return Err(journal_corrupt("noncancelled primary has cancel reason"));
+    }
+    legacy.remove("cancel_reason");
+    validate_outcome(&Value::Object(legacy))
+}
+
+fn validate_bool_assessment(value: &Value) -> Result<(), WorkflowArtifactError> {
+    if value.is_null() {
+        return Ok(());
+    }
+    let object = as_object(value, "assessment")?;
+    exact_keys(object, &["kind", "value"], "assessment")?;
+    one_of(
+        required_string(object, "kind")?,
+        &["bool"],
+        "assessment kind",
+    )?;
+    required_bool(object, "value")?;
+    Ok(())
+}
+
+fn validate_assessment(
+    policy: &str,
+    primary: &Value,
+    assessment: &Value,
+    terminal: bool,
+) -> Result<(), WorkflowArtifactError> {
+    validate_result_policy(policy)?;
+    validate_bool_assessment(assessment)?;
+    let candidate_required = terminal && policy == "require-true" && primary["class"] == "success";
+    if candidate_required == assessment.is_null() {
+        return Err(journal_corrupt("assessment contradicts policy or primary"));
+    }
+    Ok(())
+}
+
+fn events_assessment(events: &Value) -> Value {
+    events
+        .as_array()
+        .and_then(|events| events.last())
+        .filter(|event| event["kind"] == "terminal")
+        .map_or(Value::Null, |event| event["payload"]["assessment"].clone())
+}
+
 fn validate_audit(object: &Map<String, Value>, version: u64) -> Result<(), WorkflowArtifactError> {
     versioned_keys(
         object,
@@ -2526,7 +2700,7 @@ fn validate_audit(object: &Map<String, Value>, version: u64) -> Result<(), Workf
         "audit artifact",
         version,
     )?;
-    if version == 3 {
+    if version == 3 || object.contains_key("standard_host") {
         validate_standard_host(required(object, "standard_host")?)?;
     }
     validate_run_id(required_string(object, "run_id")?)?;
@@ -2548,7 +2722,14 @@ fn validate_audit(object: &Map<String, Value>, version: u64) -> Result<(), Workf
         validate_audit_event(value, version)
     })?;
     if !required(object, "primary")?.is_null() {
-        validate_outcome(required(object, "primary")?)?;
+        if version == 4 {
+            validate_current_primary(
+                required(object, "primary")?,
+                object["completeness"] == "incomplete",
+            )?;
+        } else {
+            validate_outcome(required(object, "primary")?)?;
+        }
     }
     bounded_array(object, "cleanup", validate_outcome)?;
     nullable_digest(required(object, "journal_terminal_digest")?)?;
@@ -2564,7 +2745,7 @@ fn validate_audit(object: &Map<String, Value>, version: u64) -> Result<(), Workf
             "audit completeness and terminal digest disagree",
         ));
     }
-    if version == 3 {
+    if version == 3 || object.contains_key("standard_host") {
         validate_metadata_outcome(required(object, "primary")?)?;
         for outcome in required_array(object, "cleanup")? {
             validate_metadata_outcome(outcome)?;
@@ -2611,6 +2792,21 @@ fn validate_audit(object: &Map<String, Value>, version: u64) -> Result<(), Workf
             "ARTIFACT007",
             "audit completeness disagrees with its event lifecycle",
         ));
+    }
+    if version == 4 {
+        if !lifecycle.terminal && !derived_primary.is_null() {
+            derived_primary["cancel_reason"] = Value::Null;
+        }
+        let policy = required_string(object, "result_policy")?;
+        validate_assessment(
+            policy,
+            required(object, "primary")?,
+            required(object, "assessment")?,
+            lifecycle.terminal,
+        )?;
+        if object["assessment"] != events_assessment(&object["events"]) {
+            return Err(journal_corrupt("audit assessment disagrees with terminal"));
+        }
     }
     if required(object, "primary")? != &derived_primary
         || required(object, "cleanup")? != &Value::Array(lifecycle.cleanup)
@@ -2668,6 +2864,35 @@ fn validate_journal_payload(
     value: &Value,
     version: u64,
 ) -> Result<(), WorkflowArtifactError> {
+    if version == 4 {
+        let mut legacy = as_object(value, "journal payload")?.clone();
+        match kind {
+            "header" => {
+                validate_result_policy(required_string(&legacy, "result_policy")?)?;
+                legacy.remove("result_policy");
+                let legacy_version = if legacy.contains_key("standard_host") {
+                    3
+                } else {
+                    2
+                };
+                return validate_journal_payload(kind, &Value::Object(legacy), legacy_version);
+            }
+            "terminal" => {
+                validate_current_primary(required(&legacy, "primary")?, false)?;
+                validate_bool_assessment(required(&legacy, "assessment")?)?;
+                legacy.remove("assessment");
+                legacy["primary"]
+                    .as_object_mut()
+                    .expect("validated primary")
+                    .remove("cancel_reason");
+                return validate_journal_payload(kind, &Value::Object(legacy), 2);
+            }
+            _ => {
+                return validate_journal_payload(kind, value, 2)
+                    .or_else(|_| validate_journal_payload(kind, value, 3));
+            }
+        }
+    }
     let object = as_object(value, "journal payload")?;
     match kind {
         "header" => {
@@ -3250,7 +3475,9 @@ fn seal_journal_line(
     object.insert(
         "schema".to_owned(),
         Value::String(
-            if version == 3 {
+            if version == 4 {
+                "opaal.run-journal.v4"
+            } else if version == 3 {
                 "opaal.run-journal.v3"
             } else {
                 JOURNAL_SCHEMA
