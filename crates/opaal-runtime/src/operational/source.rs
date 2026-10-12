@@ -318,6 +318,7 @@ pub(crate) trait SourceOperationalHost {
         operation: &str,
         arguments: Vec<Value>,
         budget: &mut crate::eval::ResourceBudget,
+        cancel: crate::eval::CancellationToken,
     ) -> Result<Value, ModuleError>;
 
     fn take_evidence(&mut self) -> Vec<SourceOperationalEvidence>;
@@ -325,35 +326,41 @@ pub(crate) trait SourceOperationalHost {
 
 /// Whether a value contains a control-only project identity or secret handle.
 pub(crate) fn contains_control_carrier(value: &Value) -> bool {
+    contains_nominal_identity(value, crate::module::is_opaque_operational_nominal)
+}
+
+pub(crate) fn contains_nominal_identity(
+    value: &Value,
+    matches: fn(&NominalTypeId) -> bool,
+) -> bool {
     match value {
-        Value::List(values) => values.iter().any(contains_control_carrier),
+        Value::List(values) => values
+            .iter()
+            .any(|value| contains_nominal_identity(value, matches)),
         Value::Record(record) => record
             .entries()
             .iter()
-            .any(|(_, value)| contains_control_carrier(value)),
+            .any(|(_, value)| contains_nominal_identity(value, matches)),
         Value::NominalRecord(record) => {
-            let opaque = match record.id().module().origin() {
-                ModuleOrigin::Standard { namespace, module } if namespace == "project" => {
-                    matches!(module.as_str(), "tools" | "endpoints" | "secrets")
-                }
-                ModuleOrigin::Standard { namespace, module } if namespace == "std" => {
-                    module == "http" && record.id().name() == "SecretHeader"
-                }
-                _ => false,
-            };
+            let opaque = matches(record.id());
             opaque
                 || record
                     .fields()
                     .iter()
-                    .any(|(_, value)| contains_control_carrier(value))
+                    .any(|(_, value)| contains_nominal_identity(value, matches))
         }
-        Value::Variant(variant) => variant.payload().iter().any(contains_control_carrier),
+        Value::Variant(variant) => variant
+            .payload()
+            .iter()
+            .any(|value| contains_nominal_identity(value, matches)),
         Value::Table(table) => table
             .rows()
             .iter()
             .flat_map(|row| row.iter())
-            .any(contains_control_carrier),
-        Value::Callable(callable) => crate::eval::callable_contains_control_carrier(callable),
+            .any(|value| contains_nominal_identity(value, matches)),
+        Value::Callable(callable) => {
+            crate::eval::callable_contains_nominal_identity(callable, matches)
+        }
         _ => false,
     }
 }
@@ -383,6 +390,7 @@ pub struct ControlledSourceOperations<'a> {
     planned_inputs: BTreeMap<PathBuf, String>,
     read_budget: filesystem::ReadBudget,
     process_budget: process::ProcessBudget,
+    docker_targets: BTreeMap<String, super::docker::BoundDockerTarget>,
     http_budget: http::HttpBudget,
     next_attempt: u64,
     next_secret_header: u64,
@@ -429,6 +437,7 @@ impl<'a> ControlledSourceOperations<'a> {
             planned_inputs,
             read_budget: filesystem::ReadBudget::default(),
             process_budget,
+            docker_targets: BTreeMap::new(),
             http_budget: http::HttpBudget::default(),
             next_attempt,
             next_secret_header: 0,
@@ -453,6 +462,15 @@ impl<'a> ControlledSourceOperations<'a> {
     #[must_use]
     pub fn with_standard_host(mut self, random: StandardState) -> Self {
         self.random = Some(random);
+        self
+    }
+
+    #[must_use]
+    pub fn with_docker_targets(
+        mut self,
+        targets: BTreeMap<String, super::docker::BoundDockerTarget>,
+    ) -> Self {
+        self.docker_targets = targets;
         self
     }
 
@@ -649,6 +667,8 @@ impl<'a> ControlledSourceOperations<'a> {
         module: &str,
         operation: &str,
         arguments: Vec<Value>,
+        budget: &mut crate::eval::ResourceBudget,
+        cancel: crate::eval::CancellationToken,
     ) -> Result<Value, ModuleError> {
         match (module, operation) {
             ("path", "normalize") => Ok(path_value(path::normalize(value_path(argument(
@@ -834,6 +854,194 @@ impl<'a> ControlledSourceOperations<'a> {
             ("url", "render") => url::Url::parse(nominal_string(&arguments, 0, "url", "Url")?)
                 .map(|value| Value::string(value.render()))
                 .map_err(|error| ModuleError::invalid("URL001", error.to_string())),
+            ("docker", "inspect_image") => {
+                let Value::NominalRecord(identity) = argument(&arguments, 0)? else {
+                    return Err(ModuleError::invalid(
+                        "DOCKER002",
+                        "invalid Docker target carrier",
+                    ));
+                };
+                if identity.id() != &NominalTypeId::standard("docker", "TargetIdentity")
+                    || identity.fields().len() != 3
+                    || identity.get("_manifest")
+                        != Some(&Value::string(self.manifest.id().manifest_digest()))
+                    || !matches!(identity.get("_path"), Some(Value::Path(path)) if Path::new(path.as_os_str()) == self.manifest.manifest_path())
+                {
+                    return Err(ModuleError::invalid(
+                        "DOCKER002",
+                        "foreign, stale or forged Docker target carrier",
+                    ));
+                }
+                let Some(Value::String(name)) = identity.get("_id") else {
+                    return Err(ModuleError::invalid(
+                        "DOCKER002",
+                        "invalid Docker target carrier",
+                    ));
+                };
+                let bound = self
+                    .docker_targets
+                    .get(name.as_ref())
+                    .cloned()
+                    .ok_or_else(|| {
+                        ModuleError::invalid("EXECUTE_STALE", "accepted Docker target is absent")
+                    })?;
+                if self.manifest.targets().get(name.as_ref()) != Some(&bound.target) {
+                    return Err(ModuleError::invalid(
+                        "EXECUTE_STALE",
+                        "Docker target differs from its manifest binding",
+                    ));
+                }
+                let image = string(&arguments, 1)?.to_owned();
+                crate::docker::validate_operand(&image)?;
+                let started = self.adapter.monotonic_nanos()?;
+                let aggregate_deadline = self
+                    .context
+                    .cancellation()
+                    .operation_deadline(std::time::Duration::from_secs(60));
+                let cancel = self
+                    .context
+                    .cancellation()
+                    .token_until(cancel, aggregate_deadline);
+                let mut before_version = Vec::new();
+                let mut image_document = None;
+                for stage in 0..4 {
+                    if let Some(reason) = self.context.poll_cancellation() {
+                        return Err(ModuleError::Cancelled(reason));
+                    }
+                    let elapsed = self
+                        .adapter
+                        .monotonic_nanos()?
+                        .checked_sub(started)
+                        .ok_or_else(|| {
+                            ModuleError::invalid("DOCKER003", "monotonic time moved backwards")
+                        })?;
+                    let remaining = 60_000_000_000_u128
+                        .checked_sub(elapsed)
+                        .filter(|remaining| *remaining > 0)
+                        .ok_or(ModuleError::Cancelled(crate::eval::CancelReason::Timeout))?;
+                    let timeout = std::time::Duration::from_nanos(
+                        u64::try_from(remaining.min(30_000_000_000)).expect("bounded timeout"),
+                    );
+                    let argv = super::docker::arguments(&bound.target, stage, &image);
+                    let child_deadline = self
+                        .context
+                        .cancellation()
+                        .operation_deadline(timeout)
+                        .narrowed_to(aggregate_deadline);
+                    let descriptor = native_process_descriptor(
+                        self.tools,
+                        &bound.target.tool,
+                        &argv,
+                        self.metadata_only,
+                    )?;
+                    let request = CapabilityRequest::process_run(bound.target.tool.clone())
+                        .map_err(invalid_request)?;
+                    let result =
+                        self.effect(request, "std::docker::inspect_image", descriptor, |this| {
+                            super::docker::recheck_target(this.manifest, &bound, this.adapter)?;
+                            let executable = this
+                                .executable_files
+                                .get(&bound.target.tool)
+                                .ok_or_else(|| {
+                                    ModuleError::invalid(
+                                        "EXECUTE_STALE",
+                                        "accepted Docker executable is absent",
+                                    )
+                                })?;
+                            let result = process::run_docker_retained(
+                                this.context,
+                                this.effects,
+                                this.platform,
+                                this.adapter,
+                                this.tools,
+                                &bound,
+                                stage,
+                                &image,
+                                this.manifest.root(),
+                                timeout,
+                                &mut this.process_budget,
+                                executable,
+                                child_deadline,
+                            )?;
+                            super::docker::recheck_target(this.manifest, &bound, this.adapter)?;
+                            let evidence_digest = (!this.metadata_only).then(|| {
+                                integrity::sha256(&[result.stdout(), result.stderr()].concat())
+                            });
+                            let metadata = SourceEffectResult::Process {
+                                status: result.status().code(),
+                                stdout_bytes: Some(result.stdout().len() as u64),
+                                stderr_bytes: Some(result.stderr().len() as u64),
+                                evidence_digest,
+                            };
+                            let status = result.status().clone();
+                            Ok((result, Some(status), metadata))
+                        })?;
+                    if !result.status().is_ok() {
+                        return Err(ModuleError::invalid(
+                            "DOCKER003",
+                            "Docker acquisition child returned a failed status",
+                        ));
+                    }
+                    if self
+                        .adapter
+                        .monotonic_nanos()?
+                        .checked_sub(started)
+                        .is_none_or(|elapsed| elapsed >= 60_000_000_000)
+                    {
+                        return Err(ModuleError::Cancelled(crate::eval::CancelReason::Timeout));
+                    }
+                    match stage {
+                        0 => super::docker::validate_probe(result.stdout())?,
+                        1 => {
+                            before_version = super::docker::version_fields(
+                                &super::docker::document(result.stdout(), budget, cancel.clone())?,
+                            )?
+                        }
+                        2 => {
+                            image_document = Some(super::docker::document(
+                                result.stdout(),
+                                budget,
+                                cancel.clone(),
+                            )?)
+                        }
+                        3 => {
+                            if super::docker::version_fields(&super::docker::document(
+                                result.stdout(),
+                                budget,
+                                cancel.clone(),
+                            )?)? != before_version
+                            {
+                                return Err(ModuleError::invalid(
+                                    "DOCKER003",
+                                    "Docker server profile changed during acquisition",
+                                ));
+                            }
+                        }
+                        _ => unreachable!("four stages"),
+                    }
+                }
+                crate::docker::decode_image(
+                    &image_document.expect("image stage completed"),
+                    &mut |items, bytes| {
+                        if cancel.is_cancelled() {
+                            return Err(ModuleError::Cancelled(cancel.reason()));
+                        }
+                        if !budget.charge()
+                            || !budget.charge_collection_items(items)
+                            || !budget.charge_collection_bytes(bytes)
+                        {
+                            return Err(ModuleError::invalid(
+                                "RESOURCE_LIMIT",
+                                "evaluation resource budget exhausted",
+                            ));
+                        }
+                        self.context
+                            .poll_cancellation()
+                            .map_or(Ok(()), |reason| Err(ModuleError::Cancelled(reason)))
+                    },
+                    |error| error,
+                )
+            }
             ("process", "run") => {
                 let tool = project_identity(&arguments, 0, "tools", "ToolIdentity")?.to_owned();
                 let argv = string_list(&arguments, 1)?;
@@ -1168,6 +1376,7 @@ impl SourceOperationalHost for ControlledSourceOperations<'_> {
         operation: &str,
         arguments: Vec<Value>,
         budget: &mut crate::eval::ResourceBudget,
+        cancel: crate::eval::CancellationToken,
     ) -> Result<Value, ModuleError> {
         let ModuleOrigin::Standard { namespace, module } = module.origin() else {
             return Err(ModuleError::invalid(
@@ -1250,7 +1459,7 @@ impl SourceOperationalHost for ControlledSourceOperations<'_> {
                 Ok((value, None, result))
             });
         }
-        self.invoke_inner(module, operation, arguments)
+        self.invoke_inner(module, operation, arguments, budget, cancel)
     }
 
     fn take_evidence(&mut self) -> Vec<SourceOperationalEvidence> {
@@ -1281,12 +1490,26 @@ fn process_descriptor(
     arguments: &[String],
     metadata_only: bool,
 ) -> Result<SourceOperation, ModuleError> {
+    native_process_descriptor(
+        tools,
+        tool_id,
+        &arguments.iter().map(OsString::from).collect::<Vec<_>>(),
+        metadata_only,
+    )
+}
+
+fn native_process_descriptor(
+    tools: &ToolLock,
+    tool_id: &str,
+    arguments: &[OsString],
+    metadata_only: bool,
+) -> Result<SourceOperation, ModuleError> {
     let tool = tools.tools().get(tool_id).ok_or_else(|| {
         ModuleError::invalid("PROCESS004", format!("unknown locked tool `{tool_id}`"))
     })?;
     let mut native_argv = Vec::with_capacity(arguments.len() + 1);
     native_argv.push(process::locked_path(tool).into_os_string());
-    native_argv.extend(arguments.iter().map(OsString::from));
+    native_argv.extend_from_slice(arguments);
     let argv_count = u64::try_from(native_argv.len())
         .map_err(|_| ModuleError::invalid("OPERATION005", "process argv count overflow"))?;
     let argv_bytes = native_argv.iter().try_fold(0_u64, |total, argument| {
@@ -1339,6 +1562,12 @@ pub fn maintained_probe_operation(
     let fixed = match tool.adapter() {
         MaintainedAdapter::Git => &["--version"][..],
         MaintainedAdapter::Cargo => &["--version", "--verbose"][..],
+        MaintainedAdapter::Docker => {
+            return Err(ModuleError::invalid(
+                "DOCKER002",
+                "Docker requires its fixed target probe",
+            ));
+        }
     };
     let mut native_argv = Vec::with_capacity(fixed.len() + 1);
     native_argv.push(process::locked_path(tool).into_os_string());

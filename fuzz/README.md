@@ -1,6 +1,6 @@
 # Fuzz targets
 
-The separate unpublished `opaal-fuzz` package owns eight targets:
+The separate unpublished `opaal-fuzz` package owns ten targets:
 
 - `lexer` checks lossless tokenization and progress;
 - `parser` checks parsing, complete-source formatting/reparsing, resolved AST
@@ -17,8 +17,14 @@ The separate unpublished `opaal-fuzz` package owns eight targets:
   and native BIND/FILL/ACK records with unexpected ancillary descriptors; and
 - `secret_sinks` checks raw and encoded secret redaction.
 
-Invalid UTF-8 is rejected through the normal source boundary. The Random target
-also uses the isolated native fixture built by the campaign scripts. Each
+`stdio_limits` checks bounded transfer progress, role accounting, cancellation,
+hostile worker records and artifact readers. `docker_image_limits` checks shared
+saved-image decoding, required single manifests, selected identities, hostile
+JSON and constrained-budget parity. Both are included in smoke checks; the Docker
+target also participates in sustained campaigns.
+
+Invalid UTF-8 is rejected through the normal source boundary. Random and standard
+I/O targets also use the isolated native fixture built by the campaign scripts. Each
 selected input drives a production worker, with bounded protocol waits and
 owned teardown; the fixture asserts descriptor preservation and exact reap.
 The subprocess protocol is exercised by mutations without coverage feedback

@@ -300,7 +300,28 @@ pub enum ProcessExit {
 }
 
 /// The complete bounded operational adapter boundary.
+/// Read-only native identity, with no connection or file-content access.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct UnixIdentity {
+    pub device: u64,
+    pub inode: u64,
+    pub mode: u32,
+    pub uid: u32,
+    pub gid: u32,
+}
+
 pub trait OperationalAdapter: Send + Sync {
+    /// Observe a socket, or an empty directory, without following any symlink.
+    fn observe_local_path(
+        &self,
+        _path: &Path,
+        _directory: bool,
+    ) -> Result<UnixIdentity, OperationalError> {
+        Err(OperationalError::new(
+            OperationalErrorKind::Unsupported,
+            "native path observation is unavailable",
+        ))
+    }
     fn read_file(&self, request: ReadFileRequest<'_>) -> Result<Vec<u8>, OperationalError>;
     fn write_atomic(&self, request: AtomicWriteRequest<'_>) -> Result<(), OperationalError>;
     fn wall_time_unix_nanos(&self) -> Result<i128, OperationalError>;
@@ -320,6 +341,10 @@ pub trait OperationalAdapter: Send + Sync {
 /// One observable fake call without secret or body payloads.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum OperationalCall {
+    LocalObservation {
+        path: PathBuf,
+        directory: bool,
+    },
     Read {
         root: PathBuf,
         path: PathBuf,
@@ -350,6 +375,7 @@ pub enum OperationalCall {
 #[derive(Default)]
 struct FakeState {
     files: BTreeMap<PathBuf, Vec<u8>>,
+    local_paths: BTreeMap<(PathBuf, bool), UnixIdentity>,
     calls: Vec<OperationalCall>,
     http: VecDeque<Result<HttpResponse, OperationalError>>,
     processes: VecDeque<Result<ProcessOutput, OperationalError>>,
@@ -383,6 +409,19 @@ impl FakeOperationalAdapter {
             .unwrap_or_else(PoisonError::into_inner)
             .files
             .insert(path.into(), bytes);
+    }
+
+    pub fn insert_local_path(
+        &self,
+        path: impl Into<PathBuf>,
+        directory: bool,
+        identity: UnixIdentity,
+    ) {
+        self.state
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .local_paths
+            .insert((path.into(), directory), identity);
     }
 
     pub fn push_http(&self, response: Result<HttpResponse, OperationalError>) {
@@ -428,6 +467,27 @@ impl FakeOperationalAdapter {
 }
 
 impl OperationalAdapter for FakeOperationalAdapter {
+    fn observe_local_path(
+        &self,
+        path: &Path,
+        directory: bool,
+    ) -> Result<UnixIdentity, OperationalError> {
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        state.calls.push(OperationalCall::LocalObservation {
+            path: path.to_owned(),
+            directory,
+        });
+        state
+            .local_paths
+            .get(&(path.to_owned(), directory))
+            .copied()
+            .ok_or_else(|| {
+                OperationalError::new(
+                    OperationalErrorKind::InvalidInput,
+                    "fake native path is unavailable",
+                )
+            })
+    }
     fn read_file(&self, request: ReadFileRequest<'_>) -> Result<Vec<u8>, OperationalError> {
         validate_file_path(request.root, request.path)?;
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);

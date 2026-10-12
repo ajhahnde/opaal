@@ -114,6 +114,7 @@ pub struct ProjectManifest {
     root: PathBuf,
     evidence: PathBuf,
     tools: BTreeMap<String, ToolDeclaration>,
+    targets: BTreeMap<String, DockerTarget>,
     endpoints: BTreeMap<String, EndpointDeclaration>,
     secrets: BTreeMap<String, SecretDeclaration>,
     environments: BTreeMap<String, EnvironmentDeclaration>,
@@ -158,6 +159,11 @@ impl ProjectManifest {
     #[must_use]
     pub const fn tools(&self) -> &BTreeMap<String, ToolDeclaration> {
         &self.tools
+    }
+
+    #[must_use]
+    pub const fn targets(&self) -> &BTreeMap<String, DockerTarget> {
+        &self.targets
     }
 
     #[must_use]
@@ -210,6 +216,7 @@ impl ToolDeclaration {
 pub enum MaintainedAdapter {
     Git,
     Cargo,
+    Docker,
 }
 
 impl MaintainedAdapter {
@@ -218,6 +225,7 @@ impl MaintainedAdapter {
         match self {
             Self::Git => "git",
             Self::Cargo => "cargo",
+            Self::Docker => "docker",
         }
     }
 
@@ -225,12 +233,21 @@ impl MaintainedAdapter {
         match value {
             "git" => Ok(Self::Git),
             "cargo" => Ok(Self::Cargo),
+            "docker" => Ok(Self::Docker),
             _ => Err(ProjectError::new(
                 "PROJECT012",
                 format!("unknown maintained adapter `{value}`"),
             )),
         }
     }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DockerTarget {
+    pub id: String,
+    pub tool: String,
+    pub socket: PathBuf,
+    pub config_directory: PathBuf,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -539,6 +556,7 @@ pub fn parse_project_manifest(
             "project",
             "paths",
             "tools",
+            "targets",
             "endpoints",
             "secrets",
             "environments",
@@ -587,7 +605,7 @@ pub fn parse_project_manifest(
         root: root.clone(),
         manifest_digest: sha256_digest(bytes),
     };
-    let total = ["tools", "endpoints", "secrets", "environments"]
+    let total = ["tools", "targets", "endpoints", "secrets", "environments"]
         .into_iter()
         .try_fold(0usize, |total, key| {
             total
@@ -613,6 +631,67 @@ pub fn parse_project_manifest(
             })?,
         })
     })?;
+    let targets = parse_named_tables(&document, "targets", |id, table| {
+        exact_keys(
+            table,
+            &[
+                "adapter",
+                "tool",
+                "socket",
+                "config_directory",
+                "api_version",
+            ],
+            "Docker target",
+        )?;
+        let tool = required_string(table, "tool")?;
+        if required_string(table, "adapter")? != "docker"
+            || tool != "docker"
+            || required_string(table, "api_version")? != crate::docker::API_VERSION
+            || tools.len() != 1
+            || tools
+                .get(tool)
+                .is_none_or(|declaration| declaration.adapter != MaintainedAdapter::Docker)
+        {
+            return Err(ProjectError::new(
+                "PROJECT028",
+                "Docker targets require the single declared docker tool and fixed API profile",
+            ));
+        }
+        let socket_bytes = parse_native_bytes(required_table(table, "socket")?)?;
+        crate::docker::validate_socket(socket_bytes.bytes())
+            .map_err(|error| ProjectError::new("PROJECT028", error.to_string()))?;
+        let socket = PathBuf::from(
+            std::str::from_utf8(socket_bytes.bytes()).expect("validated ASCII socket"),
+        );
+        let config_directory = resolve_contained(
+            &root,
+            required_string(table, "config_directory")?,
+            &root,
+            "target config_directory",
+        )?;
+        if config_directory == root {
+            return Err(ProjectError::new(
+                "PROJECT028",
+                "target config_directory must name a child of the project root",
+            ));
+        }
+        Ok(DockerTarget {
+            id: format!("{}::targets::{id}", project_id.name()),
+            tool: tool.to_owned(),
+            socket,
+            config_directory,
+        })
+    })?;
+    if tools
+        .values()
+        .any(|tool| tool.adapter == MaintainedAdapter::Docker)
+        && (tools.len() != 1 || targets.is_empty())
+    {
+        return Err(ProjectError::new(
+            "PROJECT028",
+            "Docker projects require one tool and an explicit target; mixed adapters are unsupported",
+        ));
+    }
     let endpoints = parse_named_tables(&document, "endpoints", |id, table| {
         exact_keys(
             table,
@@ -722,6 +801,7 @@ pub fn parse_project_manifest(
         root,
         evidence,
         tools,
+        targets,
         endpoints,
         secrets,
         environments,
@@ -958,6 +1038,14 @@ pub fn parse_tool_lock(
                 format!("adapter mismatch for tool `{id}`"),
             ));
         }
+        if adapter == MaintainedAdapter::Docker
+            && required_string(table, "version")? != crate::docker::TOOL_VERSION
+        {
+            return Err(ProjectError::new(
+                "LOCK023",
+                "Docker tool version differs from the fixed profile",
+            ));
+        }
         let version_text = required_string(table, "version")?;
         let version = Version::parse(version_text).map_err(|error| {
             ProjectError::new("LOCK011", format!("invalid tool version: {error}"))
@@ -1007,6 +1095,12 @@ pub fn parse_tool_lock(
         return Err(ProjectError::new(
             "LOCK015",
             "tool lock must contain every declared tool exactly once",
+        ));
+    }
+    if !manifest.targets.is_empty() && !variables.is_empty() {
+        return Err(ProjectError::new(
+            "LOCK023",
+            "Docker lock child-variable rows must be empty",
         ));
     }
     Ok(ToolLock {
@@ -1386,7 +1480,7 @@ fn sha256_digest(bytes: &[u8]) -> String {
     format!("sha256:{:x}", Sha256::digest(bytes))
 }
 
-fn is_opaal_identifier(value: &str) -> bool {
+pub(crate) fn is_opaal_identifier(value: &str) -> bool {
     let mut bytes = value.bytes();
     bytes
         .next()
@@ -1845,6 +1939,19 @@ fn generated_project_modules(manifest: &ProjectManifest) -> BTreeMap<String, Vec
             "tools".to_owned(),
             generated_identity_module("ToolIdentity", manifest.tools.keys().map(String::as_str)),
         ),
+        ("targets".to_owned(), {
+            let names = manifest.targets.keys().cloned().collect::<Vec<_>>();
+            let mut source = format!(
+                "import std::docker as docker\nexport {{ {} }}\n",
+                names.join(", ")
+            );
+            for name in names {
+                source.push_str(&format!(
+                    "let {name}: docker::TargetIdentity = docker::TargetIdentity {{}}\n"
+                ));
+            }
+            source.into_bytes()
+        }),
         (
             "endpoints".to_owned(),
             generated_identity_module(

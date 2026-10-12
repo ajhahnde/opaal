@@ -15,7 +15,8 @@ from typing import Callable, Sequence
 
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "1.3.0"
+VERSION = "1.4.0"
+RELEASED_VERSION = "1.3.0"
 REPOSITORY = "https://github.com/ajhahnde/opaal"
 WORKSPACE_PACKAGES = {
     "crates/opaal-syntax": "opaal-syntax",
@@ -27,7 +28,7 @@ WORKSPACE_PACKAGES = {
 }
 PRIMARY_BINARIES = {"opaal", "opaal-language-server"}
 FUZZ_TARGETS = {
-    "lexer", "parser", "expander", "resources", "data_operations_limits", "numeric_operations_limits", "random_limits", "stdio_limits", "secret_sinks"
+    "lexer", "parser", "expander", "resources", "data_operations_limits", "numeric_operations_limits", "random_limits", "stdio_limits", "docker_image_limits", "secret_sinks"
 }
 FUZZ_PATH_PACKAGES = {"opaal-platform", "opaal-runtime", "opaal-syntax"}
 QUALIFICATION_FILES = {
@@ -445,7 +446,7 @@ def source_problems(root: Path, *, run: Run = run_command) -> list[str]:
         problems.append(f"benchmark contract validation failed: {detail}")
 
     changelog = (root / "CHANGELOG.md").read_text(encoding="utf-8", errors="replace")
-    if "## [Unreleased]" not in changelog or f"## [{VERSION}]" not in changelog:
+    if "## [Unreleased]" not in changelog or f"## [{RELEASED_VERSION}]" not in changelog:
         problems.append("changelog must retain Unreleased and identify the current release line")
     return sorted(set(problems))
 

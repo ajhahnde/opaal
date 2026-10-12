@@ -1,0 +1,1761 @@
+{
+  "schema_version": 1,
+  "cases": [
+    {
+      "name": "id-missing",
+      "expect": "error",
+      "remove": [
+        [
+          "Id"
+        ]
+      ]
+    },
+    {
+      "name": "id-null",
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Id"
+          ],
+          "value": null
+        }
+      ]
+    },
+    {
+      "name": "id-bool",
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Id"
+          ],
+          "value": false
+        }
+      ]
+    },
+    {
+      "name": "id-integer",
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Id"
+          ],
+          "value": 42
+        }
+      ]
+    },
+    {
+      "name": "id-array",
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Id"
+          ],
+          "value": []
+        }
+      ]
+    },
+    {
+      "name": "id-string",
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Id"
+          ],
+          "value": ""
+        }
+      ]
+    },
+    {
+      "name": "os-missing",
+      "expect": "error",
+      "remove": [
+        [
+          "Os"
+        ]
+      ]
+    },
+    {
+      "name": "os-null",
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Os"
+          ],
+          "value": null
+        }
+      ]
+    },
+    {
+      "name": "os-bool",
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Os"
+          ],
+          "value": false
+        }
+      ]
+    },
+    {
+      "name": "os-integer",
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Os"
+          ],
+          "value": 42
+        }
+      ]
+    },
+    {
+      "name": "os-array",
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Os"
+          ],
+          "value": []
+        }
+      ]
+    },
+    {
+      "name": "os-string",
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Os"
+          ],
+          "value": ""
+        }
+      ]
+    },
+    {
+      "name": "architecture-missing",
+      "expect": "error",
+      "remove": [
+        [
+          "Architecture"
+        ]
+      ]
+    },
+    {
+      "name": "architecture-null",
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Architecture"
+          ],
+          "value": null
+        }
+      ]
+    },
+    {
+      "name": "architecture-bool",
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Architecture"
+          ],
+          "value": false
+        }
+      ]
+    },
+    {
+      "name": "architecture-integer",
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Architecture"
+          ],
+          "value": 42
+        }
+      ]
+    },
+    {
+      "name": "architecture-array",
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Architecture"
+          ],
+          "value": []
+        }
+      ]
+    },
+    {
+      "name": "architecture-string",
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Architecture"
+          ],
+          "value": ""
+        }
+      ]
+    },
+    {
+      "name": "descriptor-missing",
+      "expect": "error",
+      "remove": [
+        [
+          "Descriptor"
+        ]
+      ]
+    },
+    {
+      "name": "descriptor-null",
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Descriptor"
+          ],
+          "value": null
+        }
+      ]
+    },
+    {
+      "name": "descriptor-bool",
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Descriptor"
+          ],
+          "value": false
+        }
+      ]
+    },
+    {
+      "name": "descriptor-integer",
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Descriptor"
+          ],
+          "value": 42
+        }
+      ]
+    },
+    {
+      "name": "descriptor-array",
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Descriptor"
+          ],
+          "value": []
+        }
+      ]
+    },
+    {
+      "name": "descriptor-string",
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Descriptor"
+          ],
+          "value": ""
+        }
+      ]
+    },
+    {
+      "name": "descriptor-mediaType-missing",
+      "expect": "error",
+      "remove": [
+        [
+          "Descriptor",
+          "mediaType"
+        ]
+      ]
+    },
+    {
+      "name": "descriptor-mediaType-null",
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Descriptor",
+            "mediaType"
+          ],
+          "value": null
+        }
+      ]
+    },
+    {
+      "name": "descriptor-mediaType-bool",
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Descriptor",
+            "mediaType"
+          ],
+          "value": true
+        }
+      ]
+    },
+    {
+      "name": "descriptor-mediaType-integer",
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Descriptor",
+            "mediaType"
+          ],
+          "value": 42
+        }
+      ]
+    },
+    {
+      "name": "descriptor-mediaType-array",
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Descriptor",
+            "mediaType"
+          ],
+          "value": []
+        }
+      ]
+    },
+    {
+      "name": "descriptor-mediaType-object",
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Descriptor",
+            "mediaType"
+          ],
+          "value": {}
+        }
+      ]
+    },
+    {
+      "name": "descriptor-digest-missing",
+      "expect": "error",
+      "remove": [
+        [
+          "Descriptor",
+          "digest"
+        ]
+      ]
+    },
+    {
+      "name": "descriptor-digest-null",
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Descriptor",
+            "digest"
+          ],
+          "value": null
+        }
+      ]
+    },
+    {
+      "name": "descriptor-digest-bool",
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Descriptor",
+            "digest"
+          ],
+          "value": true
+        }
+      ]
+    },
+    {
+      "name": "descriptor-digest-integer",
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Descriptor",
+            "digest"
+          ],
+          "value": 42
+        }
+      ]
+    },
+    {
+      "name": "descriptor-digest-array",
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Descriptor",
+            "digest"
+          ],
+          "value": []
+        }
+      ]
+    },
+    {
+      "name": "descriptor-digest-object",
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Descriptor",
+            "digest"
+          ],
+          "value": {}
+        }
+      ]
+    },
+    {
+      "name": "descriptor-media-index",
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Descriptor",
+            "mediaType"
+          ],
+          "value": "application/vnd.oci.image.index.v1+json"
+        }
+      ]
+    },
+    {
+      "name": "descriptor-media-manifest-list",
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Descriptor",
+            "mediaType"
+          ],
+          "value": "application/vnd.docker.distribution.manifest.list.v2+json"
+        }
+      ]
+    },
+    {
+      "name": "descriptor-media-unknown",
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Descriptor",
+            "mediaType"
+          ],
+          "value": "unknown"
+        }
+      ]
+    },
+    {
+      "name": "descriptor-media-case",
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Descriptor",
+            "mediaType"
+          ],
+          "value": "Application/vnd.oci.image.manifest.v1+json"
+        }
+      ]
+    },
+    {
+      "name": "descriptor-media-empty",
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Descriptor",
+            "mediaType"
+          ],
+          "value": ""
+        }
+      ]
+    },
+    {
+      "name": "single-docker-manifest",
+      "expect": "image",
+      "changes": [
+        {
+          "path": [
+            "Descriptor",
+            "mediaType"
+          ],
+          "value": "application/vnd.docker.distribution.manifest.v2+json"
+        }
+      ]
+    },
+    {
+      "name": "descriptor-digest-mismatch",
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Descriptor",
+            "digest"
+          ],
+          "value": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        }
+      ]
+    },
+    {
+      "name": "Id-short",
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Id"
+          ],
+          "value": "sha256:a"
+        }
+      ]
+    },
+    {
+      "name": "Descriptor-digest-short",
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Descriptor",
+            "digest"
+          ],
+          "value": "sha256:a"
+        }
+      ]
+    },
+    {
+      "name": "Id-uppercase",
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Id"
+          ],
+          "value": "sha256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        }
+      ]
+    },
+    {
+      "name": "Descriptor-digest-uppercase",
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Descriptor",
+            "digest"
+          ],
+          "value": "sha256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        }
+      ]
+    },
+    {
+      "name": "Id-algorithm",
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Id"
+          ],
+          "value": "sha512:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }
+      ]
+    },
+    {
+      "name": "Descriptor-digest-algorithm",
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Descriptor",
+            "digest"
+          ],
+          "value": "sha512:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }
+      ]
+    },
+    {
+      "name": "Id-no-prefix",
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Id"
+          ],
+          "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }
+      ]
+    },
+    {
+      "name": "Descriptor-digest-no-prefix",
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Descriptor",
+            "digest"
+          ],
+          "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }
+      ]
+    },
+    {
+      "name": "Id-nonhex",
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Id"
+          ],
+          "value": "sha256:gggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg"
+        }
+      ]
+    },
+    {
+      "name": "Descriptor-digest-nonhex",
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Descriptor",
+            "digest"
+          ],
+          "value": "sha256:gggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg"
+        }
+      ]
+    },
+    {
+      "name": "Id-trailing",
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Id"
+          ],
+          "value": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n"
+        }
+      ]
+    },
+    {
+      "name": "Descriptor-digest-trailing",
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Descriptor",
+            "digest"
+          ],
+          "value": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n"
+        }
+      ]
+    },
+    {
+      "name": "os-object",
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Os"
+          ],
+          "value": {}
+        }
+      ]
+    },
+    {
+      "name": "os-uppercase",
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Os"
+          ],
+          "value": "Linux"
+        }
+      ]
+    },
+    {
+      "name": "os-slash",
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Os"
+          ],
+          "value": "arm/64"
+        }
+      ]
+    },
+    {
+      "name": "os-newline",
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Os"
+          ],
+          "value": "linux\n"
+        }
+      ]
+    },
+    {
+      "name": "os-unicode",
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Os"
+          ],
+          "value": "é"
+        }
+      ]
+    },
+    {
+      "name": "os-dash",
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Os"
+          ],
+          "value": "-linux"
+        }
+      ]
+    },
+    {
+      "name": "os-colon",
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Os"
+          ],
+          "value": "linux:"
+        }
+      ]
+    },
+    {
+      "name": "architecture-object",
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Architecture"
+          ],
+          "value": {}
+        }
+      ]
+    },
+    {
+      "name": "architecture-uppercase",
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Architecture"
+          ],
+          "value": "Linux"
+        }
+      ]
+    },
+    {
+      "name": "architecture-slash",
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Architecture"
+          ],
+          "value": "arm/64"
+        }
+      ]
+    },
+    {
+      "name": "architecture-newline",
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Architecture"
+          ],
+          "value": "linux\n"
+        }
+      ]
+    },
+    {
+      "name": "architecture-unicode",
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Architecture"
+          ],
+          "value": "é"
+        }
+      ]
+    },
+    {
+      "name": "architecture-dash",
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Architecture"
+          ],
+          "value": "-linux"
+        }
+      ]
+    },
+    {
+      "name": "architecture-colon",
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Architecture"
+          ],
+          "value": "linux:"
+        }
+      ]
+    },
+    {
+      "name": "variant-null",
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Variant"
+          ],
+          "value": null
+        }
+      ]
+    },
+    {
+      "name": "variant-bool",
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Variant"
+          ],
+          "value": true
+        }
+      ]
+    },
+    {
+      "name": "variant-integer",
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Variant"
+          ],
+          "value": 42
+        }
+      ]
+    },
+    {
+      "name": "variant-array",
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Variant"
+          ],
+          "value": []
+        }
+      ]
+    },
+    {
+      "name": "variant-object",
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Variant"
+          ],
+          "value": {}
+        }
+      ]
+    },
+    {
+      "name": "variant-uppercase",
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Variant"
+          ],
+          "value": "Linux"
+        }
+      ]
+    },
+    {
+      "name": "variant-slash",
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Variant"
+          ],
+          "value": "arm/64"
+        }
+      ]
+    },
+    {
+      "name": "variant-newline",
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Variant"
+          ],
+          "value": "linux\n"
+        }
+      ]
+    },
+    {
+      "name": "variant-unicode",
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Variant"
+          ],
+          "value": "é"
+        }
+      ]
+    },
+    {
+      "name": "variant-dash",
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Variant"
+          ],
+          "value": "-linux"
+        }
+      ]
+    },
+    {
+      "name": "variant-colon",
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Variant"
+          ],
+          "value": "linux:"
+        }
+      ]
+    },
+    {
+      "name": "variant-present",
+      "expect": "image",
+      "changes": [
+        {
+          "path": [
+            "Variant"
+          ],
+          "value": "v8"
+        }
+      ]
+    },
+    {
+      "name": "variant-empty",
+      "expect": "image",
+      "changes": [
+        {
+          "path": [
+            "Variant"
+          ],
+          "value": ""
+        }
+      ]
+    },
+    {
+      "name": "config-optional-null",
+      "expect": "image",
+      "changes": [
+        {
+          "path": [
+            "Config"
+          ],
+          "value": null
+        }
+      ]
+    },
+    {
+      "name": "config-optional-bool",
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Config"
+          ],
+          "value": true
+        }
+      ]
+    },
+    {
+      "name": "config-optional-integer",
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Config"
+          ],
+          "value": 42
+        }
+      ]
+    },
+    {
+      "name": "config-optional-array",
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Config"
+          ],
+          "value": []
+        }
+      ]
+    },
+    {
+      "name": "config-optional-string",
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Config"
+          ],
+          "value": ""
+        }
+      ]
+    },
+    {
+      "name": "config-optional-missing",
+      "expect": "image",
+      "remove": [
+        [
+          "Config"
+        ]
+      ]
+    },
+    {
+      "name": "labels-optional-null",
+      "expect": "image",
+      "changes": [
+        {
+          "path": [
+            "Config",
+            "Labels"
+          ],
+          "value": null
+        }
+      ]
+    },
+    {
+      "name": "labels-optional-bool",
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Config",
+            "Labels"
+          ],
+          "value": true
+        }
+      ]
+    },
+    {
+      "name": "labels-optional-integer",
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Config",
+            "Labels"
+          ],
+          "value": 42
+        }
+      ]
+    },
+    {
+      "name": "labels-optional-array",
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Config",
+            "Labels"
+          ],
+          "value": []
+        }
+      ]
+    },
+    {
+      "name": "labels-optional-string",
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Config",
+            "Labels"
+          ],
+          "value": ""
+        }
+      ]
+    },
+    {
+      "name": "labels-optional-missing",
+      "expect": "image",
+      "remove": [
+        [
+          "Config",
+          "Labels"
+        ]
+      ]
+    },
+    {
+      "name": "revision-optional-null",
+      "expect": "image",
+      "changes": [
+        {
+          "path": [
+            "Config",
+            "Labels",
+            "org.opencontainers.image.revision"
+          ],
+          "value": null
+        }
+      ]
+    },
+    {
+      "name": "revision-optional-bool",
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Config",
+            "Labels",
+            "org.opencontainers.image.revision"
+          ],
+          "value": true
+        }
+      ]
+    },
+    {
+      "name": "revision-optional-integer",
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Config",
+            "Labels",
+            "org.opencontainers.image.revision"
+          ],
+          "value": 42
+        }
+      ]
+    },
+    {
+      "name": "revision-optional-array",
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Config",
+            "Labels",
+            "org.opencontainers.image.revision"
+          ],
+          "value": []
+        }
+      ]
+    },
+    {
+      "name": "revision-optional-string",
+      "expect": "image",
+      "changes": [
+        {
+          "path": [
+            "Config",
+            "Labels",
+            "org.opencontainers.image.revision"
+          ],
+          "value": ""
+        }
+      ]
+    },
+    {
+      "name": "revision-optional-missing",
+      "expect": "image",
+      "remove": [
+        [
+          "Config",
+          "Labels",
+          "org.opencontainers.image.revision"
+        ]
+      ]
+    },
+    {
+      "name": "repodigests-optional-null",
+      "expect": "image",
+      "changes": [
+        {
+          "path": [
+            "RepoDigests"
+          ],
+          "value": null
+        }
+      ]
+    },
+    {
+      "name": "repodigests-optional-bool",
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "RepoDigests"
+          ],
+          "value": true
+        }
+      ]
+    },
+    {
+      "name": "repodigests-optional-integer",
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "RepoDigests"
+          ],
+          "value": 42
+        }
+      ]
+    },
+    {
+      "name": "repodigests-optional-array",
+      "expect": "image",
+      "changes": [
+        {
+          "path": [
+            "RepoDigests"
+          ],
+          "value": []
+        }
+      ]
+    },
+    {
+      "name": "repodigests-optional-string",
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "RepoDigests"
+          ],
+          "value": ""
+        }
+      ]
+    },
+    {
+      "name": "repodigests-optional-missing",
+      "expect": "image",
+      "remove": [
+        [
+          "RepoDigests"
+        ]
+      ]
+    },
+    {
+      "name": "config-empty",
+      "expect": "image",
+      "changes": [
+        {
+          "path": [
+            "Config"
+          ],
+          "value": {}
+        }
+      ]
+    },
+    {
+      "name": "labels-empty",
+      "expect": "image",
+      "changes": [
+        {
+          "path": [
+            "Config",
+            "Labels"
+          ],
+          "value": {}
+        }
+      ]
+    },
+    {
+      "name": "revision-object",
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Config",
+            "Labels",
+            "org.opencontainers.image.revision"
+          ],
+          "value": {}
+        }
+      ]
+    },
+    {
+      "name": "revision-unicode-control",
+      "expect": "image",
+      "changes": [
+        {
+          "path": [
+            "Config",
+            "Labels",
+            "org.opencontainers.image.revision"
+          ],
+          "value": "café\n\u001b[31m"
+        }
+      ]
+    },
+    {
+      "name": "ignored-data",
+      "expect": "image",
+      "changes": [
+        {
+          "path": [
+            "unknown"
+          ],
+          "value": {
+            "credential-canary": [
+              "unknown-label-canary",
+              false,
+              42,
+              null,
+              {
+                "nested": "raw-metadata-canary"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "ignored-label",
+      "expect": "image",
+      "changes": [
+        {
+          "path": [
+            "Config",
+            "Labels",
+            "private"
+          ],
+          "value": "unknown-label-canary"
+        }
+      ]
+    },
+    {
+      "name": "ignored-descriptor",
+      "expect": "image",
+      "changes": [
+        {
+          "path": [
+            "Descriptor",
+            "private"
+          ],
+          "value": {
+            "token": "raw-metadata-canary"
+          }
+        }
+      ]
+    },
+    {
+      "name": "repo-object",
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "RepoDigests"
+          ],
+          "value": {}
+        }
+      ]
+    },
+    {
+      "name": "repo-string",
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "RepoDigests"
+          ],
+          "value": ""
+        }
+      ]
+    },
+    {
+      "name": "repo-element-null",
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "RepoDigests"
+          ],
+          "value": [
+            null
+          ]
+        }
+      ]
+    },
+    {
+      "name": "repo-element-number",
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "RepoDigests"
+          ],
+          "value": [
+            42
+          ]
+        }
+      ]
+    },
+    {
+      "name": "repo-bare-digest",
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "RepoDigests"
+          ],
+          "value": [
+            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "repo-uppercase-digest",
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "RepoDigests"
+          ],
+          "value": [
+            "repo@sha256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "repo-empty-repository",
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "RepoDigests"
+          ],
+          "value": [
+            "@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "repo-double-at",
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "RepoDigests"
+          ],
+          "value": [
+            "repo@@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "repo-bad-prefix",
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "RepoDigests"
+          ],
+          "value": [
+            "-repo@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "repo-space",
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "RepoDigests"
+          ],
+          "value": [
+            "repo name@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "repo-unicode",
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "RepoDigests"
+          ],
+          "value": [
+            "répo@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "repo-short",
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "RepoDigests"
+          ],
+          "value": [
+            "repo@sha256:a"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "repo-order-and-duplicates",
+      "expect": "image",
+      "changes": [
+        {
+          "path": [
+            "RepoDigests"
+          ],
+          "value": [
+            "repo@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "repo@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "repo@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "repo-bounded-spelling",
+      "expect": "image",
+      "changes": [
+        {
+          "path": [
+            "RepoDigests"
+          ],
+          "value": [
+            "Registry.EXAMPLE:5000/team/name_v1-2.3@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "repo-count-256",
+      "expect": "image",
+      "repeat": {
+        "path": [
+          "RepoDigests"
+        ],
+        "value": "repo@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "count": 256,
+        "array": true
+      }
+    },
+    {
+      "name": "repo-count-257",
+      "expect": "error",
+      "repeat": {
+        "path": [
+          "RepoDigests"
+        ],
+        "value": "repo@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "count": 257,
+        "array": true
+      }
+    },
+    {
+      "name": "repo-bytes-512",
+      "expect": "image",
+      "changes": [
+        {
+          "path": [
+            "RepoDigests"
+          ],
+          "value": [
+            "rrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "repo-bytes-513",
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "RepoDigests"
+          ],
+          "value": [
+            "rrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "revision-utf8-bytes-4096",
+      "expect": "image",
+      "repeat": {
+        "path": [
+          "Config",
+          "Labels",
+          "org.opencontainers.image.revision"
+        ],
+        "value": "é",
+        "count": 2048,
+        "tail": ""
+      }
+    },
+    {
+      "name": "revision-utf8-bytes-4097",
+      "expect": "error",
+      "repeat": {
+        "path": [
+          "Config",
+          "Labels",
+          "org.opencontainers.image.revision"
+        ],
+        "value": "é",
+        "count": 2048,
+        "tail": "a"
+      }
+    },
+    {
+      "name": "platform-bytes-512",
+      "expect": "image",
+      "repeat": {
+        "path": [
+          "Os"
+        ],
+        "value": "a",
+        "count": 506
+      }
+    },
+    {
+      "name": "platform-bytes-513",
+      "expect": "error",
+      "repeat": {
+        "path": [
+          "Os"
+        ],
+        "value": "a",
+        "count": 507
+      }
+    },
+    {
+      "name": "platform-bytes-519",
+      "expect": "error",
+      "repeat": {
+        "path": [
+          "Os"
+        ],
+        "value": "a",
+        "count": 513
+      }
+    },
+    {
+      "name": "document-bytes-1048576",
+      "expect": "image",
+      "padding_bytes": 1048576
+    },
+    {
+      "name": "document-bytes-1048577",
+      "expect": "error",
+      "padding_bytes": 1048577
+    },
+    {
+      "name": "document-depth-64",
+      "expect": "image",
+      "depth": 64
+    },
+    {
+      "name": "document-depth-65",
+      "expect": "error",
+      "depth": 65
+    },
+    {
+      "name": "root-array",
+      "expect": "error",
+      "hex": "5b5d"
+    },
+    {
+      "name": "root-null",
+      "expect": "error",
+      "hex": "6e756c6c"
+    },
+    {
+      "name": "multiple-objects",
+      "expect": "error",
+      "hex": "7b7d7b7d"
+    },
+    {
+      "name": "malformed",
+      "expect": "error",
+      "hex": "7b"
+    },
+    {
+      "name": "invalid-utf8",
+      "expect": "error",
+      "hex": "7b2263726564656e7469616c2d63616e617279223a22ff227d"
+    },
+    {
+      "name": "duplicate-root",
+      "expect": "error",
+      "hex": "7b224964223a312c224964223a327d"
+    },
+    {
+      "name": "duplicate-ignored",
+      "expect": "error",
+      "hex": "7b22756e6b6e6f776e223a7b2263726564656e7469616c2d63616e617279223a312c2263726564656e7469616c2d63616e617279223a327d7d"
+    },
+    {
+      "name": "nonfinite",
+      "expect": "error",
+      "hex": "7b22756e6b6e6f776e223a31653939397d"
+    }
+  ]
+}

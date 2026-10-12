@@ -73,7 +73,7 @@ fn qualify(cancelled: bool, cleanup_failed: bool) {
     ))
     .unwrap();
     let document: Value = serde_json::from_slice(&std::fs::read(&plan).unwrap()).unwrap();
-    assert_eq!(document["schema"], "opaal.plan.v3");
+    assert_eq!(document["schema"], "opaal.plan.v4");
     let primary = if cancelled {
         "EXECUTE_CANCELLED"
     } else {

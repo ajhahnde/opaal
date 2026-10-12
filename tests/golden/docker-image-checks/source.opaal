@@ -1,0 +1,18 @@
+import './policy.opaal' as policy
+import std::docker as docker
+import std::data as data
+import std::io as io
+let input = io::read_stdin(1048576)
+mut document = {}
+try {
+    document = data::json_decode(input)
+} catch error {
+    throw "Saved image input is not valid JSON."
+}
+let image = docker::decode_image(document)
+let result = policy::assess(image, "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "linux/amd64", "abc123")
+io::write_stdout(data::json_encode(result))
+if !result.passed {
+    exit 1
+}
+exit 0

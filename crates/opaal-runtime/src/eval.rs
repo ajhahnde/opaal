@@ -1392,6 +1392,28 @@ impl CancellationToken {
         }
     }
 
+    pub(crate) fn with_deadline(self, clock: Arc<dyn Clock>, deadline: Instant) -> Self {
+        let reason = Arc::new(AtomicU8::new(2));
+        let observed = reason.clone();
+        Self {
+            is_cancelled: Arc::new(move || {
+                if observed.load(Ordering::SeqCst) != 2 {
+                    return true;
+                }
+                let next = if self.is_cancelled() {
+                    u8::from(self.reason() == CancelReason::Timeout)
+                } else if clock.now() >= deadline {
+                    1
+                } else {
+                    return false;
+                };
+                let _ = observed.compare_exchange(2, next, Ordering::SeqCst, Ordering::SeqCst);
+                true
+            }),
+            reason,
+        }
+    }
+
     /// Polls the underlying signal.
     #[must_use]
     pub fn is_cancelled(&self) -> bool {
@@ -1528,7 +1550,7 @@ impl ResourceBudget {
         true
     }
 
-    fn charge_collection_items(&mut self, amount: usize) -> bool {
+    pub(crate) fn charge_collection_items(&mut self, amount: usize) -> bool {
         let Ok(amount) = u64::try_from(amount) else {
             return false;
         };
@@ -1811,6 +1833,7 @@ pub(crate) trait EvaluationHost {
         _operation: &str,
         _arguments: Vec<Value>,
         _budget: &mut ResourceBudget,
+        _cancel: CancellationToken,
     ) -> Option<Result<Value, OperationalModuleError>> {
         None
     }
@@ -1894,8 +1917,12 @@ impl EvaluationHost for ControlledEvaluationHost<'_, '_> {
         operation: &str,
         arguments: Vec<Value>,
         budget: &mut ResourceBudget,
+        cancel: CancellationToken,
     ) -> Option<Result<Value, OperationalModuleError>> {
-        Some(self.operations.invoke(module, operation, arguments, budget))
+        Some(
+            self.operations
+                .invoke(module, operation, arguments, budget, cancel),
+        )
     }
 
     fn action_start(&mut self, action: &ActionId) -> Option<Result<(), OperationalModuleError>> {
@@ -2708,6 +2735,53 @@ struct Evaluator<'budget, 'host> {
     cancel: CancellationToken,
     budget: &'budget mut ResourceBudget,
     host: &'host mut dyn EvaluationHost,
+}
+
+/// Decode acquired data with the same parser and live counters as source calls.
+pub(crate) fn decode_json_controlled(
+    input: &[u8],
+    budget: &mut ResourceBudget,
+    cancel: CancellationToken,
+) -> Result<Value, OperationalModuleError> {
+    let source = Arc::new(SourceFile::new(
+        opaal_syntax::SourceId::new(1),
+        "Docker response",
+        "data",
+    ));
+    let span = source.span(0..4).expect("synthetic source span");
+    let mut environment = Environment::new();
+    let mut host = PureEvaluationHost {
+        environment: &mut environment,
+        policy: EvaluationPolicy::PureOpaal,
+    };
+    let mut evaluator = Evaluator {
+        source,
+        binding_types: Arc::new(RuntimeBindingTypes::default()),
+        current_result_type: None,
+        current_type_arguments: BTreeMap::new(),
+        budgeted_callback: false,
+        standard_effects: None,
+        cancel,
+        budget,
+        host: &mut host,
+    };
+    evaluator
+        .json_decode(&[Value::bytes(input.to_vec())], span)
+        .map_err(|abort| match abort {
+            Abort::Cancelled(cancel) => OperationalModuleError::Cancelled(cancel.reason()),
+            Abort::Error(error)
+                if matches!(error.kind(), RuntimeErrorKind::ResourceBudgetExceeded) =>
+            {
+                OperationalModuleError::invalid(
+                    "RESOURCE_LIMIT",
+                    "evaluation resource budget exhausted",
+                )
+            }
+            _ => OperationalModuleError::invalid(
+                "DOCKER001",
+                "Docker response is not valid bounded JSON data",
+            ),
+        })
 }
 
 impl Evaluator<'_, '_> {
@@ -3960,6 +4034,18 @@ impl Evaluator<'_, '_> {
         right: &Value,
         span: Span,
     ) -> Eval<Value> {
+        if matches!(operator, BinaryOperator::Equal | BinaryOperator::NotEqual | BinaryOperator::In)
+            && [left, right].iter().any(|value| {
+                crate::operational::source::contains_nominal_identity(value, |id| {
+                    matches!(id.module().origin(), crate::module::ModuleOrigin::Standard { namespace, module }
+                        if namespace == "std" && module == "docker" && id.name() == "TargetIdentity")
+                })
+            })
+        {
+            return Err(self.error(RuntimeErrorKind::UserThrown {
+                message: "Docker target identities have no equality operation".to_owned(),
+            }, span));
+        }
         let map = |result: Result<Value, OperationError>| {
             result.map_err(|error| self.operation(error, span))
         };
@@ -4621,10 +4707,13 @@ impl Evaluator<'_, '_> {
                     .iter()
                     .map(|argument| self.expression(argument, scope))
                     .collect::<Eval<Vec<_>>>()?;
-                let Some(result) =
-                    self.host
-                        .invoke_operational(&module, &operation, arguments, self.budget)
-                else {
+                let Some(result) = self.host.invoke_operational(
+                    &module,
+                    &operation,
+                    arguments,
+                    self.budget,
+                    self.cancel.clone(),
+                ) else {
                     return Err(Abort::Refused(Refusal::new(
                         RefusalReason::Unsupported,
                         "operational standard module",
@@ -5813,11 +5902,24 @@ pub(crate) fn snapshot_callable(callable: &Arc<dyn Callable>) -> Option<Callable
     })
 }
 
+#[cfg(test)]
 pub(crate) fn callable_contains_control_carrier(callable: &Arc<dyn Callable>) -> bool {
+    callable_contains_nominal_identity(callable, crate::module::is_opaque_operational_nominal)
+}
+
+pub(crate) fn callable_contains_nominal_identity(
+    callable: &Arc<dyn Callable>,
+    matches: fn(&crate::module::NominalTypeId) -> bool,
+) -> bool {
     callable
         .as_any()
         .downcast_ref::<CallableValue>()
-        .is_some_and(|callable| callable.captured.values().any(contains_control_carrier))
+        .is_some_and(|callable| {
+            callable
+                .captured
+                .values()
+                .any(|value| crate::operational::source::contains_nominal_identity(value, matches))
+        })
 }
 
 pub(crate) fn callable_binding_types(
@@ -6422,6 +6524,7 @@ mod tests {
             _operation: &str,
             _arguments: Vec<Value>,
             _budget: &mut ResourceBudget,
+            _cancel: CancellationToken,
         ) -> Option<Result<Value, OperationalModuleError>> {
             self.calls.operational.fetch_add(1, Ordering::Relaxed);
             None

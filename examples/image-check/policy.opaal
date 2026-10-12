@@ -1,0 +1,47 @@
+import std::docker as docker
+import std::outcome as outcome
+export { assess }
+
+def revision_text(image: docker::Image) -> String
+{
+    match image.revision {
+        outcome::Option::Some(text) => { return text }
+        outcome::Option::None() => { return "" }
+    }
+}
+
+def platform_text(image: docker::Image) -> String
+{
+    if image.variant == "" {
+        return "{image.os}/{image.architecture}"
+    }
+    return "{image.os}/{image.architecture}/{image.variant}"
+}
+
+def revision_present(image: docker::Image) -> Bool
+{
+    match image.revision {
+        outcome::Option::Some(_) => { return true }
+        outcome::Option::None() => { return false }
+    }
+}
+
+def assess(image: docker::Image, expected_id: String, expected_platform: String, expected_revision: String) -> Record
+{
+    if expected_id == "" || expected_platform == "" || expected_revision == "" {
+        throw "delivery expectations must be nonempty"
+    }
+    let full_platform = platform_text(image)
+    let revision = revision_text(image)
+    let id_ok = image.id == expected_id
+    let platform_ok = full_platform == expected_platform
+    let revision_ok = (revision != "" && revision == expected_revision)
+    return ({
+        passed: (id_ok && platform_ok && revision_ok),
+        checks: [
+        { name: "image-id", passed: id_ok, expected: expected_id, actual: image.id },
+        { name: "platform", passed: platform_ok, expected: expected_platform, actual: full_platform },
+        { name: "revision", passed: revision_ok, expected: expected_revision, actual: revision, missing: !revision_present(image) },
+        ],
+    })
+}

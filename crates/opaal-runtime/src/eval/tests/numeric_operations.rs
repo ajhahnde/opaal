@@ -41,6 +41,7 @@ impl EvaluationHost for CountingHost {
         _: &str,
         _: Vec<Value>,
         _: &mut ResourceBudget,
+        _: crate::eval::CancellationToken,
     ) -> Option<Result<Value, OperationalModuleError>> {
         self.operations += 1;
         panic!("math must not invoke an operational host")

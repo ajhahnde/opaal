@@ -345,7 +345,7 @@ class Qualification:
             "--environment", "ci", "--input", "repo=.", "--format", "json",
         )
         check_value = json.loads(check.stdout)
-        if check_value.get("schema") != "opaal.check.v2" or check_value.get("secrets") != []:
+        if check_value.get("schema") != "opaal.check.v4" or check_value.get("secrets") != []:
             fail("secret-free check artifact is not canonical or requires a secret")
         plan_path = Path("target/opaal-golden/secretfree.plan.json")
         plan = self.cli(
@@ -354,7 +354,7 @@ class Qualification:
             "--out", str(plan_path),
         )
         digest = self.plan_digest(plan)
-        exact_schema(self.project / plan_path, "opaal.plan.v2")
+        exact_schema(self.project / plan_path, "opaal.plan.v4")
         self.inspect_twice("plan", plan_path)
         journal = Path("target/opaal-golden/secretfree.run.jsonl")
         self.cli(
@@ -408,7 +408,7 @@ class Qualification:
         )
         if b" refused\n" not in plan.stdout:
             fail("many-secret plan did not report its refused outcome")
-        value = exact_schema(self.project / plan_path, "opaal.plan.v2")
+        value = exact_schema(self.project / plan_path, "opaal.plan.v4")
         if value.get("outcome", {}).get("class") != "refused":
             fail("many-secret plan is not sealed as refused")
         self.inspect_twice("plan", plan_path)
@@ -425,8 +425,8 @@ class Qualification:
         expected_status = 0 if self.is_linux else 1
         check = self.cli("check", *arguments, "--format", "json", expected=expected_status)
         check_value = json.loads(check.stdout)
-        if check_value.get("schema") != "opaal.check.v2":
-            fail("readiness check did not emit an opaal.check.v2 artifact")
+        if check_value.get("schema") != "opaal.check.v4":
+            fail("readiness check did not emit an opaal.check.v4 artifact")
         if self.is_macos:
             findings = check_value.get("findings", [])
             if not any(
@@ -441,7 +441,7 @@ class Qualification:
             "plan", *arguments, "--expires-in", "900s", "--out", str(plan_path),
             expected=expected_status,
         )
-        plan_value = exact_schema(self.project / plan_path, "opaal.plan.v2")
+        plan_value = exact_schema(self.project / plan_path, "opaal.plan.v4")
         self.assert_readiness_plan(plan_value)
         view = self.inspect_twice("plan", plan_path)
         if CANARY in view:

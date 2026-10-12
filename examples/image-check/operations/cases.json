@@ -1,0 +1,2523 @@
+{
+  "schema_version": 1,
+  "cases": [
+    {
+      "name": "stage-0-status-1",
+      "stages": [
+        0
+      ],
+      "processes": 1,
+      "expect": "error",
+      "status": 1
+    },
+    {
+      "name": "stage-0-status-127",
+      "stages": [
+        0
+      ],
+      "processes": 1,
+      "expect": "error",
+      "status": 127
+    },
+    {
+      "name": "stage-1-status-1",
+      "stages": [
+        1
+      ],
+      "processes": 2,
+      "expect": "error",
+      "status": 1
+    },
+    {
+      "name": "stage-1-status-127",
+      "stages": [
+        1
+      ],
+      "processes": 2,
+      "expect": "error",
+      "status": 127
+    },
+    {
+      "name": "stage-2-status-1",
+      "stages": [
+        2
+      ],
+      "processes": 3,
+      "expect": "error",
+      "status": 1
+    },
+    {
+      "name": "stage-2-status-127",
+      "stages": [
+        2
+      ],
+      "processes": 3,
+      "expect": "error",
+      "status": 127
+    },
+    {
+      "name": "stage-3-status-1",
+      "stages": [
+        3
+      ],
+      "processes": 4,
+      "expect": "error",
+      "status": 1
+    },
+    {
+      "name": "stage-3-status-127",
+      "stages": [
+        3
+      ],
+      "processes": 4,
+      "expect": "error",
+      "status": 127
+    },
+    {
+      "name": "probe-wrong-version",
+      "stages": [
+        0
+      ],
+      "processes": 1,
+      "expect": "error",
+      "hex": "446f636b65722076657273696f6e2032392e382e302c206275696c64206162630a"
+    },
+    {
+      "name": "probe-missing-lf",
+      "stages": [
+        0
+      ],
+      "processes": 1,
+      "expect": "error",
+      "hex": "446f636b65722076657273696f6e2032392e392e302c206275696c6420616263"
+    },
+    {
+      "name": "probe-extra-line",
+      "stages": [
+        0
+      ],
+      "processes": 1,
+      "expect": "error",
+      "hex": "446f636b65722076657273696f6e2032392e392e302c206275696c64206162630a7365637265740a"
+    },
+    {
+      "name": "probe-empty-build",
+      "stages": [
+        0
+      ],
+      "processes": 1,
+      "expect": "error",
+      "hex": "446f636b65722076657273696f6e2032392e392e302c206275696c64200a"
+    },
+    {
+      "name": "probe-space-build",
+      "stages": [
+        0
+      ],
+      "processes": 1,
+      "expect": "error",
+      "hex": "446f636b65722076657273696f6e2032392e392e302c206275696c64206120620a"
+    },
+    {
+      "name": "probe-crlf",
+      "stages": [
+        0
+      ],
+      "processes": 1,
+      "expect": "error",
+      "hex": "446f636b65722076657273696f6e2032392e392e302c206275696c64206162630d0a"
+    },
+    {
+      "name": "probe-invalid-utf8",
+      "stages": [
+        0
+      ],
+      "processes": 1,
+      "expect": "error",
+      "hex": "446f636b65722076657273696f6e2032392e392e302c206275696c6420ff0a"
+    },
+    {
+      "name": "probe-control-build",
+      "stages": [
+        0
+      ],
+      "processes": 1,
+      "expect": "error",
+      "hex": "446f636b65722076657273696f6e2032392e392e302c206275696c64201b0a"
+    },
+    {
+      "name": "probe-noncanonical-version",
+      "stages": [
+        0
+      ],
+      "processes": 1,
+      "expect": "error",
+      "hex": "446f636b65722076657273696f6e203032392e392e302c206275696c64206162630a"
+    },
+    {
+      "name": "probe-oversized-build",
+      "stages": [
+        0
+      ],
+      "processes": 1,
+      "expect": "error",
+      "hex": "446f636b65722076657273696f6e2032392e392e302c206275696c64206161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161610a"
+    },
+    {
+      "name": "probe-exact-build",
+      "stages": [
+        0
+      ],
+      "processes": 4,
+      "expect": "true",
+      "hex": "446f636b65722076657273696f6e2032392e392e302c206275696c642061616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161610a"
+    },
+    {
+      "name": "before-Client-null",
+      "stages": [
+        1
+      ],
+      "processes": 2,
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Client"
+          ],
+          "value": null
+        }
+      ]
+    },
+    {
+      "name": "before-Client-bool",
+      "stages": [
+        1
+      ],
+      "processes": 2,
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Client"
+          ],
+          "value": false
+        }
+      ]
+    },
+    {
+      "name": "before-Client-array",
+      "stages": [
+        1
+      ],
+      "processes": 2,
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Client"
+          ],
+          "value": []
+        }
+      ]
+    },
+    {
+      "name": "before-Client-missing",
+      "stages": [
+        1
+      ],
+      "processes": 2,
+      "expect": "error",
+      "remove": [
+        [
+          "Client"
+        ]
+      ]
+    },
+    {
+      "name": "before-Client-Version-missing",
+      "stages": [
+        1
+      ],
+      "processes": 2,
+      "expect": "error",
+      "remove": [
+        [
+          "Client",
+          "Version"
+        ]
+      ]
+    },
+    {
+      "name": "before-Client-Version-null",
+      "stages": [
+        1
+      ],
+      "processes": 2,
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Client",
+            "Version"
+          ],
+          "value": null
+        }
+      ]
+    },
+    {
+      "name": "before-Client-Version-bool",
+      "stages": [
+        1
+      ],
+      "processes": 2,
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Client",
+            "Version"
+          ],
+          "value": false
+        }
+      ]
+    },
+    {
+      "name": "before-Client-Version-number",
+      "stages": [
+        1
+      ],
+      "processes": 2,
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Client",
+            "Version"
+          ],
+          "value": 42
+        }
+      ]
+    },
+    {
+      "name": "before-Client-Version-object",
+      "stages": [
+        1
+      ],
+      "processes": 2,
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Client",
+            "Version"
+          ],
+          "value": {}
+        }
+      ]
+    },
+    {
+      "name": "before-Client-ApiVersion-missing",
+      "stages": [
+        1
+      ],
+      "processes": 2,
+      "expect": "error",
+      "remove": [
+        [
+          "Client",
+          "ApiVersion"
+        ]
+      ]
+    },
+    {
+      "name": "before-Client-ApiVersion-null",
+      "stages": [
+        1
+      ],
+      "processes": 2,
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Client",
+            "ApiVersion"
+          ],
+          "value": null
+        }
+      ]
+    },
+    {
+      "name": "before-Client-ApiVersion-bool",
+      "stages": [
+        1
+      ],
+      "processes": 2,
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Client",
+            "ApiVersion"
+          ],
+          "value": false
+        }
+      ]
+    },
+    {
+      "name": "before-Client-ApiVersion-number",
+      "stages": [
+        1
+      ],
+      "processes": 2,
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Client",
+            "ApiVersion"
+          ],
+          "value": 42
+        }
+      ]
+    },
+    {
+      "name": "before-Client-ApiVersion-object",
+      "stages": [
+        1
+      ],
+      "processes": 2,
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Client",
+            "ApiVersion"
+          ],
+          "value": {}
+        }
+      ]
+    },
+    {
+      "name": "before-Client-Os-missing",
+      "stages": [
+        1
+      ],
+      "processes": 2,
+      "expect": "error",
+      "remove": [
+        [
+          "Client",
+          "Os"
+        ]
+      ]
+    },
+    {
+      "name": "before-Client-Os-null",
+      "stages": [
+        1
+      ],
+      "processes": 2,
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Client",
+            "Os"
+          ],
+          "value": null
+        }
+      ]
+    },
+    {
+      "name": "before-Client-Os-bool",
+      "stages": [
+        1
+      ],
+      "processes": 2,
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Client",
+            "Os"
+          ],
+          "value": false
+        }
+      ]
+    },
+    {
+      "name": "before-Client-Os-number",
+      "stages": [
+        1
+      ],
+      "processes": 2,
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Client",
+            "Os"
+          ],
+          "value": 42
+        }
+      ]
+    },
+    {
+      "name": "before-Client-Os-object",
+      "stages": [
+        1
+      ],
+      "processes": 2,
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Client",
+            "Os"
+          ],
+          "value": {}
+        }
+      ]
+    },
+    {
+      "name": "before-Client-Arch-missing",
+      "stages": [
+        1
+      ],
+      "processes": 2,
+      "expect": "error",
+      "remove": [
+        [
+          "Client",
+          "Arch"
+        ]
+      ]
+    },
+    {
+      "name": "before-Client-Arch-null",
+      "stages": [
+        1
+      ],
+      "processes": 2,
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Client",
+            "Arch"
+          ],
+          "value": null
+        }
+      ]
+    },
+    {
+      "name": "before-Client-Arch-bool",
+      "stages": [
+        1
+      ],
+      "processes": 2,
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Client",
+            "Arch"
+          ],
+          "value": false
+        }
+      ]
+    },
+    {
+      "name": "before-Client-Arch-number",
+      "stages": [
+        1
+      ],
+      "processes": 2,
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Client",
+            "Arch"
+          ],
+          "value": 42
+        }
+      ]
+    },
+    {
+      "name": "before-Client-Arch-object",
+      "stages": [
+        1
+      ],
+      "processes": 2,
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Client",
+            "Arch"
+          ],
+          "value": {}
+        }
+      ]
+    },
+    {
+      "name": "before-Server-null",
+      "stages": [
+        1
+      ],
+      "processes": 2,
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Server"
+          ],
+          "value": null
+        }
+      ]
+    },
+    {
+      "name": "before-Server-bool",
+      "stages": [
+        1
+      ],
+      "processes": 2,
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Server"
+          ],
+          "value": false
+        }
+      ]
+    },
+    {
+      "name": "before-Server-array",
+      "stages": [
+        1
+      ],
+      "processes": 2,
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Server"
+          ],
+          "value": []
+        }
+      ]
+    },
+    {
+      "name": "before-Server-missing",
+      "stages": [
+        1
+      ],
+      "processes": 2,
+      "expect": "error",
+      "remove": [
+        [
+          "Server"
+        ]
+      ]
+    },
+    {
+      "name": "before-Server-Version-missing",
+      "stages": [
+        1
+      ],
+      "processes": 2,
+      "expect": "error",
+      "remove": [
+        [
+          "Server",
+          "Version"
+        ]
+      ]
+    },
+    {
+      "name": "before-Server-Version-null",
+      "stages": [
+        1
+      ],
+      "processes": 2,
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Server",
+            "Version"
+          ],
+          "value": null
+        }
+      ]
+    },
+    {
+      "name": "before-Server-Version-bool",
+      "stages": [
+        1
+      ],
+      "processes": 2,
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Server",
+            "Version"
+          ],
+          "value": false
+        }
+      ]
+    },
+    {
+      "name": "before-Server-Version-number",
+      "stages": [
+        1
+      ],
+      "processes": 2,
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Server",
+            "Version"
+          ],
+          "value": 42
+        }
+      ]
+    },
+    {
+      "name": "before-Server-Version-object",
+      "stages": [
+        1
+      ],
+      "processes": 2,
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Server",
+            "Version"
+          ],
+          "value": {}
+        }
+      ]
+    },
+    {
+      "name": "before-Server-ApiVersion-missing",
+      "stages": [
+        1
+      ],
+      "processes": 2,
+      "expect": "error",
+      "remove": [
+        [
+          "Server",
+          "ApiVersion"
+        ]
+      ]
+    },
+    {
+      "name": "before-Server-ApiVersion-null",
+      "stages": [
+        1
+      ],
+      "processes": 2,
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Server",
+            "ApiVersion"
+          ],
+          "value": null
+        }
+      ]
+    },
+    {
+      "name": "before-Server-ApiVersion-bool",
+      "stages": [
+        1
+      ],
+      "processes": 2,
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Server",
+            "ApiVersion"
+          ],
+          "value": false
+        }
+      ]
+    },
+    {
+      "name": "before-Server-ApiVersion-number",
+      "stages": [
+        1
+      ],
+      "processes": 2,
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Server",
+            "ApiVersion"
+          ],
+          "value": 42
+        }
+      ]
+    },
+    {
+      "name": "before-Server-ApiVersion-object",
+      "stages": [
+        1
+      ],
+      "processes": 2,
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Server",
+            "ApiVersion"
+          ],
+          "value": {}
+        }
+      ]
+    },
+    {
+      "name": "before-Server-MinAPIVersion-missing",
+      "stages": [
+        1
+      ],
+      "processes": 2,
+      "expect": "error",
+      "remove": [
+        [
+          "Server",
+          "MinAPIVersion"
+        ]
+      ]
+    },
+    {
+      "name": "before-Server-MinAPIVersion-null",
+      "stages": [
+        1
+      ],
+      "processes": 2,
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Server",
+            "MinAPIVersion"
+          ],
+          "value": null
+        }
+      ]
+    },
+    {
+      "name": "before-Server-MinAPIVersion-bool",
+      "stages": [
+        1
+      ],
+      "processes": 2,
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Server",
+            "MinAPIVersion"
+          ],
+          "value": false
+        }
+      ]
+    },
+    {
+      "name": "before-Server-MinAPIVersion-number",
+      "stages": [
+        1
+      ],
+      "processes": 2,
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Server",
+            "MinAPIVersion"
+          ],
+          "value": 42
+        }
+      ]
+    },
+    {
+      "name": "before-Server-MinAPIVersion-object",
+      "stages": [
+        1
+      ],
+      "processes": 2,
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Server",
+            "MinAPIVersion"
+          ],
+          "value": {}
+        }
+      ]
+    },
+    {
+      "name": "before-Server-Os-missing",
+      "stages": [
+        1
+      ],
+      "processes": 2,
+      "expect": "error",
+      "remove": [
+        [
+          "Server",
+          "Os"
+        ]
+      ]
+    },
+    {
+      "name": "before-Server-Os-null",
+      "stages": [
+        1
+      ],
+      "processes": 2,
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Server",
+            "Os"
+          ],
+          "value": null
+        }
+      ]
+    },
+    {
+      "name": "before-Server-Os-bool",
+      "stages": [
+        1
+      ],
+      "processes": 2,
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Server",
+            "Os"
+          ],
+          "value": false
+        }
+      ]
+    },
+    {
+      "name": "before-Server-Os-number",
+      "stages": [
+        1
+      ],
+      "processes": 2,
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Server",
+            "Os"
+          ],
+          "value": 42
+        }
+      ]
+    },
+    {
+      "name": "before-Server-Os-object",
+      "stages": [
+        1
+      ],
+      "processes": 2,
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Server",
+            "Os"
+          ],
+          "value": {}
+        }
+      ]
+    },
+    {
+      "name": "before-Server-Arch-missing",
+      "stages": [
+        1
+      ],
+      "processes": 2,
+      "expect": "error",
+      "remove": [
+        [
+          "Server",
+          "Arch"
+        ]
+      ]
+    },
+    {
+      "name": "before-Server-Arch-null",
+      "stages": [
+        1
+      ],
+      "processes": 2,
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Server",
+            "Arch"
+          ],
+          "value": null
+        }
+      ]
+    },
+    {
+      "name": "before-Server-Arch-bool",
+      "stages": [
+        1
+      ],
+      "processes": 2,
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Server",
+            "Arch"
+          ],
+          "value": false
+        }
+      ]
+    },
+    {
+      "name": "before-Server-Arch-number",
+      "stages": [
+        1
+      ],
+      "processes": 2,
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Server",
+            "Arch"
+          ],
+          "value": 42
+        }
+      ]
+    },
+    {
+      "name": "before-Server-Arch-object",
+      "stages": [
+        1
+      ],
+      "processes": 2,
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Server",
+            "Arch"
+          ],
+          "value": {}
+        }
+      ]
+    },
+    {
+      "name": "before-Client-version",
+      "stages": [
+        1
+      ],
+      "processes": 2,
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Client",
+            "Version"
+          ],
+          "value": "29.8.0"
+        }
+      ]
+    },
+    {
+      "name": "before-Server-version",
+      "stages": [
+        1
+      ],
+      "processes": 2,
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Server",
+            "Version"
+          ],
+          "value": "29.8.0"
+        }
+      ]
+    },
+    {
+      "name": "before-Client-api",
+      "stages": [
+        1
+      ],
+      "processes": 2,
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Client",
+            "ApiVersion"
+          ],
+          "value": "1.49"
+        }
+      ]
+    },
+    {
+      "name": "before-Server-max-api",
+      "stages": [
+        1
+      ],
+      "processes": 2,
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Server",
+            "ApiVersion"
+          ],
+          "value": "1.47"
+        }
+      ]
+    },
+    {
+      "name": "before-Server-min-api",
+      "stages": [
+        1
+      ],
+      "processes": 2,
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Server",
+            "MinAPIVersion"
+          ],
+          "value": "1.49"
+        }
+      ]
+    },
+    {
+      "name": "before-Server-leading-zero",
+      "stages": [
+        1
+      ],
+      "processes": 2,
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Server",
+            "ApiVersion"
+          ],
+          "value": "01.54"
+        }
+      ]
+    },
+    {
+      "name": "before-Server-semver",
+      "stages": [
+        1
+      ],
+      "processes": 2,
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Server",
+            "ApiVersion"
+          ],
+          "value": "1.54.0"
+        }
+      ]
+    },
+    {
+      "name": "before-Server-sign",
+      "stages": [
+        1
+      ],
+      "processes": 2,
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Server",
+            "ApiVersion"
+          ],
+          "value": "1.+54"
+        }
+      ]
+    },
+    {
+      "name": "before-Server-overflow",
+      "stages": [
+        1
+      ],
+      "processes": 2,
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Server",
+            "ApiVersion"
+          ],
+          "value": "1.4294967296"
+        }
+      ]
+    },
+    {
+      "name": "before-Server-newline",
+      "stages": [
+        1
+      ],
+      "processes": 2,
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Server",
+            "MinAPIVersion"
+          ],
+          "value": "1.0\n"
+        }
+      ]
+    },
+    {
+      "name": "before-Client-host",
+      "stages": [
+        1
+      ],
+      "processes": 2,
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Client",
+            "Os"
+          ],
+          "value": "darwin"
+        }
+      ]
+    },
+    {
+      "name": "before-Server-host",
+      "stages": [
+        1
+      ],
+      "processes": 2,
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Server",
+            "Os"
+          ],
+          "value": "windows"
+        }
+      ]
+    },
+    {
+      "name": "before-Client-arch",
+      "stages": [
+        1
+      ],
+      "processes": 2,
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Client",
+            "Arch"
+          ],
+          "value": "arm64"
+        }
+      ]
+    },
+    {
+      "name": "before-Server-arch",
+      "stages": [
+        1
+      ],
+      "processes": 2,
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Server",
+            "Arch"
+          ],
+          "value": "arm64"
+        }
+      ]
+    },
+    {
+      "name": "before-invalid-utf8",
+      "stages": [
+        1
+      ],
+      "processes": 2,
+      "expect": "error",
+      "hex": "7b2263726564656e7469616c2d63616e617279223a22ff227d"
+    },
+    {
+      "name": "before-duplicate",
+      "stages": [
+        1
+      ],
+      "processes": 2,
+      "expect": "error",
+      "hex": "7b22436c69656e74223a7b7d2c22436c69656e74223a7b7d7d"
+    },
+    {
+      "name": "before-multiple",
+      "stages": [
+        1
+      ],
+      "processes": 2,
+      "expect": "error",
+      "hex": "7b7d7b7d"
+    },
+    {
+      "name": "before-root-array",
+      "stages": [
+        1
+      ],
+      "processes": 2,
+      "expect": "error",
+      "hex": "5b5d"
+    },
+    {
+      "name": "after-Client-null",
+      "stages": [
+        3
+      ],
+      "processes": 4,
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Client"
+          ],
+          "value": null
+        }
+      ]
+    },
+    {
+      "name": "after-Client-bool",
+      "stages": [
+        3
+      ],
+      "processes": 4,
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Client"
+          ],
+          "value": false
+        }
+      ]
+    },
+    {
+      "name": "after-Client-array",
+      "stages": [
+        3
+      ],
+      "processes": 4,
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Client"
+          ],
+          "value": []
+        }
+      ]
+    },
+    {
+      "name": "after-Client-missing",
+      "stages": [
+        3
+      ],
+      "processes": 4,
+      "expect": "error",
+      "remove": [
+        [
+          "Client"
+        ]
+      ]
+    },
+    {
+      "name": "after-Client-Version-missing",
+      "stages": [
+        3
+      ],
+      "processes": 4,
+      "expect": "error",
+      "remove": [
+        [
+          "Client",
+          "Version"
+        ]
+      ]
+    },
+    {
+      "name": "after-Client-Version-null",
+      "stages": [
+        3
+      ],
+      "processes": 4,
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Client",
+            "Version"
+          ],
+          "value": null
+        }
+      ]
+    },
+    {
+      "name": "after-Client-Version-bool",
+      "stages": [
+        3
+      ],
+      "processes": 4,
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Client",
+            "Version"
+          ],
+          "value": false
+        }
+      ]
+    },
+    {
+      "name": "after-Client-Version-number",
+      "stages": [
+        3
+      ],
+      "processes": 4,
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Client",
+            "Version"
+          ],
+          "value": 42
+        }
+      ]
+    },
+    {
+      "name": "after-Client-Version-object",
+      "stages": [
+        3
+      ],
+      "processes": 4,
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Client",
+            "Version"
+          ],
+          "value": {}
+        }
+      ]
+    },
+    {
+      "name": "after-Client-ApiVersion-missing",
+      "stages": [
+        3
+      ],
+      "processes": 4,
+      "expect": "error",
+      "remove": [
+        [
+          "Client",
+          "ApiVersion"
+        ]
+      ]
+    },
+    {
+      "name": "after-Client-ApiVersion-null",
+      "stages": [
+        3
+      ],
+      "processes": 4,
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Client",
+            "ApiVersion"
+          ],
+          "value": null
+        }
+      ]
+    },
+    {
+      "name": "after-Client-ApiVersion-bool",
+      "stages": [
+        3
+      ],
+      "processes": 4,
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Client",
+            "ApiVersion"
+          ],
+          "value": false
+        }
+      ]
+    },
+    {
+      "name": "after-Client-ApiVersion-number",
+      "stages": [
+        3
+      ],
+      "processes": 4,
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Client",
+            "ApiVersion"
+          ],
+          "value": 42
+        }
+      ]
+    },
+    {
+      "name": "after-Client-ApiVersion-object",
+      "stages": [
+        3
+      ],
+      "processes": 4,
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Client",
+            "ApiVersion"
+          ],
+          "value": {}
+        }
+      ]
+    },
+    {
+      "name": "after-Client-Os-missing",
+      "stages": [
+        3
+      ],
+      "processes": 4,
+      "expect": "error",
+      "remove": [
+        [
+          "Client",
+          "Os"
+        ]
+      ]
+    },
+    {
+      "name": "after-Client-Os-null",
+      "stages": [
+        3
+      ],
+      "processes": 4,
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Client",
+            "Os"
+          ],
+          "value": null
+        }
+      ]
+    },
+    {
+      "name": "after-Client-Os-bool",
+      "stages": [
+        3
+      ],
+      "processes": 4,
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Client",
+            "Os"
+          ],
+          "value": false
+        }
+      ]
+    },
+    {
+      "name": "after-Client-Os-number",
+      "stages": [
+        3
+      ],
+      "processes": 4,
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Client",
+            "Os"
+          ],
+          "value": 42
+        }
+      ]
+    },
+    {
+      "name": "after-Client-Os-object",
+      "stages": [
+        3
+      ],
+      "processes": 4,
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Client",
+            "Os"
+          ],
+          "value": {}
+        }
+      ]
+    },
+    {
+      "name": "after-Client-Arch-missing",
+      "stages": [
+        3
+      ],
+      "processes": 4,
+      "expect": "error",
+      "remove": [
+        [
+          "Client",
+          "Arch"
+        ]
+      ]
+    },
+    {
+      "name": "after-Client-Arch-null",
+      "stages": [
+        3
+      ],
+      "processes": 4,
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Client",
+            "Arch"
+          ],
+          "value": null
+        }
+      ]
+    },
+    {
+      "name": "after-Client-Arch-bool",
+      "stages": [
+        3
+      ],
+      "processes": 4,
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Client",
+            "Arch"
+          ],
+          "value": false
+        }
+      ]
+    },
+    {
+      "name": "after-Client-Arch-number",
+      "stages": [
+        3
+      ],
+      "processes": 4,
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Client",
+            "Arch"
+          ],
+          "value": 42
+        }
+      ]
+    },
+    {
+      "name": "after-Client-Arch-object",
+      "stages": [
+        3
+      ],
+      "processes": 4,
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Client",
+            "Arch"
+          ],
+          "value": {}
+        }
+      ]
+    },
+    {
+      "name": "after-Server-null",
+      "stages": [
+        3
+      ],
+      "processes": 4,
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Server"
+          ],
+          "value": null
+        }
+      ]
+    },
+    {
+      "name": "after-Server-bool",
+      "stages": [
+        3
+      ],
+      "processes": 4,
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Server"
+          ],
+          "value": false
+        }
+      ]
+    },
+    {
+      "name": "after-Server-array",
+      "stages": [
+        3
+      ],
+      "processes": 4,
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Server"
+          ],
+          "value": []
+        }
+      ]
+    },
+    {
+      "name": "after-Server-missing",
+      "stages": [
+        3
+      ],
+      "processes": 4,
+      "expect": "error",
+      "remove": [
+        [
+          "Server"
+        ]
+      ]
+    },
+    {
+      "name": "after-Server-Version-missing",
+      "stages": [
+        3
+      ],
+      "processes": 4,
+      "expect": "error",
+      "remove": [
+        [
+          "Server",
+          "Version"
+        ]
+      ]
+    },
+    {
+      "name": "after-Server-Version-null",
+      "stages": [
+        3
+      ],
+      "processes": 4,
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Server",
+            "Version"
+          ],
+          "value": null
+        }
+      ]
+    },
+    {
+      "name": "after-Server-Version-bool",
+      "stages": [
+        3
+      ],
+      "processes": 4,
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Server",
+            "Version"
+          ],
+          "value": false
+        }
+      ]
+    },
+    {
+      "name": "after-Server-Version-number",
+      "stages": [
+        3
+      ],
+      "processes": 4,
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Server",
+            "Version"
+          ],
+          "value": 42
+        }
+      ]
+    },
+    {
+      "name": "after-Server-Version-object",
+      "stages": [
+        3
+      ],
+      "processes": 4,
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Server",
+            "Version"
+          ],
+          "value": {}
+        }
+      ]
+    },
+    {
+      "name": "after-Server-ApiVersion-missing",
+      "stages": [
+        3
+      ],
+      "processes": 4,
+      "expect": "error",
+      "remove": [
+        [
+          "Server",
+          "ApiVersion"
+        ]
+      ]
+    },
+    {
+      "name": "after-Server-ApiVersion-null",
+      "stages": [
+        3
+      ],
+      "processes": 4,
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Server",
+            "ApiVersion"
+          ],
+          "value": null
+        }
+      ]
+    },
+    {
+      "name": "after-Server-ApiVersion-bool",
+      "stages": [
+        3
+      ],
+      "processes": 4,
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Server",
+            "ApiVersion"
+          ],
+          "value": false
+        }
+      ]
+    },
+    {
+      "name": "after-Server-ApiVersion-number",
+      "stages": [
+        3
+      ],
+      "processes": 4,
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Server",
+            "ApiVersion"
+          ],
+          "value": 42
+        }
+      ]
+    },
+    {
+      "name": "after-Server-ApiVersion-object",
+      "stages": [
+        3
+      ],
+      "processes": 4,
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Server",
+            "ApiVersion"
+          ],
+          "value": {}
+        }
+      ]
+    },
+    {
+      "name": "after-Server-MinAPIVersion-missing",
+      "stages": [
+        3
+      ],
+      "processes": 4,
+      "expect": "error",
+      "remove": [
+        [
+          "Server",
+          "MinAPIVersion"
+        ]
+      ]
+    },
+    {
+      "name": "after-Server-MinAPIVersion-null",
+      "stages": [
+        3
+      ],
+      "processes": 4,
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Server",
+            "MinAPIVersion"
+          ],
+          "value": null
+        }
+      ]
+    },
+    {
+      "name": "after-Server-MinAPIVersion-bool",
+      "stages": [
+        3
+      ],
+      "processes": 4,
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Server",
+            "MinAPIVersion"
+          ],
+          "value": false
+        }
+      ]
+    },
+    {
+      "name": "after-Server-MinAPIVersion-number",
+      "stages": [
+        3
+      ],
+      "processes": 4,
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Server",
+            "MinAPIVersion"
+          ],
+          "value": 42
+        }
+      ]
+    },
+    {
+      "name": "after-Server-MinAPIVersion-object",
+      "stages": [
+        3
+      ],
+      "processes": 4,
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Server",
+            "MinAPIVersion"
+          ],
+          "value": {}
+        }
+      ]
+    },
+    {
+      "name": "after-Server-Os-missing",
+      "stages": [
+        3
+      ],
+      "processes": 4,
+      "expect": "error",
+      "remove": [
+        [
+          "Server",
+          "Os"
+        ]
+      ]
+    },
+    {
+      "name": "after-Server-Os-null",
+      "stages": [
+        3
+      ],
+      "processes": 4,
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Server",
+            "Os"
+          ],
+          "value": null
+        }
+      ]
+    },
+    {
+      "name": "after-Server-Os-bool",
+      "stages": [
+        3
+      ],
+      "processes": 4,
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Server",
+            "Os"
+          ],
+          "value": false
+        }
+      ]
+    },
+    {
+      "name": "after-Server-Os-number",
+      "stages": [
+        3
+      ],
+      "processes": 4,
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Server",
+            "Os"
+          ],
+          "value": 42
+        }
+      ]
+    },
+    {
+      "name": "after-Server-Os-object",
+      "stages": [
+        3
+      ],
+      "processes": 4,
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Server",
+            "Os"
+          ],
+          "value": {}
+        }
+      ]
+    },
+    {
+      "name": "after-Server-Arch-missing",
+      "stages": [
+        3
+      ],
+      "processes": 4,
+      "expect": "error",
+      "remove": [
+        [
+          "Server",
+          "Arch"
+        ]
+      ]
+    },
+    {
+      "name": "after-Server-Arch-null",
+      "stages": [
+        3
+      ],
+      "processes": 4,
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Server",
+            "Arch"
+          ],
+          "value": null
+        }
+      ]
+    },
+    {
+      "name": "after-Server-Arch-bool",
+      "stages": [
+        3
+      ],
+      "processes": 4,
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Server",
+            "Arch"
+          ],
+          "value": false
+        }
+      ]
+    },
+    {
+      "name": "after-Server-Arch-number",
+      "stages": [
+        3
+      ],
+      "processes": 4,
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Server",
+            "Arch"
+          ],
+          "value": 42
+        }
+      ]
+    },
+    {
+      "name": "after-Server-Arch-object",
+      "stages": [
+        3
+      ],
+      "processes": 4,
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Server",
+            "Arch"
+          ],
+          "value": {}
+        }
+      ]
+    },
+    {
+      "name": "after-Client-version",
+      "stages": [
+        3
+      ],
+      "processes": 4,
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Client",
+            "Version"
+          ],
+          "value": "29.8.0"
+        }
+      ]
+    },
+    {
+      "name": "after-Server-version",
+      "stages": [
+        3
+      ],
+      "processes": 4,
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Server",
+            "Version"
+          ],
+          "value": "29.8.0"
+        }
+      ]
+    },
+    {
+      "name": "after-Client-api",
+      "stages": [
+        3
+      ],
+      "processes": 4,
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Client",
+            "ApiVersion"
+          ],
+          "value": "1.49"
+        }
+      ]
+    },
+    {
+      "name": "after-Server-max-api",
+      "stages": [
+        3
+      ],
+      "processes": 4,
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Server",
+            "ApiVersion"
+          ],
+          "value": "1.47"
+        }
+      ]
+    },
+    {
+      "name": "after-Server-min-api",
+      "stages": [
+        3
+      ],
+      "processes": 4,
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Server",
+            "MinAPIVersion"
+          ],
+          "value": "1.49"
+        }
+      ]
+    },
+    {
+      "name": "after-Server-leading-zero",
+      "stages": [
+        3
+      ],
+      "processes": 4,
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Server",
+            "ApiVersion"
+          ],
+          "value": "01.54"
+        }
+      ]
+    },
+    {
+      "name": "after-Server-semver",
+      "stages": [
+        3
+      ],
+      "processes": 4,
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Server",
+            "ApiVersion"
+          ],
+          "value": "1.54.0"
+        }
+      ]
+    },
+    {
+      "name": "after-Server-sign",
+      "stages": [
+        3
+      ],
+      "processes": 4,
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Server",
+            "ApiVersion"
+          ],
+          "value": "1.+54"
+        }
+      ]
+    },
+    {
+      "name": "after-Server-overflow",
+      "stages": [
+        3
+      ],
+      "processes": 4,
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Server",
+            "ApiVersion"
+          ],
+          "value": "1.4294967296"
+        }
+      ]
+    },
+    {
+      "name": "after-Server-newline",
+      "stages": [
+        3
+      ],
+      "processes": 4,
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Server",
+            "MinAPIVersion"
+          ],
+          "value": "1.0\n"
+        }
+      ]
+    },
+    {
+      "name": "after-Client-host",
+      "stages": [
+        3
+      ],
+      "processes": 4,
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Client",
+            "Os"
+          ],
+          "value": "darwin"
+        }
+      ]
+    },
+    {
+      "name": "after-Server-host",
+      "stages": [
+        3
+      ],
+      "processes": 4,
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Server",
+            "Os"
+          ],
+          "value": "windows"
+        }
+      ]
+    },
+    {
+      "name": "after-Client-arch",
+      "stages": [
+        3
+      ],
+      "processes": 4,
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Client",
+            "Arch"
+          ],
+          "value": "arm64"
+        }
+      ]
+    },
+    {
+      "name": "after-Server-arch",
+      "stages": [
+        3
+      ],
+      "processes": 4,
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Server",
+            "Arch"
+          ],
+          "value": "arm64"
+        }
+      ]
+    },
+    {
+      "name": "after-invalid-utf8",
+      "stages": [
+        3
+      ],
+      "processes": 4,
+      "expect": "error",
+      "hex": "7b2263726564656e7469616c2d63616e617279223a22ff227d"
+    },
+    {
+      "name": "after-duplicate",
+      "stages": [
+        3
+      ],
+      "processes": 4,
+      "expect": "error",
+      "hex": "7b22436c69656e74223a7b7d2c22436c69656e74223a7b7d7d"
+    },
+    {
+      "name": "after-multiple",
+      "stages": [
+        3
+      ],
+      "processes": 4,
+      "expect": "error",
+      "hex": "7b7d7b7d"
+    },
+    {
+      "name": "after-root-array",
+      "stages": [
+        3
+      ],
+      "processes": 4,
+      "expect": "error",
+      "hex": "5b5d"
+    },
+    {
+      "name": "inclusive-fixed-api",
+      "stages": [
+        1,
+        3
+      ],
+      "processes": 4,
+      "expect": "true",
+      "changes": [
+        {
+          "path": [
+            "Server",
+            "ApiVersion"
+          ],
+          "value": "1.48"
+        },
+        {
+          "path": [
+            "Server",
+            "MinAPIVersion"
+          ],
+          "value": "1.48"
+        }
+      ]
+    },
+    {
+      "name": "numeric-api-order",
+      "stages": [
+        1,
+        3
+      ],
+      "processes": 4,
+      "expect": "true",
+      "changes": [
+        {
+          "path": [
+            "Server",
+            "MinAPIVersion"
+          ],
+          "value": "1.9"
+        }
+      ]
+    },
+    {
+      "name": "ignored-version-canaries",
+      "stages": [
+        1,
+        3
+      ],
+      "processes": 4,
+      "expect": "true",
+      "changes": [
+        {
+          "path": [
+            "unknown"
+          ],
+          "value": {
+            "credential-canary": "raw-metadata-canary"
+          }
+        }
+      ]
+    },
+    {
+      "name": "changed-valid-server-api",
+      "stages": [
+        3
+      ],
+      "processes": 4,
+      "expect": "error",
+      "changes": [
+        {
+          "path": [
+            "Server",
+            "ApiVersion"
+          ],
+          "value": "1.55"
+        }
+      ]
+    }
+  ]
+}

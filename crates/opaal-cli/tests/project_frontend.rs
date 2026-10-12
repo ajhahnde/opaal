@@ -769,7 +769,7 @@ fn project_check_json_is_canonical_and_preserves_non_path_input_text() {
     );
     assert!(output.stderr.is_empty(), "{output:?}");
     let artifact = opaal_runtime::workflow::CheckArtifact::parse(&output.stdout).unwrap();
-    assert_eq!(artifact.value()["schema"], "opaal.check.v2");
+    assert_eq!(artifact.value()["schema"], "opaal.check.v4");
     assert_eq!(artifact.value()["inputs"][0]["name"], "candidate");
     assert_eq!(artifact.value()["inputs"][0]["type"], "String");
     assert_eq!(artifact.value()["inputs"][0]["binding"], "value");
@@ -971,7 +971,7 @@ fn lexical_paths_do_not_read_and_file_bindings_snapshot_one_regular_file() {
     assert!(inspected.stderr.is_empty(), "{inspected:?}");
     let plan_view = String::from_utf8(inspected.stdout).unwrap();
     assert!(plan_view.starts_with("OPAAL plan\ndigest: sha256:"));
-    assert!(plan_view.contains("toolchain: 1.3.0"));
+    assert!(plan_view.contains(&format!("toolchain: {}", env!("CARGO_PKG_VERSION"))));
     assert!(plan_view.contains("Inputs (1)\n- repo: Path [file]"));
     assert!(plan_view.contains("Secret requirements (0)\n(none)"));
     assert!(plan_view.contains(&format!(
@@ -1053,7 +1053,7 @@ fn lexical_paths_do_not_read_and_file_bindings_snapshot_one_regular_file() {
     let future_plan_path = project.0.join("future.plan.json");
     let future_plan = String::from_utf8(fs::read(&plan_path).unwrap())
         .unwrap()
-        .replace("opaal.plan.v2", "opaal.plan.v3");
+        .replace("opaal.plan.v4", "opaal.plan.v5");
     fs::write(&future_plan_path, future_plan).unwrap();
     let refused_inspection = opaal([
         OsStr::new("plan"),

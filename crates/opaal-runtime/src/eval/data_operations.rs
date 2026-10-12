@@ -15,6 +15,36 @@ const MAX_JSON_DEPTH: usize = 64;
 const CHUNK: usize = 4096;
 
 impl Evaluator<'_, '_> {
+    pub(super) fn docker_decode_image(&mut self, arguments: &[Value], span: Span) -> Eval<Value> {
+        let [Value::Record(document)] = arguments else {
+            unreachable!("validated Record input")
+        };
+        let source = Arc::clone(&self.source);
+        crate::docker::decode_image(
+            document,
+            &mut |items, bytes| {
+                self.check_cancel(span)?;
+                self.charge(span)?;
+                self.retain_collection_bytes(bytes, span)?;
+                if !self.budget.charge_collection_items(items) {
+                    return Err(self.error(RuntimeErrorKind::ResourceBudgetExceeded, span));
+                }
+                Ok(())
+            },
+            |error| {
+                Abort::Error(
+                    super::RuntimeError::new(
+                        RuntimeErrorKind::UserThrown {
+                            message: error.to_string(),
+                        },
+                        span,
+                    )
+                    .with_source(Arc::clone(&source)),
+                )
+            },
+        )
+    }
+
     pub(super) fn legacy_data_operation(
         &mut self,
         descriptor: &OperationDescriptor,
@@ -907,6 +937,7 @@ mod tests {
                 _: &str,
                 _: Vec<Value>,
                 _: &mut ResourceBudget,
+                _: crate::eval::CancellationToken,
             ) -> Option<Result<Value, ModuleError>> {
                 panic!("pure data must not reach authority dispatch")
             }

@@ -797,6 +797,7 @@ pub(crate) enum StandardOperation {
     DataGet,
     JsonEncode,
     JsonDecode,
+    DockerDecodeImage,
 }
 
 impl StandardOperation {
@@ -1255,6 +1256,27 @@ pub fn standard_operation(module: &ModuleId, name: &str) -> Option<OperationDesc
             .expect("compiled list descriptors must be valid");
         return Some(descriptor);
     }
+    if standard == "docker" && name == "decode_image" {
+        let descriptor = OperationDescriptor {
+            id: OperationId::new(module.clone(), name),
+            type_parameters: Vec::new(),
+            overloads: vec![OperationOverload::values(
+                vec![("document", ValueType::Record)],
+                ValueType::Nominal {
+                    id: Box::new(crate::module::NominalTypeId::standard("docker", "Image")),
+                    arguments: Vec::new(),
+                },
+            )],
+            documentation: "Decode one bounded Docker image record. Require a single-image manifest Descriptor with digest equal to the full observed Id; refuse indexes and descriptorless responses. Return selected platform, optional revision and independent repository references only. Share caller budgets and cancellation; errors never include metadata values.".to_owned(),
+            purity: OperationPurity::Pure,
+            downstream: DownstreamCallMetadata::foundation(),
+            implementation: StandardOperation::DockerDecodeImage,
+        };
+        descriptor
+            .validate()
+            .expect("compiled Docker descriptor must be valid");
+        return Some(descriptor);
+    }
     if standard == "data" {
         use StandardOperation::{DataGet, JsonDecode, JsonEncode, TomlDecode};
         use ValueType::{Any, Bytes, List, String as Text};
@@ -1493,6 +1515,7 @@ pub(crate) fn standard_operations(module: &ModuleId) -> Vec<OperationDescriptor>
         "get",
         "json_encode",
         "json_decode",
+        "decode_image",
         "map",
         "filter",
         "fold",

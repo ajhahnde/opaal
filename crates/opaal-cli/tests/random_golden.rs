@@ -166,10 +166,10 @@ task sample = sample
     ]);
     success(&checked);
     let checked = opaal_runtime::workflow::CheckArtifact::parse(&checked.stdout).unwrap();
-    assert_eq!(checked.value()["schema"], "opaal.check.v3");
+    assert_eq!(checked.value()["schema"], "opaal.check.v4");
     assert!(!work.0.join("sample.run.jsonl").exists());
     let plan = controlled_plan(&work);
-    assert_eq!(plan.value()["schema"], "opaal.plan.v3");
+    assert_eq!(plan.value()["schema"], "opaal.plan.v4");
     assert_eq!(
         plan.value()["standard_host"],
         checked.value()["standard_host"]
@@ -451,7 +451,7 @@ fn altered_accepted_limits_and_denied_grants_refuse_before_journal_creation() {
     ]);
     failure(&checked);
     let checked = opaal_runtime::workflow::CheckArtifact::parse(&checked.stdout).unwrap();
-    assert_eq!(checked.value()["schema"], "opaal.check.v3");
+    assert_eq!(checked.value()["schema"], "opaal.check.v4");
     assert!(!checked.is_executable());
 }
 

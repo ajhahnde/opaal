@@ -48,6 +48,68 @@ impl Default for PosixOperationalAdapter {
 }
 
 impl OperationalAdapter for PosixOperationalAdapter {
+    #[allow(clippy::useless_conversion)] // Native stat widths differ between hosts.
+    fn observe_local_path(
+        &self,
+        path: &Path,
+        directory: bool,
+    ) -> Result<opaal_platform::operational::UnixIdentity, OperationalError> {
+        let (parent, name) = open_parent(Path::new("/"), path)?;
+        let mut status = rustix::fs::statat(&parent, name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW)
+            .map_err(|cause| io_error(cause.into()))?;
+        let kind = rustix::fs::FileType::from_raw_mode(status.st_mode);
+        if directory {
+            if kind != rustix::fs::FileType::Directory {
+                return Err(error(
+                    OperationalErrorKind::InvalidInput,
+                    "safe path is not a directory",
+                ));
+            }
+            let file = openat_file(
+                &parent,
+                name,
+                libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+                0,
+            )?;
+            let retained = rustix::fs::fstat(&file).map_err(|cause| io_error(cause.into()))?;
+            if retained.st_dev != status.st_dev || retained.st_ino != status.st_ino {
+                return Err(error(
+                    OperationalErrorKind::InvalidInput,
+                    "directory identity changed",
+                ));
+            }
+            status = retained;
+            let entries =
+                rustix::fs::Dir::read_from(&file).map_err(|cause| io_error(cause.into()))?;
+            for entry in entries {
+                let entry = entry.map_err(|cause| io_error(cause.into()))?;
+                if !matches!(entry.file_name().to_bytes(), b"." | b"..") {
+                    return Err(error(
+                        OperationalErrorKind::InvalidInput,
+                        "safe directory must be empty",
+                    ));
+                }
+            }
+        } else if kind != rustix::fs::FileType::Socket {
+            return Err(error(
+                OperationalErrorKind::InvalidInput,
+                "target path is not a Unix socket",
+            ));
+        }
+        Ok(opaal_platform::operational::UnixIdentity {
+            device: u64::try_from(status.st_dev).map_err(|_| {
+                error(
+                    OperationalErrorKind::Unsupported,
+                    "native device identity is outside its range",
+                )
+            })?,
+            inode: status.st_ino,
+            mode: u32::from(status.st_mode),
+            uid: status.st_uid,
+            gid: status.st_gid,
+        })
+    }
+
     fn read_file(&self, request: ReadFileRequest<'_>) -> Result<Vec<u8>, OperationalError> {
         let (parent, name) = open_parent(request.root, request.path)?;
         let mut file = openat_file(

@@ -132,10 +132,10 @@ def qualify(archive: Path | None, fixtures: Path | None, binaries: Path | None,
         require(all(name in help_result for name in [b"int", b"float", b"bytes", b"entropy.system"]), "help identity differs")
         base = ("--project", "opaal.toml", "--task", "sample", "--environment", "ci")
         checked = json.loads(success(run("check", *base, "--format", "json"), "project check"))
-        require(checked["schema"] == "opaal.check.v3", "check schema differs")
+        require(checked["schema"] == "opaal.check.v4", "check schema differs")
         receipt = success(run("plan", *base, "--expires-in", "900s", "--out", "sample.plan.json"), "plan")
         plan = json.loads((work / "sample.plan.json").read_bytes())
-        require(plan["schema"] == "opaal.plan.v3" and plan["standard_host"] == checked["standard_host"] and
+        require(plan["schema"] == "opaal.plan.v4" and plan["standard_host"] == checked["standard_host"] and
                 receipt == f"plan {plan['digest']}\n".encode(), "plan identity/policy differs")
         inspected = success(run("plan", "inspect", "sample.plan.json"), "plan inspect")
         require(b"entropy.system evaluation" in inspected, "plan inspection lost entropy scope")

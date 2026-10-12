@@ -463,7 +463,9 @@ fn ctrl_c_cancels_a_blocked_terminal_read_and_restores_the_editor() {
     pty.send(b"import std::io as io\r");
     pty.await_prompt_after("as io");
     let mark = pty.mark();
-    pty.send(b"io::read_stdin(128)\r");
+    pty.send(b"io::println('read-ready'); io::read_stdin(128)\r");
+    // Cooked mode alone precedes signal capture; wait for this evaluation's host.
+    pty.wait_for_after_from(mark, "read_stdin(128)", "read-ready");
     pty.await_cooked_input();
     let started = Instant::now();
     pty.send(b"\x03");

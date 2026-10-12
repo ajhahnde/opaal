@@ -169,7 +169,7 @@ identity and never claims committed archive evidence. The exact committed
 both-host candidate jobs package `tests/golden/random-values` with
 `ci/package_random_values.py` and pass both the fixture and program archives to
 the qualifier. It checks real source domains, retained interactive cells and
-help, pure/domain refusal, controlled progress and metadata-only v3 inspection,
+help, pure/domain refusal, controlled progress and metadata-only inspection,
 and stale-source refusal outside the checkout. No version or publication is
 performed. The [Random fixture guide](tests/golden/random-values/README.md)
 explains the first-release floor and the independent Python reference.
@@ -216,6 +216,34 @@ they do not establish regular-filesystem EIO or power-loss durability. Each
 success/Error primary retains exact earlier output counts, empty administrative
 streams and owned worker reap, while receipt failure makes the run unsuccessful.
 
+## Docker image check reference
+
+The [image check reference](examples/image-check/README.md) shares one pure
+policy and single-manifest decoder between saved data and controlled Linux
+inspection. Saved-input use works on Linux x86_64 and macOS arm64 without Docker.
+Live inspection requires the exact client/server profile, explicit local socket,
+locked executable and new empty reference directories. Account configuration,
+remote transport and live macOS execution are excluded. The reference documents
+authority limits, stale bindings, escaped reports and manual reruns.
+
+Replay the working binary outside the checkout and retain exact case artifacts:
+
+```sh
+python3 ci/qualify_docker_image_checks.py --offline --binary-directory target/debug --expected-source "$(git rev-parse HEAD)" --platform macos-arm64 --report dist/docker-offline-working.json
+```
+
+Use `--platform linux-x86_64` on Linux. Working reports record dirty source
+snapshots and cannot substitute for committed candidate evidence. After commit,
+`ci/package_docker_image_checks.py` packages the exact reference; replay it with
+`--archive` and `--fixtures` instead of `--binary-directory`. Example copies must
+match the golden owner byte-for-byte. The offline qualifier asserts saved task
+exits, exact reports, receipt/audit agreement, standalone parity, independent
+policy modification and exclusive paths. It does not qualify a live daemon.
+
+`docker_image_limits` fuzzes hostile saved JSON and compares successful decoder
+results under tight work/retention budgets. Controlled acquisition fakes verify
+the fixed vectors, sanitized environment, failed-status gating and target checks.
+
 ## Static task discovery and plan digests
 
 Inspect the checked-in job-check project with the built client:
@@ -239,6 +267,15 @@ LF after successfully persisting an executable plan to its exclusive output
 path. Refused plans and persistence failures return nonzero and emit no digest.
 Supply that digest explicitly to `execute --accept`; displaying it grants no
 authority. Other plan output retains its human form.
+
+New check and plan artifacts use v4. The project record includes a sorted
+`targets` array (empty for Docker-free projects). Docker target records bind
+the compiled profile digest, lossless native socket/config paths and the
+device, inode, mode and owner of the socket and four empty safe directories.
+Planning observes local files without connecting to Docker. Execution checks
+these facts again before and after each fixed child; it does not authenticate
+a daemon or exclude replacement-back races. Legacy v2/v3 check/plan readers
+retain their closed schemas and reject target fields.
 
 Native CI selection uses `execute --require-true` with mandatory `--receipt-out`.
 The task must statically and dynamically return Bool. After owned cleanup and

@@ -106,7 +106,7 @@ publish = false
         for path in checker.QUALIFICATION_FILES:
             self.write(path, "fixture\n")
         self.write("README.md", "# OPAAL\n\nA language for automation.\n")
-        self.write("CHANGELOG.md", f"# Changelog\n\n## [Unreleased]\n\n## [{checker.VERSION}]\n")
+        self.write("CHANGELOG.md", f"# Changelog\n\n## [Unreleased]\n\n## [{checker.RELEASED_VERSION}]\n")
         self.write("SECURITY.md", "# Security\n")
 
     def tearDown(self) -> None:
@@ -161,7 +161,7 @@ publish = false
         self.assertIn("source-generation wording remains", findings)
 
     def test_changelog_requires_unreleased_and_current_release_sections(self) -> None:
-        for content in (f"## [{checker.VERSION}]\n", "## [Unreleased]\n\n## [0.0.0]\n"):
+        for content in (f"## [{checker.RELEASED_VERSION}]\n", "## [Unreleased]\n\n## [0.0.0]\n"):
             with self.subTest(content=content):
                 self.write("CHANGELOG.md", content)
                 self.assertIn(

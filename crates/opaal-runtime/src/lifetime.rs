@@ -111,6 +111,14 @@ impl CancellationScope {
         self.deadline
     }
 
+    pub(crate) fn token_until(
+        &self,
+        token: CancellationToken,
+        deadline: Deadline,
+    ) -> CancellationToken {
+        token.with_deadline(self.clock.clone(), deadline.instant())
+    }
+
     /// Narrow the deadline. A child or later phase can never extend it.
     pub fn narrow_deadline(&mut self, deadline: Deadline) {
         self.deadline = Some(match self.deadline {

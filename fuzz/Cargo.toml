@@ -79,3 +79,10 @@ path = "fuzz_targets/stdio_limits.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "docker_image_limits"
+path = "fuzz_targets/docker_image_limits.rs"
+test = false
+doc = false
+bench = false

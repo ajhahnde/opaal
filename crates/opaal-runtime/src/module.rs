@@ -1638,7 +1638,8 @@ pub(crate) fn is_opaque_operational_nominal(id: &NominalTypeId) -> bool {
             matches!(module.as_str(), "tools" | "endpoints" | "secrets")
         }
         ModuleOrigin::Standard { namespace, module } if namespace == "std" => {
-            module == "http" && id.name() == "SecretHeader"
+            (module == "http" && id.name() == "SecretHeader")
+                || (module == "docker" && id.name() == "TargetIdentity")
         }
         _ => false,
     }
@@ -4041,70 +4042,123 @@ impl RuntimeBindingTypes {
         declarations
             .by_module
             .insert(entry.module().clone(), current);
-        // List find returns the existing outcome nominal. Interactive type
-        // annotations, constructors and patterns must use that same schema.
-        let outcome = ModuleId::standard("std", "outcome");
-        if aliases
+        // Interactive constructors and annotations share the compiled module schemas.
+        let docker = ModuleId::standard("std", "docker");
+        let wants_docker = aliases
             .aliases(entry.module())
-            .any(|alias| alias.target() == &outcome)
-            && !declarations.by_module.contains_key(&outcome)
+            .any(|alias| alias.target() == &docker);
+        for (index, (name, module_source)) in [
+            ("outcome", STANDARD_OUTCOME_MODULE),
+            ("docker", STANDARD_DOCKER_MODULE),
+        ]
+        .into_iter()
+        .enumerate()
         {
-            let outcome_source = SourceFile::new(
-                SourceId::new(u32::MAX),
-                "std::outcome",
-                STANDARD_OUTCOME_MODULE,
-            );
-            let ControlledParseOutcome::Parsed(ParseOutcome::Complete(outcome_script)) =
-                parse_opaal_source(&outcome_source, &|| false)
-            else {
-                panic!("compiled outcome source must parse");
-            };
-            let outcome_entry = RegisteredModuleSource {
-                module: outcome.clone(),
-                source: outcome_source,
-                script: outcome_script,
-            };
-            declarations.by_module.insert(
-                outcome.clone(),
-                TypeCollector::declarations(&outcome_entry, control),
-            );
-            let (types, errors) =
-                TypeCollector::new(&outcome_entry, &aliases, &names, &declarations, control)
-                    .collect();
-            if control.is_cancelled() {
-                return Err(Diagnostic::new(
-                    Severity::Error,
-                    "RUN001",
-                    "interactive analysis did not complete",
-                )
-                .with_primary(
-                    script.span(),
-                    "analysis was cancelled or exceeded a resource limit",
-                ));
-            }
-            assert!(errors.is_empty(), "compiled outcome schemas must resolve");
-            // Type resolution checks exports as well as declarations. Retained
-            // aliases need the same visibility as an import in this submission.
-            let mut outcome_names = ModuleNames::default();
-            for statement in outcome_entry.script().statements() {
-                let StatementKind::ModuleExport(export) = statement.kind() else {
-                    continue;
+            let standard = ModuleId::standard("std", name);
+            let wanted = aliases
+                .aliases(entry.module())
+                .any(|alias| alias.target() == &standard)
+                || (name == "outcome" && wants_docker);
+            if wanted && !declarations.by_module.contains_key(&standard) {
+                let standard_source = SourceFile::new(
+                    SourceId::new(u32::MAX - index as u32),
+                    format!("std::{name}"),
+                    module_source,
+                );
+                let ControlledParseOutcome::Parsed(ParseOutcome::Complete(standard_script)) =
+                    parse_opaal_source(&standard_source, &|| false)
+                else {
+                    panic!("compiled standard source must parse");
                 };
-                for identifier in &export.names {
-                    let name = outcome_entry.source().slice(identifier.span()).unwrap();
-                    let nominal = &types.nominals[name];
-                    outcome_names.exports.insert(
-                        name.to_owned(),
-                        ModuleExport {
-                            name: name.to_owned(),
-                            declaration_span: nominal.declaration_span(),
-                            export_span: identifier.span(),
+                let standard_entry = RegisteredModuleSource {
+                    module: standard.clone(),
+                    source: standard_source,
+                    script: standard_script,
+                };
+                let mut standard_aliases = ModuleAliases::default();
+                for statement in standard_entry.script().statements() {
+                    let StatementKind::ModuleImport(import) = statement.kind() else {
+                        continue;
+                    };
+                    let opaal_syntax::ModuleImportSource::Standard {
+                        namespace, module, ..
+                    } = import.source
+                    else {
+                        continue;
+                    };
+                    let alias_name = standard_entry
+                        .source()
+                        .slice(import.alias.span())
+                        .unwrap()
+                        .to_owned();
+                    standard_aliases.aliases.insert(
+                        alias_name.clone(),
+                        ModuleAlias {
+                            name: alias_name,
+                            importer: standard.clone(),
+                            target: ModuleId::standard(
+                                standard_entry.source().slice(namespace.span()).unwrap(),
+                                standard_entry.source().slice(module.span()).unwrap(),
+                            ),
+                            requested: None,
+                            declaration_span: import.alias.span(),
                         },
                     );
                 }
+                aliases.by_module.insert(standard.clone(), standard_aliases);
+                declarations.by_module.insert(
+                    standard.clone(),
+                    TypeCollector::declarations(&standard_entry, control),
+                );
+                let (types, errors) =
+                    TypeCollector::new(&standard_entry, &aliases, &names, &declarations, control)
+                        .collect();
+                if control.is_cancelled() {
+                    return Err(Diagnostic::new(
+                        Severity::Error,
+                        "RUN001",
+                        "interactive analysis did not complete",
+                    )
+                    .with_primary(
+                        script.span(),
+                        "analysis was cancelled or exceeded a resource limit",
+                    ));
+                }
+                assert!(errors.is_empty(), "compiled standard schemas must resolve");
+                // Type resolution checks exports as well as declarations. Retained
+                // aliases need the same visibility as an import in this submission.
+                let mut standard_names = ModuleNames::default();
+                for statement in standard_entry.script().statements() {
+                    let StatementKind::ModuleExport(export) = statement.kind() else {
+                        continue;
+                    };
+                    for identifier in &export.names {
+                        let name = standard_entry.source().slice(identifier.span()).unwrap();
+                        let declaration_span = types
+                            .nominals
+                            .get(name)
+                            .map(NominalType::declaration_span)
+                            .or_else(|| {
+                                types
+                                    .functions
+                                    .iter()
+                                    .find(|function| function.name() == name)
+                                    .map(FunctionSignature::declaration_span)
+                            })
+                            .expect("compiled standard export has a declaration");
+                        standard_names.exports.insert(
+                            name.to_owned(),
+                            ModuleExport {
+                                name: name.to_owned(),
+                                declaration_span,
+                                export_span: identifier.span(),
+                            },
+                        );
+                    }
+                }
+                names.by_module.insert(standard.clone(), standard_names);
+                declarations.by_module.insert(standard, types);
             }
-            names.by_module.insert(outcome.clone(), outcome_names);
-            declarations.by_module.insert(outcome, types);
         }
         let (types, errors) =
             TypeCollector::new(&entry, &aliases, &names, &declarations, control).collect();
@@ -11332,6 +11386,14 @@ type ToolResult = { status: Status, stdout: Bytes, stderr: Bytes }
 def run(tool: tools::ToolIdentity, arguments: List[String]) -> ToolResult { throw "controlled operation unavailable" }
 "#;
 
+const STANDARD_DOCKER_MODULE: &str = r#"import std::outcome as outcome
+export { Image, TargetIdentity, decode_image, inspect_image }
+type Image = { id: String, os: String, architecture: String, variant: String, revision: outcome::Option[String], repo_digests: List[String] }
+type TargetIdentity = {}
+def decode_image(document: Record) -> Image { throw "compiled operation unavailable" }
+def inspect_image(target: TargetIdentity, image: String) -> Image { throw "controlled operation unavailable" }
+"#;
+
 fn standard_module_source(module: &ModuleId) -> Option<&'static str> {
     let ModuleOrigin::Standard { namespace, module } = module.origin() else {
         return None;
@@ -11349,6 +11411,7 @@ fn standard_module_source(module: &ModuleId) -> Option<&'static str> {
         "url" => Some(STANDARD_URL_MODULE),
         "http" => Some(STANDARD_HTTP_MODULE),
         "process" => Some(STANDARD_PROCESS_MODULE),
+        "docker" => Some(STANDARD_DOCKER_MODULE),
         _ => None,
     }
 }
@@ -11374,6 +11437,7 @@ fn is_standard_module(namespace: &str, module: &str) -> bool {
                 | "url"
                 | "http"
                 | "process"
+                | "docker"
         )
 }
 

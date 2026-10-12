@@ -137,6 +137,7 @@ impl EvaluationHost for Host {
         operation: &str,
         arguments: Vec<Value>,
         budget: &mut ResourceBudget,
+        _cancel: crate::eval::CancellationToken,
     ) -> Option<Result<Value, OperationalModuleError>> {
         assert_eq!(module.path(), Path::new("std::random"));
         self.calls += 1;

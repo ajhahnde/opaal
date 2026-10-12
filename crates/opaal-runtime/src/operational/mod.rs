@@ -18,6 +18,7 @@ use crate::eval::CancelReason;
 
 // Keep the Rust embedding path pointed at the single pure codec owner.
 pub use crate::data;
+pub mod docker;
 pub mod filesystem;
 pub mod http;
 pub mod integrity;
@@ -41,7 +42,7 @@ pub const MAX_PROCESS_OUTPUT_BYTES: usize = opaal_platform::operational::MAX_PRO
 /// The names are stable semantic identities for inspection and later
 /// controlled execution. They are not ambient globals. Pure data source calls
 /// are compiled operations and bypass the authority host.
-pub const STANDARD_MODULES: [&str; 11] = [
+pub const STANDARD_MODULES: [&str; 12] = [
     "std::random",
     "std::io",
     "std::data",
@@ -53,6 +54,7 @@ pub const STANDARD_MODULES: [&str; 11] = [
     "std::url",
     "std::http",
     "std::process",
+    "std::docker",
 ];
 
 pub(crate) fn is_source_module(module: &str) -> bool {

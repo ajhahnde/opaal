@@ -1,0 +1,32 @@
+import './policy.opaal' as policy
+import std::docker as docker
+import std::data as data
+import std::io as io
+export { check_saved }
+
+## Check saved image data without contacting Docker.
+action check_saved(expected_id: String, expected_platform: String, expected_revision: String) -> Bool
+effects {
+    stdin.read();
+    stdout.write();
+    stderr.write();
+}
+{
+    let input = io::read_stdin(1048576)
+    mut document = {}
+    try {
+        document = data::json_decode(input)
+    } catch error {
+        throw "Saved image input is not valid JSON."
+    }
+    let image = docker::decode_image(document)
+    let result = policy::assess(image, expected_id, expected_platform, expected_revision)
+    io::write_stdout(data::json_encode(result))
+    if !result.passed {
+        io::eprintln("Image check failed: compare expected and actual report fields.")
+        io::write_stderr(data::json_encode(result.checks))
+    }
+    return result.passed
+}
+
+task saved = check_saved

@@ -10,7 +10,8 @@ use std::time::Duration as StdDuration;
 
 use opaal_platform::Platform;
 use opaal_platform::operational::{
-    OperationalAdapter, ProcessExit, ProcessRequest, ReadFileRequest, validate_child_environment,
+    OperationalAdapter, OperationalError, ProcessExit, ProcessRequest, ReadFileRequest,
+    validate_child_environment,
 };
 
 use crate::authority::{CapabilityRequest, EffectSet};
@@ -246,6 +247,12 @@ fn probe_inner(
     let fixed = match tool.adapter() {
         MaintainedAdapter::Git => &["--version"][..],
         MaintainedAdapter::Cargo => &["--version", "--verbose"][..],
+        MaintainedAdapter::Docker => {
+            return Err(ModuleError::invalid(
+                "DOCKER002",
+                "Docker requires its fixed target acquisition",
+            ));
+        }
     };
     let result = run_inner(
         context,
@@ -254,13 +261,15 @@ fn probe_inner(
         adapter,
         lock,
         tool_id,
-        fixed,
+        &fixed.iter().map(OsString::from).collect::<Vec<_>>(),
         cwd,
         MAX_PROBE_OUTPUT_BYTES,
         MAX_PROBE_OUTPUT_BYTES,
         MAX_PROCESS_DURATION,
         budget,
         executable_file,
+        None,
+        None,
     )?;
     if !result.status.is_ok() {
         return Err(ModuleError::invalid(
@@ -303,12 +312,14 @@ pub fn run(
         adapter,
         lock,
         tool_id,
-        arguments,
+        &arguments.iter().map(OsString::from).collect::<Vec<_>>(),
         cwd,
         stdout_limit,
         stderr_limit,
         timeout,
         budget,
+        None,
+        None,
         None,
     )
 }
@@ -338,13 +349,15 @@ pub fn run_retained(
         adapter,
         lock,
         tool_id,
-        arguments,
+        &arguments.iter().map(OsString::from).collect::<Vec<_>>(),
         cwd,
         stdout_limit,
         stderr_limit,
         timeout,
         budget,
         Some(executable_file),
+        None,
+        None,
     )
 }
 
@@ -356,13 +369,15 @@ fn run_inner(
     adapter: &dyn OperationalAdapter,
     lock: &ToolLock,
     tool_id: &str,
-    arguments: &[&str],
+    arguments: &[OsString],
     cwd: &Path,
     stdout_limit: usize,
     stderr_limit: usize,
     timeout: StdDuration,
     budget: &mut ProcessBudget,
     executable_file: Option<&File>,
+    environment_override: Option<&[(OsString, OsString)]>,
+    deadline: Option<crate::lifetime::Deadline>,
 ) -> Result<ToolResult, ModuleError> {
     if stdout_limit > MAX_PROCESS_OUTPUT_BYTES
         || stderr_limit > MAX_PROCESS_OUTPUT_BYTES
@@ -376,6 +391,12 @@ fn run_inner(
     let tool = lock.tools().get(tool_id).ok_or_else(|| {
         ModuleError::invalid("PROCESS004", format!("unknown locked tool `{tool_id}`"))
     })?;
+    if tool.adapter() == MaintainedAdapter::Docker && environment_override.is_none() {
+        return Err(ModuleError::invalid(
+            "DOCKER002",
+            "Docker requires its fixed target acquisition",
+        ));
+    }
     budget.ensure_available()?;
     let authority = CapabilityRequest::process_run(tool_id.to_owned())
         .map_err(|error| ModuleError::invalid("PROCESS008", error.to_string()))?;
@@ -384,15 +405,24 @@ fn run_inner(
         Some(file) if cfg!(target_os = "linux") => verify_retained_executable(file, tool)?,
         _ => verify_executable(adapter, tool)?,
     }
-    if let Some(reason) = context.poll_cancellation() {
+    let cancelled = || {
+        deadline.map_or_else(
+            || context.poll_cancellation(),
+            |deadline| context.cancellation().poll_until(deadline),
+        )
+    };
+    if let Some(reason) = cancelled() {
         return Err(ModuleError::Cancelled(reason));
     }
-    let environment = child_environment(lock)?;
+    let environment = environment_override.map_or_else(
+        || child_environment(lock),
+        |environment| Ok(environment.to_vec()),
+    )?;
     budget.charge();
     let executable = locked_path(tool);
     let mut argv = Vec::with_capacity(arguments.len() + 1);
     argv.push(executable.as_os_str().to_owned());
-    argv.extend(arguments.iter().map(OsString::from));
+    argv.extend_from_slice(arguments);
     let output = adapter
         .run_process(
             ProcessRequest {
@@ -405,10 +435,10 @@ fn run_inner(
                 stderr_limit,
                 timeout,
             },
-            &|| context.poll_cancellation().is_some(),
+            &|| cancelled().is_some(),
         )
         .map_err(|error| adapter_error(context, error))?;
-    if let Some(reason) = context.poll_cancellation() {
+    if let Some(reason) = cancelled() {
         return Err(ModuleError::Cancelled(reason));
     }
     let elapsed = i128::try_from(output.elapsed().as_nanos()).map_err(|_| {
@@ -430,6 +460,47 @@ fn run_inner(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn run_docker_retained(
+    context: &OperationalContext,
+    effects: &EffectSet,
+    platform: &dyn Platform,
+    adapter: &dyn OperationalAdapter,
+    lock: &ToolLock,
+    bound: &super::docker::BoundDockerTarget,
+    stage: usize,
+    image: &str,
+    cwd: &Path,
+    timeout: StdDuration,
+    budget: &mut ProcessBudget,
+    executable: &File,
+    deadline: crate::lifetime::Deadline,
+) -> Result<ToolResult, ModuleError> {
+    run_inner(
+        context,
+        effects,
+        platform,
+        adapter,
+        lock,
+        &bound.target.tool,
+        &super::docker::arguments(&bound.target, stage, image),
+        cwd,
+        crate::docker::MAX_IMAGE_BYTES,
+        65536,
+        timeout,
+        budget,
+        Some(executable),
+        Some(&bound.environment),
+        Some(deadline),
+    )
+    .map_err(|error| match error {
+        ModuleError::Adapter(error) => {
+            ModuleError::Adapter(OperationalError::new(error.kind(), "Docker process failed"))
+        }
+        error => error,
+    })
+}
+
 fn parse_probe(adapter: MaintainedAdapter, bytes: &[u8]) -> Result<String, ModuleError> {
     let text = std::str::from_utf8(bytes).map_err(|error| {
         ModuleError::invalid("PROCESS011", format!("probe output is not UTF-8: {error}"))
@@ -438,6 +509,12 @@ fn parse_probe(adapter: MaintainedAdapter, bytes: &[u8]) -> Result<String, Modul
     let prefix = match adapter {
         MaintainedAdapter::Git => "git version ",
         MaintainedAdapter::Cargo => "cargo ",
+        MaintainedAdapter::Docker => {
+            return Err(ModuleError::invalid(
+                "DOCKER002",
+                "Docker requires its fixed target probe",
+            ));
+        }
     };
     let version = first
         .strip_prefix(prefix)

@@ -320,7 +320,7 @@ def validate_project_check(output: bytes) -> None:
         document = json.loads(output)
     except (UnicodeError, json.JSONDecodeError) as error:
         raise RuntimeError(f"project check returned invalid JSON: {error}") from error
-    if document.get("schema") != "opaal.check.v2":
+    if document.get("schema") != "opaal.check.v4":
         raise RuntimeError("project check returned the wrong artifact schema")
 
 

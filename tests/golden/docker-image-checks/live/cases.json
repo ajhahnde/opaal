@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "cases": [
+    {"name": "single-image", "exit": 0},
+    {"name": "negative-id", "mismatch": 0, "exit": 1},
+    {"name": "negative-platform", "mismatch": 1, "exit": 1},
+    {"name": "negative-revision", "mismatch": 2, "exit": 1},
+    {"name": "missing-image", "ref": "opaal-qualification-absent:must-not-pull", "exit": 2},
+    {"name": "index-refusal", "ref": "index", "exit": 2}
+  ]
+}

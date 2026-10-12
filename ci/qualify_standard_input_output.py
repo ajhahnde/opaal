@@ -127,10 +127,10 @@ def references(binary: Path, inputs: Path, directory: Path, target: str) -> list
                                 ("invalid", b'{"jobs":null}', b"", "error")])]:
         base = ("--project", "opaal.toml", "--task", "sample", "--environment", "ci")
         checked = json.loads(success(run(sample, "check", *base, "--format", "json"), "project check"))
-        require(checked["schema"] == "opaal.check.v3", "project check schema differs")
+        require(checked["schema"] == "opaal.check.v4", "project check schema differs")
         success(run(sample, "plan", *base, "--expires-in", "900s", "--out", "plan.json"), "project plan")
         plan = json.loads((sample / "plan.json").read_bytes())
-        require(plan["schema"] == "opaal.plan.v3", "plan schema differs")
+        require(plan["schema"] == "opaal.plan.v4", "plan schema differs")
         require(not list(sample.glob("*.jsonl")), "static operations created a journal")
         for index, (name, payload, expected, primary) in enumerate(cases, 1):
             run_id = str(index) * 32

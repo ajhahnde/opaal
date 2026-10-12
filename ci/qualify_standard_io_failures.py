@@ -74,7 +74,7 @@ def qualify(binary: Path, output: Path) -> dict:
                          "--expires-in", "900s", "--out", "plan.json")
             require(result.returncode == 0, f"plan failed: {result.stderr!r}")
             document = json.loads((work / "plan.json").read_bytes())
-            require(document["schema"] == "opaal.plan.v3", "plan is not metadata-only")
+            require(document["schema"] == "opaal.plan.v4", "plan is not metadata-only")
             return ["execute", "--plan", "plan.json", "--accept", document["digest"],
                     "--run-id", RUN_ID, "--require-true"], document["digest"]
 

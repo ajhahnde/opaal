@@ -117,7 +117,7 @@ fn encode_json(value: &Value, output: &mut LimitedJson, depth: usize) -> Result<
             encode_object(record.entries(), output, depth)?;
         }
         Value::NominalRecord(record)
-            if record.id() != &crate::module::NominalTypeId::standard("http", "SecretHeader")
+            if !crate::module::is_opaque_operational_nominal(record.id())
                 && !matches!(
                     record.id().module().origin(),
                     ModuleOrigin::Standard { namespace, .. } if namespace == "project"

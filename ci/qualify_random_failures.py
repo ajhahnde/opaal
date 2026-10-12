@@ -86,7 +86,7 @@ task sample = sample
                          "--expires-in", "900s", "--out", "sample.plan.json")
             require(result.returncode == 0, f"plan failed: {result.stderr!r}")
             document = json.loads((work / "sample.plan.json").read_bytes())
-            require(document["schema"] == "opaal.plan.v3", "expected metadata-only plan")
+            require(document["schema"] == "opaal.plan.v4", "expected metadata-only plan")
             return ["execute", "--plan", "sample.plan.json", "--accept", document["digest"],
                     "--run-id", RUN_ID, "--journal"]
 
