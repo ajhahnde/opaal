@@ -4,6 +4,17 @@ All notable changes to OPAAL are documented here.
 
 ## [Unreleased]
 
+### Added
+
+- Add `std::docker::Image`, pure `decode_image`, and controlled `inspect_image`
+  for one explicitly bound local Linux Docker target. The fixed profile requires
+  a single-image manifest Descriptor matching the full observed image ID;
+  indexes, manifest lists and descriptorless responses refuse. Saved data uses
+  the same bounded decoder on Linux and macOS.
+- Add a reusable image check policy and saved/live task references with explicit
+  full image ID, platform and revision expectations, native Bool assessment,
+  escaped reports, exclusive evidence and offline package qualification.
+
 ## [1.3.0]
 
 ### Added

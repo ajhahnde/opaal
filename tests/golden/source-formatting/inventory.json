@@ -2,6 +2,30 @@
   "schema_version": 1,
   "files": [
     {
+      "path": "examples/image-check/policy.opaal",
+      "role": "positive",
+      "reason": "Shared saved/live image check policy and canonical native task/script reference.",
+      "assertion": "ci/qualify_docker_image_checks.py"
+    },
+    {
+      "path": "examples/image-check/saved-tasks.opaal",
+      "role": "positive",
+      "reason": "Shared saved/live image check policy and canonical native task/script reference.",
+      "assertion": "ci/qualify_docker_image_checks.py"
+    },
+    {
+      "path": "examples/image-check/source.opaal",
+      "role": "positive",
+      "reason": "Shared saved/live image check policy and canonical native task/script reference.",
+      "assertion": "ci/qualify_docker_image_checks.py"
+    },
+    {
+      "path": "examples/image-check/tasks.opaal",
+      "role": "positive",
+      "reason": "Shared saved/live image check policy and canonical native task/script reference.",
+      "assertion": "ci/qualify_docker_image_checks.py"
+    },
+    {
       "path": "examples/language-foundation.opaal",
       "role": "positive",
       "reason": "Executable language foundation example.",
@@ -86,6 +110,30 @@
       "role": "positive",
       "reason": "Foreground process workflow golden.",
       "assertion": "crates/opaal-cli/tests/direct_external_golden.rs"
+    },
+    {
+      "path": "tests/golden/docker-image-checks/policy.opaal",
+      "role": "positive",
+      "reason": "Saved image policy and native controlled Bool reference.",
+      "assertion": "crates/opaal-cli/tests/docker_image_checks.rs"
+    },
+    {
+      "path": "tests/golden/docker-image-checks/saved-tasks.opaal",
+      "role": "positive",
+      "reason": "Saved image policy and native controlled Bool reference.",
+      "assertion": "crates/opaal-cli/tests/docker_image_checks.rs"
+    },
+    {
+      "path": "tests/golden/docker-image-checks/source.opaal",
+      "role": "positive",
+      "reason": "Shared saved/live image check policy and canonical native task/script reference.",
+      "assertion": "ci/qualify_docker_image_checks.py"
+    },
+    {
+      "path": "tests/golden/docker-image-checks/tasks.opaal",
+      "role": "positive",
+      "reason": "Shared saved/live image check policy and canonical native task/script reference.",
+      "assertion": "ci/qualify_docker_image_checks.py"
     },
     {
       "path": "tests/golden/random-values/callback.opaal",
@@ -1016,6 +1064,9 @@
       "path": "benchmarks/README.md"
     },
     {
+      "path": "examples/image-check/README.md"
+    },
+    {
       "path": "fuzz/README.md"
     },
     {
@@ -1023,6 +1074,9 @@
     },
     {
       "path": "tests/golden/data-processing/README.md"
+    },
+    {
+      "path": "tests/golden/docker-image-checks/README.md"
     },
     {
       "path": "tests/golden/random-values/README.md"
@@ -1159,7 +1213,7 @@
     },
     {
       "path": "ci/check_product.py",
-      "sha256": "98a495cae6251a53b02ca040129bfcc671cf69d0ce062310da912854195c25c8",
+      "sha256": "69bc74cee2689439f68cda8a4769acfa4a4bba678a3b2da9c07f801767a135a4",
       "source_markers": 15,
       "constructors_or_assertions": [
         "command_json",
@@ -1229,7 +1283,7 @@
     },
     {
       "path": "ci/package_data_processing.py",
-      "sha256": "53d689f354d40c5b366bd106c1bbc2f9d1708a6317e6c1f42d96fe37908fb54c",
+      "sha256": "501d2fab1ff7da368eb2e6570f3835c259a3e3d9fef51ec179444231a14fad45",
       "source_markers": 4,
       "constructors_or_assertions": [
         "digest",
@@ -1240,6 +1294,19 @@
       "role": "source-infrastructure",
       "reason": "Source adapter, loader, parser, generator or qualification owner; listed constructors/assertions own any embedded buffers rather than a blanket source rewrite.",
       "assertion": "cargo test --workspace --locked and Python CI validator suite"
+    },
+    {
+      "path": "ci/package_docker_image_checks.py",
+      "sha256": "526f7ab605b9110c8cb76baaed4345e5e93e919cd7674c99a5d1be9b3cb33f0a",
+      "source_markers": 3,
+      "constructors_or_assertions": [
+        "check_copies",
+        "files",
+        "main"
+      ],
+      "role": "mixed-test-buffers",
+      "reason": "Exact fixture copy/package and named policy/report/evidence/first-use assertions.",
+      "assertion": "ci/tests/test_docker_image_checks.py"
     },
     {
       "path": "ci/package_random_values.py",
@@ -1254,7 +1321,7 @@
     },
     {
       "path": "ci/package_release.py",
-      "sha256": "30a5d9434ece2d6553798454e947df982a46a53ab2d2f3f18da83fbe0ba6937a",
+      "sha256": "b79625bdbad24253d8563895e76f148a3c8f0d9c098e788613ce3c4936711e6f",
       "source_markers": 2,
       "constructors_or_assertions": [
         "main",
@@ -1289,7 +1356,7 @@
     },
     {
       "path": "ci/qualify_data_processing.py",
-      "sha256": "e34b78cdfa7ce9296a3ecbfb6d215199ddc65c1150d5d9a722d3f12971b616d3",
+      "sha256": "e53d0c28c5a1d9a650f52a6d99e119e3c5a5a2785f23fd50364084ef6f8e52ec",
       "source_markers": 23,
       "constructors_or_assertions": [
         "command",
@@ -1308,6 +1375,26 @@
       "assertion": "cargo test --workspace --locked and Python CI validator suite"
     },
     {
+      "path": "ci/qualify_docker_image_checks.py",
+      "sha256": "389419d85631b73ddb9b38011481220663238dc35135983b5697a68e3af0ec43",
+      "source_markers": 16,
+      "constructors_or_assertions": [
+        "add",
+        "api",
+        "assign",
+        "cases",
+        "decoder_payload",
+        "live_references",
+        "live_report_comparison",
+        "main",
+        "qualify",
+        "references"
+      ],
+      "role": "mixed-test-buffers",
+      "reason": "Exact fixture copy/package and named policy/report/evidence/first-use assertions.",
+      "assertion": "ci/tests/test_docker_image_checks.py"
+    },
+    {
       "path": "ci/qualify_numeric_operations.py",
       "sha256": "aee80cc4f0b783a603583ed9adc983c32742f5f73999ddf1ba1d8b87bd952bda",
       "source_markers": 10,
@@ -1322,7 +1409,7 @@
     },
     {
       "path": "ci/qualify_operational_core.py",
-      "sha256": "745e265b32613d3929d692ec436896a7db0287283648474467bb8da53b2bc30a",
+      "sha256": "d7b5f22c928a47531c9e2a075649481df9ebd5873cf2322c02586b2421cd884b",
       "source_markers": 34,
       "constructors_or_assertions": [
         "__init__",
@@ -1364,7 +1451,7 @@
     },
     {
       "path": "ci/qualify_random_failures.py",
-      "sha256": "1255fcfa52d08b33bbfb3338becc2e976791e2908e69aac2acaa60667c6908b7",
+      "sha256": "8f8a694cc7c2e27c05f2b67b8bf257e857959f073acd75ed45b6946fa37acd21",
       "source_markers": 13,
       "constructors_or_assertions": [
         "children",
@@ -1383,7 +1470,7 @@
     },
     {
       "path": "ci/qualify_random_values.py",
-      "sha256": "e0f45fadab0eb104f414bf9262c3a78b59a51c4509216ca150b36dd31e6112df",
+      "sha256": "f3154e75d40fc02ba4476e78fda02175029c51d018339940229f9eeadbeeee03",
       "source_markers": 10,
       "constructors_or_assertions": [
         "byte_count",
@@ -1398,7 +1485,7 @@
     },
     {
       "path": "ci/qualify_source_formatting.py",
-      "sha256": "8c57147429865b9a49923dd0a58a32288e68778d350fd07dab6d9063f5ac7159",
+      "sha256": "32937d0c61c895868089b54e2a45dd3efaf1a30b4ec313d428eb84c719bb4c48",
       "source_markers": 69,
       "constructors_or_assertions": [
         "audit",
@@ -1424,7 +1511,7 @@
     },
     {
       "path": "ci/qualify_standard_input_output.py",
-      "sha256": "892bc1d73baee6331f62e2d112aecee60fbb57ed9a176649ee5b444f88ebf4fd",
+      "sha256": "75e2b59d5699fb6ba5f103992dcde6d72f5e9b94ee185a45418e271dba9bb46e",
       "source_markers": 14,
       "constructors_or_assertions": [
         "assessment",
@@ -1439,7 +1526,7 @@
     },
     {
       "path": "ci/qualify_standard_io_failures.py",
-      "sha256": "47c57febd243521fe87c5bf617f6f63f700700f65da770ba47fd5bc6b0ab9fa8",
+      "sha256": "e3dd5e7adfda2bd5c193d90be016c424a5ca3d7fa7cf7965ee61f961f99ccbc6",
       "source_markers": 11,
       "constructors_or_assertions": [
         "apply",
@@ -1505,7 +1592,7 @@
     },
     {
       "path": "ci/tests/test_check_product.py",
-      "sha256": "a495915d4e4e9de40621d564560a6e22c1cf215ed2356b1fcd684313cb2cf107",
+      "sha256": "3fde5c33b6eeda2caab1bf07e0e4b7d094028f743d24b2be5a8c9fe46b0bdc12",
       "source_markers": 24,
       "constructors_or_assertions": [
         "runner",
@@ -1569,8 +1656,26 @@
       "assertion": "ci/tests/test_data_processing_candidate.py"
     },
     {
+      "path": "ci/tests/test_docker_image_checks.py",
+      "sha256": "5c45dc16a79a76cbadefa6f53f53f56f6466cf6d109b324490059a5177812524",
+      "source_markers": 9,
+      "constructors_or_assertions": [
+        "run",
+        "test_comparison_shell_redacts_parser_errors_and_refuses_output_failure",
+        "test_decoder_corpus_materializes_exact_byte_utf8_and_depth_boundaries",
+        "test_independent_python_comparison_matches_every_named_report_and_exit",
+        "test_live_comparison_uses_four_fixed_children_and_stops_redacted_failures",
+        "test_named_cases_distinguish_missing_empty_and_acquisition_errors",
+        "test_reference_copies_and_package_roundtrip_keep_exact_bytes",
+        "test_setup_rejects_unqualified_inputs_without_creating_configuration"
+      ],
+      "role": "mixed-test-buffers",
+      "reason": "Exact fixture copy/package and named policy/report/evidence/first-use assertions.",
+      "assertion": "ci/tests/test_docker_image_checks.py"
+    },
+    {
       "path": "ci/tests/test_package_release.py",
-      "sha256": "95f4de7cc5283456f9ff0d57a510d30357816d0cdaf2941d4bd96e7723d0a2c6",
+      "sha256": "7a830ab43ae2d8302d9f867f75f613b8986fad4c67c219be50d7c14f53a4b6ff",
       "source_markers": 2,
       "constructors_or_assertions": [
         "test_archive_contains_exact_programs_and_checksum",
@@ -1759,7 +1864,7 @@
     },
     {
       "path": "crates/opaal-cli/src/project.rs",
-      "sha256": "47e65418f6c6e74464a6e3e3eb506fa364cbd2fab28ceea085eb3b4650691d80",
+      "sha256": "d691e68887ab117d04c5a0b8d7b05bbc59ee5de069e00b520004cf996d8e41f0",
       "source_markers": 7,
       "constructors_or_assertions": [
         "create_journal",
@@ -1878,7 +1983,7 @@
     },
     {
       "path": "crates/opaal-cli/tests/data_processing_contexts.rs",
-      "sha256": "4510d336617c155d920a2871ad64840b65731064871e6ffeda12a8f1cbd5188d",
+      "sha256": "ff18dae6f04cceb174a4255ebcb652e1b1c7abb59579b9f60b9de87d87392949",
       "source_markers": 4,
       "constructors_or_assertions": [
         "changed_input_source_or_symlink_refuses_before_a_journal_or_effect",
@@ -1932,8 +2037,22 @@
       "assertion": "crates/opaal-cli/tests/direct_external_golden.rs"
     },
     {
+      "path": "crates/opaal-cli/tests/docker_image_checks.rs",
+      "sha256": "a98b398d68571b8c76109de8643130402e8111b82d6b7d1ac2aebe9d4d40de72",
+      "source_markers": 7,
+      "constructors_or_assertions": [
+        "changed_bound_target_facts_refuse_before_process_or_evidence_creation",
+        "new",
+        "saved_image_reference_binds_version_policy_report_and_native_assessment",
+        "stream_preflight_observes_the_socket_without_opening_it_as_a_control_file"
+      ],
+      "role": "mixed-test-buffers",
+      "reason": "Docker decoder and reference assertions include valid, hostile and refused source.",
+      "assertion": "crates/opaal-cli/tests/docker_image_checks.rs"
+    },
+    {
       "path": "crates/opaal-cli/tests/e2e.rs",
-      "sha256": "cee526068dc15f1ac67c898c57f39b4235f95cdc58fba14f5e827bb11c089afd",
+      "sha256": "14de208184cef5c7b12d9eab0abe35b0b0a31ec59f77eb6ba107a76d81003522",
       "source_markers": 12,
       "constructors_or_assertions": [
         "a_former_header_receives_only_an_ordinary_unknown_name_error",
@@ -2097,7 +2216,7 @@
     },
     {
       "path": "crates/opaal-cli/tests/io_golden.rs",
-      "sha256": "14b66466d664993c90c1f3086e19f37a52957ab78e31922d030a5ed8106a4690",
+      "sha256": "bfef3e6333886411453fd20c8395ffbfc6463c4bc8708cbd360b5166cfdd65d6",
       "source_markers": 13,
       "constructors_or_assertions": [
         "a_closed_stdout_is_catchable_and_leaves_stderr_and_entropy_available",
@@ -2183,7 +2302,7 @@
     },
     {
       "path": "crates/opaal-cli/tests/project_frontend.rs",
-      "sha256": "d09a8dd62d89dd1d71360c44ff51f0a182a1a550f649e554cec80be272faad4a",
+      "sha256": "a81bf1ed368cf2f6d1b9af772a10546c67d8aedf8be2b6e2d474aced7cfc5147",
       "source_markers": 40,
       "constructors_or_assertions": [
         "accepted_execution_revalidates_probes_refuses_unused_secret_and_audits",
@@ -2217,7 +2336,7 @@
     },
     {
       "path": "crates/opaal-cli/tests/random_golden.rs",
-      "sha256": "220566109bbcbe4abb0126cb94f6b9141f7383520729dbb381a16d7b000b6fce",
+      "sha256": "4382d8607f29d2dda62f9b072dd4a1c3a901d222b1fda9be1c27f336d12747f8",
       "source_markers": 26,
       "constructors_or_assertions": [
         "controlled_fixture",
@@ -2235,7 +2354,7 @@
     },
     {
       "path": "crates/opaal-cli/tests/random_native.rs",
-      "sha256": "f3759802a32e63c22ebb547ee9b403a3d429d4a6b6a124bb711ce8127b0391bb",
+      "sha256": "3daa82312f738b1d15ddd63bdeea398c3854db8d6ad2cf38ea88aa27df786f33",
       "source_markers": 1,
       "constructors_or_assertions": [
         "qualify"
@@ -2315,7 +2434,7 @@
     },
     {
       "path": "crates/opaal-cli/tests/terminal_editor_pty.rs",
-      "sha256": "35d241ca707c4f6c6861bffbb85ad7e467917cdde2a620822e90d4c539a525f7",
+      "sha256": "b039de2141613f698c6c8e75571eeeb86051063a31119a5d24c00a503852a327",
       "source_markers": 6,
       "constructors_or_assertions": [
         "named_declaration_continues_through_separate_body_and_can_be_cancelled",
@@ -2347,6 +2466,18 @@
       "role": "mixed-test-buffers",
       "reason": "Retain complete, legacy, invalid and incomplete source buffers and their source-position assertions; canonical output is asserted only by formatting owners.",
       "assertion": "crates/opaal-lsp/tests/action_queries.rs"
+    },
+    {
+      "path": "crates/opaal-lsp/tests/docker_queries.rs",
+      "sha256": "a552d32602db415a64cffaae3fb84550bd1047ddbdcfb5db709490648b4d68ac",
+      "source_markers": 4,
+      "constructors_or_assertions": [
+        "docker_aliases_use_shared_signature_nominal_fields_and_completion",
+        "request"
+      ],
+      "role": "mixed-test-buffers",
+      "reason": "Docker decoder and reference assertions include valid, hostile and refused source.",
+      "assertion": "crates/opaal-lsp/tests/docker_queries.rs"
     },
     {
       "path": "crates/opaal-lsp/tests/lifecycle.rs",
@@ -2484,7 +2615,7 @@
     },
     {
       "path": "crates/opaal-platform-posix/src/operational.rs",
-      "sha256": "028efe6dacd93df8d8abd5e41049cd2681855d21c2d1408e1d3d5f19cdbafeab",
+      "sha256": "d4e7230d16b9d5e8707eaf3d1aff43866a4e3c033f867465f37be56d25807e98",
       "source_markers": 1,
       "constructors_or_assertions": [
         "write_atomic"
@@ -2540,7 +2671,7 @@
     },
     {
       "path": "crates/opaal-platform-posix/tests/fixtures/standard_host.rs",
-      "sha256": "c20fdb4f4b802af38c2c42b15438244288806efc6256ef2e0e478919500f0c3b",
+      "sha256": "e9a7324d2368cb189c16962558f6f4f84429b48229dfc216181cee7fd46dbcdc",
       "source_markers": 0,
       "constructors_or_assertions": [
         "assert_ancillary_truncated",
@@ -2813,12 +2944,13 @@
     },
     {
       "path": "crates/opaal-runtime/src/eval.rs",
-      "sha256": "8bae3dc26bd2e37074944bdae870f1d6c45c898860f70a104bc0cbe057fac840",
-      "source_markers": 16,
+      "sha256": "ec6f138db482c3021d7af10669a248b7cb59c309fab6fa5fb619a86f157559b4",
+      "source_markers": 17,
       "constructors_or_assertions": [
         "ambient_process_policy_propagates_into_lazy_transform_closures",
         "ambient_process_policy_refuses_nested_host_routes_before_their_boundaries",
         "ambient_process_policy_structurally_refuses_commands_in_lazy_transform_closures",
+        "decode_json_controlled",
         "evaluate_ambient_routes",
         "evaluate_glob",
         "glob_entry_limit_fails_before_a_partial_batch_can_escape",
@@ -2831,7 +2963,7 @@
     },
     {
       "path": "crates/opaal-runtime/src/eval/data_operations.rs",
-      "sha256": "33406eeaa29263f4c7c917519e91ae2a4878511c137f653c2ad6c1ce25dc43f3",
+      "sha256": "8166a86133714369ee083dbfd7f037b099fb8242b81713e4cd1a67c5f5bd35a9",
       "source_markers": 4,
       "constructors_or_assertions": [
         "execute_chain",
@@ -2865,7 +2997,7 @@
     },
     {
       "path": "crates/opaal-runtime/src/eval/string_operations.rs",
-      "sha256": "307613247693f0408875c61d90368f268199b889da9e3d74ccdb6c62ecf48d8a",
+      "sha256": "d135c0ff40f18113897aa4eda1672e8f0445d6b2e2d4b6cea149a9ec34afb107",
       "source_markers": 2,
       "constructors_or_assertions": [
         "run"
@@ -2902,7 +3034,7 @@
     },
     {
       "path": "crates/opaal-runtime/src/eval/tests/numeric_operations.rs",
-      "sha256": "9e385efb8f4b834822d5dfc45f3ebe7f21cd1b2a4378e36cb6e9b69198084a90",
+      "sha256": "c2a106a32ce80ecd1f5364410243658050c7080ffee31853c6cb73d60eb88004",
       "source_markers": 4,
       "constructors_or_assertions": [
         "execute",
@@ -2915,7 +3047,7 @@
     },
     {
       "path": "crates/opaal-runtime/src/eval/tests/random_operations.rs",
-      "sha256": "5831ec235eb6331e005e77809cfad7dedefbb0fb95ccd5e4d6e17a50f5264a38",
+      "sha256": "e3fe700d9213c3b68a4067ca9cf6cd6e5f91695f83bca48f64518437c29d7e4e",
       "source_markers": 6,
       "constructors_or_assertions": [
         "declared_action_uses_the_same_operation_and_rejects_a_wrong_host_result",
@@ -2955,12 +3087,14 @@
     },
     {
       "path": "crates/opaal-runtime/src/module.rs",
-      "sha256": "45a4e77356358b22ef8b17ee0dffe3fc461360610086e8bc1ce589ab779ee7d1",
-      "source_markers": 19,
+      "sha256": "dc54befc7b2db25f7e2fe8a7a8e021bcc9f35c8d27fdcfd6aba2648405fb4a03",
+      "source_markers": 21,
       "constructors_or_assertions": [
         "analyze_interactive_with_control",
         "contained",
+        "decode_image",
         "discover_module",
+        "inspect_image",
         "join",
         "matches",
         "monotonic_now",
@@ -2997,7 +3131,7 @@
     },
     {
       "path": "crates/opaal-runtime/src/script.rs",
-      "sha256": "11ab574df0533615c3c9c24edde9e0d939190d64bd003fd148a72f1ff54d0427",
+      "sha256": "4cab2f1d5d0bfbc21713b302f56dfb35df9cd30902fc8a3b8d0f332a375bea8a",
       "source_markers": 6,
       "constructors_or_assertions": [
         "ambient_script_connects_an_external_stage_to_a_named_transform",
@@ -3012,7 +3146,7 @@
     },
     {
       "path": "crates/opaal-runtime/src/session.rs",
-      "sha256": "1e3d867aeeff7af375545d3163734e9eea01e663841a34c43d01929ab3177c37",
+      "sha256": "da13ac47ab886d81e095b46952e0503d6e74b197c52951a8eef229c87640a6f5",
       "source_markers": 14,
       "constructors_or_assertions": [
         "ambient_admits",
@@ -3245,6 +3379,34 @@
       "role": "mixed-test-buffers",
       "reason": "Retain complete, legacy, invalid and incomplete source buffers and their source-position assertions; canonical output is asserted only by formatting owners.",
       "assertion": "crates/opaal-runtime/tests/data_operations.rs"
+    },
+    {
+      "path": "crates/opaal-runtime/tests/docker_contract.rs",
+      "sha256": "4809021da4a46ee9af6a1702d2d3a8d83131c037ea3409c051bdea10ac4fea85",
+      "source_markers": 6,
+      "constructors_or_assertions": [
+        "canonicalize",
+        "checker_rejects_wrong_decoder_calls_and_target_relations",
+        "decoder_shares_work_retention_and_cancellation_limits",
+        "evaluate",
+        "load"
+      ],
+      "role": "mixed-test-buffers",
+      "reason": "Docker decoder and reference assertions include valid, hostile and refused source.",
+      "assertion": "crates/opaal-runtime/tests/docker_contract.rs"
+    },
+    {
+      "path": "crates/opaal-runtime/tests/docker_controlled.rs",
+      "sha256": "db7e31e74429f670ea00188deb8b763f3641989d8f7779ef1a716d99177e6b82",
+      "source_markers": 3,
+      "constructors_or_assertions": [
+        "foreign_stale_and_absent_target_carriers_do_no_process_work",
+        "module constants/imports",
+        "target_carriers_cannot_escape_actions_through_table_cells"
+      ],
+      "role": "mixed-test-buffers",
+      "reason": "Generated targets and controlled image calls include valid and hostile runtime/evidence cases.",
+      "assertion": "crates/opaal-runtime/tests/docker_controlled.rs"
     },
     {
       "path": "crates/opaal-runtime/tests/embedding_api_compatibility.rs",
@@ -3875,6 +4037,20 @@
       "assertion": "crates/opaal-runtime/tests/structured.rs"
     },
     {
+      "path": "crates/opaal-runtime/tests/support/docker.rs",
+      "sha256": "e39c7cc0d8cf87a53edfc94ac9f48a0b6e5fd7b803e9c95aa5e42c77a5a1a273",
+      "source_markers": 0,
+      "constructors_or_assertions": [
+        "cases",
+        "field",
+        "payload",
+        "response"
+      ],
+      "role": "positive-generator",
+      "reason": "Materializes named decoder and acquisition fixture mutations for shared runtime assertions.",
+      "assertion": "crates/opaal-runtime/tests/docker_contract.rs"
+    },
+    {
       "path": "crates/opaal-runtime/tests/support/numeric.rs",
       "sha256": "25c984bcf0f00971a19e0c14d156edeb74d1d6361e4121971cbf93d7d84aa979",
       "source_markers": 5,
@@ -3933,7 +4109,7 @@
     },
     {
       "path": "crates/opaal-runtime/tests/workflow_artifacts.rs",
-      "sha256": "d7641e26c2be3df95e2a167b3fe14d8ace2c59af14bfc16fde7c0c09b551ddb6",
+      "sha256": "963f8f254a7cc454a3ed864eda47da98707501730b22d2697da8fe7b8f3f6588",
       "source_markers": 7,
       "constructors_or_assertions": [
         "journal_chain_projects_complete_redacted_evidence",
@@ -4226,6 +4402,35 @@
       "assertion": "crates/opaal-syntax/tests/support/formatting.rs"
     },
     {
+      "path": "examples/image-check/comparison.py",
+      "sha256": "4c54209015c30de753733dedbc3f377dbdb7f28dc40c74ff850d75348feaaf73",
+      "source_markers": 8,
+      "constructors_or_assertions": [
+        "assess",
+        "depth",
+        "integer",
+        "main",
+        "number",
+        "optional_object",
+        "require",
+        "unique_object"
+      ],
+      "role": "source-infrastructure",
+      "reason": "Independent standard-library Python image validation and shell report comparison; contains no OPAAL source buffers.",
+      "assertion": "ci/tests/test_docker_image_checks.py and ci/qualify_docker_image_checks.py"
+    },
+    {
+      "path": "examples/image-check/setup-live.py",
+      "sha256": "e496dffdfca255f69bda461d740696910c35ec9de0e21153b76b971aea29d9a5",
+      "source_markers": 2,
+      "constructors_or_assertions": [
+        "main"
+      ],
+      "role": "positive-generator",
+      "reason": "Fresh Linux manifest/lock generator for independently qualified fixed-profile facts.",
+      "assertion": "ci/tests/test_docker_image_checks.py"
+    },
+    {
       "path": "fuzz/fuzz_targets/data_operations_limits.rs",
       "sha256": "804af69d7a21aefb500d07522e316055b4e0c466eb0484d785920219d35687f3",
       "source_markers": 3,
@@ -4237,6 +4442,19 @@
       "role": "mixed-test-buffers",
       "reason": "Retain complete, legacy, invalid and incomplete source buffers and their source-position assertions; canonical output is asserted only by formatting owners.",
       "assertion": "fuzz/fuzz_targets/data_operations_limits.rs"
+    },
+    {
+      "path": "fuzz/fuzz_targets/docker_image_limits.rs",
+      "sha256": "54e03be1c8187f8219ac3b16c0c656acf70ec443dac2d856420ee12d52ab7712",
+      "source_markers": 3,
+      "constructors_or_assertions": [
+        "canonicalize",
+        "evaluate",
+        "load"
+      ],
+      "role": "mixed-test-buffers",
+      "reason": "Fixed pure decoder source and arbitrary hostile JSON under tight/generous budgets.",
+      "assertion": "fuzz/run-smoke.sh"
     },
     {
       "path": "fuzz/fuzz_targets/expander.rs",
@@ -4327,7 +4545,7 @@
     },
     {
       "path": "fuzz/run-campaign.sh",
-      "sha256": "90c9fe314f38bc1743216ea9f177308f462d3b256f2d7b96c85835bae61add66",
+      "sha256": "4a4a2819c2b70d4ff31c3c190ef0337a1427d8245e69dcfc29968252c538216f",
       "source_markers": 0,
       "constructors_or_assertions": [],
       "role": "source-infrastructure",
@@ -4336,7 +4554,7 @@
     },
     {
       "path": "fuzz/run-smoke.sh",
-      "sha256": "610d563d6b2057a48015dedb94ff3eb17018dda04eba39aa898bb13c68d96936",
+      "sha256": "7038fa4a1f9e84215d43dff060cd87f21801b342c59907e7964612a26251ee60",
       "source_markers": 1,
       "constructors_or_assertions": [
         "module constants/imports"
@@ -4457,6 +4675,62 @@
       "role": "mixed-test-buffers",
       "reason": "Conservative test owner includes helper-based source buffers, partial completion inputs and non-source harnesses; the named tests/assertions retain their exact contracts.",
       "assertion": "tests/golden/direct-external-execution/probe.rs"
+    },
+    {
+      "path": "tests/golden/docker-image-checks/comparison.py",
+      "sha256": "4c54209015c30de753733dedbc3f377dbdb7f28dc40c74ff850d75348feaaf73",
+      "source_markers": 8,
+      "constructors_or_assertions": [
+        "assess",
+        "depth",
+        "integer",
+        "main",
+        "number",
+        "optional_object",
+        "require",
+        "unique_object"
+      ],
+      "role": "source-infrastructure",
+      "reason": "Independent standard-library Python image validation and shell report comparison; contains no OPAAL source buffers.",
+      "assertion": "ci/tests/test_docker_image_checks.py and ci/qualify_docker_image_checks.py"
+    },
+    {
+      "path": "tests/golden/docker-image-checks/run-comparison.sh",
+      "sha256": "7186a7350d91051ce323eb4c101590ab8c7996f3e4c1a1acf2922e27690c5ab2",
+      "source_markers": 0,
+      "constructors_or_assertions": [],
+      "role": "source-infrastructure",
+      "reason": "Independent standard-library Python image validation and shell report comparison; contains no OPAAL source buffers.",
+      "assertion": "ci/tests/test_docker_image_checks.py and ci/qualify_docker_image_checks.py"
+    },
+    {
+      "path": "tests/golden/docker-image-checks/run-live.sh",
+      "sha256": "e4c24274ce1c771cb1ddd4f25b721a0420b9d3468292e865bf63beefe461e098",
+      "source_markers": 0,
+      "constructors_or_assertions": [],
+      "role": "source-infrastructure",
+      "reason": "Native reference drivers preserve selected execution exit and exclusive evidence.",
+      "assertion": "ci/qualify_docker_image_checks.py"
+    },
+    {
+      "path": "tests/golden/docker-image-checks/run-saved.sh",
+      "sha256": "34229ad113abfbd93c7ee85e67d81ab1fbc27535d15aecd4896479786b1af19f",
+      "source_markers": 0,
+      "constructors_or_assertions": [],
+      "role": "source-infrastructure",
+      "reason": "Native reference drivers preserve selected execution exit and exclusive evidence.",
+      "assertion": "ci/qualify_docker_image_checks.py"
+    },
+    {
+      "path": "tests/golden/docker-image-checks/setup-live.py",
+      "sha256": "e496dffdfca255f69bda461d740696910c35ec9de0e21153b76b971aea29d9a5",
+      "source_markers": 2,
+      "constructors_or_assertions": [
+        "main"
+      ],
+      "role": "positive-generator",
+      "reason": "Fresh Linux manifest/lock generator for independently qualified fixed-profile facts.",
+      "assertion": "ci/tests/test_docker_image_checks.py"
     },
     {
       "path": "tests/golden/numeric-operations/reference.py",
@@ -4703,6 +4977,27 @@
         "data_operations_limits"
       ],
       "sha256": "da0bc866770fe5be0035591f046a6f77f107ad32ddeb66f14baa632a7b4689c2"
+    },
+    {
+      "path": "fuzz/seeds/docker_image_limits/duplicate",
+      "targets": [
+        "docker_image_limits"
+      ],
+      "sha256": "65ab17d8ac4f52612f188a39b60997e357b4e29d6ff7334b14e27e0006ffebf3"
+    },
+    {
+      "path": "fuzz/seeds/docker_image_limits/invalid-utf8",
+      "targets": [
+        "docker_image_limits"
+      ],
+      "sha256": "54500301ad7ad7085d7e9f42dab2a4cf07e1098eafd247f1c0382445516f6493"
+    },
+    {
+      "path": "fuzz/seeds/docker_image_limits/single-manifest",
+      "targets": [
+        "docker_image_limits"
+      ],
+      "sha256": "6b6c1b795997389d737f3675ca476c13e2deee890fb0886185a57ce74e7f53ad"
     },
     {
       "path": "fuzz/seeds/numeric_operations_limits/vector-0-0",

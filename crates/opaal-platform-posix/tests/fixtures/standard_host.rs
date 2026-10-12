@@ -394,6 +394,10 @@ pub(crate) mod checks {
         // SAFETY: this standalone test fixture owns its descriptor table and
         // changes only its own thread signal mask; no product caller is touched.
         unsafe {
+            // Inherited launcher pipes have shared flags outside this fixture's control.
+            for fd in 3..1024 {
+                libc::close(fd);
+            }
             let fd = libc::open(c"/dev/null".as_ptr(), libc::O_RDWR);
             assert!(fd >= 0);
             for target in [3, 4, 5, 6, 7, 8, 9, 50, 200, 900] {
@@ -566,6 +570,17 @@ pub(crate) mod blocked_library {
         let ret = (libc::BPF_RET | libc::BPF_K) as u16;
         // seccomp_data.nr and the low word of args[1] on the supported x86_64 host.
         let mut instructions = [
+            // Refuse MAP_DROPPABLE state so libc's vDSO path uses the filtered syscall.
+            instruction(load, 0, 0, 0),
+            instruction(equal, 0, 3, libc::SYS_mmap as u32),
+            instruction(load, 0, 0, 40),
+            instruction(
+                (libc::BPF_JMP | libc::BPF_JSET | libc::BPF_K) as u16,
+                0,
+                1,
+                0x08,
+            ),
+            instruction(ret, 0, 0, libc::SECCOMP_RET_ERRNO | libc::ENOMEM as u32),
             instruction(load, 0, 0, 0),
             instruction(equal, 0, 3, libc::SYS_getrandom as u32),
             instruction(load, 0, 0, 24),

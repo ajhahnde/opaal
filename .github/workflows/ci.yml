@@ -285,6 +285,16 @@ jobs:
             --fixtures "dist/opaal-v${candidate_version}-standard-input-output.tar.gz" \
             --expected-source "$(git rev-parse HEAD)" --platform linux-x86_64 \
             --report dist/standard-input-output-linux.json
+      - name: Package the exact Docker image check reference
+        run: python3 ci/package_docker_image_checks.py
+      - name: Qualify saved Docker image checks outside the checkout
+        run: |
+          candidate_version=$(python3 -c 'from ci.package_release import VERSION; print(VERSION)')
+          python3 ci/qualify_docker_image_checks.py --offline \
+            --archive "dist/opaal-v${candidate_version}-linux-x86_64.tar.gz" \
+            --fixtures "dist/opaal-v${candidate_version}-docker-image-checks.tar.gz" \
+            --expected-source "$(git rev-parse HEAD)" --platform linux-x86_64 \
+            --report dist/docker-image-checks-linux.json
       - name: Qualify native standard I/O and failed journal persistence
         run: python3 ci/qualify_standard_io_failures.py --binary target/release/opaal --output dist/standard-io-native-linux
       - name: Retain candidate identity and qualification evidence
@@ -362,6 +372,16 @@ jobs:
             --fixtures "dist/opaal-v${candidate_version}-standard-input-output.tar.gz" \
             --expected-source "$(git rev-parse HEAD)" --platform macos-arm64 \
             --report dist/standard-input-output-macos.json
+      - name: Package the exact Docker image check reference
+        run: python3 ci/package_docker_image_checks.py
+      - name: Qualify saved Docker image checks outside the checkout
+        run: |
+          candidate_version=$(python3 -c 'from ci.package_release import VERSION; print(VERSION)')
+          python3 ci/qualify_docker_image_checks.py --offline \
+            --archive "dist/opaal-v${candidate_version}-macos-arm64.tar.gz" \
+            --fixtures "dist/opaal-v${candidate_version}-docker-image-checks.tar.gz" \
+            --expected-source "$(git rev-parse HEAD)" --platform macos-arm64 \
+            --report dist/docker-image-checks-macos.json
       - name: Qualify native standard I/O and failed journal persistence
         run: python3 ci/qualify_standard_io_failures.py --binary target/release/opaal --output dist/standard-io-native-macos
       - name: Retain candidate identity and qualification evidence

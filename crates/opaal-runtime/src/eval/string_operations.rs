@@ -210,6 +210,7 @@ impl Evaluator<'_, '_> {
                 descriptor.id().name(),
                 arguments,
                 self.budget,
+                self.cancel.clone(),
             ) else {
                 return Err(super::Abort::Refused(crate::outcome::Refusal::new(
                     crate::outcome::RefusalReason::Unsupported,
@@ -239,6 +240,7 @@ impl Evaluator<'_, '_> {
         }
         match descriptor.implementation() {
             StandardOperation::JsonDecode => self.json_decode(&arguments, span),
+            StandardOperation::DockerDecodeImage => self.docker_decode_image(&arguments, span),
             StandardOperation::Map
             | StandardOperation::Filter
             | StandardOperation::Fold

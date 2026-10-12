@@ -43,7 +43,7 @@ def normalized_artifact(value: dict) -> dict:
     for source in value["sources"]:
         source.pop("digest")
         source.pop("size")
-    if value["schema"] == "opaal.plan.v2":
+    if value["schema"] in ("opaal.plan.v2", "opaal.plan.v3", "opaal.plan.v4"):
         value.pop("created_at")
         value.pop("expires_at")
         for action in value["actions"]:

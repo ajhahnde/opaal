@@ -1,0 +1,27 @@
+import './policy.opaal' as policy
+import std::docker as docker
+import std::data as data
+import std::io as io
+import project::targets as targets
+import project::tools as tools
+export { check_image }
+
+## Check one available image against explicit delivery expectations.
+action check_image(image: String, expected_id: String, expected_platform: String, expected_revision: String) -> Bool
+effects {
+    process.run(tools::docker);
+    stdout.write();
+    stderr.write();
+}
+{
+    let inspected = docker::inspect_image(targets::ci, image)
+    let result = policy::assess(inspected, expected_id, expected_platform, expected_revision)
+    io::write_stdout(data::json_encode(result))
+    if !result.passed {
+        io::eprintln("Image check failed: compare expected and actual report fields.")
+        io::write_stderr(data::json_encode(result.checks))
+    }
+    return result.passed
+}
+
+task image = check_image

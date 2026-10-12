@@ -685,6 +685,9 @@ impl SemanticQueries<'_> {
     /// Finds the smallest enclosing resolved function call and active argument.
     #[must_use]
     pub fn signature_at(&self, module: &ModuleId, offset: usize) -> Option<SignatureContext> {
+        if self.operation_signature_at(module, offset).is_some() {
+            return None;
+        }
         let script = self.program.sources().script(module)?;
         let (call, call_span) = CallFinder::new(offset).find(script.statements())?;
         let reference = self.program.names().reference(module, call.callee.span())?;

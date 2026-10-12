@@ -60,7 +60,7 @@ fn controlled(work: &ReportDir, body: &str) -> String {
     );
     let plan: serde_json::Value =
         serde_json::from_slice(&std::fs::read(work.0.join("plan.json")).unwrap()).unwrap();
-    assert_eq!(plan["schema"], "opaal.plan.v3");
+    assert_eq!(plan["schema"], "opaal.plan.v4");
     plan["digest"].as_str().unwrap().to_owned()
 }
 

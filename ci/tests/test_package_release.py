@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from ci.package_release import FILES, package
+from ci.package_release import FILES, VERSION, package
 
 
 class ReleasePackageTests(unittest.TestCase):
@@ -25,7 +25,7 @@ class ReleasePackageTests(unittest.TestCase):
             with tarfile.open(archive, "r:gz") as tar:
                 self.assertEqual(len(tar.getmembers()), len(FILES))
                 for source_name, member_name, mode in FILES:
-                    member = tar.getmember(f"opaal-v1.3.0-linux-x86_64/{member_name}")
+                    member = tar.getmember(f"opaal-v{VERSION}-linux-x86_64/{member_name}")
                     self.assertEqual(member.mode, mode)
                     self.assertEqual(tar.extractfile(member).read(), source_name.encode())
 

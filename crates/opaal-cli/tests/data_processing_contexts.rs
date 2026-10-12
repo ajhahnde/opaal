@@ -303,7 +303,7 @@ fn corrupt_and_future_plans_refuse_without_effects() {
         } else {
             String::from_utf8(plan.bytes().to_vec())
                 .unwrap()
-                .replace("opaal.plan.v2", "opaal.plan.v3")
+                .replace("opaal.plan.v4", "opaal.plan.v5")
                 .into_bytes()
         };
         work.write("report.plan.json", bytes);

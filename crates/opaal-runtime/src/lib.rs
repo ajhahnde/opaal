@@ -13,6 +13,7 @@ pub mod context;
 pub mod convert;
 pub mod data;
 pub mod directory;
+mod docker;
 pub mod documentation;
 mod environment;
 pub mod eval;

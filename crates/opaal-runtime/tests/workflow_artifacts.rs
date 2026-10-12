@@ -248,8 +248,8 @@ fn v1_future_and_unbound_secret_artifacts_are_rejected() {
     );
 
     let mut future_plan = plan_document();
-    future_plan["schema"] = Value::String("opaal.plan.v4".to_owned());
-    future_plan["schema_version"] = Value::from(4_u64);
+    future_plan["schema"] = Value::String("opaal.plan.v5".to_owned());
+    future_plan["schema_version"] = Value::from(5_u64);
     assert_eq!(
         PlanArtifact::seal(future_plan).unwrap_err().code(),
         "ARTIFACT006"
@@ -1180,6 +1180,61 @@ fn v3_static_artifacts_bind_exact_reachable_roles_and_policy() {
             invalid["actions"][0]["outcome"]["value_digest"] = json!(digest('a'));
         }
         assert!(PlanArtifact::seal(invalid).is_err());
+    }
+}
+
+#[test]
+fn docker_free_check_and_plan_versions_keep_their_closed_contracts() {
+    for version in 2..=4 {
+        let mut check = if version == 2 {
+            check_document()
+        } else {
+            random_document(check_document(), "opaal.check.v3")
+        };
+        let mut plan = if version == 2 {
+            plan_document()
+        } else {
+            random_document(plan_document(), "opaal.plan.v3")
+        };
+        check["schema"] = json!(format!("opaal.check.v{version}"));
+        plan["schema"] = json!(format!("opaal.plan.v{version}"));
+        check["schema_version"] = json!(version);
+        plan["schema_version"] = json!(version);
+        if version == 4 {
+            check["project"]["targets"] = json!([]);
+            plan["project"]["targets"] = json!([]);
+        }
+        let sealed_check = CheckArtifact::seal(check.clone()).unwrap();
+        let sealed_plan = PlanArtifact::seal(plan.clone()).unwrap();
+        assert_eq!(
+            CheckArtifact::parse(sealed_check.bytes()).unwrap(),
+            sealed_check
+        );
+        assert_eq!(
+            PlanArtifact::parse(sealed_plan.bytes()).unwrap(),
+            sealed_plan
+        );
+        assert!(sealed_plan.is_executable());
+        for targets in [Value::Null, json!([])] {
+            if version == 4 && targets == json!([]) {
+                continue;
+            }
+            let mut invalid_check = check.clone();
+            let mut invalid_plan = plan.clone();
+            invalid_check["project"]["targets"] = targets.clone();
+            invalid_plan["project"]["targets"] = targets;
+            assert!(
+                CheckArtifact::seal(invalid_check).is_err(),
+                "check v{version}"
+            );
+            assert!(PlanArtifact::seal(invalid_plan).is_err(), "plan v{version}");
+        }
+        if version == 4 {
+            check.as_object_mut().unwrap().remove("standard_host");
+            plan.as_object_mut().unwrap().remove("standard_host");
+            assert!(CheckArtifact::seal(check).is_err());
+            assert!(PlanArtifact::seal(plan).is_err());
+        }
     }
 }
 

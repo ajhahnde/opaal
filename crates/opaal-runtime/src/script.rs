@@ -635,6 +635,32 @@ fn project_module_bindings(
                 )
             })
             .collect(),
+        "targets" => manifest
+            .targets()
+            .keys()
+            .map(|name| {
+                (
+                    name.clone(),
+                    Value::NominalRecord(Box::new(NominalRecordValue::new(
+                        NominalTypeId::standard("docker", "TargetIdentity"),
+                        Vec::new(),
+                        vec![
+                            (Arc::from("_id"), Value::string(name)),
+                            (
+                                Arc::from("_manifest"),
+                                Value::string(manifest.id().manifest_digest()),
+                            ),
+                            (
+                                Arc::from("_path"),
+                                Value::Path(crate::NativePath::new(
+                                    manifest.manifest_path().as_os_str().to_owned(),
+                                )),
+                            ),
+                        ],
+                    ))),
+                )
+            })
+            .collect(),
         "endpoints" => manifest
             .endpoints()
             .keys()

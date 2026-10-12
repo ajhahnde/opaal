@@ -1376,6 +1376,7 @@ impl EvaluationHost for SessionEvaluationHost<'_> {
         operation: &str,
         arguments: Vec<Value>,
         budget: &mut ResourceBudget,
+        _cancel: CancellationToken,
     ) -> Option<Result<Value, crate::operational::ModuleError>> {
         self.random
             .as_deref_mut()?

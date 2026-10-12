@@ -49,9 +49,7 @@ const STANDARD_HOST_ROLES: &[&str] = &[
 fn schema_version(schema: &str, version: u64, v2: &str) -> Result<u64, WorkflowArtifactError> {
     if (version == 2 && schema == v2)
         || (version == 3 && schema.strip_suffix(".v3") == v2.strip_suffix(".v2"))
-        || (version == 4
-            && matches!(v2, JOURNAL_SCHEMA | AUDIT_SCHEMA)
-            && schema.strip_suffix(".v4") == v2.strip_suffix(".v2"))
+        || (version == 4 && schema.strip_suffix(".v4") == v2.strip_suffix(".v2"))
     {
         Ok(version)
     } else {
@@ -72,7 +70,7 @@ fn versioned_keys(
     if version == 3 || (version == 4 && object.contains_key("standard_host")) {
         keys.push("standard_host");
     }
-    if version == 4 {
+    if version == 4 && matches!(context, "audit artifact" | "journal header") {
         keys.push("result_policy");
         if context == "audit artifact" {
             keys.push("assessment");
@@ -1090,7 +1088,10 @@ fn validate_host_artifact(
             }
         }
     }
-    if version == 3 {
+    if version == 4 && !roles.is_empty() && !object.contains_key("standard_host") {
+        return Err(journal_corrupt("standard host roles require a policy"));
+    }
+    if version == 3 || (version == 4 && object.contains_key("standard_host")) {
         let policy = required(object, "standard_host")?;
         validate_standard_host(policy)?;
         require_null(required_object(object, "outcome")?, "value_digest")?;
@@ -1379,7 +1380,7 @@ fn validate_check(object: &Map<String, Value>, version: u64) -> Result<(), Workf
         "check artifact",
         version,
     )?;
-    validate_shared(object, false)?;
+    validate_shared(object, false, version)?;
     validate_host_artifact(object, version)?;
     bounded_array(object, "findings", validate_finding)?;
     require_ordered_unique(required_array(object, "findings")?, "findings", finding_key)?;
@@ -1445,11 +1446,13 @@ fn validate_plan(object: &Map<String, Value>, version: u64) -> Result<(), Workfl
     )?;
     validate_timestamp(required_string(object, "created_at")?)?;
     validate_timestamp(required_string(object, "expires_at")?)?;
-    validate_shared(object, true)?;
+    validate_shared(object, true, version)?;
     let platform = required_object(object, "platform")?;
     exact_keys(platform, &["triple"], "platform")?;
     validate_id(required_string(platform, "triple")?)?;
-    bounded_array(object, "observations", validate_observation)?;
+    bounded_array(object, "observations", |value| {
+        validate_observation(value, version)
+    })?;
     bounded_array(object, "actions", validate_action_node)?;
     validate_outcome(required(object, "outcome")?)?;
     let created = unix_nanos_from_timestamp(required_string(object, "created_at")?)?;
@@ -1467,17 +1470,75 @@ fn validate_plan(object: &Map<String, Value>, version: u64) -> Result<(), Workfl
     Ok(())
 }
 
-fn validate_shared(object: &Map<String, Value>, plan: bool) -> Result<(), WorkflowArtifactError> {
+fn validate_shared(
+    object: &Map<String, Value>,
+    plan: bool,
+    version: u64,
+) -> Result<(), WorkflowArtifactError> {
     let toolchain = required_object(object, "toolchain")?;
     exact_keys(toolchain, &["version"], "toolchain")?;
     validate_id(required_string(toolchain, "version")?)?;
-    validate_project(required(object, "project")?)?;
+    validate_project(required(object, "project")?, version)?;
     validate_task(required(object, "task")?)?;
     bounded_array(object, "inputs", validate_input)?;
     bounded_array(object, "secrets", validate_secret_requirement)?;
     bounded_array(object, "sources", validate_source)?;
     validate_authority(required(object, "authority")?)?;
-    bounded_array(object, "tools", |value| validate_tool(value, plan))?;
+    bounded_array(object, "tools", |value| validate_tool(value, plan, version))?;
+    if version == 4 {
+        let project = required_object(object, "project")?;
+        let targets = required_array(project, "targets")?;
+        let tools = required_array(object, "tools")?;
+        for target in targets {
+            let id = target["id"].as_str().expect("validated target ID");
+            if !id
+                .strip_prefix(&format!(
+                    "{}::targets::",
+                    project["name"].as_str().expect("validated project name")
+                ))
+                .is_some_and(crate::project::is_opaal_identifier)
+                || tools.len() != 1
+                || tools[0]["id"] != target["tool"]
+                || tools[0]["adapter"] != "docker"
+                || tools[0]["locked_version"] != crate::docker::TOOL_VERSION
+                || target["profile"] != crate::operational::docker::PROFILE
+                || target["profile_digest"]
+                    != digest_bytes(crate::operational::docker::PROFILE_BYTES)
+            {
+                return Err(journal_corrupt(
+                    "target project/tool/profile binding is invalid",
+                ));
+            }
+            let root = path_from_native_value(&project["root"])?;
+            let config = path_from_native_value(&target["config_directory"])?;
+            if config == root || crate::operational::path::contained(&root, &config).is_err() {
+                return Err(journal_corrupt("target config path escapes the project"));
+            }
+            for directory in target["safe_directories"]
+                .as_array()
+                .expect("validated safe directories")
+            {
+                let role = directory["role"]
+                    .as_str()
+                    .expect("validated directory role");
+                let expected = match role {
+                    "config" => config.clone(),
+                    "home" => root.join("sandbox-home"),
+                    "path" => root.join("empty-path"),
+                    "tmp" => root.join("sandbox-tmp"),
+                    _ => unreachable!("validated role"),
+                };
+                if directory["path"] != native_path(&expected) {
+                    return Err(journal_corrupt(
+                        "safe directory path disagrees with its role",
+                    ));
+                }
+            }
+        }
+        if tools.iter().any(|tool| tool["adapter"] == "docker") && targets.is_empty() {
+            return Err(journal_corrupt("Docker tool requires explicit targets"));
+        }
+    }
     Ok(())
 }
 
@@ -1768,6 +1829,20 @@ fn validate_plan_observations(object: &Map<String, Value>) -> Result<(), Workflo
             &Value::Null,
         )?;
         require_observation_size(observations, index - 1, "tool-executable")?;
+    }
+    if let Some(targets) = project.get("targets").and_then(Value::as_array) {
+        for target in targets {
+            expect_observation(
+                observations,
+                &mut index,
+                "target",
+                &target["id"],
+                &target["socket"],
+                &Value::String(digest_value(target)?),
+                Some(&Value::Null),
+                &Value::Null,
+            )?;
+        }
     }
     expect_observation(
         observations,
@@ -2141,23 +2216,23 @@ fn require_ordered(
     Ok(())
 }
 
-fn validate_project(value: &Value) -> Result<(), WorkflowArtifactError> {
+fn validate_project(value: &Value, version: u64) -> Result<(), WorkflowArtifactError> {
     let object = as_object(value, "project")?;
-    exact_keys(
-        object,
-        &[
-            "name",
-            "root",
-            "manifest_path",
-            "manifest_digest",
-            "environment",
-            "environment_digest",
-            "tool_lock_digest",
-            "child_environment_digest",
-            "tls",
-        ],
-        "project",
-    )?;
+    let mut keys = vec![
+        "name",
+        "root",
+        "manifest_path",
+        "manifest_digest",
+        "environment",
+        "environment_digest",
+        "tool_lock_digest",
+        "child_environment_digest",
+        "tls",
+    ];
+    if version == 4 {
+        keys.push("targets");
+    }
+    exact_keys(object, &keys, "project")?;
     for name in ["name", "environment"] {
         validate_id(required_string(object, name)?)?;
     }
@@ -2173,6 +2248,90 @@ fn validate_project(value: &Value) -> Result<(), WorkflowArtifactError> {
         required_digest(object, name)?;
     }
     bounded_array(object, "tls", validate_tls)?;
+    if version == 4 {
+        bounded_array(object, "targets", validate_target)?;
+        require_ordered_unique(required_array(object, "targets")?, "targets", |target| {
+            string_key(&target["id"])
+        })?;
+    }
+    Ok(())
+}
+
+fn validate_unix_identity(
+    object: &Map<String, Value>,
+    directory: bool,
+) -> Result<(), WorkflowArtifactError> {
+    for field in ["device", "inode"] {
+        required_u64(object, field)?;
+    }
+    for field in ["mode", "uid", "gid"] {
+        u32::try_from(required_u64(object, field)?)
+            .map_err(|_| journal_corrupt("native identity integer overflow"))?;
+    }
+    let mode = required_u64(object, "mode")?;
+    if mode & 0o170000 != if directory { 0o040000 } else { 0o140000 } {
+        return Err(journal_corrupt("target native file kind is invalid"));
+    }
+    Ok(())
+}
+
+fn validate_target(value: &Value) -> Result<(), WorkflowArtifactError> {
+    let object = as_object(value, "target")?;
+    exact_keys(
+        object,
+        &[
+            "id",
+            "adapter",
+            "tool",
+            "socket",
+            "config_directory",
+            "profile",
+            "profile_digest",
+            "safe_directories",
+            "socket_identity",
+        ],
+        "target",
+    )?;
+    for field in ["id", "tool", "profile"] {
+        validate_id(required_string(object, field)?)?;
+    }
+    one_of(
+        required_string(object, "adapter")?,
+        &["docker"],
+        "target adapter",
+    )?;
+    required_digest(object, "profile_digest")?;
+    validate_native_path(required(object, "socket")?)?;
+    validate_native_path(required(object, "config_directory")?)?;
+    let socket = path_from_native_value(&object["socket"])?;
+    crate::docker::validate_socket(socket.as_os_str().as_encoded_bytes())
+        .map_err(|_| journal_corrupt("invalid target socket spelling"))?;
+    let identity = required_object(object, "socket_identity")?;
+    exact_keys(
+        identity,
+        &["device", "inode", "mode", "uid", "gid"],
+        "socket identity",
+    )?;
+    validate_unix_identity(identity, false)?;
+    let directories = required_array(object, "safe_directories")?;
+    if directories.len() != 4 {
+        return Err(journal_corrupt("target requires four safe directories"));
+    }
+    for (directory, role) in directories.iter().zip(["config", "home", "path", "tmp"]) {
+        let directory = as_object(directory, "safe directory")?;
+        exact_keys(
+            directory,
+            &["role", "path", "device", "inode", "mode", "uid", "gid"],
+            "safe directory",
+        )?;
+        if required_string(directory, "role")? != role {
+            return Err(journal_corrupt(
+                "safe directory roles must be unique and sorted",
+            ));
+        }
+        validate_native_path(required(directory, "path")?)?;
+        validate_unix_identity(directory, true)?;
+    }
     Ok(())
 }
 
@@ -2373,7 +2532,7 @@ fn validate_scope(value: &Value, metadata_only: bool) -> Result<(), WorkflowArti
     }
 }
 
-fn validate_tool(value: &Value, _plan: bool) -> Result<(), WorkflowArtifactError> {
+fn validate_tool(value: &Value, _plan: bool, version: u64) -> Result<(), WorkflowArtifactError> {
     let object = as_object(value, "tool")?;
     exact_keys(
         object,
@@ -2395,7 +2554,11 @@ fn validate_tool(value: &Value, _plan: bool) -> Result<(), WorkflowArtifactError
     }
     one_of(
         required_string(object, "adapter")?,
-        &["git", "cargo"],
+        if version == 4 {
+            &["git", "cargo", "docker"]
+        } else {
+            &["git", "cargo"]
+        },
         "tool adapter",
     )?;
     validate_native_path(required(object, "path")?)?;
@@ -2439,28 +2602,28 @@ fn validate_finding(value: &Value) -> Result<(), WorkflowArtifactError> {
     nullable_u64(required(object, "end_byte")?)
 }
 
-fn validate_observation(value: &Value) -> Result<(), WorkflowArtifactError> {
+fn validate_observation(value: &Value, version: u64) -> Result<(), WorkflowArtifactError> {
     let object = as_object(value, "observation")?;
     exact_keys(
         object,
         &["kind", "id", "path", "digest", "size", "observed_at"],
         "observation",
     )?;
-    one_of(
-        required_string(object, "kind")?,
-        &[
-            "manifest",
-            "source",
-            "authority",
-            "tool-lock",
-            "input",
-            "tls-ca",
-            "tool-executable",
-            "child-environment",
-            "wall-clock",
-        ],
-        "observation kind",
-    )?;
+    let mut kinds = vec![
+        "manifest",
+        "source",
+        "authority",
+        "tool-lock",
+        "input",
+        "tls-ca",
+        "tool-executable",
+        "child-environment",
+        "wall-clock",
+    ];
+    if version == 4 {
+        kinds.push("target");
+    }
+    one_of(required_string(object, "kind")?, &kinds, "observation kind")?;
     validate_id(required_string(object, "id")?)?;
     nullable_native_path(required(object, "path")?)?;
     nullable_digest(required(object, "digest")?)?;

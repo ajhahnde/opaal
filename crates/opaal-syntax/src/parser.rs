@@ -320,11 +320,11 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
                     let module_text = self.source.slice(module.span()).ok();
                     if !matches!(
                         module_text,
-                        Some("context" | "tools" | "endpoints" | "secrets")
+                        Some("context" | "tools" | "endpoints" | "secrets" | "targets")
                     ) {
                         return Err(self.invalid_at(
                             module.span(),
-                            "project module must be `context`, `tools`, `endpoints`, or `secrets`",
+                            "project module must be `context`, `tools`, `endpoints`, `secrets`, or `targets`",
                         ));
                     }
                     ModuleImportSource::Project {

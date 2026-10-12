@@ -1,0 +1,16 @@
+{
+  "profile": "docker-cli-image-inspect.v1",
+  "cli_version": "29.9.0",
+  "engine_version": "29.9.0",
+  "api_version": "1.48",
+  "host": "x86_64-unknown-linux-gnu",
+  "transport": "explicit-local-unix-socket",
+  "descriptor": {
+    "required": true,
+    "media_types": [
+      "application/vnd.oci.image.manifest.v1+json",
+      "application/vnd.docker.distribution.manifest.v2+json"
+    ],
+    "digest": "equals-observed-Id"
+  }
+}

@@ -34,7 +34,7 @@ use opaal_runtime::operational::source::{
     SourceProcessArgument, maintained_probe_operation,
 };
 use opaal_runtime::operational::standard::{RoleProgress, StandardLimits, StandardState};
-use opaal_runtime::operational::{data, process};
+use opaal_runtime::operational::{data, docker, process};
 use opaal_runtime::outcome::{OutcomeEvidence, PrimaryOutcome};
 use opaal_runtime::plan::SessionOptions;
 use opaal_runtime::project::{
@@ -582,6 +582,21 @@ fn render_plan_artifact(artifact: &PlanArtifact) -> Result<Vec<u8>, ProjectFront
     render_plan_sources(&mut output, &value["sources"])?;
     render_plan_authority(&mut output, &value["authority"])?;
     render_plan_tools(&mut output, &value["tools"])?;
+    if let Some(targets) = project.get("targets").and_then(Value::as_array) {
+        output.line("")?;
+        output.line(format!("Targets ({})", targets.len()))?;
+        for target in targets {
+            output.line(format!(
+                "- {} tool={} socket={} config={} profile={} digest={}",
+                escaped_text(target["id"].as_str().expect("target ID")),
+                escaped_text(target["tool"].as_str().expect("tool ID")),
+                rendered_native_path(&target["socket"])?,
+                rendered_native_path(&target["config_directory"])?,
+                escaped_text(target["profile"].as_str().expect("profile")),
+                target["profile_digest"].as_str().expect("profile digest")
+            ))?;
+        }
+    }
     render_plan_observations(&mut output, &value["observations"])?;
     render_plan_actions(&mut output, &value["actions"])?;
     Ok(output.finish())
@@ -1243,7 +1258,8 @@ pub fn inspect_project(
     let view = json!({
         "schema":"opaal.project-inspection.v1", "schema_version":1,
         "project":{"name":project.manifest().name(), "manifest_path":native_path(project.manifest().manifest_path())},
-        "tasks":tasks, "targets":[],
+        "tasks":tasks,
+        "targets":project.manifest().targets().values().map(|target| json!({"id":target.id,"adapter":"docker","tool":target.tool,"socket":native_path(&target.socket),"config_directory":native_path(&target.config_directory),"api_version":"1.48"})).collect::<Vec<_>>(),
         "tools":project.manifest().tools().values().map(|tool| json!({"id":tool.id().qualified_name(), "adapter":tool.adapter().name(), "version":tool.version().to_string()})).collect::<Vec<_>>(),
         "environments":project.manifest().environments().values().map(|environment| json!({"id":environment.id().qualified_name()})).collect::<Vec<_>>()
     });
@@ -1335,6 +1351,16 @@ pub fn inspect_project(
             ))?;
         }
         output.line("targets")?;
+        for target in view["targets"].as_array().expect("targets") {
+            output.line(format!(
+                "  {} docker tool={} socket={} config={} profile={}",
+                escaped_text(target["id"].as_str().expect("id")),
+                escaped_text(target["tool"].as_str().expect("tool")),
+                rendered_native_path(&target["socket"])?,
+                rendered_native_path(&target["config_directory"])?,
+                docker::PROFILE
+            ))?;
+        }
         output.line("environments")?;
         for environment in view["environments"].as_array().expect("environments") {
             output.line(format!(
@@ -1592,6 +1618,7 @@ pub fn plan_explicit_project(
         }));
     }
     observations.extend(executable_observations);
+    observations.extend(target_observations(&check_value["project"])?);
     observations.push(json!({
         "kind":"child-environment",
         "id":request.environment,
@@ -1640,6 +1667,8 @@ pub fn plan_explicit_project(
         "outcome":plan_outcome
     });
     select_standard_host_policy(&mut document, "opaal.plan.v3");
+    document["schema"] = json!("opaal.plan.v4");
+    document["schema_version"] = json!(4);
     let plan = PlanArtifact::seal(document).map_err(workflow_contract)?;
     filesystem.write_exclusive_atomic(&request.out, plan.bytes())?;
     Ok(ProjectFrontendRun {
@@ -1967,6 +1996,22 @@ pub fn execute_explicit_plan(
     )?;
 
     let adapter = PosixOperationalAdapter::new();
+    let docker_targets = project
+        .manifest()
+        .targets()
+        .iter()
+        .map(|(name, target)| {
+            let bound = docker::bind_target(project.manifest(), target, &adapter)
+                .map_err(|error| stale(error.to_string()))?;
+            if !plan_value["project"]["targets"]
+                .as_array()
+                .is_some_and(|targets| targets.contains(&bound.record))
+            {
+                return Err(stale("Docker target changed after plan verification"));
+            }
+            Ok((name.clone(), bound))
+        })
+        .collect::<Result<BTreeMap<_, _>, ProjectFrontendError>>()?;
     let now_nanos = adapter
         .wall_time_unix_nanos()
         .map_err(|error| execute_error("EXECUTE005", error.to_string()))?;
@@ -2160,8 +2205,12 @@ pub fn execute_explicit_plan(
         let mut process_budget = process::ProcessBudget::default();
         for tool_id in tools
             .tools()
-            .keys()
-            .filter(|tool_id| required_tools.contains(tool_id.as_str()))
+            .iter()
+            .filter(|(tool_id, tool)| {
+                required_tools.contains(tool_id.as_str())
+                    && tool.adapter() != opaal_runtime::project::MaintainedAdapter::Docker
+            })
+            .map(|(tool_id, _)| tool_id)
         {
             let attempt = process_budget.attempts();
             let scope = json!({"kind":"tool","tool":tool_id});
@@ -2302,7 +2351,8 @@ pub fn execute_explicit_plan(
                 planned_inputs,
                 process_budget,
                 secret_binding,
-            );
+            )
+            .with_docker_targets(docker_targets);
             if metadata_only {
                 operations = operations.with_standard_host(
                     StandardState::new(standard_host, StandardLimits::default())
@@ -2415,7 +2465,20 @@ fn verify_plan_check_identity(plan: &Value, check: &Value) -> Result<(), Project
         "authority",
         "tools",
     ] {
-        if plan[field] != check[field] {
+        let mut current = check[field].clone();
+        if field == "project" && plan["schema_version"] != 4 {
+            if current["targets"]
+                .as_array()
+                .is_some_and(|targets| !targets.is_empty())
+            {
+                return Err(stale("targets require a v4 plan"));
+            }
+            current
+                .as_object_mut()
+                .expect("checked project")
+                .remove("targets");
+        }
+        if plan[field] != current {
             return Err(stale(format!("bound {field} identity changed")));
         }
     }
@@ -2537,6 +2600,7 @@ fn verify_plan_identity(
         }));
         executable_files.insert(required_plan_string(tool, "id")?.to_owned(), file);
     }
+    expected.extend(target_observations(&value["project"])?);
     expected.push(json!({
         "kind":"child-environment",
         "id":project["environment"],
@@ -3315,6 +3379,7 @@ fn bind_controlled_streams(
     Ok(())
 }
 
+#[allow(clippy::useless_conversion)] // Native device widths differ between hosts.
 fn preflight_stream_channels(
     plan: &Value,
     plan_file: &File,
@@ -3371,6 +3436,25 @@ fn preflight_stream_channels(
         .as_array()
         .expect("validated observations")
     {
+        if observation["kind"] == "target" {
+            let target = plan["project"]["targets"]
+                .as_array()
+                .expect("validated targets")
+                .iter()
+                .find(|target| target["id"] == observation["id"])
+                .expect("validated target observation");
+            let identity = &target["socket_identity"];
+            if channels.iter().any(|channel| {
+                u64::try_from(channel.1).ok() == identity["device"].as_u64()
+                    && Some(channel.2) == identity["inode"].as_u64()
+            }) {
+                return Err(execute_error(
+                    "EXECUTE004",
+                    "data channel collides with a target socket",
+                ));
+            }
+            continue;
+        }
         if !observation["path"].is_null() {
             let path = path_from_native_value(&observation["path"]).map_err(workflow_contract)?;
             let (_, file) =
@@ -3846,6 +3930,12 @@ struct BuiltCheckArtifact {
     tls_ca: BTreeMap<String, Vec<u8>>,
 }
 
+fn target_observations(project: &Value) -> Result<Vec<Value>, ProjectFrontendError> {
+    project["targets"].as_array().map_or(&[][..], Vec::as_slice).iter().map(|target| {
+        Ok(json!({"kind":"target","id":target["id"],"path":target["socket"],"digest":digest_value(target).map_err(workflow_contract)?,"size":null,"observed_at":null}))
+    }).collect()
+}
+
 #[allow(clippy::too_many_arguments)]
 fn build_check_artifact(
     project: &ProjectProgram,
@@ -3860,22 +3950,30 @@ fn build_check_artifact(
     input_bindings: &[ProjectInputBinding],
 ) -> Result<BuiltCheckArtifact, ProjectFrontendError> {
     let manifest = project.manifest();
-    let child_environment = tools
-        .variables()
-        .iter()
-        .map(|variable| {
-            json!({
-                "name":variable.name(),
-                "value":{
-                    "encoding":"base64url-nopad",
-                    "platform":variable.value().platform(),
-                    "value":variable.value().encoded()
-                }
-            })
-        })
-        .collect::<Vec<_>>();
-    let child_environment_digest =
-        digest_value(&Value::Array(child_environment)).map_err(workflow_contract)?;
+    let child_environment = if manifest.targets().is_empty() {
+        Value::Array(
+            tools
+                .variables()
+                .iter()
+                .map(|variable| {
+                    json!({
+                        "name":variable.name(),
+                        "value":{
+                            "encoding":"base64url-nopad",
+                            "platform":variable.value().platform(),
+                            "value":variable.value().encoded()
+                        }
+                    })
+                })
+                .collect::<Vec<_>>(),
+        )
+    } else {
+        docker::environment_record(
+            &docker::child_environment(manifest.root())
+                .map_err(|error| execute_error(error.code(), error.to_string()))?,
+        )
+    };
+    let child_environment_digest = digest_value(&child_environment).map_err(workflow_contract)?;
     let selected_environment = manifest
         .environment(environment_name)
         .map_err(frontend_contract)?;
@@ -3885,6 +3983,15 @@ fn build_check_artifact(
     }))
     .map_err(workflow_contract)?;
     let (tls, tls_ca) = build_tls_bindings(manifest, filesystem)?;
+    let targets = manifest
+        .targets()
+        .values()
+        .map(|target| {
+            docker::bind_target(manifest, target, &PosixOperationalAdapter::new())
+                .map(|bound| bound.record)
+                .map_err(|error| execute_error(error.code(), error.to_string()))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
     let project_value = json!({
         "name":manifest.name(),
         "root":native_path(manifest.root()),
@@ -3894,7 +4001,8 @@ fn build_check_artifact(
         "environment_digest":environment_digest,
         "tool_lock_digest":digest_bytes(tools_bytes),
         "child_environment_digest":child_environment_digest,
-        "tls":tls
+        "tls":tls,
+        "targets":targets
     });
     let task = check.task();
     let task_value = json!({
@@ -3997,6 +4105,9 @@ fn build_check_artifact(
             })
         })
         .collect::<Vec<_>>();
+    if !manifest.targets().is_empty() && tools.platform() != "x86_64-unknown-linux-gnu" {
+        findings.push(json!({"severity":"error","code":"CHECK011","message":"Docker acquisition requires the qualified Linux x86_64 profile","source":null,"path":null,"start_byte":null,"end_byte":null}));
+    }
     if secrets.len() > 1 {
         findings.push(json!({
             "severity":"error",
@@ -4068,6 +4179,8 @@ fn build_check_artifact(
         "outcome":outcome
     });
     select_standard_host_policy(&mut document, "opaal.check.v3");
+    document["schema"] = json!("opaal.check.v4");
+    document["schema_version"] = json!(4);
     let artifact = CheckArtifact::seal(document).map_err(workflow_contract)?;
     Ok(BuiltCheckArtifact { artifact, tls_ca })
 }
