@@ -1123,7 +1123,7 @@
     },
     {
       "path": "benchmarks/run.py",
-      "sha256": "02d68d3491202e0447b27ea364a8643ac4674a48a8c8669de72295d1cac655d4",
+      "sha256": "118d05d4171b78b594f182e1791fbedd98e9fd019e4d7264910a38dbc467a8cc",
       "source_markers": 23,
       "constructors_or_assertions": [
         "completion_samples",
@@ -1376,7 +1376,7 @@
     },
     {
       "path": "ci/qualify_docker_image_checks.py",
-      "sha256": "389419d85631b73ddb9b38011481220663238dc35135983b5697a68e3af0ec43",
+      "sha256": "380ad6083b8d66681a9078a4c54a2554734af4f39a7bc88cec19ada3d4729094",
       "source_markers": 16,
       "constructors_or_assertions": [
         "add",

@@ -211,11 +211,13 @@ def references(binary: Path, inputs: Path, directory: Path, target: str) -> list
         require(all(canary not in evidence for canary in
                     (b"raw-metadata-canary", b"unknown-label-canary", b"credential-canary")),
                 name + ": raw metadata in evidence")
-        rows.append({"case": name, "exit": exit_code, "assessment": candidate,
-                     "comparison_exit": comparison.returncode,
-                     "artifacts": {path.name: hashlib.sha256(path.read_bytes()).hexdigest()
-                                   for path in work.iterdir() if path.suffix in {".json", ".jsonl", ".txt"}}})
+        started = time.monotonic()
         ordinary = command([binary, "source.opaal"], work, environment, stdin=payload)
+        elapsed = time.monotonic() - started
+        (work / "standalone.stdout.json").write_bytes(ordinary.stdout)
+        (work / "standalone.stderr.txt").write_bytes(ordinary.stderr)
+        (work / "standalone.result.json").write_text(json.dumps({
+            "exit": ordinary.returncode, "elapsed_seconds": elapsed}, sort_keys=True) + "\n")
         if report is not None:
             source_report = json.loads(json.dumps(report))
             for index, wanted in enumerate((document["Id"], "linux/amd64", "abc123")):
@@ -231,6 +233,10 @@ def references(binary: Path, inputs: Path, directory: Path, target: str) -> list
                     and not ordinary.stderr, name + ": fixed standalone expectations differ")
         else:
             require(ordinary.returncode == 1 and not ordinary.stdout, name + ": standalone error differs")
+        rows.append({"case": name, "exit": exit_code, "assessment": candidate,
+                     "comparison_exit": comparison.returncode,
+                     "artifacts": {path.name: hashlib.sha256(path.read_bytes()).hexdigest()
+                                   for path in work.iterdir() if path.suffix in {".json", ".jsonl", ".txt"}}})
     modified = directory / "modified-policy"
     shutil.copytree(template, modified)
     policy = modified / "policy.opaal"
