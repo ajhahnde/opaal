@@ -36,6 +36,11 @@ All notable changes to OPAAL are documented here.
   allowance while preserving its partial-count checks and the separate
   50-millisecond deliberate cancellation tests.
 
+### Fixed
+
+- Reduce macOS standard-stream transport delays when the datagram queue is full,
+  preserving operation deadlines, cancellation and transfer accounting.
+
 ## [1.3.0]
 
 ### Added

@@ -131,6 +131,33 @@ pub fn run() {
     let payload = (0..MAX_STREAM_CHUNK_BYTES)
         .map(|index| index as u8)
         .collect::<Vec<_>>();
+    let (reader, writer) = pipe();
+    let original = flags(&reader);
+    let pipe_payload = payload.repeat(16);
+    let producer_payload = pipe_payload.clone();
+    let producer = std::thread::spawn(move || {
+        File::from(writer).write_all(&producer_payload).unwrap();
+    });
+    let mut host = PosixStandardHost::for_cli(71).unwrap();
+    host.bind_stream(StandardStream::Stdin, reader.as_fd())
+        .unwrap();
+    let started = Instant::now();
+    let mut observed = Vec::with_capacity(pipe_payload.len());
+    let mut chunk = [0; MAX_STREAM_CHUNK_BYTES];
+    loop {
+        let count = host
+            .read(&mut chunk, &|| started.elapsed() >= Duration::from_secs(30))
+            .unwrap();
+        if count == 0 {
+            break;
+        }
+        observed.extend_from_slice(&chunk[..count]);
+    }
+    host.close().unwrap();
+    producer.join().unwrap();
+    assert_eq!(observed, pipe_payload);
+    assert_eq!(flags(&reader), original);
+    super::checks::assert_reaped();
     input.write_all(&payload).unwrap();
     input.seek(SeekFrom::Start(0)).unwrap();
     for stream in [
