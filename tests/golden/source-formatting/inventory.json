@@ -1213,7 +1213,7 @@
     },
     {
       "path": "ci/check_product.py",
-      "sha256": "69bc74cee2689439f68cda8a4769acfa4a4bba678a3b2da9c07f801767a135a4",
+      "sha256": "4abe01559a0879c3f415796f7eb4af21343b2141604ebfa86ebe559a5bdcbee8",
       "source_markers": 15,
       "constructors_or_assertions": [
         "command_json",
@@ -2719,7 +2719,7 @@
     },
     {
       "path": "crates/opaal-platform-posix/tests/fixtures/standard_streams.rs",
-      "sha256": "afeef4c6c2c0be8d132610048b9c0ba12716d283c8c0f72bfa1390ae54e60f23",
+      "sha256": "7b0c3a8beacd29c0ae08a94a943d16a93ae88fb165bdb0cc00a377662dd2ca2e",
       "source_markers": 0,
       "constructors_or_assertions": [
         "enable_syscall_fault",

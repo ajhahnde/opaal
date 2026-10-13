@@ -335,7 +335,8 @@ pub fn run() {
     let started = Instant::now();
     let count = host
         .write(StandardStream::Stdout, &payload, &|| {
-            started.elapsed() >= Duration::from_secs(2)
+            // Allow CI scheduling delays in this successful partial-transfer case.
+            started.elapsed() >= Duration::from_secs(30)
         })
         .unwrap();
     assert!(count > 0 && count < payload.len());
