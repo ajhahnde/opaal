@@ -1,19 +1,38 @@
 # Docker image checks
 
-These references require OPAAL 1.4.0 or later. Saved-input checks need no
+These references require OPAAL 1.5.0 or later. Saved-input checks need no
 Docker executable, daemon, account configuration, or network connection.
 `policy.opaal` is the shared pure policy for saved and live data.
 
-In a fresh writable copy, select the lock for your host and the project manifest:
+Create an explicit new offline project with the host-matched lock:
 
 ```sh
-cp offline-tools-macos.toml offline-tools.toml
-cp offline.toml opaal.toml
+opaal project init --example image-check --destination image-check --environment offline
+cd image-check
+opaal project doctor --project opaal.toml --task saved --environment offline --input expected_id=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --input expected_platform=linux/amd64 --input expected_revision=abc123 --format json
 ```
 
-On Linux x86_64, use `offline-tools-linux.toml` instead. The CLI requires the
-selected manifest to be named `opaal.toml`. Keep the fixture's normal
-`>=1.4.0,<2.0.0` version requirement.
+The parent must exist and have no symlink components. Init embeds the maintained
+assets, creates directories mode0700 and files mode0600, and never overwrites or
+merges an existing destination, including a dangling symlink. Failed setup leaves
+partial files for inspection; use a fresh destination for the next attempt.
+Creation is not crash-atomic. Native paths retain their bytes; filesystems that
+reject those bytes refuse setup. Generated controls require `>=1.5.0,<2.0.0`.
+Existing project copies keep their original version requirement.
+
+Doctor reads only explicit local controls, source, declared input files and
+locked executable identities. It never evaluates initializers, reads task stdin
+or secrets, launches a process or contacts Docker. Local readiness is static,
+not plan acceptance or daemon health. Exit0 means locally ready, 1 means findings,
+2 means invalid invocation/controls or I/O, and requested cancellation is130.
+Text is the default; `--format json` writes a closed
+`opaal.project-doctor.v1` schema_version1 view followed by LF. Its fields are
+schema, schema_version, project_id, task_id, environment, local_readiness,
+live_readiness and findings. Findings contain fixed code/category/severity/message,
+a nullable validated input_name, source and span. Blocked dependent checks remain
+unknown, and input values, source snippets and tool bytes are omitted. Every ci
+view reports live_readiness=unknown. Views are bounded to128 findings and64KiB;
+consumers must validate the complete view and exit, and reject unknown schemas.
 
 Run the check with explicit expectations and exclusive evidence paths:
 
@@ -57,32 +76,16 @@ adapter. These deterministic cases complement live host qualification.
 To change the policy, edit `policy.opaal`, check the source, and create a new
 plan. Printed bytes never determine the native assessment.
 
-Run the complete saved-input CI driver in a fresh copy:
-
-```sh
-sh run-saved.sh sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa linux/amd64 abc123 < fixtures/image.json
-```
-
-Change the last argument to `wrong` for exit 1. Supply `fixtures/invalid.json`
-for exit 2, with no report or assessment. Missing revision differs from an empty
-revision in the report's `missing` field. Every run needs fresh exclusive plan,
+Change `expected_revision` to `wrong` for exit1. Supply `fixtures/invalid.json`
+for exit2, with no report or assessment. Every run needs a fresh plan and exclusive
 journal, receipt and audit paths. Existing evidence is never overwritten.
 
-An independent Python implementation runs through the same shell interface:
-
-```sh
-sh run-comparison.sh sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa linux/amd64 abc123 < fixtures/image.json
-```
-
-It uses Python's standard library and independently validates the single-image
-Descriptor, selected fields, duplicate keys and byte/depth limits before applying
-the same three comparisons. Saved-input qualification asserts its report and
-0/1/2 exits against all named OPAAL cases. It emits fixed input-failure diagnostics.
-Its report has the same fields, including missing revision and escaped Unicode.
-It has no accepted plan, journal, audit, receipt or owned-resource contract;
-those native OPAAL features remain additional work for a plain script. Neither
-implementation establishes image provenance or daemon confinement. This saved
-comparison does not qualify live process cancellation or cleanup.
+Repository engineering qualification retains `run-saved.sh`, `comparison.py`
+and `run-comparison.sh` as independent comparison inputs. They are not required
+by generated projects. The Python comparison independently checks the same
+Descriptor, selected fields and byte/depth limits and asserts0/1/2 report behavior;
+it has no accepted-plan, journal, receipt, audit or owned-resource contract.
+Neither implementation establishes image provenance or daemon confinement.
 
 `source.opaal` performs the same check as an ordinary standalone script:
 
@@ -107,26 +110,25 @@ string alone does not qualify a binary or server. Independently verify the exact
 installed executable, source/profile and server before using this reference.
 Use one already available image; inspection never pulls, builds or runs it.
 
-Start from a fresh writable copy with no selected `opaal.toml`. Provision
-`/usr/bin/docker` and the local `/run/docker.sock` independently. Supply the
-verified CLI version as one LF-terminated line in `qualified-docker-version.txt`.
-Supply `expected-image-ref.txt`, `expected-image-id.txt`, `expected-platform.txt`
-and `expected-revision.txt`, each containing one explicit expectation line.
-The ID must be the actual full observed Docker ID of the intended image;
-repository references and config digests are independent values.
+Use independently qualified installed Docker and a local Unix socket. Supply
+both absolute paths and the profile's exact version as an explicit caller claim:
 
 ```sh
-python3 setup-live.py
-opaal task list --project opaal.toml
+opaal project init --example image-check --destination live-check --environment ci --docker /usr/bin/docker --socket /run/docker.sock --qualified-version 29.9.0
+cd live-check
+opaal project doctor --project opaal.toml --task image --environment ci --input image=example:checked --input expected_id=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --input expected_platform=linux/amd64 --input expected_revision=abc123
 opaal task inspect --project opaal.toml image --format json
-sh run-live.sh
-opaal audit inspect image.audit.json
+accepted=$(opaal plan --project opaal.toml --task image --environment ci --input image=example:checked --input expected_id=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --input expected_platform=linux/amd64 --input expected_revision=abc123 --expires-in 900s --out image.plan.json --format digest)
+opaal execute --plan image.plan.json --accept "$accepted" --journal image.run.jsonl --receipt-out image.receipt.json --require-true
+opaal audit --project opaal.toml --journal image.run.jsonl --out image.audit.json
 ```
 
-For an independently provisioned isolated daemon, supply its exact absolute
-paths with `python3 setup-live.py --docker /absolute/path/docker --socket
-/absolute/path/docker.sock` on one command line. The same profile and no-symlink
-checks apply.
+Replace the image reference, full observed ID, platform and revision with the
+intended image's actual facts. Repository references and config digests are
+independent values. Custom absolute executable/socket paths use the same fixed
+profile and no-symlink rules. Setup neither provisions Docker nor probes its
+version; an independently supplied version string alone never qualifies live use.
+macOS live setup refuses before creating files or starting a process.
 
 Setup records executable bytes and creates four new empty reference directories
 and the host-bound manifest/lock. It does not connect to Docker or qualify it.

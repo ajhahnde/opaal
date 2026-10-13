@@ -196,14 +196,15 @@ extern "C" fn cancel_signal(_: libc::c_int) {
     SIGNAL_RECEIVED.store(true, std::sync::atomic::Ordering::SeqCst);
 }
 
-pub(super) struct SignalLease {
+/// Owned invocation cancellation signals, independent of a host or worker image.
+pub struct SignalLease {
     previous: Vec<(libc::c_int, libc::sigaction)>,
     cancelled: std::sync::Arc<std::sync::atomic::AtomicBool>,
     generation: u64,
 }
 
 impl SignalLease {
-    pub(super) fn capture() -> Result<Self, OperationalError> {
+    pub fn capture() -> Result<Self, OperationalError> {
         SIGNAL_LENT
             .compare_exchange(
                 false,
@@ -248,7 +249,7 @@ impl SignalLease {
         Ok(lease)
     }
 
-    pub(super) fn cancellation(&self) -> Box<dyn Fn() -> bool + Send + Sync> {
+    pub fn cancellation(&self) -> Box<dyn Fn() -> bool + Send + Sync> {
         let flag = self.cancelled.clone();
         let generation = self.generation;
         Box::new(move || {

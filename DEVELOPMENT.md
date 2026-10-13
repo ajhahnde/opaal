@@ -244,6 +244,60 @@ policy modification and exclusive paths. It does not qualify a live daemon.
 results under tight work/retention budgets. Controlled acquisition fakes verify
 the fixed vectors, sanitized environment, failed-status gating and target checks.
 
+## Project preparation and diagnosis
+
+`project init --example image-check --destination PATH --environment offline`
+uses the compiled reference assets and host lock without installation/cwd lookup.
+Live Linux setup additionally requires explicit `--docker`, `--socket` and
+`--qualified-version 29.9.0`; these are independently qualified caller facts.
+Generated projects require OPAAL1.5 or later in the existing compatibility field.
+Existing controls are neither rewritten nor upgraded. The old setup script is
+retained only in `tests/fixtures/image-check-legacy/` for comparison.
+
+Setup validates controls/facts before creating an absent directory, then uses
+descriptor-relative exclusive no-follow writes and syncs. Its fixed inventory
+is bounded to64 files/16MiB. Injected write/sync and concurrent-collision tests
+assert retained partial files and safe refusal on retry; no cleanup path unlinks
+them. Existing directories, files, FIFOs and dangling symlinks remain unchanged.
+
+`project doctor` requires explicit project, task and environment selections and
+the existing input binding forms. It uses the shared cancellable source analysis,
+scalar validation and declarative authority checks plus bounded local identity
+reads. No execution host, initializer, secret, stdin or daemon is consulted.
+Text and closed schema_version1 JSON are bounded to128 findings/64KiB. Root keys
+are `schema`, `schema_version`, `project_id`, `task_id`, `environment`,
+`local_readiness`, `live_readiness`, `findings`. The schema name is
+`opaal.project-doctor.v1`. Local readiness is ready/blocked/unknown; live readiness
+is unknown for ci and not-applicable otherwise. Every finding has `code`,
+`category`, `severity`, `input_name`, `message`, `source`, `span`. Severity is
+error/unknown; category is version/document/task/input/authority/tool/host/resource.
+Source and span are currently null; input_name is a validated identifier or null.
+No raw diagnostics, source lines, input values or executable bytes are rendered.
+
+| Code | Fixed meaning |
+| --- | --- |
+| DOCTOR001 | Unavailable, malformed or unsupported selected document/source |
+| DOCTOR002 | Dependent task checks unknown |
+| DOCTOR003 | Analysis/input/view resource refusal (diagnostic, exit2) |
+| DOCTOR004 | Invalid selection/input names (diagnostic, exit2) |
+| DOCTOR005 | Environment not declared |
+| DOCTOR006 | Tool lock host mismatch |
+| DOCTOR007 | Executable unavailable or changed |
+| DOCTOR008 | Unsupported live host |
+| DOCTOR009 | Unavailable/invalid socket or empty directories |
+| DOCTOR010 | Incompatible OPAAL version |
+| DOCTOR011 | Task unavailable or unsupported |
+| DOCTOR012 | Missing or incompatible exact authority grant |
+| DOCTOR013 | Input file unavailable or beyond read bound |
+| DOCTOR014 | Missing or incompatible typed inputs |
+| DOCTOR015 | Undeclared input name |
+| DOCTOR016 | Unsupported secret cardinality |
+
+Both source and packaged qualification assert native setup/doctor outside the
+checkout. Linux live setup canaries assert no executable launch/socket connection;
+macOS live setup refuses. Real Docker qualification retains its separate fixed
+profile gate. Local readiness confers no plan acceptance or health guarantee.
+
 ## Static task discovery and plan digests
 
 Inspect the checked-in job-check project with the built client:

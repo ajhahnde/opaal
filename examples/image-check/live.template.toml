@@ -1,0 +1,20 @@
+schema_version = 1
+[project]
+name = "image_check"
+root_module = "tasks.opaal"
+required_opaal = ">=1.5.0,<2.0.0"
+[paths]
+root = "."
+evidence = "output"
+[tools.docker]
+adapter = "docker"
+version = "=29.9.0"
+[targets.ci]
+adapter = "docker"
+tool = "docker"
+socket = { encoding = "base64url-nopad", platform = "unix", value = "@SOCKET@" }
+config_directory = "docker-empty"
+api_version = "1.48"
+[environments.ci]
+authority = "live-authority.toml"
+tool_lock = "live-tools.toml"

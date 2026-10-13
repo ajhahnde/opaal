@@ -1,0 +1,12 @@
+schema_version = 1
+project = "image_check"
+environment = "ci"
+platform = "x86_64-unknown-linux-gnu"
+[child_environment]
+inherit = []
+[[tools]]
+id = "docker"
+adapter = "docker"
+path = { encoding = "base64url-nopad", platform = "unix", value = "@DOCKER@" }
+version = "29.9.0"
+digest = "@DIGEST@"

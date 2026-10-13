@@ -1889,6 +1889,46 @@ pub fn validate_project_compatibility(manifest: &ProjectManifest) -> Result<(), 
     Ok(())
 }
 
+/// Load the same project/task metadata with bounded, cancellable static analysis.
+/// Diagnostics are fixed codes so observers never expose source or input payloads.
+pub fn load_project_program_controlled(
+    manifest: ProjectManifest,
+    canonicalizer: &dyn ModuleCanonicalizer,
+    source_loader: &dyn ModuleSourceLoader,
+    control: &AnalysisControl,
+) -> Result<ProjectProgram, ProjectError> {
+    validate_project_compatibility(&manifest)?;
+    let modules = match analyze_project_modules_controlled(
+        &manifest,
+        canonicalizer,
+        source_loader,
+        control,
+    ) {
+        ModuleAnalysisOutcome::Complete(report) => report
+            .program()
+            .cloned()
+            .ok_or_else(|| ProjectError::new("PROJECT028", "project source analysis failed"))?,
+        ModuleAnalysisOutcome::Cancelled => {
+            return Err(ProjectError::new(
+                "PROJECT029",
+                "project analysis cancelled",
+            ));
+        }
+        ModuleAnalysisOutcome::BudgetExceeded(_) => {
+            return Err(ProjectError::new(
+                "PROJECT030",
+                "project analysis limit exceeded",
+            ));
+        }
+    };
+    let tasks = collect_tasks(&manifest, &modules)?;
+    Ok(ProjectProgram {
+        manifest,
+        modules,
+        tasks,
+    })
+}
+
 /// Analyzes one explicitly selected project's source graph without executing
 /// source or adapters, while honoring the shared analysis cancellation and
 /// resource limits.
@@ -2335,6 +2375,62 @@ impl ProjectCheck {
     }
 }
 
+/// Observe declarative grants independently of task input validity.
+#[must_use]
+pub fn check_task_authority(
+    task: &TaskSignature,
+    authority: &AuthorityDocument,
+) -> Vec<ProjectCheckFinding> {
+    let mut findings = Vec::new();
+    for effect in &task.effects {
+        let matching = authority
+            .rules
+            .iter()
+            .find(|rule| rule.effect == effect.capability && rule.scope == effect.scope);
+        match matching {
+            Some(AuthorityDocumentRule {
+                decision: AuthorityDecision::Grant,
+                required_enforcement,
+                ..
+            }) => {
+                let expected = if effect.capability == "process.run" {
+                    DocumentEnforcement::AcknowledgeUnenforced
+                } else {
+                    DocumentEnforcement::Enforced
+                };
+                if *required_enforcement != Some(expected) {
+                    findings.push(ProjectCheckFinding {
+                        code: "CHECK005",
+                        message: format!(
+                            "request `{}` `{}` has the wrong enforcement requirement",
+                            effect.capability, effect.scope
+                        ),
+                    });
+                }
+            }
+            Some(_) => {
+                findings.push(ProjectCheckFinding {
+                    code: "CHECK005",
+                    message: format!(
+                        "request `{}` `{}` is explicitly denied",
+                        effect.capability, effect.scope
+                    ),
+                });
+            }
+            None => {
+                findings.push(ProjectCheckFinding {
+                    code: "CHECK005",
+                    message: format!(
+                        "request `{}` `{}` has no exact grant",
+                        effect.capability, effect.scope
+                    ),
+                });
+            }
+        }
+    }
+    findings
+}
+
 /// Validates one task selection and all declarative grants without host observation.
 pub fn check_project(
     project: &ProjectProgram,
@@ -2427,53 +2523,7 @@ pub fn check_project(
             )
         })?;
     }
-    let mut findings = Vec::new();
-    for effect in &task.effects {
-        let matching = authority
-            .rules
-            .iter()
-            .find(|rule| rule.effect == effect.capability && rule.scope == effect.scope);
-        match matching {
-            Some(AuthorityDocumentRule {
-                decision: AuthorityDecision::Grant,
-                required_enforcement,
-                ..
-            }) => {
-                let expected = if effect.capability == "process.run" {
-                    DocumentEnforcement::AcknowledgeUnenforced
-                } else {
-                    DocumentEnforcement::Enforced
-                };
-                if *required_enforcement != Some(expected) {
-                    findings.push(ProjectCheckFinding {
-                        code: "CHECK005",
-                        message: format!(
-                            "request `{}` `{}` has the wrong enforcement requirement",
-                            effect.capability, effect.scope
-                        ),
-                    });
-                }
-            }
-            Some(_) => {
-                findings.push(ProjectCheckFinding {
-                    code: "CHECK005",
-                    message: format!(
-                        "request `{}` `{}` is explicitly denied",
-                        effect.capability, effect.scope
-                    ),
-                });
-            }
-            None => {
-                findings.push(ProjectCheckFinding {
-                    code: "CHECK005",
-                    message: format!(
-                        "request `{}` `{}` has no exact grant",
-                        effect.capability, effect.scope
-                    ),
-                });
-            }
-        }
-    }
+    let findings = check_task_authority(task, authority);
     Ok(ProjectCheck {
         task: task.clone(),
         inputs: supplied,
@@ -2488,7 +2538,8 @@ pub fn check_project(
     })
 }
 
-fn validate_input_text(value_type: &ValueType, value: &str) -> Result<(), &'static str> {
+/// Validate the existing exact scalar task binding without observing host state.
+pub fn validate_input_text(value_type: &ValueType, value: &str) -> Result<(), &'static str> {
     match value_type {
         ValueType::Null if value == "null" => Ok(()),
         ValueType::Bool if matches!(value, "true" | "false") => Ok(()),
