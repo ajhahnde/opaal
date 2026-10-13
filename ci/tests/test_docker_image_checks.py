@@ -191,7 +191,7 @@ class DockerImageChecksTests(unittest.TestCase):
             work = Path(temporary)
             shutil.copyfile(ROOT / FIXTURES / "docker-cli-profile.json", work / "docker-cli-profile.json")
             (work / "qualified-docker-version.txt").write_text("unqualified\n")
-            result = subprocess.run([sys.executable, ROOT / FIXTURES / "setup-live.py"],
+            result = subprocess.run([sys.executable, ROOT / "tests/fixtures/image-check-legacy/setup-live.py"],
                                     cwd=work, capture_output=True, timeout=10)
             self.assertNotEqual(result.returncode, 0)
             self.assertEqual(sorted(path.name for path in work.iterdir()),

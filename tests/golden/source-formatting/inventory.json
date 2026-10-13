@@ -1213,7 +1213,7 @@
     },
     {
       "path": "ci/check_product.py",
-      "sha256": "4abe01559a0879c3f415796f7eb4af21343b2141604ebfa86ebe559a5bdcbee8",
+      "sha256": "4816577817e0957d3316ae6e36d1200cfbefa6dc5c33a01611666f3b799b2c1d",
       "source_markers": 15,
       "constructors_or_assertions": [
         "command_json",
@@ -1321,7 +1321,7 @@
     },
     {
       "path": "ci/package_release.py",
-      "sha256": "b79625bdbad24253d8563895e76f148a3c8f0d9c098e788613ce3c4936711e6f",
+      "sha256": "23c27d53c2b265de988a7be3c48c7ddfe9b24cbd1d67e275b9b4a801a5734298",
       "source_markers": 2,
       "constructors_or_assertions": [
         "main",
@@ -1376,7 +1376,7 @@
     },
     {
       "path": "ci/qualify_docker_image_checks.py",
-      "sha256": "380ad6083b8d66681a9078a4c54a2554734af4f39a7bc88cec19ada3d4729094",
+      "sha256": "839875f68be6abef3fd0e71ba78fa61582ff18324ee6d08fef5673884ed4ed5c",
       "source_markers": 16,
       "constructors_or_assertions": [
         "add",
@@ -1657,7 +1657,7 @@
     },
     {
       "path": "ci/tests/test_docker_image_checks.py",
-      "sha256": "5c45dc16a79a76cbadefa6f53f53f56f6466cf6d109b324490059a5177812524",
+      "sha256": "7d0ff256eec8f12df40955116ec3a6369809e8872f5a6bd00fc07f100dcb50e3",
       "source_markers": 9,
       "constructors_or_assertions": [
         "run",
@@ -1793,7 +1793,7 @@
     },
     {
       "path": "crates/opaal-cli/src/cli.rs",
-      "sha256": "c90786c6fc18f9cbf6a5f79511568002f93ea52570f660f7e122883707352e70",
+      "sha256": "855981b3f4e11079f1abe831215ea5c238be14f72c88a8d1f4166ef7cc6d292c",
       "source_markers": 11,
       "constructors_or_assertions": [
         "check_and_plan_require_one_explicit_source",
@@ -1852,7 +1852,7 @@
     },
     {
       "path": "crates/opaal-cli/src/main.rs",
-      "sha256": "16c4b77511b20c86eef56f1cb6f5ea05a34bd0fb379cf432e72eec667b7bbc63",
+      "sha256": "80e965a55b699c3b117a57fe4053bdc129ce583edaff47a8750da5b4272ee5e6",
       "source_markers": 5,
       "constructors_or_assertions": [
         "module constants/imports",
@@ -1864,7 +1864,7 @@
     },
     {
       "path": "crates/opaal-cli/src/project.rs",
-      "sha256": "d691e68887ab117d04c5a0b8d7b05bbc59ee5de069e00b520004cf996d8e41f0",
+      "sha256": "a1ced70336b4324382033768c6618baa1ec0d99d8bc7083929b7096a217da21b",
       "source_markers": 7,
       "constructors_or_assertions": [
         "create_journal",
@@ -1875,6 +1875,18 @@
       "role": "source-infrastructure",
       "reason": "Source adapter, loader, parser, generator or qualification owner; listed constructors/assertions own any embedded buffers rather than a blanket source rewrite.",
       "assertion": "cargo test --workspace --locked and Python CI validator suite"
+    },
+    {
+      "path": "crates/opaal-cli/src/project/preparation.rs",
+      "sha256": "09afcbd368f753c08d42199b914f099aa5bc8c631cc58290b8d640901763fe4b",
+      "source_markers": 6,
+      "constructors_or_assertions": [
+        "concurrent_asset_collision_is_retained_without_overwrite",
+        "module constants/imports"
+      ],
+      "role": "source-infrastructure",
+      "reason": "Compiles maintained ordinary image-check assets and creates exclusive controls; fault tests preserve partial state.",
+      "assertion": "crates/opaal-cli/tests/project_preparation.rs"
     },
     {
       "path": "crates/opaal-cli/src/raw_editor.rs",
@@ -2301,6 +2313,19 @@
       "assertion": "crates/opaal-cli/tests/planner_e2e.rs"
     },
     {
+      "path": "crates/opaal-cli/tests/project_doctor.rs",
+      "sha256": "2ee1c13ce5c61465e7946468a83fe1c4e6ed65527cf3f5907f90a7b3df74cc1d",
+      "source_markers": 4,
+      "constructors_or_assertions": [
+        "cli_does_not_read_streamed_stdin_or_execute_initializers",
+        "fifo_controls_and_source_refuse_without_waiting_for_a_writer",
+        "ready_view_matches_static_check_and_preserves_sources"
+      ],
+      "role": "mixed-test-buffers",
+      "reason": "Static setup/doctor canaries and hostile-path/input fixtures deliberately include invalid and noncanonical buffers.",
+      "assertion": "crates/opaal-cli/tests/project_doctor.rs"
+    },
+    {
       "path": "crates/opaal-cli/tests/project_frontend.rs",
       "sha256": "a81bf1ed368cf2f6d1b9af772a10546c67d8aedf8be2b6e2d474aced7cfc5147",
       "source_markers": 40,
@@ -2322,6 +2347,17 @@
       "role": "mixed-test-buffers",
       "reason": "Retain complete, legacy, invalid and incomplete source buffers and their source-position assertions; canonical output is asserted only by formatting owners.",
       "assertion": "crates/opaal-cli/tests/project_frontend.rs"
+    },
+    {
+      "path": "crates/opaal-cli/tests/project_preparation.rs",
+      "sha256": "e1f1dbde414c384a63c74176aa94159d192a702ee4baa11c19c286f7aa16ab05",
+      "source_markers": 4,
+      "constructors_or_assertions": [
+        "fixed_offline_assets_match_maintained_sources_and_private_modes"
+      ],
+      "role": "mixed-test-buffers",
+      "reason": "Static setup/doctor canaries and hostile-path/input fixtures deliberately include invalid and noncanonical buffers.",
+      "assertion": "crates/opaal-cli/tests/project_preparation.rs"
     },
     {
       "path": "crates/opaal-cli/tests/pty.rs",
@@ -4420,17 +4456,6 @@
       "assertion": "ci/tests/test_docker_image_checks.py and ci/qualify_docker_image_checks.py"
     },
     {
-      "path": "examples/image-check/setup-live.py",
-      "sha256": "e496dffdfca255f69bda461d740696910c35ec9de0e21153b76b971aea29d9a5",
-      "source_markers": 2,
-      "constructors_or_assertions": [
-        "main"
-      ],
-      "role": "positive-generator",
-      "reason": "Fresh Linux manifest/lock generator for independently qualified fixed-profile facts.",
-      "assertion": "ci/tests/test_docker_image_checks.py"
-    },
-    {
       "path": "fuzz/fuzz_targets/data_operations_limits.rs",
       "sha256": "804af69d7a21aefb500d07522e316055b4e0c466eb0484d785920219d35687f3",
       "source_markers": 3,
@@ -4579,6 +4604,17 @@
       "assertion": "cargo test --workspace --locked and Python CI validator suite"
     },
     {
+      "path": "tests/fixtures/image-check-legacy/setup-live.py",
+      "sha256": "e496dffdfca255f69bda461d740696910c35ec9de0e21153b76b971aea29d9a5",
+      "source_markers": 2,
+      "constructors_or_assertions": [
+        "main"
+      ],
+      "role": "positive-generator",
+      "reason": "Frozen old setup driver is a test-only comparison input; native setup owns the user workflow.",
+      "assertion": "ci/tests/test_docker_image_checks.py"
+    },
+    {
       "path": "tests/fixtures/process_observer.rs",
       "sha256": "4aee4036ad2283aa5278947ef5d348a443c2454d94495627b7cae5e220e1b874",
       "source_markers": 0,
@@ -4720,17 +4756,6 @@
       "role": "source-infrastructure",
       "reason": "Native reference drivers preserve selected execution exit and exclusive evidence.",
       "assertion": "ci/qualify_docker_image_checks.py"
-    },
-    {
-      "path": "tests/golden/docker-image-checks/setup-live.py",
-      "sha256": "e496dffdfca255f69bda461d740696910c35ec9de0e21153b76b971aea29d9a5",
-      "source_markers": 2,
-      "constructors_or_assertions": [
-        "main"
-      ],
-      "role": "positive-generator",
-      "reason": "Fresh Linux manifest/lock generator for independently qualified fixed-profile facts.",
-      "assertion": "ci/tests/test_docker_image_checks.py"
     },
     {
       "path": "tests/golden/numeric-operations/reference.py",

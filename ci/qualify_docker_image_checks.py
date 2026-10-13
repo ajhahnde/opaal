@@ -130,13 +130,31 @@ def cases(document: dict) -> list[tuple[str, bytes, tuple[str, str, str], int, d
 
 def references(binary: Path, inputs: Path, directory: Path, target: str) -> list[dict]:
     template = directory / "reference"
-    shutil.copytree(inputs, template)
-    require('required_opaal = ">=1.4.0,<2.0.0"' in (template / "offline.toml").read_text(),
-            "reference version floor differs")
-    shutil.copyfile(template / "offline.toml", template / "opaal.toml")
-    shutil.copyfile(template / ("offline-tools-linux.toml" if target == "linux-x86_64" else
-                               "offline-tools-macos.toml"), template / "offline-tools.toml")
     environment = {"PATH": str(binary.parent) + os.pathsep + os.defpath}
+    success(command([binary, "project", "init", "--example", "image-check", "--destination",
+                     template, "--environment", "offline"], directory, environment), "native offline setup")
+    require('required_opaal = ">=1.5.0,<2.0.0"' in (template / "opaal.toml").read_text(),
+            "reference version floor differs")
+    for path in template.rglob("*"):
+        if path.is_file() and path.name not in {"opaal.toml", "offline-tools.toml"}:
+            require(path.read_bytes() == (inputs / path.relative_to(template)).read_bytes(),
+                    "embedded asset differs from packaged input")
+    # Independent lifecycle/comparison drivers remain qualification inputs.
+    for name in ("run-saved.sh", "comparison.py", "run-comparison.sh"):
+        shutil.copyfile(inputs / name, template / name)
+    selected_lock = "offline-tools-linux.toml" if target == "linux-x86_64" else "offline-tools-macos.toml"
+    require((template / "offline-tools.toml").read_bytes() == (inputs / selected_lock).read_bytes(),
+            "embedded offline host lock differs")
+    require((template / "opaal.toml").read_bytes() == (inputs / "offline.toml").read_bytes(),
+            "embedded manifest differs")
+    diagnosed = command([binary, "project", "doctor", "--project", "opaal.toml", "--task", "saved",
+                         "--environment", "offline", "--input", "expected_id=x", "--input",
+                         "expected_platform=x", "--input", "expected_revision=x", "--format", "json"],
+                        template, environment)
+    view = json.loads(success(diagnosed, "native offline diagnosis"))
+    require(view["schema"] == "opaal.project-doctor.v1" and view["schema_version"] == 1
+            and view["local_readiness"] == "ready" and view["live_readiness"] == "not-applicable"
+            and not view["findings"], "offline diagnosis differs")
     for path in sorted(template.glob("*.opaal")):
         success(command([binary, "format", "--check", path], template, environment), "canonical " + path.name)
         if path.name not in {"tasks.opaal", "saved-tasks.opaal"}:
@@ -351,13 +369,14 @@ def live_references(binary: Path, inputs: Path, directory: Path, live: dict) -> 
         require(name not in names, "duplicate live case")
         names.add(name)
         work = directory / name
-        shutil.copytree(inputs, work)
-        (work / "qualified-docker-version.txt").write_text("29.9.0\n")
-        setup = command(["python3", "setup-live.py", "--docker", live["docker"],
-                         "--socket", live["socket"]], work, environment)
+        setup = command([binary, "project", "init", "--example", "image-check", "--destination", work,
+                         "--environment", "ci", "--docker", live["docker"], "--socket", live["socket"],
+                         "--qualified-version", "29.9.0"], directory, environment)
+        success(setup, name + ": fresh native setup")
+        for driver in ("run-live.sh", "comparison.py", "run-comparison.sh"):
+            shutil.copyfile(inputs / driver, work / driver)
         (work / "setup.stdout.txt").write_bytes(setup.stdout)
         (work / "setup.stderr.txt").write_bytes(setup.stderr)
-        success(setup, name + ": fresh setup")
         wanted = list(expected)
         reference = live["image"]
         selected = json.loads(json.dumps(report))
@@ -427,7 +446,7 @@ def qualify(archive, fixtures, binaries, source, target, artifacts, live=None):
     dirty = bool(subprocess.check_output(["git", "status", "--porcelain", "--untracked-files=all"], cwd=ROOT))
     check_copies(ROOT)
     with tempfile.TemporaryDirectory(prefix="opaal-image-") as temporary:
-        directory = Path(temporary)
+        directory = Path(temporary).resolve()
         if archive:
             require(not dirty, "archive qualification requires a clean committed checkout")
             programs, pm = unpack(archive, directory, kind="binaries", version=VERSION, source=source, platform=target)

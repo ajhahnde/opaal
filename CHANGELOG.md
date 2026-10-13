@@ -4,6 +4,15 @@ All notable changes to OPAAL are documented here.
 
 ## [Unreleased]
 
+### Added
+
+- Add fixed offline and explicitly qualified Linux live image-check project
+  initialization with embedded assets, exclusive private files and retained
+  partial setup on failure.
+- Add static project diagnosis with bounded safe text/JSON findings, shared
+  task/input/authority checks and local identity observations. Diagnosis never
+  executes a task or contacts Docker; live readiness remains unknown.
+
 ## [1.4.0]
 
 ### Added

@@ -14,6 +14,7 @@ use opaal_platform::standard_host::{
 mod image;
 #[allow(unsafe_code)]
 mod native;
+pub use native::SignalLease;
 
 pub const WORKER_ARGUMENT: &str = "--opaal-standard-host-worker";
 const POLL_INTERVAL: Duration = Duration::from_millis(25);

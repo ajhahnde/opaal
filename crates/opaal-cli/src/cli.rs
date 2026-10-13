@@ -19,6 +19,21 @@ pub enum FormatOperation {
 pub enum Mode {
     Help,
     Version,
+    ProjectHelp,
+    ProjectInit {
+        destination: PathBuf,
+        environment: String,
+        docker: Option<PathBuf>,
+        socket: Option<PathBuf>,
+        qualified_version: Option<String>,
+    },
+    ProjectDoctor {
+        project: PathBuf,
+        task: String,
+        environment: String,
+        inputs: Vec<ProjectInputBinding>,
+        format_json: bool,
+    },
     CheckHelp,
     Check {
         source: PathBuf,
@@ -164,6 +179,7 @@ where
             });
         }
         Some("check") => return parse_check_args(arguments.into_iter().skip(1)),
+        Some("project") => return parse_project_args(&arguments[1..]),
         Some("task") => return parse_task_args(arguments.into_iter().skip(1)),
         Some("plan") => return parse_plan_args(arguments.into_iter().skip(1)),
         Some("execute") => return parse_execute_args(arguments.into_iter().skip(1)),
@@ -234,11 +250,19 @@ where
 }
 
 fn parse_project_check_args(arguments: &[OsString]) -> Result<Invocation, CliError> {
+    parse_project_diagnosis_args(arguments, false)
+}
+
+fn parse_project_diagnosis_args(
+    arguments: &[OsString],
+    doctor: bool,
+) -> Result<Invocation, CliError> {
     let mut project = None;
     let mut task = None;
     let mut environment = None;
     let mut inputs = Vec::new();
     let mut format_json = false;
+    let mut format_seen = false;
     let mut index = 0;
     while index < arguments.len() {
         let option = arguments[index].to_str().ok_or_else(|| {
@@ -255,15 +279,16 @@ fn parse_project_check_args(arguments: &[OsString]) -> Result<Invocation, CliErr
             "--input-file" => push_binding(&mut inputs, "--input-file", arguments, &mut index)?,
             "--format" => {
                 let value = text_option_value("--format", arguments, &mut index)?;
-                if value != "json" {
+                if value != "json" && !(doctor && value == "text") {
                     return Err(CliError::InvalidProjectArgument(
                         "--format supports only 'json'".to_owned(),
                     ));
                 }
-                if format_json {
+                if format_seen {
                     return Err(CliError::DuplicateOption("--format"));
                 }
-                format_json = true;
+                format_json = value == "json";
+                format_seen = true;
             }
             "--help" if arguments.len() == 1 => {
                 return Ok(Invocation {
@@ -278,12 +303,105 @@ fn parse_project_check_args(arguments: &[OsString]) -> Result<Invocation, CliErr
         }
     }
     Ok(Invocation {
-        mode: Mode::ProjectCheck {
-            project: required_option(project, "--project")?,
-            task: required_option(task, "--task")?,
-            environment: required_option(environment, "--environment")?,
-            inputs,
-            format_json,
+        mode: if doctor {
+            Mode::ProjectDoctor {
+                project: required_option(project, "--project")?,
+                task: required_option(task, "--task")?,
+                environment: required_option(environment, "--environment")?,
+                inputs,
+                format_json,
+            }
+        } else {
+            Mode::ProjectCheck {
+                project: required_option(project, "--project")?,
+                task: required_option(task, "--task")?,
+                environment: required_option(environment, "--environment")?,
+                inputs,
+                format_json,
+            }
+        },
+    })
+}
+
+fn parse_project_args(arguments: &[OsString]) -> Result<Invocation, CliError> {
+    if arguments == [OsString::from("--help")]
+        || (arguments.len() == 2
+            && matches!(arguments[0].to_str(), Some("init" | "doctor"))
+            && arguments[1] == "--help")
+    {
+        return Ok(Invocation {
+            mode: Mode::ProjectHelp,
+        });
+    }
+    match arguments.first().and_then(|value| value.to_str()) {
+        Some("doctor") => {
+            return parse_project_diagnosis_args(&arguments[1..], true).map_err(|_| {
+                CliError::InvalidProjectArgument(
+                    "invalid project doctor arguments; see project --help".to_owned(),
+                )
+            });
+        }
+        Some("init") => {}
+        _ => {
+            return Err(CliError::InvalidProjectArgument(
+                "project requires init or doctor".to_owned(),
+            ));
+        }
+    }
+    let mut example = None;
+    let mut destination = None;
+    let mut environment = None;
+    let mut docker = None;
+    let mut socket = None;
+    let mut qualified_version = None;
+    let mut index = 1;
+    while index < arguments.len() {
+        let option = arguments[index].to_str();
+        index += 1;
+        match option {
+            Some("--example") => set_text_option(&mut example, "--example", arguments, &mut index)?,
+            Some("--destination") => {
+                set_path_option(&mut destination, "--destination", arguments, &mut index)?
+            }
+            Some("--environment") => {
+                set_text_option(&mut environment, "--environment", arguments, &mut index)?
+            }
+            Some("--docker") => set_path_option(&mut docker, "--docker", arguments, &mut index)?,
+            Some("--socket") => set_path_option(&mut socket, "--socket", arguments, &mut index)?,
+            Some("--qualified-version") => set_text_option(
+                &mut qualified_version,
+                "--qualified-version",
+                arguments,
+                &mut index,
+            )?,
+            _ => {
+                return Err(CliError::InvalidProjectArgument(
+                    "unexpected project init argument".to_owned(),
+                ));
+            }
+        }
+    }
+    let example = required_option(example, "--example")?;
+    let environment = required_option(environment, "--environment")?;
+    if example != "image-check"
+        || !matches!(environment.as_str(), "offline" | "ci")
+        || (environment == "offline"
+            && (docker.is_some() || socket.is_some() || qualified_version.is_some()))
+        || (environment == "ci"
+            && (docker.is_none() || socket.is_none() || qualified_version.is_none()))
+    {
+        return Err(CliError::InvalidProjectArgument(
+            "image-check requires offline, or ci with --docker, --socket and --qualified-version"
+                .to_owned(),
+        ));
+    }
+    Ok(Invocation {
+        mode: Mode::ProjectInit {
+            destination: required_option(destination, "--destination")?,
+            environment,
+            docker,
+            socket,
+            qualified_version,
         },
     })
 }
@@ -824,6 +942,147 @@ mod tests {
 
     fn parse(arguments: &[&str]) -> Result<Invocation, CliError> {
         parse_args(arguments.iter().map(OsString::from))
+    }
+
+    #[test]
+    fn project_frontends_require_closed_explicit_requests() {
+        assert_eq!(
+            parse(&["project", "--help"]).unwrap().mode,
+            Mode::ProjectHelp
+        );
+        assert_eq!(
+            parse(&["project", "init", "--help"]).unwrap().mode,
+            Mode::ProjectHelp
+        );
+        assert_eq!(
+            parse(&[
+                "project",
+                "init",
+                "--example",
+                "image-check",
+                "--destination",
+                "new",
+                "--environment",
+                "offline"
+            ])
+            .unwrap()
+            .mode,
+            Mode::ProjectInit {
+                destination: PathBuf::from("new"),
+                environment: "offline".to_owned(),
+                docker: None,
+                socket: None,
+                qualified_version: None
+            }
+        );
+        for args in [
+            vec!["project"],
+            vec!["project", "unknown"],
+            vec![
+                "project",
+                "init",
+                "--example",
+                "image-check",
+                "--environment",
+                "offline",
+            ],
+            vec![
+                "project",
+                "init",
+                "--example",
+                "image-check",
+                "--destination",
+                "new",
+                "--environment",
+                "ci",
+            ],
+            vec![
+                "project",
+                "init",
+                "--example",
+                "image-check",
+                "--destination",
+                "new",
+                "--environment",
+                "offline",
+                "--docker",
+                "/docker",
+            ],
+            vec![
+                "project",
+                "init",
+                "--example",
+                "other",
+                "--destination",
+                "new",
+                "--environment",
+                "offline",
+            ],
+            vec![
+                "project",
+                "init",
+                "--example",
+                "image-check",
+                "--destination",
+                "new",
+                "--destination",
+                "again",
+                "--environment",
+                "offline",
+            ],
+            vec![
+                "project",
+                "doctor",
+                "--project",
+                "opaal.toml",
+                "--task",
+                "saved",
+                "--environment",
+                "offline",
+                "--format",
+                "text",
+                "--format",
+                "json",
+            ],
+            vec![
+                "project",
+                "doctor",
+                "--project",
+                "opaal.toml",
+                "--task",
+                "saved",
+                "--environment",
+                "offline",
+                "--input",
+                "x=PRIVATE",
+                "--input",
+                "x=PRIVATE",
+            ],
+        ] {
+            assert!(parse(&args).is_err(), "{args:?}");
+        }
+        for format in ["text", "json"] {
+            let invocation = parse(&[
+                "project",
+                "doctor",
+                "--project",
+                "opaal.toml",
+                "--task",
+                "saved",
+                "--environment",
+                "offline",
+                "--format",
+                format,
+            ])
+            .unwrap();
+            assert!(
+                matches!(invocation.mode, Mode::ProjectDoctor { format_json, .. } if format_json == (format == "json"))
+            );
+        }
+        let error = parse(&["project", "doctor", "PRIVATE\u{1b}"])
+            .unwrap_err()
+            .message();
+        assert!(!error.contains("PRIVATE"));
     }
 
     #[test]

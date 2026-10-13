@@ -54,6 +54,11 @@ use opaal_runtime::workflow::{
 };
 use serde_json::{Value, json};
 
+mod doctor;
+mod preparation;
+pub use doctor::{DoctorProjectRun, doctor_project};
+pub use preparation::{InitProjectRequest, init_project};
+
 const MAX_CONTROL_READ_BYTES: usize = 192 * 1024 * 1024;
 type BuiltTlsBindings = (Vec<Value>, BTreeMap<String, Vec<u8>>);
 
@@ -5299,7 +5304,10 @@ fn open_file_at_nofollow(
     let descriptor = rustix::fs::openat(
         parent,
         name,
-        rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::CLOEXEC,
+        rustix::fs::OFlags::RDONLY
+            | rustix::fs::OFlags::NONBLOCK
+            | rustix::fs::OFlags::NOFOLLOW
+            | rustix::fs::OFlags::CLOEXEC,
         rustix::fs::Mode::empty(),
     )
     .map_err(|error| project_open_error(error, display_path))?;

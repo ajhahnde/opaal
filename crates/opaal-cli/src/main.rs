@@ -21,12 +21,12 @@ use opaal_cli::interactive::{
 };
 use opaal_cli::plan::inspect_source;
 use opaal_cli::project::{
-    AuditRequest, CheckProjectRequest, ExecuteProjectRequest, InspectProjectRequest,
-    PlanProjectRequest, ProjectInputBinding, audit_explicit_journal, check_explicit_project,
-    execute_explicit_plan, inspect_audit_artifact, inspect_plan_artifact, inspect_project,
-    plan_explicit_project,
+    AuditRequest, CheckProjectRequest, ExecuteProjectRequest, InitProjectRequest,
+    InspectProjectRequest, PlanProjectRequest, ProjectInputBinding, audit_explicit_journal,
+    check_explicit_project, doctor_project, execute_explicit_plan, init_project,
+    inspect_audit_artifact, inspect_plan_artifact, inspect_project, plan_explicit_project,
 };
-use opaal_cli::report::{HostReport, write_report};
+use opaal_cli::report::{HostExit, HostReport, write_report};
 use opaal_cli::{RawLineEditor, ReedlineEditor};
 use opaal_platform_posix::PosixPlatform;
 use opaal_platform_posix::standard_host::{PosixStandardHost, worker_entry};
@@ -54,6 +54,9 @@ Usage:
   opaal check [--] SOURCE
   opaal check --project opaal.toml --task TASK --environment ID [--input NAME=VALUE | --input-file NAME=PATH]... [--format json]
   opaal check --help
+  opaal project init --example image-check --destination PATH --environment offline
+  opaal project doctor --project opaal.toml --task TASK --environment ID [--input NAME=VALUE | --input-file NAME=PATH]... [--format text|json]
+  opaal project --help
   opaal task inspect --project opaal.toml TASK [--format json]
   opaal task list --project opaal.toml [--format json]
   opaal task --help
@@ -132,6 +135,33 @@ sorts tasks by qualified identity; an empty list succeeds. JSON uses the closed
 opaal.project-inspection.v1 schema, version 1, and ends with LF. Tools are
 manifest requirements, not observations of installed executables. Discovery never
 runs initializers or tools and never searches upward or reads account settings.
+";
+
+const PROJECT_HELP: &str = "Prepare and diagnose an explicit image-check project
+
+Usage:
+  opaal project init --example image-check --destination PATH --environment offline
+  opaal project init --example image-check --destination PATH --environment ci --docker ABS_PATH --socket ABS_PATH --qualified-version VERSION
+  opaal project doctor --project opaal.toml --task TASK --environment ID [--input NAME=VALUE | --input-file NAME=PATH]... [--format text|json]
+  opaal project --help
+
+Init embeds the fixed version-matched example and selects the offline host lock.
+The parent must exist without symlink components. Destination must be absent.
+Files are exclusive mode0600; directories mode0700. Failure after creation
+retains partial files: inspect them separately and retry in a fresh destination.
+Live setup requires Linux x86_64 and explicit independently qualified Docker
+29.9.0 executable/socket facts. It hashes the executable without launching it,
+creates four empty directories and binds the unchanged profile. No provisioning,
+account reads, daemon connection or automatic plan acceptance occurs.
+
+Doctor observes explicit bounded local controls, source, input files and tool
+identities through the shared static checker. It never consumes task stdin,
+initializes a module, materializes a secret, launches a tool or contacts Docker.
+Text defaults; JSON uses the closed opaal.project-doctor.v1 schema, version1,
+with final LF and fixed safe findings. Live readiness is always unknown for ci;
+local ready is no daemon-health or executable-plan assertion. Exit0 means local
+ready, 1 means findings, 2 means invalid invocation/controls or I/O, and requested
+cancellation is130. Init succeeds with0 and refuses or fails incomplete with2.
 ";
 
 const FORMAT_HELP: &str = "Check or rewrite OPAAL source formatting
@@ -222,6 +252,66 @@ fn main() -> ExitCode {
             let version = format!("opaal {}\n", opaal_runtime::version());
             emit_report(HostReport::success(version.as_bytes()))
         }
+        Mode::ProjectHelp => emit_project_report(HostReport::success(PROJECT_HELP.as_bytes())),
+        Mode::ProjectInit {
+            destination,
+            environment,
+            docker,
+            socket,
+            qualified_version,
+        } => {
+            match init_project(&InitProjectRequest {
+                destination,
+                environment,
+                docker,
+                socket,
+                qualified_version,
+            }) {
+                Ok(()) => emit_project_report(HostReport::success(b"project created\n")),
+                Err(error) => emit_project_report(HostReport::failure(error.rendered().as_bytes())),
+            }
+        }
+        Mode::ProjectDoctor {
+            project,
+            task,
+            environment,
+            inputs,
+            format_json,
+        } => {
+            let request = CheckProjectRequest::with_bindings(project, task, environment, inputs);
+            let request = if format_json {
+                request.with_json()
+            } else {
+                request
+            };
+            let signals = match opaal_platform_posix::standard_host::SignalLease::capture() {
+                Ok(signals) => signals,
+                Err(_) => {
+                    return emit_project_report(HostReport::failure(
+                        b"opaal: diagnosis signal capture failed\n",
+                    ));
+                }
+            };
+            let control =
+                opaal_runtime::module::AnalysisControl::cooperative(signals.cancellation());
+            let diagnosis = doctor_project(&request, &control);
+            if control.is_cancelled() {
+                return ExitCode::from(130);
+            }
+            match diagnosis {
+                Ok(run) => {
+                    let status =
+                        Status::exit(i64::from(run.exit_code), opaal_runtime::Duration::ZERO)
+                            .expect("doctor exit code");
+                    emit_project_report(HostReport::completed_with_diagnostic(
+                        &status,
+                        &run.output,
+                        b"",
+                    ))
+                }
+                Err(error) => emit_project_report(HostReport::failure(error.rendered().as_bytes())),
+            }
+        }
         Mode::CheckHelp => emit_report(HostReport::success(CHECK_HELP.as_bytes())),
         Mode::Check {
             source,
@@ -300,6 +390,17 @@ fn emit_report(report: HostReport<'_>) -> ExitCode {
     let mut output = io::stdout().lock();
     let mut diagnostics = io::stderr().lock();
     ExitCode::from(write_report(report, &mut output, &mut diagnostics).code())
+}
+
+fn emit_project_report(report: HostReport<'_>) -> ExitCode {
+    let mut output = io::stdout().lock();
+    let mut diagnostics = io::stderr().lock();
+    let exit = write_report(report, &mut output, &mut diagnostics);
+    ExitCode::from(if exit == HostExit::Failure {
+        2
+    } else {
+        exit.code()
+    })
 }
 
 fn has_opaal_extension(path: &Path) -> bool {
