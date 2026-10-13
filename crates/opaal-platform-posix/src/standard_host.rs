@@ -17,6 +17,7 @@ mod native;
 
 pub const WORKER_ARGUMENT: &str = "--opaal-standard-host-worker";
 const POLL_INTERVAL: Duration = Duration::from_millis(25);
+const SEND_RETRY_INTERVAL: Duration = Duration::from_millis(1);
 const TERM_GRACE: Duration = Duration::from_millis(100);
 const HEADER_BYTES: usize = 36;
 const BIND: u16 = 1;
@@ -621,7 +622,7 @@ fn send_endpoint(
             }
             Err(error) if error.raw_os_error() == Some(libc::ENOBUFS) => {
                 // Darwin can report a full datagram queue despite POLLOUT.
-                std::thread::sleep(POLL_INTERVAL);
+                std::thread::sleep(SEND_RETRY_INTERVAL);
             }
             Err(error) => return Err(io_error(error)),
         }
@@ -668,7 +669,7 @@ fn send_bytes(
             }
             Err(error) if error.raw_os_error() == Some(libc::ENOBUFS) => {
                 // Darwin can report a full datagram queue despite POLLOUT.
-                std::thread::sleep(POLL_INTERVAL);
+                std::thread::sleep(SEND_RETRY_INTERVAL);
             }
             Err(error) => return Err(io_error(error)),
         }

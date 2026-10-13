@@ -16,7 +16,7 @@ from typing import Callable, Sequence
 
 ROOT = Path(__file__).resolve().parents[1]
 VERSION = "1.4.0"
-RELEASED_VERSION = "1.3.0"
+RELEASED_VERSION = "1.4.0"
 REPOSITORY = "https://github.com/ajhahnde/opaal"
 WORKSPACE_PACKAGES = {
     "crates/opaal-syntax": "opaal-syntax",

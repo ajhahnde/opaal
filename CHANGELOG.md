@@ -4,8 +4,16 @@ All notable changes to OPAAL are documented here.
 
 ## [Unreleased]
 
+## [1.4.0]
+
 ### Added
 
+- Add static `task list` and typed task inspection with escaped text and closed
+  JSON output, plus `plan --format digest` for an explicitly persisted plan.
+- Add `execute --require-true` with mandatory `--receipt-out` for Bool-returning
+  tasks. After cleanup and evidence persistence, true exits 0, false exits 1,
+  operational or evidence failure exits 2, and requested cancellation exits 130.
+  Ordinary execution retains its existing exit policy.
 - Add `std::docker::Image`, pure `decode_image`, and controlled `inspect_image`
   for one explicitly bound local Linux Docker target. The fixed profile requires
   a single-image manifest Descriptor matching the full observed image ID;
@@ -14,6 +22,24 @@ All notable changes to OPAAL are documented here.
 - Add a reusable image check policy and saved/live task references with explicit
   full image ID, platform and revision expectations, native Bool assessment,
   escaped reports, exclusive evidence and offline package qualification.
+
+### Changed
+
+- Write v4 project check, plan, journal and audit artifacts and v2 execution
+  receipts, recording target bindings, selected outcome policy, assessment and
+  cancellation reason. Legacy closed readers remain available; existing
+  artifacts are not automatically rewritten or replayed.
+
+### Validation
+
+- Give the successful native partial-write test 30 seconds of scheduling
+  allowance while preserving its partial-count checks and the separate
+  50-millisecond deliberate cancellation tests.
+
+### Fixed
+
+- Reduce macOS standard-stream transport delays when the datagram queue is full,
+  preserving operation deadlines, cancellation and transfer accounting.
 
 ## [1.3.0]
 
