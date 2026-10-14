@@ -56,8 +56,10 @@ use serde_json::{Value, json};
 
 mod doctor;
 mod preparation;
+mod task;
 pub use doctor::{DoctorProjectRun, doctor_project};
 pub use preparation::{InitProjectRequest, init_project};
+pub use task::{TaskRun, explain_task, run_accepted_task};
 
 const MAX_CONTROL_READ_BYTES: usize = 192 * 1024 * 1024;
 type BuiltTlsBindings = (Vec<Value>, BTreeMap<String, Vec<u8>>);
@@ -1839,6 +1841,21 @@ pub fn execute_explicit_plan(
     secret_input_is_terminal: bool,
     secret_input: &mut dyn Read,
 ) -> Result<ExecuteFrontendRun, ProjectFrontendError> {
+    execute_plan(request, secret_input_is_terminal, secret_input, None)
+}
+
+fn execute_plan(
+    request: &ExecuteProjectRequest,
+    secret_input_is_terminal: bool,
+    secret_input: &mut dyn Read,
+    mut audit: Option<&mut task::RunAudit>,
+) -> Result<ExecuteFrontendRun, ProjectFrontendError> {
+    if audit
+        .as_deref()
+        .is_some_and(|audit| audit.control.is_cancelled())
+    {
+        return Err(execute_error("TASK004", "task request cancelled"));
+    }
     if request.require_true && request.receipt_out.is_none() {
         return Err(execute_error(
             "EXECUTE_TYPE",
@@ -1890,8 +1907,11 @@ pub fn execute_explicit_plan(
     let planned_root = path_from_native_value(&project_value["root"]).map_err(workflow_contract)?;
     let manifest_path =
         path_from_native_value(&project_value["manifest_path"]).map_err(workflow_contract)?;
-    let (project, filesystem, manifest_bytes) =
-        load_explicit_project_with_budget(&manifest_path, control_reads)?;
+    let (project, filesystem, manifest_bytes) = load_explicit_project_with_control(
+        &manifest_path,
+        control_reads,
+        audit.as_deref().map(|audit| &audit.control),
+    )?;
     if filesystem.root != planned_root {
         return Err(stale("project root changed"));
     }
@@ -2080,6 +2100,12 @@ pub fn execute_explicit_plan(
         ));
     }
     let started_at = timestamp_from_unix_nanos(started_nanos).map_err(workflow_contract)?;
+    if audit
+        .as_deref()
+        .is_some_and(|audit| audit.control.is_cancelled())
+    {
+        return Err(execute_error("TASK004", "task request cancelled"));
+    }
     let mut header = json!({
         "plan_digest":plan.digest(),
         "accepted_plan_digest":request.accept,
@@ -2096,6 +2122,9 @@ pub fn execute_explicit_plan(
     }
     if roles.iter().any(|role| role != "entropy.system") {
         preflight_stream_channels(plan_value, &plan_file, &executable_files)?;
+    }
+    if let Some(audit) = audit.as_deref_mut() {
+        audit.reserve(&filesystem, request, &journal_path)?;
     }
     let receipt = request
         .receipt_out
@@ -2124,6 +2153,9 @@ pub fn execute_explicit_plan(
         let execution_deadline = Instant::from_nanos(10 * 60 * 1_000_000_000);
         let mut cancellation =
             CancellationToken::deadline(execution_clock.clone(), execution_deadline);
+        if let Some(audit) = audit.as_deref() {
+            cancellation = cancellation.with_requested_cancellation(audit.cancellation());
+        }
         let standard_host = if metadata_only {
             let mut host = PosixStandardHost::for_cli(evaluation.get()).ok();
             if roles.iter().any(|role| role != "entropy.system") {
@@ -2134,10 +2166,15 @@ pub fn execute_explicit_plan(
                     })
                     .and_then(|host| {
                         bind_controlled_streams(host, roles)?;
-                        let signal = host.capture_cancellation_signals().map_err(|_| {
-                            execute_error("EXECUTE004", "stream cancellation lease is unavailable")
-                        })?;
-                        cancellation = cancellation.clone().with_requested_cancellation(signal);
+                        if audit.is_none() {
+                            let signal = host.capture_cancellation_signals().map_err(|_| {
+                                execute_error(
+                                    "EXECUTE004",
+                                    "stream cancellation lease is unavailable",
+                                )
+                            })?;
+                            cancellation = cancellation.clone().with_requested_cancellation(signal);
+                        }
                         Ok(())
                     });
                 if binding.is_err() {
@@ -2452,10 +2489,20 @@ pub fn execute_explicit_plan(
         );
         finish_execution_journal(&mut journal, primary_value, cleanup, &adapter)
     })();
-    match receipt {
-        Some(receipt) => Ok(finish_receipt(receipt, plan.digest(), &mut journal, result)),
+    let result = match receipt {
+        Some(receipt) => Ok(finish_receipt(
+            receipt,
+            plan.digest(),
+            &mut journal,
+            result,
+            audit.is_some(),
+        )),
         None => result,
+    };
+    if let Some(audit) = audit {
+        audit.finish(&filesystem, &journal_path, &journal.file);
     }
+    result
 }
 
 fn verify_plan_check_identity(plan: &Value, check: &Value) -> Result<(), ProjectFrontendError> {
@@ -3201,6 +3248,7 @@ fn finish_receipt(
     plan_digest: &str,
     journal: &mut SyncedJournal,
     result: Result<ExecuteFrontendRun, ProjectFrontendError>,
+    strict_output: bool,
 ) -> ExecuteFrontendRun {
     let mut primary = journal.primary.clone().unwrap_or_else(|| {
         outcome_value(
@@ -3227,7 +3275,7 @@ fn finish_receipt(
         .filter(|outcome| outcome["class"] == "cleanup-failed")
         .map(|outcome| json!({"category":"cleanup", "code":outcome["code"]}))
         .collect::<Vec<_>>();
-    if journal.require_true && journal.output_failed {
+    if (journal.require_true || strict_output) && journal.output_failed {
         secondary.push(json!({"category":"evidence", "code":"EXECUTE_OUTPUT"}));
     }
     if result.is_err() {
@@ -3858,16 +3906,7 @@ pub fn audit_explicit_journal(
             "--out must differ from the explicit journal",
         )));
     }
-    let bytes = filesystem
-        .read_existing_bounded(&journal_path, MAX_JOURNAL_BYTES)
-        .map_err(frontend_contract)?;
-    let audit = audit_journal(&bytes).map_err(workflow_contract)?;
-    if audit.bytes().len() > MAX_AUDIT_BYTES {
-        return Err(frontend_contract(ProjectError::new(
-            "AUDIT002",
-            "audit output exceeds its byte limit",
-        )));
-    }
+    let audit = generate_audit(&filesystem, &journal_path, None)?;
     filesystem.write_exclusive_atomic_kind(&out_path, audit.bytes(), "audit")?;
     Ok(AuditFrontendRun {
         output: format!(
@@ -3882,6 +3921,32 @@ pub fn audit_explicit_journal(
         .into_bytes(),
         complete: audit.is_complete(),
     })
+}
+
+fn generate_audit(
+    filesystem: &HostProjectFilesystem,
+    journal_path: &Path,
+    identity: Option<&File>,
+) -> Result<opaal_runtime::workflow::AuditArtifact, ProjectFrontendError> {
+    let file = filesystem
+        .open_existing_file(journal_path)
+        .map_err(frontend_contract)?;
+    if let Some(identity) = identity
+        && !same_file_identity(identity, &file).map_err(frontend_contract)?
+    {
+        return Err(execute_error("AUDIT001", "journal identity changed"));
+    }
+    let bytes = filesystem
+        .read_file_bounded(file, MAX_JOURNAL_BYTES)
+        .map_err(frontend_contract)?;
+    let audit = audit_journal(&bytes).map_err(workflow_contract)?;
+    if audit.bytes().len() > MAX_AUDIT_BYTES {
+        return Err(execute_error(
+            "AUDIT002",
+            "audit output exceeds its byte limit",
+        ));
+    }
+    Ok(audit)
 }
 
 fn observation(
@@ -4656,6 +4721,14 @@ fn load_explicit_project_with_budget(
     requested: &Path,
     control_reads: ControlReadBudget,
 ) -> Result<(ProjectProgram, HostProjectFilesystem, Vec<u8>), ProjectFrontendError> {
+    load_explicit_project_with_control(requested, control_reads, None)
+}
+
+fn load_explicit_project_with_control(
+    requested: &Path,
+    control_reads: ControlReadBudget,
+    control: Option<&opaal_runtime::module::AnalysisControl>,
+) -> Result<(ProjectProgram, HostProjectFilesystem, Vec<u8>), ProjectFrontendError> {
     let (manifest, filesystem, manifest_bytes) =
         load_explicit_manifest_root_with_budget(requested, control_reads)?;
     filesystem
@@ -4671,15 +4744,27 @@ fn load_explicit_project_with_budget(
                 .map_err(frontend_contract)?;
         }
     }
-    let program = load_project_program(manifest, &filesystem, &filesystem).map_err(|error| {
-        let rendered = match error {
-            opaal_runtime::project::ProjectProgramError::Module(error) => error.render().to_owned(),
-            opaal_runtime::project::ProjectProgramError::Contract(error) => {
-                format!("opaal: {error}\n")
-            }
-        };
-        ProjectFrontendError { rendered }
-    })?;
+    let program = if let Some(control) = control {
+        opaal_runtime::project::load_project_program_controlled(
+            manifest,
+            &filesystem,
+            &filesystem,
+            control,
+        )
+        .map_err(frontend_contract)?
+    } else {
+        load_project_program(manifest, &filesystem, &filesystem).map_err(|error| {
+            let rendered = match error {
+                opaal_runtime::project::ProjectProgramError::Module(error) => {
+                    error.render().to_owned()
+                }
+                opaal_runtime::project::ProjectProgramError::Contract(error) => {
+                    format!("opaal: {error}\n")
+                }
+            };
+            ProjectFrontendError { rendered }
+        })?
+    };
     Ok((program, filesystem, manifest_bytes))
 }
 
@@ -5660,6 +5745,7 @@ mod tests {
                 &format!("sha256:{}", "1".repeat(64)),
                 &mut journal,
                 Err(error),
+                false,
             );
             assert!(!run.is_successful());
             assert!(run.output().is_empty());
@@ -5769,6 +5855,7 @@ mod tests {
                     &digest,
                     &mut journal,
                     result,
+                    false,
                 );
                 assert_eq!(
                     run.exit_code(),
@@ -5960,6 +6047,7 @@ mod tests {
                             &digest,
                             &mut journal,
                             result,
+                            false,
                         );
                         assert!(!run.is_successful());
                         if require_true {

@@ -1376,9 +1376,10 @@
     },
     {
       "path": "ci/qualify_docker_image_checks.py",
-      "sha256": "839875f68be6abef3fd0e71ba78fa61582ff18324ee6d08fef5673884ed4ed5c",
-      "source_markers": 16,
+      "sha256": "7afc5c3c350b83be43493d36f9f5fa09bc667fcf564371ab33dbd569c9205313",
+      "source_markers": 17,
       "constructors_or_assertions": [
+        "accepted_run",
         "add",
         "api",
         "assign",
@@ -1526,18 +1527,22 @@
     },
     {
       "path": "ci/qualify_standard_io_failures.py",
-      "sha256": "e3dd5e7adfda2bd5c193d90be016c424a5ca3d7fa7cf7965ee61f961f99ccbc6",
-      "source_markers": 11,
+      "sha256": "752b51f81cb65f0b0d8a971e5a2f02be199bc93743190eec6eb0a9ef0112fd6c",
+      "source_markers": 17,
       "constructors_or_assertions": [
         "apply",
         "execute",
+        "full_pipe",
         "limited_sink",
         "main",
         "plan",
         "qualify",
         "retain",
         "run",
-        "stop"
+        "serve",
+        "stop",
+        "task_arguments",
+        "task_observation"
       ],
       "role": "positive-generator",
       "reason": "Generates controlled standard-stream projects for real transfers, interruption, exact reap and bounded journal persistence failures.",
@@ -1793,7 +1798,7 @@
     },
     {
       "path": "crates/opaal-cli/src/cli.rs",
-      "sha256": "855981b3f4e11079f1abe831215ea5c238be14f72c88a8d1f4166ef7cc6d292c",
+      "sha256": "a008d88df51977ce776fa40a4685b9b757c043b1956950587fedb61d76c4e773",
       "source_markers": 11,
       "constructors_or_assertions": [
         "check_and_plan_require_one_explicit_source",
@@ -1852,7 +1857,7 @@
     },
     {
       "path": "crates/opaal-cli/src/main.rs",
-      "sha256": "80e965a55b699c3b117a57fe4053bdc129ce583edaff47a8750da5b4272ee5e6",
+      "sha256": "d70b6f5455763b3dd31ec19853d9b4df1dd116374bb07f7f8523dd492b8a656b",
       "source_markers": 5,
       "constructors_or_assertions": [
         "module constants/imports",
@@ -1864,7 +1869,7 @@
     },
     {
       "path": "crates/opaal-cli/src/project.rs",
-      "sha256": "a1ced70336b4324382033768c6618baa1ec0d99d8bc7083929b7096a217da21b",
+      "sha256": "c1d5194e184c2037268bcaa6a36b28ecbe2b973fc132dd6306bc0e9d2b2b7a8a",
       "source_markers": 7,
       "constructors_or_assertions": [
         "create_journal",
@@ -2243,10 +2248,10 @@
     },
     {
       "path": "crates/opaal-cli/tests/io_receipt_native.rs",
-      "sha256": "a65b12c00574388e70ca94a58c362a329cea640a0f35982ca46a26a3f5376cb0",
+      "sha256": "66fcf44531b3c4e4326498b8e9cb924351efe1174540289c354a9fa519bc6258",
       "source_markers": 1,
       "constructors_or_assertions": [
-        "qualify"
+        "prepare"
       ],
       "role": "mixed-test-buffers",
       "reason": "I/O contract or native fault assertions retain scripted actions, legacy layout, refused contexts, cancellation and hostile descriptor/protocol inputs.",
@@ -2456,6 +2461,20 @@
       "role": "mixed-test-buffers",
       "reason": "Retain complete, legacy, invalid and incomplete source buffers and their source-position assertions; canonical output is asserted only by formatting owners.",
       "assertion": "crates/opaal-cli/tests/syntax_highlighting.rs"
+    },
+    {
+      "path": "crates/opaal-cli/tests/task_run.rs",
+      "sha256": "d853190cff5842a598dda6fda6e643504d53b26f0983c41c4ed43c4f0f02e122",
+      "source_markers": 6,
+      "constructors_or_assertions": [
+        "explanation_is_passive_safe_and_conservative_for_legacy_or_missing_evidence",
+        "pure_task_views_compare_the_receipts_metadata_projection_and_allow_discarded_output",
+        "summary_failure_prevents_success_and_native_output_paths_keep_their_bytes",
+        "wrong_acceptance_and_stale_inputs_never_run_or_create_evidence"
+      ],
+      "role": "mixed-test-buffers",
+      "reason": "Accepted task execution, evidence/view validation and preserved lifecycle comparison inputs.",
+      "assertion": "cargo test -p opaal-cli --locked; python3 -m unittest ci.tests.test_docker_image_checks"
     },
     {
       "path": "crates/opaal-cli/tests/terminal_editor.rs",
@@ -4604,6 +4623,24 @@
       "assertion": "cargo test --workspace --locked and Python CI validator suite"
     },
     {
+      "path": "tests/fixtures/image-check-legacy/run-live.sh",
+      "sha256": "e4c24274ce1c771cb1ddd4f25b721a0420b9d3468292e865bf63beefe461e098",
+      "source_markers": 0,
+      "constructors_or_assertions": [],
+      "role": "mixed-test-buffers",
+      "reason": "Accepted task execution, evidence/view validation and preserved lifecycle comparison inputs.",
+      "assertion": "cargo test -p opaal-cli --locked; python3 -m unittest ci.tests.test_docker_image_checks"
+    },
+    {
+      "path": "tests/fixtures/image-check-legacy/run-saved.sh",
+      "sha256": "34229ad113abfbd93c7ee85e67d81ab1fbc27535d15aecd4896479786b1af19f",
+      "source_markers": 0,
+      "constructors_or_assertions": [],
+      "role": "mixed-test-buffers",
+      "reason": "Accepted task execution, evidence/view validation and preserved lifecycle comparison inputs.",
+      "assertion": "cargo test -p opaal-cli --locked; python3 -m unittest ci.tests.test_docker_image_checks"
+    },
+    {
       "path": "tests/fixtures/image-check-legacy/setup-live.py",
       "sha256": "e496dffdfca255f69bda461d740696910c35ec9de0e21153b76b971aea29d9a5",
       "source_markers": 2,
@@ -4738,24 +4775,6 @@
       "role": "source-infrastructure",
       "reason": "Independent standard-library Python image validation and shell report comparison; contains no OPAAL source buffers.",
       "assertion": "ci/tests/test_docker_image_checks.py and ci/qualify_docker_image_checks.py"
-    },
-    {
-      "path": "tests/golden/docker-image-checks/run-live.sh",
-      "sha256": "e4c24274ce1c771cb1ddd4f25b721a0420b9d3468292e865bf63beefe461e098",
-      "source_markers": 0,
-      "constructors_or_assertions": [],
-      "role": "source-infrastructure",
-      "reason": "Native reference drivers preserve selected execution exit and exclusive evidence.",
-      "assertion": "ci/qualify_docker_image_checks.py"
-    },
-    {
-      "path": "tests/golden/docker-image-checks/run-saved.sh",
-      "sha256": "34229ad113abfbd93c7ee85e67d81ab1fbc27535d15aecd4896479786b1af19f",
-      "source_markers": 0,
-      "constructors_or_assertions": [],
-      "role": "source-infrastructure",
-      "reason": "Native reference drivers preserve selected execution exit and exclusive evidence.",
-      "assertion": "ci/qualify_docker_image_checks.py"
     },
     {
       "path": "tests/golden/numeric-operations/reference.py",

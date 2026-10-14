@@ -7,7 +7,7 @@ use std::ffi::OsString;
 use std::os::unix::ffi::{OsStrExt as _, OsStringExt as _};
 use std::path::{Path, PathBuf};
 
-use crate::project::ProjectInputBinding;
+use crate::project::{ExecuteProjectRequest, ProjectInputBinding};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FormatOperation {
@@ -47,6 +47,17 @@ pub enum Mode {
         format_json: bool,
     },
     TaskHelp,
+    TaskRunHelp,
+    TaskRun {
+        request: ExecuteProjectRequest,
+        audit_out: PathBuf,
+    },
+    TaskExplainHelp,
+    TaskExplain {
+        receipt: PathBuf,
+        audit: Option<PathBuf>,
+        format_json: bool,
+    },
     TaskInspect {
         project: PathBuf,
         task: String,
@@ -485,10 +496,21 @@ fn parse_execute_args<I>(arguments: I) -> Result<Invocation, CliError>
 where
     I: IntoIterator<Item = OsString>,
 {
+    parse_execution_args(arguments, false)
+}
+
+fn parse_execution_args<I>(arguments: I, task_run: bool) -> Result<Invocation, CliError>
+where
+    I: IntoIterator<Item = OsString>,
+{
     let arguments = arguments.into_iter().collect::<Vec<_>>();
     if arguments.as_slice() == [OsString::from("--help")] {
         return Ok(Invocation {
-            mode: Mode::ExecuteHelp,
+            mode: if task_run {
+                Mode::TaskRunHelp
+            } else {
+                Mode::ExecuteHelp
+            },
         });
     }
     let mut plan = None;
@@ -497,6 +519,7 @@ where
     let mut secret_stdin = None;
     let mut journal = None;
     let mut receipt_out = None;
+    let mut audit_out = None;
     let mut require_true = false;
     let mut index = 0;
     while index < arguments.len() {
@@ -516,10 +539,15 @@ where
             "--receipt-out" => {
                 set_path_option(&mut receipt_out, "--receipt-out", &arguments, &mut index)?
             }
+            "--audit-out" if task_run => {
+                set_path_option(&mut audit_out, "--audit-out", &arguments, &mut index)?
+            }
             value => {
-                return Err(CliError::InvalidProjectArgument(format!(
-                    "unexpected execute argument '{value}'"
-                )));
+                return Err(CliError::InvalidProjectArgument(if task_run {
+                    "unexpected task run argument".to_owned()
+                } else {
+                    format!("unexpected execute argument '{value}'")
+                }));
             }
         }
     }
@@ -527,6 +555,23 @@ where
         return Err(CliError::InvalidProjectArgument(
             "--require-true requires --receipt-out".to_owned(),
         ));
+    }
+    if task_run {
+        let receipt = required_option(receipt_out, "--receipt-out")?;
+        return Ok(Invocation {
+            mode: Mode::TaskRun {
+                request: ExecuteProjectRequest::new(
+                    required_option(plan, "--plan")?,
+                    required_option(accept, "--accept")?,
+                    run_id,
+                    secret_stdin,
+                    required_option(journal, "--journal")?,
+                )
+                .with_receipt_out(Some(receipt))
+                .with_require_true(require_true),
+                audit_out: required_option(audit_out, "--audit-out")?,
+            },
+        });
     }
     Ok(Invocation {
         mode: Mode::Execute {
@@ -655,6 +700,11 @@ where
     I: IntoIterator<Item = OsString>,
 {
     let arguments = arguments.into_iter().collect::<Vec<_>>();
+    match arguments.first().and_then(|value| value.to_str()) {
+        Some("run") => return parse_execution_args(arguments.into_iter().skip(1), true),
+        Some("explain") => return parse_task_explain_args(&arguments[1..]),
+        _ => {}
+    }
     if arguments.as_slice() == [OsString::from("--help")] {
         return Ok(Invocation {
             mode: Mode::TaskHelp,
@@ -665,7 +715,7 @@ where
         Some("inspect") => false,
         _ => {
             return Err(CliError::InvalidProjectArgument(
-                "task requires 'list' or 'inspect'".to_owned(),
+                "task requires 'list', 'inspect', 'run' or 'explain'".to_owned(),
             ));
         }
     };
@@ -715,6 +765,48 @@ where
                 task: required_option(task, "TASK")?,
                 format_json,
             }
+        },
+    })
+}
+
+fn parse_task_explain_args(arguments: &[OsString]) -> Result<Invocation, CliError> {
+    if arguments == [OsString::from("--help")] {
+        return Ok(Invocation {
+            mode: Mode::TaskExplainHelp,
+        });
+    }
+    let mut receipt = None;
+    let mut audit = None;
+    let mut format = None;
+    let mut index = 0;
+    while index < arguments.len() {
+        let option = arguments[index].to_str();
+        index += 1;
+        match option {
+            Some("--receipt") => set_path_option(&mut receipt, "--receipt", arguments, &mut index)?,
+            Some("--audit") => set_path_option(&mut audit, "--audit", arguments, &mut index)?,
+            Some("--format") => set_text_option(&mut format, "--format", arguments, &mut index)?,
+            _ => {
+                return Err(CliError::InvalidProjectArgument(
+                    "unexpected task explain argument".to_owned(),
+                ));
+            }
+        }
+    }
+    let format_json = match format.as_deref() {
+        None | Some("text") => false,
+        Some("json") => true,
+        _ => {
+            return Err(CliError::InvalidProjectArgument(
+                "--format requires text or json".to_owned(),
+            ));
+        }
+    };
+    Ok(Invocation {
+        mode: Mode::TaskExplain {
+            receipt: required_option(receipt, "--receipt")?,
+            audit,
+            format_json,
         },
     })
 }

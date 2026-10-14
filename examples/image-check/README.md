@@ -39,15 +39,46 @@ Run the check with explicit expectations and exclusive evidence paths:
 ```sh
 opaal task inspect --project opaal.toml saved
 accepted=$(opaal plan --project opaal.toml --task saved --environment offline --input expected_id=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --input expected_platform=linux/amd64 --input expected_revision=abc123 --expires-in 900s --out saved.plan.json --format digest)
-opaal execute --plan saved.plan.json --accept "$accepted" --journal saved.run.jsonl --receipt-out saved.receipt.json --require-true < fixtures/image.json
-opaal audit --project opaal.toml --journal saved.run.jsonl --out saved.audit.json
+opaal plan inspect saved.plan.json
+opaal task run --plan saved.plan.json --accept "$accepted" --journal saved.run.jsonl --receipt-out saved.receipt.json --audit-out saved.audit.json --require-true < fixtures/image.json
+opaal task explain --receipt saved.receipt.json --audit saved.audit.json --format json
 ```
 
 The policy compares the full observed image ID, platform and revision exactly.
 It prints a JSON report and returns Bool. Exit 0 means the assessment passed
 and execution, cleanup and evidence succeeded. Exit 1 means a completed negative
 assessment; operational failures exit 2 and requested cancellation exits 130.
-Use a fresh plan and evidence paths for each run.
+Use a fresh reviewed plan and evidence paths for each run. Acceptance is scoped to
+this request; run neither generates a plan nor overrides its inputs. All evidence
+paths must be distinct and absent, including hardlinks, symlinks and native path
+aliases. The audit destination is reserved mode0600 before task effects. Failed
+reservations and partial evidence remain for inspection; nothing is overwritten
+or automatically removed. Owned task/stream/child finish precedes the bounded
+audit. Audit or stderr summary persistence failure exits2 unless requested
+cancellation retains130. Without `--require-true`, a completed false Bool is
+ordinary data and exits0 after successful finish and evidence.
+
+Task stdout remains the policy report; the native administrative summary uses
+stderr and never interprets report bytes. `task explain` reads only bounded
+explicit receipt/audit files, without reopening the journal, source or Docker.
+It returns0 for a valid view even when the recorded task failed; invalid,
+contradictory or unwritable views return2. A complete audit records a complete
+execution, including negative and failed checks. Missing audit, incomplete
+journal or legacy unknown assessment/cancellation facts cannot prove a pass.
+Conclusion precedence is cancelled, then failed primary/cleanup/secondaries,
+then unproven evidence, then passed/negative or execution-complete. Partial and
+four-role confirmed/uncertain byte counts remain independent recorded facts.
+
+Text and `opaal.task-explanation.v1` JSON schema_version1 expose run_id,
+plan_digest, nullable result_policy/assessment/primary_code/cancel_reason,
+execution, partial, progress, cleanup, journal, receipt, audit, evidence,
+conclusion, safe secondary categories/codes and omitted_secondary_count. Unknown
+codes are null; messages, exception payloads, secret references and report data
+are omitted. Views end with LF and are bounded to64KiB. They report recorded
+facts, without authenticating the artifact author or proving the original
+writer's fsync or command exit. Existing execute/audit commands and persisted
+schemas retain their meanings. To recover a valid journal prefix, use the old
+`audit` command with a fresh output path; it does not rerun the task.
 
 `std::docker::decode_image` requires a single-manifest `Descriptor` with a
 supported OCI or Docker image media type and a full lowercase SHA-256 digest
@@ -80,8 +111,9 @@ Change `expected_revision` to `wrong` for exit1. Supply `fixtures/invalid.json`
 for exit2, with no report or assessment. Every run needs a fresh plan and exclusive
 journal, receipt and audit paths. Existing evidence is never overwritten.
 
-Repository engineering qualification retains `run-saved.sh`, `comparison.py`
-and `run-comparison.sh` as independent comparison inputs. They are not required
+Repository engineering qualification retains original lifecycle drivers under
+test-only fixtures and uses `comparison.py` and `run-comparison.sh` as independent
+comparison inputs. They are not required
 by generated projects. The Python comparison independently checks the same
 Descriptor, selected fields and byte/depth limits and asserts0/1/2 report behavior;
 it has no accepted-plan, journal, receipt, audit or owned-resource contract.
@@ -119,8 +151,9 @@ cd live-check
 opaal project doctor --project opaal.toml --task image --environment ci --input image=example:checked --input expected_id=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --input expected_platform=linux/amd64 --input expected_revision=abc123
 opaal task inspect --project opaal.toml image --format json
 accepted=$(opaal plan --project opaal.toml --task image --environment ci --input image=example:checked --input expected_id=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --input expected_platform=linux/amd64 --input expected_revision=abc123 --expires-in 900s --out image.plan.json --format digest)
-opaal execute --plan image.plan.json --accept "$accepted" --journal image.run.jsonl --receipt-out image.receipt.json --require-true
-opaal audit --project opaal.toml --journal image.run.jsonl --out image.audit.json
+opaal plan inspect image.plan.json
+opaal task run --plan image.plan.json --accept "$accepted" --journal image.run.jsonl --receipt-out image.receipt.json --audit-out image.audit.json --require-true
+opaal task explain --receipt image.receipt.json --audit image.audit.json --format json
 ```
 
 Replace the image reference, full observed ID, platform and revision with the

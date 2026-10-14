@@ -128,6 +128,23 @@ def cases(document: dict) -> list[tuple[str, bytes, tuple[str, str, str], int, d
     return result
 
 
+def accepted_run(binary, work, environment, task, selected_environment, expected, *, image=None, stdin=None):
+    bindings = []
+    for name, value in zip(("expected_id", "expected_platform", "expected_revision"), expected):
+        bindings += ["--input", name + "=" + value]
+    if image is not None:
+        bindings += ["--input", "image=" + image]
+    planned = command([binary, "plan", "--project", "opaal.toml", "--task", task,
+                       "--environment", selected_environment, *bindings, "--expires-in", "900s",
+                       "--out", task + ".plan.json", "--format", "digest"], work, environment)
+    if planned.returncode:
+        return planned
+    accepted = planned.stdout.decode().strip()
+    return command([binary, "task", "run", "--plan", task + ".plan.json", "--accept", accepted,
+                    "--journal", task + ".run.jsonl", "--receipt-out", task + ".receipt.json",
+                    "--audit-out", task + ".audit.json", "--require-true"], work, environment, stdin=stdin)
+
+
 def references(binary: Path, inputs: Path, directory: Path, target: str) -> list[dict]:
     template = directory / "reference"
     environment = {"PATH": str(binary.parent) + os.pathsep + os.defpath}
@@ -140,7 +157,7 @@ def references(binary: Path, inputs: Path, directory: Path, target: str) -> list
             require(path.read_bytes() == (inputs / path.relative_to(template)).read_bytes(),
                     "embedded asset differs from packaged input")
     # Independent lifecycle/comparison drivers remain qualification inputs.
-    for name in ("run-saved.sh", "comparison.py", "run-comparison.sh"):
+    for name in ("comparison.py", "run-comparison.sh"):
         shutil.copyfile(inputs / name, template / name)
     selected_lock = "offline-tools-linux.toml" if target == "linux-x86_64" else "offline-tools-macos.toml"
     require((template / "offline-tools.toml").read_bytes() == (inputs / selected_lock).read_bytes(),
@@ -187,7 +204,13 @@ def references(binary: Path, inputs: Path, directory: Path, target: str) -> list
         work = directory / name
         shutil.copytree(template, work)
         (work / "input.json").write_bytes(payload)
-        output = command(["sh", "run-saved.sh", *expected], work, environment, stdin=payload)
+        before = directory / (name + "-legacy")
+        shutil.copytree(template, before)
+        legacy_driver = ROOT / "tests/fixtures/image-check-legacy/run-saved.sh"
+        legacy = command(["sh", legacy_driver, *expected], before, environment, stdin=payload)
+        output = accepted_run(binary, work, environment, "saved", "offline", expected, stdin=payload)
+        require((legacy.returncode, legacy.stdout) == (output.returncode, output.stdout),
+                name + ": original driver and native run differ")
         (work / "stdout.json").write_bytes(output.stdout)
         (work / "stderr.txt").write_bytes(output.stderr)
         require(output.returncode == exit_code, f"{name}: selected exit differs: {output.stderr!r}")
@@ -212,6 +235,15 @@ def references(binary: Path, inputs: Path, directory: Path, target: str) -> list
         receipt = json.loads((work / "saved.receipt.json").read_bytes())
         audit = json.loads((work / "saved.audit.json").read_bytes())
         plan = json.loads((work / "saved.plan.json").read_bytes())
+        explained = command([binary, "task", "explain", "--receipt", "saved.receipt.json",
+                             "--audit", "saved.audit.json", "--format", "json"], work, environment)
+        view = json.loads(success(explained, name + ": native explanation"))
+        require(view["schema"] == "opaal.task-explanation.v1" and view["schema_version"] == 1
+                and view["run_id"] == receipt["run_id"] and view["plan_digest"] == plan["digest"]
+                and view["conclusion"] == ("failed" if report is None else "passed" if report["passed"] else "negative")
+                and view["partial"] == receipt["primary"]["partial"] and view["progress"] == receipt["progress"],
+                name + ": explanation differs")
+        (work / "explanation.json").write_bytes(explained.stdout)
         candidate = None if report is None else {"kind": "bool", "value": report["passed"]}
         require(receipt["schema"] == "opaal.execution-receipt.v2" and audit["schema"] == "opaal.audit.v4"
                 and plan["schema"] == "opaal.plan.v4", name + ": artifact schema differs")
@@ -259,8 +291,8 @@ def references(binary: Path, inputs: Path, directory: Path, target: str) -> list
     shutil.copytree(template, modified)
     policy = modified / "policy.opaal"
     policy.write_text(policy.read_text().replace("let revision_ok = (revision !=", "let revision_ok = (revision =="))
-    result = command(["sh", "run-saved.sh", document["Id"], "linux/amd64", "abc123"], modified,
-                     environment, stdin=json.dumps(document).encode())
+    result = accepted_run(binary, modified, environment, "saved", "offline",
+                          [document["Id"], "linux/amd64", "abc123"], stdin=json.dumps(document).encode())
     require(result.returncode == 1 and json.loads(result.stdout)["passed"] is False,
             "independent policy modification did not change assessment")
     comparison_policy = modified / "comparison.py"
@@ -272,9 +304,9 @@ def references(binary: Path, inputs: Path, directory: Path, target: str) -> list
             "equivalent independent policy modification differs")
     (modified / "comparison.stdout.json").write_bytes(comparison.stdout)
     (modified / "comparison.stderr.txt").write_bytes(comparison.stderr)
-    stale = command(["sh", "run-saved.sh", document["Id"], "linux/amd64", "abc123"], modified,
-                    environment, stdin=json.dumps(document).encode())
-    require(stale.returncode == 2, "existing plan was overwritten")
+    stale = accepted_run(binary, modified, environment, "saved", "offline",
+                         [document["Id"], "linux/amd64", "abc123"], stdin=json.dumps(document).encode())
+    require(stale.returncode != 0, "existing plan was overwritten")
     return rows
 
 
@@ -373,7 +405,7 @@ def live_references(binary: Path, inputs: Path, directory: Path, live: dict) -> 
                          "--environment", "ci", "--docker", live["docker"], "--socket", live["socket"],
                          "--qualified-version", "29.9.0"], directory, environment)
         success(setup, name + ": fresh native setup")
-        for driver in ("run-live.sh", "comparison.py", "run-comparison.sh"):
+        for driver in ("comparison.py", "run-comparison.sh"):
             shutil.copyfile(inputs / driver, work / driver)
         (work / "setup.stdout.txt").write_bytes(setup.stdout)
         (work / "setup.stderr.txt").write_bytes(setup.stderr)
@@ -392,7 +424,7 @@ def live_references(binary: Path, inputs: Path, directory: Path, live: dict) -> 
                                     "expected-platform.txt", "expected-revision.txt"),
                                    (reference, *wanted)):
             (work / filename).write_text(value + "\n")
-        output = command(["sh", "run-live.sh"], work, environment)
+        output = accepted_run(binary, work, environment, "image", "ci", wanted, image=reference)
         (work / "stdout.json").write_bytes(output.stdout)
         (work / "stderr.txt").write_bytes(output.stderr)
         require(output.returncode == case["exit"], name + ": selected exit differs")

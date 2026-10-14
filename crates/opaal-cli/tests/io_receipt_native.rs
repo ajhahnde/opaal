@@ -6,6 +6,7 @@ mod support;
 
 use opaal_cli::project::{
     ExecuteProjectRequest, PlanProjectRequest, execute_explicit_plan, plan_explicit_project,
+    run_accepted_task,
 };
 use opaal_platform_posix::standard_host::{WORKER_ARGUMENT, worker_entry};
 use serde_json::Value;
@@ -15,6 +16,7 @@ use std::sync::atomic::{AtomicI32, Ordering};
 
 static RECEIPT: OnceLock<PathBuf> = OnceLock::new();
 static FAULT: OnceLock<String> = OnceLock::new();
+static AUDIT_FAULT: OnceLock<bool> = OnceLock::new();
 static KERNEL_ERROR: AtomicI32 = AtomicI32::new(0);
 const CANARY: &str = "native-receipt-payload-canary";
 
@@ -30,6 +32,13 @@ fn main() {
         );
         return;
     }
+    if arguments.get(1).is_some_and(|arg| arg == "task-case") {
+        qualify_task(
+            arguments[2].to_str().unwrap(),
+            arguments[3].to_str().unwrap(),
+        );
+        return;
+    }
     for fault in ["write-limit", "file-sync", "parent-sync"] {
         for primary in ["success", "error"] {
             let result = std::process::Command::new(std::env::current_exe().unwrap())
@@ -41,10 +50,24 @@ fn main() {
             assert!(result.stderr.is_empty(), "administrative diagnostic leaked");
         }
     }
-    println!("6 native receipt kernel write/sync failure cases passed");
+    for fault in ["write-limit", "file-sync", "parent-sync"] {
+        for primary in ["true", "false", "error"] {
+            let result = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["task-case", fault, primary])
+                .output()
+                .unwrap();
+            assert!(
+                result.status.success(),
+                "audit/{fault}/{primary}: {result:?}"
+            );
+            assert_eq!(result.stdout, CANARY.as_bytes(), "output replayed or lost");
+            assert!(result.stderr.is_empty(), "administrative diagnostic leaked");
+        }
+    }
+    println!("6 native receipt and 9 native audit kernel write/sync failure cases passed");
 }
 
-fn qualify(fault: &str, error: bool) {
+fn prepare(primary: &str) -> (support::ReportDir, PathBuf, String) {
     let work = support::ReportDir::new();
     let fixtures = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/golden/standard-input-output");
@@ -66,7 +89,7 @@ fn qualify(fault: &str, error: bool) {
     );
     work.write("tasks.opaal", format!(
         "import std::io as io\naction run() -> Bool effects {{ stdout.write(); }} {{ io::print('{CANARY}')\n{} }}\ntask sample = run\n",
-        if error { "throw 'error-payload-canary'" } else { "return true" }
+        match primary { "error" => "throw 'error-payload-canary'", "false" => "return false", _ => "return true" }
     ));
     let plan = work.0.join("plan.json");
     plan_explicit_project(&PlanProjectRequest::new(
@@ -79,21 +102,20 @@ fn qualify(fault: &str, error: bool) {
     ))
     .unwrap();
     let document: Value = serde_json::from_slice(&std::fs::read(&plan).unwrap()).unwrap();
-    let digest = document["digest"].as_str().unwrap();
+    let digest = document["digest"].as_str().unwrap().to_owned();
+    (work, plan, digest)
+}
+
+fn qualify(fault: &str, error: bool) {
+    let (work, plan, digest) = prepare(if error { "error" } else { "true" });
     let journal = work.0.join("run.jsonl");
     let receipt = work.0.join("receipt.json");
     RECEIPT.set(receipt.clone()).unwrap();
     FAULT.set(fault.to_owned()).unwrap();
     let run = execute_explicit_plan(
-        &ExecuteProjectRequest::new(
-            plan,
-            digest.into(),
-            Some("1".repeat(32)),
-            None,
-            journal.clone(),
-        )
-        .with_receipt_out(Some(receipt.clone()))
-        .with_require_true(true),
+        &ExecuteProjectRequest::new(plan, digest, Some("1".repeat(32)), None, journal.clone())
+            .with_receipt_out(Some(receipt.clone()))
+            .with_require_true(true),
         false,
         &mut std::io::empty(),
     )
@@ -161,6 +183,79 @@ fn qualify(fault: &str, error: bool) {
         assert!(!text.contains("canary"));
         let hash = opaal_runtime::workflow::digest_bytes(CANARY.as_bytes());
         assert!(!text.contains(&hash));
+    }
+}
+
+fn qualify_task(fault: &str, primary: &str) {
+    let (work, plan, digest) = prepare(primary);
+    let audit_path = work.0.join("audit.json");
+    let receipt_path = work.0.join("receipt.json");
+    RECEIPT.set(audit_path.clone()).unwrap();
+    FAULT.set(fault.to_owned()).unwrap();
+    AUDIT_FAULT.set(true).unwrap();
+    let request = ExecuteProjectRequest::new(
+        plan,
+        digest,
+        Some("1".repeat(32)),
+        None,
+        work.0.join("run.jsonl"),
+    )
+    .with_receipt_out(Some(receipt_path.clone()))
+    .with_require_true(true);
+    let mut summary = Vec::new();
+    let run = run_accepted_task(
+        &request,
+        &audit_path,
+        false,
+        &mut std::io::empty(),
+        &mut summary,
+        opaal_platform_posix::standard_host::SignalLease::capture().unwrap(),
+    );
+    native::assert_reaped();
+    assert_eq!(run.exit_code, 2);
+    let error = KERNEL_ERROR.load(Ordering::Relaxed);
+    assert!(if fault == "write-limit" {
+        error == libc::EFBIG
+    } else {
+        matches!(error, libc::EINVAL | libc::ENOTSUP)
+    });
+    let receipt_bytes = std::fs::read(receipt_path).unwrap();
+    let receipt = opaal_runtime::workflow::parse_execution_receipt(&receipt_bytes).unwrap();
+    assert_eq!(
+        receipt["primary"]["class"],
+        if primary == "error" {
+            "error"
+        } else {
+            "success"
+        }
+    );
+    assert_eq!(
+        receipt["assessment"],
+        match primary {
+            "error" => Value::Null,
+            "false" => serde_json::json!({"kind":"bool","value":false}),
+            _ => serde_json::json!({"kind":"bool","value":true}),
+        }
+    );
+    assert_eq!(receipt["journal_state"], "complete");
+    assert_eq!(
+        receipt["progress"]["stdout.write"]["confirmed_bytes"],
+        CANARY.len()
+    );
+    let journal = std::fs::read(work.0.join("run.jsonl")).unwrap();
+    let recovered = opaal_runtime::workflow::audit_journal(&journal).unwrap();
+    assert!(recovered.is_complete());
+    assert_eq!(recovered.value()["primary"], receipt["primary"]);
+    let audit = std::fs::read(audit_path).unwrap();
+    if fault == "write-limit" {
+        assert!(audit.is_empty());
+    } else {
+        opaal_runtime::workflow::AuditArtifact::parse(&audit).unwrap();
+    }
+    let text = String::from_utf8(summary).unwrap();
+    assert!(text.contains("audit: unavailable") && !text.contains("conclusion: passed"));
+    for bytes in [receipt_bytes, journal, audit, text.into_bytes()] {
+        assert!(!String::from_utf8(bytes).unwrap().contains("canary"));
     }
 }
 
@@ -258,7 +353,11 @@ mod native {
                 return result;
             }
             let result = original(fd, bytes, count);
-            if result == 1 && count == 1 && *bytes.cast::<u8>() == b'\n' && matches(fd, false) {
+            if result > 0
+                && matches(fd, false)
+                && (AUDIT_FAULT.get().copied().unwrap_or(false)
+                    || (result == 1 && count == 1 && *bytes.cast::<u8>() == b'\n'))
+            {
                 let fault = FAULT.get().unwrap();
                 if fault == "file-sync" {
                     substitute_pipe(fd);
