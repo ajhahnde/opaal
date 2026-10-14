@@ -15,6 +15,7 @@ pub mod plan;
 pub mod project;
 pub mod report;
 pub mod terminal_editor;
+pub mod test;
 
 mod raw_editor;
 #[cfg(any(target_os = "macos", target_os = "linux"))]

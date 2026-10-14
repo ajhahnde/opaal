@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
 import json
 import os
 import platform
 import re
+import resource
 import runpy
 import shutil
 import subprocess
@@ -145,6 +147,84 @@ def accepted_run(binary, work, environment, task, selected_environment, expected
                     "--audit-out", task + ".audit.json", "--require-true"], work, environment, stdin=stdin)
 
 
+def test_view(payload: bytes) -> dict:
+    """Validate the closed result independently of the native renderer."""
+    def closed_pairs(pairs):
+        result = {}
+        for key, value in pairs:
+            require(key not in result, "duplicate test view key")
+            result[key] = value
+        return result
+    require(len(payload) <= 65_536 and payload.endswith(b"\n"), "test view bytes/LF differ")
+    view = json.loads(payload, object_pairs_hook=closed_pairs)
+    require(set(view) == {"schema", "schema_version", "source", "mode", "selected",
+                         "completeness", "cases", "counts", "failure"}, "test view root differs")
+    require(view["schema"] == "opaal.test-results.v1" and view["schema_version"] == 1
+            and type(view["schema_version"]) is int, "test view schema differs")
+    require(view["mode"] in {"list", "run"} and view["completeness"] in {"complete", "incomplete"},
+            "test view mode/completeness differs")
+    require(view["failure"] in {None, "TEST_EMPTY", "TEST_SOURCE", "TEST_SELECTION", "TEST_SIGNATURE",
+                               "TEST_EFFECT", "TEST_RESOURCE", "TEST_RETURN", "TEST_CANCELLED"},
+            "test view failure code differs")
+    require(view["completeness"] == ("complete" if view["failure"] is None else "incomplete"),
+            "test completeness/failure contradict")
+    require(view["selected"] is None or type(view["selected"]) is str, "test selection differs")
+    require(type(view["cases"]) is list and len(view["cases"]) <= 128, "test case inventory differs")
+    require(set(view["counts"]) == {"discovered", "selected", "passed", "failed", "error", "unrun"}
+            and all(type(count) is int and 0 <= count <= 128 for count in view["counts"].values()),
+            "test counts differ")
+    def native_path(value):
+        require(type(value) is dict and set(value) == {"platform", "encoding", "value"}
+                and value["platform"] == "unix" and value["encoding"] == "base64url-nopad"
+                and type(value["value"]) is str and re.fullmatch(r"[A-Za-z0-9_-]*", value["value"]),
+                "test native path differs")
+        encoded = value["value"]
+        require(len(encoded) % 4 != 1, "invalid native path encoding")
+        decoded = base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4))
+        require(base64.urlsafe_b64encode(decoded).decode().rstrip("=") == encoded
+                and b"\0" not in decoded, "noncanonical native path encoding")
+    native_path(view["source"])
+    names = []
+    for case in view["cases"]:
+        require(set(case) == {"name", "callable_id", "state", "diagnostic"}, "test case fields differ")
+        require(type(case["name"]) is str and case["name"].startswith("test_")
+                and case["state"] in {"listed", "passed", "failed", "error", "unrun"}, "test case identity/state differs")
+        names.append(case["name"])
+        if view["failure"] is None:
+            require((case["state"] == "listed") == (view["mode"] == "list")
+                    and case["state"] != "unrun", "complete test case state contradicts mode")
+        require(set(case["callable_id"]) == {"module", "name"}
+                and type(case["callable_id"]["name"]) is str, "callable identity differs")
+        native_path(case["callable_id"]["module"])
+        diagnostic = case["diagnostic"]
+        if diagnostic is not None:
+            require(set(diagnostic) == {"code", "kind", "source", "span"}
+                    and diagnostic["code"] in {"TEST_ERROR", "TEST_EFFECT", "TEST_RESOURCE", "TEST_CANCELLED", "TEST_RETURN"}
+                    and diagnostic["kind"] in {"error", "refused", "resource", "cancelled", "invalid"}, "test diagnostic differs")
+            if diagnostic["source"] is not None:
+                native_path(diagnostic["source"])
+            if diagnostic["span"] is not None:
+                span = diagnostic["span"]
+                require(set(span) == {"start", "end"} and type(span["start"]) is int
+                        and type(span["end"]) is int and 0 <= span["start"] <= span["end"], "test span differs")
+    require(names == sorted(set(names)), "test order/duplicates differ")
+    counts = view["counts"]
+    require(counts["selected"] == len(names) <= counts["discovered"], "test selection counts differ")
+    for state in ("passed", "failed", "error", "unrun"):
+        require(counts[state] == sum(case["state"] == state for case in view["cases"]), "test state counts differ")
+    return view
+
+
+def measured(run):
+    before = resource.getrusage(resource.RUSAGE_CHILDREN)
+    started = time.monotonic()
+    result = run()
+    after = resource.getrusage(resource.RUSAGE_CHILDREN)
+    return result, {"wall_seconds": time.monotonic() - started,
+                    "child_cpu_seconds": after.ru_utime + after.ru_stime - before.ru_utime - before.ru_stime,
+                    "child_rss_high_water_bytes": after.ru_maxrss * (1 if platform.system() == "Darwin" else 1024)}
+
+
 def references(binary: Path, inputs: Path, directory: Path, target: str) -> list[dict]:
     template = directory / "reference"
     environment = {"PATH": str(binary.parent) + os.pathsep + os.defpath}
@@ -176,6 +256,33 @@ def references(binary: Path, inputs: Path, directory: Path, target: str) -> list
         success(command([binary, "format", "--check", path], template, environment), "canonical " + path.name)
         if path.name not in {"tasks.opaal", "saved-tasks.opaal"}:
             success(command([binary, "check", path], template, environment), "check " + path.name)
+    expected_cases = sorted(["test_pass", "test_negative_id", "test_negative_platform", "test_negative_revision",
+                             "test_missing_revision", "test_empty_revision", "test_empty_expectation",
+                             "test_invalid_decoder", "test_unsupported_descriptor", "test_json_roundtrip"])
+    listing = test_view(success(command([binary, "test", "--list", "policy-tests.opaal", "--format", "json"],
+                                       template, environment), "pure test discovery"))
+    require([case["name"] for case in listing["cases"]] == expected_cases
+            and all(case["state"] == "listed" for case in listing["cases"]), "pure test listing differs")
+    passing = test_view(success(command([binary, "test", "policy-tests.opaal", "--format", "json"],
+                                       template, environment), "pure policy tests"))
+    require(passing["counts"]["passed"] == len(expected_cases) and passing["failure"] is None,
+            "same-policy cases did not all pass")
+    policy_path = template / "policy.opaal"
+    original_policy = policy_path.read_bytes()
+    try:
+        policy_path.write_bytes(original_policy.replace(b"let revision_ok = (revision != \"\" && revision == expected_revision)",
+                                                       b"let revision_ok = true"))
+        mutated = command([binary, "test", "policy-tests.opaal", "--case", "test_negative_revision", "--format", "json"],
+                          template, environment)
+        mutated_view = test_view(mutated.stdout)
+        require(mutated.returncode == 1 and mutated_view["cases"][0]["state"] == "failed",
+                "real policy mutation did not fail named test")
+    finally:
+        policy_path.write_bytes(original_policy)
+    success(command([binary, "test", "policy-tests.opaal"], template, environment), "repaired policy tests")
+    for label, payload in (("policy-tests-list.json", listing), ("policy-tests-run.json", passing),
+                           ("policy-tests-mutation.json", mutated_view)):
+        (directory / label).write_text(json.dumps(payload, sort_keys=True) + "\n")
     discovered = json.loads(success(command([binary, "task", "list", "--project", "opaal.toml",
                                            "--format", "json"], template, environment), "task list"))
     require(discovered["schema"] == "opaal.project-inspection.v1", "discovery schema differs")
@@ -207,8 +314,8 @@ def references(binary: Path, inputs: Path, directory: Path, target: str) -> list
         before = directory / (name + "-legacy")
         shutil.copytree(template, before)
         legacy_driver = ROOT / "tests/fixtures/image-check-legacy/run-saved.sh"
-        legacy = command(["sh", legacy_driver, *expected], before, environment, stdin=payload)
-        output = accepted_run(binary, work, environment, "saved", "offline", expected, stdin=payload)
+        legacy, legacy_cost = measured(lambda: command(["sh", legacy_driver, *expected], before, environment, stdin=payload))
+        output, native_cost = measured(lambda: accepted_run(binary, work, environment, "saved", "offline", expected, stdin=payload))
         require((legacy.returncode, legacy.stdout) == (output.returncode, output.stdout),
                 name + ": original driver and native run differ")
         (work / "stdout.json").write_bytes(output.stdout)
@@ -284,6 +391,8 @@ def references(binary: Path, inputs: Path, directory: Path, target: str) -> list
         else:
             require(ordinary.returncode == 1 and not ordinary.stdout, name + ": standalone error differs")
         rows.append({"case": name, "exit": exit_code, "assessment": candidate,
+                     "workflow_costs": {"legacy_lifecycle": legacy_cost, "native_lifecycle": native_cost,
+                                        "rss_scope": "cumulative child-process high-water mark; not an isolated workflow peak"},
                      "comparison_exit": comparison.returncode,
                      "artifacts": {path.name: hashlib.sha256(path.read_bytes()).hexdigest()
                                    for path in work.iterdir() if path.suffix in {".json", ".jsonl", ".txt"}}})
@@ -518,6 +627,8 @@ def qualify(archive, fixtures, binaries, source, target, artifacts, live=None):
                                               "exclusive evidence paths", "standalone/task report parity",
                                               "independent Python/shell report and exit parity",
                                               "equivalent independent policy modification",
+                                              "named pure cases/listing and actual policy mutation/repair",
+                                              "same-input lifecycle wall/child CPU and child RSS high-water; no speedup claim",
                                               "interactive policy and decoder error recovery"])}
 
 

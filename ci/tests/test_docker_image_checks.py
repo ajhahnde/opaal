@@ -15,10 +15,35 @@ from ci.package_data_processing import package_examples
 from ci.package_docker_image_checks import FIXTURES, ROOT, check_copies
 from ci.package_release import VERSION
 from ci.qualify_data_processing import unpack
-from ci.qualify_docker_image_checks import cases, decoder_payload, live_report_comparison
+from ci.qualify_docker_image_checks import cases, decoder_payload, live_report_comparison, test_view
+from ci.qualify_data_processing import QualificationError
 
 
 class DockerImageChecksTests(unittest.TestCase):
+    def test_named_test_view_rejects_unknown_duplicate_fields_and_invalid_counts(self):
+        path = {"platform": "unix", "encoding": "base64url-nopad", "value": "L3Rlc3Qub3BhYWw"}
+        view = {"schema": "opaal.test-results.v1", "schema_version": 1, "source": path,
+                "mode": "run", "selected": None, "completeness": "complete", "failure": None,
+                "cases": [{"name": "test_one", "callable_id": {"module": path, "name": "test_one"},
+                           "state": "passed", "diagnostic": None}],
+                "counts": {"discovered": 1, "selected": 1, "passed": 1, "failed": 0, "error": 0, "unrun": 0}}
+        payload = json.dumps(view).encode() + b"\n"
+        self.assertEqual(test_view(payload), view)
+        for change in (lambda value: value.update(extra=True),
+                       lambda value: value.update(schema_version=2),
+                       lambda value: value["cases"][0].update(extra=True),
+                       lambda value: value["cases"][0]["callable_id"].update(extra=True),
+                       lambda value: value["counts"].update(passed=0),
+                       lambda value: value["counts"].update(selected=True)):
+            altered = json.loads(payload)
+            change(altered)
+            with self.assertRaises(QualificationError):
+                test_view(json.dumps(altered).encode() + b"\n")
+        with self.assertRaises(QualificationError):
+            test_view(payload.replace(b'"schema_version": 1', b'"schema_version": 1, "schema_version": 1'))
+        with self.assertRaises(QualificationError):
+            test_view(payload[:-1])
+
     def test_live_comparison_uses_four_fixed_children_and_stops_redacted_failures(self):
         version = {"Client": {"Version": "29.9.0", "ApiVersion": "1.48", "Os": "linux", "Arch": "amd64"},
                    "Server": {"Version": "29.9.0", "ApiVersion": "1.56", "MinAPIVersion": "1.40",

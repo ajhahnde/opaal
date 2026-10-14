@@ -8,8 +8,10 @@ use std::sync::Arc;
 
 use crate::command::CommandRegistry;
 use crate::eval::{
-    CancellationToken, Clock, EvalLimits, EvaluationPolicy, HostedEvaluationFailure,
-    HostedEvaluationOutcome, ResourceBudget, apply_callable_with_controlled_host_and_budget,
+    CancellationToken, Clock, Completion, EvalLimits, EvaluationPolicy, HostedEvaluationFailure,
+    HostedEvaluationOutcome, ResourceBudget, RuntimeError, RuntimeErrorKind,
+    apply_callable_with_budget, apply_callable_with_controlled_host_and_budget,
+    evaluate_module_initializer,
 };
 use crate::module::{ModuleId, ModuleOrigin, ModuleProgram, ModuleSourceRegistry, NominalTypeId};
 use crate::operational::source::{
@@ -31,6 +33,103 @@ use crate::{
     Value,
 };
 use opaal_platform::Platform;
+
+/// Initialize fresh canonical modules and invoke one resolved function without a host.
+/// Initializers and the call share the supplied finite budget and cancellation token.
+pub fn invoke_pure_function(
+    program: &ModuleProgram,
+    module: &ModuleId,
+    signature: &crate::module::FunctionSignature,
+    cancellation: CancellationToken,
+    budget: &mut ResourceBudget,
+) -> Result<Completion, RuntimeError> {
+    let limits = EvalLimits::pure_opaal(cancellation, *budget);
+    let binding_types = Arc::new(program.runtime_binding_types());
+    let mut instances = BTreeMap::new();
+    let mut selected = None;
+    for owner in module_initialization_order(program) {
+        let mut scope = ScopeStack::new();
+        for alias in program.aliases().aliases(&owner) {
+            declare_qualified_alias_values(
+                &mut scope,
+                program,
+                &instances,
+                alias.name(),
+                alias.target(),
+            );
+        }
+        let source = program
+            .sources()
+            .source(&owner)
+            .expect("loaded module source");
+        let script = program
+            .sources()
+            .script(&owner)
+            .expect("loaded module syntax");
+        match evaluate_module_initializer(
+            script,
+            Arc::new(source.clone()),
+            &mut scope,
+            &limits,
+            budget,
+            Arc::clone(&binding_types),
+        ) {
+            Ok(HostedEvaluationOutcome::Value(_)) => {}
+            Ok(HostedEvaluationOutcome::Cancelled(cancelled)) => {
+                return Ok(Completion::Cancelled(cancelled));
+            }
+            Ok(HostedEvaluationOutcome::Refused(refusal)) => {
+                return Err(RuntimeError::new(
+                    RuntimeErrorKind::PolicyRefused {
+                        reason: refusal.reason(),
+                        operation: refusal.operation(),
+                    },
+                    refusal.span(),
+                ));
+            }
+            Err(HostedEvaluationFailure::Runtime(error)) => return Err(error),
+            _ => {
+                return Err(RuntimeError::new(
+                    RuntimeErrorKind::ExecutionUnsupported,
+                    script.span(),
+                ));
+            }
+        }
+        if &owner == module {
+            selected = scope.get(signature.name()).cloned();
+        }
+        let exports = program
+            .names()
+            .exports(&owner)
+            .filter_map(|export| {
+                scope
+                    .get(export.name())
+                    .cloned()
+                    .map(|value| (export.name().to_owned(), value))
+            })
+            .collect();
+        instances.insert(owner, exports);
+    }
+    let source = program
+        .sources()
+        .source(module)
+        .expect("resolved function source");
+    let selected = selected.ok_or_else(|| {
+        RuntimeError::new(
+            RuntimeErrorKind::ExecutionUnsupported,
+            signature.declaration_span(),
+        )
+    })?;
+    apply_callable_with_budget(
+        &selected,
+        Vec::new(),
+        source,
+        signature.declaration_span(),
+        &mut Environment::new(),
+        &limits,
+        budget,
+    )
+}
 
 /// The normally completed result of one non-interactive source file.
 #[derive(Clone, Debug, Eq, PartialEq)]

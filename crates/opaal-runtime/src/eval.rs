@@ -1518,6 +1518,16 @@ impl ResourceBudget {
         }
     }
 
+    /// Tightens the step ceiling without resetting consumed counters.
+    #[must_use]
+    pub const fn with_step_ceiling(mut self, limit: u64) -> Self {
+        self.step_limit = Some(match self.step_limit {
+            Some(existing) if existing < limit => existing,
+            _ => limit,
+        });
+        self
+    }
+
     /// Adds an exact nested-call ceiling to this budget.
     #[must_use]
     pub const fn with_call_depth(mut self, limit: u64) -> Self {

@@ -66,6 +66,58 @@ fn request(
 }
 
 #[test]
+fn pure_policy_cases_use_ordinary_diagnostics_hover_definitions_and_signatures() {
+    let directory = TestDirectory::new();
+    let uri = directory.uri("policy-tests.opaal");
+    let policy_uri = directory.uri("policy.opaal");
+    let policy = "export { assess }\ndef assess() -> Bool\n{\n    return true\n}\n";
+    let text = "import './policy.opaal' as policy\nexport { test_policy }\ndef test_policy() -> Bool\n{\n    return policy::assess()\n}\n";
+    let mut workspace = Workspace::new();
+    workspace
+        .open(policy_uri.clone(), 1, policy.into())
+        .unwrap();
+    workspace.open(uri.clone(), 1, text.into()).unwrap();
+    let diagnostics = workspace
+        .diagnostic_snapshot()
+        .analyze_diagnostics(PositionEncoding::Utf16)
+        .unwrap();
+    assert!(
+        diagnostics
+            .documents()
+            .iter()
+            .all(|doc| doc.diagnostics().is_empty()),
+        "{diagnostics:?}"
+    );
+    let offset = text.find("policy::assess").unwrap() + "policy::".len();
+    let query = |method, cursor| {
+        request(
+            &workspace,
+            PositionEncoding::Utf16,
+            &RequestControl::new(),
+            method,
+            positional(&uri, text, cursor, PositionEncoding::Utf16),
+        )
+        .unwrap()
+    };
+    let definition = query("textDocument/definition", offset);
+    assert!(
+        definition.to_string().contains(policy_uri.as_str()),
+        "{definition}"
+    );
+    let hover = query(
+        "textDocument/hover",
+        text.find("def test_policy").unwrap() + 5,
+    );
+    assert!(hover.to_string().contains("test_policy"), "{hover}");
+    assert!(hover.to_string().contains("Bool"), "{hover}");
+    let signature = query("textDocument/signatureHelp", offset + "assess(".len());
+    assert!(
+        signature.to_string().contains("assess() -> Bool"),
+        "{signature}"
+    );
+}
+
+#[test]
 fn math_aliases_signatures_completion_and_diagnostics_use_the_shared_catalog() {
     let directory = TestDirectory::new();
     let uri = directory.uri("main.opaal");

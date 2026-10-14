@@ -838,10 +838,8 @@ impl ModuleAliasRegistry {
             .and_then(|aliases| aliases.exports.get(name))
     }
 
-    pub(crate) fn exports<'a>(
-        &'a self,
-        module: &ModuleId,
-    ) -> impl Iterator<Item = &'a ModuleAliasExport> {
+    /// Explicit exported module aliases in deterministic name order.
+    pub fn exports<'a>(&'a self, module: &ModuleId) -> impl Iterator<Item = &'a ModuleAliasExport> {
         self.by_module
             .get(module)
             .into_iter()
@@ -8927,6 +8925,51 @@ impl ModuleEffectRegistry {
     }
 }
 
+fn resolve_function_declaration(
+    sources: &ModuleSourceRegistry,
+    names: &ModuleNameRegistry,
+    module: &ModuleId,
+    span: Span,
+) -> Option<(ModuleId, Span)> {
+    let mut module = module.clone();
+    let mut span = span;
+    let mut visited = BTreeSet::new();
+    while visited.len() < 256 && visited.insert((module.clone(), span.start())) {
+        let script = sources.script(&module)?;
+        let declaration = script
+            .statements()
+            .iter()
+            .find(|statement| match statement.kind() {
+                StatementKind::Function(function) => function.name.span() == span,
+                StatementKind::Declaration(declaration) => declaration.name.span() == span,
+                _ => false,
+            })?;
+        match declaration.kind() {
+            StatementKind::Function(_) => return Some((module, span)),
+            StatementKind::Declaration(declaration) if !declaration.mutable => {
+                let reference = names.reference(&module, declaration.value.span())?;
+                match reference.target() {
+                    ModuleReferenceTarget::Local {
+                        module: owner,
+                        declaration_span,
+                    }
+                    | ModuleReferenceTarget::Imported {
+                        target_module: owner,
+                        declaration_span,
+                        ..
+                    } => {
+                        module = owner.clone();
+                        span = *declaration_span;
+                    }
+                    _ => return None,
+                }
+            }
+            _ => return None,
+        }
+    }
+    None
+}
+
 struct StaticEffectSemantics<'a> {
     aliases: &'a ModuleAliasRegistry,
     names: &'a ModuleNameRegistry,
@@ -8940,6 +8983,8 @@ struct StaticEffectAnalyzer<'a> {
     commands: &'a CommandRegistry,
     summary: ModuleEffectSummary,
     active_functions: BTreeSet<(ModuleId, usize)>,
+    function_body: bool,
+    visited_functions: BTreeSet<(ModuleId, usize)>,
     control: &'a AnalysisControl,
 }
 
@@ -8961,6 +9006,8 @@ impl<'a> StaticEffectAnalyzer<'a> {
             commands,
             summary: ModuleEffectSummary::default(),
             active_functions: BTreeSet::new(),
+            function_body: false,
+            visited_functions: BTreeSet::new(),
             control,
         };
         analyzer.statements(script.statements());
@@ -9071,12 +9118,36 @@ impl<'a> StaticEffectAnalyzer<'a> {
         if self.control.is_cancelled() {
             return;
         }
-        if self.pure_operation_pipeline(pipeline) {
-            for stage in pipeline.stages() {
+        if self.function_body
+            && let [stage] = pipeline.stages()
+            && let StageKind::Command(command) = stage.kind()
+            && command.head.kind() == CommandHeadKind::Bare
+            && command.items.is_empty()
+            && let Some(reference) = self
+                .semantics
+                .names
+                .reference(&self.module, command.head.span())
+        {
+            if matches!(reference.target(), ModuleReferenceTarget::DynamicStatus) {
+                self.summary.push(ModuleEffect::Status, command.head.span());
+            } else if matches!(reference.target(), ModuleReferenceTarget::ScriptArguments) {
+                self.summary
+                    .push(ModuleEffect::OpaqueExternal, command.head.span());
+            }
+            return;
+        }
+        if self.pure_operation_pipeline(pipeline)
+            || (self.function_body
+                && matches!(pipeline.stages(), [stage] if matches!(stage.kind(), StageKind::Expression(_))))
+        {
+            for (index, stage) in pipeline.stages().iter().enumerate() {
                 let StageKind::Expression(expression) = stage.kind() else {
                     unreachable!("a pure operation pipeline contains only expressions")
                 };
                 self.expression(expression);
+                if index > 0 {
+                    self.call(stage.span(), expression, &[]);
+                }
             }
             return;
         }
@@ -9266,6 +9337,18 @@ impl<'a> StaticEffectAnalyzer<'a> {
         match expression.kind() {
             ExpressionKind::Literal(literal) => self.literal(literal),
             ExpressionKind::Name(_) => {
+                if self.function_body
+                    && self
+                        .semantics
+                        .names
+                        .reference(&self.module, expression.span())
+                        .is_some_and(|reference| {
+                            matches!(reference.target(), ModuleReferenceTarget::ScriptArguments)
+                        })
+                {
+                    self.summary
+                        .push(ModuleEffect::OpaqueExternal, expression.span());
+                }
                 if self
                     .semantics
                     .names
@@ -9302,7 +9385,7 @@ impl<'a> StaticEffectAnalyzer<'a> {
                 for argument in &call.arguments {
                     self.expression(argument);
                 }
-                self.call(expression.span(), &call.callee);
+                self.call(expression.span(), &call.callee, &call.arguments);
             }
             ExpressionKind::Index(index) => {
                 self.expression(&index.target);
@@ -9317,7 +9400,7 @@ impl<'a> StaticEffectAnalyzer<'a> {
         }
     }
 
-    fn call(&mut self, call_span: Span, callee: &Expression) {
+    fn call(&mut self, call_span: Span, callee: &Expression, arguments: &[Expression]) {
         if self.control.is_cancelled() {
             return;
         }
@@ -9325,6 +9408,19 @@ impl<'a> StaticEffectAnalyzer<'a> {
             if let ExpressionKind::Qualified(name) = callee.kind()
                 && let Some(operation) = self.qualified_operation(name)
             {
+                for overload in operation.overloads() {
+                    for (parameter, argument) in overload.parameters().iter().zip(arguments) {
+                        if parameter.callback().is_some() {
+                            if let ExpressionKind::Closure(closure) = argument.kind() {
+                                let previous = std::mem::replace(&mut self.function_body, true);
+                                self.chain(&closure.body);
+                                self.function_body = previous;
+                            } else {
+                                self.call(argument.span(), argument, &[]);
+                            }
+                        }
+                    }
+                }
                 for request in operation.downstream().effects().iter() {
                     let effect = match request.effect() {
                         opaal_platform::AuthorityEffect::EntropySystem => {
@@ -9376,7 +9472,23 @@ impl<'a> StaticEffectAnalyzer<'a> {
                 return;
             }
         };
+        let Some((module, declaration_span)) = resolve_function_declaration(
+            self.sources,
+            self.semantics.names,
+            &module,
+            declaration_span,
+        ) else {
+            self.summary.push(ModuleEffect::OpaqueExternal, call_span);
+            return;
+        };
         let key = (module.clone(), declaration_span.start());
+        if self.visited_functions.contains(&key) {
+            return;
+        }
+        if self.active_functions.len() >= 256 {
+            self.summary.push(ModuleEffect::OpaqueExternal, call_span);
+            return;
+        }
         if !self.active_functions.insert(key.clone()) {
             return;
         }
@@ -9397,13 +9509,16 @@ impl<'a> StaticEffectAnalyzer<'a> {
                 .clone();
             let previous_module = std::mem::replace(&mut self.module, module);
             let previous_source = std::mem::replace(&mut self.source, defining_source);
+            let previous_context = std::mem::replace(&mut self.function_body, true);
             self.statements(&body);
+            self.function_body = previous_context;
             self.module = previous_module;
             self.source = previous_source;
         } else {
             self.summary.push(ModuleEffect::OpaqueExternal, call_span);
         }
         self.active_functions.remove(&key);
+        self.visited_functions.insert(key);
     }
 
     fn literal(&mut self, literal: &opaal_syntax::Literal) {
@@ -10364,6 +10479,84 @@ impl std::error::Error for ModuleProgramLoadError {
 }
 
 impl ModuleProgram {
+    /// Resolve an exported function or immutable function alias to its declaration.
+    #[must_use]
+    pub fn exported_function(&self, name: &str) -> Option<(ModuleId, &FunctionSignature)> {
+        let root = self.graph.root();
+        let export = self.names.export(root, name)?;
+        let (module, span) = resolve_function_declaration(
+            &self.sources,
+            &self.names,
+            root,
+            export.declaration_span(),
+        )?;
+        self.types
+            .function(&module, span)
+            .map(|signature| (module, signature))
+    }
+
+    /// Reachable effects of one resolved function under ordinary body semantics.
+    /// Initializer effects remain available separately through `effects()`.
+    pub fn function_effects(
+        &self,
+        module: &ModuleId,
+        signature: &FunctionSignature,
+        control: &AnalysisControl,
+    ) -> ModuleEffectSummary {
+        let controlled = control.for_run(AnalysisLimits::OPAAL);
+        let control = &controlled;
+        let semantics = StaticEffectSemantics {
+            aliases: &self.aliases,
+            names: &self.names,
+        };
+        let commands = standard_registry();
+        let source = self
+            .sources
+            .source(module)
+            .expect("resolved function source");
+        let mut analyzer = StaticEffectAnalyzer {
+            module: module.clone(),
+            source: source.clone(),
+            sources: &self.sources,
+            semantics: &semantics,
+            commands: &commands,
+            summary: ModuleEffectSummary::default(),
+            active_functions: BTreeSet::new(),
+            function_body: true,
+            control,
+            visited_functions: BTreeSet::new(),
+        };
+        let body = self.sources.script(module).and_then(|script| {
+            script
+                .statements()
+                .iter()
+                .find_map(|statement| match statement.kind() {
+                    StatementKind::Function(function)
+                        if function.name.span() == signature.declaration_span() =>
+                    {
+                        Some(&function.body)
+                    }
+                    _ => None,
+                })
+        });
+        if let Some(body) = body {
+            analyzer
+                .active_functions
+                .insert((module.clone(), signature.declaration_span().start()));
+            analyzer.statements(&body.statements);
+        } else {
+            analyzer
+                .summary
+                .push(ModuleEffect::OpaqueExternal, signature.declaration_span());
+        }
+        if control.limit_exceeded().is_some() {
+            analyzer
+                .summary
+                .push(ModuleEffect::OpaqueExternal, signature.declaration_span());
+        }
+        analyzer.summary
+    }
+
     /// The canonical acyclic dependency graph.
     #[must_use]
     pub const fn graph(&self) -> &ModuleGraph {

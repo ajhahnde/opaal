@@ -2,6 +2,12 @@
   "schema_version": 1,
   "files": [
     {
+      "path": "examples/image-check/policy-tests.opaal",
+      "role": "positive",
+      "reason": "Ordinary same-policy pure named case module; checker/formatter and native package tests own behavior.",
+      "assertion": "ci/qualify_docker_image_checks.py"
+    },
+    {
       "path": "examples/image-check/policy.opaal",
       "role": "positive",
       "reason": "Shared saved/live image check policy and canonical native task/script reference.",
@@ -110,6 +116,12 @@
       "role": "positive",
       "reason": "Foreground process workflow golden.",
       "assertion": "crates/opaal-cli/tests/direct_external_golden.rs"
+    },
+    {
+      "path": "tests/golden/docker-image-checks/policy-tests.opaal",
+      "role": "positive",
+      "reason": "Ordinary same-policy pure named case module; checker/formatter and native package tests own behavior.",
+      "assertion": "ci/qualify_docker_image_checks.py"
     },
     {
       "path": "tests/golden/docker-image-checks/policy.opaal",
@@ -1196,8 +1208,8 @@
     },
     {
       "path": "ci/check_docs.py",
-      "sha256": "a6419f08bcb7d34e0f84bf4dcfa0b71720daa4c02f778152b0e48b2f16bfd3e7",
-      "source_markers": 9,
+      "sha256": "d33461628e915444dd515be26d69d527ee8c09f95b48da42b5e19e3f9057cdbc",
+      "source_markers": 10,
       "constructors_or_assertions": [
         "check_examples",
         "check_guides",
@@ -1376,20 +1388,24 @@
     },
     {
       "path": "ci/qualify_docker_image_checks.py",
-      "sha256": "7afc5c3c350b83be43493d36f9f5fa09bc667fcf564371ab33dbd569c9205313",
-      "source_markers": 17,
+      "sha256": "0f449ed06f977681639749adae670cae337d42c15a7775f684b99bcbcc5c7ae5",
+      "source_markers": 26,
       "constructors_or_assertions": [
         "accepted_run",
         "add",
         "api",
         "assign",
         "cases",
+        "closed_pairs",
         "decoder_payload",
         "live_references",
         "live_report_comparison",
         "main",
+        "measured",
+        "native_path",
         "qualify",
-        "references"
+        "references",
+        "test_view"
       ],
       "role": "mixed-test-buffers",
       "reason": "Exact fixture copy/package and named policy/report/evidence/first-use assertions.",
@@ -1662,8 +1678,8 @@
     },
     {
       "path": "ci/tests/test_docker_image_checks.py",
-      "sha256": "7d0ff256eec8f12df40955116ec3a6369809e8872f5a6bd00fc07f100dcb50e3",
-      "source_markers": 9,
+      "sha256": "1f0647f4669be1c88cf13cd7fdccb69d92cb65fb751aa53f13af04463a671bbb",
+      "source_markers": 10,
       "constructors_or_assertions": [
         "run",
         "test_comparison_shell_redacts_parser_errors_and_refuses_output_failure",
@@ -1671,6 +1687,7 @@
         "test_independent_python_comparison_matches_every_named_report_and_exit",
         "test_live_comparison_uses_four_fixed_children_and_stops_redacted_failures",
         "test_named_cases_distinguish_missing_empty_and_acquisition_errors",
+        "test_named_test_view_rejects_unknown_duplicate_fields_and_invalid_counts",
         "test_reference_copies_and_package_roundtrip_keep_exact_bytes",
         "test_setup_rejects_unqualified_inputs_without_creating_configuration"
       ],
@@ -1798,7 +1815,7 @@
     },
     {
       "path": "crates/opaal-cli/src/cli.rs",
-      "sha256": "a008d88df51977ce776fa40a4685b9b757c043b1956950587fedb61d76c4e773",
+      "sha256": "1063a7da918c908bdc50885e0f30a56d9b543f8fd2dc47967c68285568de79b0",
       "source_markers": 11,
       "constructors_or_assertions": [
         "check_and_plan_require_one_explicit_source",
@@ -1857,7 +1874,7 @@
     },
     {
       "path": "crates/opaal-cli/src/main.rs",
-      "sha256": "d70b6f5455763b3dd31ec19853d9b4df1dd116374bb07f7f8523dd492b8a656b",
+      "sha256": "7837802f79a98e673c1484a614e251117829a576c3f89b5850cca6754495efd5",
       "source_markers": 5,
       "constructors_or_assertions": [
         "module constants/imports",
@@ -1883,8 +1900,8 @@
     },
     {
       "path": "crates/opaal-cli/src/project/preparation.rs",
-      "sha256": "09afcbd368f753c08d42199b914f099aa5bc8c631cc58290b8d640901763fe4b",
-      "source_markers": 6,
+      "sha256": "b9c4e4802506c259ebb6e60b488de74aa5fe3252908277d610c999568faec4bd",
+      "source_markers": 7,
       "constructors_or_assertions": [
         "concurrent_asset_collision_is_retained_without_overwrite",
         "module constants/imports"
@@ -2500,6 +2517,26 @@
       "assertion": "crates/opaal-cli/tests/terminal_editor_pty.rs"
     },
     {
+      "path": "crates/opaal-cli/tests/test_frontend.rs",
+      "sha256": "42c01ee615dace81c295788b61bb5b12a6404ae1e72526fac33e2abcec26dbc9",
+      "source_markers": 19,
+      "constructors_or_assertions": [
+        "cooperative_cancellation_never_passes_or_leaks_partial_source",
+        "empty_unknown_and_nonselected_invalid_inventory_refuse",
+        "exact_case_suite_and_view_ceilings_refuse_first_excess",
+        "module_and_imported_alias_cases_use_canonical_identity_and_fresh_scopes",
+        "native_test_command_refuses_an_unwritable_result_sink",
+        "repeated_long_callable_ids_refuse_before_retaining_an_oversized_inventory",
+        "request",
+        "run",
+        "test_cli_rejects_duplicate_missing_unknown_and_stdin_arguments",
+        "the_reference_policy_cases_are_proven_pure_and_pass"
+      ],
+      "role": "mixed-test-buffers",
+      "reason": "Ordinary valid/invalid/pure/effectful source snippets assert test admission, invocation and existing semantics.",
+      "assertion": "crates/opaal-cli/tests/test_frontend.rs"
+    },
+    {
       "path": "crates/opaal-lsp/src/query.rs",
       "sha256": "9bf6cc9011c65a12173539ed320ef197449b78d08feb5b7cef78465877e0a7cf",
       "source_markers": 1,
@@ -2554,8 +2591,8 @@
     },
     {
       "path": "crates/opaal-lsp/tests/queries.rs",
-      "sha256": "33b72525f2e751f98e365d71a1f1c368c9152a2614eb54c1b84d32478e276a9e",
-      "source_markers": 50,
+      "sha256": "354e27de75a9395406d7ddab55e1ffc6811bf6b0acefdaede10394081a89cb89",
+      "source_markers": 53,
       "constructors_or_assertions": [
         "callback_operation_signatures_show_relations_and_argument_positions",
         "complete_report_and_policy_observers_resolve_the_same_source_operations",
@@ -2570,6 +2607,7 @@
         "list_query_and_order_signatures_expose_option_and_ordered_constraints",
         "math_aliases_signatures_completion_and_diagnostics_use_the_shared_catalog",
         "position",
+        "pure_policy_cases_use_ordinary_diagnostics_hover_definitions_and_signatures",
         "random_reexports_signatures_effect_hover_and_completion_use_the_shared_catalog",
         "record_signatures_hover_and_completion_share_the_structural_contract",
         "semantic_completion_hover_and_signature_help_use_shared_program_data",
@@ -2999,7 +3037,7 @@
     },
     {
       "path": "crates/opaal-runtime/src/eval.rs",
-      "sha256": "ec6f138db482c3021d7af10669a248b7cb59c309fab6fa5fb619a86f157559b4",
+      "sha256": "613389bfb0168058ead1a99e76d3a60009f991e9da65b97e696e1d261fb41619",
       "source_markers": 17,
       "constructors_or_assertions": [
         "ambient_process_policy_propagates_into_lazy_transform_closures",
@@ -3142,7 +3180,7 @@
     },
     {
       "path": "crates/opaal-runtime/src/module.rs",
-      "sha256": "dc54befc7b2db25f7e2fe8a7a8e021bcc9f35c8d27fdcfd6aba2648405fb4a03",
+      "sha256": "f4c98209b0d72582a4c266e1086badf3ec5a3091dc867d17972843f4e61f50e4",
       "source_markers": 21,
       "constructors_or_assertions": [
         "analyze_interactive_with_control",
@@ -3186,7 +3224,7 @@
     },
     {
       "path": "crates/opaal-runtime/src/script.rs",
-      "sha256": "4cab2f1d5d0bfbc21713b302f56dfb35df9cd30902fc8a3b8d0f332a375bea8a",
+      "sha256": "3a15bd0470535b45544a28f3f80884d8e729921e110240eedb223f0323436a73",
       "source_markers": 6,
       "constructors_or_assertions": [
         "ambient_script_connects_an_external_stage_to_a_named_transform",
@@ -3806,6 +3844,17 @@
       "role": "mixed-test-buffers",
       "reason": "Retain complete, legacy, invalid and incomplete source buffers and their source-position assertions; canonical output is asserted only by formatting owners.",
       "assertion": "crates/opaal-runtime/tests/project_contract.rs"
+    },
+    {
+      "path": "crates/opaal-runtime/tests/pure_tests.rs",
+      "sha256": "d22d6ee73dfe12a9fc895b6ef2f38119e070fd6797b02ff61e0abf5d3a7880c8",
+      "source_markers": 1,
+      "constructors_or_assertions": [
+        "program"
+      ],
+      "role": "mixed-test-buffers",
+      "reason": "Ordinary valid/invalid/pure/effectful source snippets assert test admission, invocation and existing semantics.",
+      "assertion": "crates/opaal-runtime/tests/pure_tests.rs"
     },
     {
       "path": "crates/opaal-runtime/tests/random_authority.rs",
