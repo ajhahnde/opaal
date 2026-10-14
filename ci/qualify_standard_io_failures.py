@@ -11,8 +11,10 @@ import resource
 import select
 import shutil
 import signal
+import socket
 import subprocess
 import tempfile
+import threading
 import time
 from pathlib import Path
 
@@ -64,11 +66,11 @@ def qualify(binary: Path, output: Path) -> dict:
             return subprocess.run([str(binary), *args], cwd=work, capture_output=True,
                                   timeout=20, **kwargs)
 
-        def plan(body):
+        def plan(body, roles=("entropy.system", "stdin.read", "stdout.write", "stderr.write")):
             (work / "plan.json").unlink(missing_ok=True)
             (work / "tasks.opaal").write_text(
                 "import std::io as io\nimport std::random as random\nimport std::string as string\n"
-                "action sample() -> Bool effects { entropy.system(); stdin.read(); stdout.write(); stderr.write(); } {\n"
+                "action sample() -> Bool effects { " + " ".join(role + "();" for role in roles) + " } {\n"
                 + body.replace("return ", "") + "\nreturn true\n}\ntask sample = sample\n")
             result = run("plan", "--project", "opaal.toml", "--task", "sample", "--environment", "ci",
                          "--expires-in", "900s", "--out", "plan.json")
@@ -238,6 +240,233 @@ def qualify(binary: Path, output: Path) -> dict:
                 "pre-admission sink failure persisted unexpected evidence")
         cases.append({"name": name, "exit": code, "stdout_bytes": 0, "journal_present": False,
                       "receipt_bytes": 0, "pre_admission": True})
+
+        def task_arguments(name, body, roles):
+            arguments, digest = plan(body, roles)
+            return ["task", "run", *arguments[1:], "--journal", name + ".jsonl",
+                    "--receipt-out", name + ".receipt.json", "--audit-out", name + ".audit.json"], digest
+
+        def task_observation(name, child, stdout, stderr, digest, expected_exit):
+            require(child.returncode == expected_exit, name + ": native run exit differs")
+            retained = {}
+            for suffix in ("jsonl", "receipt.json", "audit.json"):
+                path = work / (name + "." + suffix)
+                if path.exists():
+                    data = path.read_bytes()
+                    require(CANARY not in data, name + ": evidence leaked payload")
+                    (output / path.name).write_bytes(data)
+                    retained[suffix] = len(data)
+            require(CANARY not in stderr, name + ": summary leaked payload")
+            (output / (name + ".stderr.txt")).write_bytes(stderr)
+            (output / (name + ".stdout.txt")).write_bytes(stdout)
+            if retained.get("receipt.json"):
+                receipt = json.loads((work / (name + ".receipt.json")).read_bytes())
+                require(receipt["plan_digest"] == digest, name + ": receipt identity differs")
+            cases.append({"name": name, "exit": child.returncode, "artifacts": retained})
+
+        # Pre-effect evidence failure retains the exclusively reserved audit.
+        name = "task-baseline"
+        arguments, digest = task_arguments(name, "", ())
+        baseline = run(*arguments, input=b"")
+        task_observation(name, baseline, baseline.stdout, baseline.stderr, digest, 0)
+        name = "task-evidence-write-failure"
+        arguments, digest = task_arguments(name, "", ())
+        failed = run(*arguments, input=b"", preexec_fn=limited_sink(0))
+        task_observation(name, failed, failed.stdout, failed.stderr, digest, 2)
+        require(not (work / (name + ".jsonl")).exists()
+                and (work / (name + ".receipt.json")).read_bytes() == b""
+                and (work / (name + ".audit.json")).read_bytes() == b"",
+                "failed evidence admission fabricated or removed reserved artifacts")
+
+        for name, closed, requested in (("task-summary-failure", True, False),
+                                        ("task-requested-cancel", False, True),
+                                        ("task-cancel-summary-failure", True, True)):
+            body = "io::print('ready')\nlet input = io::read_stdin(64)" if requested else ""
+            roles = ("stdin.read", "stdout.write") if requested else ()
+            arguments, digest = task_arguments(name, body, roles)
+            child = subprocess.Popen([str(binary), *arguments], cwd=work, stdin=subprocess.PIPE,
+                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            if closed:
+                child.stderr.close()
+                child.stderr = None
+            worker = None
+            try:
+                if requested:
+                    require(select.select([child.stdout], [], [], 10)[0], "task read marker timed out")
+                    require(child.stdout.read(5) == b"ready", "task did not reach blocked read")
+                    deadline = time.monotonic() + 5
+                    while time.monotonic() < deadline:
+                        owned = children(child.pid)
+                        rows = (work / (name + ".jsonl")).read_bytes().splitlines()
+                        if owned and rows and json.loads(rows[-1])["kind"] == "effect-before" \
+                                and json.loads(rows[-1])["payload"]["effect"] == "stdin.read":
+                            require(len(owned) == 1, "unexpected task worker count")
+                            worker = owned[0]
+                            break
+                        time.sleep(0.001)
+                    require(worker is not None, "task did not own a blocked-read worker")
+                    os.kill(child.pid, signal.SIGTERM)
+                    child.wait(timeout=10)
+                    child.stdin.close()
+                    child.stdin = None
+                stdout, stderr = child.communicate(b"" if not requested else None, timeout=10)
+            finally:
+                stop(child)
+            if worker is not None:
+                reaped(worker)
+            task_observation(name, child, stdout or b"", stderr or b"", digest, 130 if requested else 2)
+            receipt = json.loads((work / (name + ".receipt.json")).read_bytes())
+            require(receipt["primary"]["class"] == ("cancelled" if requested else "success"),
+                    name + ": summary failure replaced the primary")
+            require(receipt["primary"]["cancel_reason"] == ("requested" if requested else None),
+                    name + ": cancellation reason differs")
+
+        def full_pipe():
+            read_fd, write_fd = os.pipe()
+            os.set_blocking(write_fd, False)
+            try:
+                while True:
+                    os.write(write_fd, b"x" * 4096)
+            except BlockingIOError:
+                pass
+            os.set_blocking(write_fd, True)
+            return read_fd, write_fd
+
+        # The administrative writer must remain cancellable after task finish.
+        for name, explain, requested in (("task-blocked-summary-cancel", False, True),
+                                         ("task-blocked-explanation-cancel", True, True),
+                                         ("task-blocked-summary-timeout", False, False)):
+            arguments, digest = task_arguments(name, "", ())
+            if explain:
+                arguments = ["task", "explain", "--receipt", "task-baseline.receipt.json",
+                             "--audit", "task-baseline.audit.json", "--format", "json"]
+            read_fd, write_fd = full_pipe()
+            child = subprocess.Popen([str(binary), *arguments], cwd=work, stdin=subprocess.DEVNULL,
+                                     stdout=write_fd if explain else subprocess.PIPE,
+                                     stderr=subprocess.PIPE if explain else write_fd)
+            os.close(write_fd)
+            worker = None
+            try:
+                deadline = time.monotonic() + 5
+                while time.monotonic() < deadline:
+                    owned = children(child.pid)
+                    if owned:
+                        require(len(owned) == 1, "unexpected view worker count")
+                        worker = owned[0]
+                        break
+                    require(child.poll() is None, "view exited before blocked output")
+                    time.sleep(0.001)
+                require(worker is not None, "view did not own a blocked-output worker")
+                if requested:
+                    os.kill(child.pid, signal.SIGTERM)
+                stdout, stderr = child.communicate(timeout=5 if requested else 40)
+            finally:
+                stop(child)
+                os.close(read_fd)
+            reaped(worker)
+            task_observation(name, child, stdout or b"", stderr or b"", digest, 130 if requested else 2)
+            if not explain:
+                receipt = json.loads((work / (name + ".receipt.json")).read_bytes())
+                require(receipt["primary"]["class"] == "success"
+                        and receipt["assessment"] == {"kind": "bool", "value": True},
+                        "summary cancellation replaced the completed task")
+
+        # Explicit secret stdin is separate from controlled task stdin.
+        with manifest.open("a") as document:
+            document.write('\n[endpoints.cancel]\nurl = "http://127.0.0.1:9/unused"\n'
+                           'methods = ["GET"]\nsecret_headers = ["authorization"]\ntls = false\n'
+                           '[secrets.token]\nkind = "injected"\n')
+        with (work / "authority.toml").open("a") as authority:
+            for effect, scope in (("network.http", "endpoint.cancel"),
+                                  ("secret.reveal", "secret.token@endpoint.cancel")):
+                authority.write(f'[[rules]]\ndecision = "grant"\neffect = "{effect}"\n'
+                                f'scope = "{scope}"\nrequired_enforcement = "enforced"\n')
+        (work / "tasks.opaal").write_text(
+            'import project::endpoints as endpoints\nimport project::secrets as secrets\n'
+            'import std::http as http\n'
+            'action sample() -> Bool effects { network.http(endpoints::cancel); '
+            'secret.reveal(secrets::token, endpoints::cancel); } {\n'
+            'let header = http::secret_header("authorization", secrets::token)\n'
+            'http::request(endpoints::cancel, "GET", {}, header, null, 1024)\n'
+            'return true\n}\ntask sample = sample\n')
+        planned = run("plan", "--project", "opaal.toml", "--task", "sample", "--environment", "ci",
+                      "--expires-in", "900s", "--out", "secret.plan.json", "--format", "digest")
+        require(planned.returncode == 0, "secret cancellation plan failed")
+        digest = planned.stdout.decode().strip()
+        for name, requested in (("task-blocked-secret-cancel", True),
+                                ("task-blocked-secret-timeout", False)):
+            arguments = ["task", "run", "--plan", "secret.plan.json", "--accept", digest,
+                         "--secret-stdin", "token", "--journal", name + ".jsonl",
+                         "--receipt-out", name + ".receipt.json", "--audit-out", name + ".audit.json",
+                         "--require-true"]
+            child = subprocess.Popen([str(binary), *arguments], cwd=work, stdin=subprocess.PIPE,
+                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            worker = None
+            try:
+                deadline = time.monotonic() + 5
+                while time.monotonic() < deadline:
+                    owned = children(child.pid)
+                    if owned:
+                        require(len(owned) == 1, "unexpected secret-input worker count")
+                        worker = owned[0]
+                        break
+                    require(child.poll() is None, "secret run exited before blocked input")
+                    time.sleep(0.001)
+                require(worker is not None, "secret run did not own its input worker")
+                if requested:
+                    os.kill(child.pid, signal.SIGTERM)
+                child.wait(timeout=5 if requested else 40)
+                child.stdin.close()
+                child.stdin = None
+                stdout, stderr = child.communicate(timeout=5)
+            finally:
+                stop(child)
+            reaped(worker)
+            task_observation(name, child, stdout, stderr, digest, 130 if requested else 2)
+            receipt = json.loads((work / (name + ".receipt.json")).read_bytes())
+            require(receipt["primary"]["class"] == "cancelled"
+                    and receipt["primary"]["cancel_reason"] == ("requested" if requested else "timeout"),
+                    "secret read did not retain typed cancellation")
+
+        # A completed secret read reaches the ordinary HTTP owner exactly once.
+        name = "task-secret-complete"
+        with socket.socket() as listener:
+            listener.bind(("127.0.0.1", 0))
+            listener.listen(1)
+            listener.settimeout(5)
+            manifest.write_text(manifest.read_text().replace("127.0.0.1:9/unused",
+                                f"127.0.0.1:{listener.getsockname()[1]}/unused"))
+            received = []
+            def serve():
+                with listener.accept()[0] as connection:
+                    connection.settimeout(5)
+                    request = b""
+                    while b"\r\n\r\n" not in request:
+                        chunk = connection.recv(4096)
+                        require(chunk and len(request) < 16_384, "HTTP request incomplete or oversized")
+                        request += chunk
+                    received.append(request)
+                    connection.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+            server = threading.Thread(target=serve)
+            server.start()
+            try:
+                planned = run("plan", "--project", "opaal.toml", "--task", "sample", "--environment", "ci",
+                              "--expires-in", "900s", "--out", "complete.plan.json", "--format", "digest")
+                require(planned.returncode == 0, "completed secret plan failed")
+                digest = planned.stdout.decode().strip()
+                completed = run("task", "run", "--plan", "complete.plan.json", "--accept", digest,
+                                "--secret-stdin", "token", "--journal", name + ".jsonl",
+                                "--receipt-out", name + ".receipt.json", "--audit-out", name + ".audit.json",
+                                "--require-true", input=CANARY)
+            finally:
+                server.join(timeout=10)
+            require(not server.is_alive() and len(received) == 1
+                    and b"authorization: " + CANARY + b"\r\n" in received[0].lower(),
+                    "completed secret input was not sent once to the selected sink")
+        task_observation(name, completed, completed.stdout, completed.stderr, digest, 0)
+        receipt = json.loads((work / (name + ".receipt.json")).read_bytes())
+        require(receipt["primary"]["class"] == "success" and receipt["assessment"]["value"] is True,
+                "completed secret read did not preserve the successful task")
 
     snapshot = {name: hashlib.sha256((ROOT / name).read_bytes()).hexdigest()
                 for name in public_paths(ROOT) if (ROOT / name).is_file()}

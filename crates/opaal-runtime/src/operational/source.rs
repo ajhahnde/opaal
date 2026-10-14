@@ -512,10 +512,37 @@ impl<'a> ControlledSourceOperations<'a> {
             ModuleError::invalid("EXECUTE008", "secret input was already consumed")
         })?;
         let mut bytes = ZeroingBytes(Vec::with_capacity(4096));
-        input
-            .take((MAX_SECRET_BYTES + 1) as u64)
-            .read_to_end(&mut bytes.0)
-            .map_err(|error| ModuleError::invalid("EXECUTE008", error.to_string()))?;
+        while bytes.0.len() <= MAX_SECRET_BYTES {
+            if let Some(reason) = self.context.poll_cancellation() {
+                return Err(ModuleError::Cancelled(reason));
+            }
+            let start = bytes.0.len();
+            bytes.0.resize((start + 4096).min(MAX_SECRET_BYTES + 1), 0);
+            // Check cancellation between interrupted reads instead of retrying invisibly.
+            match input.read(&mut bytes.0[start..]) {
+                Ok(count) => {
+                    bytes.0.truncate(start + count);
+                    if count == 0 {
+                        break;
+                    }
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {
+                    bytes.0.truncate(start);
+                }
+                Err(error) => {
+                    if let Some(reason) = self.context.poll_cancellation() {
+                        return Err(ModuleError::Cancelled(reason));
+                    }
+                    if error.kind() == std::io::ErrorKind::TimedOut {
+                        return Err(ModuleError::Cancelled(crate::eval::CancelReason::Timeout));
+                    }
+                    return Err(ModuleError::invalid("EXECUTE008", error.to_string()));
+                }
+            }
+        }
+        if let Some(reason) = self.context.poll_cancellation() {
+            return Err(ModuleError::Cancelled(reason));
+        }
         if bytes.0.is_empty() || bytes.0.len() > MAX_SECRET_BYTES {
             return Err(ModuleError::invalid(
                 "EXECUTE008",

@@ -4,6 +4,7 @@ use std::env;
 use std::ffi::OsStr;
 use std::io::{self, IsTerminal, Write};
 use std::os::fd::AsFd;
+use std::os::unix::fs::MetadataExt as _;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
@@ -23,8 +24,9 @@ use opaal_cli::plan::inspect_source;
 use opaal_cli::project::{
     AuditRequest, CheckProjectRequest, ExecuteProjectRequest, InitProjectRequest,
     InspectProjectRequest, PlanProjectRequest, ProjectInputBinding, audit_explicit_journal,
-    check_explicit_project, doctor_project, execute_explicit_plan, init_project,
+    check_explicit_project, doctor_project, execute_explicit_plan, explain_task, init_project,
     inspect_audit_artifact, inspect_plan_artifact, inspect_project, plan_explicit_project,
+    run_accepted_task,
 };
 use opaal_cli::report::{HostExit, HostReport, write_report};
 use opaal_cli::{RawLineEditor, ReedlineEditor};
@@ -59,6 +61,8 @@ Usage:
   opaal project --help
   opaal task inspect --project opaal.toml TASK [--format json]
   opaal task list --project opaal.toml [--format json]
+  opaal task run --plan PATH --accept DIGEST --journal PATH --receipt-out PATH --audit-out PATH [--require-true]
+  opaal task explain --receipt PATH [--audit PATH] [--format text|json]
   opaal task --help
   opaal plan [--] SOURCE
   opaal plan --project opaal.toml --task TASK --environment ID [--input NAME=VALUE | --input-file NAME=PATH]... --expires-in SECONDSs --out PATH [--format digest]
@@ -121,11 +125,13 @@ parses lexical values without I/O; --input-file snapshots one regular file for
 a Path parameter.
 ";
 
-const TASK_HELP: &str = "Inspect typed tasks without executing them
+const TASK_HELP: &str = "Inspect tasks, run accepted plans and explain recorded outcomes
 
 Usage:
   opaal task inspect --project opaal.toml TASK [--format json]
   opaal task list --project opaal.toml [--format json]
+  opaal task run --help
+  opaal task explain --help
   opaal task --help
 
 The exact manifest path is required. Inspection reads only the explicit project
@@ -135,6 +141,39 @@ sorts tasks by qualified identity; an empty list succeeds. JSON uses the closed
 opaal.project-inspection.v1 schema, version 1, and ends with LF. Tools are
 manifest requirements, not observations of installed executables. Discovery never
 runs initializers or tools and never searches upward or reads account settings.
+";
+
+const TASK_RUN_HELP: &str = "Run one explicitly accepted task with complete evidence
+
+Usage:
+  opaal task run --plan PATH --accept DIGEST --journal PATH --receipt-out PATH --audit-out PATH [--run-id ID] [--secret-stdin ID] [--require-true]
+
+The exact saved plan and digest acceptance are required. No new plan or input
+override is inferred. Existing source, inputs, authority, tools, targets and
+expiry are revalidated before effects. All three evidence paths must be fresh,
+distinct project-contained files. Audit is reserved before effects; partial
+reservations remain on failure. Owned finish precedes one bounded journal audit.
+Program stdout is unchanged; the fixed safe administrative summary uses stderr.
+Successful execution, cleanup, journal, receipt, audit and summary are required
+for exit 0. --require-true selects Bool true/false as 0/1; other failures exit 2.
+Requested cancellation retains 130 despite later evidence failure; timeout is 2.
+Recover valid journal evidence with audit into a fresh path. Retry requires a
+new reviewed plan and fresh files; no task or stdin is replayed automatically.
+";
+
+const TASK_EXPLAIN_HELP: &str = "Explain explicit recorded task evidence without execution
+
+Usage:
+  opaal task explain --receipt PATH [--audit PATH] [--format text|json]
+
+Only bounded receipt/audit artifacts are read. Source, tools, journal and daemon
+are not reopened. Matching identities and known complete terminal outcomes are
+required. Missing audit or legacy unknown facts cannot prove a passed check.
+Complete audit alone does not mean the task passed. Text and closed JSON
+opaal.task-explanation.v1 contain fixed facts, safe codes and transfer counts;
+messages and payloads are omitted. A valid view exits 0 even for recorded failure;
+invalid, inconsistent or unwritable views exit 2. Recorded evidence does not
+authenticate its author or prove the original writer's fsync or command exit.
 ";
 
 const PROJECT_HELP: &str = "Prepare and diagnose an explicit image-check project
@@ -325,6 +364,94 @@ fn main() -> ExitCode {
             format_json,
         } => run_project_checker(project, task, environment, inputs, format_json),
         Mode::TaskHelp => emit_report(HostReport::success(TASK_HELP.as_bytes())),
+        Mode::TaskRunHelp => emit_project_report(HostReport::success(TASK_RUN_HELP.as_bytes())),
+        Mode::TaskExplainHelp => {
+            emit_project_report(HostReport::success(TASK_EXPLAIN_HELP.as_bytes()))
+        }
+        Mode::TaskRun { request, audit_out } => {
+            let Ok(signals) = opaal_platform_posix::standard_host::SignalLease::capture() else {
+                return emit_project_report(HostReport::failure(
+                    b"TASK004: task cancellation signal capture failed\n",
+                ));
+            };
+            let stdin = io::stdin();
+            let terminal = stdin.is_terminal();
+            let mut input = TaskStream::new(
+                stdin.as_fd(),
+                opaal_platform::standard_host::StandardStream::Stdin,
+                false,
+                signals.cancellation(),
+            );
+            let stderr = io::stderr();
+            let mut summary = TaskStream::new(
+                stderr.as_fd(),
+                opaal_platform::standard_host::StandardStream::Stderr,
+                stderr.is_terminal(),
+                signals.cancellation(),
+            );
+            ExitCode::from(
+                run_accepted_task(
+                    &request,
+                    &audit_out,
+                    terminal,
+                    &mut input,
+                    &mut summary,
+                    signals,
+                )
+                .exit_code,
+            )
+        }
+        Mode::TaskExplain {
+            receipt,
+            audit,
+            format_json,
+        } => {
+            let Ok(signals) = opaal_platform_posix::standard_host::SignalLease::capture() else {
+                return emit_project_report(HostReport::failure(
+                    b"TASK004: explanation signal capture failed\n",
+                ));
+            };
+            let cancelled = signals.cancellation();
+            let explanation = explain_task(&receipt, audit.as_deref(), format_json);
+            if cancelled() {
+                return ExitCode::from(130);
+            }
+            let stdout = io::stdout();
+            let stderr = io::stderr();
+            let mut output = TaskStream::new(
+                stdout.as_fd(),
+                opaal_platform::standard_host::StandardStream::Stdout,
+                stdout.is_terminal(),
+                signals.cancellation(),
+            );
+            let mut diagnostics = TaskStream::new(
+                stderr.as_fd(),
+                opaal_platform::standard_host::StandardStream::Stderr,
+                stderr.is_terminal(),
+                signals.cancellation(),
+            );
+            let exit = match explanation {
+                Ok(bytes) => {
+                    write_report(HostReport::success(&bytes), &mut output, &mut diagnostics)
+                }
+                Err(_) => write_report(
+                    HostReport::failure(
+                        b"TASK002: task evidence is invalid, unavailable or inconsistent\n",
+                    ),
+                    &mut output,
+                    &mut diagnostics,
+                ),
+            };
+            if cancelled() {
+                ExitCode::from(130)
+            } else {
+                ExitCode::from(if exit == HostExit::Failure {
+                    2
+                } else {
+                    exit.code()
+                })
+            }
+        }
         Mode::TaskInspect {
             project,
             task,
@@ -390,6 +517,129 @@ fn emit_report(report: HostReport<'_>) -> ExitCode {
     let mut output = io::stdout().lock();
     let mut diagnostics = io::stderr().lock();
     ExitCode::from(write_report(report, &mut output, &mut diagnostics).code())
+}
+
+struct TaskStream<'a> {
+    descriptor: std::os::fd::BorrowedFd<'a>,
+    stream: opaal_platform::standard_host::StandardStream,
+    terminal: bool,
+    null_sink: bool,
+    cancelled: Box<dyn Fn() -> bool + Send + Sync>,
+    started: std::time::Instant,
+    host: Option<opaal_platform_posix::standard_host::PosixStandardHost>,
+}
+
+impl<'a> TaskStream<'a> {
+    fn new(
+        descriptor: std::os::fd::BorrowedFd<'a>,
+        stream: opaal_platform::standard_host::StandardStream,
+        terminal: bool,
+        cancelled: Box<dyn Fn() -> bool + Send + Sync>,
+    ) -> Self {
+        let null_sink = descriptor
+            .try_clone_to_owned()
+            .and_then(|fd| std::fs::File::from(fd).metadata())
+            .is_ok_and(|status| {
+                std::fs::metadata("/dev/null")
+                    .is_ok_and(|null| status.dev() == null.dev() && status.ino() == null.ino())
+            });
+        Self {
+            descriptor,
+            stream,
+            terminal,
+            null_sink,
+            cancelled,
+            started: std::time::Instant::now(),
+            host: None,
+        }
+    }
+
+    fn prepare(&mut self) -> io::Result<()> {
+        let failure = |_| io::Error::other("task stream binding failed");
+        if self.host.is_none() {
+            self.started = std::time::Instant::now();
+            let mut host = opaal_platform_posix::standard_host::PosixStandardHost::for_cli(1)
+                .map_err(failure)?;
+            if self.terminal {
+                host.bind_terminal_stream(self.stream, self.descriptor)
+                    .map_err(failure)?;
+            } else {
+                host.bind_stream(self.stream, self.descriptor)
+                    .map_err(failure)?;
+            }
+            self.host = Some(host);
+        }
+        Ok(())
+    }
+}
+
+impl io::Read for TaskStream<'_> {
+    fn read(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
+        use opaal_platform::standard_host::StandardHost;
+        if bytes.is_empty() || self.null_sink {
+            return Ok(0);
+        }
+        self.prepare()?;
+        let cancelled = || {
+            (self.cancelled)()
+                || self.started.elapsed() >= opaal_runtime::operational::standard::OPERATION_TIMEOUT
+        };
+        let result = self
+            .host
+            .as_mut()
+            .expect("bound input host")
+            .read(bytes, &cancelled);
+        // Secret-input workers finish before the task continues or persists evidence.
+        let cleanup = self.flush();
+        match result {
+            Ok(count) => cleanup.map(|()| count),
+            Err(_) => Err(
+                if self.started.elapsed() >= opaal_runtime::operational::standard::OPERATION_TIMEOUT
+                {
+                    io::Error::new(io::ErrorKind::TimedOut, "task input timed out")
+                } else {
+                    io::Error::other("task input failed")
+                },
+            ),
+        }
+    }
+}
+
+impl Write for TaskStream<'_> {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        use opaal_platform::standard_host::StandardHost;
+        if bytes.is_empty() {
+            return Ok(0);
+        }
+        if self.null_sink {
+            return rustix::io::write(self.descriptor, bytes).map_err(Into::into);
+        }
+        self.prepare()?;
+        let cancelled = || {
+            (self.cancelled)()
+                || self.started.elapsed() >= opaal_runtime::operational::standard::OPERATION_TIMEOUT
+        };
+        self.host
+            .as_mut()
+            .expect("bound output host")
+            .write(
+                self.stream,
+                &bytes[..bytes
+                    .len()
+                    .min(opaal_platform::standard_host::MAX_STREAM_CHUNK_BYTES)],
+                &cancelled,
+            )
+            .map_err(|_| io::Error::other("task view output failed"))
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        use opaal_platform::standard_host::StandardHost;
+        if let Some(mut host) = self.host.take() {
+            host.close()
+                .map_err(|_| io::Error::other("task view output cleanup failed"))?;
+        }
+        Ok(())
+    }
 }
 
 fn emit_project_report(report: HostReport<'_>) -> ExitCode {

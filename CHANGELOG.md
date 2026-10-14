@@ -6,6 +6,11 @@ All notable changes to OPAAL are documented here.
 
 ### Added
 
+- Add accepted-plan task runs with exclusive journal, receipt and reserved audit
+  evidence, unchanged report stdout, safe stderr summaries and complete
+  execution/cleanup/evidence exit selection.
+- Add passive bounded text/JSON task explanation with correlated recorded
+  outcomes, conservative legacy/incomplete conclusions and payload-free codes.
 - Add fixed offline and explicitly qualified Linux live image-check project
   initialization with embedded assets, exclusive private files and retained
   partial setup on failure.
