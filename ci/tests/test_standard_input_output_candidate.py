@@ -7,11 +7,16 @@ import os
 import shutil
 import subprocess
 import sys
+import stat
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
 from pathlib import Path
 
 from ci.tests import test_data_processing_candidate as candidates
 from ci.package_standard_input_output import ROOT, check_copies
 from ci.qualify_standard_input_output import assessment
+from ci.qualify_standard_io_failures import worker_has_pipe
+from ci.qualify_data_processing import QualificationError
 
 
 class StdioFixtureIdentityTests(candidates.CandidateIdentityTests):
@@ -21,6 +26,43 @@ class StdioFixtureIdentityTests(candidates.CandidateIdentityTests):
 
 
 class CiReferenceTests(unittest.TestCase):
+    def test_linux_worker_pipe_requires_received_endpoint(self):
+        with patch("ci.qualify_standard_io_failures.platform.system", return_value="Linux"), \
+             patch("ci.qualify_standard_io_failures.Path") as path:
+            descriptors = path.return_value.iterdir
+            descriptors.return_value = [
+                SimpleNamespace(name="0", stat=lambda: SimpleNamespace(st_mode=stat.S_IFIFO)),
+                SimpleNamespace(name="8", stat=lambda: SimpleNamespace(st_mode=stat.S_IFSOCK)),
+            ]
+            self.assertFalse(worker_has_pipe(123))
+            descriptors.return_value.append(
+                SimpleNamespace(name="3", stat=lambda: SimpleNamespace(st_mode=stat.S_IFIFO)))
+            self.assertTrue(worker_has_pipe(123))
+            descriptors.side_effect = FileNotFoundError
+            self.assertFalse(worker_has_pipe(123))
+
+    def test_macos_worker_pipe_requires_received_endpoint(self):
+        def fd_table(pid, flavor, argument, storage, size):
+            self.assertEqual((pid, flavor, argument), (123, 1, 0))
+            storage[0], storage[1] = 8, 2
+            if received[0]:
+                storage[2], storage[3] = 3, 6
+                return 16
+            return 8
+
+        received = [False]
+        library = Mock()
+        library.proc_pidinfo.side_effect = fd_table
+        with patch("ci.qualify_standard_io_failures.platform.system", return_value="Darwin"), \
+             patch("ci.qualify_standard_io_failures.ctypes.CDLL", return_value=library):
+            self.assertFalse(worker_has_pipe(123))
+            received[0] = True
+            self.assertTrue(worker_has_pipe(123))
+            library.proc_pidinfo.side_effect = None
+            library.proc_pidinfo.return_value = 3
+            with self.assertRaisesRegex(QualificationError, "owned worker descriptors"):
+                worker_has_pipe(123)
+
     def test_native_driver_preserves_exit_precedence_and_exclusive_acquisition(self):
         for selected, audit, expected in [(0, 0, 0), (1, 0, 1), (2, 0, 2),
                                            (130, 0, 130), (0, 1, 2), (1, 1, 2), (130, 1, 130)]:

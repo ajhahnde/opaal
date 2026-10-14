@@ -4,6 +4,8 @@ All notable changes to OPAAL are documented here.
 
 ## [Unreleased]
 
+## [1.5.0]
+
 ### Added
 
 - Add named pure policy tests with static reachable-effect admission, fresh
@@ -19,6 +21,10 @@ All notable changes to OPAAL are documented here.
 - Add static project diagnosis with bounded safe text/JSON findings, shared
   task/input/authority checks and local identity observations. Diagnosis never
   executes a task or contacts Docker; live readiness remains unknown.
+
+### Fixed
+
+- Update the pinned TLS dependency to include upstream security fixes.
 
 ## [1.4.0]
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import ctypes
 import hashlib
 import json
 import os
@@ -12,6 +13,7 @@ import select
 import shutil
 import signal
 import socket
+import stat
 import subprocess
 import tempfile
 import threading
@@ -30,6 +32,32 @@ else:
     from qualify_random_failures import RUN_ID, children, reaped
 
 CANARY = b"native-stream-payload-canary"
+
+
+def worker_has_pipe(pid: int) -> bool:
+    if platform.system() == "Linux":
+        try:
+            descriptors = list(Path(f"/proc/{pid}/fd").iterdir())
+        except FileNotFoundError:
+            return False
+        for descriptor in descriptors:
+            try:
+                if int(descriptor.name) > 2 and stat.S_ISFIFO(descriptor.stat().st_mode):
+                    return True
+            except FileNotFoundError:
+                pass
+        return False
+    library = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True)
+    library.proc_pidinfo.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_uint64,
+                                    ctypes.c_void_p, ctypes.c_int]
+    library.proc_pidinfo.restype = ctypes.c_int
+    # Darwin proc_fdinfo is one int32 fd and one uint32 type; PIPE has type 6.
+    storage = (ctypes.c_uint32 * 32)()
+    count = library.proc_pidinfo(pid, 1, 0, storage, ctypes.sizeof(storage))
+    require(0 <= count < ctypes.sizeof(storage) and count % 8 == 0,
+            "could not inspect owned worker descriptors")
+    return any(storage[index] > 2 and storage[index + 1] == 6
+               for index in range(0, count // 4, 2))
 
 
 def stop(child: subprocess.Popen) -> None:
@@ -202,11 +230,12 @@ def qualify(binary: Path, output: Path) -> dict:
                         json.loads(rows[-1])["payload"]["effect"] == "stdin.read"
                     if owned and reading:
                         require(len(owned) == 1, "unexpected additional worker")
-                        worker = owned[0]
-                        break
+                        # Null worker stdio and the completed prior write leave only the lent read pipe.
+                        if worker_has_pipe(owned[0]):
+                            worker = owned[0]
+                            break
                     time.sleep(0.001)
                 require(worker is not None, "no owned worker during blocked read")
-                time.sleep(0.05)
                 os.kill(worker if kill_worker else child.pid, signal.SIGKILL if kill_worker else signal.SIGTERM)
                 require(child.wait(timeout=10) > 0, "interrupted command succeeded")
                 stdout, stderr = child.communicate(timeout=5)
