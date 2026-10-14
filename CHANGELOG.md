@@ -4,6 +4,8 @@ All notable changes to OPAAL are documented here.
 
 ## [Unreleased]
 
+## [1.5.0]
+
 ### Added
 
 - Add named pure policy tests with static reachable-effect admission, fresh
