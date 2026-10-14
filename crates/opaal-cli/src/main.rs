@@ -56,6 +56,8 @@ Usage:
   opaal check [--] SOURCE
   opaal check --project opaal.toml --task TASK --environment ID [--input NAME=VALUE | --input-file NAME=PATH]... [--format json]
   opaal check --help
+  opaal test [--list] SOURCE [--case NAME] [--format text|json]
+  opaal test --help
   opaal project init --example image-check --destination PATH --environment offline
   opaal project doctor --project opaal.toml --task TASK --environment ID [--input NAME=VALUE | --input-file NAME=PATH]... [--format text|json]
   opaal project --help
@@ -88,6 +90,31 @@ Options:
   -V, --version      Print version
 
 Every operand after SCRIPT belongs to the script, including option-like values.
+";
+
+const TEST_HELP: &str = "Run named pure OPAAL policy tests
+
+Usage:
+  opaal test [--list] [--case NAME] [--format text|json] [--] SOURCE
+  opaal test --help
+
+Only root exports named test_ are discovered, in name order. Each must resolve
+to a non-generic ordinary zero-argument Bool function. --case selects one exact
+export; signatures of the entire inventory are still validated. --list never
+initializes source. Running admits only statically proven pure initializers and
+reachable calls, then invokes each case in fresh canonical module scopes with
+the ordinary evaluator and no environment, process, I/O, random or other host.
+true passes; false and uncaught ordinary Error fail and allow later cases.
+Caught language resource Errors retain their ordinary semantics and counters.
+Uncaught resource Error, refusal, invalid return and infrastructure stop the
+suite, with remaining cases unrun. Limits: 128 cases, one million steps per
+case including initialization, ten million suite steps, depth 256, one million
+collection items, 16 MiB retained bytes per case, and a 64 KiB result view.
+JSON is the closed opaal.test-results.v1 view, version 1, followed by LF; safe
+codes and byte spans omit thrown messages and source snippets. Text uses fixed
+facts without terminal controls. Exit: all passed/listed 0, ordinary failure 1,
+invalid/refused/resource/infrastructure/output failure 2, requested cancel 130.
+No source rewrite, directory discovery, fixtures, retries or host grants occur.
 ";
 
 const CHECK_HELP: &str = "Analyze OPAAL source without executing it
@@ -349,6 +376,78 @@ fn main() -> ExitCode {
                     ))
                 }
                 Err(error) => emit_project_report(HostReport::failure(error.rendered().as_bytes())),
+            }
+        }
+        Mode::TestHelp => emit_project_report(HostReport::success(TEST_HELP.as_bytes())),
+        Mode::Test {
+            source,
+            list,
+            case,
+            format_json,
+        } => {
+            let Ok(signals) = opaal_platform_posix::standard_host::SignalLease::capture() else {
+                return emit_project_report(HostReport::failure(
+                    b"TEST_HOST: signal capture failed\n",
+                ));
+            };
+            let request = opaal_cli::test::TestRequest {
+                source,
+                list,
+                case,
+                format_json,
+            };
+            let cancellation = CancellationToken::from_fn(signals.cancellation());
+            let run = opaal_cli::test::run_tests(
+                &request,
+                &HostCheckFilesystem,
+                cancellation.clone(),
+                opaal_cli::test::TestLimits::default(),
+            );
+            let stdout = io::stdout();
+            let stderr = io::stderr();
+            let mut output = TaskStream::new(
+                stdout.as_fd(),
+                opaal_platform::standard_host::StandardStream::Stdout,
+                stdout.is_terminal(),
+                signals.cancellation(),
+            );
+            let mut diagnostics = TaskStream::new(
+                stderr.as_fd(),
+                opaal_platform::standard_host::StandardStream::Stderr,
+                stderr.is_terminal(),
+                signals.cancellation(),
+            );
+            let exit = match run {
+                Ok(run) => {
+                    let status =
+                        Status::exit(i64::from(run.exit_code), opaal_runtime::Duration::ZERO)
+                            .expect("test exit code");
+                    write_report(
+                        HostReport::completed_with_diagnostic(&status, &run.output, b""),
+                        &mut output,
+                        &mut diagnostics,
+                    )
+                }
+                Err(_) => write_report(
+                    HostReport::failure(b"TEST_RESOURCE: result view limit exceeded\n"),
+                    &mut output,
+                    &mut diagnostics,
+                ),
+            };
+            if cancellation.is_cancelled() {
+                ExitCode::from(
+                    if cancellation.reason() == opaal_runtime::eval::CancelReason::Requested {
+                        130
+                    } else {
+                        2
+                    },
+                )
+            } else {
+                ExitCode::from(if exit == HostExit::Failure {
+                    2
+                } else {
+                    exit.code()
+                })
             }
         }
         Mode::CheckHelp => emit_report(HostReport::success(CHECK_HELP.as_bytes())),

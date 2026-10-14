@@ -53,6 +53,26 @@ target/debug/opaal examples/language-foundation.opaal
 Pure non-interactive evaluation does not print its final value. Examples must not depend on authority that
 the pure foundation does not grant.
 
+## Pure policy tests
+
+Export ordinary non-generic zero-argument Bool functions whose names start with
+`test_`. List their signatures without initialization, or run them sequentially
+in fresh module contexts:
+
+```sh
+target/debug/opaal test --list examples/image-check/policy-tests.opaal --format json
+target/debug/opaal test examples/image-check/policy-tests.opaal
+target/debug/opaal test examples/image-check/policy-tests.opaal --case test_negative_revision
+```
+
+Source checking and formatting use the ordinary language rules. Test admission
+also requires proven-pure initializers and reachable calls; unresolved dynamic
+calls refuse. Tests have no environment snapshot, process, filesystem, I/O or
+random grant. A false Bool or uncaught ordinary Error fails a case and continues;
+uncaught resource errors, refusal and infrastructure stop the suite. Caught
+language Errors retain their existing semantics and consumed counters.
+`opaal test --help` owns signature, view, budget and exit details.
+
 ## Source formatting
 
 Use one canonical style for named functions and actions: the signature precedes

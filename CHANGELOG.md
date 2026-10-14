@@ -6,6 +6,8 @@ All notable changes to OPAAL are documented here.
 
 ### Added
 
+- Add named pure policy tests with static reachable-effect admission, fresh
+  ordinary module contexts, finite case/suite budgets and safe text/JSON results.
 - Add accepted-plan task runs with exclusive journal, receipt and reserved audit
   evidence, unchanged report stdout, safe stderr summaries and complete
   execution/cleanup/evidence exit selection.

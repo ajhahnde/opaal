@@ -1,0 +1,107 @@
+import std::data as data
+import std::docker as docker
+import std::record as record
+import std::string as string
+import './policy.opaal' as policy
+export { test_pass, test_negative_id, test_negative_platform, test_negative_revision, test_missing_revision, test_empty_revision, test_empty_expectation, test_invalid_decoder, test_unsupported_descriptor, test_json_roundtrip }
+
+def saved_image() -> Record
+{
+    return ({
+        Id: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        Os: "linux",
+        Architecture: "amd64",
+        Variant: "",
+        Config: { Labels: { "org.opencontainers.image.revision": "abc123" } },
+        RepoDigests: [],
+        Descriptor: {
+            mediaType: "application/vnd.oci.image.manifest.v1+json",
+            digest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        },
+    })
+}
+
+def test_pass() -> Bool
+{
+    let image = docker::decode_image(saved_image())
+    let result = policy::assess(image, image.id, "linux/amd64", "abc123")
+    return (result.passed && result.checks[0].passed && result.checks[1].passed && result.checks[2].passed)
+}
+
+def test_negative_id() -> Bool
+{
+    let image = docker::decode_image(saved_image())
+    let result = policy::assess(image, "wrong", "linux/amd64", "abc123")
+    return (!result.passed && !result.checks[0].passed && result.checks[0].actual == image.id && result.checks[0].expected == "wrong")
+}
+
+def test_negative_platform() -> Bool
+{
+    let image = docker::decode_image(saved_image())
+    let result = policy::assess(image, image.id, "wrong", "abc123")
+    return (!result.passed && !result.checks[1].passed && result.checks[1].actual == "linux/amd64" && result.checks[1].expected == "wrong")
+}
+
+def test_negative_revision() -> Bool
+{
+    let image = docker::decode_image(saved_image())
+    let result = policy::assess(image, image.id, "linux/amd64", "wrong")
+    return (!result.passed && !result.checks[2].passed && result.checks[2].actual == "abc123" && result.checks[2].expected == "wrong" && !result.checks[2].missing)
+}
+
+def test_missing_revision() -> Bool
+{
+    let document = record::set(saved_image(), "Config", { Labels: {} })
+    let image = docker::decode_image(document)
+    let result = policy::assess(image, image.id, "linux/amd64", "abc123")
+    return (!result.passed && !result.checks[2].passed && result.checks[2].missing && result.checks[2].actual == "")
+}
+
+def test_empty_revision() -> Bool
+{
+    let document = record::set(saved_image(), "Config", { Labels: { "org.opencontainers.image.revision": "" } })
+    let image = docker::decode_image(document)
+    let result = policy::assess(image, image.id, "linux/amd64", "abc123")
+    return (!result.passed && !result.checks[2].passed && !result.checks[2].missing && result.checks[2].actual == "")
+}
+
+def test_empty_expectation() -> Bool
+{
+    let image = docker::decode_image(saved_image())
+    try {
+        let result = policy::assess(image, image.id, "linux/amd64", "")
+    } catch error {
+        return (error.category == "user" && error.message == "delivery expectations must be nonempty")
+    }
+    return false
+}
+
+def test_invalid_decoder() -> Bool
+{
+    try {
+        let decoded = docker::decode_image({})
+    } catch error {
+        return (error.category == "user" && string::contains(error.message, "DOCKER001"))
+    }
+    return false
+}
+
+def test_unsupported_descriptor() -> Bool
+{
+    let descriptor = record::set(saved_image().Descriptor, "mediaType", "application/vnd.oci.image.index.v1+json")
+    let document = record::set(saved_image(), "Descriptor", descriptor)
+    try {
+        let decoded = docker::decode_image(document)
+    } catch error {
+        return (error.category == "user" && string::contains(error.message, "Descriptor requires a supported single manifest"))
+    }
+    return false
+}
+
+def test_json_roundtrip() -> Bool
+{
+    let decoded = data::json_decode(data::json_encode(saved_image()))
+    let image = docker::decode_image(decoded)
+    let result = policy::assess(image, image.id, "linux/amd64", "abc123")
+    return (result.passed && result.checks[2].actual == "abc123" && !result.checks[2].missing)
+}

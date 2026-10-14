@@ -35,6 +35,13 @@ pub enum Mode {
         format_json: bool,
     },
     CheckHelp,
+    TestHelp,
+    Test {
+        source: PathBuf,
+        list: bool,
+        case: Option<String>,
+        format_json: bool,
+    },
     Check {
         source: PathBuf,
         format_json: bool,
@@ -190,6 +197,7 @@ where
             });
         }
         Some("check") => return parse_check_args(arguments.into_iter().skip(1)),
+        Some("test") => return parse_test_args(&arguments[1..]),
         Some("project") => return parse_project_args(&arguments[1..]),
         Some("task") => return parse_task_args(arguments.into_iter().skip(1)),
         Some("plan") => return parse_plan_args(arguments.into_iter().skip(1)),
@@ -221,6 +229,58 @@ where
         .collect::<Result<Vec<_>, _>>()?;
     Ok(Invocation {
         mode: Mode::Script { path, arguments },
+    })
+}
+
+fn parse_test_args(arguments: &[OsString]) -> Result<Invocation, CliError> {
+    if matches!(arguments, [arg] if arg == "--help" || arg == "-h") {
+        return Ok(Invocation {
+            mode: Mode::TestHelp,
+        });
+    }
+    let invalid = || {
+        CliError::InvalidCheckArgument(
+            "test requires one source and optional --list, --case NAME, --format text|json"
+                .to_owned(),
+        )
+    };
+    let mut source = None;
+    let mut list = false;
+    let mut case = None;
+    let mut format = None;
+    let mut options = true;
+    let mut iter = arguments.iter();
+    while let Some(arg) = iter.next() {
+        match arg.to_str().filter(|_| options) {
+            Some("--") => options = false,
+            Some("--list") if !list => list = true,
+            Some("--case") if case.is_none() => {
+                let name = iter
+                    .next()
+                    .and_then(|value| value.to_str())
+                    .filter(|name| !name.is_empty() && !name.starts_with('-'))
+                    .ok_or_else(invalid)?;
+                case = Some(name.to_owned());
+            }
+            Some("--format") if format.is_none() => {
+                format = Some(match iter.next().and_then(|value| value.to_str()) {
+                    Some("json") => true,
+                    Some("text") => false,
+                    _ => return Err(invalid()),
+                });
+            }
+            Some(text) if text.starts_with('-') => return Err(invalid()),
+            _ if source.is_none() && arg != "-" => source = Some(PathBuf::from(arg)),
+            _ => return Err(invalid()),
+        }
+    }
+    Ok(Invocation {
+        mode: Mode::Test {
+            source: source.ok_or_else(invalid)?,
+            list,
+            case,
+            format_json: format.unwrap_or(false),
+        },
     })
 }
 

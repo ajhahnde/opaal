@@ -12,6 +12,7 @@ macro_rules! asset {
 const ASSETS: &[(&str, &[u8])] = &[
     asset!("README.md"),
     asset!("policy.opaal"),
+    asset!("policy-tests.opaal"),
     asset!("source.opaal"),
     asset!("saved-tasks.opaal"),
     asset!("tasks.opaal"),

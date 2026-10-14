@@ -34,6 +34,50 @@ unknown, and input values, source snippets and tool bytes are omitted. Every ci
 view reports live_readiness=unknown. Views are bounded to128 findings and64KiB;
 consumers must validate the complete view and exit, and reject unknown schemas.
 
+Check and test the actual shared policy before reviewing a new execution plan:
+
+```sh
+opaal check policy-tests.opaal
+opaal format --check policy.opaal saved-tasks.opaal policy-tests.opaal
+opaal test --list policy-tests.opaal --format json
+opaal test policy-tests.opaal
+opaal test policy-tests.opaal --case test_negative_revision --format json
+```
+
+Cases are ordinary exported non-generic zero-argument Bool functions named
+`test_`; imported modules are dependencies, not additional test inventories.
+`--list` checks the complete root inventory without initializing it. `--case`
+selects one exact exported name while validating every discovered signature.
+Tests admit only proven-pure reachable calls and initializers, then initialize
+fresh module contexts and invoke each ordinary function with no environment
+snapshot or host bindings. Unused effectful definitions may remain; reachable
+effects or unresolved dynamic calls refuse before the first case runs.
+
+true passes, false fails, and an uncaught ordinary Error fails with no message
+or payload in the result. These failures continue in name order. Ordinary
+try/catch can assert an expected Error; resource catches retain consumed counters.
+Uncaught resource Errors, invalid returns, refusal and infrastructure stop the
+suite and retain remaining cases as unrun. Exit is0 for all passed/listed,
+1 for a completed suite with ordinary failures, 2 for invalid/refused/resource/
+infrastructure/output failure, and130 for requested cancellation.
+
+The closed `opaal.test-results.v1` JSON schema_version1 ends with LF. Root keys
+are schema, schema_version, source, mode, selected, completeness, cases, counts
+and failure. Each case has name, callable_id (native module path and declared
+function name), state and a nullable diagnostic. Diagnostics expose only fixed
+code/kind and nullable native source/UTF8 byte span, with exclusive end. Counts
+are discovered, selected, passed, failed, error and unrun. Listing uses state
+listed and zero execution counts. Consumers must reject duplicate/extra fields,
+unknown versions and incomplete output. Text renders the same fixed facts.
+Limits are128 cases, one million steps per case including initialization,
+ten million suite steps, depth256, one million collection items and16MiB retained
+bytes per case, and64KiB output. Contexts are released between sequential cases.
+
+To verify that cases observe the real policy, change `revision_ok` in
+`policy.opaal` to `true`. `test_negative_revision` must fail with exit1. Restore
+the original expression, check and format the source, and verify all cases pass.
+Changed source invalidates existing plans; create and review a fresh plan.
+
 Run the check with explicit expectations and exclusive evidence paths:
 
 ```sh
