@@ -1543,8 +1543,8 @@
     },
     {
       "path": "ci/qualify_standard_io_failures.py",
-      "sha256": "752b51f81cb65f0b0d8a971e5a2f02be199bc93743190eec6eb0a9ef0112fd6c",
-      "source_markers": 17,
+      "sha256": "d417168cb5cfc7821ae11de00828d43947c378c184971309bfd260e35adcd3a5",
+      "source_markers": 18,
       "constructors_or_assertions": [
         "apply",
         "execute",
@@ -1558,7 +1558,8 @@
         "serve",
         "stop",
         "task_arguments",
-        "task_observation"
+        "task_observation",
+        "worker_has_pipe"
       ],
       "role": "positive-generator",
       "reason": "Generates controlled standard-stream projects for real transfers, interruption, exact reap and bounded journal persistence failures.",
@@ -1788,9 +1789,12 @@
     },
     {
       "path": "ci/tests/test_standard_input_output_candidate.py",
-      "sha256": "a678ab65801bb4e60725e88cda19857293eb8988c2484d42ed59dec994d23f15",
-      "source_markers": 5,
+      "sha256": "fa58836fc8fa6a9267c248e59783ec9118edf27f40a0264248fd524e15585fb4",
+      "source_markers": 8,
       "constructors_or_assertions": [
+        "fd_table",
+        "test_linux_worker_pipe_requires_received_endpoint",
+        "test_macos_worker_pipe_requires_received_endpoint",
         "test_native_driver_preserves_exit_precedence_and_exclusive_acquisition",
         "test_policy_only_passes_without_failed_or_pending_jobs",
         "test_report_core_copy_must_match_maintained_owner"
