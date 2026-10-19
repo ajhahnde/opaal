@@ -19,7 +19,7 @@ impl Image {
         {
             let file = File::open("/proc/self/exe").map_err(io_error)?;
             verify_elf(&file, true)?;
-            verify_linux_libraries(&file)?;
+            verify_linux_libraries()?;
             Ok(Self { file })
         }
         #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
@@ -252,8 +252,7 @@ fn verify_elf(file: &File, executable: bool) -> Result<(), OperationalError> {
 }
 
 #[cfg(target_os = "linux")]
-fn verify_linux_libraries(image: &File) -> Result<(), OperationalError> {
-    use std::os::unix::fs::MetadataExt;
+fn verify_linux_libraries() -> Result<(), OperationalError> {
     let mut maps = String::new();
     File::open("/proc/self/maps")
         .map_err(io_error)?
@@ -263,12 +262,7 @@ fn verify_linux_libraries(image: &File) -> Result<(), OperationalError> {
     if maps.len() > 65536 {
         return Err(unsupported());
     }
-    let identity = image.metadata().map_err(io_error)?;
-    let paths = mapped_libraries(
-        &maps,
-        (libc::major(identity.dev()), libc::minor(identity.dev())),
-        identity.ino(),
-    )?;
+    let paths = mapped_libraries(&maps, native::running_elf_entry())?;
     for path in paths {
         let path = path.canonicalize().map_err(io_error)?;
         if !["/usr/lib", "/usr/lib64", "/lib", "/lib64"]
@@ -393,13 +387,21 @@ fn system_elf_library(name: &str) -> bool {
 #[cfg(any(target_os = "linux", test))]
 fn mapped_libraries(
     maps: &str,
-    image_device: (u32, u32),
-    image_inode: u64,
+    image_entry: usize,
 ) -> Result<std::collections::BTreeSet<PathBuf>, OperationalError> {
-    let mut paths = std::collections::BTreeSet::new();
+    let mut image_identity = None;
+    let mut mappings = Vec::new();
     for line in maps.lines() {
         let mut fields = line.split_whitespace();
-        let _range = fields.next().ok_or_else(unsupported)?;
+        let (start, end) = fields
+            .next()
+            .and_then(|range| range.split_once('-'))
+            .ok_or_else(unsupported)?;
+        let start = usize::from_str_radix(start, 16).map_err(|_| unsupported())?;
+        let end = usize::from_str_radix(end, 16).map_err(|_| unsupported())?;
+        if start >= end {
+            return Err(unsupported());
+        }
         let permissions = fields.next().ok_or_else(unsupported)?;
         let _offset = fields.next().ok_or_else(unsupported)?;
         let (major, minor) = fields
@@ -415,7 +417,23 @@ fn mapped_libraries(
             .ok_or_else(unsupported)?
             .parse()
             .map_err(|_| unsupported())?;
-        if !permissions.contains('x') || (device == image_device && inode == image_inode) {
+        if (start..end).contains(&image_entry) {
+            if image_entry == 0 || !permissions.contains('x') || inode == 0 || device == (0, 0) {
+                return Err(unsupported());
+            }
+            if image_identity.replace((device, inode)).is_some() {
+                return Err(unsupported());
+            }
+        }
+        if permissions.contains('x') {
+            mappings.push((device, inode, fields));
+        }
+    }
+    // Overlay stat identities can differ from maps; compare within maps only.
+    let image_identity = image_identity.ok_or_else(unsupported)?;
+    let mut paths = std::collections::BTreeSet::new();
+    for (device, inode, mut fields) in mappings {
+        if (device, inode) == image_identity {
             continue;
         }
         let path = fields.next().ok_or_else(unsupported)?;
@@ -537,7 +555,7 @@ mod tests {
                     400-500 r--p 0 00:01 19 /tmp/data\n\
                     500-600 r-xp 0 00:00 0 [vdso]\n";
         assert_eq!(
-            mapped_libraries(maps, (0, 1), 17).unwrap(),
+            mapped_libraries(maps, 0x100).unwrap(),
             [
                 PathBuf::from("/tmp/injected"),
                 PathBuf::from("/usr/lib/libc.so.6")
@@ -545,12 +563,44 @@ mod tests {
             .into()
         );
         assert!(
-            mapped_libraries("100-200 r-xp 0 00:01 18 /tmp/deleted (deleted)", (0, 1), 17).is_err()
+            mapped_libraries(
+                &format!("{maps}600-700 r-xp 0 00:01 18 /tmp/deleted (deleted)"),
+                0x100
+            )
+            .is_err()
         );
-        assert!(mapped_libraries("100-200 r-xp 0 00:00 0", (0, 1), 17).is_err());
+        assert!(mapped_libraries(&format!("{maps}600-700 r-xp 0 00:00 0"), 0x100).is_err());
         assert!(!system_elf_library("libc.extra.so"));
         assert!(!system_elf_library("/tmp/libc.so.6"));
         assert!(system_elf_library("libc.so.6"));
+    }
+
+    #[test]
+    fn main_mapping_identity_comes_from_entry_and_keeps_other_devices_and_inodes() {
+        let maps = "100-200 r-xp 0 00:22 17 /var/tmp/opaal (deleted)\n\
+                    200-300 r-xp 100 00:22 17 /var/tmp/opaal (deleted)\n\
+                    300-400 r-xp 0 00:24 17 /tmp/same-inode\n\
+                    400-500 r-xp 0 00:22 18 /tmp/same-device\n\
+                    500-600 r-xp 0 00:02 19 /usr/lib/libc.so.6\n";
+        assert_eq!(
+            mapped_libraries(maps, 0x1ff).unwrap(),
+            ["/tmp/same-inode", "/tmp/same-device", "/usr/lib/libc.so.6"]
+                .map(PathBuf::from)
+                .into()
+        );
+        for entry in [0, 0xff, 0x600] {
+            assert!(mapped_libraries(maps, entry).is_err());
+        }
+        for bad_main in [
+            "100-200 r--p 0 00:22 17 /var/tmp/opaal",
+            "100-200 r-xp 0 00:22 0 /var/tmp/opaal",
+            "100-200 r-xp 0 00:00 17 /var/tmp/opaal",
+            "100-100 r-xp 0 00:22 17 /var/tmp/opaal",
+            "bad-200 r-xp 0 00:22 17 /var/tmp/opaal",
+        ] {
+            assert!(mapped_libraries(bad_main, 0x100).is_err());
+        }
+        assert!(mapped_libraries(&format!("{maps}{maps}"), 0x100).is_err());
     }
 
     #[test]

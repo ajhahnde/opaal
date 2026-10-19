@@ -97,6 +97,95 @@ version = "2.50.0"
 digest = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
 "#;
 
+fn native_documents() -> (String, String) {
+    (
+        MANIFEST.replace(
+            "adapter = \"git\"\nversion = \">=2.39.0,<3.0.0\"",
+            "adapter = \"native\"",
+        ),
+        LOCK.replace("adapter = \"git\"", "adapter = \"native\"")
+            .replace("version = \"2.50.0\"\n", ""),
+    )
+}
+
+#[test]
+fn native_tool_has_the_same_identity_without_a_version_claim() {
+    use opaal_runtime::project::ToolContract;
+
+    let (manifest_text, lock_text) = native_documents();
+    let manifest =
+        parse_project_manifest(Path::new("/project/opaal.toml"), manifest_text.as_bytes()).unwrap();
+    let lock = parse_tool_lock(&manifest, "ci", lock_text.as_bytes()).unwrap();
+    let declaration = &manifest.tools()["git"];
+    let locked = &lock.tools()["git"];
+    assert_eq!(declaration.id().qualified_name(), "demo::tool::git");
+    assert_eq!(declaration.contract(), &ToolContract::Native);
+    assert_eq!(locked.contract(), &ToolContract::Native);
+    assert_eq!(locked.contract().adapter_name(), "native");
+    assert_eq!(locked.contract().version(), None);
+    assert_eq!(locked.path().bytes(), b"/usr/bin/git");
+    assert_eq!(locked.digest().len(), 71);
+
+    for key in ["version = '1.0.0'", "probe = '--version'", "unknown = true"] {
+        let invalid_manifest = manifest_text.replace(
+            "adapter = \"native\"",
+            &format!("adapter = 'native'\n{key}"),
+        );
+        assert!(
+            parse_project_manifest(
+                Path::new("/project/opaal.toml"),
+                invalid_manifest.as_bytes()
+            )
+            .is_err()
+        );
+        let invalid_lock = lock_text.replace(
+            "adapter = \"native\"",
+            &format!("adapter = 'native'\n{key}"),
+        );
+        assert!(parse_tool_lock(&manifest, "ci", invalid_lock.as_bytes()).is_err());
+    }
+    let duplicate = lock_text.split("[[tools]]").nth(1).unwrap();
+    assert_eq!(
+        parse_tool_lock(
+            &manifest,
+            "ci",
+            format!("{lock_text}\n[[tools]]{duplicate}").as_bytes()
+        )
+        .unwrap_err()
+        .code(),
+        "LOCK014"
+    );
+    assert_eq!(
+        parse_tool_lock(&manifest, "ci", LOCK.as_bytes())
+            .unwrap_err()
+            .code(),
+        "LOCK010"
+    );
+}
+
+#[test]
+fn native_only_environment_can_be_empty_but_mixed_maintained_tools_keep_requirements() {
+    use opaal_runtime::operational::process::child_environment;
+
+    let (manifest_text, lock_text) = native_documents();
+    let manifest =
+        parse_project_manifest(Path::new("/project/opaal.toml"), manifest_text.as_bytes()).unwrap();
+    let empty_lock = lock_text.replace("[[child_environment.variables]]\nname = \"PATH\"\nvalue = { encoding = \"base64url-nopad\", platform = \"unix\", value = \"L2Jpbg\" }\n", "");
+    let lock = parse_tool_lock(&manifest, "ci", empty_lock.as_bytes()).unwrap();
+    assert!(child_environment(&lock).unwrap().is_empty());
+    let mixed_manifest =
+        format!("{manifest_text}\n[tools.cargo]\nadapter = 'cargo'\nversion = '>=1.0.0,<2.0.0'\n");
+    let mixed_manifest =
+        parse_project_manifest(Path::new("/project/opaal.toml"), mixed_manifest.as_bytes())
+            .unwrap();
+    let mixed_lock = format!(
+        "{empty_lock}\n[[tools]]\nid = 'cargo'\nadapter = 'cargo'\nversion = '1.90.0'\npath = {{ encoding = 'base64url-nopad', platform = 'unix', value = 'L2Jpbi9jYXJnbw' }}\ndigest = 'sha256:{}'\n",
+        "0".repeat(64)
+    );
+    let lock = parse_tool_lock(&mixed_manifest, "ci", mixed_lock.as_bytes()).unwrap();
+    assert_eq!(child_environment(&lock).unwrap_err().code(), "PROCESS002");
+}
+
 #[test]
 fn tool_lock_reader_uses_only_the_selected_environment_path() {
     let manifest =

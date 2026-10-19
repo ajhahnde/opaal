@@ -20,6 +20,11 @@ pub enum Mode {
     Help,
     Version,
     ProjectHelp,
+    RepositoryInit {
+        destination: PathBuf,
+        environment: String,
+        tool: Option<PathBuf>,
+    },
     ProjectInit {
         destination: PathBuf,
         environment: String,
@@ -423,6 +428,7 @@ fn parse_project_args(arguments: &[OsString]) -> Result<Invocation, CliError> {
     let mut destination = None;
     let mut environment = None;
     let mut docker = None;
+    let mut tool = None;
     let mut socket = None;
     let mut qualified_version = None;
     let mut index = 1;
@@ -438,6 +444,7 @@ fn parse_project_args(arguments: &[OsString]) -> Result<Invocation, CliError> {
                 set_text_option(&mut environment, "--environment", arguments, &mut index)?
             }
             Some("--docker") => set_path_option(&mut docker, "--docker", arguments, &mut index)?,
+            Some("--tool") => set_path_option(&mut tool, "--tool", arguments, &mut index)?,
             Some("--socket") => set_path_option(&mut socket, "--socket", arguments, &mut index)?,
             Some("--qualified-version") => set_text_option(
                 &mut qualified_version,
@@ -454,7 +461,28 @@ fn parse_project_args(arguments: &[OsString]) -> Result<Invocation, CliError> {
     }
     let example = required_option(example, "--example")?;
     let environment = required_option(environment, "--environment")?;
+    if example == "repository-check" {
+        if !matches!(environment.as_str(), "offline" | "ci")
+            || docker.is_some()
+            || socket.is_some()
+            || qualified_version.is_some()
+            || (environment == "offline" && tool.is_some())
+            || (environment == "ci" && !tool.as_ref().is_some_and(|path| path.is_absolute()))
+        {
+            return Err(CliError::InvalidProjectArgument(
+                "repository-check requires offline, or ci with an absolute --tool path".to_owned(),
+            ));
+        }
+        return Ok(Invocation {
+            mode: Mode::RepositoryInit {
+                destination: required_option(destination, "--destination")?,
+                environment,
+                tool,
+            },
+        });
+    }
     if example != "image-check"
+        || tool.is_some()
         || !matches!(environment.as_str(), "offline" | "ci")
         || (environment == "offline"
             && (docker.is_some() || socket.is_some() || qualified_version.is_some()))

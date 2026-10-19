@@ -1,0 +1,558 @@
+{
+  "schema_version": 1,
+  "cases": [
+    {
+      "name": "clean",
+      "saved": "{\"code\":0,\"findings\":{\"comments\":[]},\"manifest\":{\"repository\":{\"license\":\"MIT\",\"private\":false}}}",
+      "code": 0,
+      "stdout": "{\"comments\":[]}",
+      "manifest": "[repository]\nlicense = \"MIT\"\nprivate = false\n",
+      "outcome": "report",
+      "report": "{\"findings\":0,\"manifest_ok\":true,\"passed\":true}"
+    },
+    {
+      "name": "findings",
+      "saved": "{\"code\":1,\"findings\":{\"comments\":[{\"code\":2086,\"level\":\"info\"}]},\"manifest\":{\"repository\":{\"license\":\"MIT\",\"private\":false}}}",
+      "code": 1,
+      "stdout": "{\"comments\":[{\"code\":2086,\"level\":\"info\"}]}",
+      "manifest": "[repository]\nlicense = \"MIT\"\nprivate = false\n",
+      "outcome": "report",
+      "report": "{\"findings\":1,\"manifest_ok\":true,\"passed\":false}"
+    },
+    {
+      "name": "negative-manifest",
+      "saved": "{\"code\":0,\"findings\":{\"comments\":[]},\"manifest\":{\"repository\":{\"license\":\"\",\"private\":true}}}",
+      "code": 0,
+      "stdout": "{\"comments\":[]}",
+      "manifest": "[repository]\nlicense = \"\"\nprivate = true\n",
+      "outcome": "report",
+      "report": "{\"findings\":0,\"manifest_ok\":false,\"passed\":false}"
+    },
+    {
+      "name": "apache-license",
+      "saved": "{\"code\":0,\"findings\":{\"comments\":[]},\"manifest\":{\"repository\":{\"license\":\"Apache-2.0\",\"private\":false}}}",
+      "code": 0,
+      "stdout": "{\"comments\":[]}",
+      "manifest": "[repository]\nlicense = \"Apache-2.0\"\nprivate = false\n",
+      "outcome": "report",
+      "report": "{\"findings\":0,\"manifest_ok\":false,\"passed\":false}"
+    },
+    {
+      "name": "private-repository",
+      "saved": "{\"code\":0,\"findings\":{\"comments\":[]},\"manifest\":{\"repository\":{\"license\":\"MIT\",\"private\":true}}}",
+      "code": 0,
+      "stdout": "{\"comments\":[]}",
+      "manifest": "[repository]\nlicense = \"MIT\"\nprivate = true\n",
+      "outcome": "report",
+      "report": "{\"findings\":0,\"manifest_ok\":false,\"passed\":false}"
+    },
+    {
+      "name": "tool-2",
+      "saved": "{\"code\":2,\"findings\":{\"comments\":[]},\"manifest\":{\"repository\":{\"license\":\"MIT\",\"private\":false}}}",
+      "code": 2,
+      "stdout": "{\"comments\":[]}",
+      "manifest": "[repository]\nlicense = \"MIT\"\nprivate = false\n",
+      "outcome": "acquisition",
+      "report": ""
+    },
+    {
+      "name": "tool-3",
+      "saved": "{\"code\":3,\"findings\":{\"comments\":[]},\"manifest\":{\"repository\":{\"license\":\"MIT\",\"private\":false}}}",
+      "code": 3,
+      "stdout": "{\"comments\":[]}",
+      "manifest": "[repository]\nlicense = \"MIT\"\nprivate = false\n",
+      "outcome": "acquisition",
+      "report": ""
+    },
+    {
+      "name": "tool-4",
+      "saved": "{\"code\":4,\"findings\":{\"comments\":[]},\"manifest\":{\"repository\":{\"license\":\"MIT\",\"private\":false}}}",
+      "code": 4,
+      "stdout": "{\"comments\":[]}",
+      "manifest": "[repository]\nlicense = \"MIT\"\nprivate = false\n",
+      "outcome": "acquisition",
+      "report": ""
+    },
+    {
+      "name": "tool-7",
+      "saved": "{\"code\":7,\"findings\":{\"comments\":[]},\"manifest\":{\"repository\":{\"license\":\"MIT\",\"private\":false}}}",
+      "code": 7,
+      "stdout": "{\"comments\":[]}",
+      "manifest": "[repository]\nlicense = \"MIT\"\nprivate = false\n",
+      "outcome": "acquisition",
+      "report": ""
+    },
+    {
+      "name": "tool-signal",
+      "saved": "{\"code\":-15,\"findings\":{\"comments\":[]},\"manifest\":{\"repository\":{\"license\":\"MIT\",\"private\":false}}}",
+      "code": -15,
+      "stdout": "{\"comments\":[]}",
+      "manifest": "[repository]\nlicense = \"MIT\"\nprivate = false\n",
+      "outcome": "acquisition",
+      "report": ""
+    },
+    {
+      "name": "invalid-json",
+      "saved": "{",
+      "code": 0,
+      "stdout": "{",
+      "manifest": "[repository]\nlicense = \"MIT\"\nprivate = false\n",
+      "outcome": "output",
+      "report": ""
+    },
+    {
+      "name": "duplicate-json",
+      "saved": "{\"comments\":[],\"comments\":[]}",
+      "code": 0,
+      "stdout": "{\"comments\":[],\"comments\":[]}",
+      "manifest": "[repository]\nlicense = \"MIT\"\nprivate = false\n",
+      "outcome": "output",
+      "report": ""
+    },
+    {
+      "name": "multiple-json",
+      "saved": "{}{}",
+      "code": 0,
+      "stdout": "{}{}",
+      "manifest": "[repository]\nlicense = \"MIT\"\nprivate = false\n",
+      "outcome": "output",
+      "report": ""
+    },
+    {
+      "name": "invalid-utf8",
+      "saved": null,
+      "code": 0,
+      "manifest": "[repository]\nlicense = \"MIT\"\nprivate = false\n",
+      "outcome": "output",
+      "report": "",
+      "stdout_hex": "ff",
+      "saved_hex": "ff"
+    },
+    {
+      "name": "root-list",
+      "saved": "{\"code\":0,\"findings\":[],\"manifest\":{\"repository\":{\"license\":\"MIT\",\"private\":false}}}",
+      "code": 0,
+      "stdout": "[]",
+      "manifest": "[repository]\nlicense = \"MIT\"\nprivate = false\n",
+      "outcome": "policy",
+      "report": ""
+    },
+    {
+      "name": "root-null",
+      "saved": "{\"code\":0,\"findings\":null,\"manifest\":{\"repository\":{\"license\":\"MIT\",\"private\":false}}}",
+      "code": 0,
+      "stdout": "null",
+      "manifest": "[repository]\nlicense = \"MIT\"\nprivate = false\n",
+      "outcome": "policy",
+      "report": ""
+    },
+    {
+      "name": "root-string",
+      "saved": "{\"code\":0,\"findings\":\"private-canary\",\"manifest\":{\"repository\":{\"license\":\"MIT\",\"private\":false}}}",
+      "code": 0,
+      "stdout": "\"private-canary\"",
+      "manifest": "[repository]\nlicense = \"MIT\"\nprivate = false\n",
+      "outcome": "policy",
+      "report": ""
+    },
+    {
+      "name": "comments-null",
+      "saved": "{\"code\":0,\"findings\":{\"comments\":null},\"manifest\":{\"repository\":{\"license\":\"MIT\",\"private\":false}}}",
+      "code": 0,
+      "stdout": "{\"comments\":null}",
+      "manifest": "[repository]\nlicense = \"MIT\"\nprivate = false\n",
+      "outcome": "policy",
+      "report": ""
+    },
+    {
+      "name": "comments-record",
+      "saved": "{\"code\":0,\"findings\":{\"comments\":{}},\"manifest\":{\"repository\":{\"license\":\"MIT\",\"private\":false}}}",
+      "code": 0,
+      "stdout": "{\"comments\":{}}",
+      "manifest": "[repository]\nlicense = \"MIT\"\nprivate = false\n",
+      "outcome": "policy",
+      "report": ""
+    },
+    {
+      "name": "comments-string",
+      "saved": "{\"code\":0,\"findings\":{\"comments\":\"private-canary\"},\"manifest\":{\"repository\":{\"license\":\"MIT\",\"private\":false}}}",
+      "code": 0,
+      "stdout": "{\"comments\":\"private-canary\"}",
+      "manifest": "[repository]\nlicense = \"MIT\"\nprivate = false\n",
+      "outcome": "policy",
+      "report": ""
+    },
+    {
+      "name": "comments-bool",
+      "saved": "{\"code\":0,\"findings\":{\"comments\":false},\"manifest\":{\"repository\":{\"license\":\"MIT\",\"private\":false}}}",
+      "code": 0,
+      "stdout": "{\"comments\":false}",
+      "manifest": "[repository]\nlicense = \"MIT\"\nprivate = false\n",
+      "outcome": "policy",
+      "report": ""
+    },
+    {
+      "name": "missing-comments",
+      "saved": "{\"code\":0,\"findings\":{},\"manifest\":{\"repository\":{\"license\":\"MIT\",\"private\":false}}}",
+      "code": 0,
+      "stdout": "{}",
+      "manifest": "[repository]\nlicense = \"MIT\"\nprivate = false\n",
+      "outcome": "policy",
+      "report": ""
+    },
+    {
+      "name": "finding-null",
+      "saved": "{\"code\":1,\"findings\":{\"comments\":[null]},\"manifest\":{\"repository\":{\"license\":\"MIT\",\"private\":false}}}",
+      "code": 1,
+      "stdout": "{\"comments\":[null]}",
+      "manifest": "[repository]\nlicense = \"MIT\"\nprivate = false\n",
+      "outcome": "policy",
+      "report": ""
+    },
+    {
+      "name": "finding-list",
+      "saved": "{\"code\":1,\"findings\":{\"comments\":[[]]},\"manifest\":{\"repository\":{\"license\":\"MIT\",\"private\":false}}}",
+      "code": 1,
+      "stdout": "{\"comments\":[[]]}",
+      "manifest": "[repository]\nlicense = \"MIT\"\nprivate = false\n",
+      "outcome": "policy",
+      "report": ""
+    },
+    {
+      "name": "finding-number",
+      "saved": "{\"code\":1,\"findings\":{\"comments\":[1]},\"manifest\":{\"repository\":{\"license\":\"MIT\",\"private\":false}}}",
+      "code": 1,
+      "stdout": "{\"comments\":[1]}",
+      "manifest": "[repository]\nlicense = \"MIT\"\nprivate = false\n",
+      "outcome": "policy",
+      "report": ""
+    },
+    {
+      "name": "missing-code",
+      "saved": "{\"code\":1,\"findings\":{\"comments\":[{\"level\":\"info\"}]},\"manifest\":{\"repository\":{\"license\":\"MIT\",\"private\":false}}}",
+      "code": 1,
+      "stdout": "{\"comments\":[{\"level\":\"info\"}]}",
+      "manifest": "[repository]\nlicense = \"MIT\"\nprivate = false\n",
+      "outcome": "policy",
+      "report": ""
+    },
+    {
+      "name": "missing-level",
+      "saved": "{\"code\":1,\"findings\":{\"comments\":[{\"code\":2086}]},\"manifest\":{\"repository\":{\"license\":\"MIT\",\"private\":false}}}",
+      "code": 1,
+      "stdout": "{\"comments\":[{\"code\":2086}]}",
+      "manifest": "[repository]\nlicense = \"MIT\"\nprivate = false\n",
+      "outcome": "policy",
+      "report": ""
+    },
+    {
+      "name": "code-null",
+      "saved": "{\"code\":1,\"findings\":{\"comments\":[{\"code\":null,\"level\":\"info\"}]},\"manifest\":{\"repository\":{\"license\":\"MIT\",\"private\":false}}}",
+      "code": 1,
+      "stdout": "{\"comments\":[{\"code\":null,\"level\":\"info\"}]}",
+      "manifest": "[repository]\nlicense = \"MIT\"\nprivate = false\n",
+      "outcome": "policy",
+      "report": ""
+    },
+    {
+      "name": "code-bool",
+      "saved": "{\"code\":1,\"findings\":{\"comments\":[{\"code\":true,\"level\":\"info\"}]},\"manifest\":{\"repository\":{\"license\":\"MIT\",\"private\":false}}}",
+      "code": 1,
+      "stdout": "{\"comments\":[{\"code\":true,\"level\":\"info\"}]}",
+      "manifest": "[repository]\nlicense = \"MIT\"\nprivate = false\n",
+      "outcome": "policy",
+      "report": ""
+    },
+    {
+      "name": "code-float",
+      "saved": "{\"code\":1,\"findings\":{\"comments\":[{\"code\":2086.0,\"level\":\"info\"}]},\"manifest\":{\"repository\":{\"license\":\"MIT\",\"private\":false}}}",
+      "code": 1,
+      "stdout": "{\"comments\":[{\"code\":2086.0,\"level\":\"info\"}]}",
+      "manifest": "[repository]\nlicense = \"MIT\"\nprivate = false\n",
+      "outcome": "policy",
+      "report": ""
+    },
+    {
+      "name": "code-string",
+      "saved": "{\"code\":1,\"findings\":{\"comments\":[{\"code\":\"2086\",\"level\":\"info\"}]},\"manifest\":{\"repository\":{\"license\":\"MIT\",\"private\":false}}}",
+      "code": 1,
+      "stdout": "{\"comments\":[{\"code\":\"2086\",\"level\":\"info\"}]}",
+      "manifest": "[repository]\nlicense = \"MIT\"\nprivate = false\n",
+      "outcome": "policy",
+      "report": ""
+    },
+    {
+      "name": "code-zero",
+      "saved": "{\"code\":1,\"findings\":{\"comments\":[{\"code\":0,\"level\":\"info\"}]},\"manifest\":{\"repository\":{\"license\":\"MIT\",\"private\":false}}}",
+      "code": 1,
+      "stdout": "{\"comments\":[{\"code\":0,\"level\":\"info\"}]}",
+      "manifest": "[repository]\nlicense = \"MIT\"\nprivate = false\n",
+      "outcome": "policy",
+      "report": ""
+    },
+    {
+      "name": "code-negative",
+      "saved": "{\"code\":1,\"findings\":{\"comments\":[{\"code\":-1,\"level\":\"info\"}]},\"manifest\":{\"repository\":{\"license\":\"MIT\",\"private\":false}}}",
+      "code": 1,
+      "stdout": "{\"comments\":[{\"code\":-1,\"level\":\"info\"}]}",
+      "manifest": "[repository]\nlicense = \"MIT\"\nprivate = false\n",
+      "outcome": "policy",
+      "report": ""
+    },
+    {
+      "name": "code-first-excess",
+      "saved": "{\"code\":1,\"findings\":{\"comments\":[{\"code\":100000,\"level\":\"info\"}]},\"manifest\":{\"repository\":{\"license\":\"MIT\",\"private\":false}}}",
+      "code": 1,
+      "stdout": "{\"comments\":[{\"code\":100000,\"level\":\"info\"}]}",
+      "manifest": "[repository]\nlicense = \"MIT\"\nprivate = false\n",
+      "outcome": "policy",
+      "report": ""
+    },
+    {
+      "name": "level-null",
+      "saved": "{\"code\":1,\"findings\":{\"comments\":[{\"code\":2086,\"level\":null}]},\"manifest\":{\"repository\":{\"license\":\"MIT\",\"private\":false}}}",
+      "code": 1,
+      "stdout": "{\"comments\":[{\"code\":2086,\"level\":null}]}",
+      "manifest": "[repository]\nlicense = \"MIT\"\nprivate = false\n",
+      "outcome": "policy",
+      "report": ""
+    },
+    {
+      "name": "level-number",
+      "saved": "{\"code\":1,\"findings\":{\"comments\":[{\"code\":2086,\"level\":1}]},\"manifest\":{\"repository\":{\"license\":\"MIT\",\"private\":false}}}",
+      "code": 1,
+      "stdout": "{\"comments\":[{\"code\":2086,\"level\":1}]}",
+      "manifest": "[repository]\nlicense = \"MIT\"\nprivate = false\n",
+      "outcome": "policy",
+      "report": ""
+    },
+    {
+      "name": "level-unknown",
+      "saved": "{\"code\":1,\"findings\":{\"comments\":[{\"code\":2086,\"level\":\"fatal\"}]},\"manifest\":{\"repository\":{\"license\":\"MIT\",\"private\":false}}}",
+      "code": 1,
+      "stdout": "{\"comments\":[{\"code\":2086,\"level\":\"fatal\"}]}",
+      "manifest": "[repository]\nlicense = \"MIT\"\nprivate = false\n",
+      "outcome": "policy",
+      "report": ""
+    },
+    {
+      "name": "status-zero-with-findings",
+      "saved": "{\"code\":0,\"findings\":{\"comments\":[{\"code\":2086,\"level\":\"info\"}]},\"manifest\":{\"repository\":{\"license\":\"MIT\",\"private\":false}}}",
+      "code": 0,
+      "stdout": "{\"comments\":[{\"code\":2086,\"level\":\"info\"}]}",
+      "manifest": "[repository]\nlicense = \"MIT\"\nprivate = false\n",
+      "outcome": "policy",
+      "report": ""
+    },
+    {
+      "name": "status-one-empty",
+      "saved": "{\"code\":1,\"findings\":{\"comments\":[]},\"manifest\":{\"repository\":{\"license\":\"MIT\",\"private\":false}}}",
+      "code": 1,
+      "stdout": "{\"comments\":[]}",
+      "manifest": "[repository]\nlicense = \"MIT\"\nprivate = false\n",
+      "outcome": "policy",
+      "report": ""
+    },
+    {
+      "name": "count-256",
+      "saved": "{\"code\":1,\"findings\":{\"comments\":[{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"}]},\"manifest\":{\"repository\":{\"license\":\"MIT\",\"private\":false}}}",
+      "code": 1,
+      "stdout": "{\"comments\":[{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"}]}",
+      "manifest": "[repository]\nlicense = \"MIT\"\nprivate = false\n",
+      "outcome": "report",
+      "report": "{\"findings\":256,\"manifest_ok\":true,\"passed\":false}"
+    },
+    {
+      "name": "count-257",
+      "saved": "{\"code\":1,\"findings\":{\"comments\":[{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"}]},\"manifest\":{\"repository\":{\"license\":\"MIT\",\"private\":false}}}",
+      "code": 1,
+      "stdout": "{\"comments\":[{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"},{\"code\":2086,\"level\":\"info\"}]}",
+      "manifest": "[repository]\nlicense = \"MIT\"\nprivate = false\n",
+      "outcome": "policy",
+      "report": ""
+    },
+    {
+      "name": "code-lower-bound",
+      "saved": "{\"code\":1,\"findings\":{\"comments\":[{\"code\":1,\"level\":\"error\"}]},\"manifest\":{\"repository\":{\"license\":\"MIT\",\"private\":false}}}",
+      "code": 1,
+      "stdout": "{\"comments\":[{\"code\":1,\"level\":\"error\"}]}",
+      "manifest": "[repository]\nlicense = \"MIT\"\nprivate = false\n",
+      "outcome": "report",
+      "report": "{\"findings\":1,\"manifest_ok\":true,\"passed\":false}"
+    },
+    {
+      "name": "code-upper-bound",
+      "saved": "{\"code\":1,\"findings\":{\"comments\":[{\"code\":99999,\"level\":\"warning\"}]},\"manifest\":{\"repository\":{\"license\":\"MIT\",\"private\":false}}}",
+      "code": 1,
+      "stdout": "{\"comments\":[{\"code\":99999,\"level\":\"warning\"}]}",
+      "manifest": "[repository]\nlicense = \"MIT\"\nprivate = false\n",
+      "outcome": "report",
+      "report": "{\"findings\":1,\"manifest_ok\":true,\"passed\":false}"
+    },
+    {
+      "name": "level-style",
+      "saved": "{\"code\":1,\"findings\":{\"comments\":[{\"code\":2086,\"level\":\"style\"}]},\"manifest\":{\"repository\":{\"license\":\"MIT\",\"private\":false}}}",
+      "code": 1,
+      "stdout": "{\"comments\":[{\"code\":2086,\"level\":\"style\"}]}",
+      "manifest": "[repository]\nlicense = \"MIT\"\nprivate = false\n",
+      "outcome": "report",
+      "report": "{\"findings\":1,\"manifest_ok\":true,\"passed\":false}"
+    },
+    {
+      "name": "missing-repository",
+      "saved": "{\"code\":0,\"findings\":{\"comments\":[]},\"manifest\":{}}",
+      "code": 0,
+      "stdout": "{\"comments\":[]}",
+      "manifest": "title = \"canary\"\n",
+      "outcome": "policy",
+      "report": ""
+    },
+    {
+      "name": "wrong-repository",
+      "saved": "{\"code\":0,\"findings\":{\"comments\":[]},\"manifest\":{\"repository\":\"canary\"}}",
+      "code": 0,
+      "stdout": "{\"comments\":[]}",
+      "manifest": "repository = \"canary\"\n",
+      "outcome": "policy",
+      "report": ""
+    },
+    {
+      "name": "missing-license",
+      "saved": "{\"code\":0,\"findings\":{\"comments\":[]},\"manifest\":{\"repository\":{\"private\":false}}}",
+      "code": 0,
+      "stdout": "{\"comments\":[]}",
+      "manifest": "[repository]\nprivate = false\n",
+      "outcome": "policy",
+      "report": ""
+    },
+    {
+      "name": "license-type",
+      "saved": "{\"code\":0,\"findings\":{\"comments\":[]},\"manifest\":{\"repository\":{\"license\":1,\"private\":false}}}",
+      "code": 0,
+      "stdout": "{\"comments\":[]}",
+      "manifest": "[repository]\nlicense = 1\nprivate = false\n",
+      "outcome": "policy",
+      "report": ""
+    },
+    {
+      "name": "missing-private",
+      "saved": "{\"code\":0,\"findings\":{\"comments\":[]},\"manifest\":{\"repository\":{\"license\":\"MIT\"}}}",
+      "code": 0,
+      "stdout": "{\"comments\":[]}",
+      "manifest": "[repository]\nlicense = \"MIT\"\n",
+      "outcome": "policy",
+      "report": ""
+    },
+    {
+      "name": "private-type",
+      "saved": "{\"code\":0,\"findings\":{\"comments\":[]},\"manifest\":{\"repository\":{\"license\":\"MIT\",\"private\":\"false\"}}}",
+      "code": 0,
+      "stdout": "{\"comments\":[]}",
+      "manifest": "[repository]\nlicense = \"MIT\"\nprivate = \"false\"\n",
+      "outcome": "policy",
+      "report": ""
+    },
+    {
+      "name": "invalid-toml",
+      "saved": null,
+      "code": 0,
+      "stdout": "{\"comments\":[]}",
+      "manifest": "[invalid",
+      "outcome": "manifest",
+      "report": ""
+    },
+    {
+      "name": "duplicate-toml",
+      "saved": null,
+      "code": 0,
+      "stdout": "{\"comments\":[]}",
+      "manifest": "[repository]\nlicense = \"MIT\"\nprivate = false\nlicense = \"MIT\"\n",
+      "outcome": "manifest",
+      "report": ""
+    },
+    {
+      "name": "datetime-toml",
+      "saved": null,
+      "code": 0,
+      "stdout": "{\"comments\":[]}",
+      "manifest": "[repository]\nlicense = \"MIT\"\nprivate = false\ncreated = 2026-10-15T00:00:00Z\n",
+      "outcome": "manifest",
+      "report": ""
+    },
+    {
+      "name": "invalid-utf8-toml",
+      "saved": null,
+      "code": 0,
+      "stdout": "{\"comments\":[]}",
+      "outcome": "manifest",
+      "report": "",
+      "manifest_hex": "ff"
+    },
+    {
+      "name": "ignored-sensitive-fields",
+      "saved": "{\"code\":0,\"findings\":{\"comments\":[],\"message\":\"SENSITIVE_REPOSITORY_CANARY\\n\\u001b[31m/home/private/source.sh\",\"path\":\"SENSITIVE_REPOSITORY_CANARY\\n\\u001b[31m/home/private/source.sh\"},\"manifest\":{\"repository\":{\"license\":\"MIT\",\"private\":false},\"extra\":\"SENSITIVE_REPOSITORY_CANARY\\n\\u001b[31m/home/private/source.sh\"}}",
+      "code": 0,
+      "stdout": "{\"comments\":[],\"message\":\"SENSITIVE_REPOSITORY_CANARY\\n\\u001b[31m/home/private/source.sh\",\"path\":\"SENSITIVE_REPOSITORY_CANARY\\n\\u001b[31m/home/private/source.sh\"}",
+      "manifest": "[repository]\nlicense = \"MIT\"\nprivate = false\nextra = \"SENSITIVE_REPOSITORY_CANARY\"\n",
+      "outcome": "report",
+      "report": "{\"findings\":0,\"manifest_ok\":true,\"passed\":true}"
+    },
+    {
+      "name": "sensitive-finding",
+      "saved": "{\"code\":1,\"findings\":{\"comments\":[{\"code\":2086,\"level\":\"info\",\"message\":\"SENSITIVE_REPOSITORY_CANARY\\n\\u001b[31m/home/private/source.sh\",\"file\":\"SENSITIVE_REPOSITORY_CANARY\\n\\u001b[31m/home/private/source.sh\"}]},\"manifest\":{\"repository\":{\"license\":\"MIT\",\"private\":false}}}",
+      "code": 1,
+      "stdout": "{\"comments\":[{\"code\":2086,\"level\":\"info\",\"message\":\"SENSITIVE_REPOSITORY_CANARY\\n\\u001b[31m/home/private/source.sh\",\"file\":\"SENSITIVE_REPOSITORY_CANARY\\n\\u001b[31m/home/private/source.sh\"}]}",
+      "manifest": "[repository]\nlicense = \"MIT\"\nprivate = false\n",
+      "outcome": "report",
+      "report": "{\"findings\":1,\"manifest_ok\":true,\"passed\":false}"
+    },
+    {
+      "name": "saved-missing-code",
+      "saved": "{\"findings\":{\"comments\":[]},\"manifest\":{}}",
+      "outcome": "saved",
+      "report": ""
+    },
+    {
+      "name": "saved-code-bool",
+      "saved": "{\"code\":true,\"findings\":{\"comments\":[]},\"manifest\":{\"repository\":{\"license\":\"MIT\",\"private\":false}}}",
+      "outcome": "saved",
+      "report": ""
+    },
+    {
+      "name": "saved-code-float",
+      "saved": "{\"code\":0.0,\"findings\":{\"comments\":[]},\"manifest\":{\"repository\":{\"license\":\"MIT\",\"private\":false}}}",
+      "outcome": "saved",
+      "report": ""
+    },
+    {
+      "name": "saved-code-string",
+      "saved": "{\"code\":\"0\",\"findings\":{\"comments\":[]},\"manifest\":{\"repository\":{\"license\":\"MIT\",\"private\":false}}}",
+      "outcome": "saved",
+      "report": ""
+    },
+    {
+      "name": "saved-duplicate-key",
+      "saved": "{\"code\":0,\"code\":0}",
+      "outcome": "saved",
+      "report": ""
+    },
+    {
+      "name": "saved-null",
+      "saved": "null",
+      "outcome": "saved",
+      "report": ""
+    },
+    {
+      "name": "saved-integer-overflow",
+      "saved": "{\"ignored\":9223372036854775808}",
+      "outcome": "saved",
+      "report": ""
+    },
+    {
+      "name": "saved-nonfinite",
+      "saved": "{\"ignored\":NaN}",
+      "outcome": "saved",
+      "report": ""
+    }
+  ]
+}

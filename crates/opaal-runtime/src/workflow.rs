@@ -11,7 +11,7 @@ use std::io::{self, Write};
 use std::os::unix::ffi::{OsStrExt as _, OsStringExt as _};
 use std::path::{Component, Path, PathBuf};
 
-use opaal_platform::operational::supports_exact_process_execution;
+use opaal_platform::operational::{MAX_PROCESS_OUTPUT_BYTES, supports_exact_process_execution};
 use serde_json::{Map, Value, json};
 use sha2::{Digest as _, Sha256};
 use unicode_normalization::UnicodeNormalization as _;
@@ -50,6 +50,7 @@ fn schema_version(schema: &str, version: u64, v2: &str) -> Result<u64, WorkflowA
     if (version == 2 && schema == v2)
         || (version == 3 && schema.strip_suffix(".v3") == v2.strip_suffix(".v2"))
         || (version == 4 && schema.strip_suffix(".v4") == v2.strip_suffix(".v2"))
+        || (version == 5 && schema.strip_suffix(".v5") == v2.strip_suffix(".v2"))
     {
         Ok(version)
     } else {
@@ -67,10 +68,10 @@ fn versioned_keys(
     version: u64,
 ) -> Result<(), WorkflowArtifactError> {
     let mut keys = keys.to_vec();
-    if version == 3 || (version == 4 && object.contains_key("standard_host")) {
+    if version == 3 || (version >= 4 && object.contains_key("standard_host")) {
         keys.push("standard_host");
     }
-    if version == 4 && matches!(context, "audit artifact" | "journal header") {
+    if version >= 4 && matches!(context, "audit artifact" | "journal header") {
         keys.push("result_policy");
         if context == "audit artifact" {
             keys.push("assessment");
@@ -572,6 +573,20 @@ impl JournalChain {
         } else {
             2
         };
+        Self::begin_with_version(run_id, header_payload, version)
+    }
+
+    /// Begin an explicitly versioned journal; v5 selects metadata-only evidence
+    /// independently of the presence of standard-host effects.
+    pub fn begin_with_version(
+        run_id: &str,
+        header_payload: Value,
+        version: u64,
+    ) -> Result<(Self, Vec<u8>), WorkflowArtifactError> {
+        validate_run_id(run_id)?;
+        if !(2..=5).contains(&version) {
+            return Err(journal_corrupt("unsupported journal version"));
+        }
         validate_journal_payload("header", &header_payload, version)?;
         let standard_host = header_payload.get("standard_host").cloned();
         let result_policy = header_payload
@@ -613,7 +628,7 @@ impl JournalChain {
             ));
         }
         validate_journal_payload(kind, &payload, self.version)?;
-        validate_host_event(kind, &payload, self.standard_host.as_ref())?;
+        validate_host_event(kind, &payload, self.standard_host.as_ref(), self.version)?;
         if kind == "terminal"
             && let Some(policy) = &self.result_policy
         {
@@ -935,6 +950,7 @@ pub fn audit_journal(bytes: &[u8]) -> Result<AuditArtifact, WorkflowArtifactErro
                 header
                     .as_ref()
                     .and_then(|header: &Value| header.get("standard_host")),
+                line_version,
             )?;
             let root_action_end = kind == "action-end" && lifecycle.action_stack.len() == 1;
             lifecycle.admit(kind, payload)?;
@@ -994,7 +1010,9 @@ pub fn audit_journal(bytes: &[u8]) -> Result<AuditArtifact, WorkflowArtifactErro
     audit.insert(
         "schema".to_owned(),
         Value::String(
-            if version == 4 {
+            if version == 5 {
+                "opaal.audit.v5"
+            } else if version == 4 {
                 "opaal.audit.v4"
             } else if version == 3 {
                 "opaal.audit.v3"
@@ -1039,7 +1057,7 @@ pub fn audit_journal(bytes: &[u8]) -> Result<AuditArtifact, WorkflowArtifactErro
         ),
     );
     audit.insert("events".to_owned(), Value::Array(events));
-    if version == 4 {
+    if version >= 4 {
         if !terminal_seen && !primary.is_null() {
             primary["cancel_reason"] = Value::Null;
         }
@@ -1088,12 +1106,10 @@ fn validate_host_artifact(
             }
         }
     }
-    if version == 4 && !roles.is_empty() && !object.contains_key("standard_host") {
+    if version >= 4 && !roles.is_empty() && !object.contains_key("standard_host") {
         return Err(journal_corrupt("standard host roles require a policy"));
     }
-    if version == 3 || (version == 4 && object.contains_key("standard_host")) {
-        let policy = required(object, "standard_host")?;
-        validate_standard_host(policy)?;
+    if version == 5 || version == 3 || object.contains_key("standard_host") {
         require_null(required_object(object, "outcome")?, "value_digest")?;
         if let Some(actions) = object.get("actions").and_then(Value::as_array) {
             for action in actions {
@@ -1103,6 +1119,10 @@ fn validate_host_artifact(
                 )?;
             }
         }
+    }
+    if version == 3 || object.contains_key("standard_host") {
+        let policy = required(object, "standard_host")?;
+        validate_standard_host(policy)?;
         let expected = Value::Array(roles.into_iter().map(Value::String).collect());
         if policy["roles"] != expected {
             return Err(journal_corrupt(
@@ -1140,13 +1160,24 @@ fn validate_host_event(
     kind: &str,
     payload: &Value,
     policy: Option<&Value>,
+    version: u64,
 ) -> Result<(), WorkflowArtifactError> {
     if !matches!(kind, "header" | "terminal" | "evidence-failure") {
-        validate_journal_payload(kind, payload, if policy.is_some() { 3 } else { 2 })?;
+        validate_journal_payload(
+            kind,
+            payload,
+            if version == 5 {
+                5
+            } else if policy.is_some() {
+                3
+            } else {
+                2
+            },
+        )?;
     }
-    let Some(policy) = policy else {
+    if version != 5 && policy.is_none() {
         return Ok(());
-    };
+    }
     for field in ["outcome", "primary"] {
         if let Some(outcome) = payload.get(field) {
             validate_metadata_outcome(outcome)?;
@@ -1165,6 +1196,7 @@ fn validate_host_event(
         .expect("validated effect is a string");
     let operation = &payload["operation"];
     if STANDARD_HOST_ROLES.contains(&effect) {
+        let policy = policy.ok_or_else(|| journal_corrupt("standard host effect has no policy"))?;
         if kind == "effect-before" && payload["verdict"] != "granted-enforced" {
             return Err(journal_corrupt("standard host admission must be enforced"));
         }
@@ -1485,7 +1517,7 @@ fn validate_shared(
     bounded_array(object, "sources", validate_source)?;
     validate_authority(required(object, "authority")?)?;
     bounded_array(object, "tools", |value| validate_tool(value, plan, version))?;
-    if version == 4 {
+    if version >= 4 {
         let project = required_object(object, "project")?;
         let targets = required_array(project, "targets")?;
         let tools = required_array(object, "tools")?;
@@ -1631,6 +1663,7 @@ fn validate_shared_cross_fields(
         let request = as_object(request, "authority request")?;
         let effect = required_string(request, "effect")?;
         validate_effect_scope(effect, required(request, "scope")?)?;
+        let mut native_process = false;
         let process_platform = if effect == "process.run" {
             let tool_id = required_string(required_object(request, "scope")?, "tool")?;
             let tool = required_array(object, "tools")?
@@ -1642,6 +1675,7 @@ fn validate_shared_cross_fields(
                         "process request refers to an absent tool",
                     )
                 })?;
+            native_process = tool["adapter"] == "native";
             Some(required_string(as_object(tool, "tool")?, "platform")?)
         } else {
             None
@@ -1653,7 +1687,8 @@ fn validate_shared_cross_fields(
                 if effect == "process.run"
                     && rule["required_enforcement"] == "acknowledged-unenforced"
                     && process_platform.is_some_and(|platform| {
-                        matches!(platform, "aarch64-apple-darwin" | "x86_64-apple-darwin")
+                        (native_process && platform != "x86_64-unknown-linux-gnu")
+                            || matches!(platform, "aarch64-apple-darwin" | "x86_64-apple-darwin")
                     }) =>
             {
                 "unsupported"
@@ -2229,7 +2264,7 @@ fn validate_project(value: &Value, version: u64) -> Result<(), WorkflowArtifactE
         "child_environment_digest",
         "tls",
     ];
-    if version == 4 {
+    if version >= 4 {
         keys.push("targets");
     }
     exact_keys(object, &keys, "project")?;
@@ -2248,7 +2283,7 @@ fn validate_project(value: &Value, version: u64) -> Result<(), WorkflowArtifactE
         required_digest(object, name)?;
     }
     bounded_array(object, "tls", validate_tls)?;
-    if version == 4 {
+    if version >= 4 {
         bounded_array(object, "targets", validate_target)?;
         require_ordered_unique(required_array(object, "targets")?, "targets", |target| {
             string_key(&target["id"])
@@ -2549,12 +2584,22 @@ fn validate_tool(value: &Value, _plan: bool, version: u64) -> Result<(), Workflo
         ],
         "tool",
     )?;
-    for name in ["id", "required_version", "locked_version", "platform"] {
+    for name in ["id", "platform"] {
         validate_id(required_string(object, name)?)?;
+    }
+    let native = version == 5 && required_string(object, "adapter")? == "native";
+    for name in ["required_version", "locked_version"] {
+        if native {
+            require_null(object, name)?;
+        } else {
+            validate_id(required_string(object, name)?)?;
+        }
     }
     one_of(
         required_string(object, "adapter")?,
-        if version == 4 {
+        if version == 5 {
+            &["git", "cargo", "docker", "native"]
+        } else if version == 4 {
             &["git", "cargo", "docker"]
         } else {
             &["git", "cargo"]
@@ -2620,7 +2665,7 @@ fn validate_observation(value: &Value, version: u64) -> Result<(), WorkflowArtif
         "child-environment",
         "wall-clock",
     ];
-    if version == 4 {
+    if version >= 4 {
         kinds.push("target");
     }
     one_of(required_string(object, "kind")?, &kinds, "observation kind")?;
@@ -2885,7 +2930,7 @@ fn validate_audit(object: &Map<String, Value>, version: u64) -> Result<(), Workf
         validate_audit_event(value, version)
     })?;
     if !required(object, "primary")?.is_null() {
-        if version == 4 {
+        if version >= 4 {
             validate_current_primary(
                 required(object, "primary")?,
                 object["completeness"] == "incomplete",
@@ -2908,7 +2953,7 @@ fn validate_audit(object: &Map<String, Value>, version: u64) -> Result<(), Workf
             "audit completeness and terminal digest disagree",
         ));
     }
-    if version == 3 || object.contains_key("standard_host") {
+    if matches!(version, 3 | 5) || object.contains_key("standard_host") {
         validate_metadata_outcome(required(object, "primary")?)?;
         for outcome in required_array(object, "cleanup")? {
             validate_metadata_outcome(outcome)?;
@@ -2937,7 +2982,7 @@ fn validate_audit(object: &Map<String, Value>, version: u64) -> Result<(), Workf
         let kind = required_string(event, "kind")?;
         let root_action_end = kind == "action-end" && lifecycle.action_stack.len() == 1;
         let payload = required(event, "payload")?;
-        validate_host_event(kind, payload, object.get("standard_host"))?;
+        validate_host_event(kind, payload, object.get("standard_host"), version)?;
         lifecycle.admit(kind, payload)?;
         lifecycle.validate_host_bytes(object.get("standard_host"))?;
         if root_action_end {
@@ -2956,7 +3001,7 @@ fn validate_audit(object: &Map<String, Value>, version: u64) -> Result<(), Workf
             "audit completeness disagrees with its event lifecycle",
         ));
     }
-    if version == 4 {
+    if version >= 4 {
         if !lifecycle.terminal && !derived_primary.is_null() {
             derived_primary["cancel_reason"] = Value::Null;
         }
@@ -3027,7 +3072,7 @@ fn validate_journal_payload(
     value: &Value,
     version: u64,
 ) -> Result<(), WorkflowArtifactError> {
-    if version == 4 {
+    if version >= 4 {
         let mut legacy = as_object(value, "journal payload")?.clone();
         match kind {
             "header" => {
@@ -3050,10 +3095,11 @@ fn validate_journal_payload(
                     .remove("cancel_reason");
                 return validate_journal_payload(kind, &Value::Object(legacy), 2);
             }
-            _ => {
+            _ if version == 4 => {
                 return validate_journal_payload(kind, value, 2)
                     .or_else(|_| validate_journal_payload(kind, value, 3));
             }
+            _ => {}
         }
     }
     let object = as_object(value, "journal payload")?;
@@ -3126,7 +3172,7 @@ fn validate_journal_payload(
             )?;
             validate_id(required_string(object, "action_node_id")?)?;
             validate_id(required_string(object, "effect")?)?;
-            validate_scope(required(object, "scope")?, version == 3)?;
+            validate_scope(required(object, "scope")?, matches!(version, 3 | 5))?;
             validate_effect_scope(
                 required_string(object, "effect")?,
                 required(object, "scope")?,
@@ -3177,7 +3223,7 @@ fn validate_journal_payload(
             )?;
             validate_id(required_string(object, "action_node_id")?)?;
             validate_id(required_string(object, "effect")?)?;
-            validate_scope(required(object, "scope")?, version == 3)?;
+            validate_scope(required(object, "scope")?, matches!(version, 3 | 5))?;
             validate_effect_scope(
                 required_string(object, "effect")?,
                 required(object, "scope")?,
@@ -3205,7 +3251,7 @@ fn validate_journal_payload(
             }
             Ok(())
         }
-        "evidence-failure" if version == 3 => {
+        "evidence-failure" if matches!(version, 3 | 5) => {
             exact_keys(object, &["category", "code"], "evidence failure")?;
             one_of(
                 required_string(object, "category")?,
@@ -3261,10 +3307,10 @@ fn validate_operation(
 ) -> Result<(), WorkflowArtifactError> {
     let object = as_object(value, "operation descriptor")?;
     let kind = required_string(object, "kind")?;
-    if version == 3 && STANDARD_HOST_ROLES.contains(&effect) {
+    if matches!(version, 3 | 5) && STANDARD_HOST_ROLES.contains(&effect) {
         return validate_transfer_operation(effect, object, after);
     }
-    if version == 3 {
+    if matches!(version, 3 | 5) {
         require_null(object, "evidence_digest")?;
     }
     let expected_kind = match effect {
@@ -3299,7 +3345,7 @@ fn validate_operation(
                 _ => unreachable!("filesystem kind was derived from effect"),
             };
             require_operation_name(object, expected)?;
-            if version == 3 {
+            if matches!(version, 3 | 5) {
                 require_null(object, "relative_path")?;
             } else {
                 validate_native_path(required(object, "relative_path")?)?;
@@ -3346,11 +3392,16 @@ fn validate_operation(
             validate_id(required_string(object, "tool")?)?;
             let argv_count = required_u64(object, "argv_count")?;
             let argv_bytes = required_u64(object, "argv_bytes")?;
-            if version == 3 {
+            if matches!(version, 3 | 5) {
                 require_null(object, "argv_digest")?;
                 if !required_array(object, "argv")?.is_empty()
                     || argv_count == 0
-                    || argv_count > MAX_ARTIFACT_ENTRIES as u64
+                    || argv_count
+                        > if version == 5 {
+                            4096
+                        } else {
+                            MAX_ARTIFACT_ENTRIES as u64
+                        }
                 {
                     return Err(journal_corrupt(
                         "metadata-only argv must omit arguments and retain bounded counts",
@@ -3432,8 +3483,20 @@ fn validate_operation(
                 }
             }
             nullable_u64(required(object, "status")?)?;
-            nullable_u64(required(object, "stdout_bytes")?)?;
-            nullable_u64(required(object, "stderr_bytes")?)?;
+            let stdout_bytes = required(object, "stdout_bytes")?;
+            let stderr_bytes = required(object, "stderr_bytes")?;
+            nullable_u64(stdout_bytes)?;
+            nullable_u64(stderr_bytes)?;
+            if version == 5
+                && [stdout_bytes, stderr_bytes]
+                    .into_iter()
+                    .filter_map(Value::as_u64)
+                    .any(|bytes| bytes > MAX_PROCESS_OUTPUT_BYTES as u64)
+            {
+                return Err(journal_corrupt(
+                    "process output byte count exceeds its limit",
+                ));
+            }
             nullable_digest(required(object, "evidence_digest")?)?;
             require_empty_result(
                 object,
@@ -3457,7 +3520,7 @@ fn validate_operation(
             )?;
             require_operation_name(object, "std::http::request")?;
             validate_id(required_string(object, "endpoint")?)?;
-            if version == 3 {
+            if matches!(version, 3 | 5) {
                 require_null(object, "method")?;
             } else {
                 validate_id(required_string(object, "method")?)?;
@@ -3572,10 +3635,9 @@ fn validate_successful_operation(value: &Value, version: u64) -> Result<(), Work
         "entropy" | "standard-stream" => &["confirmed_bytes", "uncertain_bytes_upper_bound"][..],
         _ => unreachable!("operation kind was validated"),
     };
-    if required
-        .iter()
-        .any(|field| !(version == 3 && *field == "evidence_digest") && object[*field].is_null())
-    {
+    if required.iter().any(|field| {
+        !(matches!(version, 3 | 5) && *field == "evidence_digest") && object[*field].is_null()
+    }) {
         return Err(journal_corrupt(
             "successful operation omits required result metadata",
         ));
@@ -3638,7 +3700,9 @@ fn seal_journal_line(
     object.insert(
         "schema".to_owned(),
         Value::String(
-            if version == 4 {
+            if version == 5 {
+                "opaal.run-journal.v5"
+            } else if version == 4 {
                 "opaal.run-journal.v4"
             } else if version == 3 {
                 "opaal.run-journal.v3"
@@ -4308,6 +4372,119 @@ fn journal_limit() -> WorkflowArtifactError {
 }
 fn journal_corrupt(message: impl Into<String>) -> WorkflowArtifactError {
     WorkflowArtifactError::new("JOURNAL003", message)
+}
+
+#[cfg(test)]
+mod bound_observers {
+    use super::*;
+
+    #[test]
+    fn native_frozen_journal_bound_cases() {
+        let inventory =
+            include_bytes!("../../../tests/golden/controlled-external-tools/evidence-cases.json");
+        let cases: Value = serde_json::from_slice(inventory).unwrap();
+        let host = match (std::env::consts::OS, std::env::consts::ARCH) {
+            ("macos", "aarch64") => "aarch64-apple-darwin",
+            ("linux", "x86_64") => "x86_64-unknown-linux-gnu",
+            _ => return,
+        };
+        let digest = format!("sha256:{}", "1".repeat(64));
+        let header = serde_json::json!({"plan_digest":digest, "accepted_plan_digest":digest, "authority_digest":digest,
+            "project_digest":digest, "environment_digest":digest, "tool_lock_digest":digest,
+            "child_environment_digest":digest, "started_at":"1970-01-01T00:00:00.000000000Z",
+            "result_policy":"require-true"});
+        let (chain, _) = JournalChain::begin_with_version(&"1".repeat(32), header, 5).unwrap();
+        let primary = serde_json::json!({"class":"success", "code":"EXECUTE_TEST", "message":METADATA_ONLY_MESSAGE,
+            "status":null,"value_digest":null,"partial":false,"cancel_reason":null});
+        let terminal = serde_json::json!({"finished_at":"1970-01-01T00:00:00.000000000Z",
+            "primary":primary,"cleanup":[],"complete":true,"assessment":{"kind":"bool","value":true}});
+        let payload = serde_json::json!({"category":"receipt","code":"JOURNAL005"});
+        let emit = |name: &str, observed: Value| {
+            let row = cases["cases"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|row| row["name"] == name)
+                .unwrap();
+            assert_eq!(observed, row["expected"], "{name}");
+            println!(
+                "OPAAL_EVIDENCE_CASE {}",
+                serde_json::json!({"name":name, "observed":observed,
+                "host":host,"inventory_digest":digest_bytes(inventory)})
+            );
+        };
+
+        // Isolate the line gate: real v5 lines reach the byte ceiling first.
+        let mut exact = chain.clone();
+        exact.lines = MAX_JOURNAL_LINES - 1;
+        exact.append("terminal", terminal.clone()).unwrap();
+        assert_eq!(exact.lines(), 100_000);
+        assert!(exact.is_terminal());
+        emit(
+            "journal-lines-exact",
+            serde_json::json!({"limit_admitted":true}),
+        );
+        let mut excess = chain.clone();
+        excess.lines = MAX_JOURNAL_LINES;
+        let error = excess.append("terminal", terminal.clone()).unwrap_err();
+        assert_eq!(error.code(), "JOURNAL001");
+        assert_eq!(excess.lines(), MAX_JOURNAL_LINES);
+        assert!(!excess.is_terminal());
+        emit(
+            "journal-lines-first-excess",
+            serde_json::json!({"admitted":false}),
+        );
+
+        let mut reserve = chain.clone();
+        reserve.lines = MAX_JOURNAL_LINES - 2;
+        reserve.append("evidence-failure", payload.clone()).unwrap();
+        assert_eq!(reserve.lines(), MAX_JOURNAL_LINES - 1);
+        let before = (reserve.lines(), reserve.bytes(), reserve.previous.clone());
+        assert_eq!(
+            reserve
+                .append("evidence-failure", payload.clone())
+                .unwrap_err()
+                .code(),
+            "JOURNAL001"
+        );
+        assert_eq!(
+            before,
+            (reserve.lines(), reserve.bytes(), reserve.previous.clone())
+        );
+        reserve.append("terminal", terminal.clone()).unwrap();
+        assert!(reserve.is_terminal());
+
+        let line = chain
+            .clone()
+            .append("evidence-failure", payload.clone())
+            .unwrap();
+        let mut reserve = chain;
+        reserve.bytes = MAX_JOURNAL_BYTES - JOURNAL_TERMINAL_RESERVE_BYTES - line.len();
+        reserve.append("evidence-failure", payload.clone()).unwrap();
+        assert_eq!(
+            reserve.bytes(),
+            MAX_JOURNAL_BYTES - JOURNAL_TERMINAL_RESERVE_BYTES
+        );
+        let before = (reserve.lines(), reserve.bytes(), reserve.previous.clone());
+        assert_eq!(
+            reserve
+                .append("evidence-failure", payload)
+                .unwrap_err()
+                .code(),
+            "JOURNAL001"
+        );
+        assert_eq!(
+            before,
+            (reserve.lines(), reserve.bytes(), reserve.previous.clone())
+        );
+        reserve.append("terminal", terminal).unwrap();
+        assert!(reserve.bytes() > MAX_JOURNAL_BYTES - JOURNAL_TERMINAL_RESERVE_BYTES);
+        assert!(reserve.bytes() <= MAX_JOURNAL_BYTES && reserve.is_terminal());
+        emit(
+            "journal-terminal-reserve",
+            serde_json::json!({"admitted":false}),
+        );
+    }
 }
 
 #[cfg(test)]

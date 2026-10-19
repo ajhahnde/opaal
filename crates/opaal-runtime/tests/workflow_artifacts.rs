@@ -248,8 +248,8 @@ fn v1_future_and_unbound_secret_artifacts_are_rejected() {
     );
 
     let mut future_plan = plan_document();
-    future_plan["schema"] = Value::String("opaal.plan.v5".to_owned());
-    future_plan["schema_version"] = Value::from(5_u64);
+    future_plan["schema"] = Value::String("opaal.plan.v6".to_owned());
+    future_plan["schema_version"] = Value::from(6_u64);
     assert_eq!(
         PlanArtifact::seal(future_plan).unwrap_err().code(),
         "ARTIFACT006"
@@ -956,6 +956,298 @@ fn standard_host() -> Value {
         "max_integer_candidates":128, "operation_timeout_ms":30000,
         "poll_interval_ms":25, "term_grace_ms":100, "max_chunk_bytes":65536
     })
+}
+
+fn native_document(mut document: Value, schema: &str) -> Value {
+    document["schema"] = json!(schema);
+    document["schema_version"] = json!(5);
+    document["project"]["targets"] = json!([]);
+    document["tools"] = json!([{
+        "id":"checker", "adapter":"native", "path":native_path(),
+        "required_version":null, "locked_version":null, "digest":digest('8'),
+        "platform":"aarch64-apple-darwin", "child_environment_digest":digest('4'),
+        "version_verified":false
+    }]);
+    if let Some(observations) = document
+        .get_mut("observations")
+        .and_then(Value::as_array_mut)
+    {
+        observations.insert(
+            3,
+            json!({
+                "kind":"tool-executable", "id":"checker", "path":native_path(),
+                "digest":digest('8'), "size":120, "observed_at":null
+            }),
+        );
+    }
+    document
+}
+
+#[test]
+fn native_v5_artifacts_require_absent_versions_and_preserve_legacy_refusal() {
+    let check = native_document(check_document(), "opaal.check.v5");
+    let plan = native_document(plan_document(), "opaal.plan.v5");
+    let sealed_check = CheckArtifact::seal(check.clone()).unwrap();
+    let sealed_plan = PlanArtifact::seal(plan.clone()).unwrap();
+    assert_eq!(
+        CheckArtifact::parse(sealed_check.bytes()).unwrap(),
+        sealed_check
+    );
+    assert_eq!(
+        PlanArtifact::parse(sealed_plan.bytes()).unwrap(),
+        sealed_plan
+    );
+    assert!(sealed_plan.value().get("standard_host").is_none());
+    for (field, value) in [
+        ("required_version", json!(">=1.0.0")),
+        ("locked_version", json!("1.0.0")),
+        ("version_verified", json!(true)),
+        ("probe", json!([])),
+    ] {
+        let mut invalid = check.clone();
+        invalid["tools"][0][field] = value;
+        assert!(CheckArtifact::seal(invalid).is_err(), "{field}");
+    }
+    for field in ["required_version", "locked_version", "version_verified"] {
+        let mut invalid = plan.clone();
+        invalid["tools"][0].as_object_mut().unwrap().remove(field);
+        assert!(PlanArtifact::seal(invalid).is_err(), "missing {field}");
+    }
+    for version in 2..=4 {
+        let mut legacy_check = check.clone();
+        let mut legacy_plan = plan.clone();
+        for (document, kind) in [(&mut legacy_check, "check"), (&mut legacy_plan, "plan")] {
+            document["schema"] = json!(format!("opaal.{kind}.v{version}"));
+            document["schema_version"] = json!(version);
+            if version < 4 {
+                document["project"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("targets");
+            }
+        }
+        assert!(CheckArtifact::seal(legacy_check).is_err());
+        assert!(PlanArtifact::seal(legacy_plan).is_err());
+    }
+    for location in ["outcome", "actions"] {
+        let mut invalid = plan.clone();
+        let outcome = if location == "outcome" {
+            &mut invalid["outcome"]
+        } else {
+            &mut invalid["actions"][0]["outcome"]
+        };
+        outcome["value_digest"] = json!(digest('a'));
+        assert!(PlanArtifact::seal(invalid).is_err());
+    }
+    let mut invalid = plan;
+    invalid["standard_host"] = standard_host();
+    invalid["standard_host"]["roles"] = json!([]);
+    assert!(PlanArtifact::seal(invalid).is_err());
+}
+
+#[test]
+fn native_frozen_evidence_reader_cases() {
+    use opaal_runtime::workflow::{MAX_ARTIFACT_BYTES, parse_execution_receipt};
+
+    let inventory_bytes = include_bytes!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../tests/golden/controlled-external-tools/evidence-cases.json"
+    ));
+    let inventory: Value = serde_json::from_slice(inventory_bytes).unwrap();
+    let host = match (std::env::consts::OS, std::env::consts::ARCH) {
+        ("macos", "aarch64") => "aarch64-apple-darwin",
+        ("linux", "x86_64") => "x86_64-unknown-linux-gnu",
+        _ => return,
+    };
+    let native_check =
+        CheckArtifact::seal(native_document(check_document(), "opaal.check.v5")).unwrap();
+    assert_eq!(
+        CheckArtifact::parse(native_check.bytes()).unwrap(),
+        native_check
+    );
+    let mut count = 0;
+    for row in inventory["cases"].as_array().unwrap() {
+        let spec = &row["input"];
+        let observed = if spec["kind"] == "artifact" && spec["artifact"] == "check" {
+            let mut value = native_check.value().clone();
+            match spec["mutation"].as_str().unwrap() {
+                "future-schema" => value["schema_version"] = json!(99),
+                "unknown-field" => value["unknown"] = json!(true),
+                "native-required-version" => value["tools"][0]["required_version"] = json!("1.0.0"),
+                "native-locked-version" => value["tools"][0]["locked_version"] = json!("1.0.0"),
+                "native-version-verified" => value["tools"][0]["version_verified"] = json!(true),
+                mutation => panic!("unhandled check mutation: {mutation}"),
+            }
+            value.as_object_mut().unwrap().remove("digest");
+            value["digest"] = json!(digest_value(&value).unwrap());
+            json!({"admitted":CheckArtifact::parse(&serde_json::to_vec(&value).unwrap()).is_ok()})
+        } else if row["name"] == "receipt-first-excess" {
+            let length = spec["bytes"].as_u64().unwrap() as usize;
+            assert_eq!(length, MAX_ARTIFACT_BYTES + 1);
+            // Distinguish the byte-limit gate from malformed JSON or a missing LF.
+            assert_eq!(
+                parse_execution_receipt(&vec![b' '; length - 1])
+                    .unwrap_err()
+                    .code(),
+                "JOURNAL003"
+            );
+            let error = parse_execution_receipt(&vec![b' '; length]).unwrap_err();
+            assert_eq!(error.code(), "JOURNAL001");
+            json!({"admitted":false})
+        } else if row["name"] == "maintained-v4-preserved" {
+            let mut check = native_document(check_document(), "opaal.check.v4");
+            let mut plan = native_document(plan_document(), "opaal.plan.v4");
+            for value in [&mut check, &mut plan] {
+                value["schema_version"] = json!(4);
+                value["tools"][0]["adapter"] = json!("git");
+                value["tools"][0]["required_version"] = json!(">=2.0.0,<3.0.0");
+                value["tools"][0]["locked_version"] = json!("2.50.0");
+            }
+            let check = CheckArtifact::seal(check).unwrap();
+            let plan = PlanArtifact::seal(plan).unwrap();
+            let check_bytes = CheckArtifact::parse(check.bytes()).unwrap();
+            let plan_bytes = PlanArtifact::parse(plan.bytes()).unwrap();
+            json!({"bytes_unchanged":check_bytes.bytes() == check.bytes() && plan_bytes.bytes() == plan.bytes()})
+        } else {
+            continue;
+        };
+        assert_eq!(observed, row["expected"], "{}", row["name"]);
+        println!(
+            "OPAAL_EVIDENCE_CASE {}",
+            json!({
+                "name":row["name"], "observed":observed, "host":host,
+                "inventory_digest":digest_bytes(inventory_bytes)
+            })
+        );
+        count += 1;
+    }
+    assert_eq!(count, 7);
+}
+
+#[test]
+fn v5_journal_is_metadata_only_without_standard_host_roles() {
+    let mut payload = header(&digest('5'));
+    payload["result_policy"] = json!("require-true");
+    let (mut chain, mut bytes) =
+        JournalChain::begin_with_version("00000000000000000000000000000012", payload, 5).unwrap();
+    assert!(
+        serde_json::from_slice::<Value>(&bytes).unwrap()["payload"]
+            .get("standard_host")
+            .is_none()
+    );
+    bytes.extend(
+        chain
+            .append(
+                "action-start",
+                json!({
+                    "action_node_id":format!("{}#000000", digest('5')),
+                    "action_id":"/project/tasks.opaal::ready", "contract_digest":digest('5')
+                }),
+            )
+            .unwrap(),
+    );
+    let mut operation = process_operation(None, None, None, None);
+    operation["tool"] = json!("checker");
+    operation["argv_count"] = json!(4096);
+    operation["argv_bytes"] = json!(131072);
+    operation["argv_digest"] = Value::Null;
+    operation["argv"] = json!([]);
+    let mut before = effect_before(
+        "process.run",
+        json!({"kind":"tool", "tool":"checker"}),
+        operation.clone(),
+    );
+    before["verdict"] = json!("granted-unenforced");
+    for (field, value) in [
+        ("argv_count", json!(4097)),
+        ("argv_count", json!(0)),
+        ("argv_digest", json!(digest('a'))),
+        ("argv", json!([{"kind":"public", "value":"argv-canary"}])),
+        ("evidence_digest", json!(digest('b'))),
+    ] {
+        let mut invalid = before.clone();
+        invalid["operation"][field] = value;
+        assert!(
+            chain.clone().append("effect-before", invalid).is_err(),
+            "{field}"
+        );
+    }
+    bytes.extend(chain.append("effect-before", before).unwrap());
+    let incomplete = audit_journal(&bytes).unwrap();
+    assert_eq!(incomplete.value()["schema"], "opaal.audit.v5");
+    assert!(!incomplete.is_complete());
+    operation["status"] = json!(17);
+    operation["stdout_bytes"] = json!(12);
+    operation["stderr_bytes"] = json!(9);
+    let after = json!({
+        "action_node_id":format!("{}#000000", digest('5')), "effect":"process.run",
+        "scope":{"kind":"tool", "tool":"checker"}, "operation":operation,
+        "attempt":0, "outcome":metadata_outcome("success"), "evidence_digest":null
+    });
+    for field in ["stdout_bytes", "stderr_bytes"] {
+        let mut exact = after.clone();
+        exact["operation"][field] =
+            json!(opaal_platform::operational::MAX_PROCESS_OUTPUT_BYTES as u64);
+        assert!(
+            chain.clone().append("effect-after", exact).is_ok(),
+            "{field} at limit"
+        );
+
+        let mut excessive = after.clone();
+        excessive["operation"][field] =
+            json!(opaal_platform::operational::MAX_PROCESS_OUTPUT_BYTES as u64 + 1);
+        assert_eq!(
+            chain
+                .clone()
+                .append("effect-after", excessive)
+                .unwrap_err()
+                .code(),
+            "JOURNAL003",
+            "{field} above limit"
+        );
+    }
+    let mut invalid = after.clone();
+    invalid["outcome"]["message"] = json!("child-output-canary");
+    assert!(chain.clone().append("effect-after", invalid).is_err());
+    bytes.extend(chain.append("effect-after", after).unwrap());
+    let action_end = json!({
+        "action_node_id":format!("{}#000000", digest('5')),
+        "outcome":metadata_outcome("success")
+    });
+    let mut invalid = action_end.clone();
+    invalid["outcome"]["value_digest"] = json!(digest('c'));
+    assert!(chain.clone().append("action-end", invalid).is_err());
+    bytes.extend(chain.append("action-end", action_end).unwrap());
+    let mut primary = metadata_outcome("success");
+    primary["cancel_reason"] = Value::Null;
+    bytes.extend(
+        chain
+            .append(
+                "terminal",
+                json!({
+                    "finished_at":"2026-09-09T08:01:01.000000000Z", "primary":primary,
+                    "cleanup":[], "complete":true, "assessment":{"kind":"bool", "value":false}
+                }),
+            )
+            .unwrap(),
+    );
+    let audit = audit_journal(&bytes).unwrap();
+    assert!(audit.is_complete());
+    assert_eq!(audit.value()["assessment"]["value"], false);
+    assert_eq!(AuditArtifact::parse(audit.bytes()).unwrap(), audit);
+    assert!(audit.value().get("standard_host").is_none());
+    for field in ["primary", "cleanup"] {
+        let mut invalid = audit.value().clone();
+        if field == "primary" {
+            invalid[field]["message"] = json!("value-canary");
+        } else {
+            invalid[field] = json!([outcome("cleanup-failed", "CLEANUP", "cleanup-canary")]);
+        }
+        invalid.as_object_mut().unwrap().remove("digest");
+        invalid["digest"] = json!(digest_value(&invalid).unwrap());
+        assert!(AuditArtifact::parse(&serde_json::to_vec(&invalid).unwrap()).is_err());
+    }
+    assert!(!String::from_utf8(bytes).unwrap().contains("canary"));
 }
 
 fn random_document(mut document: Value, schema: &str) -> Value {

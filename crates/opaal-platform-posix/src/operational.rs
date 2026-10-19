@@ -26,6 +26,9 @@ use rustls::pki_types::pem::PemObject;
 use rustls::pki_types::{CertificateDer, ServerName};
 use rustls::{ClientConfig, ClientConnection, RootCertStore, StreamOwned};
 
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+mod native;
+
 /// One concrete operational adapter with a process-local monotonic origin.
 #[derive(Debug)]
 pub struct PosixOperationalAdapter {
@@ -47,7 +50,32 @@ impl Default for PosixOperationalAdapter {
     }
 }
 
+#[cfg(target_os = "linux")]
+#[allow(unsafe_code)]
+fn close_descriptors_on_exec(command: &mut Command) {
+    // SAFETY: The callback obeys `pre_exec`'s post-fork rules: it makes only a raw `close_range` syscall and reports a failed return code without allocating, locking, or touching shared state.
+    unsafe {
+        command.pre_exec(|| {
+            if libc::syscall(libc::SYS_close_range, 3_u32, u32::MAX, 4_u32) != 0 {
+                Err(io::Error::last_os_error())
+            } else {
+                Ok(())
+            }
+        });
+    }
+}
+
 impl OperationalAdapter for PosixOperationalAdapter {
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    fn snapshot_executable(
+        &self,
+        source: &File,
+        max_bytes: usize,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<File, OperationalError> {
+        native::snapshot(source, max_bytes, cancelled)
+    }
+
     #[allow(clippy::useless_conversion)] // Native stat widths differ between hosts.
     fn observe_local_path(
         &self,
@@ -335,9 +363,28 @@ impl OperationalAdapter for PosixOperationalAdapter {
             )
         })?;
         #[cfg(target_os = "linux")]
+        let mut native_snapshot = false;
+        #[cfg(target_os = "linux")]
         let executable_descriptor = request
             .executable_file
-            .map(rustix::io::dup)
+            .map(|file| {
+                match rustix::fs::fcntl_get_seals(file) {
+                    Ok(seals)
+                        if seals.contains(
+                            rustix::fs::SealFlags::WRITE
+                                | rustix::fs::SealFlags::GROW
+                                | rustix::fs::SealFlags::SHRINK
+                                | rustix::fs::SealFlags::SEAL,
+                        ) =>
+                    {
+                        native_snapshot = true;
+                        rustix::io::fcntl_dupfd_cloexec(file, 3)
+                    }
+                    // Ordinary tmpfs files support seals too; scripts need an inherited descriptor.
+                    Ok(_) | Err(rustix::io::Errno::INVAL) => rustix::io::dup(file),
+                    Err(cause) => Err(cause),
+                }
+            })
             .transpose()
             .map_err(|cause| io_error(cause.into()))?;
         #[cfg(target_os = "linux")]
@@ -363,6 +410,10 @@ impl OperationalAdapter for PosixOperationalAdapter {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         command.process_group(0);
+        #[cfg(target_os = "linux")]
+        if native_snapshot {
+            close_descriptors_on_exec(&mut command);
+        }
         let mut child = command.spawn().map_err(io_error)?;
         let mut stdout = child.stdout.take().expect("piped stdout is present");
         let mut stderr = child.stderr.take().expect("piped stderr is present");

@@ -56,6 +56,7 @@ def package_examples(root: Path, paths: list[str], source: str, *,
         ("tests/golden/random-values", "random-values"),
         ("tests/golden/standard-input-output", "standard-input-output"),
         ("tests/golden/docker-image-checks", "docker-image-checks"),
+        ("tests/golden/controlled-external-tools", "controlled-native-tools"),
     }:
         raise ValueError("invalid fixture source or bundle name")
     prefix = f"opaal-v{VERSION}-{name}"
@@ -88,7 +89,8 @@ def package_examples(root: Path, paths: list[str], source: str, *,
     kind = {EXAMPLES: "examples", "tests/golden/source-formatting": "formatting-fixtures",
             "tests/golden/random-values": "random-fixtures",
             "tests/golden/standard-input-output": "stdio-fixtures",
-            "tests/golden/docker-image-checks": "docker-fixtures"}[directory]
+            "tests/golden/docker-image-checks": "docker-fixtures",
+            "tests/golden/controlled-external-tools": "native-fixtures"}[directory]
     write_manifest(archive, kind=kind,
                    source=source, platform="portable")
     return archive

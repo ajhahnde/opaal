@@ -106,6 +106,15 @@ pub fn run_accepted_task(
         secret_input,
         Some(&mut audit),
     );
+    finish_task_run(request, &execution, &audit, summary)
+}
+
+fn finish_task_run(
+    request: &ExecuteProjectRequest,
+    execution: &Result<ExecuteFrontendRun, ProjectFrontendError>,
+    audit: &RunAudit,
+    summary: &mut dyn Write,
+) -> TaskRun {
     let receipt = execution
         .as_ref()
         .ok()
@@ -117,7 +126,7 @@ pub fn run_accepted_task(
         });
     let mut exit_code = if requested {
         130
-    } else if let (Ok(run), Some(receipt)) = (&execution, receipt) {
+    } else if let (Ok(run), Some(receipt)) = (execution, receipt) {
         if !audit.persisted
             || !audit
                 .artifact
@@ -211,6 +220,10 @@ fn safe_code(value: &Value) -> Value {
             | "EXECUTE_OUTPUT"
             | "EXECUTE_EVIDENCE_OVERFLOW"
             | "JOURNAL005"
+            | "NATIVE001"
+            | "NATIVE002"
+            | "NATIVE003"
+            | "NATIVE004"
             | "CLEANUP001"
             | "OPERATION004"),
         ) => json!(code),
@@ -261,7 +274,7 @@ fn explanation(
             if failed != receipt_cleanup_failed {
                 return Err(invalid_evidence());
             }
-            if value.get("standard_host").is_some() {
+            if value["schema_version"] == 5 || value.get("standard_host").is_some() {
                 let mut progress = json!({});
                 for role in [
                     "entropy.system",
@@ -397,6 +410,17 @@ mod tests {
     use super::*;
     use std::cell::RefCell;
     use std::rc::Rc;
+
+    include!("finish_observers.rs");
+
+    #[test]
+    fn native_explanation_codes_are_fixed_and_payload_free() {
+        for code in ["NATIVE001", "NATIVE002", "NATIVE003", "NATIVE004"] {
+            assert_eq!(safe_code(&json!(code)), json!(code));
+        }
+        assert_eq!(safe_code(&json!("NATIVE005")), Value::Null);
+        assert_eq!(safe_code(&json!("NATIVE001: payload-canary")), Value::Null);
+    }
 
     struct FaultSink {
         fault: &'static str,

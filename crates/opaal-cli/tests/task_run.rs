@@ -5,7 +5,7 @@ use std::io::{self, Write};
 #[cfg(target_os = "linux")]
 use std::os::unix::ffi::OsStringExt;
 use std::os::unix::fs::{PermissionsExt, symlink};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::{Command, Output, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -19,12 +19,19 @@ struct Project(PathBuf);
 
 impl Project {
     fn new() -> Self {
-        let parent = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!(
-            "accepted-run-{}-{}",
-            std::process::id(),
-            NEXT.fetch_add(1, Ordering::Relaxed)
-        ));
-        fs::create_dir_all(&parent).unwrap();
+        let temporary_root = std::env::temp_dir().canonicalize().unwrap();
+        let parent = loop {
+            let candidate = temporary_root.join(format!(
+                "accepted-run-{}-{}",
+                std::process::id(),
+                NEXT.fetch_add(1, Ordering::Relaxed)
+            ));
+            match fs::create_dir(&candidate) {
+                Ok(()) => break candidate,
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+                Err(error) => panic!("failed to create test directory {candidate:?}: {error}"),
+            }
+        };
         let root = parent.join("project");
         let initialized = Command::new(env!("CARGO_BIN_EXE_opaal"))
             .args([

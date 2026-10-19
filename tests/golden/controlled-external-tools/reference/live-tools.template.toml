@@ -1,0 +1,14 @@
+schema_version = 1
+project = "repository_check"
+environment = "ci"
+platform = "x86_64-unknown-linux-gnu"
+[child_environment]
+inherit = []
+[[child_environment.variables]]
+name = "LC_ALL"
+value = { encoding = "base64url-nopad", platform = "unix", value = "Qw" }
+[[tools]]
+id = "checker"
+adapter = "native"
+path = { encoding = "base64url-nopad", platform = "unix", value = "@TOOL@" }
+digest = "@DIGEST@"

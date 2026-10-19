@@ -4,6 +4,17 @@ All notable changes to OPAAL are documented here.
 
 ## [Unreleased]
 
+### Added
+
+- Bind byte-pinned native executables through the existing project ToolIdentity,
+  process action and explicit accepted-plan lifecycle on Linux x86_64. Native
+  versions remain absent; child effects and dynamic dependencies are unenforced.
+- Add non-executing repository-check preparation and diagnosis, shared saved/live
+  repository policy, pure tests and an independent Python comparison.
+- Add closed native plan/check/journal/audit v5 and project inspection v2 forms.
+  Existing maintained-only forms remain unchanged; older readers refuse native
+  forms rather than downgrading or automatically reaccepting them.
+
 ## [1.5.0]
 
 ### Added

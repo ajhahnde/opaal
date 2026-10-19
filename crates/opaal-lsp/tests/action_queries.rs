@@ -111,3 +111,116 @@ fn action_identity_signature_effects_and_definition_are_shared() {
 
     fs::remove_dir_all(directory).unwrap();
 }
+
+#[test]
+fn native_project_uses_shared_process_policy_and_effect_observers_without_a_lock() {
+    let directory = std::env::temp_dir()
+        .canonicalize()
+        .unwrap()
+        .join(format!("opaal-lsp-native-{}", std::process::id()));
+    fs::create_dir(&directory).unwrap();
+    fs::write(
+        directory.join("opaal.toml"),
+        include_str!("../../../examples/repository-check/live.toml"),
+    )
+    .unwrap();
+    fs::write(
+        directory.join("policy.opaal"),
+        include_str!("../../../examples/repository-check/policy.opaal"),
+    )
+    .unwrap();
+    let text = include_str!("../../../examples/repository-check/tasks.opaal");
+    fs::write(directory.join("tasks.opaal"), text).unwrap();
+    let uri = DocumentUri::from_absolute_path(&directory.join("tasks.opaal")).unwrap();
+    let mut workspace = Workspace::new();
+    workspace
+        .select_project(&DocumentUri::from_absolute_path(&directory.join("opaal.toml")).unwrap())
+        .unwrap();
+    workspace.open(uri.clone(), 1, text.to_owned()).unwrap();
+    let diagnostics = workspace
+        .diagnostic_snapshot()
+        .analyze_diagnostics(PositionEncoding::Utf16)
+        .unwrap();
+    assert!(
+        diagnostics
+            .documents()
+            .iter()
+            .all(|document| document.diagnostics().is_empty()),
+        "{diagnostics:?}"
+    );
+    let hover = request(
+        &workspace,
+        "textDocument/hover",
+        &uri,
+        text,
+        text.find("process::run(").unwrap() + "process::".len() + 1,
+    );
+    let markdown = hover["contents"]["value"].as_str().unwrap();
+    for expected in ["def run(", "ToolIdentity", "List[String]", "ToolResult"] {
+        assert!(markdown.contains(expected), "{markdown}");
+    }
+    let completion = request(
+        &workspace,
+        "textDocument/completion",
+        &uri,
+        text,
+        text.find("process::run(").unwrap() + "process::".len(),
+    );
+    let names = completion
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| item["label"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert!(names.contains(&"process::run") && names.contains(&"process::ToolResult"));
+    let signature = request(
+        &workspace,
+        "textDocument/signatureHelp",
+        &uri,
+        text,
+        text.find("[\"--norc\"").unwrap() + 2,
+    );
+    let label = signature["signatures"][0]["label"].as_str().unwrap();
+    assert!(
+        label.contains("ToolIdentity") && label.contains("ToolResult"),
+        "{label}"
+    );
+    let action = request(
+        &workspace,
+        "textDocument/hover",
+        &uri,
+        text,
+        text.find("check_repository(").unwrap() + 2,
+    );
+    let action = action["contents"]["value"].as_str().unwrap();
+    for expected in ["process.run", "filesystem.read", "stdout.write"] {
+        assert!(action.contains(expected), "{action}");
+    }
+    let definition = request(
+        &workspace,
+        "textDocument/definition",
+        &uri,
+        text,
+        text.find("policy::checked").unwrap() + "policy::".len() + 1,
+    );
+    assert_eq!(
+        definition["uri"],
+        DocumentUri::from_absolute_path(&directory.join("policy.opaal"))
+            .unwrap()
+            .as_str()
+    );
+    assert!(!directory.join("live-tools.toml").exists());
+    assert!(!directory.join("live-authority.toml").exists());
+    let edits = prepare_request(
+        &workspace.diagnostic_snapshot(),
+        PositionEncoding::Utf16,
+        RequestControl::new(),
+        "textDocument/formatting",
+        &json!({"textDocument": {"uri": uri.as_str()},
+                "options": {"tabSize": 4, "insertSpaces": true}}),
+    )
+    .finish(&workspace)
+    .unwrap();
+    assert_eq!(edits, json!([]));
+    fs::remove_dir_all(directory).unwrap();
+}

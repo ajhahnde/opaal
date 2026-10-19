@@ -467,6 +467,45 @@ fn checked_in_project_case_inspects_and_checks_without_execution() {
 }
 
 #[test]
+fn native_task_inspection_reports_null_version_without_loading_the_tool() {
+    let (_project, manifest, _, _) = fixture();
+    let text = fs::read_to_string(&manifest).unwrap().replace(
+        "adapter = \"git\"\nversion = \">=2.39.0,<3.0.0\"",
+        "adapter = \"native\"",
+    );
+    fs::write(&manifest, text).unwrap();
+    let output = opaal([
+        OsStr::new("task"),
+        OsStr::new("inspect"),
+        OsStr::new("--project"),
+        manifest.as_os_str(),
+        OsStr::new("release"),
+        OsStr::new("--format"),
+        OsStr::new("json"),
+    ]);
+    assert!(output.status.success(), "{output:?}");
+    let view: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(view["schema"], "opaal.project-inspection.v2");
+    assert_eq!(view["schema_version"], 2);
+    assert_eq!(view["tools"][0]["id"], "demo::tool::git");
+    assert_eq!(view["tools"][0]["adapter"], "native");
+    assert!(view["tools"][0]["version"].is_null());
+    let output = opaal([
+        OsStr::new("task"),
+        OsStr::new("inspect"),
+        OsStr::new("--project"),
+        manifest.as_os_str(),
+        OsStr::new("release"),
+    ]);
+    assert!(output.status.success(), "{output:?}");
+    assert!(
+        String::from_utf8(output.stdout)
+            .unwrap()
+            .contains("demo::tool::git native version unverified")
+    );
+}
+
+#[test]
 fn task_inspect_reports_the_shared_action_contract() {
     let (_project, manifest, _, _) = fixture();
     let output = opaal([

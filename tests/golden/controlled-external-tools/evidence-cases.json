@@ -1,0 +1,2183 @@
+{
+  "schema_version": 1,
+  "cases": [
+    {
+      "name": "metadata-native-call",
+      "hosts": [
+        "x86_64-unknown-linux-gnu"
+      ],
+      "input": {
+        "kind": "redaction",
+        "route": "native-call",
+        "canaries": [
+          "argv",
+          "environment",
+          "stdout",
+          "stderr",
+          "error-message"
+        ]
+      },
+      "expected": {
+        "raw_canaries": false,
+        "argv": [],
+        "argv_digest": null,
+        "payload_digest": null,
+        "value_digest": null,
+        "canonical_outcomes": true,
+        "fictitious_standard_host": false
+      }
+    },
+    {
+      "name": "metadata-pure-unused-native",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "redaction",
+        "route": "pure-unused-native",
+        "canaries": [
+          "argv",
+          "environment",
+          "stdout",
+          "stderr",
+          "error-message"
+        ]
+      },
+      "expected": {
+        "raw_canaries": false,
+        "argv": [],
+        "argv_digest": null,
+        "payload_digest": null,
+        "value_digest": null,
+        "canonical_outcomes": true,
+        "fictitious_standard_host": false
+      }
+    },
+    {
+      "name": "metadata-caught-throw",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "redaction",
+        "route": "caught-throw",
+        "canaries": [
+          "argv",
+          "environment",
+          "stdout",
+          "stderr",
+          "error-message"
+        ]
+      },
+      "expected": {
+        "raw_canaries": false,
+        "argv": [],
+        "argv_digest": null,
+        "payload_digest": null,
+        "value_digest": null,
+        "canonical_outcomes": true,
+        "fictitious_standard_host": false
+      }
+    },
+    {
+      "name": "metadata-unhandled-throw",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "redaction",
+        "route": "unhandled-throw",
+        "canaries": [
+          "argv",
+          "environment",
+          "stdout",
+          "stderr",
+          "error-message"
+        ]
+      },
+      "expected": {
+        "raw_canaries": false,
+        "argv": [],
+        "argv_digest": null,
+        "payload_digest": null,
+        "value_digest": null,
+        "canonical_outcomes": true,
+        "fictitious_standard_host": false
+      }
+    },
+    {
+      "name": "metadata-maintained-only",
+      "hosts": [
+        "x86_64-unknown-linux-gnu"
+      ],
+      "input": {
+        "kind": "redaction",
+        "route": "maintained-only",
+        "canaries": [
+          "argv",
+          "environment",
+          "stdout",
+          "stderr",
+          "error-message"
+        ]
+      },
+      "expected": {
+        "raw_canaries": false,
+        "argv": [],
+        "argv_digest": null,
+        "payload_digest": null,
+        "value_digest": null,
+        "canonical_outcomes": true,
+        "fictitious_standard_host": false
+      }
+    },
+    {
+      "name": "metadata-mixed-native-maintained",
+      "hosts": [
+        "x86_64-unknown-linux-gnu"
+      ],
+      "input": {
+        "kind": "redaction",
+        "route": "mixed-native-maintained",
+        "canaries": [
+          "argv",
+          "environment",
+          "stdout",
+          "stderr",
+          "error-message"
+        ]
+      },
+      "expected": {
+        "raw_canaries": false,
+        "argv": [],
+        "argv_digest": null,
+        "payload_digest": null,
+        "value_digest": null,
+        "canonical_outcomes": true,
+        "fictitious_standard_host": false
+      }
+    },
+    {
+      "name": "metadata-mixed-no-stdio",
+      "hosts": [
+        "x86_64-unknown-linux-gnu"
+      ],
+      "input": {
+        "kind": "redaction",
+        "route": "mixed-no-stdio",
+        "canaries": [
+          "argv",
+          "environment",
+          "stdout",
+          "stderr",
+          "error-message"
+        ]
+      },
+      "expected": {
+        "raw_canaries": false,
+        "argv": [],
+        "argv_digest": null,
+        "payload_digest": null,
+        "value_digest": null,
+        "canonical_outcomes": true,
+        "fictitious_standard_host": false
+      }
+    },
+    {
+      "name": "metadata-mixed-caught-throw",
+      "hosts": [
+        "x86_64-unknown-linux-gnu"
+      ],
+      "input": {
+        "kind": "redaction",
+        "route": "mixed-caught-throw",
+        "canaries": [
+          "argv",
+          "environment",
+          "stdout",
+          "stderr",
+          "error-message"
+        ]
+      },
+      "expected": {
+        "raw_canaries": false,
+        "argv": [],
+        "argv_digest": null,
+        "payload_digest": null,
+        "value_digest": null,
+        "canonical_outcomes": true,
+        "fictitious_standard_host": false
+      }
+    },
+    {
+      "name": "metadata-mixed-unhandled-throw",
+      "hosts": [
+        "x86_64-unknown-linux-gnu"
+      ],
+      "input": {
+        "kind": "redaction",
+        "route": "mixed-unhandled-throw",
+        "canaries": [
+          "argv",
+          "environment",
+          "stdout",
+          "stderr",
+          "error-message"
+        ]
+      },
+      "expected": {
+        "raw_canaries": false,
+        "argv": [],
+        "argv_digest": null,
+        "payload_digest": null,
+        "value_digest": null,
+        "canonical_outcomes": true,
+        "fictitious_standard_host": false
+      }
+    },
+    {
+      "name": "explicit-safe-report",
+      "hosts": [
+        "x86_64-unknown-linux-gnu"
+      ],
+      "input": {
+        "kind": "redaction",
+        "route": "explicit-safe-report"
+      },
+      "expected": {
+        "report_only_explicit_fields": true,
+        "raw_canaries": false
+      }
+    },
+    {
+      "name": "metadata-argv-count-1",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "process-descriptor",
+        "argv_count": 1
+      },
+      "expected": {
+        "admitted": true
+      }
+    },
+    {
+      "name": "metadata-argv-count-256",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "process-descriptor",
+        "argv_count": 256
+      },
+      "expected": {
+        "admitted": true
+      }
+    },
+    {
+      "name": "metadata-argv-count-4096",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "process-descriptor",
+        "argv_count": 4096
+      },
+      "expected": {
+        "admitted": true
+      }
+    },
+    {
+      "name": "metadata-argv-count-4097",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "process-descriptor",
+        "argv_count": 4097
+      },
+      "expected": {
+        "admitted": false
+      }
+    },
+    {
+      "name": "metadata-argv-count-0",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "process-descriptor",
+        "argv_count": 0
+      },
+      "expected": {
+        "admitted": false
+      }
+    },
+    {
+      "name": "forbidden-process-argv",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "metadata-injection",
+        "field": "argv"
+      },
+      "expected": {
+        "admitted": false
+      }
+    },
+    {
+      "name": "forbidden-process-argv-digest",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "metadata-injection",
+        "field": "argv_digest"
+      },
+      "expected": {
+        "admitted": false
+      }
+    },
+    {
+      "name": "forbidden-process-stdout-digest",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "metadata-injection",
+        "field": "stdout_digest"
+      },
+      "expected": {
+        "admitted": false
+      }
+    },
+    {
+      "name": "forbidden-process-stderr-digest",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "metadata-injection",
+        "field": "stderr_digest"
+      },
+      "expected": {
+        "admitted": false
+      }
+    },
+    {
+      "name": "forbidden-process-value-digest",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "metadata-injection",
+        "field": "value_digest"
+      },
+      "expected": {
+        "admitted": false
+      }
+    },
+    {
+      "name": "forbidden-process-message",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "metadata-injection",
+        "field": "message"
+      },
+      "expected": {
+        "admitted": false
+      }
+    },
+    {
+      "name": "forbidden-process-extra",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "metadata-injection",
+        "field": "extra"
+      },
+      "expected": {
+        "admitted": false
+      }
+    },
+    {
+      "name": "stale-acceptance",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "acceptance",
+        "changed": "acceptance"
+      },
+      "expected": {
+        "exit": 2,
+        "launches": 0,
+        "evidence_created": false
+      }
+    },
+    {
+      "name": "stale-source",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "acceptance",
+        "changed": "source"
+      },
+      "expected": {
+        "exit": 2,
+        "launches": 0,
+        "evidence_created": false
+      }
+    },
+    {
+      "name": "stale-manifest",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "acceptance",
+        "changed": "manifest"
+      },
+      "expected": {
+        "exit": 2,
+        "launches": 0,
+        "evidence_created": false
+      }
+    },
+    {
+      "name": "stale-authority",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "acceptance",
+        "changed": "authority"
+      },
+      "expected": {
+        "exit": 2,
+        "launches": 0,
+        "evidence_created": false
+      }
+    },
+    {
+      "name": "stale-tool-lock",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "acceptance",
+        "changed": "tool-lock"
+      },
+      "expected": {
+        "exit": 2,
+        "launches": 0,
+        "evidence_created": false
+      }
+    },
+    {
+      "name": "stale-input-bytes",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "acceptance",
+        "changed": "input-bytes"
+      },
+      "expected": {
+        "exit": 2,
+        "launches": 0,
+        "evidence_created": false
+      }
+    },
+    {
+      "name": "stale-native-bytes",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "acceptance",
+        "changed": "native-bytes"
+      },
+      "expected": {
+        "exit": 2,
+        "launches": 0,
+        "evidence_created": false
+      }
+    },
+    {
+      "name": "stale-native-path",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "acceptance",
+        "changed": "native-path"
+      },
+      "expected": {
+        "exit": 2,
+        "launches": 0,
+        "evidence_created": false
+      }
+    },
+    {
+      "name": "stale-child-environment",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "acceptance",
+        "changed": "child-environment"
+      },
+      "expected": {
+        "exit": 2,
+        "launches": 0,
+        "evidence_created": false
+      }
+    },
+    {
+      "name": "stale-host",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "acceptance",
+        "changed": "host"
+      },
+      "expected": {
+        "exit": 2,
+        "launches": 0,
+        "evidence_created": false
+      }
+    },
+    {
+      "name": "stale-expiry",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "acceptance",
+        "changed": "expiry"
+      },
+      "expected": {
+        "exit": 2,
+        "launches": 0,
+        "evidence_created": false
+      }
+    },
+    {
+      "name": "stale-root",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "acceptance",
+        "changed": "root"
+      },
+      "expected": {
+        "exit": 2,
+        "launches": 0,
+        "evidence_created": false
+      }
+    },
+    {
+      "name": "bound-input-before-use-changed-bytes",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "input-race",
+        "phase": "after-acceptance-before-read",
+        "change": "changed-bytes"
+      },
+      "expected": {
+        "exit": 2,
+        "primary": "refused",
+        "value_returned": false
+      }
+    },
+    {
+      "name": "bound-input-before-use-symlink",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "input-race",
+        "phase": "after-acceptance-before-read",
+        "change": "symlink"
+      },
+      "expected": {
+        "exit": 2,
+        "primary": "error",
+        "value_returned": false
+      }
+    },
+    {
+      "name": "bound-input-before-use-same-bytes-replacement",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "input-race",
+        "phase": "after-acceptance-before-read",
+        "change": "same-bytes-replacement"
+      },
+      "expected": {
+        "exit": 0,
+        "primary": "success",
+        "value_returned": true
+      }
+    },
+    {
+      "name": "reference-persistent-child-change",
+      "hosts": [
+        "x86_64-unknown-linux-gnu"
+      ],
+      "input": {
+        "kind": "input-race",
+        "phase": "during-child",
+        "change": "persistent-child-change"
+      },
+      "expected": {
+        "exit": 2,
+        "report": false
+      }
+    },
+    {
+      "name": "reference-child-change-and-restore",
+      "hosts": [
+        "x86_64-unknown-linux-gnu"
+      ],
+      "input": {
+        "kind": "input-race",
+        "phase": "during-child",
+        "change": "child-change-and-restore"
+      },
+      "expected": {
+        "detection_guaranteed": false,
+        "child_bytes_proven": false
+      }
+    },
+    {
+      "name": "complete-pass",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "evidence",
+        "fault": "none"
+      },
+      "expected": {
+        "exit": 0,
+        "conclusion": "passed"
+      }
+    },
+    {
+      "name": "complete-negative",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "evidence",
+        "assessment": false
+      },
+      "expected": {
+        "exit": 1,
+        "conclusion": "negative"
+      }
+    },
+    {
+      "name": "language-error",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "evidence",
+        "primary": "error"
+      },
+      "expected": {
+        "exit": 2,
+        "conclusion": "failed"
+      }
+    },
+    {
+      "name": "requested-cancellation",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "evidence",
+        "primary": "cancelled",
+        "cause": "requested"
+      },
+      "expected": {
+        "exit": 130,
+        "conclusion": "cancelled"
+      }
+    },
+    {
+      "name": "deadline-cancellation",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "evidence",
+        "primary": "cancelled",
+        "cause": "timeout"
+      },
+      "expected": {
+        "exit": 2,
+        "passed": false
+      }
+    },
+    {
+      "name": "missing-audit",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "evidence",
+        "fault": "missing-audit"
+      },
+      "expected": {
+        "inspect_exit": 0,
+        "conclusion": "unproven"
+      }
+    },
+    {
+      "name": "journal-header-prefix",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "evidence",
+        "fault": "journal-header-prefix"
+      },
+      "expected": {
+        "inspect_exit": 0,
+        "conclusion": "unproven"
+      }
+    },
+    {
+      "name": "journal-truncated-terminal",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "evidence",
+        "fault": "journal-truncated-terminal"
+      },
+      "expected": {
+        "inspect_exit": 0,
+        "conclusion": "unproven"
+      }
+    },
+    {
+      "name": "future-receipt",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "evidence",
+        "fault": "future-receipt"
+      },
+      "expected": {
+        "inspect_exit": 2
+      }
+    },
+    {
+      "name": "future-audit",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "evidence",
+        "fault": "future-audit"
+      },
+      "expected": {
+        "inspect_exit": 2
+      }
+    },
+    {
+      "name": "receipt-run-mismatch",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "evidence",
+        "fault": "receipt-run-id"
+      },
+      "expected": {
+        "inspect_exit": 2
+      }
+    },
+    {
+      "name": "audit-run-mismatch",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "evidence",
+        "fault": "audit-run-id"
+      },
+      "expected": {
+        "inspect_exit": 2
+      }
+    },
+    {
+      "name": "receipt-plan-mismatch",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "evidence",
+        "fault": "receipt-plan-digest"
+      },
+      "expected": {
+        "inspect_exit": 2
+      }
+    },
+    {
+      "name": "receipt-partial-forgery",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "evidence",
+        "fault": "receipt-partial"
+      },
+      "expected": {
+        "inspect_exit": 2
+      }
+    },
+    {
+      "name": "receipt-progress-forgery",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "evidence",
+        "fault": "receipt-progress"
+      },
+      "expected": {
+        "inspect_exit": 2
+      }
+    },
+    {
+      "name": "audit-message-injection",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "evidence",
+        "fault": "audit-message",
+        "reseal": true
+      },
+      "expected": {
+        "inspect_exit": 2
+      }
+    },
+    {
+      "name": "audit-value-digest-injection",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "evidence",
+        "fault": "audit-value-digest",
+        "reseal": true
+      },
+      "expected": {
+        "inspect_exit": 2
+      }
+    },
+    {
+      "name": "audit-extra-field",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "evidence",
+        "fault": "audit-extra",
+        "reseal": true
+      },
+      "expected": {
+        "inspect_exit": 2
+      }
+    },
+    {
+      "name": "audit-digest-mismatch",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "evidence",
+        "fault": "audit-digest"
+      },
+      "expected": {
+        "inspect_exit": 2
+      }
+    },
+    {
+      "name": "journal-corrupt-first-line",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "evidence",
+        "fault": "journal-corrupt-first-line"
+      },
+      "expected": {
+        "audit_refused": true
+      }
+    },
+    {
+      "name": "journal-corrupt-middle-line",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "evidence",
+        "fault": "journal-corrupt-middle-line"
+      },
+      "expected": {
+        "audit_refused": true
+      }
+    },
+    {
+      "name": "journal-reordered-attempt",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "evidence",
+        "fault": "journal-reordered-attempt",
+        "reseal": true
+      },
+      "expected": {
+        "audit_refused": true
+      }
+    },
+    {
+      "name": "journal-unmatched-after",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "evidence",
+        "fault": "journal-unmatched-after",
+        "reseal": true
+      },
+      "expected": {
+        "audit_refused": true
+      }
+    },
+    {
+      "name": "explain-without-project",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "evidence",
+        "remove": [
+          "source",
+          "tool-lock",
+          "journal"
+        ]
+      },
+      "expected": {
+        "inspect_exit": 0,
+        "conclusion": "passed"
+      }
+    },
+    {
+      "name": "success-before-event-failure",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "finish-fault",
+        "primary": "success",
+        "fault": "before-event"
+      },
+      "expected": {
+        "exit": 2,
+        "passed": false,
+        "partial_files_retained": true
+      }
+    },
+    {
+      "name": "success-after-event-failure",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "finish-fault",
+        "primary": "success",
+        "fault": "after-event"
+      },
+      "expected": {
+        "exit": 2,
+        "passed": false,
+        "partial_files_retained": true
+      }
+    },
+    {
+      "name": "success-action-end-failure",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "finish-fault",
+        "primary": "success",
+        "fault": "action-end"
+      },
+      "expected": {
+        "exit": 2,
+        "passed": false,
+        "partial_files_retained": true
+      }
+    },
+    {
+      "name": "success-terminal-failure",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "finish-fault",
+        "primary": "success",
+        "fault": "terminal"
+      },
+      "expected": {
+        "exit": 2,
+        "passed": false,
+        "partial_files_retained": true
+      }
+    },
+    {
+      "name": "success-receipt-failure",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "finish-fault",
+        "primary": "success",
+        "fault": "receipt"
+      },
+      "expected": {
+        "exit": 2,
+        "passed": false,
+        "partial_files_retained": true
+      }
+    },
+    {
+      "name": "success-audit-failure",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "finish-fault",
+        "primary": "success",
+        "fault": "audit"
+      },
+      "expected": {
+        "exit": 2,
+        "passed": false,
+        "partial_files_retained": true
+      }
+    },
+    {
+      "name": "success-summary-failure",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "finish-fault",
+        "primary": "success",
+        "fault": "summary"
+      },
+      "expected": {
+        "exit": 2,
+        "passed": false,
+        "partial_files_retained": true
+      }
+    },
+    {
+      "name": "success-cleanup-failure",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "finish-fault",
+        "primary": "success",
+        "fault": "cleanup"
+      },
+      "expected": {
+        "exit": 2,
+        "passed": false,
+        "partial_files_retained": true
+      }
+    },
+    {
+      "name": "error-before-event-failure",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "finish-fault",
+        "primary": "error",
+        "fault": "before-event"
+      },
+      "expected": {
+        "exit": 2,
+        "passed": false,
+        "primary_preserved": true,
+        "partial_files_retained": true
+      }
+    },
+    {
+      "name": "error-after-event-failure",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "finish-fault",
+        "primary": "error",
+        "fault": "after-event"
+      },
+      "expected": {
+        "exit": 2,
+        "passed": false,
+        "primary_preserved": true,
+        "partial_files_retained": true
+      }
+    },
+    {
+      "name": "error-action-end-failure",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "finish-fault",
+        "primary": "error",
+        "fault": "action-end"
+      },
+      "expected": {
+        "exit": 2,
+        "passed": false,
+        "primary_preserved": true,
+        "partial_files_retained": true
+      }
+    },
+    {
+      "name": "error-terminal-failure",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "finish-fault",
+        "primary": "error",
+        "fault": "terminal"
+      },
+      "expected": {
+        "exit": 2,
+        "passed": false,
+        "primary_preserved": true,
+        "partial_files_retained": true
+      }
+    },
+    {
+      "name": "error-receipt-failure",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "finish-fault",
+        "primary": "error",
+        "fault": "receipt"
+      },
+      "expected": {
+        "exit": 2,
+        "passed": false,
+        "primary_preserved": true,
+        "partial_files_retained": true
+      }
+    },
+    {
+      "name": "error-audit-failure",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "finish-fault",
+        "primary": "error",
+        "fault": "audit"
+      },
+      "expected": {
+        "exit": 2,
+        "passed": false,
+        "primary_preserved": true,
+        "partial_files_retained": true
+      }
+    },
+    {
+      "name": "error-summary-failure",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "finish-fault",
+        "primary": "error",
+        "fault": "summary"
+      },
+      "expected": {
+        "exit": 2,
+        "passed": false,
+        "primary_preserved": true,
+        "partial_files_retained": true
+      }
+    },
+    {
+      "name": "error-cleanup-failure",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "finish-fault",
+        "primary": "error",
+        "fault": "cleanup"
+      },
+      "expected": {
+        "exit": 2,
+        "passed": false,
+        "primary_preserved": true,
+        "partial_files_retained": true
+      }
+    },
+    {
+      "name": "requested-cancellation-before-event-failure",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "finish-fault",
+        "primary": "requested-cancellation",
+        "fault": "before-event"
+      },
+      "expected": {
+        "exit": 130,
+        "passed": false,
+        "primary_preserved": true,
+        "partial_files_retained": true
+      }
+    },
+    {
+      "name": "requested-cancellation-after-event-failure",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "finish-fault",
+        "primary": "requested-cancellation",
+        "fault": "after-event"
+      },
+      "expected": {
+        "exit": 130,
+        "passed": false,
+        "primary_preserved": true,
+        "partial_files_retained": true
+      }
+    },
+    {
+      "name": "requested-cancellation-action-end-failure",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "finish-fault",
+        "primary": "requested-cancellation",
+        "fault": "action-end"
+      },
+      "expected": {
+        "exit": 130,
+        "passed": false,
+        "primary_preserved": true,
+        "partial_files_retained": true
+      }
+    },
+    {
+      "name": "requested-cancellation-terminal-failure",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "finish-fault",
+        "primary": "requested-cancellation",
+        "fault": "terminal"
+      },
+      "expected": {
+        "exit": 130,
+        "passed": false,
+        "primary_preserved": true,
+        "partial_files_retained": true
+      }
+    },
+    {
+      "name": "requested-cancellation-receipt-failure",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "finish-fault",
+        "primary": "requested-cancellation",
+        "fault": "receipt"
+      },
+      "expected": {
+        "exit": 130,
+        "passed": false,
+        "primary_preserved": true,
+        "partial_files_retained": true
+      }
+    },
+    {
+      "name": "requested-cancellation-audit-failure",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "finish-fault",
+        "primary": "requested-cancellation",
+        "fault": "audit"
+      },
+      "expected": {
+        "exit": 130,
+        "passed": false,
+        "primary_preserved": true,
+        "partial_files_retained": true
+      }
+    },
+    {
+      "name": "requested-cancellation-summary-failure",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "finish-fault",
+        "primary": "requested-cancellation",
+        "fault": "summary"
+      },
+      "expected": {
+        "exit": 130,
+        "passed": false,
+        "primary_preserved": true,
+        "partial_files_retained": true
+      }
+    },
+    {
+      "name": "requested-cancellation-cleanup-failure",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "finish-fault",
+        "primary": "requested-cancellation",
+        "fault": "cleanup"
+      },
+      "expected": {
+        "exit": 130,
+        "passed": false,
+        "primary_preserved": true,
+        "partial_files_retained": true
+      }
+    },
+    {
+      "name": "native-under-v2",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "schema",
+        "native": true,
+        "schema_version": 2
+      },
+      "expected": {
+        "admitted": false
+      }
+    },
+    {
+      "name": "native-under-v3",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "schema",
+        "native": true,
+        "schema_version": 3
+      },
+      "expected": {
+        "admitted": false
+      }
+    },
+    {
+      "name": "native-under-v4",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "schema",
+        "native": true,
+        "schema_version": 4
+      },
+      "expected": {
+        "admitted": false
+      }
+    },
+    {
+      "name": "native-v5-roundtrip",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "schema",
+        "native": true,
+        "schema_version": 5
+      },
+      "expected": {
+        "admitted": true,
+        "native_version": null,
+        "version_verified": false
+      }
+    },
+    {
+      "name": "maintained-v4-preserved",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "schema",
+        "native": false,
+        "schema_version": 4
+      },
+      "expected": {
+        "bytes_unchanged": true
+      }
+    },
+    {
+      "name": "plan-first-excess",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "document-bound",
+        "document": "plan",
+        "bytes": 8388609
+      },
+      "expected": {
+        "admitted": false
+      }
+    },
+    {
+      "name": "receipt-first-excess",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "document-bound",
+        "document": "receipt",
+        "bytes": 8388609
+      },
+      "expected": {
+        "admitted": false
+      }
+    },
+    {
+      "name": "audit-first-excess",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "document-bound",
+        "document": "audit",
+        "bytes": 16777217
+      },
+      "expected": {
+        "admitted": false
+      }
+    },
+    {
+      "name": "journal-first-excess",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "document-bound",
+        "document": "journal",
+        "bytes": 16777217
+      },
+      "expected": {
+        "admitted": false
+      }
+    },
+    {
+      "name": "passive-task-list",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "observer",
+        "observer": "task-list",
+        "markers": [
+          "initializer",
+          "action",
+          "tool"
+        ]
+      },
+      "expected": {
+        "launches": 0,
+        "evaluated_initializers": 0,
+        "evaluated_actions": 0
+      }
+    },
+    {
+      "name": "passive-task-inspect",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "observer",
+        "observer": "task-inspect",
+        "markers": [
+          "initializer",
+          "action",
+          "tool"
+        ]
+      },
+      "expected": {
+        "launches": 0,
+        "evaluated_initializers": 0,
+        "evaluated_actions": 0
+      }
+    },
+    {
+      "name": "passive-check",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "observer",
+        "observer": "check",
+        "markers": [
+          "initializer",
+          "action",
+          "tool"
+        ]
+      },
+      "expected": {
+        "launches": 0,
+        "evaluated_initializers": 0,
+        "evaluated_actions": 0
+      }
+    },
+    {
+      "name": "passive-doctor",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "observer",
+        "observer": "doctor",
+        "markers": [
+          "initializer",
+          "action",
+          "tool"
+        ]
+      },
+      "expected": {
+        "launches": 0,
+        "evaluated_initializers": 0,
+        "evaluated_actions": 0
+      }
+    },
+    {
+      "name": "passive-plan",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "observer",
+        "observer": "plan",
+        "markers": [
+          "initializer",
+          "action",
+          "tool"
+        ]
+      },
+      "expected": {
+        "launches": 0,
+        "evaluated_initializers": 0,
+        "evaluated_actions": 0
+      }
+    },
+    {
+      "name": "passive-plan-inspect",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "observer",
+        "observer": "plan-inspect",
+        "markers": [
+          "initializer",
+          "action",
+          "tool"
+        ]
+      },
+      "expected": {
+        "launches": 0,
+        "evaluated_initializers": 0,
+        "evaluated_actions": 0
+      }
+    },
+    {
+      "name": "passive-lsp",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "observer",
+        "observer": "lsp",
+        "markers": [
+          "initializer",
+          "action",
+          "tool"
+        ]
+      },
+      "expected": {
+        "launches": 0,
+        "evaluated_initializers": 0,
+        "evaluated_actions": 0
+      }
+    },
+    {
+      "name": "passive-help",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "observer",
+        "observer": "help",
+        "markers": [
+          "initializer",
+          "action",
+          "tool"
+        ]
+      },
+      "expected": {
+        "launches": 0,
+        "evaluated_initializers": 0,
+        "evaluated_actions": 0
+      }
+    },
+    {
+      "name": "passive-interactive-prompt",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "observer",
+        "observer": "interactive-prompt",
+        "markers": [
+          "initializer",
+          "action",
+          "tool"
+        ]
+      },
+      "expected": {
+        "launches": 0,
+        "evaluated_initializers": 0,
+        "evaluated_actions": 0
+      }
+    },
+    {
+      "name": "check-future-schema",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "artifact",
+        "artifact": "check",
+        "mutation": "future-schema",
+        "reseal": true
+      },
+      "expected": {
+        "admitted": false
+      }
+    },
+    {
+      "name": "check-native-required-version",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "artifact",
+        "artifact": "check",
+        "mutation": "native-required-version",
+        "reseal": true
+      },
+      "expected": {
+        "admitted": false
+      }
+    },
+    {
+      "name": "check-native-locked-version",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "artifact",
+        "artifact": "check",
+        "mutation": "native-locked-version",
+        "reseal": true
+      },
+      "expected": {
+        "admitted": false
+      }
+    },
+    {
+      "name": "check-native-version-verified",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "artifact",
+        "artifact": "check",
+        "mutation": "native-version-verified",
+        "reseal": true
+      },
+      "expected": {
+        "admitted": false
+      }
+    },
+    {
+      "name": "check-unknown-field",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "artifact",
+        "artifact": "check",
+        "mutation": "unknown-field",
+        "reseal": true
+      },
+      "expected": {
+        "admitted": false
+      }
+    },
+    {
+      "name": "plan-future-schema",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "artifact",
+        "artifact": "plan",
+        "mutation": "future-schema",
+        "reseal": true
+      },
+      "expected": {
+        "admitted": false
+      }
+    },
+    {
+      "name": "plan-native-required-version",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "artifact",
+        "artifact": "plan",
+        "mutation": "native-required-version",
+        "reseal": true
+      },
+      "expected": {
+        "admitted": false
+      }
+    },
+    {
+      "name": "plan-native-locked-version",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "artifact",
+        "artifact": "plan",
+        "mutation": "native-locked-version",
+        "reseal": true
+      },
+      "expected": {
+        "admitted": false
+      }
+    },
+    {
+      "name": "plan-native-version-verified",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "artifact",
+        "artifact": "plan",
+        "mutation": "native-version-verified",
+        "reseal": true
+      },
+      "expected": {
+        "admitted": false
+      }
+    },
+    {
+      "name": "plan-unknown-field",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "artifact",
+        "artifact": "plan",
+        "mutation": "unknown-field",
+        "reseal": true
+      },
+      "expected": {
+        "admitted": false
+      }
+    },
+    {
+      "name": "audit-future-schema",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "artifact",
+        "artifact": "audit",
+        "mutation": "future-schema",
+        "reseal": true
+      },
+      "expected": {
+        "admitted": false
+      }
+    },
+    {
+      "name": "audit-native-required-version",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "artifact",
+        "artifact": "audit",
+        "mutation": "native-required-version",
+        "reseal": true
+      },
+      "expected": {
+        "admitted": false
+      }
+    },
+    {
+      "name": "audit-native-locked-version",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "artifact",
+        "artifact": "audit",
+        "mutation": "native-locked-version",
+        "reseal": true
+      },
+      "expected": {
+        "admitted": false
+      }
+    },
+    {
+      "name": "audit-native-version-verified",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "artifact",
+        "artifact": "audit",
+        "mutation": "native-version-verified",
+        "reseal": true
+      },
+      "expected": {
+        "admitted": false
+      }
+    },
+    {
+      "name": "audit-unknown-field",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "artifact",
+        "artifact": "audit",
+        "mutation": "unknown-field",
+        "reseal": true
+      },
+      "expected": {
+        "admitted": false
+      }
+    },
+    {
+      "name": "receipt-missing-lf",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "encoding-sequence",
+        "fault": "receipt-missing-lf"
+      },
+      "expected": {
+        "admitted": false
+      }
+    },
+    {
+      "name": "receipt-noncanonical",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "encoding-sequence",
+        "fault": "receipt-noncanonical"
+      },
+      "expected": {
+        "admitted": false
+      }
+    },
+    {
+      "name": "receipt-invalid-utf8",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "encoding-sequence",
+        "fault": "receipt-invalid-utf8"
+      },
+      "expected": {
+        "admitted": false
+      }
+    },
+    {
+      "name": "receipt-extra-field",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "encoding-sequence",
+        "fault": "receipt-extra-field"
+      },
+      "expected": {
+        "admitted": false
+      }
+    },
+    {
+      "name": "journal-duplicate-terminal",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "encoding-sequence",
+        "fault": "journal-duplicate-terminal"
+      },
+      "expected": {
+        "admitted": false
+      }
+    },
+    {
+      "name": "journal-missing-before",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "encoding-sequence",
+        "fault": "journal-missing-before"
+      },
+      "expected": {
+        "admitted": false
+      }
+    },
+    {
+      "name": "journal-digest-mismatch",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "encoding-sequence",
+        "fault": "journal-digest-mismatch"
+      },
+      "expected": {
+        "admitted": false
+      }
+    },
+    {
+      "name": "journal-lines-exact",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "journal-bound",
+        "lines": 100000
+      },
+      "expected": {
+        "limit_admitted": true
+      }
+    },
+    {
+      "name": "journal-lines-first-excess",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "journal-bound",
+        "lines": 100001
+      },
+      "expected": {
+        "admitted": false
+      }
+    },
+    {
+      "name": "journal-terminal-reserve",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "journal-bound",
+        "nonterminal_uses_terminal_reserve": true
+      },
+      "expected": {
+        "admitted": false
+      }
+    }
+  ]
+}

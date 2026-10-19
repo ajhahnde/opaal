@@ -206,6 +206,119 @@ impl Server {
 }
 
 #[test]
+fn native_frozen_passive_lsp_case() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let directory = TempDirectory::new();
+    fs::write(
+        directory.path("opaal.toml"),
+        r#"schema_version = 1
+[project]
+name = "native_test"
+root_module = "tasks.opaal"
+required_opaal = ">=1.6.0,<2.0.0"
+[paths]
+root = "."
+evidence = "output"
+[tools.checker]
+adapter = "native"
+[environments.ci]
+authority = "authority.toml"
+tool_lock = "tools.toml"
+"#,
+    )
+    .unwrap();
+    let marker = directory.path("launches");
+    let tool = directory.path("checker");
+    fs::write(
+        &tool,
+        format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$1\" >> '{}'\n",
+            marker.display()
+        ),
+    )
+    .unwrap();
+    fs::set_permissions(&tool, fs::Permissions::from_mode(0o700)).unwrap();
+    for mode in ["initializer", "action", "tool"] {
+        assert!(Command::new(&tool).arg(mode).status().unwrap().success());
+    }
+    assert_eq!(fs::read(&marker).unwrap(), b"initializer\naction\ntool\n");
+    fs::remove_file(&marker).unwrap();
+    let text = format!(
+        "import project::tools as tools\nimport std::process as process\n^sh \"{}\" \"initializer\"\naction check() -> Bool effects {{ process.run(tools::checker); }} {{\n    let result = process::run(tools::checker, [\"action\"])\n    throw \"SENSITIVE_PASSIVE_ACTION\"\n}}\naction outer() -> Bool effects {{ process.run(tools::checker); }} {{ return check() }}\ntask check = outer\n",
+        tool.display()
+    );
+    fs::write(directory.path("tasks.opaal"), &text).unwrap();
+    let uri = directory.uri("tasks.opaal");
+    let mut server = Server::start();
+    server.initialize_project(&directory.uri("opaal.toml"));
+    server.open(&uri, 1, &text);
+    let diagnostics = wait_for_diagnostics(&mut server, &uri, 1);
+    assert_eq!(
+        diagnostics["params"]["diagnostics"],
+        json!([]),
+        "{diagnostics}"
+    );
+    for (id, method, line, character) in [
+        (2, "textDocument/hover", 4, 27),
+        (3, "textDocument/completion", 4, 26),
+        (4, "textDocument/signatureHelp", 4, 33),
+        (
+            5,
+            "textDocument/definition",
+            7,
+            text.lines().nth(7).unwrap().rfind("check()").unwrap() as u64 + 2,
+        ),
+    ] {
+        server.send(position_request(id, method, &uri, line, character));
+        let response = server.receive_response(id);
+        assert!(
+            response.get("error").is_none() && !response["result"].is_null(),
+            "{response}"
+        );
+        if method == "textDocument/hover" {
+            let hover = response["result"]["contents"]["value"].as_str().unwrap();
+            assert!(
+                hover.contains("ToolIdentity") && hover.contains("ToolResult"),
+                "{hover}"
+            );
+        }
+        if method == "textDocument/definition" {
+            assert_eq!(response["result"]["uri"], uri.as_str());
+        }
+    }
+    let received = serde_json::to_string(&server.received).unwrap();
+    assert!(!received.contains("SENSITIVE_PASSIVE_ACTION"));
+    let output = server.finish();
+    assert!(
+        output.status.success() && output.stderr.is_empty(),
+        "{output:?}"
+    );
+    assert!(!marker.exists());
+    assert!(!directory.path("authority.toml").exists() && !directory.path("tools.toml").exists());
+    let inventory =
+        include_bytes!("../../../tests/golden/controlled-external-tools/evidence-cases.json");
+    let cases: Value = serde_json::from_slice(inventory).unwrap();
+    let observed = json!({"launches":0,"evaluated_initializers":0,"evaluated_actions":0});
+    let row = cases["cases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["name"] == "passive-lsp")
+        .unwrap();
+    assert_eq!(observed, row["expected"]);
+    let host = match (std::env::consts::OS, std::env::consts::ARCH) {
+        ("macos", "aarch64") => "aarch64-apple-darwin",
+        ("linux", "x86_64") => "x86_64-unknown-linux-gnu",
+        _ => panic!("unsupported evidence host"),
+    };
+    println!(
+        "OPAAL_EVIDENCE_CASE {}",
+        json!({"name":"passive-lsp","observed":observed,
+        "host":host,"inventory_digest":opaal_runtime::workflow::digest_bytes(inventory)})
+    );
+}
+
+#[test]
 fn opaal_protocol_launcher_accepts_directive_free_documents() {
     let directory = TempDirectory::new();
     let uri = directory.uri("main.opaal");

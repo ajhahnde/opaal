@@ -295,8 +295,25 @@ jobs:
             --fixtures "dist/opaal-v${candidate_version}-docker-image-checks.tar.gz" \
             --expected-source "$(git rev-parse HEAD)" --platform linux-x86_64 \
             --report dist/docker-image-checks-linux.json
+      - name: Package the exact controlled native tool reference
+        run: python3 ci/package_controlled_native_tools.py
+      - name: Qualify saved repository checks outside the checkout
+        run: |
+          candidate_version=$(python3 -c 'from ci.package_release import VERSION; print(VERSION)')
+          python3 ci/qualify_controlled_native_tools.py \
+            --archive "dist/opaal-v${candidate_version}-linux-x86_64.tar.gz" \
+            --fixtures "dist/opaal-v${candidate_version}-controlled-native-tools.tar.gz" \
+            --expected-source "$(git rev-parse HEAD)" --platform linux-x86_64 \
+            --output "${RUNNER_TEMP}/controlled-native-tools"
       - name: Qualify native standard I/O and failed journal persistence
         run: python3 ci/qualify_standard_io_failures.py --binary target/release/opaal --output dist/standard-io-native-linux
+      - name: Retain repository check replay files
+        if: always()
+        run: |
+          if [ -d "${RUNNER_TEMP}/controlled-native-tools" ]; then
+            tar -czf dist/controlled-native-tools-linux-evidence.tar.gz \
+              -C "${RUNNER_TEMP}" controlled-native-tools
+          fi
       - name: Retain candidate identity and qualification evidence
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -382,8 +399,25 @@ jobs:
             --fixtures "dist/opaal-v${candidate_version}-docker-image-checks.tar.gz" \
             --expected-source "$(git rev-parse HEAD)" --platform macos-arm64 \
             --report dist/docker-image-checks-macos.json
+      - name: Package the exact controlled native tool reference
+        run: python3 ci/package_controlled_native_tools.py
+      - name: Qualify saved repository checks outside the checkout
+        run: |
+          candidate_version=$(python3 -c 'from ci.package_release import VERSION; print(VERSION)')
+          python3 ci/qualify_controlled_native_tools.py \
+            --archive "dist/opaal-v${candidate_version}-macos-arm64.tar.gz" \
+            --fixtures "dist/opaal-v${candidate_version}-controlled-native-tools.tar.gz" \
+            --expected-source "$(git rev-parse HEAD)" --platform macos-arm64 \
+            --output "${RUNNER_TEMP}/controlled-native-tools"
       - name: Qualify native standard I/O and failed journal persistence
         run: python3 ci/qualify_standard_io_failures.py --binary target/release/opaal --output dist/standard-io-native-macos
+      - name: Retain repository check replay files
+        if: always()
+        run: |
+          if [ -d "${RUNNER_TEMP}/controlled-native-tools" ]; then
+            tar -czf dist/controlled-native-tools-macos-evidence.tar.gz \
+              -C "${RUNNER_TEMP}" controlled-native-tools
+          fi
       - name: Retain candidate identity and qualification evidence
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

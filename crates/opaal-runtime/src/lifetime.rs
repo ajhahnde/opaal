@@ -142,6 +142,15 @@ impl CancellationScope {
             .map_or(deadline, |current| current.narrowed_to(deadline))
     }
 
+    pub(crate) fn remaining_until(&self, deadline: Deadline) -> std::time::Duration {
+        std::time::Duration::from_nanos(
+            deadline
+                .instant()
+                .as_nanos()
+                .saturating_sub(self.clock.now().as_nanos()),
+        )
+    }
+
     /// Poll an operation's original deadline, making timeout sticky.
     #[must_use]
     pub fn poll_until(&self, deadline: Deadline) -> Option<CancelReason> {

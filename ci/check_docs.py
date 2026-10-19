@@ -55,7 +55,7 @@ def markdown_pages(root: Path) -> list[Path]:
         ).decode().split("\0")
         return sorted({root / name for name in names if name and (root / name).is_file()})
     pages = [root / name for name in ROOT_GUIDES if name.endswith(".md")]
-    for folder in ("benchmarks", "fuzz", "tests"):
+    for folder in ("benchmarks", "examples", "fuzz", "tests"):
         pages.extend((root / folder).rglob("*.md"))
     return sorted({page for page in pages if page.is_file()})
 
@@ -128,13 +128,14 @@ def check_examples(root: Path, binary: Path) -> list[str]:
             detail = (result.stderr or result.stdout).strip().splitlines()
             errors.append(f"{example.relative_to(root)}: {' '.join(args)} failed: "
                           f"{detail[0] if detail else result.returncode}")
-    policy_tests = root / "examples/image-check/policy-tests.opaal"
-    for args in (("check", str(policy_tests)), ("format", "--check", str(policy_tests)),
-                 ("test", "--list", str(policy_tests), "--format", "json"),
-                 ("test", str(policy_tests), "--format", "json")):
-        result = subprocess.run([str(binary), *args], cwd=root, capture_output=True, text=True, timeout=30)
-        if result.returncode or result.stderr:
-            errors.append("image-check: named pure policy example failed: " + args[0])
+    for name in ("image-check", "repository-check"):
+        policy_tests = root / "examples" / name / "policy-tests.opaal"
+        for args in (("check", str(policy_tests)), ("format", "--check", str(policy_tests)),
+                     ("test", "--list", str(policy_tests), "--format", "json"),
+                     ("test", str(policy_tests), "--format", "json")):
+            result = subprocess.run([str(binary), *args], cwd=root, capture_output=True, text=True, timeout=30)
+            if result.returncode or result.stderr:
+                errors.append(name + ": named pure policy example failed: " + args[0])
     with tempfile.TemporaryDirectory(prefix="opaal-repository-docs-") as directory:
         for page in markdown_pages(root):
             content = page.read_text(encoding="utf-8")
