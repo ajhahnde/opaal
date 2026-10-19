@@ -53,6 +53,7 @@ impl Default for PosixOperationalAdapter {
 #[cfg(target_os = "linux")]
 #[allow(unsafe_code)]
 fn close_descriptors_on_exec(command: &mut Command) {
+    // SAFETY: The callback obeys `pre_exec`'s post-fork rules: it makes only a raw `close_range` syscall and reports a failed return code without allocating, locking, or touching shared state.
     unsafe {
         command.pre_exec(|| {
             if libc::syscall(libc::SYS_close_range, 3_u32, u32::MAX, 4_u32) != 0 {

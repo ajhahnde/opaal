@@ -2750,7 +2750,7 @@
     },
     {
       "path": "crates/opaal-cli/tests/task_run.rs",
-      "sha256": "8448a1f5005100871c5e2b4dadf357894953eafdf62ee057bd16e48020e91c5c",
+      "sha256": "4a5ef05f9c135b0505ed6fb42ae03a9a325014c9ddb7d43c6eeb4a5536906104",
       "source_markers": 6,
       "constructors_or_assertions": [
         "explanation_is_passive_safe_and_conservative_for_legacy_or_missing_evidence",
@@ -2979,7 +2979,7 @@
     },
     {
       "path": "crates/opaal-platform-posix/src/operational.rs",
-      "sha256": "91b79864b018175cd8152487e00afb0e4f8cb214268a069cea2b76fb71507d4c",
+      "sha256": "14169e5216d42f6ccb5a75d5ad101da7042e75ca37014a4e3d8206b9304bfb8e",
       "source_markers": 1,
       "constructors_or_assertions": [
         "write_atomic"
