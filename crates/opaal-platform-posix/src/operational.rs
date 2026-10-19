@@ -50,6 +50,20 @@ impl Default for PosixOperationalAdapter {
     }
 }
 
+#[cfg(target_os = "linux")]
+#[allow(unsafe_code)]
+fn close_descriptors_on_exec(command: &mut Command) {
+    unsafe {
+        command.pre_exec(|| {
+            if libc::syscall(libc::SYS_close_range, 3_u32, u32::MAX, 4_u32) != 0 {
+                Err(io::Error::last_os_error())
+            } else {
+                Ok(())
+            }
+        });
+    }
+}
+
 impl OperationalAdapter for PosixOperationalAdapter {
     #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
     fn snapshot_executable(
@@ -348,22 +362,27 @@ impl OperationalAdapter for PosixOperationalAdapter {
             )
         })?;
         #[cfg(target_os = "linux")]
+        let mut native_snapshot = false;
+        #[cfg(target_os = "linux")]
         let executable_descriptor = request
             .executable_file
-            .map(|file| match rustix::fs::fcntl_get_seals(file) {
-                Ok(seals)
-                    if seals.contains(
-                        rustix::fs::SealFlags::WRITE
-                            | rustix::fs::SealFlags::GROW
-                            | rustix::fs::SealFlags::SHRINK
-                            | rustix::fs::SealFlags::SEAL,
-                    ) =>
-                {
-                    rustix::io::fcntl_dupfd_cloexec(file, 0)
+            .map(|file| {
+                match rustix::fs::fcntl_get_seals(file) {
+                    Ok(seals)
+                        if seals.contains(
+                            rustix::fs::SealFlags::WRITE
+                                | rustix::fs::SealFlags::GROW
+                                | rustix::fs::SealFlags::SHRINK
+                                | rustix::fs::SealFlags::SEAL,
+                        ) =>
+                    {
+                        native_snapshot = true;
+                        rustix::io::fcntl_dupfd_cloexec(file, 3)
+                    }
+                    // Ordinary tmpfs files support seals too; scripts need an inherited descriptor.
+                    Ok(_) | Err(rustix::io::Errno::INVAL) => rustix::io::dup(file),
+                    Err(cause) => Err(cause),
                 }
-                // Ordinary tmpfs files support seals too; scripts need an inherited descriptor.
-                Ok(_) | Err(rustix::io::Errno::INVAL) => rustix::io::dup(file),
-                Err(cause) => Err(cause),
             })
             .transpose()
             .map_err(|cause| io_error(cause.into()))?;
@@ -390,6 +409,10 @@ impl OperationalAdapter for PosixOperationalAdapter {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         command.process_group(0);
+        #[cfg(target_os = "linux")]
+        if native_snapshot {
+            close_descriptors_on_exec(&mut command);
+        }
         let mut child = command.spawn().map_err(io_error)?;
         let mut stdout = child.stdout.take().expect("piped stdout is present");
         let mut stderr = child.stderr.take().expect("piped stderr is present");

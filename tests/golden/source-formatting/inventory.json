@@ -76,6 +76,66 @@
       "assertion": "ci/qualify_numeric_operations.py"
     },
     {
+      "path": "examples/repository-check/policy-tests.opaal",
+      "role": "positive",
+      "reason": "Named repository-check policy cases cover pass, negative and invalid input without effectful execution.",
+      "assertion": "ci/qualify_controlled_native_tools.py"
+    },
+    {
+      "path": "examples/repository-check/policy.opaal",
+      "role": "positive",
+      "reason": "Executable repository-check reference policy and task workflow.",
+      "assertion": "ci/qualify_controlled_native_tools.py"
+    },
+    {
+      "path": "examples/repository-check/saved-tasks.opaal",
+      "role": "positive",
+      "reason": "Executable repository-check saved-task reference workflow.",
+      "assertion": "ci/qualify_controlled_native_tools.py"
+    },
+    {
+      "path": "examples/repository-check/source.opaal",
+      "role": "positive",
+      "reason": "Executable repository-check source module for the reference workflow.",
+      "assertion": "ci/qualify_controlled_native_tools.py"
+    },
+    {
+      "path": "examples/repository-check/tasks.opaal",
+      "role": "positive",
+      "reason": "Executable repository-check task module for the reference workflow.",
+      "assertion": "ci/qualify_controlled_native_tools.py"
+    },
+    {
+      "path": "tests/golden/controlled-external-tools/reference/policy-tests.opaal",
+      "role": "positive",
+      "reason": "Byte-preserved golden copy of repository-check policy cases; the copy and package assertions own its identity.",
+      "assertion": "ci/tests/test_controlled_native_tools.py"
+    },
+    {
+      "path": "tests/golden/controlled-external-tools/reference/policy.opaal",
+      "role": "positive",
+      "reason": "Byte-preserved golden copy of the repository-check reference policy.",
+      "assertion": "ci/tests/test_controlled_native_tools.py"
+    },
+    {
+      "path": "tests/golden/controlled-external-tools/reference/saved-tasks.opaal",
+      "role": "positive",
+      "reason": "Byte-preserved golden copy of repository-check saved tasks.",
+      "assertion": "ci/tests/test_controlled_native_tools.py"
+    },
+    {
+      "path": "tests/golden/controlled-external-tools/reference/source.opaal",
+      "role": "positive",
+      "reason": "Byte-preserved golden copy of the repository-check source module.",
+      "assertion": "ci/tests/test_controlled_native_tools.py"
+    },
+    {
+      "path": "tests/golden/controlled-external-tools/reference/tasks.opaal",
+      "role": "positive",
+      "reason": "Byte-preserved golden copy of the repository-check task module.",
+      "assertion": "ci/tests/test_controlled_native_tools.py"
+    },
+    {
       "path": "tests/golden/data-processing/json-report.opaal",
       "role": "positive",
       "reason": "Offline report workflow golden.",
@@ -1079,10 +1139,16 @@
       "path": "examples/image-check/README.md"
     },
     {
+      "path": "examples/repository-check/README.md"
+    },
+    {
       "path": "fuzz/README.md"
     },
     {
       "path": "tests/fixtures/README.md"
+    },
+    {
+      "path": "tests/golden/controlled-external-tools/reference/README.md"
     },
     {
       "path": "tests/golden/data-processing/README.md"
@@ -1208,7 +1274,7 @@
     },
     {
       "path": "ci/check_docs.py",
-      "sha256": "d33461628e915444dd515be26d69d527ee8c09f95b48da42b5e19e3f9057cdbc",
+      "sha256": "7553b19e88ef8d08bca9290efe2a1fd3735dff5dda8d600281b7beaa7941ed72",
       "source_markers": 10,
       "constructors_or_assertions": [
         "check_examples",
@@ -1225,7 +1291,7 @@
     },
     {
       "path": "ci/check_product.py",
-      "sha256": "4816577817e0957d3316ae6e36d1200cfbefa6dc5c33a01611666f3b799b2c1d",
+      "sha256": "971b895026bf1548175c57b01a7a0e8aa726b76aff939fb53e0b95efa9a592ac",
       "source_markers": 15,
       "constructors_or_assertions": [
         "command_json",
@@ -1294,8 +1360,22 @@
       "assertion": "ci/check_benchmarks.py and benchmarks/run.py"
     },
     {
+      "path": "ci/package_controlled_native_tools.py",
+      "sha256": "74a64ffb0a4d02c8362dce0594ea04a42f014726f12f1c0f4c86597e3535c1bc",
+      "source_markers": 4,
+      "constructors_or_assertions": [
+        "check_cases",
+        "check_copies",
+        "files",
+        "main"
+      ],
+      "role": "mixed-test-buffers",
+      "reason": "Exact fixture copy/package and named policy/report/evidence/first-use assertions.",
+      "assertion": "ci/tests/test_controlled_native_tools.py"
+    },
+    {
       "path": "ci/package_data_processing.py",
-      "sha256": "501d2fab1ff7da368eb2e6570f3835c259a3e3d9fef51ec179444231a14fad45",
+      "sha256": "f597946a553af75fa7347e43c597c935e15a3a42dede3baf41ff8e3d745173f7",
       "source_markers": 4,
       "constructors_or_assertions": [
         "digest",
@@ -1333,7 +1413,7 @@
     },
     {
       "path": "ci/package_release.py",
-      "sha256": "23c27d53c2b265de988a7be3c48c7ddfe9b24cbd1d67e275b9b4a801a5734298",
+      "sha256": "e2074a48b39506028b4a401ed342fd0685ab2b868da6d3bbc0bf35266b5b686a",
       "source_markers": 2,
       "constructors_or_assertions": [
         "main",
@@ -1367,8 +1447,31 @@
       "assertion": "ci/tests/test_standard_input_output_candidate.py"
     },
     {
+      "path": "ci/qualify_controlled_native_tools.py",
+      "sha256": "a286d3bdae6afd9a6aea44b02812f5934ec9c1ad286f6c0ef75f854d1761e2f7",
+      "source_markers": 27,
+      "constructors_or_assertions": [
+        "accepted",
+        "assert_result",
+        "corpus",
+        "expected_exit",
+        "main",
+        "payload",
+        "policy_change",
+        "prepare",
+        "python_run",
+        "qualify",
+        "qualify_archive",
+        "repeated",
+        "sha"
+      ],
+      "role": "mixed-test-buffers",
+      "reason": "Native preparation, image and evidence fixtures are intentionally retained; the named case and observer assertions bind their exact outcomes.",
+      "assertion": "ci/tests/test_controlled_native_tools.py"
+    },
+    {
       "path": "ci/qualify_data_processing.py",
-      "sha256": "e53d0c28c5a1d9a650f52a6d99e119e3c5a5a2785f23fd50364084ef6f8e52ec",
+      "sha256": "6bcebc20402e707a598c1c433156313e93768ea8407deee2646fcb3bc8a52627",
       "source_markers": 23,
       "constructors_or_assertions": [
         "command",
@@ -1423,6 +1526,68 @@
       "role": "source-infrastructure",
       "reason": "Source adapter, loader, parser, generator or qualification owner; listed constructors/assertions own any embedded buffers rather than a blanket source rewrite.",
       "assertion": "cargo test --workspace --locked and Python CI validator suite"
+    },
+    {
+      "path": "ci/qualify_native_evidence.py",
+      "sha256": "86499d1f1b8ff38999da1237a92a329bf4bdb86f34870c7a24c6a2b969cfbfa3",
+      "source_markers": 23,
+      "constructors_or_assertions": [
+        "acceptance_case",
+        "audit",
+        "canonical",
+        "cli_evidence_cases",
+        "explain",
+        "injected_evidence_cases",
+        "journal_bytes",
+        "mutate_artifact",
+        "passive_case",
+        "prepare_project",
+        "process_journal",
+        "project",
+        "qualify_evidence",
+        "reference_input_cases",
+        "reseal",
+        "run_plan"
+      ],
+      "role": "mixed-test-buffers",
+      "reason": "Native preparation, image and evidence fixtures are intentionally retained; the named case and observer assertions bind their exact outcomes.",
+      "assertion": "ci/tests/test_controlled_native_tools.py"
+    },
+    {
+      "path": "ci/qualify_native_images.py",
+      "sha256": "09ae91754d009d78e8f94d538938be437e07f373da787e530284a65f1a0d7449",
+      "source_markers": 8,
+      "constructors_or_assertions": [
+        "acquisition_trace_observations",
+        "finish_cases",
+        "finish_launch_census",
+        "permission_cases",
+        "posix_image_cases",
+        "qualify_images",
+        "snapshot_fault_case",
+        "snapshot_fault_records"
+      ],
+      "role": "mixed-test-buffers",
+      "reason": "Native preparation, image and evidence fixtures are intentionally retained; the named case and observer assertions bind their exact outcomes.",
+      "assertion": "ci/tests/test_controlled_native_tools.py"
+    },
+    {
+      "path": "ci/qualify_native_preparation.py",
+      "sha256": "532e3fede2dad6ae5cfab76d77dfb113fd260455cb81211c14569f5d9f74f5dd",
+      "source_markers": 10,
+      "constructors_or_assertions": [
+        "asset_observations",
+        "case_results",
+        "host_triple",
+        "initialize",
+        "injected_results",
+        "minimal_elf",
+        "qualify_preparation",
+        "snapshot"
+      ],
+      "role": "mixed-test-buffers",
+      "reason": "Native preparation, image and evidence fixtures are intentionally retained; the named case and observer assertions bind their exact outcomes.",
+      "assertion": "ci/tests/test_controlled_native_tools.py"
     },
     {
       "path": "ci/qualify_operational_core.py",
@@ -1655,6 +1820,73 @@
       "assertion": "ci/tests/test_check_public_boundary.py"
     },
     {
+      "path": "ci/tests/test_controlled_native_tools.py",
+      "sha256": "804a4ce8b6b8bd426554899a4f1283123144d23a4fd73f44073bca106ad2c4cb",
+      "source_markers": 50,
+      "constructors_or_assertions": [
+        "completed",
+        "consume",
+        "observe",
+        "run",
+        "seed",
+        "test_acquisition_trace_requires_each_boundary_seals_and_no_execution",
+        "test_case_names_cannot_escape_fresh_evidence_directory",
+        "test_child_input_observer_records_changed_bytes_and_restores_only_when_requested",
+        "test_cli_evidence_records_require_exact_cases_inventory_host_and_candidate",
+        "test_comparison_cli_bounds_saved_bytes_and_uses_fixed_safe_errors",
+        "test_copies_and_deterministic_bundle_preserve_all_inputs",
+        "test_fault_inventories_are_frozen_before_producers_and_packaging",
+        "test_finish_census_distinguishes_native_child_from_owned_summary_worker",
+        "test_finish_fault_requires_real_launch_injection_reap_and_primary",
+        "test_finish_journal_lsp_observers_require_the_exact_frozen_rows",
+        "test_frontend_image_records_require_complete_host_bound_inventory",
+        "test_frozen_inventory_and_independent_saved_expectations",
+        "test_image_and_evidence_accounting_rejects_missing_duplicate_and_mistyped_results",
+        "test_image_api_records_are_explicit_and_bound_to_inventory_and_host",
+        "test_image_cli_refusal_uses_the_existing_setup_diagnostic",
+        "test_image_producer_keeps_mac_format_rows_pending_without_an_api_observer",
+        "test_independent_resealing_uses_canonical_bytes_and_replaces_only_digest",
+        "test_injected_results_bind_inventory_host_success_and_exact_fault_set",
+        "test_inventory_omission_is_rejected_before_any_producer",
+        "test_journal_mutations_reseal_links_without_repairing_lifecycle_faults",
+        "test_live_capture_bounds_each_stream_with_safe_acquisition_failure",
+        "test_live_files_reject_fifo_and_first_excess_without_blocking",
+        "test_native_version_mutations_follow_each_artifacts_closed_shape",
+        "test_original_permission_observers_use_isolated_namespaces_and_exact_records",
+        "test_passive_help_and_prompt_require_views_without_evaluation",
+        "test_posix_records_require_exact_inventory_and_execution_syscalls",
+        "test_preparation_asset_observer_rejects_missing_changed_and_extra_files",
+        "test_preparation_preservation_observer_does_not_open_fifo_or_follow_links",
+        "test_preparation_results_require_exact_case_and_expectation_sets",
+        "test_process_observer_records_cover_only_explicit_inventory_cases",
+        "test_safe_report_oracle_rejects_wrong_bytes_exits_and_payload_leaks",
+        "test_snapshot_faults_require_one_injection_at_the_intended_syscall_and_no_exec",
+        "view"
+      ],
+      "role": "mixed-test-buffers",
+      "reason": "Retain complete, legacy, invalid and incomplete source buffers and their source-position assertions; canonical output is asserted only by formatting owners.",
+      "assertion": "ci/tests/test_controlled_native_tools.py"
+    },
+    {
+      "path": "ci/tests/test_controlled_native_tools_archive.py",
+      "sha256": "9fca46f61a90910d0565f2a93f324b6384871ab8222d4ca9c4dc2bfed45e81ec",
+      "source_markers": 9,
+      "constructors_or_assertions": [
+        "observe_replay",
+        "run_archive",
+        "setUp",
+        "test_each_archive_rejects_wrong_identity_checksum_and_member_hash",
+        "test_exact_pair_replays_extracted_bytes_and_records_both_identities",
+        "test_linux_pair_uses_linux_identity",
+        "test_missing_pair_source_host_and_dirty_checkout_refuse_before_replay",
+        "test_self_consistent_reference_archive_cannot_change_source_inventory_or_bytes",
+        "test_wrong_binary_version_and_existing_output_refuse_before_replay"
+      ],
+      "role": "mixed-test-buffers",
+      "reason": "Retain complete, legacy, invalid and incomplete source buffers and their source-position assertions; canonical output is asserted only by formatting owners.",
+      "assertion": "ci/tests/test_controlled_native_tools_archive.py"
+    },
+    {
       "path": "ci/tests/test_data_processing_candidate.py",
       "sha256": "e291f0f583dc1e6aee48c0c5b54069f5fc9979bad10a02fbc3b59a8994d5c35f",
       "source_markers": 23,
@@ -1819,7 +2051,7 @@
     },
     {
       "path": "crates/opaal-cli/src/cli.rs",
-      "sha256": "1063a7da918c908bdc50885e0f30a56d9b543f8fd2dc47967c68285568de79b0",
+      "sha256": "e964257b4c4470d2c9f0f5a5c7fd3c263af704bc27f27bcd7747b4b298ff2c34",
       "source_markers": 11,
       "constructors_or_assertions": [
         "check_and_plan_require_one_explicit_source",
@@ -1878,7 +2110,7 @@
     },
     {
       "path": "crates/opaal-cli/src/main.rs",
-      "sha256": "7837802f79a98e673c1484a614e251117829a576c3f89b5850cca6754495efd5",
+      "sha256": "0b280fc0fefa0db047a915c875adc9890f44e20bbdcbc54e99924bb844778647",
       "source_markers": 5,
       "constructors_or_assertions": [
         "module constants/imports",
@@ -1890,7 +2122,7 @@
     },
     {
       "path": "crates/opaal-cli/src/project.rs",
-      "sha256": "c1d5194e184c2037268bcaa6a36b28ecbe2b973fc132dd6306bc0e9d2b2b7a8a",
+      "sha256": "20650d77a241688679083d76e8d53dc9c286235f3d6b4128f5cbb433ec4bbd48",
       "source_markers": 7,
       "constructors_or_assertions": [
         "create_journal",
@@ -1903,11 +2135,23 @@
       "assertion": "cargo test --workspace --locked and Python CI validator suite"
     },
     {
+      "path": "crates/opaal-cli/src/project/finish_observers.rs",
+      "sha256": "d5e6aed7621d04f1e866482bae566894b6c2d9b573797bbfb49258b922edc072",
+      "source_markers": 1,
+      "constructors_or_assertions": [
+        "native_frozen_finish_evidence_cases"
+      ],
+      "role": "source-infrastructure",
+      "reason": "Source adapter, loader, parser, generator or qualification owner; listed constructors/assertions own any embedded buffers rather than a blanket source rewrite.",
+      "assertion": "cargo test --workspace --locked and Python CI validator suite"
+    },
+    {
       "path": "crates/opaal-cli/src/project/preparation.rs",
-      "sha256": "b9c4e4802506c259ebb6e60b488de74aa5fe3252908277d610c999568faec4bd",
-      "source_markers": 7,
+      "sha256": "75d3c622cda509607fdb47556dae1ba406996fc56c08bf4cf40c0076ea797178",
+      "source_markers": 17,
       "constructors_or_assertions": [
         "concurrent_asset_collision_is_retained_without_overwrite",
+        "failed_write_or_sync_keeps_every_partial_path_and_refuses_retry",
         "module constants/imports"
       ],
       "role": "source-infrastructure",
@@ -2018,6 +2262,27 @@
       "role": "mixed-test-buffers",
       "reason": "Retain complete, legacy, invalid and incomplete source buffers and their source-position assertions; canonical output is asserted only by formatting owners.",
       "assertion": "crates/opaal-cli/tests/context_aware_completion.rs"
+    },
+    {
+      "path": "crates/opaal-cli/tests/controlled_native_tools.rs",
+      "sha256": "45cfff737bd090cc1b131034e155a58dd92e1313e5fd39a659da2a74db8d3c21",
+      "source_markers": 22,
+      "constructors_or_assertions": [
+        "acceptance_bound_input_is_checked_at_use_after_execution_has_begun",
+        "acceptance_revalidates_native_project_controls_inputs_and_tool_before_evidence",
+        "accepted_native_process_omits_payload_and_preserves_explicit_report",
+        "evidence_corrupt_partial_and_missing_native_artifacts_never_prove_pass",
+        "evidence_mixed_tools_redact_probes_calls_and_errors_without_fictitious_host_roles",
+        "observers_native_project_never_evaluate_initializers_actions_or_tools",
+        "preparation_native_doctor_unknown_and_invalid_images_never_launch",
+        "preparation_offline_assets_policy_and_accepted_saved_routes",
+        "supplied_checker_snapshot_compatibility",
+        "unused_native_tool_selects_v5_for_pure_tasks_and_caught_errors_without_host_roles",
+        "with_tool"
+      ],
+      "role": "mixed-test-buffers",
+      "reason": "Retain complete, legacy, invalid and incomplete source buffers and their source-position assertions; canonical output is asserted only by formatting owners.",
+      "assertion": "crates/opaal-cli/tests/controlled_native_tools.rs"
     },
     {
       "path": "crates/opaal-cli/tests/data_processing_contexts.rs",
@@ -2353,7 +2618,7 @@
     },
     {
       "path": "crates/opaal-cli/tests/project_frontend.rs",
-      "sha256": "a81bf1ed368cf2f6d1b9af772a10546c67d8aedf8be2b6e2d474aced7cfc5147",
+      "sha256": "c864073735708cdbd3e4185f3641fd354c6889fd5261f2ddb9d10071ba6c83db",
       "source_markers": 40,
       "constructors_or_assertions": [
         "accepted_execution_revalidates_probes_refuses_unused_secret_and_audits",
@@ -2376,7 +2641,7 @@
     },
     {
       "path": "crates/opaal-cli/tests/project_preparation.rs",
-      "sha256": "e1f1dbde414c384a63c74176aa94159d192a702ee4baa11c19c286f7aa16ab05",
+      "sha256": "8387b8d8cf84ad9cfed6bcb8234999fb56add6ceed7421da4020edb53d6aef58",
       "source_markers": 4,
       "constructors_or_assertions": [
         "fixed_offline_assets_match_maintained_sources_and_private_modes"
@@ -2485,7 +2750,7 @@
     },
     {
       "path": "crates/opaal-cli/tests/task_run.rs",
-      "sha256": "d853190cff5842a598dda6fda6e643504d53b26f0983c41c4ed43c4f0f02e122",
+      "sha256": "8448a1f5005100871c5e2b4dadf357894953eafdf62ee057bd16e48020e91c5c",
       "source_markers": 6,
       "constructors_or_assertions": [
         "explanation_is_passive_safe_and_conservative_for_legacy_or_missing_evidence",
@@ -2553,10 +2818,11 @@
     },
     {
       "path": "crates/opaal-lsp/tests/action_queries.rs",
-      "sha256": "cac64f244b4fa7ed0a558ad67a2cc606a438ac034cbfcdd99042a21b7565b39b",
-      "source_markers": 5,
+      "sha256": "0cece53f9cf44e513725231f484dbdc33fe07eceea2e68fb61d3ab38b584863f",
+      "source_markers": 12,
       "constructors_or_assertions": [
         "action_identity_signature_effects_and_definition_are_shared",
+        "native_project_uses_shared_process_policy_and_effect_observers_without_a_lock",
         "position"
       ],
       "role": "mixed-test-buffers",
@@ -2626,8 +2892,8 @@
     },
     {
       "path": "crates/opaal-lsp/tests/server_e2e.rs",
-      "sha256": "b889435b44ff7ae3461eb60cadcc077af6d3e24614d2a5c8e70ce56fdfacbcfb",
-      "source_markers": 23,
+      "sha256": "06d693dce5a66bcd9aec8978a10ce968da129e8325dbd922a65c21d36f599c94",
+      "source_markers": 26,
       "constructors_or_assertions": [
         "analysis_never_executes_effectful_source",
         "cancellation_and_document_changes_terminate_each_request_once",
@@ -2635,6 +2901,7 @@
         "explicit_project_selection_uses_saved_modules_and_editor_overlays",
         "framed_declaration_formatting_matches_canonical_fixture_and_is_idempotent",
         "invalid_project_initialization_is_rejected_without_starting_the_server",
+        "native_frozen_passive_lsp_case",
         "opaal_protocol_launcher_accepts_directive_free_documents",
         "project_references_survive_an_unrelated_root_error",
         "project_source_symlinks_cannot_become_editor_overlays",
@@ -2712,7 +2979,7 @@
     },
     {
       "path": "crates/opaal-platform-posix/src/operational.rs",
-      "sha256": "d4e7230d16b9d5e8707eaf3d1aff43866a4e3c033f867465f37be56d25807e98",
+      "sha256": "91b79864b018175cd8152487e00afb0e4f8cb214268a069cea2b76fb71507d4c",
       "source_markers": 1,
       "constructors_or_assertions": [
         "write_atomic"
@@ -2720,6 +2987,28 @@
       "role": "source-infrastructure",
       "reason": "Source adapter, loader, parser, generator or qualification owner; listed constructors/assertions own any embedded buffers rather than a blanket source rewrite.",
       "assertion": "cargo test --workspace --locked and Python CI validator suite"
+    },
+    {
+      "path": "crates/opaal-platform-posix/tests/controlled_native_tools.rs",
+      "sha256": "5f5b5f0407948f593c1a0210a8c72a7c44080c5ec5935f3b670f1c91dbc51d15",
+      "source_markers": 0,
+      "constructors_or_assertions": [
+        "drop",
+        "image_maintained_script_with_seal_support_preserves_interpreter_descriptor",
+        "image_original_acl_refuses",
+        "image_original_capabilities_refuse",
+        "image_original_noexec_mount_refuses",
+        "image_snapshot_syscall_fault",
+        "native_frozen_image_seals_permissions_cancellation_and_descriptor_launch",
+        "native_frozen_image_snapshots_refuse_unsupported_hosts",
+        "native_frozen_lifetime_output_deadline_cancellation_and_owned_group",
+        "observe_image_case",
+        "observe_native_image",
+        "snapshot_handles"
+      ],
+      "role": "mixed-test-buffers",
+      "reason": "Conservative test owner includes helper-based source buffers, partial completion inputs and non-source harnesses; the named tests/assertions retain their exact contracts.",
+      "assertion": "crates/opaal-platform-posix/tests/controlled_native_tools.rs"
     },
     {
       "path": "crates/opaal-platform-posix/tests/fixtures/foreground_signal.rs",
@@ -3381,6 +3670,65 @@
       "assertion": "crates/opaal-runtime/tests/closure.rs"
     },
     {
+      "path": "crates/opaal-runtime/tests/controlled_native_tools.rs",
+      "sha256": "c80a9df94ae2ea40f8074669476f4b4630141f6d855fce88d88971edaf8bcae2",
+      "source_markers": 2,
+      "constructors_or_assertions": [
+        "is_executable",
+        "module constants/imports"
+      ],
+      "role": "mixed-test-buffers",
+      "reason": "Retain complete, legacy, invalid and incomplete source buffers and their source-position assertions; canonical output is asserted only by formatting owners.",
+      "assertion": "crates/opaal-runtime/tests/controlled_native_tools.rs"
+    },
+    {
+      "path": "crates/opaal-runtime/tests/controlled_native_tools/acquisition.rs",
+      "sha256": "39d2ccfe4836e186bc31b279d2874319f1e2da08284b6377c68b969e64333c6d",
+      "source_markers": 0,
+      "constructors_or_assertions": [
+        "enter",
+        "http_request",
+        "image_frozen_real_spawn_and_missing_loader_fail_without_fallback",
+        "monotonic_nanos",
+        "native_frozen_acquisition_phases_preserve_requested_and_deadline_causes",
+        "native_frozen_snapshot_identity_and_read_failures_release_handles",
+        "poll",
+        "read_file",
+        "run",
+        "run_process",
+        "snapshot_executable",
+        "snapshots",
+        "wall_time_unix_nanos",
+        "write_atomic"
+      ],
+      "role": "mixed-test-buffers",
+      "reason": "Conservative test owner includes helper-based source buffers, partial completion inputs and non-source harnesses; the named tests/assertions retain their exact contracts.",
+      "assertion": "crates/opaal-runtime/tests/controlled_native_tools/acquisition.rs"
+    },
+    {
+      "path": "crates/opaal-runtime/tests/controlled_native_tools/cancellation.rs",
+      "sha256": "cca3777e705e01a1a02531944cf10aa6a6f1c219105c98d16f6809a47cef6bf7",
+      "source_markers": 0,
+      "constructors_or_assertions": [
+        "action_end",
+        "action_start",
+        "after",
+        "before",
+        "canonicalize",
+        "checkpoint",
+        "is_executable",
+        "load",
+        "run_source",
+        "source_cancellation_and_journal_faults_preserve_first_evaluator_outcome",
+        "source_cancellation_preserves_partial_only_after_a_process_attempt",
+        "source_journal_failure_bypasses_catch_and_does_not_replace_language_error",
+        "source_native_calls_share_attempt_budget_and_keep_nonzero_status_as_data"
+      ],
+      "role": "mixed-test-buffers",
+      "reason": "Conservative test owner includes helper-based source buffers, partial completion inputs and non-source harnesses; the named tests/assertions retain their exact contracts.",
+      "assertion": "crates/opaal-runtime/tests/controlled_native_tools/cancellation.rs"
+    },
+    {
       "path": "crates/opaal-runtime/tests/convert.rs",
       "sha256": "05e0a25fe0f4cf48b370454ee4501c4c7d9710d0da02ee180b0dcbbc1a1ecd35",
       "source_markers": 2,
@@ -3751,10 +4099,11 @@
     },
     {
       "path": "crates/opaal-runtime/tests/operational_modules.rs",
-      "sha256": "72e8598ba0e925317d91759a9dd670d1a0c1471ce3cf1d34222e73d57ce3803d",
-      "source_markers": 4,
+      "sha256": "7c0affba1ae099b4904ae6f7a051c9a57b9ce2be4db57d0c271cf146752cb83a",
+      "source_markers": 5,
       "constructors_or_assertions": [
         "fixed_probe_uses_locked_executable_and_complete_sanitized_environment",
+        "native_requests_have_no_probe_or_path_fallback_and_validate_before_launch",
         "retained_executable_is_rehashed_after_probe_before_action_run",
         "secret_header_counts_toward_exact_header_limits_without_early_consumption",
         "secret_header_materializes_once_and_redirect_status_is_not_followed"
@@ -3831,7 +4180,7 @@
     },
     {
       "path": "crates/opaal-runtime/tests/project_contract.rs",
-      "sha256": "bd6fb220a9e7f5df53ed3bd3a9582a19052465e8b4bed01be37742d50108abdc",
+      "sha256": "eb4491e98d536995c94f19f6d2957c595c36e208a87b48ee4b8508bbee0c3135",
       "source_markers": 28,
       "constructors_or_assertions": [
         "controlled_project_analysis_shares_cli_modules_and_honors_cancellation",
@@ -4217,14 +4566,15 @@
     },
     {
       "path": "crates/opaal-runtime/tests/workflow_artifacts.rs",
-      "sha256": "963f8f254a7cc454a3ed864eda47da98707501730b22d2697da8fe7b8f3f6588",
-      "source_markers": 7,
+      "sha256": "cfdaae221fcebdb46cdb5d97c50483ef5181f94f885f20d3f9e4b30b04f12bc9",
+      "source_markers": 8,
       "constructors_or_assertions": [
         "journal_chain_projects_complete_redacted_evidence",
         "journal_lifecycle_refuses_bad_attempts_nodes_and_open_boundaries",
         "metadata_chain",
         "plan_document",
-        "task"
+        "task",
+        "v5_journal_is_metadata_only_without_standard_host_roles"
       ],
       "role": "mixed-test-buffers",
       "reason": "Retain complete, legacy, invalid and incomplete source buffers and their source-position assertions; canonical output is asserted only by formatting owners.",
@@ -4528,6 +4878,28 @@
       "assertion": "ci/tests/test_docker_image_checks.py and ci/qualify_docker_image_checks.py"
     },
     {
+      "path": "examples/repository-check/comparison.py",
+      "sha256": "df71d9006870f25d513e5cb36ec4959891cd5086928f242916bdf25184af7739",
+      "source_markers": 12,
+      "constructors_or_assertions": [
+        "acquire",
+        "checked",
+        "decode",
+        "integer",
+        "live",
+        "main",
+        "number",
+        "read_file",
+        "require",
+        "saved",
+        "unique_object",
+        "validate"
+      ],
+      "role": "source-infrastructure",
+      "reason": "Independent standard-library Python comparison; contains no OPAAL source buffers.",
+      "assertion": "ci/tests/test_controlled_native_tools.py and ci/qualify_controlled_native_tools.py"
+    },
+    {
       "path": "fuzz/fuzz_targets/data_operations_limits.rs",
       "sha256": "804af69d7a21aefb500d07522e316055b4e0c466eb0484d785920219d35687f3",
       "source_markers": 3,
@@ -4772,6 +5144,37 @@
       "role": "mixed-test-buffers",
       "reason": "Conservative test owner includes helper-based source buffers, partial completion inputs and non-source harnesses; the named tests/assertions retain their exact contracts.",
       "assertion": "tests/fixtures/terminal_editor.rs"
+    },
+    {
+      "path": "tests/golden/controlled-external-tools/reference/comparison.py",
+      "sha256": "df71d9006870f25d513e5cb36ec4959891cd5086928f242916bdf25184af7739",
+      "source_markers": 12,
+      "constructors_or_assertions": [
+        "acquire",
+        "checked",
+        "decode",
+        "integer",
+        "live",
+        "main",
+        "number",
+        "read_file",
+        "require",
+        "saved",
+        "unique_object",
+        "validate"
+      ],
+      "role": "source-infrastructure",
+      "reason": "Independent standard-library Python comparison; contains no OPAAL source buffers.",
+      "assertion": "ci/tests/test_controlled_native_tools.py"
+    },
+    {
+      "path": "tests/golden/controlled-external-tools/reference/fixtures/check.sh",
+      "sha256": "a1dd4102727e838ba3c35b3a76dca9f789a397da7e65060a732ec79fc5dc000a",
+      "source_markers": 0,
+      "constructors_or_assertions": [],
+      "role": "mixed-test-buffers",
+      "reason": "Fixed shell analyzer reference; named qualification cases preserve its exact bytes and safe failure behavior.",
+      "assertion": "ci/tests/test_controlled_native_tools.py"
     },
     {
       "path": "tests/golden/data-processing/reference.py",

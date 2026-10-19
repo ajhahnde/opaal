@@ -19,12 +19,19 @@ struct Project(PathBuf);
 
 impl Project {
     fn new() -> Self {
-        let parent = std::env::temp_dir().canonicalize().unwrap().join(format!(
-            "accepted-run-{}-{}",
-            std::process::id(),
-            NEXT.fetch_add(1, Ordering::Relaxed)
-        ));
-        fs::create_dir_all(&parent).unwrap();
+        let temporary_root = std::env::temp_dir().canonicalize().unwrap();
+        let parent = loop {
+            let candidate = temporary_root.join(format!(
+                "accepted-run-{}-{}",
+                std::process::id(),
+                NEXT.fetch_add(1, Ordering::Relaxed)
+            ));
+            match fs::create_dir(&candidate) {
+                Ok(()) => break candidate,
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+                Err(error) => panic!("failed to create test directory {candidate:?}: {error}"),
+            }
+        };
         fs::copy(env!("CARGO_BIN_EXE_opaal"), parent.join("opaal")).unwrap();
         let root = parent.join("project");
         let initialized = Command::new(parent.join("opaal"))
