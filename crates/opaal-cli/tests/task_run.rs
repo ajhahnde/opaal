@@ -32,9 +32,8 @@ impl Project {
                 Err(error) => panic!("failed to create test directory {candidate:?}: {error}"),
             }
         };
-        fs::copy(env!("CARGO_BIN_EXE_opaal"), parent.join("opaal")).unwrap();
         let root = parent.join("project");
-        let initialized = Command::new(parent.join("opaal"))
+        let initialized = Command::new(env!("CARGO_BIN_EXE_opaal"))
             .args([
                 "project",
                 "init",
@@ -51,7 +50,7 @@ impl Project {
     }
 
     fn command(&self, arguments: &[&str], input: &[u8]) -> Output {
-        let mut child = Command::new(self.0.parent().unwrap().join("opaal"))
+        let mut child = Command::new(env!("CARGO_BIN_EXE_opaal"))
             .current_dir(&self.0)
             .args(arguments)
             .stdin(Stdio::piped())
@@ -221,7 +220,7 @@ fn pure_task_views_compare_the_receipts_metadata_projection_and_allow_discarded_
         let view: Value = serde_json::from_slice(&output.stdout).unwrap();
         assert_eq!(view["conclusion"], expected);
         assert!(!String::from_utf8(output.stdout).unwrap().contains("canary"));
-        let discarded = Command::new(project.0.parent().unwrap().join("opaal"))
+        let discarded = Command::new(env!("CARGO_BIN_EXE_opaal"))
             .current_dir(&project.0)
             .args([
                 "task",
@@ -609,7 +608,7 @@ fn racing_runs_keep_one_exclusive_evidence_owner() {
     let digest = project.plan("abc123");
     let input = fs::read(project.0.join("fixtures/image.json")).unwrap();
     let start = || {
-        Command::new(project.0.parent().unwrap().join("opaal"))
+        Command::new(env!("CARGO_BIN_EXE_opaal"))
             .current_dir(&project.0)
             .args([
                 "task",
