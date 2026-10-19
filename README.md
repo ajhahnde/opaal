@@ -64,6 +64,11 @@ system or physical-device support. See the
 [project reference](https://opaal-lang.org/docs/projects/) and
 [compatibility guide](https://opaal-lang.org/docs/compatibility/) for details.
 
+The [repository-check reference](examples/repository-check/README.md) combines
+a pinned Linux native checker with reusable repository policy. Its saved-input
+route and pure tests work on both qualified hosts. Native pins identify bytes,
+with no version claim or child confinement; live use requires explicit acceptance.
+
 ## Build from source
 
 The [pinned Rust toolchain](rust-toolchain.toml) and checked-in lockfile define

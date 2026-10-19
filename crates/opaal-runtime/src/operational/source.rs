@@ -445,15 +445,19 @@ impl<'a> ControlledSourceOperations<'a> {
             secret_input_id,
             secret_input,
             evidence: Vec::new(),
-            metadata_only: effects.iter().any(|request| {
-                matches!(
-                    request.effect(),
-                    opaal_platform::AuthorityEffect::EntropySystem
-                        | opaal_platform::AuthorityEffect::StdinRead
-                        | opaal_platform::AuthorityEffect::StdoutWrite
-                        | opaal_platform::AuthorityEffect::StderrWrite
-                )
-            }),
+            metadata_only: tools
+                .tools()
+                .values()
+                .any(|tool| tool.contract().adapter().is_none())
+                || effects.iter().any(|request| {
+                    matches!(
+                        request.effect(),
+                        opaal_platform::AuthorityEffect::EntropySystem
+                            | opaal_platform::AuthorityEffect::StdinRead
+                            | opaal_platform::AuthorityEffect::StdoutWrite
+                            | opaal_platform::AuthorityEffect::StderrWrite
+                    )
+                }),
             random: None,
         }
     }
@@ -471,6 +475,13 @@ impl<'a> ControlledSourceOperations<'a> {
         targets: BTreeMap<String, super::docker::BoundDockerTarget>,
     ) -> Self {
         self.docker_targets = targets;
+        self
+    }
+
+    /// Select payload-free evidence without acquiring any standard-host role.
+    #[must_use]
+    pub fn with_metadata_only_evidence(mut self) -> Self {
+        self.metadata_only = true;
         self
     }
 
@@ -598,6 +609,7 @@ impl<'a> ControlledSourceOperations<'a> {
             *attempted = true;
         }
 
+        let process_attempts = self.process_budget.attempts();
         match invoke(self) {
             Ok((value, status, result)) => {
                 let outcome = SourceEffectOutcome {
@@ -625,6 +637,9 @@ impl<'a> ControlledSourceOperations<'a> {
                     operation: operation.to_owned(),
                     status,
                 });
+                if let Some(reason) = self.context.poll_cancellation() {
+                    return Err(ModuleError::Cancelled(reason));
+                }
                 Ok(value)
             }
             Err(error) => {
@@ -648,7 +663,10 @@ impl<'a> ControlledSourceOperations<'a> {
                     | SourceEffectResult::StandardStream(progress) => {
                         progress.confirmed_bytes > 0 || progress.uncertain_bytes_upper_bound > 0
                     }
-                    _ => matches!(error, ModuleError::Adapter(_)),
+                    _ => {
+                        matches!(error, ModuleError::Adapter(_))
+                            || self.process_budget.attempts() > process_attempts
+                    }
                 };
                 let class = match &error {
                     ModuleError::Authority { .. } => "refused",
@@ -1076,7 +1094,6 @@ impl<'a> ControlledSourceOperations<'a> {
                     CapabilityRequest::process_run(tool.clone()).map_err(invalid_request)?;
                 let descriptor = process_descriptor(self.tools, &tool, &argv, self.metadata_only)?;
                 self.effect(request, "std::process::run", descriptor, |this| {
-                    let refs = argv.iter().map(String::as_str).collect::<Vec<_>>();
                     let executable_file = this.executable_files.get(&tool).ok_or_else(|| {
                         ModuleError::invalid(
                             "EXECUTE_STALE",
@@ -1090,7 +1107,7 @@ impl<'a> ControlledSourceOperations<'a> {
                         this.adapter,
                         this.tools,
                         &tool,
-                        &refs,
+                        &argv,
                         this.manifest.root(),
                         super::MAX_PROCESS_OUTPUT_BYTES,
                         super::MAX_PROCESS_OUTPUT_BYTES,
@@ -1514,9 +1531,10 @@ fn filesystem_descriptor(
 fn process_descriptor(
     tools: &ToolLock,
     tool_id: &str,
-    arguments: &[String],
+    arguments: &[&str],
     metadata_only: bool,
 ) -> Result<SourceOperation, ModuleError> {
+    process::validate_arguments(tools, tool_id, arguments)?;
     native_process_descriptor(
         tools,
         tool_id,
@@ -1586,10 +1604,16 @@ pub fn maintained_probe_operation(
     let tool = tools.tools().get(tool_id).ok_or_else(|| {
         ModuleError::invalid("PROCESS004", format!("unknown locked tool `{tool_id}`"))
     })?;
-    let fixed = match tool.adapter() {
-        MaintainedAdapter::Git => &["--version"][..],
-        MaintainedAdapter::Cargo => &["--version", "--verbose"][..],
-        MaintainedAdapter::Docker => {
+    let fixed = match tool.contract().adapter() {
+        None => {
+            return Err(ModuleError::invalid(
+                "NATIVE001",
+                "native tools have no version probe",
+            ));
+        }
+        Some(MaintainedAdapter::Git) => &["--version"][..],
+        Some(MaintainedAdapter::Cargo) => &["--version", "--verbose"][..],
+        Some(MaintainedAdapter::Docker) => {
             return Err(ModuleError::invalid(
                 "DOCKER002",
                 "Docker requires its fixed target probe",
@@ -1735,7 +1759,7 @@ fn usize_value(arguments: &[Value], index: usize) -> Result<usize, ModuleError> 
     }
 }
 
-fn string_list(arguments: &[Value], index: usize) -> Result<Vec<String>, ModuleError> {
+fn string_list(arguments: &[Value], index: usize) -> Result<Vec<&str>, ModuleError> {
     let Value::List(values) = argument(arguments, index)? else {
         return Err(type_error(
             index,
@@ -1747,7 +1771,7 @@ fn string_list(arguments: &[Value], index: usize) -> Result<Vec<String>, ModuleE
         .iter()
         .enumerate()
         .map(|(item, value)| match value {
-            Value::String(value) => Ok(value.to_string()),
+            Value::String(value) => Ok(value.as_ref()),
             other => Err(type_error(item, "String", other)),
         })
         .collect()

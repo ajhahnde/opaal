@@ -6,6 +6,12 @@ use std::os::fd::{AsFd, OwnedFd};
 #[cfg(target_os = "macos")]
 use std::os::unix::ffi::OsStrExt;
 
+#[cfg(target_os = "linux")]
+pub(super) fn running_elf_entry() -> usize {
+    // SAFETY: getauxval only reads the process auxiliary vector, with no pointers supplied.
+    unsafe { libc::getauxval(libc::AT_ENTRY) as usize }
+}
+
 pub(super) fn check_parent() -> Result<(), OperationalError> {
     // SAFETY: sigaction writes one initialized, correctly sized action and
     // does not change this process's disposition when the new action is null.

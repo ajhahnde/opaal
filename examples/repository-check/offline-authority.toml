@@ -1,0 +1,13 @@
+schema_version = 1
+project = "repository_check"
+environment = "offline"
+[[rules]]
+decision = "grant"
+effect = "stdin.read"
+scope = "evaluation"
+required_enforcement = "enforced"
+[[rules]]
+decision = "grant"
+effect = "stdout.write"
+scope = "evaluation"
+required_enforcement = "enforced"

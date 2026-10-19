@@ -58,7 +58,7 @@ mod doctor;
 mod preparation;
 mod task;
 pub use doctor::{DoctorProjectRun, doctor_project};
-pub use preparation::{InitProjectRequest, init_project};
+pub use preparation::{InitProjectRequest, init_project, init_repository_project};
 pub use task::{TaskRun, explain_task, run_accepted_task};
 
 const MAX_CONTROL_READ_BYTES: usize = 192 * 1024 * 1024;
@@ -782,12 +782,12 @@ fn render_plan_tools(output: &mut BoundedText, value: &Value) -> Result<(), Proj
             escaped_text(
                 tool["required_version"]
                     .as_str()
-                    .expect("validated required tool version")
+                    .unwrap_or("unverified")
             ),
             escaped_text(
                 tool["locked_version"]
                     .as_str()
-                    .expect("validated tool version")
+                    .unwrap_or("unverified")
             ),
             escaped_text(tool["platform"].as_str().expect("validated tool platform")),
             tool["digest"].as_str().expect("validated tool digest"),
@@ -798,6 +798,9 @@ fn render_plan_tools(output: &mut BoundedText, value: &Value) -> Result<(), Proj
                 .as_bool()
                 .expect("validated tool verification state")
         ))?;
+        if tool["adapter"] == "native" {
+            output.line("  Executable bytes are pinned; version and behavior are unverified; child effects are unenforced.")?;
+        }
     }
     Ok(())
 }
@@ -1262,12 +1265,17 @@ pub fn inspect_project(
             "effects":effects
         })
     }).collect::<Vec<_>>();
+    let native = project
+        .manifest()
+        .tools()
+        .values()
+        .any(|tool| tool.contract().adapter().is_none());
     let view = json!({
-        "schema":"opaal.project-inspection.v1", "schema_version":1,
+        "schema":if native { "opaal.project-inspection.v2" } else { "opaal.project-inspection.v1" }, "schema_version":if native { 2 } else { 1 },
         "project":{"name":project.manifest().name(), "manifest_path":native_path(project.manifest().manifest_path())},
         "tasks":tasks,
         "targets":project.manifest().targets().values().map(|target| json!({"id":target.id,"adapter":"docker","tool":target.tool,"socket":native_path(&target.socket),"config_directory":native_path(&target.config_directory),"api_version":"1.48"})).collect::<Vec<_>>(),
-        "tools":project.manifest().tools().values().map(|tool| json!({"id":tool.id().qualified_name(), "adapter":tool.adapter().name(), "version":tool.version().to_string()})).collect::<Vec<_>>(),
+        "tools":project.manifest().tools().values().map(|tool| json!({"id":tool.id().qualified_name(), "adapter":tool.contract().adapter_name(), "version":tool.contract().version().map(ToString::to_string)})).collect::<Vec<_>>(),
         "environments":project.manifest().environments().values().map(|environment| json!({"id":environment.id().qualified_name()})).collect::<Vec<_>>()
     });
     let output = if request.format_json {
@@ -1354,7 +1362,7 @@ pub fn inspect_project(
                 "  {} {} {}",
                 escaped_text(tool["id"].as_str().expect("id")),
                 escaped_text(tool["adapter"].as_str().expect("adapter")),
-                escaped_text(tool["version"].as_str().expect("version"))
+                escaped_text(tool["version"].as_str().unwrap_or("version unverified"))
             ))?;
         }
         output.line("targets")?;
@@ -1674,8 +1682,13 @@ pub fn plan_explicit_project(
         "outcome":plan_outcome
     });
     select_standard_host_policy(&mut document, "opaal.plan.v3");
-    document["schema"] = json!("opaal.plan.v4");
-    document["schema_version"] = json!(4);
+    let native = check_value["schema_version"] == 5;
+    document["schema"] = json!(if native {
+        "opaal.plan.v5"
+    } else {
+        "opaal.plan.v4"
+    });
+    document["schema_version"] = json!(if native { 5 } else { 4 });
     let plan = PlanArtifact::seal(document).map_err(workflow_contract)?;
     filesystem.write_exclusive_atomic(&request.out, plan.bytes())?;
     Ok(ProjectFrontendRun {
@@ -1850,6 +1863,12 @@ fn execute_plan(
     secret_input: &mut dyn Read,
     mut audit: Option<&mut task::RunAudit>,
 ) -> Result<ExecuteFrontendRun, ProjectFrontendError> {
+    let execution_clock = SystemClock::new();
+    let execution_deadline = Instant::from_nanos(10 * 60 * 1_000_000_000);
+    let mut cancellation = CancellationToken::deadline(execution_clock.clone(), execution_deadline);
+    if let Some(audit) = audit.as_deref() {
+        cancellation = cancellation.with_requested_cancellation(audit.cancellation());
+    }
     if audit
         .as_deref()
         .is_some_and(|audit| audit.control.is_cancelled())
@@ -1886,7 +1905,8 @@ fn execute_plan(
     }
 
     let plan_value = plan.value();
-    let metadata_only = plan_value.get("standard_host").is_some();
+    let native = plan_value["schema_version"] == 5;
+    let metadata_only = native || plan_value.get("standard_host").is_some();
     let roles = plan_value["standard_host"]["roles"]
         .as_array()
         .map_or(&[][..], Vec::as_slice);
@@ -2018,6 +2038,8 @@ fn execute_plan(
         &tools_bytes,
         &current_check.tls_ca,
         &filesystem.control_reads,
+        &tools,
+        &cancellation,
     )?;
 
     let adapter = PosixOperationalAdapter::new();
@@ -2142,21 +2164,15 @@ fn execute_plan(
             filesystem.create_receipt(&path)
         })
         .transpose()?;
-    let mut journal = filesystem.create_journal(&journal_path, &run_id, header)?;
+    let mut journal =
+        filesystem.create_journal(&journal_path, &run_id, header, if native { 5 } else { 4 })?;
     let result = (|| {
         let mut runtime_rules = Vec::new();
         for rule in authority.rules() {
             runtime_rules.extend(runtime_authority_rules(project.manifest(), rule)?);
         }
         let evaluation = evaluation_id(&run_id)?;
-        let execution_clock = SystemClock::new();
-        let execution_deadline = Instant::from_nanos(10 * 60 * 1_000_000_000);
-        let mut cancellation =
-            CancellationToken::deadline(execution_clock.clone(), execution_deadline);
-        if let Some(audit) = audit.as_deref() {
-            cancellation = cancellation.with_requested_cancellation(audit.cancellation());
-        }
-        let standard_host = if metadata_only {
+        let standard_host = if !roles.is_empty() {
             let mut host = PosixStandardHost::for_cli(evaluation.get()).ok();
             if roles.iter().any(|role| role != "entropy.system") {
                 let binding = host
@@ -2250,7 +2266,13 @@ fn execute_plan(
             .iter()
             .filter(|(tool_id, tool)| {
                 required_tools.contains(tool_id.as_str())
-                    && tool.adapter() != opaal_runtime::project::MaintainedAdapter::Docker
+                    && matches!(
+                        tool.contract().adapter(),
+                        Some(
+                            opaal_runtime::project::MaintainedAdapter::Git
+                                | opaal_runtime::project::MaintainedAdapter::Cargo
+                        )
+                    )
             })
             .map(|(tool_id, _)| tool_id)
         {
@@ -2395,7 +2417,10 @@ fn execute_plan(
                 secret_binding,
             )
             .with_docker_targets(docker_targets);
-            if metadata_only {
+            if native {
+                operations = operations.with_metadata_only_evidence();
+            }
+            if !roles.is_empty() {
                 operations = operations.with_standard_host(
                     StandardState::new(standard_host, StandardLimits::default())
                         .map_err(|error| execute_error(error.code(), error.to_string()))?,
@@ -2518,7 +2543,11 @@ fn verify_plan_check_identity(plan: &Value, check: &Value) -> Result<(), Project
         "tools",
     ] {
         let mut current = check[field].clone();
-        if field == "project" && plan["schema_version"] != 4 {
+        if field == "project"
+            && plan["schema_version"]
+                .as_u64()
+                .is_some_and(|version| version < 4)
+        {
             if current["targets"]
                 .as_array()
                 .is_some_and(|targets| !targets.is_empty())
@@ -2548,6 +2577,8 @@ fn verify_plan_identity(
     tools_bytes: &[u8],
     tls_ca: &BTreeMap<String, Vec<u8>>,
     control_reads: &ControlReadBudget,
+    tools: &ToolLock,
+    cancellation: &CancellationToken,
 ) -> Result<BTreeMap<String, File>, ProjectFrontendError> {
     let value = plan.value();
     verify_plan_check_identity(value, check)?;
@@ -2629,25 +2660,34 @@ fn verify_plan_identity(
         let path = path_from_native_value(&tool["path"]).map_err(workflow_contract)?;
         let (_, file) =
             open_absolute_file_with_parent_nofollow(&path).map_err(frontend_contract)?;
-        let bytes = read_bounded_control(
-            file.try_clone()
-                .map_err(|error| execute_error("EXECUTE_STALE", error.to_string()))?,
-            process::MAX_TOOL_EXECUTABLE_BYTES,
-            control_reads,
-        )
-        .map_err(frontend_contract)?;
-        if digest_bytes(&bytes) != tool["digest"] {
-            return Err(stale(format!(
-                "tool executable `{}` changed",
-                required_plan_string(tool, "id")?
-            )));
-        }
+        let id = required_plan_string(tool, "id")?;
+        let locked = tools
+            .tools()
+            .get(id)
+            .ok_or_else(|| stale("locked tool is absent"))?;
+        let size = process::verify_retained_executable(&file, locked, &|| {
+            if cancellation.is_cancelled() {
+                Err(opaal_runtime::operational::ModuleError::Cancelled(
+                    cancellation.reason(),
+                ))
+            } else {
+                Ok(())
+            }
+        })
+        .map_err(|error| match error {
+            opaal_runtime::operational::ModuleError::Cancelled(_) => execute_error(
+                "EXECUTE_CANCELLED",
+                "execution cancelled during tool identity verification",
+            ),
+            _ => stale("tool executable identity changed"),
+        })?;
+        control_reads.charge(size).map_err(frontend_contract)?;
         expected.push(json!({
             "kind":"tool-executable",
             "id":tool["id"],
             "path":tool["path"],
-            "digest":digest_bytes(&bytes),
-            "size":bytes.len(),
+            "digest":locked.digest(),
+            "size":size,
             "observed_at":null
         }));
         executable_files.insert(required_plan_string(tool, "id")?.to_owned(), file);
@@ -4249,8 +4289,16 @@ fn build_check_artifact(
         "outcome":outcome
     });
     select_standard_host_policy(&mut document, "opaal.check.v3");
-    document["schema"] = json!("opaal.check.v4");
-    document["schema_version"] = json!(4);
+    let native = tools
+        .tools()
+        .values()
+        .any(|tool| tool.contract().adapter().is_none());
+    document["schema"] = json!(if native {
+        "opaal.check.v5"
+    } else {
+        "opaal.check.v4"
+    });
+    document["schema_version"] = json!(if native { 5 } else { 4 });
     let artifact = CheckArtifact::seal(document).map_err(workflow_contract)?;
     Ok(BuiltCheckArtifact { artifact, tls_ca })
 }
@@ -4512,10 +4560,10 @@ fn build_tool_records(
             let path = PathBuf::from(OsString::from_vec(locked.path().bytes().to_vec()));
             Ok(json!({
                 "id":name,
-                "adapter":locked.adapter().name(),
+                "adapter":locked.contract().adapter_name(),
                 "path":native_path(&path),
-                "required_version":declaration.version().to_string(),
-                "locked_version":locked.version().to_string(),
+                "required_version":declaration.contract().version().map(ToString::to_string),
+                "locked_version":locked.contract().version().map(ToString::to_string),
                 "digest":locked.digest(),
                 "platform":tools.platform(),
                 "child_environment_digest":child_environment_digest,
@@ -4526,6 +4574,7 @@ fn build_tool_records(
 }
 
 fn static_verdict(
+    manifest: &ProjectManifest,
     authority: &AuthorityDocument,
     effect: &ProjectEffect,
     platform: &str,
@@ -4540,7 +4589,14 @@ fn static_verdict(
                 (AuthorityDecision::Grant, Some(DocumentEnforcement::AcknowledgeUnenforced))
                     if effect.capability() == "process.run" =>
                 {
-                    if supports_exact_process_execution(platform) {
+                    let native = effect
+                        .scope()
+                        .strip_prefix("tool.")
+                        .and_then(|id| manifest.tools().get(id))
+                        .is_some_and(|tool| tool.contract().adapter().is_none());
+                    if native && platform != "x86_64-unknown-linux-gnu" {
+                        "unsupported"
+                    } else if supports_exact_process_execution(platform) {
                         "granted-unenforced"
                     } else if matches!(platform, "aarch64-apple-darwin" | "x86_64-apple-darwin") {
                         "unsupported"
@@ -4570,7 +4626,7 @@ fn artifact_requests(
             json!({
                 "effect":effect.capability(),
                 "scope":scope,
-                "verdict":static_verdict(authority, effect, platform)
+                "verdict":static_verdict(manifest, authority, effect, platform)
             })
         })
         .collect())
@@ -4968,6 +5024,7 @@ impl HostProjectFilesystem {
         candidate: &Path,
         run_id: &str,
         header: Value,
+        version: u64,
     ) -> Result<SyncedJournal, ProjectFrontendError> {
         let candidate = self
             .resolve_output_path(candidate)
@@ -4982,10 +5039,10 @@ impl HostProjectFilesystem {
             open_relative_output_parent(&self.root_directory, relative, &candidate)
                 .map_err(frontend_contract)?;
         require_absent_output(&parent, &name, &candidate).map_err(frontend_contract)?;
-        let metadata_only = header.get("standard_host").is_some();
+        let metadata_only = version == 5 || header.get("standard_host").is_some();
         let require_true = header["result_policy"] == "require-true";
         let (chain, header_line) =
-            JournalChain::begin(run_id, header).map_err(workflow_contract)?;
+            JournalChain::begin_with_version(run_id, header, version).map_err(workflow_contract)?;
         let temporary = OsString::from(format!(
             ".opaal-journal-{}-{:016x}",
             std::process::id(),
@@ -5472,6 +5529,77 @@ mod tests {
 
     static NEXT: AtomicU64 = AtomicU64::new(0);
 
+    #[test]
+    fn image_frozen_source_open_and_image_byte_bounds() {
+        let inventory =
+            include_bytes!("../../../tests/golden/controlled-external-tools/image-cases.json");
+        let cases: Value = serde_json::from_slice(inventory).unwrap();
+        let temporary = TempDirectory::new();
+        let source = temporary.0.join("image");
+        let original = temporary.0.join("original");
+        fs::write(&original, b"regular image positive control").unwrap();
+        assert_eq!(
+            read_bounded(
+                open_absolute_file_with_parent_nofollow(&original)
+                    .unwrap()
+                    .1,
+                64
+            )
+            .unwrap(),
+            b"regular image positive control"
+        );
+        for name in [
+            "image-bytes-exact",
+            "image-bytes-first-excess",
+            "source-symlink",
+            "source-fifo",
+            "source-directory",
+        ] {
+            let case = cases["cases"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|case| case["name"] == name)
+                .unwrap();
+            if let Some(length) = case["input"]["value"].as_u64() {
+                File::create(&source).unwrap().set_len(length).unwrap();
+            } else {
+                match case["input"]["source"].as_str().unwrap() {
+                    "symlink" => std::os::unix::fs::symlink(&original, &source).unwrap(),
+                    "fifo" => assert!(
+                        std::process::Command::new("/usr/bin/mkfifo")
+                            .arg(&source)
+                            .status()
+                            .unwrap()
+                            .success()
+                    ),
+                    "directory" => fs::create_dir(&source).unwrap(),
+                    _ => unreachable!(),
+                }
+            }
+            let result = open_absolute_file_with_parent_nofollow(&source)
+                .and_then(|(_, file)| read_bounded(file, process::MAX_TOOL_EXECUTABLE_BYTES));
+            let mut observed = json!({"admitted": result.is_ok()});
+            if name.starts_with("source-") {
+                observed["attempts"] = json!(0);
+            }
+            if let Ok(bytes) = result {
+                assert_eq!(bytes.len(), process::MAX_TOOL_EXECUTABLE_BYTES);
+            }
+            assert_eq!(observed, case["expected"], "{name}");
+            println!(
+                "OPAAL_IMAGE_CASE {}",
+                json!({"name":name, "observed":observed,
+                "host":host_platform_triple(), "inventory_digest":digest_bytes(inventory)})
+            );
+            if source.is_dir() {
+                fs::remove_dir(&source).unwrap();
+            } else {
+                fs::remove_file(&source).unwrap();
+            }
+        }
+    }
+
     fn standard_test_header() -> Value {
         let mut document = json!({"authority":{"requests":[{"effect":"stdout.write"}]}});
         select_standard_host_policy(&mut document, "opaal.plan.v3");
@@ -5514,6 +5642,7 @@ mod tests {
                                         &path,
                                         "0123456789abcdef0123456789abcdef",
                                         standard_test_header(),
+                                        4,
                                     )
                                     .is_ok()
                             }
@@ -5538,7 +5667,8 @@ mod tests {
                         .create_journal(
                             &path,
                             "0123456789abcdef0123456789abcdef",
-                            standard_test_header()
+                            standard_test_header(),
+                            4,
                         )
                         .is_err()
                 );
@@ -5566,6 +5696,7 @@ mod tests {
                     &path,
                     "0123456789abcdef0123456789abcdef",
                     standard_test_header(),
+                    4,
                 )
                 .unwrap();
             let evaluation = EvaluationContextId::new(1).unwrap();
@@ -5792,18 +5923,25 @@ mod tests {
 
     #[test]
     fn selected_finish_retains_candidates_through_cleanup_and_terminal_failure() {
-        for candidate in [false, true] {
+        for (candidate, version) in [false, true]
+            .into_iter()
+            .flat_map(|candidate| [(candidate, 4), (candidate, 5)])
+        {
             for fault in ["none", "cleanup", "terminal"] {
                 let temporary = TempDirectory::new();
                 let path = temporary.0.join("run.jsonl");
                 let mut document = json!({"authority":{"requests":[{"effect":"entropy.system"}]}});
                 select_standard_host_policy(&mut document, "opaal.plan.v3");
                 let digest = format!("sha256:{}", "1".repeat(64));
-                let header = json!({"plan_digest":digest, "accepted_plan_digest":digest, "authority_digest":digest,
+                let mut header = json!({"plan_digest":digest, "accepted_plan_digest":digest, "authority_digest":digest,
                     "project_digest":digest, "environment_digest":digest, "tool_lock_digest":digest,
                     "child_environment_digest":digest, "started_at":"1970-01-01T00:00:00.000000000Z",
                     "standard_host":document["standard_host"], "result_policy":"require-true"});
-                let (chain, bytes) = JournalChain::begin(&"1".repeat(32), header).unwrap();
+                if version == 5 {
+                    header.as_object_mut().unwrap().remove("standard_host");
+                }
+                let (chain, bytes) =
+                    JournalChain::begin_with_version(&"1".repeat(32), header, version).unwrap();
                 fs::write(&path, bytes).unwrap();
                 let mut journal = SyncedJournal {
                     run_id: "1".repeat(32),
@@ -5961,7 +6099,10 @@ mod tests {
 
     #[test]
     fn receipt_faults_preserve_primary_and_record_only_in_available_open_journals() {
-        for candidate in [None, Some(false), Some(true)] {
+        for (candidate, version) in [None, Some(false), Some(true)]
+            .into_iter()
+            .flat_map(|candidate| [(candidate, 4), (candidate, 5)])
+        {
             let require_true = candidate.is_some();
             for state in ["open", "complete", "unavailable", "fails-with-receipt"] {
                 for class in ["success", "error", "cancelled", "refused"] {
@@ -5971,15 +6112,21 @@ mod tests {
                             json!({"authority":{"requests":[{"effect":"stdout.write"}]}});
                         select_standard_host_policy(&mut document, "opaal.plan.v3");
                         let digest = format!("sha256:{}", "1".repeat(64));
-                        let header = json!({
+                        let mut header = json!({
                             "plan_digest":digest, "accepted_plan_digest":digest, "authority_digest":digest,
                             "project_digest":digest, "environment_digest":digest, "tool_lock_digest":digest,
                             "child_environment_digest":digest, "started_at":"2026-10-08T00:00:00.000000000Z",
                             "standard_host":document["standard_host"], "result_policy":if require_true { "require-true" } else { "execution" }
                         });
-                        let (chain, bytes) =
-                            JournalChain::begin("0123456789abcdef0123456789abcdef", header)
-                                .unwrap();
+                        if version == 5 {
+                            header.as_object_mut().unwrap().remove("standard_host");
+                        }
+                        let (chain, bytes) = JournalChain::begin_with_version(
+                            "0123456789abcdef0123456789abcdef",
+                            header,
+                            version,
+                        )
+                        .unwrap();
                         let path = temporary.0.join("journal.jsonl");
                         fs::write(&path, bytes).unwrap();
                         let primary = outcome_value(

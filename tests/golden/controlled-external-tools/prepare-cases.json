@@ -1,0 +1,760 @@
+{
+  "schema_version": 1,
+  "cases": [
+    {
+      "name": "offline-linux",
+      "hosts": [
+        "x86_64-unknown-linux-gnu"
+      ],
+      "input": {
+        "environment": "offline"
+      },
+      "expected": {
+        "created": true,
+        "launches": 0,
+        "file_mode": "0600",
+        "directory_mode": "0700"
+      }
+    },
+    {
+      "name": "offline-macos",
+      "hosts": [
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "environment": "offline"
+      },
+      "expected": {
+        "created": true,
+        "launches": 0,
+        "file_mode": "0600",
+        "directory_mode": "0700"
+      }
+    },
+    {
+      "name": "live-linux-explicit-tool",
+      "hosts": [
+        "x86_64-unknown-linux-gnu"
+      ],
+      "input": {
+        "environment": "ci",
+        "tool": "absolute-elf"
+      },
+      "expected": {
+        "created": true,
+        "launches": 0,
+        "version_present": false,
+        "environment": {
+          "LC_ALL": "C"
+        },
+        "inherit": []
+      }
+    },
+    {
+      "name": "live-macos-refuses",
+      "hosts": [
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "environment": "ci",
+        "tool": "absolute-elf"
+      },
+      "expected": {
+        "created": false,
+        "exit": 2,
+        "launches": 0
+      }
+    },
+    {
+      "name": "unknown-environment",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "environment": "other"
+      },
+      "expected": {
+        "exit": 2,
+        "created": false,
+        "launches": 0
+      }
+    },
+    {
+      "name": "offline-tool-option",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "environment": "offline",
+        "tool": "absolute-elf"
+      },
+      "expected": {
+        "exit": 2,
+        "created": false,
+        "launches": 0
+      }
+    },
+    {
+      "name": "live-missing-tool",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "environment": "ci"
+      },
+      "expected": {
+        "exit": 2,
+        "created": false,
+        "launches": 0
+      }
+    },
+    {
+      "name": "live-relative-tool",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "environment": "ci",
+        "tool": "relative"
+      },
+      "expected": {
+        "exit": 2,
+        "created": false,
+        "launches": 0
+      }
+    },
+    {
+      "name": "qualified-version-option",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "option": "--qualified-version"
+      },
+      "expected": {
+        "exit": 2,
+        "created": false,
+        "launches": 0
+      }
+    },
+    {
+      "name": "docker-option",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "option": "--docker"
+      },
+      "expected": {
+        "exit": 2,
+        "created": false,
+        "launches": 0
+      }
+    },
+    {
+      "name": "socket-option",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "option": "--socket"
+      },
+      "expected": {
+        "exit": 2,
+        "created": false,
+        "launches": 0
+      }
+    },
+    {
+      "name": "duplicate-tool-option",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "option": "--tool",
+        "count": 2
+      },
+      "expected": {
+        "exit": 2,
+        "created": false,
+        "launches": 0
+      }
+    },
+    {
+      "name": "missing-tool-file",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "tool": "missing"
+      },
+      "expected": {
+        "exit": 2,
+        "created": false,
+        "launches": 0
+      }
+    },
+    {
+      "name": "symlink-tool",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "tool": "symlink"
+      },
+      "expected": {
+        "exit": 2,
+        "created": false,
+        "launches": 0
+      }
+    },
+    {
+      "name": "fifo-tool",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "tool": "fifo"
+      },
+      "expected": {
+        "exit": 2,
+        "created": false,
+        "launches": 0
+      }
+    },
+    {
+      "name": "nonexec-tool",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "tool": "nonexec"
+      },
+      "expected": {
+        "exit": 2,
+        "created": false,
+        "launches": 0
+      }
+    },
+    {
+      "name": "setid-tool",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "tool": "setid"
+      },
+      "expected": {
+        "exit": 2,
+        "created": false,
+        "launches": 0
+      }
+    },
+    {
+      "name": "script-tool",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "tool": "script"
+      },
+      "expected": {
+        "exit": 2,
+        "created": false,
+        "launches": 0
+      }
+    },
+    {
+      "name": "foreign-tool",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "tool": "foreign"
+      },
+      "expected": {
+        "exit": 2,
+        "created": false,
+        "launches": 0
+      }
+    },
+    {
+      "name": "oversized-tool",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "tool": "67108865-bytes"
+      },
+      "expected": {
+        "exit": 2,
+        "created": false,
+        "launches": 0
+      }
+    },
+    {
+      "name": "empty-destination",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "destination": "empty"
+      },
+      "expected": {
+        "exit": 2,
+        "created": false,
+        "launches": 0
+      }
+    },
+    {
+      "name": "parent-component",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "destination": "parent-component"
+      },
+      "expected": {
+        "exit": 2,
+        "created": false,
+        "launches": 0
+      }
+    },
+    {
+      "name": "symlink-parent",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "destination": "symlink-parent"
+      },
+      "expected": {
+        "exit": 2,
+        "created": false,
+        "launches": 0
+      }
+    },
+    {
+      "name": "missing-parent",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "destination": "missing-parent"
+      },
+      "expected": {
+        "exit": 2,
+        "created": false,
+        "launches": 0
+      }
+    },
+    {
+      "name": "existing-directory",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "destination": "directory"
+      },
+      "expected": {
+        "exit": 2,
+        "preserved": true,
+        "launches": 0
+      }
+    },
+    {
+      "name": "existing-file",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "destination": "file"
+      },
+      "expected": {
+        "exit": 2,
+        "preserved": true,
+        "launches": 0
+      }
+    },
+    {
+      "name": "existing-symlink",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "destination": "symlink"
+      },
+      "expected": {
+        "exit": 2,
+        "preserved": true,
+        "launches": 0
+      }
+    },
+    {
+      "name": "existing-dangling-symlink",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "destination": "dangling-symlink"
+      },
+      "expected": {
+        "exit": 2,
+        "preserved": true,
+        "launches": 0
+      }
+    },
+    {
+      "name": "existing-fifo",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "destination": "fifo"
+      },
+      "expected": {
+        "exit": 2,
+        "preserved": true,
+        "launches": 0
+      }
+    },
+    {
+      "name": "concurrent-asset-file",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "fault": "asset-collision",
+        "kind": "file"
+      },
+      "expected": {
+        "exit": 2,
+        "preserved": true,
+        "partial_retained": true,
+        "retry_refused": true,
+        "launches": 0
+      }
+    },
+    {
+      "name": "concurrent-asset-symlink",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "fault": "asset-collision",
+        "kind": "symlink"
+      },
+      "expected": {
+        "exit": 2,
+        "preserved": true,
+        "partial_retained": true,
+        "retry_refused": true,
+        "launches": 0
+      }
+    },
+    {
+      "name": "concurrent-asset-fifo",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "fault": "asset-collision",
+        "kind": "fifo"
+      },
+      "expected": {
+        "exit": 2,
+        "preserved": true,
+        "partial_retained": true,
+        "retry_refused": true,
+        "launches": 0
+      }
+    },
+    {
+      "name": "failure-zero-write",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "fault": "zero-write"
+      },
+      "expected": {
+        "exit": 2,
+        "partial_retained": true,
+        "retry_refused": true,
+        "launches": 0
+      }
+    },
+    {
+      "name": "failure-partial-write",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "fault": "partial-write"
+      },
+      "expected": {
+        "exit": 2,
+        "partial_retained": true,
+        "retry_refused": true,
+        "launches": 0
+      }
+    },
+    {
+      "name": "failure-file-sync",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "fault": "file-sync"
+      },
+      "expected": {
+        "exit": 2,
+        "partial_retained": true,
+        "retry_refused": true,
+        "launches": 0
+      }
+    },
+    {
+      "name": "failure-directory-sync",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "fault": "directory-sync"
+      },
+      "expected": {
+        "exit": 2,
+        "partial_retained": true,
+        "retry_refused": true,
+        "launches": 0
+      }
+    },
+    {
+      "name": "failure-root-sync",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "fault": "root-sync"
+      },
+      "expected": {
+        "exit": 2,
+        "partial_retained": true,
+        "retry_refused": true,
+        "launches": 0
+      }
+    },
+    {
+      "name": "failure-parent-sync",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "fault": "parent-sync"
+      },
+      "expected": {
+        "exit": 2,
+        "partial_retained": true,
+        "retry_refused": true,
+        "launches": 0
+      }
+    },
+    {
+      "name": "concurrent-initializers",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "initializers": 2
+      },
+      "expected": {
+        "successes": 1,
+        "refusals": 1,
+        "launches": 0
+      }
+    },
+    {
+      "name": "broken-success-output",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "fault": "summary-write"
+      },
+      "expected": {
+        "exit": 2,
+        "complete_assets_retained": true,
+        "launches": 0
+      }
+    },
+    {
+      "name": "doctor-valid-unverified",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "observer": "doctor",
+        "tool": "valid-unverified"
+      },
+      "expected": {
+        "launches": 0,
+        "live_ready": false,
+        "finding": "DOCTOR017"
+      }
+    },
+    {
+      "name": "doctor-missing-tool",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "observer": "doctor",
+        "tool": "missing-tool"
+      },
+      "expected": {
+        "launches": 0,
+        "live_ready": false,
+        "finding": "DOCTOR007"
+      }
+    },
+    {
+      "name": "doctor-changed-tool",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "observer": "doctor",
+        "tool": "changed-tool"
+      },
+      "expected": {
+        "launches": 0,
+        "live_ready": false,
+        "finding": "DOCTOR007"
+      }
+    },
+    {
+      "name": "doctor-foreign-image",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "observer": "doctor",
+        "tool": "foreign-image"
+      },
+      "expected": {
+        "launches": 0,
+        "live_ready": false,
+        "finding": "DOCTOR007"
+      }
+    },
+    {
+      "name": "embedded-assets-exact",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "compare": "packaged-reference"
+      },
+      "expected": {
+        "all_asset_bytes_equal": true
+      }
+    },
+    {
+      "name": "asset-count-exact",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "asset_bound": "count",
+        "value": 64
+      },
+      "expected": {
+        "asset_limit_admitted": true
+      }
+    },
+    {
+      "name": "asset-count-first-excess",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "asset_bound": "count",
+        "value": 65
+      },
+      "expected": {
+        "asset_limit_admitted": false
+      }
+    },
+    {
+      "name": "asset-bytes-exact",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "asset_bound": "bytes",
+        "value": 16777216
+      },
+      "expected": {
+        "asset_limit_admitted": true
+      }
+    },
+    {
+      "name": "asset-bytes-first-excess",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "asset_bound": "bytes",
+        "value": 16777217
+      },
+      "expected": {
+        "asset_limit_admitted": false
+      }
+    }
+  ]
+}

@@ -835,6 +835,186 @@ kind = "injected"
 }
 
 #[test]
+fn native_requests_have_no_probe_or_path_fallback_and_validate_before_launch() {
+    let executable = vec![0_u8; 128 * 1024];
+    let manifest = parse_project_manifest(
+        Path::new("/project/opaal.toml"),
+        br#"
+schema_version = 1
+[project]
+name = "demo"
+root_module = "tasks.opaal"
+required_opaal = ">=1.0.0,<2.0.0"
+[paths]
+root = "."
+evidence = "evidence.json"
+[tools.checker]
+adapter = "native"
+[environments.ci]
+authority = "authority.toml"
+tool_lock = "tools.toml"
+"#,
+    )
+    .unwrap();
+    let lock = parse_tool_lock(
+        &manifest,
+        "ci",
+        format!(
+            r#"
+schema_version = 1
+project = "demo"
+environment = "ci"
+platform = "x86_64-unknown-linux-gnu"
+[child_environment]
+inherit = []
+[[tools]]
+id = "checker"
+adapter = "native"
+path = {{ encoding = "base64url-nopad", platform = "unix", value = "L3Rvb2wvZ2l0" }}
+digest = "sha256:{}"
+"#,
+            &integrity::sha256(&executable)[7..]
+        )
+        .as_bytes(),
+    )
+    .unwrap();
+    let request = CapabilityRequest::process_run("checker").unwrap();
+    let effects = EffectSet::new([request.clone()]);
+    let platform = platform(AuthorityProfile::unsupported().with(
+        AuthorityEffect::ProcessRun,
+        AuthorityEnforcement::Unenforced,
+    ));
+    let adapter = FakeOperationalAdapter::new();
+    let granted = context(vec![AuthorityRule::grant(
+        request.clone(),
+        RequiredEnforcement::AcknowledgeUnenforced,
+    )]);
+    let mut budget = process::ProcessBudget::default();
+    assert_eq!(
+        process::probe(
+            &granted,
+            &effects,
+            &platform,
+            &adapter,
+            &lock,
+            "checker",
+            Path::new("/project"),
+            &mut budget
+        )
+        .unwrap_err()
+        .code(),
+        "NATIVE001"
+    );
+    let run = |context: &OperationalContext, effects: &EffectSet, arguments: &[&str]| {
+        process::run(
+            context,
+            effects,
+            &platform,
+            &adapter,
+            &lock,
+            "checker",
+            arguments,
+            Path::new("/project"),
+            0,
+            0,
+            Duration::from_secs(1),
+            &mut process::ProcessBudget::default(),
+        )
+        .unwrap_err()
+        .code()
+    };
+    assert_eq!(run(&context(vec![]), &effects, &[]), "OPERATION002");
+    assert_eq!(run(&granted, &EffectSet::new([]), &[]), "OPERATION002");
+    let enforced = context(vec![AuthorityRule::grant(
+        request,
+        RequiredEnforcement::Enforced,
+    )]);
+    assert_eq!(run(&enforced, &effects, &[]), "OPERATION002");
+    assert_eq!(run(&granted, &effects, &[]), "NATIVE002");
+    assert_eq!(run(&granted, &effects, &vec![""; 4095]), "NATIVE002");
+    assert_eq!(run(&granted, &effects, &vec![""; 4096]), "NATIVE004");
+    let exact_argument = "a".repeat(32 * 1024 - 1);
+    assert_eq!(run(&granted, &effects, &[&exact_argument]), "NATIVE002");
+    assert_eq!(
+        run(&granted, &effects, &[&format!("{exact_argument}a")]),
+        "NATIVE004"
+    );
+    let last_argument = "a".repeat(32 * 1024 - 11);
+    assert_eq!(
+        run(
+            &granted,
+            &effects,
+            &[
+                &exact_argument,
+                &exact_argument,
+                &exact_argument,
+                &last_argument
+            ]
+        ),
+        "NATIVE002"
+    );
+    assert_eq!(
+        run(
+            &granted,
+            &effects,
+            &[
+                &exact_argument,
+                &exact_argument,
+                &exact_argument,
+                &format!("{last_argument}a")
+            ]
+        ),
+        "NATIVE004"
+    );
+    assert_eq!(run(&granted, &effects, &["a\0b"]), "NATIVE004");
+    assert_eq!(budget.attempts(), 0);
+    assert!(adapter.calls().is_empty());
+
+    let path = Path::new(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("native-hash-polls-{}", std::process::id()));
+    std::fs::write(&path, &executable).unwrap();
+    let retained = std::fs::File::open(&path).unwrap();
+    let tool = &lock.tools()["checker"];
+    let polls = AtomicUsize::new(0);
+    process::verify_retained_executable(&retained, tool, &|| {
+        polls.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    })
+    .unwrap();
+    assert!(polls.load(Ordering::SeqCst) >= 5);
+    for boundary in 0..polls.load(Ordering::SeqCst) {
+        for reason in [
+            opaal_runtime::eval::CancelReason::Requested,
+            opaal_runtime::eval::CancelReason::Timeout,
+        ] {
+            let calls = AtomicUsize::new(0);
+            let result = process::verify_retained_executable(&retained, tool, &|| {
+                if calls.fetch_add(1, Ordering::SeqCst) >= boundary {
+                    Err(opaal_runtime::operational::ModuleError::Cancelled(reason))
+                } else {
+                    Ok(())
+                }
+            });
+            assert!(
+                matches!(result, Err(opaal_runtime::operational::ModuleError::Cancelled(observed)) if observed == reason),
+                "poll {boundary}"
+            );
+        }
+    }
+    let calls = AtomicUsize::new(0);
+    let verified_bytes = process::verify_retained_executable(&retained, tool, &|| {
+        if calls.fetch_add(1, Ordering::SeqCst) == polls.load(Ordering::SeqCst) - 1 {
+            std::fs::write(&path, []).unwrap();
+        }
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(verified_bytes, executable.len());
+    assert_eq!(retained.metadata().unwrap().len(), 0);
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
 fn fixed_probe_uses_locked_executable_and_complete_sanitized_environment() {
     let executable = b"fake git executable";
     let digest = integrity::sha256(executable);

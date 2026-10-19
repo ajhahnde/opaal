@@ -1,0 +1,43 @@
+import std::list as list
+import std::value as value
+export { assess, checked }
+
+def valid_comment(input: Any) -> Bool
+{
+    let comment: Record = input
+    let code: Int = comment.code
+    let level: String = comment.level
+    if code > 99999 || code <= 0 {
+        throw "Invalid checker finding."
+    }
+    if level != "error" && level != "warning" && level != "info" && level != "style" {
+        throw "Invalid checker finding."
+    }
+    return true
+}
+
+def assess(findings: Record, manifest: Record) -> Record
+{
+    let comments: List[Any] = findings.comments
+    let count = value::length[Any](comments)
+    if count > 256 || !list::all[Any](comments, valid_comment) {
+        throw "Invalid checker findings."
+    }
+    let repository: Record = manifest.repository
+    let license: String = repository.license
+    let private: Bool = repository.private
+    let manifest_ok = (license == "MIT" && !private)
+    return ({ passed: (count == 0 && manifest_ok), findings: count, manifest_ok: manifest_ok })
+}
+
+def checked(code: Int, findings: Record, manifest: Record) -> Record
+{
+    if code != 0 && code != 1 {
+        throw "Checker acquisition failed."
+    }
+    let result = assess(findings, manifest)
+    if (code == 0 && result.findings != 0) || (code == 1 && result.findings == 0) {
+        throw "Checker status and findings disagree."
+    }
+    return result
+}

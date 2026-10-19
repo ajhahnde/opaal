@@ -1,0 +1,23 @@
+import './policy.opaal' as policy
+import std::data as data
+import std::io as io
+export { check_saved }
+
+action check_saved() -> Bool
+effects {
+    stdin.read();
+    stdout.write();
+}
+{
+    mut report = {}
+    try {
+        let saved: Record = data::json_decode(io::read_stdin(1048576))
+        report = policy::checked(saved.code, saved.findings, saved.manifest)
+    } catch error {
+        throw "Saved repository input failed."
+    }
+    io::write_stdout(data::json_encode(report))
+    return report.passed
+}
+
+task saved = check_saved

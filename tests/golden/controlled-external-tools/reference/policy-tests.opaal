@@ -1,0 +1,55 @@
+import './policy.opaal' as policy
+export { test_pass, test_findings, test_manifest, test_bad_shape, test_acquisition, test_inconsistent }
+
+def manifest() -> Record
+{
+    return ({ repository: { license: "MIT", private: false } })
+}
+
+def test_pass() -> Bool
+{
+    let report = policy::checked(0, { comments: [] }, manifest())
+    return (report.passed && report.findings == 0 && report.manifest_ok)
+}
+
+def test_findings() -> Bool
+{
+    let report = policy::checked(1, { comments: [{ code: 2086, level: "info" }] }, manifest())
+    return (!report.passed && report.findings == 1 && report.manifest_ok)
+}
+
+def test_manifest() -> Bool
+{
+    let report = policy::checked(0, { comments: [] }, { repository: { license: "", private: true } })
+    return (!report.passed && report.findings == 0 && !report.manifest_ok)
+}
+
+def test_bad_shape() -> Bool
+{
+    try {
+        let report = policy::checked(0, {}, manifest())
+    } catch error {
+        return true
+    }
+    return false
+}
+
+def test_acquisition() -> Bool
+{
+    try {
+        let report = policy::checked(2, { comments: [] }, manifest())
+    } catch error {
+        return (error.message == "Checker acquisition failed.")
+    }
+    return false
+}
+
+def test_inconsistent() -> Bool
+{
+    try {
+        let report = policy::checked(1, { comments: [] }, manifest())
+    } catch error {
+        return (error.message == "Checker status and findings disagree.")
+    }
+    return false
+}

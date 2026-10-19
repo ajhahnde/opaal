@@ -191,8 +191,7 @@ impl ProjectManifest {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ToolDeclaration {
     id: ToolId,
-    adapter: MaintainedAdapter,
-    version: VersionReq,
+    contract: ToolContract<VersionReq>,
 }
 
 impl ToolDeclaration {
@@ -202,13 +201,44 @@ impl ToolDeclaration {
     }
 
     #[must_use]
-    pub const fn adapter(&self) -> MaintainedAdapter {
-        self.adapter
+    pub const fn contract(&self) -> &ToolContract<VersionReq> {
+        &self.contract
+    }
+}
+
+/// Native byte identity carries no version claim or implicit probe.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ToolContract<V> {
+    Maintained {
+        adapter: MaintainedAdapter,
+        version: V,
+    },
+    Native,
+}
+
+impl<V> ToolContract<V> {
+    #[must_use]
+    pub const fn adapter(&self) -> Option<MaintainedAdapter> {
+        match self {
+            Self::Maintained { adapter, .. } => Some(*adapter),
+            Self::Native => None,
+        }
     }
 
     #[must_use]
-    pub const fn version(&self) -> &VersionReq {
-        &self.version
+    pub const fn adapter_name(&self) -> &'static str {
+        match self {
+            Self::Maintained { adapter, .. } => adapter.name(),
+            Self::Native => "native",
+        }
+    }
+
+    #[must_use]
+    pub const fn version(&self) -> Option<&V> {
+        match self {
+            Self::Maintained { version, .. } => Some(version),
+            Self::Native => None,
+        }
     }
 }
 
@@ -471,26 +501,20 @@ impl NativeBytes {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct LockedTool {
-    adapter: MaintainedAdapter,
+    contract: ToolContract<Version>,
     path: NativeBytes,
-    version: Version,
     digest: String,
 }
 
 impl LockedTool {
     #[must_use]
-    pub const fn adapter(&self) -> MaintainedAdapter {
-        self.adapter
+    pub const fn contract(&self) -> &ToolContract<Version> {
+        &self.contract
     }
 
     #[must_use]
     pub const fn path(&self) -> &NativeBytes {
         &self.path
-    }
-
-    #[must_use]
-    pub const fn version(&self) -> &Version {
-        &self.version
     }
 
     #[must_use]
@@ -619,16 +643,30 @@ pub fn parse_project_manifest(
         ));
     }
     let tools = parse_named_tables(&document, "tools", |id, table| {
-        exact_keys(table, &["adapter", "version"], &format!("tools.{id}"))?;
+        let adapter = required_string(table, "adapter")?;
+        let contract = if adapter == "native" {
+            exact_keys(table, &["adapter"], &format!("tools.{id}"))?;
+            ToolContract::Native
+        } else {
+            exact_keys(table, &["adapter", "version"], &format!("tools.{id}"))?;
+            ToolContract::Maintained {
+                adapter: MaintainedAdapter::parse(adapter)?,
+                version: VersionReq::parse(required_string(table, "version")?).map_err(
+                    |error| {
+                        ProjectError::new(
+                            "PROJECT013",
+                            format!("invalid tools.{id}.version: {error}"),
+                        )
+                    },
+                )?,
+            }
+        };
         Ok(ToolDeclaration {
             id: ToolId {
                 project: project_id.clone(),
                 name: id.to_owned(),
             },
-            adapter: MaintainedAdapter::parse(required_string(table, "adapter")?)?,
-            version: VersionReq::parse(required_string(table, "version")?).map_err(|error| {
-                ProjectError::new("PROJECT013", format!("invalid tools.{id}.version: {error}"))
-            })?,
+            contract,
         })
     })?;
     let targets = parse_named_tables(&document, "targets", |id, table| {
@@ -648,9 +686,9 @@ pub fn parse_project_manifest(
             || tool != "docker"
             || required_string(table, "api_version")? != crate::docker::API_VERSION
             || tools.len() != 1
-            || tools
-                .get(tool)
-                .is_none_or(|declaration| declaration.adapter != MaintainedAdapter::Docker)
+            || tools.get(tool).is_none_or(|declaration| {
+                declaration.contract.adapter() != Some(MaintainedAdapter::Docker)
+            })
         {
             return Err(ProjectError::new(
                 "PROJECT028",
@@ -684,7 +722,7 @@ pub fn parse_project_manifest(
     })?;
     if tools
         .values()
-        .any(|tool| tool.adapter == MaintainedAdapter::Docker)
+        .any(|tool| tool.contract.adapter() == Some(MaintainedAdapter::Docker))
         && (tools.len() != 1 || targets.is_empty())
     {
         return Err(ProjectError::new(
@@ -1022,23 +1060,29 @@ pub fn parse_tool_lock(
         let table = row
             .as_table()
             .ok_or_else(|| ProjectError::new("LOCK008", "tool row is not a table"))?;
-        exact_keys(
-            table,
-            &["id", "adapter", "path", "version", "digest"],
-            "locked tool",
-        )?;
+        let adapter_text = required_string(table, "adapter")?;
+        let keys = if adapter_text == "native" {
+            &["id", "adapter", "path", "digest"][..]
+        } else {
+            &["id", "adapter", "path", "version", "digest"][..]
+        };
+        exact_keys(table, keys, "locked tool")?;
         let id = required_string(table, "id")?.to_owned();
         let declaration = manifest.tools.get(&id).ok_or_else(|| {
             ProjectError::new("LOCK009", format!("lock contains undeclared tool `{id}`"))
         })?;
-        let adapter = MaintainedAdapter::parse(required_string(table, "adapter")?)?;
-        if adapter != declaration.adapter {
+        let adapter = if adapter_text == "native" {
+            None
+        } else {
+            Some(MaintainedAdapter::parse(adapter_text)?)
+        };
+        if adapter != declaration.contract.adapter() {
             return Err(ProjectError::new(
                 "LOCK010",
                 format!("adapter mismatch for tool `{id}`"),
             ));
         }
-        if adapter == MaintainedAdapter::Docker
+        if declaration.contract.adapter() == Some(MaintainedAdapter::Docker)
             && required_string(table, "version")? != crate::docker::TOOL_VERSION
         {
             return Err(ProjectError::new(
@@ -1046,22 +1090,34 @@ pub fn parse_tool_lock(
                 "Docker tool version differs from the fixed profile",
             ));
         }
-        let version_text = required_string(table, "version")?;
-        let version = Version::parse(version_text).map_err(|error| {
-            ProjectError::new("LOCK011", format!("invalid tool version: {error}"))
-        })?;
-        if version.to_string() != version_text {
-            return Err(ProjectError::new(
-                "LOCK011",
-                format!("tool `{id}` version is not canonical SemVer"),
-            ));
-        }
-        if !declaration.version.matches(&version) {
-            return Err(ProjectError::new(
-                "LOCK012",
-                format!("tool `{id}` version is outside its declared range"),
-            ));
-        }
+        let contract = match &declaration.contract {
+            ToolContract::Native => ToolContract::Native,
+            ToolContract::Maintained {
+                adapter,
+                version: requirement,
+            } => {
+                let version_text = required_string(table, "version")?;
+                let version = Version::parse(version_text).map_err(|error| {
+                    ProjectError::new("LOCK011", format!("invalid tool version: {error}"))
+                })?;
+                if version.to_string() != version_text {
+                    return Err(ProjectError::new(
+                        "LOCK011",
+                        format!("tool `{id}` version is not canonical SemVer"),
+                    ));
+                }
+                if !requirement.matches(&version) {
+                    return Err(ProjectError::new(
+                        "LOCK012",
+                        format!("tool `{id}` version is outside its declared range"),
+                    ));
+                }
+                ToolContract::Maintained {
+                    adapter: *adapter,
+                    version,
+                }
+            }
+        };
         let digest = required_string(table, "digest")?.to_owned();
         if !is_sha256(&digest) {
             return Err(ProjectError::new(
@@ -1077,9 +1133,8 @@ pub fn parse_tool_lock(
             ));
         }
         let locked = LockedTool {
-            adapter,
+            contract,
             path,
-            version,
             digest,
         };
         if tools.insert(id.clone(), locked).is_some() {

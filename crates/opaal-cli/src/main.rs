@@ -25,8 +25,8 @@ use opaal_cli::project::{
     AuditRequest, CheckProjectRequest, ExecuteProjectRequest, InitProjectRequest,
     InspectProjectRequest, PlanProjectRequest, ProjectInputBinding, audit_explicit_journal,
     check_explicit_project, doctor_project, execute_explicit_plan, explain_task, init_project,
-    inspect_audit_artifact, inspect_plan_artifact, inspect_project, plan_explicit_project,
-    run_accepted_task,
+    init_repository_project, inspect_audit_artifact, inspect_plan_artifact, inspect_project,
+    plan_explicit_project, run_accepted_task,
 };
 use opaal_cli::report::{HostExit, HostReport, write_report};
 use opaal_cli::{RawLineEditor, ReedlineEditor};
@@ -59,6 +59,7 @@ Usage:
   opaal test [--list] SOURCE [--case NAME] [--format text|json]
   opaal test --help
   opaal project init --example image-check --destination PATH --environment offline
+  opaal project init --example repository-check --destination PATH --environment offline
   opaal project doctor --project opaal.toml --task TASK --environment ID [--input NAME=VALUE | --input-file NAME=PATH]... [--format text|json]
   opaal project --help
   opaal task inspect --project opaal.toml TASK [--format json]
@@ -203,11 +204,13 @@ invalid, inconsistent or unwritable views exit 2. Recorded evidence does not
 authenticate its author or prove the original writer's fsync or command exit.
 ";
 
-const PROJECT_HELP: &str = "Prepare and diagnose an explicit image-check project
+const PROJECT_HELP: &str = "Prepare and diagnose an explicit project example
 
 Usage:
   opaal project init --example image-check --destination PATH --environment offline
   opaal project init --example image-check --destination PATH --environment ci --docker ABS_PATH --socket ABS_PATH --qualified-version VERSION
+  opaal project init --example repository-check --destination PATH --environment offline
+  opaal project init --example repository-check --destination PATH --environment ci --tool ABS_PATH
   opaal project doctor --project opaal.toml --task TASK --environment ID [--input NAME=VALUE | --input-file NAME=PATH]... [--format text|json]
   opaal project --help
 
@@ -219,6 +222,13 @@ Live setup requires Linux x86_64 and explicit independently qualified Docker
 29.9.0 executable/socket facts. It hashes the executable without launching it,
 creates four empty directories and binds the unchanged profile. No provisioning,
 account reads, daemon connection or automatic plan acceptance occurs.
+
+Repository-check offline is tool-free on both qualified hosts. Its ci setup
+requires Linux x86_64 and an explicit native ELF image, hashes and inspects it
+without launching it, and sets only LC_ALL=C with no inherited environment.
+Native version and behavior remain unverified; child effects are unenforced.
+Image inspection cannot establish sealed snapshot or execution availability.
+No --qualified-version, --docker or --socket is accepted for repository-check.
 
 Doctor observes explicit bounded local controls, source, input files and tool
 identities through the shared static checker. It never consumes task stdin,
@@ -319,6 +329,14 @@ fn main() -> ExitCode {
             emit_report(HostReport::success(version.as_bytes()))
         }
         Mode::ProjectHelp => emit_project_report(HostReport::success(PROJECT_HELP.as_bytes())),
+        Mode::RepositoryInit {
+            destination,
+            environment,
+            tool,
+        } => match init_repository_project(&destination, &environment, tool.as_deref()) {
+            Ok(()) => emit_project_report(HostReport::success(b"project created\n")),
+            Err(error) => emit_project_report(HostReport::failure(error.rendered().as_bytes())),
+        },
         Mode::ProjectInit {
             destination,
             environment,

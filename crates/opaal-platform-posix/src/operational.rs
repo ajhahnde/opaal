@@ -26,6 +26,9 @@ use rustls::pki_types::pem::PemObject;
 use rustls::pki_types::{CertificateDer, ServerName};
 use rustls::{ClientConfig, ClientConnection, RootCertStore, StreamOwned};
 
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+mod native;
+
 /// One concrete operational adapter with a process-local monotonic origin.
 #[derive(Debug)]
 pub struct PosixOperationalAdapter {
@@ -48,6 +51,16 @@ impl Default for PosixOperationalAdapter {
 }
 
 impl OperationalAdapter for PosixOperationalAdapter {
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    fn snapshot_executable(
+        &self,
+        source: &File,
+        max_bytes: usize,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<File, OperationalError> {
+        native::snapshot(source, max_bytes, cancelled)
+    }
+
     #[allow(clippy::useless_conversion)] // Native stat widths differ between hosts.
     fn observe_local_path(
         &self,
@@ -337,7 +350,21 @@ impl OperationalAdapter for PosixOperationalAdapter {
         #[cfg(target_os = "linux")]
         let executable_descriptor = request
             .executable_file
-            .map(rustix::io::dup)
+            .map(|file| match rustix::fs::fcntl_get_seals(file) {
+                Ok(seals)
+                    if seals.contains(
+                        rustix::fs::SealFlags::WRITE
+                            | rustix::fs::SealFlags::GROW
+                            | rustix::fs::SealFlags::SHRINK
+                            | rustix::fs::SealFlags::SEAL,
+                    ) =>
+                {
+                    rustix::io::fcntl_dupfd_cloexec(file, 0)
+                }
+                // Ordinary tmpfs files support seals too; scripts need an inherited descriptor.
+                Ok(_) | Err(rustix::io::Errno::INVAL) => rustix::io::dup(file),
+                Err(cause) => Err(cause),
+            })
             .transpose()
             .map_err(|cause| io_error(cause.into()))?;
         #[cfg(target_os = "linux")]

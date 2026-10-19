@@ -1,0 +1,13 @@
+schema_version = 1
+[project]
+name = "repository_check"
+root_module = "tasks.opaal"
+required_opaal = ">=1.6.0,<2.0.0"
+[paths]
+root = "."
+evidence = "output"
+[tools.checker]
+adapter = "native"
+[environments.ci]
+authority = "live-authority.toml"
+tool_lock = "live-tools.toml"

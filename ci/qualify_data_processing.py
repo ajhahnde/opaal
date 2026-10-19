@@ -47,10 +47,10 @@ def unpack(archive: Path, destination: Path, *, kind: str, version: str,
         manifest_bytes = handle.read(1024 * 1024 + 1)
     require(len(manifest_bytes) <= 1024 * 1024, "archive manifest exceeds qualification bound")
     manifest = json.loads(manifest_bytes)
-    require(kind in {"binaries", "examples", "formatting-fixtures", "random-fixtures", "stdio-fixtures", "docker-fixtures"}, "unknown archive kind")
+    require(kind in {"binaries", "examples", "formatting-fixtures", "random-fixtures", "stdio-fixtures", "docker-fixtures", "native-fixtures"}, "unknown archive kind")
     suffix = {"examples": "data-processing", "formatting-fixtures": "source-formatting",
               "random-fixtures": "random-values", "stdio-fixtures": "standard-input-output",
-              "docker-fixtures": "docker-image-checks"}.get(kind, platform)
+              "docker-fixtures": "docker-image-checks", "native-fixtures": "controlled-native-tools"}.get(kind, platform)
     prefix = f"opaal-v{version}-{suffix}"
     require(archive.name == prefix + ".tar.gz", "archive filename differs from candidate identity")
     expected = {"schema_version": 1, "kind": kind, "version": version,

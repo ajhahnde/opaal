@@ -311,6 +311,21 @@ pub struct UnixIdentity {
 }
 
 pub trait OperationalAdapter: Send + Sync {
+    /// Admit the original executable's effective permissions and security metadata,
+    /// then copy into a private CLOEXEC executable descriptor and verify all seals.
+    /// The caller validates/hash-checks only the sealed result before launch.
+    fn snapshot_executable(
+        &self,
+        _source: &std::fs::File,
+        _max_bytes: usize,
+        _cancelled: &dyn Fn() -> bool,
+    ) -> Result<std::fs::File, OperationalError> {
+        Err(OperationalError::new(
+            OperationalErrorKind::Unsupported,
+            "executable snapshots are unavailable",
+        ))
+    }
+
     /// Observe a socket, or an empty directory, without following any symlink.
     fn observe_local_path(
         &self,

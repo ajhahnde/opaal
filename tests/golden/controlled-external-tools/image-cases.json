@@ -1,0 +1,1715 @@
+{
+  "schema_version": 1,
+  "cases": [
+    {
+      "name": "elf-exec",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "format",
+        "image_hex": "7f454c4602010100000000000000000002003e0001000000000000000000000040000000000000000000000000000000000000004000380001000000000000000100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+      },
+      "expected": {
+        "admitted": true
+      }
+    },
+    {
+      "name": "elf-dyn",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "format",
+        "image_hex": "7f454c4602010100000000000000000003003e0001000000000000000000000040000000000000000000000000000000000000004000380001000000000000000100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+      },
+      "expected": {
+        "admitted": true
+      }
+    },
+    {
+      "name": "empty-image",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "format",
+        "image_hex": ""
+      },
+      "expected": {
+        "admitted": false
+      }
+    },
+    {
+      "name": "shebang-image",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "format",
+        "image_hex": "23212f62696e2f73680a6578697420300a"
+      },
+      "expected": {
+        "admitted": false
+      }
+    },
+    {
+      "name": "truncated-6",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "format",
+        "image_hex": "7f454c460201"
+      },
+      "expected": {
+        "admitted": false
+      }
+    },
+    {
+      "name": "truncated-63",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "format",
+        "image_hex": "7f454c4602010100000000000000000002003e0001000000000000000000000040000000000000000000000000000000000000004000380001000000000000"
+      },
+      "expected": {
+        "admitted": false
+      }
+    },
+    {
+      "name": "truncated-64",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "format",
+        "image_hex": "7f454c4602010100000000000000000002003e000100000000000000000000004000000000000000000000000000000000000000400038000100000000000000"
+      },
+      "expected": {
+        "admitted": false
+      }
+    },
+    {
+      "name": "truncated-119",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "format",
+        "image_hex": "7f454c4602010100000000000000000002003e00010000000000000000000000400000000000000000000000000000000000000040003800010000000000000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+      },
+      "expected": {
+        "admitted": false
+      }
+    },
+    {
+      "name": "wrong-magic",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "format",
+        "image_hex": "00454c4602010100000000000000000002003e0001000000000000000000000040000000000000000000000000000000000000004000380001000000000000000100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+      },
+      "expected": {
+        "admitted": false
+      }
+    },
+    {
+      "name": "elf32",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "format",
+        "image_hex": "7f454c4601010100000000000000000002003e0001000000000000000000000040000000000000000000000000000000000000004000380001000000000000000100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+      },
+      "expected": {
+        "admitted": false
+      }
+    },
+    {
+      "name": "big-endian",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "format",
+        "image_hex": "7f454c4602020100000000000000000002003e0001000000000000000000000040000000000000000000000000000000000000004000380001000000000000000100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+      },
+      "expected": {
+        "admitted": false
+      }
+    },
+    {
+      "name": "bad-ident-version",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "format",
+        "image_hex": "7f454c4602010200000000000000000002003e0001000000000000000000000040000000000000000000000000000000000000004000380001000000000000000100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+      },
+      "expected": {
+        "admitted": false
+      }
+    },
+    {
+      "name": "relocatable",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "format",
+        "image_hex": "7f454c4602010100000000000000000001003e0001000000000000000000000040000000000000000000000000000000000000004000380001000000000000000100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+      },
+      "expected": {
+        "admitted": false
+      }
+    },
+    {
+      "name": "foreign-machine",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "format",
+        "image_hex": "7f454c460201010000000000000000000200b70001000000000000000000000040000000000000000000000000000000000000004000380001000000000000000100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+      },
+      "expected": {
+        "admitted": false
+      }
+    },
+    {
+      "name": "bad-object-version",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "format",
+        "image_hex": "7f454c4602010100000000000000000002003e0002000000000000000000000040000000000000000000000000000000000000004000380001000000000000000100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+      },
+      "expected": {
+        "admitted": false
+      }
+    },
+    {
+      "name": "bad-header-size",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "format",
+        "image_hex": "7f454c4602010100000000000000000002003e0001000000000000000000000040000000000000000000000000000000000000003f00380001000000000000000100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+      },
+      "expected": {
+        "admitted": false
+      }
+    },
+    {
+      "name": "bad-program-size",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "format",
+        "image_hex": "7f454c4602010100000000000000000002003e0001000000000000000000000040000000000000000000000000000000000000004000370001000000000000000100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+      },
+      "expected": {
+        "admitted": false
+      }
+    },
+    {
+      "name": "missing-programs",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "format",
+        "image_hex": "7f454c4602010100000000000000000002003e0001000000000000000000000040000000000000000000000000000000000000004000380000000000000000000100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+      },
+      "expected": {
+        "admitted": false
+      }
+    },
+    {
+      "name": "extended-program-count",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "format",
+        "image_hex": "7f454c4602010100000000000000000002003e00010000000000000000000000400000000000000000000000000000000000000040003800ffff0000000000000100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+      },
+      "expected": {
+        "admitted": false
+      }
+    },
+    {
+      "name": "program-before-header",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "format",
+        "image_hex": "7f454c4602010100000000000000000002003e000100000000000000000000003f000000000000000000000000000000000000004000380001000000000000000100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+      },
+      "expected": {
+        "admitted": false
+      }
+    },
+    {
+      "name": "program-offset-overflow",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "format",
+        "image_hex": "7f454c4602010100000000000000000002003e00010000000000000000000000ffffffffffffffff0000000000000000000000004000380001000000000000000100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+      },
+      "expected": {
+        "admitted": false
+      }
+    },
+    {
+      "name": "program-count-excess",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "format",
+        "image_hex": "7f454c4602010100000000000000000002003e0001000000000000000000000040000000000000000000000000000000000000004000380002000000000000000100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+      },
+      "expected": {
+        "admitted": false
+      }
+    },
+    {
+      "name": "missing-load",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "format",
+        "image_hex": "7f454c4602010100000000000000000002003e0001000000000000000000000040000000000000000000000000000000000000004000380001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+      },
+      "expected": {
+        "admitted": false
+      }
+    },
+    {
+      "name": "load-offset-overflow",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "format",
+        "image_hex": "7f454c4602010100000000000000000002003e0001000000000000000000000040000000000000000000000000000000000000004000380001000000000000000100000000000000ffffffffffffffff00000000000000000000000000000000000000000000000000000000000000000000000000000000"
+      },
+      "expected": {
+        "admitted": false
+      }
+    },
+    {
+      "name": "load-file-size-excess",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "format",
+        "image_hex": "7f454c4602010100000000000000000002003e0001000000000000000000000040000000000000000000000000000000000000004000380001000000000000000100000000000000000000000000000000000000000000000000000000000000790000000000000000000000000000000000000000000000"
+      },
+      "expected": {
+        "admitted": false
+      }
+    },
+    {
+      "name": "load-file-exceeds-memory",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "format",
+        "image_hex": "7f454c4602010100000000000000000002003e0001000000000000000000000040000000000000000000000000000000000000004000380001000000000000000100000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000"
+      },
+      "expected": {
+        "admitted": false
+      }
+    },
+    {
+      "name": "load-bad-alignment",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "format",
+        "image_hex": "7f454c4602010100000000000000000002003e0001000000000000000000000040000000000000000000000000000000000000004000380001000000000000000100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000300000000000000"
+      },
+      "expected": {
+        "admitted": false
+      }
+    },
+    {
+      "name": "orphan-section-offset",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "format",
+        "image_hex": "7f454c4602010100000000000000000002003e0001000000000000000000000040000000000000004000000000000000000000004000380001000000000000000100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+      },
+      "expected": {
+        "admitted": false
+      }
+    },
+    {
+      "name": "orphan-section-index",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "format",
+        "image_hex": "7f454c4602010100000000000000000002003e0001000000000000000000000040000000000000000000000000000000000000004000380001000000000001000100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+      },
+      "expected": {
+        "admitted": false
+      }
+    },
+    {
+      "name": "valid-sections",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "format",
+        "image_hex": "7f454c4602010100000000000000000002003e000100000000000000000000004000000000000000780000000000000000000000400038000100400001000000010000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+      },
+      "expected": {
+        "admitted": true
+      }
+    },
+    {
+      "name": "sections-overlap-programs",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "format",
+        "image_hex": "7f454c4602010100000000000000000002003e000100000000000000000000004000000000000000400000000000000000000000400038000100400001000000010000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+      },
+      "expected": {
+        "admitted": false
+      }
+    },
+    {
+      "name": "bad-section-size",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "format",
+        "image_hex": "7f454c4602010100000000000000000002003e0001000000000000000000000040000000000000007800000000000000000000004000380001003f0001000000010000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+      },
+      "expected": {
+        "admitted": false
+      }
+    },
+    {
+      "name": "section-index-excess",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "format",
+        "image_hex": "7f454c4602010100000000000000000002003e000100000000000000000000004000000000000000780000000000000000000000400038000100400001000100010000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+      },
+      "expected": {
+        "admitted": false
+      }
+    },
+    {
+      "name": "section-data-overflow",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "format",
+        "image_hex": "7f454c4602010100000000000000000002003e0001000000000000000000000040000000000000007800000000000000000000004000380001004000010000000100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000ffffffffffffffff0000000000000000000000000000000000000000000000000000000000000000"
+      },
+      "expected": {
+        "admitted": false
+      }
+    },
+    {
+      "name": "nobits-has-no-file-range",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "format",
+        "image_hex": "7f454c4602010100000000000000000002003e0001000000000000000000000040000000000000007800000000000000000000004000380001004000010000000100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000800000000000000000000000000000000000000ffffffffffffffff0000000000000000000000000000000000000000000000000000000000000000"
+      },
+      "expected": {
+        "admitted": true
+      }
+    },
+    {
+      "name": "absolute-interpreter",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "format",
+        "image_hex": "7f454c4602010100000000000000000002003e00010000000000000000000000400000000000000000000000000000000000000040003800020000000000000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000300000000000000b000000000000000000000000000000000000000000000000c00000000000000000000000000000000000000000000002f6c69622f6c6f6164657200"
+      },
+      "expected": {
+        "admitted": true
+      }
+    },
+    {
+      "name": "relative-interpreter",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "format",
+        "image_hex": "7f454c4602010100000000000000000002003e00010000000000000000000000400000000000000000000000000000000000000040003800020000000000000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000300000000000000b000000000000000000000000000000000000000000000000700000000000000000000000000000000000000000000006c6f6164657200"
+      },
+      "expected": {
+        "admitted": false
+      }
+    },
+    {
+      "name": "unterminated-interpreter",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "format",
+        "image_hex": "7f454c4602010100000000000000000002003e00010000000000000000000000400000000000000000000000000000000000000040003800020000000000000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000300000000000000b000000000000000000000000000000000000000000000000b00000000000000000000000000000000000000000000002f6c69622f6c6f61646572"
+      },
+      "expected": {
+        "admitted": false
+      }
+    },
+    {
+      "name": "interior-nul-interpreter",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "format",
+        "image_hex": "7f454c4602010100000000000000000002003e00010000000000000000000000400000000000000000000000000000000000000040003800020000000000000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000300000000000000b000000000000000000000000000000000000000000000000c00000000000000000000000000000000000000000000002f6c6962006c6f6164657200"
+      },
+      "expected": {
+        "admitted": false
+      }
+    },
+    {
+      "name": "empty-interpreter",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "format",
+        "image_hex": "7f454c4602010100000000000000000002003e00010000000000000000000000400000000000000000000000000000000000000040003800020000000000000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000300000000000000b0000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000"
+      },
+      "expected": {
+        "admitted": false
+      }
+    },
+    {
+      "name": "static-sealed-execution",
+      "hosts": [
+        "x86_64-unknown-linux-gnu"
+      ],
+      "input": {
+        "kind": "execution",
+        "fixture": "native-static.c"
+      },
+      "expected": {
+        "exit": 0,
+        "attempts": 1,
+        "fallback_attempts": 0
+      }
+    },
+    {
+      "name": "dynamic-sealed-execution",
+      "hosts": [
+        "x86_64-unknown-linux-gnu"
+      ],
+      "input": {
+        "kind": "execution",
+        "fixture": "native-dynamic.c"
+      },
+      "expected": {
+        "exit": 0,
+        "attempts": 1,
+        "fallback_attempts": 0
+      }
+    },
+    {
+      "name": "post-seal-source-inplace-mutation",
+      "hosts": [
+        "x86_64-unknown-linux-gnu"
+      ],
+      "input": {
+        "kind": "execution",
+        "mutation": "original-inode-after-seal"
+      },
+      "expected": {
+        "exit": 0,
+        "attempts": 1,
+        "fallback_attempts": 0
+      }
+    },
+    {
+      "name": "post-seal-path-replacement",
+      "hosts": [
+        "x86_64-unknown-linux-gnu"
+      ],
+      "input": {
+        "kind": "execution",
+        "mutation": "original-path-after-seal"
+      },
+      "expected": {
+        "exit": 0,
+        "attempts": 1,
+        "fallback_attempts": 0
+      }
+    },
+    {
+      "name": "snapshot-descriptors-close-on-exec",
+      "hosts": [
+        "x86_64-unknown-linux-gnu"
+      ],
+      "input": {
+        "kind": "execution",
+        "observer": "proc-self-fd"
+      },
+      "expected": {
+        "exit": 0,
+        "attempts": 1,
+        "fallback_attempts": 0
+      }
+    },
+    {
+      "name": "literal-argv-environment-cwd",
+      "hosts": [
+        "x86_64-unknown-linux-gnu"
+      ],
+      "input": {
+        "kind": "execution",
+        "observer": "literal-context"
+      },
+      "expected": {
+        "exit": 0,
+        "attempts": 1,
+        "fallback_attempts": 0
+      }
+    },
+    {
+      "name": "empty-argument-list",
+      "hosts": [
+        "x86_64-unknown-linux-gnu"
+      ],
+      "input": {
+        "kind": "execution",
+        "arguments": []
+      },
+      "expected": {
+        "exit": 0,
+        "attempts": 1,
+        "fallback_attempts": 0
+      }
+    },
+    {
+      "name": "original-nonexec",
+      "hosts": [
+        "x86_64-unknown-linux-gnu"
+      ],
+      "input": {
+        "kind": "snapshot",
+        "mode": "0600"
+      },
+      "expected": {
+        "error": "unsupported",
+        "attempts": 0,
+        "fallback_attempts": 0,
+        "remaining_snapshot_handles": 0
+      }
+    },
+    {
+      "name": "original-setuid",
+      "hosts": [
+        "x86_64-unknown-linux-gnu"
+      ],
+      "input": {
+        "kind": "snapshot",
+        "mode": "4700"
+      },
+      "expected": {
+        "error": "unsupported",
+        "attempts": 0,
+        "fallback_attempts": 0,
+        "remaining_snapshot_handles": 0
+      }
+    },
+    {
+      "name": "original-setgid",
+      "hosts": [
+        "x86_64-unknown-linux-gnu"
+      ],
+      "input": {
+        "kind": "snapshot",
+        "mode": "2700"
+      },
+      "expected": {
+        "error": "unsupported",
+        "attempts": 0,
+        "fallback_attempts": 0,
+        "remaining_snapshot_handles": 0
+      }
+    },
+    {
+      "name": "original-acl-denies-effective-user",
+      "hosts": [
+        "x86_64-unknown-linux-gnu"
+      ],
+      "input": {
+        "kind": "snapshot",
+        "admission": "acl-denied"
+      },
+      "expected": {
+        "error": "unsupported",
+        "attempts": 0,
+        "fallback_attempts": 0,
+        "remaining_snapshot_handles": 0
+      }
+    },
+    {
+      "name": "original-noexec-mount",
+      "hosts": [
+        "x86_64-unknown-linux-gnu"
+      ],
+      "input": {
+        "kind": "snapshot",
+        "admission": "noexec-mount"
+      },
+      "expected": {
+        "error": "unsupported",
+        "attempts": 0,
+        "fallback_attempts": 0,
+        "remaining_snapshot_handles": 0
+      }
+    },
+    {
+      "name": "original-file-capability",
+      "hosts": [
+        "x86_64-unknown-linux-gnu"
+      ],
+      "input": {
+        "kind": "snapshot",
+        "admission": "file-capability"
+      },
+      "expected": {
+        "error": "unsupported",
+        "attempts": 0,
+        "fallback_attempts": 0,
+        "remaining_snapshot_handles": 0
+      }
+    },
+    {
+      "name": "effective-access-unavailable",
+      "hosts": [
+        "x86_64-unknown-linux-gnu"
+      ],
+      "input": {
+        "kind": "snapshot",
+        "fault": "faccessat2-unavailable"
+      },
+      "expected": {
+        "error": "unsupported",
+        "attempts": 0,
+        "fallback_attempts": 0,
+        "remaining_snapshot_handles": 0
+      }
+    },
+    {
+      "name": "capability-read-failure",
+      "hosts": [
+        "x86_64-unknown-linux-gnu"
+      ],
+      "input": {
+        "kind": "snapshot",
+        "fault": "fgetxattr-io"
+      },
+      "expected": {
+        "error": "unsupported",
+        "attempts": 0,
+        "fallback_attempts": 0,
+        "remaining_snapshot_handles": 0
+      }
+    },
+    {
+      "name": "snapshot-create-failure",
+      "hosts": [
+        "x86_64-unknown-linux-gnu"
+      ],
+      "input": {
+        "kind": "snapshot",
+        "fault": "memfd-create"
+      },
+      "expected": {
+        "error": "unsupported",
+        "attempts": 0,
+        "fallback_attempts": 0,
+        "remaining_snapshot_handles": 0
+      }
+    },
+    {
+      "name": "snapshot-mode-failure",
+      "hosts": [
+        "x86_64-unknown-linux-gnu"
+      ],
+      "input": {
+        "kind": "snapshot",
+        "fault": "fchmod"
+      },
+      "expected": {
+        "error": "unsupported",
+        "attempts": 0,
+        "fallback_attempts": 0,
+        "remaining_snapshot_handles": 0
+      }
+    },
+    {
+      "name": "snapshot-copy-read-failure",
+      "hosts": [
+        "x86_64-unknown-linux-gnu"
+      ],
+      "input": {
+        "kind": "snapshot",
+        "fault": "source-read"
+      },
+      "expected": {
+        "error": "unsupported",
+        "attempts": 0,
+        "fallback_attempts": 0,
+        "remaining_snapshot_handles": 0
+      }
+    },
+    {
+      "name": "snapshot-copy-write-failure",
+      "hosts": [
+        "x86_64-unknown-linux-gnu"
+      ],
+      "input": {
+        "kind": "snapshot",
+        "fault": "snapshot-write"
+      },
+      "expected": {
+        "error": "unsupported",
+        "attempts": 0,
+        "fallback_attempts": 0,
+        "remaining_snapshot_handles": 0
+      }
+    },
+    {
+      "name": "snapshot-add-seals-failure",
+      "hosts": [
+        "x86_64-unknown-linux-gnu"
+      ],
+      "input": {
+        "kind": "snapshot",
+        "fault": "add-seals"
+      },
+      "expected": {
+        "error": "unsupported",
+        "attempts": 0,
+        "fallback_attempts": 0,
+        "remaining_snapshot_handles": 0
+      }
+    },
+    {
+      "name": "snapshot-get-seals-failure",
+      "hosts": [
+        "x86_64-unknown-linux-gnu"
+      ],
+      "input": {
+        "kind": "snapshot",
+        "fault": "get-seals"
+      },
+      "expected": {
+        "error": "unsupported",
+        "attempts": 0,
+        "fallback_attempts": 0,
+        "remaining_snapshot_handles": 0
+      }
+    },
+    {
+      "name": "snapshot-missing-seals",
+      "hosts": [
+        "x86_64-unknown-linux-gnu"
+      ],
+      "input": {
+        "kind": "snapshot",
+        "fault": "incomplete-seals"
+      },
+      "expected": {
+        "error": "unsupported",
+        "attempts": 0,
+        "fallback_attempts": 0,
+        "remaining_snapshot_handles": 0
+      }
+    },
+    {
+      "name": "snapshot-post-seal-read-failure",
+      "hosts": [
+        "x86_64-unknown-linux-gnu"
+      ],
+      "input": {
+        "kind": "snapshot",
+        "fault": "sealed-read"
+      },
+      "expected": {
+        "error": "refused",
+        "attempts": 0,
+        "fallback_attempts": 0,
+        "remaining_snapshot_handles": 0
+      }
+    },
+    {
+      "name": "snapshot-preseal-mutation-mismatches-lock",
+      "hosts": [
+        "x86_64-unknown-linux-gnu"
+      ],
+      "input": {
+        "kind": "snapshot",
+        "mutation": "copy-before-seal"
+      },
+      "expected": {
+        "error": "refused",
+        "attempts": 0,
+        "fallback_attempts": 0,
+        "remaining_snapshot_handles": 0
+      }
+    },
+    {
+      "name": "snapshot-original-stale-before-acquisition",
+      "hosts": [
+        "x86_64-unknown-linux-gnu"
+      ],
+      "input": {
+        "kind": "snapshot",
+        "mutation": "before-admission"
+      },
+      "expected": {
+        "error": "refused",
+        "attempts": 0,
+        "fallback_attempts": 0,
+        "remaining_snapshot_handles": 0
+      }
+    },
+    {
+      "name": "image-first-excess",
+      "hosts": [
+        "x86_64-unknown-linux-gnu"
+      ],
+      "input": {
+        "kind": "snapshot",
+        "bytes": 67108865
+      },
+      "expected": {
+        "error": "limit",
+        "attempts": 0,
+        "fallback_attempts": 0,
+        "remaining_snapshot_handles": 0
+      }
+    },
+    {
+      "name": "image-growth-during-copy",
+      "hosts": [
+        "x86_64-unknown-linux-gnu"
+      ],
+      "input": {
+        "kind": "snapshot",
+        "bytes": 67108864,
+        "mutation": "grow-after-metadata"
+      },
+      "expected": {
+        "error": "limit",
+        "attempts": 0,
+        "fallback_attempts": 0,
+        "remaining_snapshot_handles": 0
+      }
+    },
+    {
+      "name": "macos-live-refusal",
+      "hosts": [
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "snapshot"
+      },
+      "expected": {
+        "error": "unsupported",
+        "attempts": 0,
+        "fallback_attempts": 0
+      }
+    },
+    {
+      "name": "image-bytes-exact",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "request-bound",
+        "subject": "image-bytes",
+        "value": 67108864
+      },
+      "expected": {
+        "admitted": true
+      }
+    },
+    {
+      "name": "image-bytes-first-excess",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "request-bound",
+        "subject": "image-bytes",
+        "value": 67108865
+      },
+      "expected": {
+        "admitted": false
+      }
+    },
+    {
+      "name": "argv-count-including-zero-exact",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "request-bound",
+        "subject": "argv-count-including-zero",
+        "value": 4096
+      },
+      "expected": {
+        "admitted": true
+      }
+    },
+    {
+      "name": "argv-count-including-zero-first-excess",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "request-bound",
+        "subject": "argv-count-including-zero",
+        "value": 4097
+      },
+      "expected": {
+        "admitted": false
+      }
+    },
+    {
+      "name": "argv-bytes-including-nuls-exact",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "request-bound",
+        "subject": "argv-bytes-including-nuls",
+        "value": 131072
+      },
+      "expected": {
+        "admitted": true
+      }
+    },
+    {
+      "name": "argv-bytes-including-nuls-first-excess",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "request-bound",
+        "subject": "argv-bytes-including-nuls",
+        "value": 131073
+      },
+      "expected": {
+        "admitted": false
+      }
+    },
+    {
+      "name": "argument-bytes-including-nul-exact",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "request-bound",
+        "subject": "argument-bytes-including-nul",
+        "value": 32768
+      },
+      "expected": {
+        "admitted": true
+      }
+    },
+    {
+      "name": "argument-bytes-including-nul-first-excess",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "request-bound",
+        "subject": "argument-bytes-including-nul",
+        "value": 32769
+      },
+      "expected": {
+        "admitted": false
+      }
+    },
+    {
+      "name": "environment-encoded-bytes-exact",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "request-bound",
+        "subject": "environment-encoded-bytes",
+        "value": 65536
+      },
+      "expected": {
+        "admitted": true
+      }
+    },
+    {
+      "name": "environment-encoded-bytes-first-excess",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "request-bound",
+        "subject": "environment-encoded-bytes",
+        "value": 65537
+      },
+      "expected": {
+        "admitted": false
+      }
+    },
+    {
+      "name": "argument-interior-nul",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "request",
+        "arguments": [
+          "a\u0000b"
+        ]
+      },
+      "expected": {
+        "admitted": false,
+        "attempts": 0
+      }
+    },
+    {
+      "name": "copy-requested",
+      "hosts": [
+        "x86_64-unknown-linux-gnu"
+      ],
+      "input": {
+        "kind": "cancellation",
+        "phase": "copy",
+        "cause": "requested"
+      },
+      "expected": {
+        "exit": 130,
+        "attempts": 0,
+        "remaining_snapshot_handles": 0
+      }
+    },
+    {
+      "name": "copy-deadline",
+      "hosts": [
+        "x86_64-unknown-linux-gnu"
+      ],
+      "input": {
+        "kind": "cancellation",
+        "phase": "copy",
+        "cause": "deadline"
+      },
+      "expected": {
+        "exit": 2,
+        "attempts": 0,
+        "remaining_snapshot_handles": 0
+      }
+    },
+    {
+      "name": "sealed-hash-requested",
+      "hosts": [
+        "x86_64-unknown-linux-gnu"
+      ],
+      "input": {
+        "kind": "cancellation",
+        "phase": "sealed-hash",
+        "cause": "requested"
+      },
+      "expected": {
+        "exit": 130,
+        "attempts": 0,
+        "remaining_snapshot_handles": 0
+      }
+    },
+    {
+      "name": "sealed-hash-deadline",
+      "hosts": [
+        "x86_64-unknown-linux-gnu"
+      ],
+      "input": {
+        "kind": "cancellation",
+        "phase": "sealed-hash",
+        "cause": "deadline"
+      },
+      "expected": {
+        "exit": 2,
+        "attempts": 0,
+        "remaining_snapshot_handles": 0
+      }
+    },
+    {
+      "name": "elf-validation-requested",
+      "hosts": [
+        "x86_64-unknown-linux-gnu"
+      ],
+      "input": {
+        "kind": "cancellation",
+        "phase": "elf-validation",
+        "cause": "requested"
+      },
+      "expected": {
+        "exit": 130,
+        "attempts": 0,
+        "remaining_snapshot_handles": 0
+      }
+    },
+    {
+      "name": "elf-validation-deadline",
+      "hosts": [
+        "x86_64-unknown-linux-gnu"
+      ],
+      "input": {
+        "kind": "cancellation",
+        "phase": "elf-validation",
+        "cause": "deadline"
+      },
+      "expected": {
+        "exit": 2,
+        "attempts": 0,
+        "remaining_snapshot_handles": 0
+      }
+    },
+    {
+      "name": "before-launch-requested",
+      "hosts": [
+        "x86_64-unknown-linux-gnu"
+      ],
+      "input": {
+        "kind": "cancellation",
+        "phase": "before-launch",
+        "cause": "requested"
+      },
+      "expected": {
+        "exit": 130,
+        "attempts": 0,
+        "remaining_snapshot_handles": 0
+      }
+    },
+    {
+      "name": "before-launch-deadline",
+      "hosts": [
+        "x86_64-unknown-linux-gnu"
+      ],
+      "input": {
+        "kind": "cancellation",
+        "phase": "before-launch",
+        "cause": "deadline"
+      },
+      "expected": {
+        "exit": 2,
+        "attempts": 0,
+        "remaining_snapshot_handles": 0
+      }
+    },
+    {
+      "name": "running-child-requested",
+      "hosts": [
+        "x86_64-unknown-linux-gnu"
+      ],
+      "input": {
+        "kind": "cancellation",
+        "phase": "running-child",
+        "cause": "requested"
+      },
+      "expected": {
+        "exit": 130,
+        "attempts": 1,
+        "remaining_snapshot_handles": 0
+      }
+    },
+    {
+      "name": "running-child-deadline",
+      "hosts": [
+        "x86_64-unknown-linux-gnu"
+      ],
+      "input": {
+        "kind": "cancellation",
+        "phase": "running-child",
+        "cause": "deadline"
+      },
+      "expected": {
+        "exit": 2,
+        "attempts": 1,
+        "remaining_snapshot_handles": 0
+      }
+    },
+    {
+      "name": "shared-acquisition-launch-deadline",
+      "hosts": [
+        "x86_64-unknown-linux-gnu"
+      ],
+      "input": {
+        "kind": "lifetime",
+        "acquisition_ms": 750,
+        "deadline_ms": 1000
+      },
+      "expected": {
+        "remaining_launch_ms_at_most": 250
+      }
+    },
+    {
+      "name": "stdout-exact",
+      "hosts": [
+        "x86_64-unknown-linux-gnu"
+      ],
+      "input": {
+        "kind": "lifetime",
+        "stream": "stdout",
+        "bytes": 8388608
+      },
+      "expected": {
+        "completed": true
+      }
+    },
+    {
+      "name": "stdout-first-excess",
+      "hosts": [
+        "x86_64-unknown-linux-gnu"
+      ],
+      "input": {
+        "kind": "lifetime",
+        "stream": "stdout",
+        "bytes": 8388609
+      },
+      "expected": {
+        "error": "limit"
+      }
+    },
+    {
+      "name": "stderr-exact",
+      "hosts": [
+        "x86_64-unknown-linux-gnu"
+      ],
+      "input": {
+        "kind": "lifetime",
+        "stream": "stderr",
+        "bytes": 8388608
+      },
+      "expected": {
+        "completed": true
+      }
+    },
+    {
+      "name": "stderr-first-excess",
+      "hosts": [
+        "x86_64-unknown-linux-gnu"
+      ],
+      "input": {
+        "kind": "lifetime",
+        "stream": "stderr",
+        "bytes": 8388609
+      },
+      "expected": {
+        "error": "limit"
+      }
+    },
+    {
+      "name": "nonzero-status-is-data",
+      "hosts": [
+        "x86_64-unknown-linux-gnu"
+      ],
+      "input": {
+        "kind": "lifetime",
+        "observer": "exit-17"
+      },
+      "expected": {
+        "status_code": 17,
+        "completed": true
+      }
+    },
+    {
+      "name": "signal-status-is-data",
+      "hosts": [
+        "x86_64-unknown-linux-gnu"
+      ],
+      "input": {
+        "kind": "lifetime",
+        "observer": "signal-10"
+      },
+      "expected": {
+        "signal": 10,
+        "completed": true
+      }
+    },
+    {
+      "name": "failed-spawn",
+      "hosts": [
+        "x86_64-unknown-linux-gnu"
+      ],
+      "input": {
+        "kind": "lifetime",
+        "fault": "spawn"
+      },
+      "expected": {
+        "exit": 2,
+        "attempts": 1,
+        "fallback_attempts": 0
+      }
+    },
+    {
+      "name": "missing-interpreter",
+      "hosts": [
+        "x86_64-unknown-linux-gnu"
+      ],
+      "input": {
+        "kind": "lifetime",
+        "fault": "missing-loader"
+      },
+      "expected": {
+        "exit": 2,
+        "attempts": 1,
+        "fallback_attempts": 0
+      }
+    },
+    {
+      "name": "term-resistant-group",
+      "hosts": [
+        "x86_64-unknown-linux-gnu"
+      ],
+      "input": {
+        "kind": "lifetime",
+        "observer": "term-resistant-descendant"
+      },
+      "expected": {
+        "exit": 2,
+        "owned_running_processes": 0,
+        "cleanup_ms_at_most": 11000
+      }
+    },
+    {
+      "name": "shared-eight-attempts",
+      "hosts": [
+        "x86_64-unknown-linux-gnu"
+      ],
+      "input": {
+        "kind": "lifetime",
+        "native_calls": 8
+      },
+      "expected": {
+        "attempts": 8,
+        "implicit_probes": 0
+      }
+    },
+    {
+      "name": "ninth-attempt-refuses",
+      "hosts": [
+        "x86_64-unknown-linux-gnu"
+      ],
+      "input": {
+        "kind": "lifetime",
+        "native_calls": 9
+      },
+      "expected": {
+        "attempts": 8,
+        "exit": 2
+      }
+    },
+    {
+      "name": "maintained-probe-shares-budget",
+      "hosts": [
+        "x86_64-unknown-linux-gnu"
+      ],
+      "input": {
+        "kind": "lifetime",
+        "maintained_probes": 1,
+        "native_calls": 8
+      },
+      "expected": {
+        "attempts": 8,
+        "exit": 2
+      }
+    },
+    {
+      "name": "process-finish-failure",
+      "hosts": [
+        "x86_64-unknown-linux-gnu"
+      ],
+      "input": {
+        "kind": "lifetime",
+        "fault": "finish"
+      },
+      "expected": {
+        "exit": 2,
+        "passed": false,
+        "partial": true
+      }
+    },
+    {
+      "name": "process-cancel-and-finish-failure",
+      "hosts": [
+        "x86_64-unknown-linux-gnu"
+      ],
+      "input": {
+        "kind": "lifetime",
+        "fault": "finish",
+        "cancel": "requested"
+      },
+      "expected": {
+        "exit": 130,
+        "passed": false,
+        "partial": true
+      }
+    },
+    {
+      "name": "load-address-overflow",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "format",
+        "image_hex": "7f454c4602010100000000000000000002003e00010000000000000000000000400000000000000000000000000000000000000040003800010000000000000001000000000000000000000000000000ffffffffffffffff0000000000000000000000000000000001000000000000000000000000000000"
+      },
+      "expected": {
+        "admitted": false
+      }
+    },
+    {
+      "name": "load-alignment-mismatch",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "format",
+        "image_hex": "7f454c4602010100000000000000000002003e0001000000000000000000000040000000000000000000000000000000000000004000380001000000000000000100000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000000010000000000000"
+      },
+      "expected": {
+        "admitted": false
+      }
+    },
+    {
+      "name": "source-symlink",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "source-open",
+        "source": "symlink"
+      },
+      "expected": {
+        "attempts": 0,
+        "admitted": false
+      }
+    },
+    {
+      "name": "source-fifo",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "source-open",
+        "source": "fifo"
+      },
+      "expected": {
+        "attempts": 0,
+        "admitted": false
+      }
+    },
+    {
+      "name": "source-directory",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "source-open",
+        "source": "directory"
+      },
+      "expected": {
+        "attempts": 0,
+        "admitted": false
+      }
+    },
+    {
+      "name": "missing-effect",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "authority",
+        "effect": false,
+        "grant": true
+      },
+      "expected": {
+        "attempts": 0,
+        "admitted": false
+      }
+    },
+    {
+      "name": "missing-grant",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "authority",
+        "effect": true,
+        "grant": false
+      },
+      "expected": {
+        "attempts": 0,
+        "admitted": false
+      }
+    },
+    {
+      "name": "enforced-grant",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "authority",
+        "effect": true,
+        "grant": "enforced"
+      },
+      "expected": {
+        "attempts": 0,
+        "admitted": false
+      }
+    },
+    {
+      "name": "pure-call",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "authority",
+        "context": "pure"
+      },
+      "expected": {
+        "attempts": 0,
+        "admitted": false
+      }
+    },
+    {
+      "name": "module-initializer-call",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "authority",
+        "context": "initializer"
+      },
+      "expected": {
+        "attempts": 0,
+        "admitted": false
+      }
+    },
+    {
+      "name": "default-embedding-call",
+      "hosts": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ],
+      "input": {
+        "kind": "authority",
+        "context": "default-embedding"
+      },
+      "expected": {
+        "attempts": 0,
+        "admitted": false
+      }
+    }
+  ]
+}

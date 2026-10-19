@@ -5,7 +5,7 @@ use std::io::{self, Write};
 #[cfg(target_os = "linux")]
 use std::os::unix::ffi::OsStringExt;
 use std::os::unix::fs::{PermissionsExt, symlink};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::{Command, Output, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -19,14 +19,15 @@ struct Project(PathBuf);
 
 impl Project {
     fn new() -> Self {
-        let parent = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!(
+        let parent = std::env::temp_dir().canonicalize().unwrap().join(format!(
             "accepted-run-{}-{}",
             std::process::id(),
             NEXT.fetch_add(1, Ordering::Relaxed)
         ));
         fs::create_dir_all(&parent).unwrap();
+        fs::copy(env!("CARGO_BIN_EXE_opaal"), parent.join("opaal")).unwrap();
         let root = parent.join("project");
-        let initialized = Command::new(env!("CARGO_BIN_EXE_opaal"))
+        let initialized = Command::new(parent.join("opaal"))
             .args([
                 "project",
                 "init",
@@ -43,7 +44,7 @@ impl Project {
     }
 
     fn command(&self, arguments: &[&str], input: &[u8]) -> Output {
-        let mut child = Command::new(env!("CARGO_BIN_EXE_opaal"))
+        let mut child = Command::new(self.0.parent().unwrap().join("opaal"))
             .current_dir(&self.0)
             .args(arguments)
             .stdin(Stdio::piped())
@@ -213,7 +214,7 @@ fn pure_task_views_compare_the_receipts_metadata_projection_and_allow_discarded_
         let view: Value = serde_json::from_slice(&output.stdout).unwrap();
         assert_eq!(view["conclusion"], expected);
         assert!(!String::from_utf8(output.stdout).unwrap().contains("canary"));
-        let discarded = Command::new(env!("CARGO_BIN_EXE_opaal"))
+        let discarded = Command::new(project.0.parent().unwrap().join("opaal"))
             .current_dir(&project.0)
             .args([
                 "task",
@@ -601,7 +602,7 @@ fn racing_runs_keep_one_exclusive_evidence_owner() {
     let digest = project.plan("abc123");
     let input = fs::read(project.0.join("fixtures/image.json")).unwrap();
     let start = || {
-        Command::new(env!("CARGO_BIN_EXE_opaal"))
+        Command::new(project.0.parent().unwrap().join("opaal"))
             .current_dir(&project.0)
             .args([
                 "task",

@@ -1,0 +1,49 @@
+import './policy.opaal' as policy
+import project::tools as tools
+import project::context as project
+import std::process as process
+import std::filesystem as fs
+import std::data as data
+import std::io as io
+export { check_repository }
+
+action check_repository(script: Path, manifest: Path) -> Bool
+effects {
+    process.run(tools::checker);
+    filesystem.read(project::root);
+    stdout.write();
+}
+{
+    let before = fs::read(script, 65536)
+    let manifest_bytes = fs::read(manifest, 65536)
+    let result = process::run(tools::checker, ["--norc", "--format=json1", "--shell=sh", "--severity=style", "--", "{script}"])
+    let after = fs::read(script, 65536)
+    if before != after {
+        throw "Script changed during acquisition."
+    }
+    if result.status.code != 0 && result.status.code != 1 {
+        throw "Checker acquisition failed."
+    }
+    mut findings = {}
+    try {
+        findings = data::json_decode(result.stdout)
+    } catch error {
+        throw "Checker output is invalid."
+    }
+    mut document = {}
+    try {
+        document = data::toml_decode(manifest_bytes)
+    } catch error {
+        throw "Repository manifest is invalid."
+    }
+    mut report = {}
+    try {
+        report = policy::checked(result.status.code, findings, document)
+    } catch error {
+        throw "Repository policy input is invalid."
+    }
+    io::write_stdout(data::json_encode(report))
+    return report.passed
+}
+
+task repository = check_repository

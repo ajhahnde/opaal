@@ -13,6 +13,7 @@ use opaal_platform::operational::{
     OperationalAdapter, OperationalError, ProcessExit, ProcessRequest, ReadFileRequest,
     validate_child_environment,
 };
+use sha2::{Digest, Sha256};
 
 use crate::authority::{CapabilityRequest, EffectSet};
 use crate::context::OperationalContext;
@@ -20,6 +21,10 @@ use crate::project::{LockedTool, MaintainedAdapter, ToolLock};
 use crate::{Duration, Signal, Status};
 
 use super::{MAX_PROCESS_OUTPUT_BYTES, ModuleError, adapter_error, authorize, integrity};
+
+mod native;
+pub(crate) use native::validate_arguments;
+pub use native::validate_image as validate_native_image;
 
 pub const MAX_TOOL_EXECUTABLE_BYTES: usize = 64 * 1024 * 1024;
 pub const MAX_PROCESS_ATTEMPTS: usize = 8;
@@ -97,9 +102,13 @@ pub fn child_environment(lock: &ToolLock) -> Result<Vec<(OsString, OsString)>, M
         .iter()
         .map(|variable| variable.name())
         .collect::<BTreeSet<_>>();
-    if REQUIRED_ENVIRONMENT
-        .iter()
-        .any(|required| !actual.contains(required))
+    if lock
+        .tools()
+        .values()
+        .any(|tool| tool.contract().adapter().is_some())
+        && REQUIRED_ENVIRONMENT
+            .iter()
+            .any(|required| !actual.contains(required))
     {
         return Err(ModuleError::invalid(
             "PROCESS002",
@@ -139,7 +148,13 @@ pub fn verify_executable(
     Ok(())
 }
 
-fn verify_retained_executable(file: &File, tool: &LockedTool) -> Result<(), ModuleError> {
+/// Verify a retained regular executable and return its hashed byte count.
+pub fn verify_retained_executable(
+    file: &File,
+    tool: &LockedTool,
+    poll: &dyn Fn() -> Result<(), ModuleError>,
+) -> Result<usize, ModuleError> {
+    poll()?;
     let metadata = file
         .metadata()
         .map_err(|error| ModuleError::invalid("PROCESS003", error.to_string()))?;
@@ -149,15 +164,13 @@ fn verify_retained_executable(file: &File, tool: &LockedTool) -> Result<(), Modu
             "retained executable is not a regular file",
         ));
     }
-    let mut bytes = Vec::with_capacity(
-        usize::try_from(metadata.len())
-            .unwrap_or(MAX_TOOL_EXECUTABLE_BYTES)
-            .min(MAX_TOOL_EXECUTABLE_BYTES),
-    );
+    let mut hash = Sha256::new();
+    let mut total = 0_usize;
     let mut offset = 0_u64;
     let mut buffer = [0_u8; 64 * 1024];
-    while bytes.len() <= MAX_TOOL_EXECUTABLE_BYTES {
-        let remaining = MAX_TOOL_EXECUTABLE_BYTES + 1 - bytes.len();
+    while total <= MAX_TOOL_EXECUTABLE_BYTES {
+        poll()?;
+        let remaining = MAX_TOOL_EXECUTABLE_BYTES + 1 - total;
         let chunk = remaining.min(buffer.len());
         let read = file
             .read_at(&mut buffer[..chunk], offset)
@@ -165,24 +178,26 @@ fn verify_retained_executable(file: &File, tool: &LockedTool) -> Result<(), Modu
         if read == 0 {
             break;
         }
-        bytes.extend_from_slice(&buffer[..read]);
+        hash.update(&buffer[..read]);
+        total += read;
         offset = offset
             .checked_add(u64::try_from(read).expect("read size fits u64"))
             .ok_or_else(|| ModuleError::invalid("PROCESS003", "executable offset overflow"))?;
     }
-    if bytes.len() > MAX_TOOL_EXECUTABLE_BYTES {
+    if total > MAX_TOOL_EXECUTABLE_BYTES {
         return Err(ModuleError::invalid(
             "PROCESS003",
             "locked executable exceeds its byte limit",
         ));
     }
-    if integrity::sha256(&bytes) != tool.digest() {
+    if format!("sha256:{:x}", hash.finalize()) != tool.digest() {
         return Err(ModuleError::invalid(
             "PROCESS003",
             "locked executable digest changed",
         ));
     }
-    Ok(())
+    poll()?;
+    Ok(total)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -244,10 +259,16 @@ fn probe_inner(
         ModuleError::invalid("PROCESS004", format!("unknown locked tool `{tool_id}`"))
     })?;
     budget.ensure_available()?;
-    let fixed = match tool.adapter() {
-        MaintainedAdapter::Git => &["--version"][..],
-        MaintainedAdapter::Cargo => &["--version", "--verbose"][..],
-        MaintainedAdapter::Docker => {
+    let fixed = match tool.contract().adapter() {
+        None => {
+            return Err(ModuleError::invalid(
+                "NATIVE001",
+                "native tools have no version probe",
+            ));
+        }
+        Some(MaintainedAdapter::Git) => &["--version"][..],
+        Some(MaintainedAdapter::Cargo) => &["--version", "--verbose"][..],
+        Some(MaintainedAdapter::Docker) => {
             return Err(ModuleError::invalid(
                 "DOCKER002",
                 "Docker requires its fixed target acquisition",
@@ -277,13 +298,22 @@ fn probe_inner(
             "maintained version probe returned nonzero status",
         ));
     }
-    let observed = parse_probe(tool.adapter(), &result.stdout)?;
-    if observed != tool.version().to_string() {
+    let observed = parse_probe(
+        tool.contract().adapter().expect("maintained probe"),
+        &result.stdout,
+    )?;
+    if observed
+        != tool
+            .contract()
+            .version()
+            .expect("maintained tool version")
+            .to_string()
+    {
         return Err(ModuleError::invalid(
             "PROCESS006",
             format!(
                 "maintained probe reported {observed}, lock requires {}",
-                tool.version()
+                tool.contract().version().expect("maintained tool version")
             ),
         ));
     }
@@ -305,6 +335,7 @@ pub fn run(
     timeout: StdDuration,
     budget: &mut ProcessBudget,
 ) -> Result<ToolResult, ModuleError> {
+    native::validate_arguments(lock, tool_id, arguments)?;
     run_inner(
         context,
         effects,
@@ -342,6 +373,7 @@ pub fn run_retained(
     budget: &mut ProcessBudget,
     executable_file: &File,
 ) -> Result<ToolResult, ModuleError> {
+    native::validate_arguments(lock, tool_id, arguments)?;
     run_inner(
         context,
         effects,
@@ -391,7 +423,9 @@ fn run_inner(
     let tool = lock.tools().get(tool_id).ok_or_else(|| {
         ModuleError::invalid("PROCESS004", format!("unknown locked tool `{tool_id}`"))
     })?;
-    if tool.adapter() == MaintainedAdapter::Docker && environment_override.is_none() {
+    if tool.contract().adapter() == Some(MaintainedAdapter::Docker)
+        && environment_override.is_none()
+    {
         return Err(ModuleError::invalid(
             "DOCKER002",
             "Docker requires its fixed target acquisition",
@@ -401,10 +435,13 @@ fn run_inner(
     let authority = CapabilityRequest::process_run(tool_id.to_owned())
         .map_err(|error| ModuleError::invalid("PROCESS008", error.to_string()))?;
     authorize(context, effects, &authority, platform)?;
-    match executable_file {
-        Some(file) if cfg!(target_os = "linux") => verify_retained_executable(file, tool)?,
-        _ => verify_executable(adapter, tool)?,
-    }
+    let native = tool.contract().adapter().is_none();
+    let started = std::time::Instant::now();
+    let deadline = if native {
+        Some(context.cancellation().operation_deadline(timeout))
+    } else {
+        deadline
+    };
     let cancelled = || {
         deadline.map_or_else(
             || context.poll_cancellation(),
@@ -414,10 +451,44 @@ fn run_inner(
     if let Some(reason) = cancelled() {
         return Err(ModuleError::Cancelled(reason));
     }
+    let poll = || cancelled().map_or(Ok(()), |reason| Err(ModuleError::Cancelled(reason)));
+    let snapshot;
+    let executable_file = if native {
+        let source = executable_file.ok_or_else(|| {
+            ModuleError::invalid(
+                "NATIVE002",
+                "native execution requires a retained executable",
+            )
+        })?;
+        verify_retained_executable(source, tool, &poll)?;
+        snapshot = native::acquire(adapter, source, tool, &poll)?;
+        Some(&snapshot)
+    } else {
+        match executable_file {
+            Some(file) if cfg!(target_os = "linux") => {
+                verify_retained_executable(file, tool, &poll)?;
+            }
+            _ => verify_executable(adapter, tool)?,
+        }
+        executable_file
+    };
     let environment = environment_override.map_or_else(
         || child_environment(lock),
         |environment| Ok(environment.to_vec()),
     )?;
+    poll()?;
+    let timeout = if native {
+        timeout.saturating_sub(started.elapsed()).min(
+            context
+                .cancellation()
+                .remaining_until(deadline.expect("native operation deadline")),
+        )
+    } else {
+        timeout
+    };
+    if native && timeout.is_zero() {
+        return Err(ModuleError::Cancelled(crate::eval::CancelReason::Timeout));
+    }
     budget.charge();
     let executable = locked_path(tool);
     let mut argv = Vec::with_capacity(arguments.len() + 1);

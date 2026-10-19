@@ -163,6 +163,19 @@ pub fn doctor_project(
     };
     let project_name = manifest.name().to_owned();
     let mut findings = Vec::new();
+    let native = manifest
+        .tools()
+        .values()
+        .any(|tool| tool.contract().adapter().is_none());
+    if native {
+        findings.push(finding(
+            "DOCTOR017",
+            "tool",
+            "unknown",
+            "Native tool version and behavior are unverified; child effects are unenforced.",
+            None,
+        ));
+    }
     let mut exit_code = 0;
     let selected = manifest.environment(&request.environment);
     let mut authority = None;
@@ -209,18 +222,31 @@ pub fn doctor_project(
             ));
         }
         for tool in tools.tools().values() {
+            let native = tool.contract().adapter().is_none();
             let path = PathBuf::from(OsString::from_vec(tool.path().bytes().to_vec()));
             let observed = open_absolute_file_with_parent_nofollow(&path).and_then(|(_, file)| {
-                if file
+                let mode = file
                     .metadata()
                     .map_err(|_| ProjectError::new("PROJECT024", "tool metadata unavailable"))?
-                    .mode()
-                    & 0o111
-                    == 0
-                {
+                    .mode();
+                if mode & 0o111 == 0 || (native && mode & 0o6000 != 0) {
                     return Err(ProjectError::new("PROJECT024", "tool is not executable"));
                 }
-                filesystem.read_file_bounded(file, 64 * 1024 * 1024)
+                let bytes =
+                    filesystem.read_file_bounded(file, process::MAX_TOOL_EXECUTABLE_BYTES)?;
+                if native {
+                    process::validate_native_image(&bytes, &|| {
+                        if control.is_cancelled() {
+                            Err(opaal_runtime::operational::ModuleError::Cancelled(
+                                opaal_runtime::eval::CancelReason::Requested,
+                            ))
+                        } else {
+                            Ok(())
+                        }
+                    })
+                    .map_err(|_| ProjectError::new("PROJECT024", "unsupported native image"))?;
+                }
+                Ok(bytes)
             });
             if !observed
                 .as_ref()
@@ -396,8 +422,32 @@ pub fn doctor_project(
                         match project.action_effects(action) {
                             Ok(effects) => {
                                 for effect in effects {
+                                    if host_platform_triple() != "x86_64-unknown-linux-gnu"
+                                        && effect.capability() == "process.run"
+                                        && effect
+                                            .scope()
+                                            .strip_prefix("tool.")
+                                            .and_then(|id| project.manifest().tools().get(id))
+                                            .is_some_and(|tool| tool.contract().adapter().is_none())
+                                        && !findings
+                                            .iter()
+                                            .any(|finding| finding["code"] == "DOCTOR006")
+                                    {
+                                        findings.push(finding(
+                                            "DOCTOR006",
+                                            "host",
+                                            "error",
+                                            "Native execution requires the qualified Linux host.",
+                                            None,
+                                        ));
+                                    }
                                     if !matches!(
-                                        static_verdict(authority, &effect, tools.platform()),
+                                        static_verdict(
+                                            project.manifest(),
+                                            authority,
+                                            &effect,
+                                            tools.platform()
+                                        ),
                                         "granted-enforced" | "granted-unenforced"
                                     ) {
                                         findings.push(finding(
