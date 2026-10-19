@@ -4,6 +4,8 @@ All notable changes to OPAAL are documented here.
 
 ## [Unreleased]
 
+## [1.6.0]
+
 ### Added
 
 - Bind byte-pinned native executables through the existing project ToolIdentity,
