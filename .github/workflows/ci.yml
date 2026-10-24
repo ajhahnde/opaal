@@ -188,24 +188,35 @@ jobs:
         shell: bash
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-
       - name: Install pinned Rust and native qualification tools
         run: |
           apt-get update
-          DEBIAN_FRONTEND=noninteractive apt-get install -y binutils build-essential ca-certificates curl python3 shellcheck strace
+          DEBIAN_FRONTEND=noninteractive apt-get install -y binutils build-essential ca-certificates curl git python3 shellcheck strace
           curl -fsSLo "$RUNNER_TEMP/rustup-init" https://static.rust-lang.org/rustup/archive/1.28.2/aarch64-unknown-linux-gnu/rustup-init
           printf '%s  %s\n' e3853c5a252fca15252d07cb23a1bdd9377a8c6f3efa01531109281ae47f841c "$RUNNER_TEMP/rustup-init" | sha256sum --check
           chmod 0755 "$RUNNER_TEMP/rustup-init"
           "$RUNNER_TEMP/rustup-init" -y --profile minimal --default-host aarch64-unknown-linux-gnu --default-toolchain none --no-modify-path
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
 
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Mark the mounted checkout safe for Git
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Set up Python for native qualification
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
+        env:
+          # The Ubuntu 24.04 tool cache is mounted at /__t; install for Jammy here.
+          AGENT_TOOLSDIRECTORY: /opt/hostedtoolcache
+        with:
+          python-version: '3.12.15'
+
       - name: Verify the native ARM host and Jammy userland
         run: |
           test "$(uname -m)" = aarch64
-          python3 -c 'import platform; assert platform.libc_ver() == ("glibc", "2.35"), platform.libc_ver(); assert tuple(map(int, platform.release().split(".")[:2])) >= (6, 3), platform.release()'
+          python3 -c 'import platform, tomllib; assert platform.libc_ver() == ("glibc", "2.35"), platform.libc_ver(); assert tuple(map(int, platform.release().split(".")[:2])) >= (6, 3), platform.release()'
 
       - name: Activate the pinned Rust toolchain
         run: |
@@ -537,10 +548,18 @@ jobs:
       - name: Mark the mounted checkout safe for Git
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
+      - name: Set up Python for native qualification
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
+        env:
+          # The Ubuntu 24.04 tool cache is mounted at /__t; install for Jammy here.
+          AGENT_TOOLSDIRECTORY: /opt/hostedtoolcache
+        with:
+          python-version: '3.12.15'
+
       - name: Verify the native ARM host and Jammy userland
         run: |
           test "$(uname -m)" = aarch64
-          python3 -c 'import platform; assert platform.libc_ver() == ("glibc", "2.35"), platform.libc_ver(); assert tuple(map(int, platform.release().split(".")[:2])) >= (6, 3), platform.release()'
+          python3 -c 'import platform, tomllib; assert platform.libc_ver() == ("glibc", "2.35"), platform.libc_ver(); assert tuple(map(int, platform.release().split(".")[:2])) >= (6, 3), platform.release()'
 
       - name: Start the isolated Docker 29.9.0 daemon
         run: |

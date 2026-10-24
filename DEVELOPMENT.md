@@ -2,7 +2,7 @@
 
 Use the repository root for all commands. The pinned Rust toolchain is declared
 in `rust-toolchain.toml`; Cargo uses the checked-in lockfile. Python validators
-use only the standard library.
+require Python 3.11 or newer and use only the standard library.
 
 ## Build and source gates
 

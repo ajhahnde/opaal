@@ -1574,7 +1574,7 @@
     },
     {
       "path": "ci/qualify_native_preparation.py",
-      "sha256": "12b341be856cfa945bfdeadac1145096125905dc299d0a948c8b0c7251a41d17",
+      "sha256": "fad9ef4f6ab61fe86be47e288a440ed654e79b5aba3faed56abc7257fb3f6d82",
       "source_markers": 10,
       "constructors_or_assertions": [
         "asset_observations",
