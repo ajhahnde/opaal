@@ -523,7 +523,7 @@ jobs:
       - name: Install pinned Rust, Docker 29.9.0, and qualification tools
         run: |
           apt-get update
-          DEBIAN_FRONTEND=noninteractive apt-get install -y binutils build-essential ca-certificates curl git python3 shellcheck strace
+          DEBIAN_FRONTEND=noninteractive apt-get install -y acl binutils build-essential ca-certificates curl git libcap2-bin python3 shellcheck strace util-linux
           curl -fsSLo "$RUNNER_TEMP/rustup-init" https://static.rust-lang.org/rustup/archive/1.28.2/aarch64-unknown-linux-gnu/rustup-init
           printf '%s  %s\n' e3853c5a252fca15252d07cb23a1bdd9377a8c6f3efa01531109281ae47f841c "$RUNNER_TEMP/rustup-init" | sha256sum --check
           chmod 0755 "$RUNNER_TEMP/rustup-init"
@@ -602,7 +602,7 @@ jobs:
           import sys
           from pathlib import Path
 
-          result = subprocess.run(["cargo", "test", "--workspace", "--locked", "--no-run", "--message-format=json"], capture_output=True, text=True)
+          result = subprocess.run(["cargo", "test", "--release", "--workspace", "--locked", "--no-run", "--message-format=json"], capture_output=True, text=True)
           if result.returncode:
               sys.stderr.write(result.stderr)
               raise SystemExit(result.returncode)
@@ -676,6 +676,17 @@ jobs:
         run: |
           candidate_version=$(python3 -c 'from ci.package_release import VERSION; print(VERSION)')
           python3 ci/qualify_docker_image_checks.py --live --archive "dist/opaal-v${candidate_version}-linux-aarch64.tar.gz" --fixtures "dist/opaal-v${candidate_version}-docker-image-checks.tar.gz" --docker /usr/bin/docker --socket "$RUNNER_TEMP/docker.sock" --image-ref opaal-qualification/arm64:fixture --image-id sha256:c13ecbac43418b19df646a517e67b212484a1a6c2db55c978f37bf56b6f5207f --image-revision opaal-arm64-live-fixture-v1 --index-ref ubuntu:22.04@sha256:829f6df217bcbae2b371026e81711d1a787c61b2967ad09d015063663ebafbf7 --expected-source "$(git rev-parse HEAD)" --platform linux-aarch64 --report "$RUNNER_TEMP/docker-live-linux-aarch64.json"
+
+      - name: Retain native qualification reports and failure traces
+        if: always()
+        run: |
+          for report in "$RUNNER_TEMP"/*linux-aarch64.json; do
+            if [ -f "$report" ]; then cp "$report" dist/; fi
+          done
+          if [ -d "$RUNNER_TEMP/controlled-native-tools" ]; then
+            tar -czf dist/controlled-native-tools-linux-aarch64-evidence.tar.gz \
+              -C "$RUNNER_TEMP" controlled-native-tools
+          fi
 
       - name: Retain candidate identity and qualification evidence
         if: always()

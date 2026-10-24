@@ -151,7 +151,9 @@ def acquisition_trace_observations(trace):
             expected, seals = [-1], 1
         else:
             expected, seals = [65536, 65536, 0], 1
-        require(reads == expected, "acquisition snapshot read boundary differs: " + name)
+        # AArch64 also uses pread64 for the ELF and program headers.
+        headers = name.startswith(("elf-validation-", "before-launch-")) and reads == expected + [64, 56]
+        require(reads == expected or headers, "acquisition snapshot read boundary differs: " + name)
         for operation in ("F_ADD_SEALS", "F_GET_SEALS"):
             calls = [line for line in block.splitlines() if "/memfd:opaal-native" in line and operation in line]
             require(len(calls) == seals and all(" = -1 " not in line for line in calls),
@@ -192,9 +194,11 @@ def permission_cases(test_binary, inputs, output, cases, host):
                        ("original-noexec-mount", "image_original_noexec_mount_refuses")):
         work = output / name
         work.mkdir()
-        environment = {"PATH": "/usr/bin:/bin"}
+        environment = {"PATH": "/usr/sbin:/usr/bin:/sbin:/bin"}
         arguments = [test_binary, test, "--exact", "--ignored", "--nocapture", "--test-threads=1"]
-        if name == "original-file-capability":
+        if name == "original-acl-denies-effective-user" and os.geteuid() == 0:
+            arguments = ["/usr/bin/setpriv", "--bounding-set=-dac_override,-dac_read_search", *arguments]
+        elif name == "original-file-capability":
             arguments = ["/usr/bin/unshare", "--user", "--map-root-user", *arguments]
         elif name == "original-noexec-mount":
             mount = work / "noexec"

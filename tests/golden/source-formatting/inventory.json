@@ -1555,7 +1555,7 @@
     },
     {
       "path": "ci/qualify_native_images.py",
-      "sha256": "175a379bf0c052790df59803fa0f99510a9329ed27ec4dac33ea14c705f84553",
+      "sha256": "02203e519a64d2ffc306af824f36bc7f14410019e8ce260b380a078e05040bda",
       "source_markers": 9,
       "constructors_or_assertions": [
         "acquisition_trace_observations",
@@ -1823,7 +1823,7 @@
     },
     {
       "path": "ci/tests/test_controlled_native_tools.py",
-      "sha256": "804a4ce8b6b8bd426554899a4f1283123144d23a4fd73f44073bca106ad2c4cb",
+      "sha256": "436dd259e763046002adf02ad44f0401fcfe31aea9058b697d5f8831172b21d2",
       "source_markers": 50,
       "constructors_or_assertions": [
         "completed",

@@ -11,7 +11,7 @@ evidence = "target/opaal-golden/readiness.json"
 
 [tools.git]
 adapter = "git"
-version = ">=2.39.0,<3.0.0"
+version = ">=2.34.0,<3.0.0"
 
 [tools.cargo]
 adapter = "cargo"
