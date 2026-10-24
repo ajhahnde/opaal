@@ -189,8 +189,8 @@ Use one already available image; inspection never pulls, builds or runs it.
 
 The saved ARM64 live fixture is `live/arm64-image.tar`. Load it with
 `docker load --input live/arm64-image.tar`; it creates
-`opaal-qualification/arm64:fixture` with ID
-`sha256:c13ecbac43418b19df646a517e67b212484a1a6c2db55c978f37bf56b6f5207f`
+`opaal-qualification/arm64:fixture` with manifest ID
+`sha256:2a654a940aa4d12f5f291f5d600ac3b9a6166bb3c3a0f391f6626f049161328e`
 and revision label `opaal-arm64-live-fixture-v1`. The native qualification
 also uses an already-loaded, digest-pinned multi-platform reference to verify
 that index responses are refused. These are test inputs; OPAAL does not pull,
