@@ -663,9 +663,9 @@ jobs:
           python3 ci/qualify_standard_io_failures.py --binary target/release/opaal --output "$RUNNER_TEMP/standard-io-failures-linux-aarch64"
 
       - name: Load the deterministic ARM image and local multi-platform index
-        env:
-          DOCKER_HOST: unix://${{ runner.temp }}/docker.sock
         run: |
+          # Keep the runner's job-container exec on its own Docker daemon.
+          export DOCKER_HOST="unix://$RUNNER_TEMP/docker.sock"
           docker version --format '{{json .}}' > "$RUNNER_TEMP/docker-version.json"
           docker load --input tests/golden/docker-image-checks/live/arm64-image.tar
           docker pull --platform linux/arm64 ubuntu:22.04@sha256:829f6df217bcbae2b371026e81711d1a787c61b2967ad09d015063663ebafbf7
