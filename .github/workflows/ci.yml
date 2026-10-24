@@ -205,13 +205,17 @@ jobs:
       - name: Mark the mounted checkout safe for Git
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
-      - name: Set up Python for native qualification
-        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
-        env:
-          # The Ubuntu 24.04 tool cache is mounted at /__t; install for Jammy here.
-          AGENT_TOOLSDIRECTORY: /opt/hostedtoolcache
-        with:
-          python-version: '3.12.15'
+      - name: Install pinned Jammy Python for native qualification
+        run: |
+          curl -fsSLo "$RUNNER_TEMP/python.tar.gz" https://github.com/actions/python-versions/releases/download/3.12.15-36805895057/python-3.12.15-linux-22.04-arm64.tar.gz
+          printf '%s  %s\n' 753766e28452fe7946c9e7bab7428c02ece786da64d066af9bd390ac38ae3b79 "$RUNNER_TEMP/python.tar.gz" | sha256sum --check
+          # Preserve Python's compiled prefix; the runner remaps action env paths to /__t.
+          python_prefix=/opt/hostedtoolcache/Python/3.12.15/arm64
+          mkdir -p "$python_prefix"
+          tar -xzf "$RUNNER_TEMP/python.tar.gz" -C "$python_prefix"
+          ln -s "$python_prefix/bin/python3" /usr/local/bin/python3
+          echo /usr/local/bin >> "$GITHUB_PATH"
+          env -i /usr/local/bin/python3 -c 'import sys, tomllib; assert sys.version_info[:3] == (3, 12, 15), sys.version'
 
       - name: Verify the native ARM host and Jammy userland
         run: |
@@ -548,13 +552,17 @@ jobs:
       - name: Mark the mounted checkout safe for Git
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
-      - name: Set up Python for native qualification
-        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
-        env:
-          # The Ubuntu 24.04 tool cache is mounted at /__t; install for Jammy here.
-          AGENT_TOOLSDIRECTORY: /opt/hostedtoolcache
-        with:
-          python-version: '3.12.15'
+      - name: Install pinned Jammy Python for native qualification
+        run: |
+          curl -fsSLo "$RUNNER_TEMP/python.tar.gz" https://github.com/actions/python-versions/releases/download/3.12.15-36805895057/python-3.12.15-linux-22.04-arm64.tar.gz
+          printf '%s  %s\n' 753766e28452fe7946c9e7bab7428c02ece786da64d066af9bd390ac38ae3b79 "$RUNNER_TEMP/python.tar.gz" | sha256sum --check
+          # Preserve Python's compiled prefix; the runner remaps action env paths to /__t.
+          python_prefix=/opt/hostedtoolcache/Python/3.12.15/arm64
+          mkdir -p "$python_prefix"
+          tar -xzf "$RUNNER_TEMP/python.tar.gz" -C "$python_prefix"
+          ln -s "$python_prefix/bin/python3" /usr/local/bin/python3
+          echo /usr/local/bin >> "$GITHUB_PATH"
+          env -i /usr/local/bin/python3 -c 'import sys, tomllib; assert sys.version_info[:3] == (3, 12, 15), sys.version'
 
       - name: Verify the native ARM host and Jammy userland
         run: |
