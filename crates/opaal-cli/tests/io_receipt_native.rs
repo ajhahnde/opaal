@@ -80,6 +80,8 @@ fn prepare(primary: &str) -> (support::ReportDir, PathBuf, String) {
     }
     let target = if cfg!(target_os = "macos") {
         "macos"
+    } else if cfg!(target_arch = "aarch64") {
+        "linux-aarch64"
     } else {
         "linux"
     };

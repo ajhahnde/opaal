@@ -4,7 +4,8 @@
     {
       "name": "offline-linux",
       "hosts": [
-        "x86_64-unknown-linux-gnu"
+        "x86_64-unknown-linux-gnu",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "environment": "offline"
@@ -34,7 +35,8 @@
     {
       "name": "live-linux-explicit-tool",
       "hosts": [
-        "x86_64-unknown-linux-gnu"
+        "x86_64-unknown-linux-gnu",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "environment": "ci",
@@ -69,7 +71,8 @@
       "name": "unknown-environment",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "environment": "other"
@@ -84,7 +87,8 @@
       "name": "offline-tool-option",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "environment": "offline",
@@ -100,7 +104,8 @@
       "name": "live-missing-tool",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "environment": "ci"
@@ -115,7 +120,8 @@
       "name": "live-relative-tool",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "environment": "ci",
@@ -131,7 +137,8 @@
       "name": "qualified-version-option",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "option": "--qualified-version"
@@ -146,7 +153,8 @@
       "name": "docker-option",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "option": "--docker"
@@ -161,7 +169,8 @@
       "name": "socket-option",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "option": "--socket"
@@ -176,7 +185,8 @@
       "name": "duplicate-tool-option",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "option": "--tool",
@@ -192,7 +202,8 @@
       "name": "missing-tool-file",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "tool": "missing"
@@ -207,7 +218,8 @@
       "name": "symlink-tool",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "tool": "symlink"
@@ -222,7 +234,8 @@
       "name": "fifo-tool",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "tool": "fifo"
@@ -237,7 +250,8 @@
       "name": "nonexec-tool",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "tool": "nonexec"
@@ -252,7 +266,8 @@
       "name": "setid-tool",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "tool": "setid"
@@ -267,7 +282,8 @@
       "name": "script-tool",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "tool": "script"
@@ -282,7 +298,8 @@
       "name": "foreign-tool",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "tool": "foreign"
@@ -297,7 +314,8 @@
       "name": "oversized-tool",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "tool": "67108865-bytes"
@@ -312,7 +330,8 @@
       "name": "empty-destination",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "destination": "empty"
@@ -327,7 +346,8 @@
       "name": "parent-component",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "destination": "parent-component"
@@ -342,7 +362,8 @@
       "name": "symlink-parent",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "destination": "symlink-parent"
@@ -357,7 +378,8 @@
       "name": "missing-parent",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "destination": "missing-parent"
@@ -372,7 +394,8 @@
       "name": "existing-directory",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "destination": "directory"
@@ -387,7 +410,8 @@
       "name": "existing-file",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "destination": "file"
@@ -402,7 +426,8 @@
       "name": "existing-symlink",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "destination": "symlink"
@@ -417,7 +442,8 @@
       "name": "existing-dangling-symlink",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "destination": "dangling-symlink"
@@ -432,7 +458,8 @@
       "name": "existing-fifo",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "destination": "fifo"
@@ -447,7 +474,8 @@
       "name": "concurrent-asset-file",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "fault": "asset-collision",
@@ -465,7 +493,8 @@
       "name": "concurrent-asset-symlink",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "fault": "asset-collision",
@@ -483,7 +512,8 @@
       "name": "concurrent-asset-fifo",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "fault": "asset-collision",
@@ -501,7 +531,8 @@
       "name": "failure-zero-write",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "fault": "zero-write"
@@ -517,7 +548,8 @@
       "name": "failure-partial-write",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "fault": "partial-write"
@@ -533,7 +565,8 @@
       "name": "failure-file-sync",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "fault": "file-sync"
@@ -549,7 +582,8 @@
       "name": "failure-directory-sync",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "fault": "directory-sync"
@@ -565,7 +599,8 @@
       "name": "failure-root-sync",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "fault": "root-sync"
@@ -581,7 +616,8 @@
       "name": "failure-parent-sync",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "fault": "parent-sync"
@@ -597,7 +633,8 @@
       "name": "concurrent-initializers",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "initializers": 2
@@ -612,7 +649,8 @@
       "name": "broken-success-output",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "fault": "summary-write"
@@ -627,7 +665,8 @@
       "name": "doctor-valid-unverified",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "observer": "doctor",
@@ -643,7 +682,8 @@
       "name": "doctor-missing-tool",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "observer": "doctor",
@@ -659,7 +699,8 @@
       "name": "doctor-changed-tool",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "observer": "doctor",
@@ -675,7 +716,8 @@
       "name": "doctor-foreign-image",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "observer": "doctor",
@@ -691,7 +733,8 @@
       "name": "embedded-assets-exact",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "compare": "packaged-reference"
@@ -704,7 +747,8 @@
       "name": "asset-count-exact",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "asset_bound": "count",
@@ -718,7 +762,8 @@
       "name": "asset-count-first-excess",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "asset_bound": "count",
@@ -732,7 +777,8 @@
       "name": "asset-bytes-exact",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "asset_bound": "bytes",
@@ -746,7 +792,8 @@
       "name": "asset-bytes-first-excess",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "asset_bound": "bytes",

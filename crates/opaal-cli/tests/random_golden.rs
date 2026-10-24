@@ -43,11 +43,7 @@ scope = "project.root"
 required_enforcement = "enforced"
 "#,
     );
-    let platform = if cfg!(target_os = "macos") {
-        "aarch64-apple-darwin"
-    } else {
-        "x86_64-unknown-linux-gnu"
-    };
+    let platform = support::host_platform_triple();
     work.write(
         "tools.toml",
         format!(
@@ -676,7 +672,7 @@ task sample = sample
             r#"schema_version = 1
 project = "sample"
 environment = "ci"
-platform = "x86_64-unknown-linux-gnu"
+platform = "{}"
 [child_environment]
 inherit = []
 {variables}
@@ -687,6 +683,7 @@ path = {{ encoding = "base64url-nopad", platform = "unix", value = "{}" }}
 version = "2.50.0"
 digest = "{}"
 "#,
+            support::host_platform_triple(),
             opaal_runtime::workflow::native_path(&tool)["value"]
                 .as_str()
                 .unwrap(),

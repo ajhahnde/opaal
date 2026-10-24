@@ -46,7 +46,6 @@ const ASSETS: &[(&str, &[u8])] = &[
     asset!("decode/cases.json"),
     asset!("operations/cases.json"),
     asset!("live/cases.json"),
-    asset!("docker-cli-profile.json"),
 ];
 const OFFLINE: &[u8] = include_bytes!("../../../../examples/image-check/offline.toml");
 const LIVE: &str = include_str!("../../../../examples/image-check/live.template.toml");
@@ -89,10 +88,23 @@ fn prepared_assets(
     request: &InitProjectRequest,
     destination: &Path,
 ) -> Result<Vec<(String, Vec<u8>)>, ProjectFrontendError> {
+    let (profile_name, profile_bytes) = if host_platform_triple() == "aarch64-unknown-linux-gnu" {
+        (
+            "docker-cli-profile-aarch64.json",
+            include_bytes!("../../../../examples/image-check/docker-cli-profile-aarch64.json")
+                .as_slice(),
+        )
+    } else {
+        (
+            "docker-cli-profile.json",
+            include_bytes!("../../../../examples/image-check/docker-cli-profile.json").as_slice(),
+        )
+    };
     let mut assets = ASSETS
         .iter()
         .map(|(name, bytes)| ((*name).to_owned(), bytes.to_vec()))
         .collect::<Vec<_>>();
+    assets.push((profile_name.to_owned(), profile_bytes.to_vec()));
     let (manifest, authority, lock) = match request.environment.as_str() {
         "offline"
             if request.docker.is_none()
@@ -108,6 +120,10 @@ fn prepared_assets(
                     include_bytes!("../../../../examples/image-check/offline-tools-linux.toml")
                         .as_slice()
                 }
+                "aarch64-unknown-linux-gnu" => include_bytes!(
+                    "../../../../examples/image-check/offline-tools-linux-aarch64.toml"
+                )
+                .as_slice(),
                 _ => return Err(setup_error(false)),
             };
             (
@@ -116,7 +132,11 @@ fn prepared_assets(
                 lock.to_vec(),
             )
         }
-        "ci" if host_platform_triple() == "x86_64-unknown-linux-gnu" => {
+        "ci" if matches!(
+            host_platform_triple(),
+            "x86_64-unknown-linux-gnu" | "aarch64-unknown-linux-gnu"
+        ) =>
+        {
             let executable = request
                 .docker
                 .as_deref()
@@ -150,6 +170,7 @@ fn prepared_assets(
                     .expect("native path encoding"),
             );
             let lock = LIVE_TOOLS
+                .replace("x86_64-unknown-linux-gnu", host_platform_triple())
                 .replace(
                     "@DOCKER@",
                     native_path(&executable)["value"]
@@ -213,18 +234,31 @@ fn init_repository_project_with_writer(
         .map(|(name, bytes)| ((*name).to_owned(), bytes.to_vec()))
         .collect::<Vec<_>>();
     let (manifest, authority, lock) = match (environment, host_platform_triple(), tool) {
-        ("offline", host @ ("aarch64-apple-darwin" | "x86_64-unknown-linux-gnu"), None) => (
+        (
+            "offline",
+            host @ ("aarch64-apple-darwin"
+            | "x86_64-unknown-linux-gnu"
+            | "aarch64-unknown-linux-gnu"),
+            None,
+        ) => (
             include_bytes!("../../../../examples/repository-check/offline.toml").to_vec(),
             include_bytes!("../../../../examples/repository-check/offline-authority.toml").to_vec(),
             if host == "aarch64-apple-darwin" {
                 include_bytes!("../../../../examples/repository-check/offline-tools-macos.toml")
                     .to_vec()
+            } else if host == "aarch64-unknown-linux-gnu" {
+                include_bytes!(
+                    "../../../../examples/repository-check/offline-tools-linux-aarch64.toml"
+                )
+                .to_vec()
             } else {
                 include_bytes!("../../../../examples/repository-check/offline-tools-linux.toml")
                     .to_vec()
             },
         ),
-        ("ci", "x86_64-unknown-linux-gnu", Some(tool)) if tool.is_absolute() => {
+        ("ci", "x86_64-unknown-linux-gnu" | "aarch64-unknown-linux-gnu", Some(tool))
+            if tool.is_absolute() =>
+        {
             let tool = setup_path(tool)?;
             let (_, file) =
                 open_absolute_file_with_parent_nofollow(&tool).map_err(|_| setup_error(false))?;
@@ -237,6 +271,7 @@ fn init_repository_project_with_writer(
             process::validate_native_image(&bytes, &|| Ok(())).map_err(|_| setup_error(false))?;
             let lock =
                 include_str!("../../../../examples/repository-check/live-tools.template.toml")
+                    .replace("x86_64-unknown-linux-gnu", host_platform_triple())
                     .replace(
                         "@TOOL@",
                         native_path(&tool)["value"]

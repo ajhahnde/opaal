@@ -14,9 +14,9 @@ else:
 
 FIXTURES = "tests/golden/controlled-external-tools"
 CASE_MANIFESTS = {
-    "image": (115, "20379050cdda8c7e4ad1a9bfdac3d1261fcd4d15f46b371f6764ad46b205eed4"),
-    "prepare": (49, "18e0080599832f73e99534dddac612b905f3a2ab14bf2c2bdf069ec6a0cf9e32"),
-    "evidence": (130, "04e86885c16d4a3c80758529d0622f83bc06d6c5efe7766006bb4c9bcb1bc10f"),
+    "image": (115, "03bb3cc4f8ea719206db79f4475dd12d530b5df572e2a1179d77f0aabc1c5686"),
+    "prepare": (49, "c3e1d0bfb4011f460ea11195f0ee5a9f89c02169ff37212b75fc2cf2ffd4b834"),
+    "evidence": (130, "8ed76a51dd06c9986a7a815ca815bca30c5ae8ca5ddf5e92f9a49e380886ea38"),
 }
 
 

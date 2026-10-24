@@ -35,6 +35,7 @@ FRONTEND_CASES = ("image-bytes-exact", "image-bytes-first-excess", "source-symli
                   "source-fifo", "source-directory")
 LAUNCH_FAILURE_CASES = ("failed-spawn", "missing-interpreter")
 FINISH_CASES = ("process-finish-failure", "process-cancel-and-finish-failure")
+LINUX_HOSTS = {"x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"}
 
 
 def finish_launch_census(calls, pid):
@@ -150,7 +151,9 @@ def acquisition_trace_observations(trace):
             expected, seals = [-1], 1
         else:
             expected, seals = [65536, 65536, 0], 1
-        require(reads == expected, "acquisition snapshot read boundary differs: " + name)
+        # AArch64 also uses pread64 for the ELF and program headers.
+        headers = name.startswith(("elf-validation-", "before-launch-")) and reads == expected + [64, 56]
+        require(reads == expected or headers, "acquisition snapshot read boundary differs: " + name)
         for operation in ("F_ADD_SEALS", "F_GET_SEALS"):
             calls = [line for line in block.splitlines() if "/memfd:opaal-native" in line and operation in line]
             require(len(calls) == seals and all(" = -1 " not in line for line in calls),
@@ -191,9 +194,11 @@ def permission_cases(test_binary, inputs, output, cases, host):
                        ("original-noexec-mount", "image_original_noexec_mount_refuses")):
         work = output / name
         work.mkdir()
-        environment = {"PATH": "/usr/bin:/bin"}
+        environment = {"PATH": "/usr/sbin:/usr/bin:/sbin:/bin"}
         arguments = [test_binary, test, "--exact", "--ignored", "--nocapture", "--test-threads=1"]
-        if name == "original-file-capability":
+        if name == "original-acl-denies-effective-user" and os.geteuid() == 0:
+            arguments = ["/usr/bin/setpriv", "--bounding-set=-dac_override,-dac_read_search", *arguments]
+        elif name == "original-file-capability":
             arguments = ["/usr/bin/unshare", "--user", "--map-root-user", *arguments]
         elif name == "original-noexec-mount":
             mount = work / "noexec"
@@ -208,6 +213,16 @@ def permission_cases(test_binary, inputs, output, cases, host):
         records.extend(injected_results(completed, cases, [name], host, inventory,
                                         marker=b"OPAAL_IMAGE_CASE ", label="original permission"))
     return records
+
+
+def format_image(row, host):
+    image = bytearray.fromhex(row["input"]["image_hex"])
+    if len(image) >= 20:
+        machine = 183 if host == "aarch64-unknown-linux-gnu" else 62
+        if row["name"] == "foreign-machine":
+            machine = 62 if machine == 183 else 183
+        image[18:20] = machine.to_bytes(2, "little")
+    return bytes(image)
 
 
 def snapshot_fault_case(test_binary, tracer, work, name, injection):
@@ -273,7 +288,7 @@ def posix_image_cases(test_binary, inputs, output, cases, host):
     digest = hashlib.sha256(test_binary.read_bytes()).hexdigest()
     arguments = [test_binary, "native_frozen_", "--nocapture", "--test-threads=1"]
     trace = output / "posix.execve"
-    if host == "x86_64-unknown-linux-gnu":
+    if host in LINUX_HOSTS:
         tracer = shutil.which("strace")
         require(tracer is not None, "POSIX image qualification requires strace")
         arguments = [tracer, "-f", "-qq", "-s", "4096", "-e", "trace=execve,execveat",
@@ -287,7 +302,7 @@ def posix_image_cases(test_binary, inputs, output, cases, host):
                                "sha256:" + hashlib.sha256((inputs / "image-cases.json").read_bytes()).hexdigest(),
                                marker=b"OPAAL_IMAGE_CASE ", label="POSIX image")
     metadata = {"binary_sha256": digest, "scope": "POSIX snapshot/process adapter and compiled C observers"}
-    if host == "x86_64-unknown-linux-gnu":
+    if host in LINUX_HOSTS:
         images = [json.loads(line.partition(b"OPAAL_NATIVE_IMAGE ")[2])
                   for line in completed.stdout.splitlines() if b"OPAAL_NATIVE_IMAGE " in line]
         require(len(images) == 3 and {row.get("kind") for row in images} == {"static", "dynamic", "lifetime"}
@@ -324,13 +339,14 @@ def qualify_images(binary, inputs, output, cases, *, test_binary=None, process_t
         supported = (spec["kind"] in {"format", "source-open"}
                      or (spec["kind"] == "request-bound" and spec["subject"] == "image-bytes"))
         # CLI preparation admits Linux images only; macOS format validation needs an API observer.
-        if host != "x86_64-unknown-linux-gnu" or not supported:
+        if host not in LINUX_HOSTS or not supported:
             pending.append(row["name"])
             continue
         work = output / row["name"]
         work.mkdir()
         tool = work / "image"
-        tool.write_bytes(bytes.fromhex(spec["image_hex"]) if spec["kind"] == "format" else minimal_elf())
+        image = format_image(row, host) if spec["kind"] == "format" else minimal_elf()
+        tool.write_bytes(image)
         if spec["kind"] == "request-bound":
             with tool.open("r+b") as handle:
                 handle.truncate(spec["value"])
@@ -383,7 +399,7 @@ def qualify_images(binary, inputs, output, cases, *, test_binary=None, process_t
             else:
                 pending.remove(row["name"])
                 observations.append({**row, "route": "runtime-api"})
-            image = bytes.fromhex(next(case for case in cases if case["name"] == row["name"])["input"]["image_hex"])
+            image = format_image(next(case for case in cases if case["name"] == row["name"]), host)
             image_hashes[row["name"]] = hashlib.sha256(image).hexdigest()
         require(hashlib.sha256(test_binary.read_bytes()).hexdigest() == digest, "image API test binary changed")
         api = {"binary_sha256": digest, "scope": "public runtime structural image validation; no snapshot or launch"}
@@ -414,7 +430,7 @@ def qualify_images(binary, inputs, output, cases, *, test_binary=None, process_t
         arguments = [process_test_binary, "native_frozen_", "--nocapture", "--test-threads=1"]
         tracer = None
         trace = output / "acquisition.syscalls"
-        if host == "x86_64-unknown-linux-gnu":
+        if host in LINUX_HOSTS:
             tracer = shutil.which("strace")
             require(tracer is not None, "runtime acquisition qualification requires strace")
             arguments = [tracer, "-f", "-qq", "-yy", "-s", "256", "-e",
@@ -468,7 +484,7 @@ def qualify_images(binary, inputs, output, cases, *, test_binary=None, process_t
             pending.remove(row["name"])
             observations.append({**row, "route": "posix-adapter-with-compiled-native-observer"})
     finish = None
-    if host == "x86_64-unknown-linux-gnu" and all(name in pending for name in FINISH_CASES):
+    if host in LINUX_HOSTS and all(name in pending for name in FINISH_CASES):
         records, finish = finish_cases(binary, inputs, output / "finish")
         for row in records:
             pending.remove(row["name"])

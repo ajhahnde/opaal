@@ -1291,7 +1291,7 @@
     },
     {
       "path": "ci/check_product.py",
-      "sha256": "971b895026bf1548175c57b01a7a0e8aa726b76aff939fb53e0b95efa9a592ac",
+      "sha256": "a8ae8c46e50d84bfd86e8bb5e31488594dbee2fe03366008f1768cdfd4920933",
       "source_markers": 15,
       "constructors_or_assertions": [
         "command_json",
@@ -1361,7 +1361,7 @@
     },
     {
       "path": "ci/package_controlled_native_tools.py",
-      "sha256": "74a64ffb0a4d02c8362dce0594ea04a42f014726f12f1c0f4c86597e3535c1bc",
+      "sha256": "e8a7b8fcc68530b475cfa2f134b3040569161c82da942a1ecc67b6d91d79a673",
       "source_markers": 4,
       "constructors_or_assertions": [
         "check_cases",
@@ -1413,7 +1413,7 @@
     },
     {
       "path": "ci/package_release.py",
-      "sha256": "e2074a48b39506028b4a401ed342fd0685ab2b868da6d3bbc0bf35266b5b686a",
+      "sha256": "48b7be4efe00e5121fd508e2734939f70a2c5aa46931ff73f877253a2da32ce2",
       "source_markers": 2,
       "constructors_or_assertions": [
         "main",
@@ -1448,7 +1448,7 @@
     },
     {
       "path": "ci/qualify_controlled_native_tools.py",
-      "sha256": "a286d3bdae6afd9a6aea44b02812f5934ec9c1ad286f6c0ef75f854d1761e2f7",
+      "sha256": "2ee758e606d0914d1c0211ad4ce265a91eb45ce48e10f6f0831f07b9baea9b6e",
       "source_markers": 27,
       "constructors_or_assertions": [
         "accepted",
@@ -1471,7 +1471,7 @@
     },
     {
       "path": "ci/qualify_data_processing.py",
-      "sha256": "6bcebc20402e707a598c1c433156313e93768ea8407deee2646fcb3bc8a52627",
+      "sha256": "c91be623bb444f7b94f57d5747881ba806daf020f1b3150f549b12b501641e56",
       "source_markers": 23,
       "constructors_or_assertions": [
         "command",
@@ -1491,7 +1491,7 @@
     },
     {
       "path": "ci/qualify_docker_image_checks.py",
-      "sha256": "0f449ed06f977681639749adae670cae337d42c15a7775f684b99bcbcc5c7ae5",
+      "sha256": "4829df5d06d744e2deb04196ba2e38179d3439566b67267efab5e2d64d8fdca8",
       "source_markers": 26,
       "constructors_or_assertions": [
         "accepted_run",
@@ -1516,7 +1516,7 @@
     },
     {
       "path": "ci/qualify_numeric_operations.py",
-      "sha256": "aee80cc4f0b783a603583ed9adc983c32742f5f73999ddf1ba1d8b87bd952bda",
+      "sha256": "298bf5ac04df462563c7012c60ebe1c78ecbd8f11582d2003d0657194c5b8e3b",
       "source_markers": 10,
       "constructors_or_assertions": [
         "main",
@@ -1529,7 +1529,7 @@
     },
     {
       "path": "ci/qualify_native_evidence.py",
-      "sha256": "86499d1f1b8ff38999da1237a92a329bf4bdb86f34870c7a24c6a2b969cfbfa3",
+      "sha256": "98429b0fdf0c60140b3fef380a55ff85e918fa9ef1b796efdb26bed57a3f03b0",
       "source_markers": 23,
       "constructors_or_assertions": [
         "acceptance_case",
@@ -1555,12 +1555,13 @@
     },
     {
       "path": "ci/qualify_native_images.py",
-      "sha256": "09ae91754d009d78e8f94d538938be437e07f373da787e530284a65f1a0d7449",
-      "source_markers": 8,
+      "sha256": "02203e519a64d2ffc306af824f36bc7f14410019e8ce260b380a078e05040bda",
+      "source_markers": 9,
       "constructors_or_assertions": [
         "acquisition_trace_observations",
         "finish_cases",
         "finish_launch_census",
+        "format_image",
         "permission_cases",
         "posix_image_cases",
         "qualify_images",
@@ -1573,7 +1574,7 @@
     },
     {
       "path": "ci/qualify_native_preparation.py",
-      "sha256": "532e3fede2dad6ae5cfab76d77dfb113fd260455cb81211c14569f5d9f74f5dd",
+      "sha256": "fad9ef4f6ab61fe86be47e288a440ed654e79b5aba3faed56abc7257fb3f6d82",
       "source_markers": 10,
       "constructors_or_assertions": [
         "asset_observations",
@@ -1633,7 +1634,7 @@
     },
     {
       "path": "ci/qualify_random_failures.py",
-      "sha256": "8f8a694cc7c2e27c05f2b67b8bf257e857959f073acd75ed45b6946fa37acd21",
+      "sha256": "8313469fa0f11a6cadc8d37cbcbea0aa49f8e533bd015ffe998b213304f35755",
       "source_markers": 13,
       "constructors_or_assertions": [
         "children",
@@ -1652,7 +1653,7 @@
     },
     {
       "path": "ci/qualify_random_values.py",
-      "sha256": "f3154e75d40fc02ba4476e78fda02175029c51d018339940229f9eeadbeeee03",
+      "sha256": "7700510be076c727c4af37cb015927b4e1966fbf060c4c78ce295d1602db2192",
       "source_markers": 10,
       "constructors_or_assertions": [
         "byte_count",
@@ -1667,7 +1668,7 @@
     },
     {
       "path": "ci/qualify_source_formatting.py",
-      "sha256": "32937d0c61c895868089b54e2a45dd3efaf1a30b4ec313d428eb84c719bb4c48",
+      "sha256": "48e7679c60067df152dc4188874aab802a5ba847093a96e1d5538421aecd75c4",
       "source_markers": 69,
       "constructors_or_assertions": [
         "audit",
@@ -1693,7 +1694,7 @@
     },
     {
       "path": "ci/qualify_standard_input_output.py",
-      "sha256": "75e2b59d5699fb6ba5f103992dcde6d72f5e9b94ee185a45418e271dba9bb46e",
+      "sha256": "98dc4a127c6dac27626cd08bd5e21fe4e4a122478927617f2509e2d214d2e523",
       "source_markers": 14,
       "constructors_or_assertions": [
         "assessment",
@@ -1708,7 +1709,7 @@
     },
     {
       "path": "ci/qualify_standard_io_failures.py",
-      "sha256": "d417168cb5cfc7821ae11de00828d43947c378c184971309bfd260e35adcd3a5",
+      "sha256": "956e6b761cf046520b016b8c0376c8eebea6c88a611b1ff197cc437c5ad13412",
       "source_markers": 18,
       "constructors_or_assertions": [
         "apply",
@@ -1779,14 +1780,15 @@
     },
     {
       "path": "ci/tests/test_check_product.py",
-      "sha256": "3fde5c33b6eeda2caab1bf07e0e4b7d094028f743d24b2be5a8c9fe46b0bdc12",
-      "source_markers": 24,
+      "sha256": "22fc79a94187f24c628f0f817beebbf03c9f8d9c539df74259c8894afbd322a0",
+      "source_markers": 25,
       "constructors_or_assertions": [
         "runner",
         "setUp",
         "tearDown",
         "test_accepts_exact_current_product_and_release_candidate",
         "test_allows_literal_dollars_and_the_classified_negative_fixture",
+        "test_arm_test_binary_collection_uses_the_manifest_path",
         "test_changelog_requires_unreleased_and_current_release_sections",
         "test_rejects_applying_retained_host_budget_to_shared_macos_ci",
         "test_rejects_removed_language_syntax_and_handlers",
@@ -1821,7 +1823,7 @@
     },
     {
       "path": "ci/tests/test_controlled_native_tools.py",
-      "sha256": "804a4ce8b6b8bd426554899a4f1283123144d23a4fd73f44073bca106ad2c4cb",
+      "sha256": "436dd259e763046002adf02ad44f0401fcfe31aea9058b697d5f8831172b21d2",
       "source_markers": 50,
       "constructors_or_assertions": [
         "completed",
@@ -1911,7 +1913,7 @@
     },
     {
       "path": "ci/tests/test_docker_image_checks.py",
-      "sha256": "1f0647f4669be1c88cf13cd7fdccb69d92cb65fb751aa53f13af04463a671bbb",
+      "sha256": "eeebebf84e2ee44cbee7821dfbfceec728018977cd286d0b95cc4e42e25953c9",
       "source_markers": 10,
       "constructors_or_assertions": [
         "run",
@@ -1930,7 +1932,7 @@
     },
     {
       "path": "ci/tests/test_package_release.py",
-      "sha256": "7a830ab43ae2d8302d9f867f75f613b8986fad4c67c219be50d7c14f53a4b6ff",
+      "sha256": "4daf37447dc861af4e3a9d4b8dea0550af6980161fbbd3eed3e0ad7be0a735eb",
       "source_markers": 2,
       "constructors_or_assertions": [
         "test_archive_contains_exact_programs_and_checksum",
@@ -2110,7 +2112,7 @@
     },
     {
       "path": "crates/opaal-cli/src/main.rs",
-      "sha256": "0b280fc0fefa0db047a915c875adc9890f44e20bbdcbc54e99924bb844778647",
+      "sha256": "db7efa71e3cf5beb621bba6e362bd91d99e17b6375ac854b4263f475be88ca59",
       "source_markers": 5,
       "constructors_or_assertions": [
         "module constants/imports",
@@ -2122,7 +2124,7 @@
     },
     {
       "path": "crates/opaal-cli/src/project.rs",
-      "sha256": "20650d77a241688679083d76e8d53dc9c286235f3d6b4128f5cbb433ec4bbd48",
+      "sha256": "e6957476f5d879de8d2c0df84c7a438b3ab021598c223b5479c07e779db5b841",
       "source_markers": 7,
       "constructors_or_assertions": [
         "create_journal",
@@ -2136,7 +2138,7 @@
     },
     {
       "path": "crates/opaal-cli/src/project/finish_observers.rs",
-      "sha256": "d5e6aed7621d04f1e866482bae566894b6c2d9b573797bbfb49258b922edc072",
+      "sha256": "5c1c8673d20b5f80e3c0292f9a0eed3ef53d62f1f4f34f763a70a6e4195bc7bf",
       "source_markers": 1,
       "constructors_or_assertions": [
         "native_frozen_finish_evidence_cases"
@@ -2147,7 +2149,7 @@
     },
     {
       "path": "crates/opaal-cli/src/project/preparation.rs",
-      "sha256": "75d3c622cda509607fdb47556dae1ba406996fc56c08bf4cf40c0076ea797178",
+      "sha256": "5375c7bf7182beaf078f9ecbd56989a3f960712c526433446710fef1b334c152",
       "source_markers": 17,
       "constructors_or_assertions": [
         "concurrent_asset_collision_is_retained_without_overwrite",
@@ -2265,7 +2267,7 @@
     },
     {
       "path": "crates/opaal-cli/tests/controlled_native_tools.rs",
-      "sha256": "45cfff737bd090cc1b131034e155a58dd92e1313e5fd39a659da2a74db8d3c21",
+      "sha256": "e2ea43f401865ad422f3f44b10bda40af343202e4f9fa8d4f1d7c8fa45016a2c",
       "source_markers": 22,
       "constructors_or_assertions": [
         "acceptance_bound_input_is_checked_at_use_after_execution_has_begun",
@@ -2341,7 +2343,7 @@
     },
     {
       "path": "crates/opaal-cli/tests/docker_image_checks.rs",
-      "sha256": "a98b398d68571b8c76109de8643130402e8111b82d6b7d1ac2aebe9d4d40de72",
+      "sha256": "2ff25449b1965650cd923f1f170e89d0219978e22e0727f134dde75c9a1decb4",
       "source_markers": 7,
       "constructors_or_assertions": [
         "changed_bound_target_facts_refuse_before_process_or_evidence_creation",
@@ -2519,7 +2521,7 @@
     },
     {
       "path": "crates/opaal-cli/tests/io_golden.rs",
-      "sha256": "bfef3e6333886411453fd20c8395ffbfc6463c4bc8708cbd360b5166cfdd65d6",
+      "sha256": "7685742b3fffd2adaa7e674ab69cb2886a86a81bb3cf152ece8d688c26d44131",
       "source_markers": 13,
       "constructors_or_assertions": [
         "a_closed_stdout_is_catchable_and_leaves_stderr_and_entropy_available",
@@ -2534,7 +2536,7 @@
     },
     {
       "path": "crates/opaal-cli/tests/io_receipt_native.rs",
-      "sha256": "66fcf44531b3c4e4326498b8e9cb924351efe1174540289c354a9fa519bc6258",
+      "sha256": "03ecdc8a203c51afb8f3912ed3ad2414cee4ac3179ad1352cb8c491cca337796",
       "source_markers": 1,
       "constructors_or_assertions": [
         "prepare"
@@ -2556,7 +2558,7 @@
     },
     {
       "path": "crates/opaal-cli/tests/native_ci_outcomes.rs",
-      "sha256": "8af2008682191731876c9ea957efab3974ce054a3eb9258069d6c621aa13cbd8",
+      "sha256": "d264638df780cd62ed23b4a998293f85dc461f98f66f3e5b8cb35434e9243d82",
       "source_markers": 4,
       "constructors_or_assertions": [
         "project",
@@ -2568,7 +2570,7 @@
     },
     {
       "path": "crates/opaal-cli/tests/numeric_golden.rs",
-      "sha256": "095c6042e82baa5ec8198ff84b96c1f0b5e4f9ed2536519edefbd88e2c09a7e5",
+      "sha256": "2b999fafc52861560b6fb47ba8415a6c456d98893081a7c75e28bbcaf3d9bba6",
       "source_markers": 20,
       "constructors_or_assertions": [
         "interactive_report_and_help_reuse_imports_without_executing_domain_errors",
@@ -2605,7 +2607,7 @@
     },
     {
       "path": "crates/opaal-cli/tests/project_doctor.rs",
-      "sha256": "2ee1c13ce5c61465e7946468a83fe1c4e6ed65527cf3f5907f90a7b3df74cc1d",
+      "sha256": "0536de28c5e9b1d7a88986390f3b9dcb567d2d6c5ac49d1103d633a8feef45fb",
       "source_markers": 4,
       "constructors_or_assertions": [
         "cli_does_not_read_streamed_stdin_or_execute_initializers",
@@ -2641,7 +2643,7 @@
     },
     {
       "path": "crates/opaal-cli/tests/project_preparation.rs",
-      "sha256": "8387b8d8cf84ad9cfed6bcb8234999fb56add6ceed7421da4020edb53d6aef58",
+      "sha256": "ae13bd19c5c005f8a45513062c43061413e8736c674fb69428ac3e8186bbae61",
       "source_markers": 4,
       "constructors_or_assertions": [
         "fixed_offline_assets_match_maintained_sources_and_private_modes"
@@ -2663,7 +2665,7 @@
     },
     {
       "path": "crates/opaal-cli/tests/random_golden.rs",
-      "sha256": "4382d8607f29d2dda62f9b072dd4a1c3a901d222b1fda9be1c27f336d12747f8",
+      "sha256": "dbc9cce0ac1f1a65bd0dbaa18b6ac40d26e2c7a91fd57b5c283cfb3834df1a9e",
       "source_markers": 26,
       "constructors_or_assertions": [
         "controlled_fixture",
@@ -2681,7 +2683,7 @@
     },
     {
       "path": "crates/opaal-cli/tests/random_native.rs",
-      "sha256": "3daa82312f738b1d15ddd63bdeea398c3854db8d6ad2cf38ea88aa27df786f33",
+      "sha256": "9a61e0d6a121dc18d200e3ee4f3aded582bca80efbd0a2c86e1e82149ff1cb17",
       "source_markers": 1,
       "constructors_or_assertions": [
         "qualify"
@@ -2704,7 +2706,7 @@
     },
     {
       "path": "crates/opaal-cli/tests/support/data_processing.rs",
-      "sha256": "31c1e91ee33a3d0060c24cf79c6eb49eb4dd625cc52505f9439c64ce3180224b",
+      "sha256": "69af8faf437a800e1b5d9073ca3b0e8a7ebe69685adf0f01a348b437f0b49350",
       "source_markers": 5,
       "constructors_or_assertions": [
         "new"
@@ -2892,7 +2894,7 @@
     },
     {
       "path": "crates/opaal-lsp/tests/server_e2e.rs",
-      "sha256": "06d693dce5a66bcd9aec8978a10ce968da129e8325dbd922a65c21d36f599c94",
+      "sha256": "ccb23235015bcd94e438caa7f1bf51f4cbdd420d41b773b180e6cf2dce3df82f",
       "source_markers": 26,
       "constructors_or_assertions": [
         "analysis_never_executes_effectful_source",
@@ -2979,7 +2981,7 @@
     },
     {
       "path": "crates/opaal-platform-posix/src/operational.rs",
-      "sha256": "14169e5216d42f6ccb5a75d5ad101da7042e75ca37014a4e3d8206b9304bfb8e",
+      "sha256": "681389388aec3dd800d04dae789382ed22ab22394a79f74bee89bad8a93342c5",
       "source_markers": 1,
       "constructors_or_assertions": [
         "write_atomic"
@@ -2990,7 +2992,7 @@
     },
     {
       "path": "crates/opaal-platform-posix/tests/controlled_native_tools.rs",
-      "sha256": "5f5b5f0407948f593c1a0210a8c72a7c44080c5ec5935f3b670f1c91dbc51d15",
+      "sha256": "00b48dffb01fcf883147facb683f2b0d22951543781bc9ee6e93cd0bdeb56ab3",
       "source_markers": 0,
       "constructors_or_assertions": [
         "drop",
@@ -3119,7 +3121,7 @@
     },
     {
       "path": "crates/opaal-platform-posix/tests/operational_adapters.rs",
-      "sha256": "acf58d4bcbde8bdf4913d1b72896e53abf014be87caf0986dad8d09742a83445",
+      "sha256": "3114680617c0d0dcddc0dd21eb20ce06c9507914c99bb6974dbaf5dba8cb00cf",
       "source_markers": 0,
       "constructors_or_assertions": [
         "ca_only_tls_validates_hostname_and_returns_redirect_status_without_following",
@@ -3671,7 +3673,7 @@
     },
     {
       "path": "crates/opaal-runtime/tests/controlled_native_tools.rs",
-      "sha256": "c80a9df94ae2ea40f8074669476f4b4630141f6d855fce88d88971edaf8bcae2",
+      "sha256": "af6142b4ff6bfed5c558a78f119e9f91bfe8e160cd04fd80344f68084fe3a1db",
       "source_markers": 2,
       "constructors_or_assertions": [
         "is_executable",
@@ -3842,7 +3844,7 @@
     },
     {
       "path": "crates/opaal-runtime/tests/docker_controlled.rs",
-      "sha256": "db7e31e74429f670ea00188deb8b763f3641989d8f7779ef1a716d99177e6b82",
+      "sha256": "4b7e02305707f1fa8299c209996f02fe45013b3dd09ec596eecb6a41e598397b",
       "source_markers": 3,
       "constructors_or_assertions": [
         "foreign_stale_and_absent_target_carriers_do_no_process_work",
@@ -4566,7 +4568,7 @@
     },
     {
       "path": "crates/opaal-runtime/tests/workflow_artifacts.rs",
-      "sha256": "cfdaae221fcebdb46cdb5d97c50483ef5181f94f885f20d3f9e4b30b04f12bc9",
+      "sha256": "89157c42cd7b71832510488e12e566d113426ea5ca1722698cfb029ad499651f",
       "source_markers": 8,
       "constructors_or_assertions": [
         "journal_chain_projects_complete_redacted_evidence",

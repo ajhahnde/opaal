@@ -150,7 +150,15 @@ class NativeReferenceTests(unittest.TestCase):
             blocks.append(block)
         trace = ''.join(blocks)
         self.assertEqual(set(acquisition_trace_observations(trace)), set(ACQUISITION_CASES))
+        header_read = '2 pread64(4</memfd:opaal-native>(deleted), "header", 64, 0) = 64\n'
+        program_read = '2 pread64(4</memfd:opaal-native>(deleted), "program", 56, 64) = 56\n'
+        arm_trace = trace.replace(blocks[5], blocks[5] + header_read + program_read)
+        self.assertEqual(acquisition_trace_observations(arm_trace)['elf-validation-requested'],
+                         {'snapshot_read_results': [65536, 65536, 0, 64, 56], 'verified_seals': True})
         for fault in (trace.replace(blocks[1], ''), trace + blocks[1],
+                      arm_trace.replace(' = 64\n', ' = 17\n'),
+                      arm_trace.replace(program_read, ''),
+                      arm_trace + header_read + program_read,
                       trace.replace(' = 65536', ' = 17', 1),
                       trace.replace('F_ADD_SEALS', 'F_GETFD', 1),
                       trace.replace('F_SEAL_WRITE', 'F_SEAL_EXEC', 1),
@@ -270,11 +278,12 @@ class NativeReferenceTests(unittest.TestCase):
         inventory = "sha256:" + hashlib.sha256((ROOT / FIXTURES / "image-cases.json").read_bytes()).hexdigest()
         host = "x86_64-unknown-linux-gnu"
         by_name = {row["name"]: row for row in cases}
-        for fault in (None, "failed", "missing", "wrong-host", "wrong-result"):
+        for uid, fault in ((uid, fault) for uid in (0, 1000)
+                           for fault in (None, "failed", "missing", "wrong-host", "wrong-result")):
             with tempfile.TemporaryDirectory() as temporary:
                 def run(arguments, cwd, environment):
                     name = cwd.name
-                    self.assertEqual(environment["PATH"], "/usr/bin:/bin")
+                    self.assertEqual(environment["PATH"], "/usr/sbin:/usr/bin:/sbin:/bin")
                     if name == "original-file-capability":
                         self.assertEqual(arguments[:3], ["/usr/bin/unshare", "--user", "--map-root-user"])
                     elif name == "original-noexec-mount":
@@ -282,6 +291,9 @@ class NativeReferenceTests(unittest.TestCase):
                         self.assertEqual(environment["OPAAL_NATIVE_NOEXEC_ROOT"], str(cwd / "noexec"))
                         self.assertTrue((cwd / "noexec").is_dir())
                         self.assertIn('mount -t tmpfs -o noexec tmpfs "$OPAAL_NATIVE_NOEXEC_ROOT"', arguments[6])
+                    elif uid == 0:
+                        self.assertEqual(arguments[:2], ["/usr/bin/setpriv", "--bounding-set=-dac_override,-dac_read_search"])
+                        self.assertEqual(arguments[2], Path("test"))
                     else:
                         self.assertEqual(arguments[0], Path("test"))
                     row = {"name": name, "observed": {} if fault == "wrong-result" else by_name[name]["expected"],
@@ -289,7 +301,9 @@ class NativeReferenceTests(unittest.TestCase):
                     stdout = b"" if fault == "missing" else b"OPAAL_IMAGE_CASE " + canonical(row) + b"\n"
                     return subprocess.CompletedProcess(arguments, int(fault == "failed"), stdout, b"")
 
-                with self.subTest(fault=fault), patch("ci.qualify_native_images.command", side_effect=run):
+                with self.subTest(uid=uid, fault=fault), \
+                        patch("ci.qualify_native_images.os.geteuid", return_value=uid), \
+                        patch("ci.qualify_native_images.command", side_effect=run):
                     arguments = (Path("test"), ROOT / FIXTURES, Path(temporary), cases, host)
                     if fault:
                         with self.assertRaises(QualificationError):

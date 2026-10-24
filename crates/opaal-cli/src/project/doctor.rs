@@ -263,7 +263,10 @@ pub fn doctor_project(
         }
     }
     if !manifest.targets().is_empty() {
-        if host_platform_triple() != "x86_64-unknown-linux-gnu" {
+        if !matches!(
+            host_platform_triple(),
+            "x86_64-unknown-linux-gnu" | "aarch64-unknown-linux-gnu"
+        ) {
             findings.push(finding(
                 "DOCTOR008",
                 "host",
@@ -422,8 +425,10 @@ pub fn doctor_project(
                         match project.action_effects(action) {
                             Ok(effects) => {
                                 for effect in effects {
-                                    if host_platform_triple() != "x86_64-unknown-linux-gnu"
-                                        && effect.capability() == "process.run"
+                                    if !matches!(
+                                        host_platform_triple(),
+                                        "x86_64-unknown-linux-gnu" | "aarch64-unknown-linux-gnu"
+                                    ) && effect.capability() == "process.run"
                                         && effect
                                             .scope()
                                             .strip_prefix("tool.")

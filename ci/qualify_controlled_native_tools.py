@@ -260,7 +260,7 @@ def qualify(binary, inputs, output, *, checker=None, fault_checker=None, prepara
     changed = policy_change(binary, offline, next(row for row in rows if row["name"] == "apache-license"))
     timings = {"offline_setup": setup_timing, "saved": repeated(binary, offline, rows[0])}
     if fault_checker or checker:
-        require(platform.system() == "Linux" and platform.machine() == "x86_64", "live host unsupported")
+        require(platform.system() == "Linux" and platform.machine() in {"x86_64", "aarch64"}, "live host unsupported")
     if fault_checker:
         work = prepare(binary, reference, output, "synthetic", fault_checker)
         for row in rows:
@@ -336,7 +336,8 @@ def qualify_archive(archive, fixtures, output, source, target, **options):
     require(fixtures is not None and source is not None and target in PLATFORMS,
             "archive mode requires --fixtures, --expected-source and --platform")
     require((platform.system(), platform.machine()) == {
-        "linux-x86_64": ("Linux", "x86_64"), "macos-arm64": ("Darwin", "arm64")}[target],
+        "linux-x86_64": ("Linux", "x86_64"), "linux-aarch64": ("Linux", "aarch64"),
+        "macos-arm64": ("Darwin", "arm64")}[target],
         "candidate target differs from running host")
     require(subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT).decode().strip() == source,
             "expected source differs from checkout head")

@@ -4215,8 +4215,13 @@ fn build_check_artifact(
             })
         })
         .collect::<Vec<_>>();
-    if !manifest.targets().is_empty() && tools.platform() != "x86_64-unknown-linux-gnu" {
-        findings.push(json!({"severity":"error","code":"CHECK011","message":"Docker acquisition requires the qualified Linux x86_64 profile","source":null,"path":null,"start_byte":null,"end_byte":null}));
+    if !manifest.targets().is_empty()
+        && !matches!(
+            tools.platform(),
+            "x86_64-unknown-linux-gnu" | "aarch64-unknown-linux-gnu"
+        )
+    {
+        findings.push(json!({"severity":"error","code":"CHECK011","message":"Docker acquisition requires a qualified Linux profile","source":null,"path":null,"start_byte":null,"end_byte":null}));
     }
     if secrets.len() > 1 {
         findings.push(json!({
@@ -4594,7 +4599,7 @@ fn static_verdict(
                         .strip_prefix("tool.")
                         .and_then(|id| manifest.tools().get(id))
                         .is_some_and(|tool| tool.contract().adapter().is_none());
-                    if native && platform != "x86_64-unknown-linux-gnu" {
+                    if native && !supports_exact_process_execution(platform) {
                         "unsupported"
                     } else if supports_exact_process_execution(platform) {
                         "granted-unenforced"

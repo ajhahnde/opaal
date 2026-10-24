@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import platform
 import runpy
 import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -20,6 +23,23 @@ from ci.qualify_data_processing import QualificationError
 
 
 class DockerImageChecksTests(unittest.TestCase):
+    def test_arm_live_expectation_binds_the_loaded_manifest_not_its_config(self):
+        with tarfile.open(ROOT / FIXTURES / "live/arm64-image.tar") as archive:
+            saved, = json.load(archive.extractfile("manifest.json"))
+            self.assertEqual(saved["Layers"], [])
+            config = archive.extractfile(saved["Config"]).read()
+        config_digest = "sha256:" + hashlib.sha256(config).hexdigest()
+        self.assertEqual(saved["Config"], config_digest.removeprefix("sha256:") + ".json")
+        # Docker 29.9 serializes this descriptor in mediaType/digest/size order.
+        manifest = {"schemaVersion": 2, "mediaType": "application/vnd.docker.distribution.manifest.v2+json",
+                    "config": {"mediaType": "application/vnd.docker.container.image.v1+json",
+                               "digest": config_digest, "size": len(config)}, "layers": []}
+        image_id = "sha256:" + hashlib.sha256(json.dumps(manifest, separators=(",", ":")).encode()).hexdigest()
+        workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+        self.assertIn("--image-id " + image_id, workflow)
+        self.assertNotIn("--image-id " + config_digest, workflow)
+        self.assertIn(image_id, (ROOT / FIXTURES / "README.md").read_text())
+
     def test_named_test_view_rejects_unknown_duplicate_fields_and_invalid_counts(self):
         path = {"platform": "unix", "encoding": "base64url-nopad", "value": "L3Rlc3Qub3BhYWw"}
         view = {"schema": "opaal.test-results.v1", "schema_version": 1, "source": path,
@@ -45,9 +65,10 @@ class DockerImageChecksTests(unittest.TestCase):
             test_view(payload[:-1])
 
     def test_live_comparison_uses_four_fixed_children_and_stops_redacted_failures(self):
-        version = {"Client": {"Version": "29.9.0", "ApiVersion": "1.48", "Os": "linux", "Arch": "amd64"},
+        host_arch = "arm64" if platform.machine() == "aarch64" else "amd64"
+        version = {"Client": {"Version": "29.9.0", "ApiVersion": "1.48", "Os": "linux", "Arch": host_arch},
                    "Server": {"Version": "29.9.0", "ApiVersion": "1.56", "MinAPIVersion": "1.40",
-                              "Os": "linux", "Arch": "amd64"}}
+                              "Os": "linux", "Arch": host_arch}}
         image = (ROOT / FIXTURES / "fixtures/image.json").read_bytes()
         expected = ["sha256:" + "a" * 64, "linux/amd64", "abc123"]
         original_run = subprocess.run

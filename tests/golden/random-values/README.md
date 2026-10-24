@@ -64,7 +64,8 @@ interactive cells, help, project check/plan/execute/audit and stale-source
 refusal outside the checkout. Archive mode requires identity-bound program and
 fixture archives from a clean committed checkout. Working mode reports its
 source snapshot and program/fixture hashes without an archive qualification
-claim. Linux x86_64 and macOS arm64 are separate gates; other hosts are not
-qualified by these fixtures.
+claim. Linux x86_64, Linux AArch64, and macOS arm64 are separate gates; other
+hosts are not qualified by these fixtures. This change does not publish an
+AArch64 program archive.
 
 [OPAAL documentation](https://opaal-lang.org/docs/)

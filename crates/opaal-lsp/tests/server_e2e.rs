@@ -309,6 +309,7 @@ tool_lock = "tools.toml"
     let host = match (std::env::consts::OS, std::env::consts::ARCH) {
         ("macos", "aarch64") => "aarch64-apple-darwin",
         ("linux", "x86_64") => "x86_64-unknown-linux-gnu",
+        ("linux", "aarch64") => "aarch64-unknown-linux-gnu",
         _ => panic!("unsupported evidence host"),
     };
     println!(

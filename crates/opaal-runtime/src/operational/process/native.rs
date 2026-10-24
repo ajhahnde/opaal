@@ -166,7 +166,11 @@ fn validate_image_reader(
                 .expect("header bounds"),
         )
     };
-    if !matches!(u16_at(16), 2 | 3) || u16_at(18) != 62 || u32_at(20) != 1 || u16_at(52) != 64 {
+    if !matches!(u16_at(16), 2 | 3)
+        || u16_at(18) != native_elf_machine()
+        || u32_at(20) != 1
+        || u16_at(52) != 64
+    {
         return Err(invalid());
     }
     let range = |offset: u64, size: u64| -> Result<std::ops::Range<u64>, ModuleError> {
@@ -272,6 +276,19 @@ fn validate_image_reader(
     poll()
 }
 
+#[cfg(target_arch = "x86_64")]
+const fn native_elf_machine() -> u16 {
+    62
+}
+#[cfg(target_arch = "aarch64")]
+const fn native_elf_machine() -> u16 {
+    183
+}
+#[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+const fn native_elf_machine() -> u16 {
+    0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -280,7 +297,7 @@ mod tests {
         let mut image = vec![0; 120];
         image[..7].copy_from_slice(b"\x7fELF\x02\x01\x01");
         image[16..18].copy_from_slice(&2_u16.to_le_bytes());
-        image[18..20].copy_from_slice(&62_u16.to_le_bytes());
+        image[18..20].copy_from_slice(&native_elf_machine().to_le_bytes());
         image[20..24].copy_from_slice(&1_u32.to_le_bytes());
         image[32..40].copy_from_slice(&64_u64.to_le_bytes());
         image[52..54].copy_from_slice(&64_u16.to_le_bytes());
@@ -300,6 +317,7 @@ mod tests {
         let inventory_digest = format!("sha256:{:x}", Sha256::digest(bytes));
         let host = match (std::env::consts::OS, std::env::consts::ARCH) {
             ("linux", "x86_64") => "x86_64-unknown-linux-gnu",
+            ("linux", "aarch64") => "aarch64-unknown-linux-gnu",
             ("macos", "aarch64") => "aarch64-apple-darwin",
             _ => "unsupported",
         };
@@ -310,10 +328,18 @@ mod tests {
             }
             let hex = case["input"]["image_hex"].as_str().unwrap();
             assert_eq!(hex.len() % 2, 0);
-            let bytes = (0..hex.len())
+            let mut bytes = (0..hex.len())
                 .step_by(2)
                 .map(|offset| u8::from_str_radix(&hex[offset..offset + 2], 16).unwrap())
                 .collect::<Vec<_>>();
+            if bytes.len() >= 20 {
+                let machine: u16 = if case["name"] == "foreign-machine" {
+                    if native_elf_machine() == 62 { 183 } else { 62 }
+                } else {
+                    native_elf_machine()
+                };
+                bytes[18..20].copy_from_slice(&machine.to_le_bytes());
+            }
             let admitted = validate_image(&bytes, &|| Ok(())).is_ok();
             assert_eq!(
                 admitted,

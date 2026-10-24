@@ -39,6 +39,7 @@ def case_results(cases, observations, pending, host, *, label="preparation"):
 
 def host_triple():
     return {("Linux", "x86_64"): "x86_64-unknown-linux-gnu",
+            ("Linux", "aarch64"): "aarch64-unknown-linux-gnu",
             ("Darwin", "arm64"): "aarch64-apple-darwin"}.get((platform.system(), platform.machine()))
 
 
@@ -63,11 +64,14 @@ def injected_results(completed, cases, pending, host, inventory_digest, *,
     return observations
 
 
-def minimal_elf():
+def minimal_elf(foreign=False):
     # macOS must refuse this Linux image before any launch or snapshot attempt.
     image = bytearray(120)
     image[:7] = b"\x7fELF\x02\x01\x01"
-    for offset, value in ((16, 2), (18, 62), (52, 64), (54, 56), (56, 1)):
+    machine = 183 if platform.machine() in {"aarch64", "arm64"} else 62
+    if foreign:
+        machine = 62 if machine == 183 else 183
+    for offset, value in ((16, 2), (18, machine), (52, 64), (54, 56), (56, 1)):
         struct.pack_into("<H", image, offset, value)
     struct.pack_into("<I", image, 20, 1)
     struct.pack_into("<Q", image, 32, 64)
@@ -96,8 +100,10 @@ def asset_observations(destination, reference, host):
                 for path in reference.rglob("*") if path.is_file()
                 and path.suffix != ".py" and "__pycache__" not in path.parts}
     controls = {"opaal.toml": "offline.toml", "offline-tools.toml":
-                "offline-tools-linux.toml" if host.startswith("x86_64") else "offline-tools-macos.toml"}
-    omitted = {"offline.toml", "offline-tools-linux.toml", "offline-tools-macos.toml",
+                "offline-tools-linux.toml" if host == "x86_64-unknown-linux-gnu" else
+                "offline-tools-linux-aarch64.toml" if host == "aarch64-unknown-linux-gnu" else
+                "offline-tools-macos.toml"}
+    omitted = {"offline.toml", "offline-tools-linux.toml", "offline-tools-linux-aarch64.toml", "offline-tools-macos.toml",
                "live.toml", "live-authority.toml", "live-tools.template.toml"}
     expected = {name: path for name, path in expected.items() if name not in omitted}
     expected.update({name: reference / owner for name, owner in controls.items()})
@@ -111,7 +117,7 @@ def qualify_preparation(binary, inputs, output, cases, *, test_binary=None):
     output.mkdir()
     tool = output / "canary-checker"
     compiler = None
-    if host == "x86_64-unknown-linux-gnu":
+    if host in {"x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"}:
         compiler = shutil.which("cc")
         require(compiler is not None, "preparation launch observer requires the host C compiler")
         success(command([compiler, "-O2", inputs / "preparation-checker.c", "-o", tool],
@@ -162,8 +168,7 @@ def qualify_preparation(binary, inputs, output, cases, *, test_binary=None):
         elif kind == "script":
             selected_tool.write_bytes(b"#!/bin/sh\nprintf 'launch\\n' >> checker.launches\n")
         elif kind == "foreign":
-            image = bytearray(minimal_elf())
-            struct.pack_into("<H", image, 18, 183)
+            image = bytearray(minimal_elf(foreign=True))
             selected_tool.write_bytes(image)
         elif kind == "67108865-bytes":
             with selected_tool.open("r+b") as handle:
@@ -215,8 +220,7 @@ def qualify_preparation(binary, inputs, output, cases, *, test_binary=None):
             elif kind == "changed-tool":
                 selected_tool.write_bytes(tool_bytes + b"changed")
             elif kind == "foreign-image":
-                image = bytearray(minimal_elf())
-                struct.pack_into("<H", image, 18, 183)
+                image = bytearray(minimal_elf(foreign=True))
                 selected_tool.write_bytes(image)
                 lock = lock.replace("sha256:" + hashlib.sha256(tool_bytes).hexdigest(),
                                     "sha256:" + hashlib.sha256(image).hexdigest())

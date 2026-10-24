@@ -177,6 +177,89 @@ jobs:
       - name: Validate the full macOS performance profile
         run: python3 benchmarks/run.py --profile qualification
 
+  operational-core-linux-aarch64:
+    name: operational-core-linux-aarch64
+    runs-on: ubuntu-24.04-arm
+    container:
+      image: ubuntu:22.04@sha256:829f6df217bcbae2b371026e81711d1a787c61b2967ad09d015063663ebafbf7
+      options: --privileged --init
+    defaults:
+      run:
+        shell: bash
+    timeout-minutes: 60
+    steps:
+      - name: Install pinned Rust and native qualification tools
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y binutils build-essential ca-certificates curl git python3 shellcheck strace
+          curl -fsSLo "$RUNNER_TEMP/rustup-init" https://static.rust-lang.org/rustup/archive/1.28.2/aarch64-unknown-linux-gnu/rustup-init
+          printf '%s  %s\n' e3853c5a252fca15252d07cb23a1bdd9377a8c6f3efa01531109281ae47f841c "$RUNNER_TEMP/rustup-init" | sha256sum --check
+          chmod 0755 "$RUNNER_TEMP/rustup-init"
+          "$RUNNER_TEMP/rustup-init" -y --profile minimal --default-host aarch64-unknown-linux-gnu --default-toolchain none --no-modify-path
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Mark the mounted checkout safe for Git
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Install pinned Jammy Python for native qualification
+        run: |
+          curl -fsSLo "$RUNNER_TEMP/python.tar.gz" https://github.com/actions/python-versions/releases/download/3.12.15-36805895057/python-3.12.15-linux-22.04-arm64.tar.gz
+          printf '%s  %s\n' 753766e28452fe7946c9e7bab7428c02ece786da64d066af9bd390ac38ae3b79 "$RUNNER_TEMP/python.tar.gz" | sha256sum --check
+          # Preserve Python's compiled prefix; the runner remaps action env paths to /__t.
+          python_prefix=/opt/hostedtoolcache/Python/3.12.15/arm64
+          mkdir -p "$python_prefix"
+          tar -xzf "$RUNNER_TEMP/python.tar.gz" -C "$python_prefix"
+          ln -s "$python_prefix/bin/python3" /usr/local/bin/python3
+          echo /usr/local/bin >> "$GITHUB_PATH"
+          env -i /usr/local/bin/python3 -c 'import sys, tomllib; assert sys.version_info[:3] == (3, 12, 15), sys.version'
+
+      - name: Verify the native ARM host and Jammy userland
+        run: |
+          test "$(uname -m)" = aarch64
+          python3 -c 'import platform, tomllib; assert platform.libc_ver() == ("glibc", "2.35"), platform.libc_ver(); assert tuple(map(int, platform.release().split(".")[:2])) >= (6, 3), platform.release()'
+
+      - name: Activate the pinned Rust toolchain
+        run: |
+          rustup show active-toolchain || rustup toolchain install
+          rustc -vV
+
+      - name: Check formatting and build the full optimized candidate
+        run: |
+          cargo fmt --all -- --check
+          cargo build --workspace --locked --release
+
+      - name: Verify ELF architecture, GLIBC floor, and deterministic archive identity
+        run: |
+          for binary in target/release/opaal target/release/opaal-language-server; do
+            readelf -hW "$binary" | grep -Fx '  Class:                             ELF64'
+            readelf -hW "$binary" | grep -Fx '  Data:                              2'\''s complement, little endian'
+            readelf -hW "$binary" | grep -Fx '  Machine:                           AArch64'
+            readelf --version-info --wide "$binary" | python3 -c 'import re,sys; versions=[tuple(map(int,x.split("."))) for x in re.findall(r"GLIBC_(\d+\.\d+)",sys.stdin.read())]; assert versions and max(versions) <= (2,35), max(versions) if versions else "no GLIBC symbols"'
+          done
+          python3 ci/package_release.py --platform linux-aarch64
+          candidate_version=$(python3 -c 'from ci.package_release import VERSION; print(VERSION)')
+          (cd dist && sha256sum --check "opaal-v${candidate_version}-linux-aarch64.tar.gz.sha256")
+
+      - name: Test the complete workspace on native Linux AArch64
+        run: cargo test --workspace --locked --no-fail-fast
+
+      - name: Clippy and documentation
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: |
+          cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+          cargo doc --workspace --no-deps --locked
+
+      - name: Qualify the complete native Linux workflow
+        run: python3 ci/qualify_operational_core.py --profile qualification
+
+      - name: Exercise the native ARM performance smoke profile
+        run: python3 benchmarks/run.py --profile smoke --output "$RUNNER_TEMP/benchmark-smoke-linux-aarch64.json"
+
   random-native-linux:
     name: random-native-linux
     if: github.event_name == 'workflow_dispatch'
@@ -426,10 +509,201 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
+  data-processing-linux-aarch64:
+    name: data-processing-linux-aarch64
+    runs-on: ubuntu-24.04-arm
+    container:
+      image: ubuntu:22.04@sha256:829f6df217bcbae2b371026e81711d1a787c61b2967ad09d015063663ebafbf7
+      options: --privileged --init
+    defaults:
+      run:
+        shell: bash
+    timeout-minutes: 60
+    steps:
+      - name: Install pinned Rust, Docker 29.9.0, and qualification tools
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y acl binutils build-essential ca-certificates curl git libcap2-bin python3 shellcheck strace util-linux
+          curl -fsSLo "$RUNNER_TEMP/rustup-init" https://static.rust-lang.org/rustup/archive/1.28.2/aarch64-unknown-linux-gnu/rustup-init
+          printf '%s  %s\n' e3853c5a252fca15252d07cb23a1bdd9377a8c6f3efa01531109281ae47f841c "$RUNNER_TEMP/rustup-init" | sha256sum --check
+          chmod 0755 "$RUNNER_TEMP/rustup-init"
+          "$RUNNER_TEMP/rustup-init" -y --profile minimal --default-host aarch64-unknown-linux-gnu --default-toolchain none --no-modify-path
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          install -m 0755 -d /etc/apt/keyrings
+          curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+          chmod a+r /etc/apt/keyrings/docker.asc
+          cat > /etc/apt/sources.list.d/docker.sources <<'EOF'
+          Types: deb
+          URIs: https://download.docker.com/linux/ubuntu
+          Suites: jammy
+          Components: stable
+          Architectures: arm64
+          Signed-By: /etc/apt/keyrings/docker.asc
+          EOF
+          apt-get update
+          docker_version='5:29.9.0-1~ubuntu.22.04~jammy'
+          DEBIAN_FRONTEND=noninteractive apt-get install -y "docker-ce=$docker_version" "docker-ce-cli=$docker_version" containerd.io
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+
+      - name: Mark the mounted checkout safe for Git
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Install pinned Jammy Python for native qualification
+        run: |
+          curl -fsSLo "$RUNNER_TEMP/python.tar.gz" https://github.com/actions/python-versions/releases/download/3.12.15-36805895057/python-3.12.15-linux-22.04-arm64.tar.gz
+          printf '%s  %s\n' 753766e28452fe7946c9e7bab7428c02ece786da64d066af9bd390ac38ae3b79 "$RUNNER_TEMP/python.tar.gz" | sha256sum --check
+          # Preserve Python's compiled prefix; the runner remaps action env paths to /__t.
+          python_prefix=/opt/hostedtoolcache/Python/3.12.15/arm64
+          mkdir -p "$python_prefix"
+          tar -xzf "$RUNNER_TEMP/python.tar.gz" -C "$python_prefix"
+          ln -s "$python_prefix/bin/python3" /usr/local/bin/python3
+          echo /usr/local/bin >> "$GITHUB_PATH"
+          env -i /usr/local/bin/python3 -c 'import sys, tomllib; assert sys.version_info[:3] == (3, 12, 15), sys.version'
+
+      - name: Verify the native ARM host and Jammy userland
+        run: |
+          test "$(uname -m)" = aarch64
+          python3 -c 'import platform, tomllib; assert platform.libc_ver() == ("glibc", "2.35"), platform.libc_ver(); assert tuple(map(int, platform.release().split(".")[:2])) >= (6, 3), platform.release()'
+
+      - name: Start the isolated Docker 29.9.0 daemon
+        run: |
+          nohup dockerd --host="unix://$RUNNER_TEMP/docker.sock" --data-root="$RUNNER_TEMP/docker-data" --exec-root="$RUNNER_TEMP/docker-exec" --pidfile="$RUNNER_TEMP/docker.pid" --bridge=none --iptables=false > "$RUNNER_TEMP/dockerd.log" 2>&1 &
+          for attempt in {1..60}; do
+            if docker --host="unix://$RUNNER_TEMP/docker.sock" version --format '{{.Server.Version}}' 2>/dev/null | grep -Fxq '29.9.0'; then
+              exit 0
+            fi
+            sleep 1
+          done
+          cat "$RUNNER_TEMP/dockerd.log"
+          exit 1
+
+      - name: Activate the pinned Rust toolchain
+        run: |
+          rustup show active-toolchain || rustup toolchain install
+          rustc -vV
+
+      - name: Build and package the native candidate
+        run: |
+          cargo build --release --workspace --locked
+          candidate_version=$(python3 -c 'from ci.package_release import VERSION; print(VERSION)')
+          python3 ci/package_release.py --platform linux-aarch64
+          (cd dist && sha256sum --check "opaal-v${candidate_version}-linux-aarch64.tar.gz.sha256")
+
+      - name: Build native observer test binaries
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import subprocess
+          import sys
+          from pathlib import Path
+
+          result = subprocess.run(["cargo", "test", "--release", "--workspace", "--locked", "--no-run", "--message-format=json"], capture_output=True, text=True)
+          if result.returncode:
+              sys.stderr.write(result.stderr)
+              raise SystemExit(result.returncode)
+          selected = {}
+          wanted = {
+              ("opaal-cli", "opaal_cli"): "PREPARATION_TEST_BINARY",
+              ("opaal-cli", "controlled_native_tools"): "CLI_TEST_BINARY",
+              ("opaal-platform-posix", "controlled_native_tools"): "POSIX_TEST_BINARY",
+              ("opaal-runtime", "opaal_runtime"): "IMAGE_TEST_BINARY",
+              ("opaal-runtime", "controlled_native_tools"): "PROCESS_TEST_BINARY",
+              ("opaal-runtime", "workflow_artifacts"): "EVIDENCE_TEST_BINARY",
+              ("opaal-lsp", "server_e2e"): "LSP_TEST_BINARY",
+          }
+          for line in result.stdout.splitlines():
+              event = json.loads(line)
+              if event.get("reason") != "compiler-artifact" or not event.get("executable"):
+                  continue
+              package = Path(event["manifest_path"]).parent.name
+              key = (package, event["target"]["name"])
+              if key in wanted:
+                  selected[wanted[key]] = event["executable"]
+          if set(selected) != set(wanted.values()):
+              raise SystemExit(f"observer binaries differ: {sorted(selected)}")
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as output:
+              for key, value in sorted(selected.items()):
+                  output.write(f"{key}={value}\n")
+          PY
+
+      - name: Package the exact native qualification fixtures
+        run: |
+          python3 ci/package_data_processing.py --platform linux-aarch64
+          python3 ci/package_source_formatting.py
+          python3 ci/package_random_values.py
+          python3 ci/package_standard_input_output.py
+          python3 ci/package_docker_image_checks.py
+          python3 ci/package_controlled_native_tools.py
+
+      - name: Qualify saved-input, numeric, Random, stream, and source workflows
+        run: |
+          candidate_version=$(python3 -c 'from ci.package_release import VERSION; print(VERSION)')
+          archive="dist/opaal-v${candidate_version}-linux-aarch64.tar.gz"
+          source_sha=$(git rev-parse HEAD)
+          python3 ci/qualify_source_formatting.py --archive "$archive" --fixtures "dist/opaal-v${candidate_version}-source-formatting.tar.gz" --expected-source "$source_sha" --platform linux-aarch64 --report "$RUNNER_TEMP/source-formatting-linux-aarch64.json"
+          python3 ci/qualify_data_processing.py --archive "$archive" --examples "dist/opaal-v${candidate_version}-data-processing.tar.gz" --expected-version "$candidate_version" --expected-source "$source_sha" --platform linux-aarch64 --report "$RUNNER_TEMP/data-processing-linux-aarch64.json"
+          python3 ci/qualify_numeric_operations.py --archive "$archive" --expected-source "$source_sha" --platform linux-aarch64 --report "$RUNNER_TEMP/numeric-operations-linux-aarch64.json"
+          python3 ci/qualify_random_values.py --archive "$archive" --fixtures "dist/opaal-v${candidate_version}-random-values.tar.gz" --expected-source "$source_sha" --platform linux-aarch64 --report "$RUNNER_TEMP/random-values-linux-aarch64.json"
+          python3 ci/qualify_standard_input_output.py --archive "$archive" --fixtures "dist/opaal-v${candidate_version}-standard-input-output.tar.gz" --expected-source "$source_sha" --platform linux-aarch64 --report "$RUNNER_TEMP/standard-input-output-linux-aarch64.json"
+          python3 ci/qualify_docker_image_checks.py --offline --archive "$archive" --fixtures "dist/opaal-v${candidate_version}-docker-image-checks.tar.gz" --expected-source "$source_sha" --platform linux-aarch64 --report "$RUNNER_TEMP/docker-image-checks-offline-linux-aarch64.json"
+
+      - name: Qualify controlled process, image, and fault boundaries
+        run: |
+          candidate_version=$(python3 -c 'from ci.package_release import VERSION; print(VERSION)')
+          archive="dist/opaal-v${candidate_version}-linux-aarch64.tar.gz"
+          source_sha=$(git rev-parse HEAD)
+          cc -O2 -Wall -Wextra -Werror tests/golden/controlled-external-tools/checker.c -o "$RUNNER_TEMP/native-fault-checker"
+          python3 ci/qualify_controlled_native_tools.py --archive "$archive" --fixtures "dist/opaal-v${candidate_version}-controlled-native-tools.tar.gz" --expected-source "$source_sha" --platform linux-aarch64 --output "$RUNNER_TEMP/controlled-native-tools" --checker /usr/bin/shellcheck --fault-checker "$RUNNER_TEMP/native-fault-checker" --preparation-test-binary "$PREPARATION_TEST_BINARY" --image-test-binary "$IMAGE_TEST_BINARY" --evidence-test-binary "$EVIDENCE_TEST_BINARY" --process-test-binary "$PROCESS_TEST_BINARY" --cli-test-binary "$CLI_TEST_BINARY" --posix-test-binary "$POSIX_TEST_BINARY" --lsp-test-binary "$LSP_TEST_BINARY"
+          python3 ci/qualify_random_failures.py --binary target/release/opaal --output "$RUNNER_TEMP/random-failures-linux-aarch64"
+          python3 ci/qualify_standard_io_failures.py --binary target/release/opaal --output "$RUNNER_TEMP/standard-io-failures-linux-aarch64"
+
+      - name: Load the deterministic ARM image and local multi-platform index
+        run: |
+          # Keep the runner's job-container exec on its own Docker daemon.
+          export DOCKER_HOST="unix://$RUNNER_TEMP/docker.sock"
+          docker version --format '{{json .}}' > "$RUNNER_TEMP/docker-version.json"
+          docker load --input tests/golden/docker-image-checks/live/arm64-image.tar
+          docker pull --platform linux/arm64 ubuntu:22.04@sha256:829f6df217bcbae2b371026e81711d1a787c61b2967ad09d015063663ebafbf7
+          docker image inspect --format '{{.Os}}/{{.Architecture}} {{json .Descriptor}}' opaal-qualification/arm64:fixture
+          docker image inspect ubuntu:22.04@sha256:829f6df217bcbae2b371026e81711d1a787c61b2967ad09d015063663ebafbf7
+
+      - name: Qualify live Docker image inspection
+        run: |
+          candidate_version=$(python3 -c 'from ci.package_release import VERSION; print(VERSION)')
+          python3 ci/qualify_docker_image_checks.py --live --archive "dist/opaal-v${candidate_version}-linux-aarch64.tar.gz" --fixtures "dist/opaal-v${candidate_version}-docker-image-checks.tar.gz" --docker /usr/bin/docker --socket "$RUNNER_TEMP/docker.sock" --image-ref opaal-qualification/arm64:fixture --image-id sha256:2a654a940aa4d12f5f291f5d600ac3b9a6166bb3c3a0f391f6626f049161328e --image-revision opaal-arm64-live-fixture-v1 --index-ref ubuntu:22.04@sha256:829f6df217bcbae2b371026e81711d1a787c61b2967ad09d015063663ebafbf7 --expected-source "$(git rev-parse HEAD)" --platform linux-aarch64 --report "$RUNNER_TEMP/docker-live-linux-aarch64.json"
+
+      - name: Retain native qualification reports and failure traces
+        if: always()
+        run: |
+          for report in "$RUNNER_TEMP"/*linux-aarch64.json; do
+            if [ -f "$report" ]; then cp "$report" dist/; fi
+          done
+          if [ -d "$RUNNER_TEMP/controlled-native-tools" ]; then
+            tar -czf dist/controlled-native-tools-linux-aarch64-evidence.tar.gz \
+              -C "$RUNNER_TEMP" controlled-native-tools
+          fi
+          if [ -d "$RUNNER_TEMP/docker-live-linux-aarch64.artifacts" ]; then
+            tar -czf dist/docker-live-linux-aarch64-evidence.tar.gz \
+              -C "$RUNNER_TEMP" docker-live-linux-aarch64.artifacts
+          fi
+
+      - name: Retain candidate identity and qualification evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: data-processing-linux-aarch64
+          path: dist/*
+          if-no-files-found: error
+
   required:
     name: required
     if: always()
-    needs: [foundation, policy, fuzz, operational-core-linux, operational-core-macos, data-processing-linux, data-processing-macos]
+    needs: [foundation, policy, fuzz, operational-core-linux, operational-core-macos, operational-core-linux-aarch64, data-processing-linux, data-processing-macos, data-processing-linux-aarch64]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -440,8 +714,10 @@ jobs:
           FUZZ_RESULT: ${{ needs.fuzz.result }}
           OPERATIONAL_CORE_LINUX_RESULT: ${{ needs.operational-core-linux.result }}
           OPERATIONAL_CORE_MACOS_RESULT: ${{ needs.operational-core-macos.result }}
+          OPERATIONAL_CORE_LINUX_AARCH64_RESULT: ${{ needs.operational-core-linux-aarch64.result }}
           DATA_PROCESSING_LINUX_RESULT: ${{ needs.data-processing-linux.result }}
           DATA_PROCESSING_MACOS_RESULT: ${{ needs.data-processing-macos.result }}
+          DATA_PROCESSING_LINUX_AARCH64_RESULT: ${{ needs.data-processing-linux-aarch64.result }}
         run: |
           if [ "${FOUNDATION_RESULT}" != "success" ] ||
              [ "${POLICY_RESULT}" != "success" ] ||
@@ -449,8 +725,11 @@ jobs:
              [ "${OPERATIONAL_CORE_LINUX_RESULT}" != "success" ] ||
              [ "${OPERATIONAL_CORE_MACOS_RESULT}" != "success" ] ||
              [ "${DATA_PROCESSING_LINUX_RESULT}" != "success" ] ||
-             [ "${DATA_PROCESSING_MACOS_RESULT}" != "success" ]; then
+             [ "${DATA_PROCESSING_MACOS_RESULT}" != "success" ] ||
+             [ "${OPERATIONAL_CORE_LINUX_AARCH64_RESULT}" != "success" ] ||
+             [ "${DATA_PROCESSING_LINUX_AARCH64_RESULT}" != "success" ]; then
             echo "foundation=${FOUNDATION_RESULT} policy=${POLICY_RESULT} fuzz=${FUZZ_RESULT} operational-core-linux=${OPERATIONAL_CORE_LINUX_RESULT} operational-core-macos=${OPERATIONAL_CORE_MACOS_RESULT}"
             echo "data-processing-linux=${DATA_PROCESSING_LINUX_RESULT} data-processing-macos=${DATA_PROCESSING_MACOS_RESULT}"
+            echo "operational-core-linux-aarch64=${OPERATIONAL_CORE_LINUX_AARCH64_RESULT} data-processing-linux-aarch64=${DATA_PROCESSING_LINUX_AARCH64_RESULT}"
             exit 1
           fi

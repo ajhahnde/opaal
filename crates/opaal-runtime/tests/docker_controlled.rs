@@ -56,7 +56,16 @@ tool_lock = "tools.toml"
 "#;
 
 fn version() -> Vec<u8> {
-    serde_json::to_vec(&json!({"Client":{"Version":"29.9.0","ApiVersion":"1.48","Os":"linux","Arch":"amd64"},"Server":{"Version":"29.9.0","ApiVersion":"1.54","MinAPIVersion":"1.44","Os":"linux","Arch":"amd64"}})).unwrap()
+    let arch = if cfg!(all(target_os = "linux", target_arch = "aarch64")) {
+        "arm64"
+    } else {
+        "amd64"
+    };
+    serde_json::to_vec(&json!({
+        "Client": {"Version":"29.9.0","ApiVersion":"1.48","Os":"linux","Arch":arch},
+        "Server": {"Version":"29.9.0","ApiVersion":"1.54","MinAPIVersion":"1.44","Os":"linux","Arch":arch}
+    }))
+    .unwrap()
 }
 fn outputs() -> Vec<(i32, Vec<u8>)> {
     vec![
@@ -528,6 +537,14 @@ fn named_operation_corpus_asserts_typed_outcomes_counts_and_redacted_evidence() 
     for case in cases {
         let name = case["name"].as_str().unwrap();
         assert!(names.insert(name), "duplicate case: {name}");
+        let mut case = case.clone();
+        if cfg!(all(target_os = "linux", target_arch = "aarch64")) && name.ends_with("-arch") {
+            for change in case["changes"].as_array_mut().unwrap() {
+                if change["path"][1] == "Arch" {
+                    change["value"] = json!("amd64");
+                }
+            }
+        }
         let mut responses = outputs();
         for stage in case["stages"].as_array().unwrap() {
             let stage = stage.as_u64().unwrap() as usize;
@@ -535,7 +552,7 @@ fn named_operation_corpus_asserts_typed_outcomes_counts_and_redacted_evidence() 
                 responses[stage].0 = status as i32;
             } else {
                 responses[stage].1 =
-                    docker_cases::response(serde_json::from_slice(&version()).unwrap(), case);
+                    docker_cases::response(serde_json::from_slice(&version()).unwrap(), &case);
             }
         }
         let mut journal = Journal::default();

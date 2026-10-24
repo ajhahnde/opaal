@@ -2,7 +2,7 @@
 
 Use the repository root for all commands. The pinned Rust toolchain is declared
 in `rust-toolchain.toml`; Cargo uses the checked-in lockfile. Python validators
-use only the standard library.
+require Python 3.11 or newer and use only the standard library.
 
 ## Build and source gates
 
@@ -193,9 +193,9 @@ python3 ci/qualify_random_values.py --binary-directory target/debug --expected-s
 python3 ci/qualify_random_failures.py --binary target/debug/opaal --output dist/random-failures
 ```
 
-Use `linux-x86_64` for Linux qualification. Working mode records dirty-source
-identity and never claims committed archive evidence. The exact committed
-both-host candidate jobs package `tests/golden/random-values` with
+Use `linux-x86_64` or `linux-aarch64` on the matching native Linux host. Working
+mode records dirty-source identity and never claims committed archive evidence.
+The committed host jobs package `tests/golden/random-values` with
 `ci/package_random_values.py` and pass both the fixture and program archives to
 the qualifier. It checks real source domains, retained interactive cells and
 help, pure/domain refusal, controlled progress and metadata-only inspection,
@@ -224,7 +224,7 @@ python3 ci/qualify_standard_input_output.py --binary-directory target/debug --ex
 python3 ci/qualify_standard_io_failures.py --binary target/debug/opaal --output dist/stdio-failures
 ```
 
-Use `linux-x86_64` on Linux. Working mode records an exact dirty-source snapshot
+Use `linux-x86_64` or `linux-aarch64` on the matching Linux host. Working mode records an exact dirty-source snapshot
 and binary hashes; it supplies no committed-package claim. Both candidate jobs
 package the [self-contained references](tests/golden/standard-input-output/README.md)
 with `ci/package_standard_input_output.py` and replay those exact fixtures and
@@ -249,7 +249,8 @@ streams and owned worker reap, while receipt failure makes the run unsuccessful.
 
 The [image check reference](examples/image-check/README.md) shares one pure
 policy and single-manifest decoder between saved data and controlled Linux
-inspection. Saved-input use works on Linux x86_64 and macOS arm64 without Docker.
+inspection. Saved-input use works on Linux x86_64, Linux AArch64 and macOS arm64
+without Docker.
 Live inspection requires the exact client/server profile, explicit local socket,
 locked executable and new empty reference directories. Account configuration,
 remote transport and live macOS execution are excluded. The reference documents
@@ -261,7 +262,7 @@ Replay the working binary outside the checkout and retain exact case artifacts:
 python3 ci/qualify_docker_image_checks.py --offline --binary-directory target/debug --expected-source "$(git rev-parse HEAD)" --platform macos-arm64 --report dist/docker-offline-working.json
 ```
 
-Use `--platform linux-x86_64` on Linux. Working reports record dirty source
+Use `--platform linux-x86_64` or `--platform linux-aarch64` on the matching Linux host. Working reports record dirty source
 snapshots and cannot substitute for committed candidate evidence. After commit,
 `ci/package_docker_image_checks.py` packages the exact reference; replay it with
 `--archive` and `--fixtures` instead of `--binary-directory`. Example copies must
@@ -293,7 +294,7 @@ Native argv includes the locked path as argv0, with at most4096 entries,
 stream, child stdin is null, cwd is project root, and one evaluation shares at
 most8 attempts. No native version probe or retry runs before the task.
 
-On Linux x86_64, runtime first checks original execute admission and rejects
+On Linux x86_64 and GNU/Linux AArch64, runtime first checks original execute admission and rejects
 unsupported ELF images, privilege-bearing files and unavailable execution
 policy. It copies at most64MiB under the current deadline into a private
 executable memfd, verifies immutability seals, then hashes and structurally
@@ -328,7 +329,8 @@ python3 ci/qualify_controlled_native_tools.py --cli target/debug/opaal --output 
 ```
 
 For a clean committed candidate, package the programs with
-`ci/package_data_processing.py --platform macos-arm64` (or `linux-x86_64`) and
+`ci/package_data_processing.py --platform macos-arm64`, `linux-x86_64` or
+`linux-aarch64` and
 the reference with `ci/package_controlled_native_tools.py`. Replay the exact pair:
 
 ```sh
@@ -340,7 +342,8 @@ python3 ci/qualify_controlled_native_tools.py \
   --output /tmp/opaal-repository-package
 ```
 
-Use `linux-x86_64` in both platform positions on Linux. Archive replay verifies
+Use the matching `linux-x86_64` or `linux-aarch64` value in both platform
+positions on Linux. Archive replay verifies
 the shared source identity, version, platform, complete fixture inventory,
 member hashes and modes before running the packaged CLI outside the checkout.
 Both candidate CI jobs retain the archives and replay evidence. This saved
@@ -481,8 +484,8 @@ Existing controls are neither rewritten nor upgraded. The old setup script is
 retained only in `tests/fixtures/image-check-legacy/` for comparison.
 
 `project init --example repository-check --destination PATH --environment offline`
-prepares the fixed saved policy without tools on both qualified hosts. Its
-Linux x86_64 `ci` form requires exactly one absolute `--tool` ELF executable;
+prepares the fixed saved policy without tools on all qualified hosts. Its
+Linux x86_64 and AArch64 `ci` forms require exactly one absolute `--tool` ELF executable;
 Docker flags and `--qualified-version` refuse. It hashes and structurally
 inspects the original executable without launching it or creating a snapshot.
 Generated repository controls require >=1.6.0,<2.0.0 and declare only LC_ALL=C

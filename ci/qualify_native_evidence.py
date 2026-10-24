@@ -608,7 +608,7 @@ def qualify_evidence(binary, inputs, output, cases, *, test_binary=None, cli_tes
                  and spec["mutation"].startswith("native-") else "candidate-cli")
         observations.append({"name": row["name"], "observed": observed, "route": route})
     child = None
-    if host == "x86_64-unknown-linux-gnu":
+    if host in {"x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"}:
         child_cases = [row for row in cases if row["input"]["kind"] == "input-race"
                        and row["input"]["phase"] == "during-child"]
         records, child = reference_input_cases(binary, inputs, output / "reference-inputs", child_cases)
