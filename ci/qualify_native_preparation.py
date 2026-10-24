@@ -64,11 +64,13 @@ def injected_results(completed, cases, pending, host, inventory_digest, *,
     return observations
 
 
-def minimal_elf():
+def minimal_elf(foreign=False):
     # macOS must refuse this Linux image before any launch or snapshot attempt.
     image = bytearray(120)
     image[:7] = b"\x7fELF\x02\x01\x01"
-    machine = 183 if platform.machine() == "aarch64" else 62
+    machine = 183 if platform.machine() in {"aarch64", "arm64"} else 62
+    if foreign:
+        machine = 62 if machine == 183 else 183
     for offset, value in ((16, 2), (18, machine), (52, 64), (54, 56), (56, 1)):
         struct.pack_into("<H", image, offset, value)
     struct.pack_into("<I", image, 20, 1)
@@ -166,8 +168,7 @@ def qualify_preparation(binary, inputs, output, cases, *, test_binary=None):
         elif kind == "script":
             selected_tool.write_bytes(b"#!/bin/sh\nprintf 'launch\\n' >> checker.launches\n")
         elif kind == "foreign":
-            image = bytearray(minimal_elf())
-            struct.pack_into("<H", image, 18, 183)
+            image = bytearray(minimal_elf(foreign=True))
             selected_tool.write_bytes(image)
         elif kind == "67108865-bytes":
             with selected_tool.open("r+b") as handle:
@@ -219,8 +220,7 @@ def qualify_preparation(binary, inputs, output, cases, *, test_binary=None):
             elif kind == "changed-tool":
                 selected_tool.write_bytes(tool_bytes + b"changed")
             elif kind == "foreign-image":
-                image = bytearray(minimal_elf())
-                struct.pack_into("<H", image, 18, 183)
+                image = bytearray(minimal_elf(foreign=True))
                 selected_tool.write_bytes(image)
                 lock = lock.replace("sha256:" + hashlib.sha256(tool_bytes).hexdigest(),
                                     "sha256:" + hashlib.sha256(image).hexdigest())

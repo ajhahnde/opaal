@@ -182,7 +182,7 @@ jobs:
     runs-on: ubuntu-24.04-arm
     container:
       image: ubuntu:22.04@sha256:829f6df217bcbae2b371026e81711d1a787c61b2967ad09d015063663ebafbf7
-      options: --privileged
+      options: --privileged --init
     defaults:
       run:
         shell: bash
@@ -499,7 +499,7 @@ jobs:
     runs-on: ubuntu-24.04-arm
     container:
       image: ubuntu:22.04@sha256:829f6df217bcbae2b371026e81711d1a787c61b2967ad09d015063663ebafbf7
-      options: --privileged
+      options: --privileged --init
     defaults:
       run:
         shell: bash
@@ -533,6 +533,9 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
+
+      - name: Mark the mounted checkout safe for Git
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
       - name: Verify the native ARM host and Jammy userland
         run: |
