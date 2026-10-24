@@ -35,9 +35,9 @@ fn numeric_work() -> ReportDir {
     work.write(
         "tools.toml",
         fs::read(examples.join(if cfg!(target_os = "macos") {
-            "tools-macos.toml"
+            "tools-macos.toml".to_owned()
         } else {
-            "tools-linux.toml"
+            format!("tools-linux{}.toml", support::linux_fixture_arch_suffix())
         }))
         .unwrap(),
     );

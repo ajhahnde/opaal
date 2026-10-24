@@ -391,7 +391,12 @@ def source_problems(root: Path, *, run: Run = run_command) -> list[str]:
             ci,
         ):
             problems.append("CI does not pin the operational-core Apple-silicon host")
-        for host in ("linux", "macos"):
+        if not re.search(
+            r"(?m)^  operational-core-linux-aarch64:\n    name: operational-core-linux-aarch64\n    runs-on: ubuntu-24\.04-arm$",
+            ci,
+        ):
+            problems.append("CI does not pin the operational-core Linux AArch64 host")
+        for host in ("linux", "macos", "linux-aarch64"):
             job = re.search(
                 rf"(?ms)^  operational-core-{host}:\n(.*?)(?=^  [\w-]+:|\Z)",
                 ci,
@@ -409,13 +414,14 @@ def source_problems(root: Path, *, run: Run = run_command) -> list[str]:
         if "--budget-environment host-darwin-arm64" in ci:
             problems.append("CI applies a retained host budget to the shared macOS runner")
         if not re.search(
-            r"needs:\s*\[foundation, policy, fuzz, operational-core-linux, operational-core-macos, data-processing-linux, data-processing-macos\]",
+            r"needs:\s*\[foundation, policy, fuzz, operational-core-linux, operational-core-macos, operational-core-linux-aarch64, data-processing-linux, data-processing-macos, data-processing-linux-aarch64\]",
             ci,
         ):
             problems.append(
-                "CI required aggregate does not require foundation, policy, fuzz, and both operational-core and data-processing hosts"
+                "CI required aggregate does not require foundation, policy, fuzz, and all qualified operational-core and data-processing hosts"
             )
-        for candidate_host, runner in (("linux", "ubuntu-24.04"), ("macos", "macos-15")):
+        for candidate_host, runner in (("linux", "ubuntu-24.04"), ("macos", "macos-15"),
+                                       ("linux-aarch64", "ubuntu-24.04-arm")):
             job = re.search(rf"(?ms)^  data-processing-{candidate_host}:\n(.*?)(?=^  [\w-]+:|\Z)", ci)
             if job is None or f"runs-on: {runner}" not in job.group(1) or not all(
                 owner in job.group(1) for owner in (
@@ -426,6 +432,12 @@ def source_problems(root: Path, *, run: Run = run_command) -> list[str]:
                 )
             ):
                 problems.append(f"CI does not build/qualify/retain data-processing candidates on {candidate_host}")
+            if (
+                candidate_host == "linux-aarch64"
+                and job is not None
+                and 'Path(event["manifest_path"]).parent.name' not in job.group(1)
+            ):
+                problems.append("CI ARM test-binary collection does not resolve Cargo artifacts by manifest path")
         if "python3 ci/check_product.py release-candidate" not in release:
             problems.append("release workflow does not run the release-candidate validator")
         if not re.search(

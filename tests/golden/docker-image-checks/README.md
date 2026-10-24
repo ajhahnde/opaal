@@ -180,11 +180,21 @@ Live inspection requires controlled task execution.
 
 ## Live Linux inspection
 
-The fixed `docker-cli-profile.json` requires Docker client and engine 29.9.0,
-API 1.48, Linux x86_64, and descriptor-bearing single-image responses. A version
-string alone does not qualify a binary or server. Independently verify the exact
+The fixed `docker-cli-profile.json` and `docker-cli-profile-aarch64.json` require
+Docker client and engine 29.9.0, API 1.48, and descriptor-bearing single-image
+responses on Linux x86_64 and AArch64 respectively. Client and server architecture
+must match the host. A version string alone does not qualify a binary or server. Independently verify the exact
 installed executable, source/profile and server before using this reference.
 Use one already available image; inspection never pulls, builds or runs it.
+
+The saved ARM64 live fixture is `live/arm64-image.tar`. Load it with
+`docker load --input live/arm64-image.tar`; it creates
+`opaal-qualification/arm64:fixture` with ID
+`sha256:c13ecbac43418b19df646a517e67b212484a1a6c2db55c978f37bf56b6f5207f`
+and revision label `opaal-arm64-live-fixture-v1`. The native qualification
+also uses an already-loaded, digest-pinned multi-platform reference to verify
+that index responses are refused. These are test inputs; OPAAL does not pull,
+build, or push images.
 
 Use independently qualified installed Docker and a local Unix socket. Supply
 both absolute paths and the profile's exact version as an explicit caller claim:

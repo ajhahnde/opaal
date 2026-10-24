@@ -58,9 +58,10 @@ def reaped(pid: int) -> None:
 
 
 def qualify(binary: Path, output: Path) -> dict:
-    require((platform.system(), platform.machine()) in [("Linux", "x86_64"), ("Darwin", "arm64")],
+    require((platform.system(), platform.machine()) in [("Linux", "x86_64"), ("Linux", "aarch64"), ("Darwin", "arm64")],
             "unsupported qualification host")
-    target = "linux" if platform.system() == "Linux" else "macos"
+    target = {("Linux", "x86_64"): "linux", ("Linux", "aarch64"): "linux-aarch64",
+              ("Darwin", "arm64"): "macos"}[(platform.system(), platform.machine())]
     output.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="opaal-random-failures-") as temporary:
         work = Path(temporary).resolve()
@@ -185,7 +186,8 @@ int main(void) {
             probe_tool = Tool("git", "git", tool, "2.50.0", f"sha256:{sha(tool.read_bytes())}")
             environment = sanitized_environment(work, [probe_tool], Path("/usr/bin/false"), Path("/usr/bin/false"))
             tools = work / "tools.toml"
-            tools.write_text(tool_lock_text("x86_64-unknown-linux-gnu", environment, [probe_tool]).replace(
+            triple = "aarch64-unknown-linux-gnu" if platform.machine() == "aarch64" else "x86_64-unknown-linux-gnu"
+            tools.write_text(tool_lock_text(triple, environment, [probe_tool]).replace(
                 'project = "opaal_golden_readiness"', 'project = "random_sample"'))
             (work / "tasks.opaal").write_text("""import std::random as random
 import std::process as process

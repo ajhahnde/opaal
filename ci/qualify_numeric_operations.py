@@ -22,7 +22,8 @@ else:
 
 def qualify(archive: Path | None, binary_directory: Path | None, source: str, target: str) -> dict:
     require((platform.system(), platform.machine()) == {
-        "linux-x86_64": ("Linux", "x86_64"), "macos-arm64": ("Darwin", "arm64"),
+        "linux-x86_64": ("Linux", "x86_64"), "linux-aarch64": ("Linux", "aarch64"),
+        "macos-arm64": ("Darwin", "arm64"),
     }[target], "candidate target differs from running host")
     require(subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT).decode().strip() == source,
             "expected source differs from checkout head")
@@ -46,7 +47,8 @@ def qualify(archive: Path | None, binary_directory: Path | None, source: str, ta
         binary = binaries / "opaal"
         work = directory / "report"
         shutil.copytree(examples, work)
-        shutil.copy(work / ("tools-linux.toml" if target == "linux-x86_64" else "tools-macos.toml"), work / "tools.toml")
+        lock = "tools-macos.toml" if target == "macos-arm64" else "tools-linux-aarch64.toml" if target == "linux-aarch64" else "tools-linux.toml"
+        shutil.copy(work / lock, work / "tools.toml")
         environment = {"PATH": os.defpath}
         def run(*arguments: str, stdin: bytes | None = None):
             return command([binary, *arguments], work, environment, stdin=stdin)

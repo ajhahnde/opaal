@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import tempfile
 import unittest
@@ -79,9 +80,13 @@ publish = false
             "    name: operational-core-macos\n"
             "    runs-on: macos-15\n"
             "        run: cargo test --workspace --locked --no-fail-fast\n"
+            "  operational-core-linux-aarch64:\n"
+            "    name: operational-core-linux-aarch64\n"
+            "    runs-on: ubuntu-24.04-arm\n"
+            "        run: cargo test --workspace --locked --no-fail-fast\n"
             "run: python3 benchmarks/run.py --profile qualification\n"
             "name: required\n"
-            "needs: [foundation, policy, fuzz, operational-core-linux, operational-core-macos, data-processing-linux, data-processing-macos]\n"
+            "needs: [foundation, policy, fuzz, operational-core-linux, operational-core-macos, operational-core-linux-aarch64, data-processing-linux, data-processing-macos, data-processing-linux-aarch64]\n"
             "  data-processing-linux:\n"
             "    runs-on: ubuntu-24.04\n"
             "    ref: ${{ github.event.pull_request.head.sha || github.sha }}\n"
@@ -91,7 +96,13 @@ publish = false
             "    runs-on: macos-15\n"
             "    ref: ${{ github.event.pull_request.head.sha || github.sha }}\n"
             "    run: cargo build --release --workspace --locked\n"
-            "    ci/package_data_processing.py ci/qualify_data_processing.py ci/package_random_values.py ci/qualify_random_values.py --fixtures --expected-source actions/upload-artifact@\n",
+            "    ci/package_data_processing.py ci/qualify_data_processing.py ci/package_random_values.py ci/qualify_random_values.py --fixtures --expected-source actions/upload-artifact@\n"
+            "  data-processing-linux-aarch64:\n"
+            "    runs-on: ubuntu-24.04-arm\n"
+            "    ref: ${{ github.event.pull_request.head.sha || github.sha }}\n"
+            "    run: cargo build --release --workspace --locked\n"
+            "    ci/package_data_processing.py ci/qualify_data_processing.py ci/package_random_values.py ci/qualify_random_values.py --fixtures --expected-source actions/upload-artifact@\n"
+            "    Path(event[\"manifest_path\"]).parent.name\n",
         )
         self.write(
             ".github/workflows/release.yml",
@@ -180,12 +191,23 @@ publish = false
             with self.subTest(required=required):
                 path.write_text(original.replace(required, "removed"))
                 findings = "\n".join(checker.source_problems(self.root, run=self.runner))
-                for candidate_host in ("linux", "macos"):
+                for candidate_host in ("linux", "macos", "linux-aarch64"):
                     self.assertIn(f"CI does not build/qualify/retain data-processing candidates on {candidate_host}", findings)
         path.write_text(original.replace(
-            ", data-processing-linux, data-processing-macos]", "]"))
-        self.assertIn("CI required aggregate does not require foundation, policy, fuzz, and both operational-core and data-processing hosts",
+            "operational-core-macos, operational-core-linux-aarch64",
+            "operational-core-macos"))
+        self.assertIn("CI required aggregate does not require foundation, policy, fuzz, and all qualified operational-core and data-processing hosts",
                       checker.source_problems(self.root, run=self.runner))
+
+    def test_arm_test_binary_collection_uses_the_manifest_path(self) -> None:
+        path = self.root / ".github/workflows/ci.yml"
+        original = path.read_text()
+        required = 'Path(event["manifest_path"]).parent.name'
+        path.write_text(original.replace(required, "removed"))
+        self.assertIn(
+            "CI ARM test-binary collection does not resolve Cargo artifacts by manifest path",
+            checker.source_problems(self.root, run=self.runner),
+        )
 
     def test_rejects_source_directives(self) -> None:
         self.write("examples/stale.opaal", "## note\r\nlanguage 1; let answer = 42\r\n")
@@ -235,23 +257,19 @@ publish = false
         path = self.root / ".github/workflows/ci.yml"
         original = path.read_text(encoding="utf-8")
         command = "        run: cargo test --workspace --locked --no-fail-fast\n"
-        for host in ("linux", "macos"):
+        for host in ("linux", "macos", "linux-aarch64"):
             with self.subTest(host=host):
-                changed = (
-                    original.replace(command, "", 1)
-                    if host == "linux"
-                    else "".join(original.rsplit(command, 1))
-                )
+                index = ("linux", "macos", "linux-aarch64").index(host)
+                start = [match.start() for match in re.finditer(re.escape(command), original)][index]
+                changed = original[:start] + original[start:].replace(command, "", 1)
                 self.write(
                     ".github/workflows/ci.yml",
                     changed,
                 )
-                findings = "\n".join(checker.source_problems(self.root, run=self.runner))
-                self.assertIn(f"does not test the complete workspace on {host}", findings)
-                self.assertNotIn(
-                    f"does not test the complete workspace on {'macos' if host == 'linux' else 'linux'}",
-                    findings,
-                )
+                findings = set(checker.source_problems(self.root, run=self.runner))
+                self.assertIn(f"CI does not test the complete workspace on {host}", findings)
+                for other in {"linux", "macos", "linux-aarch64"} - {host}:
+                    self.assertNotIn(f"CI does not test the complete workspace on {other}", findings)
 
     def test_requires_every_operational_core_qualification_file(self) -> None:
         missing = "tests/golden/release-readiness/tasks.opaal"

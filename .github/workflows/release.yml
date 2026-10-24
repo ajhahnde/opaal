@@ -31,6 +31,9 @@ jobs:
           - runner: ubuntu-24.04
             platform: linux-x86_64
             arch: x86_64
+          - runner: ubuntu-24.04-arm
+            platform: linux-aarch64
+            arch: aarch64
           - runner: macos-15
             platform: macos-arm64
             arch: arm64
@@ -55,6 +58,13 @@ jobs:
 
       - name: Build the tagged programs
         run: cargo build --release --locked -p opaal-cli -p opaal-lsp
+
+      - name: Enforce the Linux AArch64 glibc baseline
+        if: matrix.platform == 'linux-aarch64'
+        run: |
+          for binary in target/release/opaal target/release/opaal-language-server; do
+            readelf --version-info --wide "$binary" | python3 -c 'import re,sys; versions=[tuple(map(int,x.split("."))) for x in re.findall(r"GLIBC_(\d+\.\d+)",sys.stdin.read())]; assert versions and max(versions) <= (2,35), max(versions) if versions else "no GLIBC symbols"'
+          done
 
       - name: Enforce native image invalidation policy before packaging
         if: matrix.platform == 'macos-arm64'

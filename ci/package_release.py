@@ -13,7 +13,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 VERSION = "1.6.0"
-PLATFORMS = ("linux-x86_64", "macos-arm64")
+PLATFORMS = ("linux-x86_64", "linux-aarch64", "macos-arm64")
 FILES = (
     ("target/release/opaal", "opaal", 0o755),
     ("target/release/opaal-language-server", "opaal-language-server", 0o755),

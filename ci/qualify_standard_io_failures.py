@@ -72,7 +72,7 @@ def stop(child: subprocess.Popen) -> None:
 
 
 def qualify(binary: Path, output: Path) -> dict:
-    require((platform.system(), platform.machine()) in [("Linux", "x86_64"), ("Darwin", "arm64")],
+    require((platform.system(), platform.machine()) in [("Linux", "x86_64"), ("Linux", "aarch64"), ("Darwin", "arm64")],
             "unsupported qualification host")
     output.mkdir(parents=True, exist_ok=True)
     cases = []
@@ -82,7 +82,8 @@ def qualify(binary: Path, output: Path) -> dict:
         shutil.copyfile(fixtures / "opaal.toml", work / "opaal.toml")
         manifest = work / "opaal.toml"
         manifest.write_text(manifest.read_text().replace(">=1.3.0", f">={VERSION}"))
-        target = "macos" if platform.system() == "Darwin" else "linux"
+        target = {("Linux", "x86_64"): "linux", ("Linux", "aarch64"): "linux-aarch64",
+                  ("Darwin", "arm64"): "macos"}[(platform.system(), platform.machine())]
         shutil.copyfile(fixtures / f"tools-{target}.toml", work / "tools.toml")
         (work / "authority.toml").write_text(
             'schema_version = 1\nproject = "random_sample"\nenvironment = "ci"\n' + "".join(

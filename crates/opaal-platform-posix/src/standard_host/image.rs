@@ -15,7 +15,7 @@ pub(super) struct Image {
 
 impl Image {
     pub fn capture() -> Result<Self, OperationalError> {
-        #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+        #[cfg(all(target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64")))]
         {
             let file = File::open("/proc/self/exe").map_err(io_error)?;
             verify_elf(&file, true)?;
@@ -36,7 +36,7 @@ impl Image {
             })
         }
         #[cfg(not(any(
-            all(target_os = "linux", target_arch = "x86_64"),
+            all(target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64")),
             all(target_os = "macos", target_arch = "aarch64")
         )))]
         {
@@ -128,7 +128,8 @@ fn verify_elf(file: &File, executable: bool) -> Result<(), OperationalError> {
             u16::from_le_bytes(header[16..18].try_into().expect("ELF type")),
             2 | 3
         )
-        || u16::from_le_bytes(header[18..20].try_into().expect("ELF machine")) != 62
+        || u16::from_le_bytes(header[18..20].try_into().expect("ELF machine"))
+            != native_elf_machine()
         || number32(&header, 20)? != 1
     {
         return Err(unsupported());
@@ -158,10 +159,7 @@ fn verify_elf(file: &File, executable: bool) -> Result<(), OperationalError> {
                 }
                 let count = usize::try_from(number64(entry, 32)?).map_err(|_| unsupported())?;
                 let name = read(file, number64(entry, 8)?, count)?;
-                if !matches!(
-                    cstring(&name, 0)?,
-                    "/lib64/ld-linux-x86-64.so.2" | "/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2"
-                ) {
+                if !native_elf_interpreter(cstring(&name, 0)?) {
                     return Err(unsupported());
                 }
                 interpreter = true;
@@ -319,9 +317,8 @@ fn verify_linux_cache() -> Result<(), OperationalError> {
         let mut entry = [0; 24];
         file.read_exact_at(&mut entry, 48 + u64::from(index) * 24)
             .map_err(io_error)?;
-        // glibc's ELF libc6 + x86_64 cache identity; other ABIs cannot be
-        // selected by this worker and may legitimately coexist on the host.
-        if number32(&entry, 0)? != 0x0303 {
+        // Other ABI cache entries may coexist but cannot be selected by this worker.
+        if number32(&entry, 0)? != native_ld_cache_flag() {
             continue;
         }
         let name = read_name(&file, number32(&entry, 4)?)?;
@@ -380,8 +377,62 @@ fn system_elf_library(name: &str) -> bool {
             | "libpthread.so.0"
             | "libdl.so.2"
             | "librt.so.1"
-            | "ld-linux-x86-64.so.2"
+    ) || name == native_elf_loader_name()
+}
+
+#[cfg(target_arch = "x86_64")]
+const fn native_elf_machine() -> u16 {
+    62
+}
+#[cfg(target_arch = "aarch64")]
+const fn native_elf_machine() -> u16 {
+    183
+}
+#[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+const fn native_elf_machine() -> u16 {
+    0
+}
+
+#[cfg(target_arch = "x86_64")]
+fn native_elf_interpreter(path: &str) -> bool {
+    matches!(
+        path,
+        "/lib64/ld-linux-x86-64.so.2" | "/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2"
     )
+}
+#[cfg(target_arch = "aarch64")]
+fn native_elf_interpreter(path: &str) -> bool {
+    path == "/lib/ld-linux-aarch64.so.1"
+}
+#[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+fn native_elf_interpreter(_: &str) -> bool {
+    false
+}
+
+#[cfg(target_arch = "x86_64")]
+const fn native_elf_loader_name() -> &'static str {
+    "ld-linux-x86-64.so.2"
+}
+#[cfg(target_arch = "aarch64")]
+const fn native_elf_loader_name() -> &'static str {
+    "ld-linux-aarch64.so.1"
+}
+#[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+const fn native_elf_loader_name() -> &'static str {
+    ""
+}
+
+#[cfg(target_arch = "x86_64")]
+const fn native_ld_cache_flag() -> u32 {
+    0x0303
+}
+#[cfg(target_arch = "aarch64")]
+const fn native_ld_cache_flag() -> u32 {
+    0x0a03
+}
+#[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+const fn native_ld_cache_flag() -> u32 {
+    0
 }
 
 #[cfg(any(target_os = "linux", test))]
@@ -619,7 +670,7 @@ mod tests {
         let mut bytes = vec![0; 512];
         bytes[..7].copy_from_slice(&[0x7f, b'E', b'L', b'F', 2, 1, 1]);
         bytes[16..18].copy_from_slice(&3_u16.to_le_bytes());
-        bytes[18..20].copy_from_slice(&62_u16.to_le_bytes());
+        bytes[18..20].copy_from_slice(&native_elf_machine().to_le_bytes());
         bytes[20..24].copy_from_slice(&1_u32.to_le_bytes());
         bytes[32..40].copy_from_slice(&64_u64.to_le_bytes());
         bytes[54..56].copy_from_slice(&56_u16.to_le_bytes());

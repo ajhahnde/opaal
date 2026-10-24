@@ -10,8 +10,18 @@ use crate::project::{DockerTarget, ProjectManifest};
 use crate::workflow::{digest_bytes, native_path};
 
 pub const PROFILE: &str = "docker-cli-image-inspect.v1";
+#[cfg(all(target_os = "linux", target_arch = "aarch64"))]
+pub const PROFILE_BYTES: &[u8] = include_bytes!(
+    "../../../../tests/golden/docker-image-checks/docker-cli-profile-aarch64.json"
+);
+#[cfg(not(all(target_os = "linux", target_arch = "aarch64")))]
 pub const PROFILE_BYTES: &[u8] =
     include_bytes!("../../../../tests/golden/docker-image-checks/docker-cli-profile.json");
+
+#[cfg(all(target_os = "linux", target_arch = "aarch64"))]
+const HOST_DOCKER_ARCH: &str = "arm64";
+#[cfg(not(all(target_os = "linux", target_arch = "aarch64")))]
+const HOST_DOCKER_ARCH: &str = "amd64";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct BoundDockerTarget {
@@ -202,10 +212,10 @@ pub(crate) fn version_fields(document: &crate::Record) -> Result<Vec<String>, Mo
     if fields[0] != crate::docker::TOOL_VERSION
         || fields[1] != crate::docker::API_VERSION
         || fields[2] != "linux"
-        || fields[3] != "amd64"
+        || fields[3] != HOST_DOCKER_ARCH
         || fields[4] != crate::docker::TOOL_VERSION
         || fields[7] != "linux"
-        || fields[8] != "amd64"
+        || fields[8] != HOST_DOCKER_ARCH
     {
         return Err(invalid_profile());
     }

@@ -36,6 +36,8 @@ fn saved_image_reference_binds_version_policy_report_and_native_assessment() {
             "offline-tools.toml",
             fs::read(owner.join(if cfg!(target_os = "macos") {
                 "offline-tools-macos.toml"
+            } else if cfg!(target_arch = "aarch64") {
+                "offline-tools-linux-aarch64.toml"
             } else {
                 "offline-tools-linux.toml"
             }))
@@ -151,11 +153,7 @@ impl StaticTarget {
         }
         work.write("docker", b"this static canary must never execute");
         let path = native_path(&work.0.join("docker"));
-        let platform = if cfg!(target_os = "macos") {
-            "aarch64-apple-darwin"
-        } else {
-            "x86_64-unknown-linux-gnu"
-        };
+        let platform = support::host_platform_triple();
         work.write("opaal.toml",format!("schema_version=1\n[project]\nname='image_check'\nroot_module='tasks.opaal'\nrequired_opaal='>=1.4.0,<2.0.0'\n[paths]\nroot='.'\nevidence='output'\n[tools.docker]\nadapter='docker'\nversion='=29.9.0'\n[targets.ci]\nadapter='docker'\ntool='docker'\nsocket={{encoding='base64url-nopad',platform='unix',value='{}'}}\nconfig_directory='docker-empty'\napi_version='1.48'\n[environments.ci]\nauthority='authority.toml'\ntool_lock='tools.toml'\n",native_path(&socket)["value"].as_str().unwrap()));
         work.write("tasks.opaal","import std::docker as docker\nimport project::targets as targets\nimport project::tools as tools\naction verify() -> Bool effects { process.run(tools::docker); } {\nlet image = docker::inspect_image(targets::ci, 'example:test')\nreturn image.os == 'linux'\n}\ntask verify = verify\n");
         work.write("authority.toml","schema_version=1\nproject='image_check'\nenvironment='ci'\n[[rules]]\ndecision='grant'\neffect='process.run'\nscope='tool.docker'\nrequired_enforcement='acknowledge-unenforced'\n");

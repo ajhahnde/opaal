@@ -13,6 +13,8 @@ fn packaged_processor_and_ci_job_check_references_use_public_entry_points() {
     let work = ReportDir::new();
     let target = if cfg!(target_os = "macos") {
         "macos-arm64"
+    } else if cfg!(target_arch = "aarch64") {
+        "linux-aarch64"
     } else {
         "linux-x86_64"
     };
@@ -33,11 +35,7 @@ fn packaged_processor_and_ci_job_check_references_use_public_entry_points() {
 fn controlled(work: &ReportDir, body: &str) -> String {
     work.write("opaal.toml", "schema_version = 1\n[project]\nname = 'stream_processor'\nroot_module = 'tasks.opaal'\nrequired_opaal = '>=1.2.0,<2.0.0'\n[paths]\nroot = '.'\nevidence = 'output'\n[environments.ci]\nauthority = 'authority.toml'\ntool_lock = 'tools.toml'\n");
     work.write("authority.toml", format!("schema_version = 1\nproject = 'stream_processor'\nenvironment = 'ci'\n{}", ["entropy.system", "stdin.read", "stdout.write", "stderr.write"].map(|effect| format!("[[rules]]\ndecision = 'grant'\neffect = '{effect}'\nscope = 'evaluation'\nrequired_enforcement = 'enforced'\n")).join("")));
-    let platform = if cfg!(target_os = "macos") {
-        "aarch64-apple-darwin"
-    } else {
-        "x86_64-unknown-linux-gnu"
-    };
+    let platform = support::host_platform_triple();
     work.write("tools.toml", format!("schema_version = 1\nproject = 'stream_processor'\nenvironment = 'ci'\nplatform = '{platform}'\ntools = []\n[child_environment]\ninherit = []\n"));
     work.write("tasks.opaal", format!("import std::io as io\nimport std::random as random\nimport std::string as string\naction process() -> Null effects {{ entropy.system(); stdin.read(); stdout.write(); stderr.write(); }} {{ {body} }}\ntask process = process\n"));
     let planned = work.run(&[

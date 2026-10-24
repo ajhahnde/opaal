@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import platform
 import runpy
 import shutil
 import subprocess
@@ -45,9 +46,10 @@ class DockerImageChecksTests(unittest.TestCase):
             test_view(payload[:-1])
 
     def test_live_comparison_uses_four_fixed_children_and_stops_redacted_failures(self):
-        version = {"Client": {"Version": "29.9.0", "ApiVersion": "1.48", "Os": "linux", "Arch": "amd64"},
+        host_arch = "arm64" if platform.machine() == "aarch64" else "amd64"
+        version = {"Client": {"Version": "29.9.0", "ApiVersion": "1.48", "Os": "linux", "Arch": host_arch},
                    "Server": {"Version": "29.9.0", "ApiVersion": "1.56", "MinAPIVersion": "1.40",
-                              "Os": "linux", "Arch": "amd64"}}
+                              "Os": "linux", "Arch": host_arch}}
         image = (ROOT / FIXTURES / "fixtures/image.json").read_bytes()
         expected = ["sha256:" + "a" * 64, "linux/amd64", "abc123"]
         original_run = subprocess.run

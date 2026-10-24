@@ -23,7 +23,7 @@ use opaal_runtime::eval::{CancelReason, CancellationToken, FakeClock};
 use opaal_runtime::operational::{ModuleError, integrity, process};
 use opaal_runtime::project::{ToolLock, parse_project_manifest, parse_tool_lock};
 
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[cfg(all(target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64")))]
 #[path = "controlled_native_tools/acquisition.rs"]
 mod acquisition;
 
@@ -347,6 +347,7 @@ fn observe_image_case(name: &str, observed: serde_json::Value) {
     assert_eq!(observed, case["expected"], "{name}");
     let host = match (std::env::consts::OS, std::env::consts::ARCH) {
         ("linux", "x86_64") => "x86_64-unknown-linux-gnu",
+        ("linux", "aarch64") => "aarch64-unknown-linux-gnu",
         ("macos", "aarch64") => "aarch64-apple-darwin",
         _ => panic!("unsupported observer host"),
     };
@@ -758,7 +759,8 @@ fn image() -> Vec<u8> {
     let mut bytes = vec![0; 128 * 1024];
     bytes[..7].copy_from_slice(b"\x7fELF\x02\x01\x01");
     bytes[16..18].copy_from_slice(&2_u16.to_le_bytes());
-    bytes[18..20].copy_from_slice(&62_u16.to_le_bytes());
+    let machine = if cfg!(target_arch = "aarch64") { 183_u16 } else { 62_u16 };
+    bytes[18..20].copy_from_slice(&machine.to_le_bytes());
     bytes[20..24].copy_from_slice(&1_u32.to_le_bytes());
     bytes[32..40].copy_from_slice(&64_u64.to_le_bytes());
     bytes[52..54].copy_from_slice(&64_u16.to_le_bytes());
