@@ -15,7 +15,10 @@ pub(super) struct Image {
 
 impl Image {
     pub fn capture() -> Result<Self, OperationalError> {
-        #[cfg(all(target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64")))]
+        #[cfg(all(
+            target_os = "linux",
+            any(target_arch = "x86_64", target_arch = "aarch64")
+        ))]
         {
             let file = File::open("/proc/self/exe").map_err(io_error)?;
             verify_elf(&file, true)?;
@@ -36,7 +39,10 @@ impl Image {
             })
         }
         #[cfg(not(any(
-            all(target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64")),
+            all(
+                target_os = "linux",
+                any(target_arch = "x86_64", target_arch = "aarch64")
+            ),
             all(target_os = "macos", target_arch = "aarch64")
         )))]
         {

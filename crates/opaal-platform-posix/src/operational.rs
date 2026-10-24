@@ -26,7 +26,10 @@ use rustls::pki_types::pem::PemObject;
 use rustls::pki_types::{CertificateDer, ServerName};
 use rustls::{ClientConfig, ClientConnection, RootCertStore, StreamOwned};
 
-#[cfg(all(target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64")))]
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
 mod native;
 
 /// One concrete operational adapter with a process-local monotonic origin.
@@ -66,7 +69,10 @@ fn close_descriptors_on_exec(command: &mut Command) {
 }
 
 impl OperationalAdapter for PosixOperationalAdapter {
-    #[cfg(all(target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64")))]
+    #[cfg(all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ))]
     fn snapshot_executable(
         &self,
         source: &File,

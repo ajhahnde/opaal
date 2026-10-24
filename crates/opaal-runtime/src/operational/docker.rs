@@ -11,9 +11,8 @@ use crate::workflow::{digest_bytes, native_path};
 
 pub const PROFILE: &str = "docker-cli-image-inspect.v1";
 #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
-pub const PROFILE_BYTES: &[u8] = include_bytes!(
-    "../../../../tests/golden/docker-image-checks/docker-cli-profile-aarch64.json"
-);
+pub const PROFILE_BYTES: &[u8] =
+    include_bytes!("../../../../tests/golden/docker-image-checks/docker-cli-profile-aarch64.json");
 #[cfg(not(all(target_os = "linux", target_arch = "aarch64")))]
 pub const PROFILE_BYTES: &[u8] =
     include_bytes!("../../../../tests/golden/docker-image-checks/docker-cli-profile.json");

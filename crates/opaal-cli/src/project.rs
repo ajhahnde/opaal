@@ -4216,7 +4216,10 @@ fn build_check_artifact(
         })
         .collect::<Vec<_>>();
     if !manifest.targets().is_empty()
-        && !matches!(tools.platform(), "x86_64-unknown-linux-gnu" | "aarch64-unknown-linux-gnu")
+        && !matches!(
+            tools.platform(),
+            "x86_64-unknown-linux-gnu" | "aarch64-unknown-linux-gnu"
+        )
     {
         findings.push(json!({"severity":"error","code":"CHECK011","message":"Docker acquisition requires a qualified Linux profile","source":null,"path":null,"start_byte":null,"end_byte":null}));
     }

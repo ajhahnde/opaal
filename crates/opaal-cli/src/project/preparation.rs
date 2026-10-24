@@ -88,20 +88,18 @@ fn prepared_assets(
     request: &InitProjectRequest,
     destination: &Path,
 ) -> Result<Vec<(String, Vec<u8>)>, ProjectFrontendError> {
-    let (profile_name, profile_bytes) =
-        if host_platform_triple() == "aarch64-unknown-linux-gnu" {
-            (
-                "docker-cli-profile-aarch64.json",
-                include_bytes!("../../../../examples/image-check/docker-cli-profile-aarch64.json")
-                    .as_slice(),
-            )
-        } else {
-            (
-                "docker-cli-profile.json",
-                include_bytes!("../../../../examples/image-check/docker-cli-profile.json")
-                    .as_slice(),
-            )
-        };
+    let (profile_name, profile_bytes) = if host_platform_triple() == "aarch64-unknown-linux-gnu" {
+        (
+            "docker-cli-profile-aarch64.json",
+            include_bytes!("../../../../examples/image-check/docker-cli-profile-aarch64.json")
+                .as_slice(),
+        )
+    } else {
+        (
+            "docker-cli-profile.json",
+            include_bytes!("../../../../examples/image-check/docker-cli-profile.json").as_slice(),
+        )
+    };
     let mut assets = ASSETS
         .iter()
         .map(|(name, bytes)| ((*name).to_owned(), bytes.to_vec()))
@@ -122,12 +120,10 @@ fn prepared_assets(
                     include_bytes!("../../../../examples/image-check/offline-tools-linux.toml")
                         .as_slice()
                 }
-                "aarch64-unknown-linux-gnu" => {
-                    include_bytes!(
-                        "../../../../examples/image-check/offline-tools-linux-aarch64.toml"
-                    )
-                    .as_slice()
-                }
+                "aarch64-unknown-linux-gnu" => include_bytes!(
+                    "../../../../examples/image-check/offline-tools-linux-aarch64.toml"
+                )
+                .as_slice(),
                 _ => return Err(setup_error(false)),
             };
             (
@@ -136,11 +132,10 @@ fn prepared_assets(
                 lock.to_vec(),
             )
         }
-        "ci"
-            if matches!(
-                host_platform_triple(),
-                "x86_64-unknown-linux-gnu" | "aarch64-unknown-linux-gnu"
-            ) =>
+        "ci" if matches!(
+            host_platform_triple(),
+            "x86_64-unknown-linux-gnu" | "aarch64-unknown-linux-gnu"
+        ) =>
         {
             let executable = request
                 .docker
@@ -255,17 +250,15 @@ fn init_repository_project_with_writer(
                 include_bytes!(
                     "../../../../examples/repository-check/offline-tools-linux-aarch64.toml"
                 )
-                    .to_vec()
+                .to_vec()
             } else {
                 include_bytes!("../../../../examples/repository-check/offline-tools-linux.toml")
                     .to_vec()
             },
         ),
-        (
-            "ci",
-            "x86_64-unknown-linux-gnu" | "aarch64-unknown-linux-gnu",
-            Some(tool),
-        ) if tool.is_absolute() => {
+        ("ci", "x86_64-unknown-linux-gnu" | "aarch64-unknown-linux-gnu", Some(tool))
+            if tool.is_absolute() =>
+        {
             let tool = setup_path(tool)?;
             let (_, file) =
                 open_absolute_file_with_parent_nofollow(&tool).map_err(|_| setup_error(false))?;

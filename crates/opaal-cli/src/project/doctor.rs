@@ -428,8 +428,7 @@ pub fn doctor_project(
                                     if !matches!(
                                         host_platform_triple(),
                                         "x86_64-unknown-linux-gnu" | "aarch64-unknown-linux-gnu"
-                                    )
-                                        && effect.capability() == "process.run"
+                                    ) && effect.capability() == "process.run"
                                         && effect
                                             .scope()
                                             .strip_prefix("tool.")

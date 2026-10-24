@@ -192,11 +192,6 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Verify the native ARM host and Jammy userland
-        run: |
-          test "$(uname -m)" = aarch64
-          python3 -c 'import platform; assert platform.libc_ver() == ("glibc", "2.35"), platform.libc_ver(); assert tuple(map(int, platform.release().split(".")[:2])) >= (6, 3), platform.release()'
-
       - name: Install pinned Rust and native qualification tools
         run: |
           apt-get update
@@ -206,6 +201,11 @@ jobs:
           chmod 0755 "$RUNNER_TEMP/rustup-init"
           "$RUNNER_TEMP/rustup-init" -y --profile minimal --default-host aarch64-unknown-linux-gnu --default-toolchain none --no-modify-path
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      - name: Verify the native ARM host and Jammy userland
+        run: |
+          test "$(uname -m)" = aarch64
+          python3 -c 'import platform; assert platform.libc_ver() == ("glibc", "2.35"), platform.libc_ver(); assert tuple(map(int, platform.release().split(".")[:2])) >= (6, 3), platform.release()'
 
       - name: Activate the pinned Rust toolchain
         run: |
@@ -510,11 +510,6 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
 
-      - name: Verify the native ARM host and Jammy userland
-        run: |
-          test "$(uname -m)" = aarch64
-          python3 -c 'import platform; assert platform.libc_ver() == ("glibc", "2.35"), platform.libc_ver(); assert tuple(map(int, platform.release().split(".")[:2])) >= (6, 3), platform.release()'
-
       - name: Install pinned Rust, Docker 29.9.0, and qualification tools
         run: |
           apt-get update
@@ -538,6 +533,11 @@ jobs:
           apt-get update
           docker_version='5:29.9.0-1~ubuntu.22.04~jammy'
           DEBIAN_FRONTEND=noninteractive apt-get install -y "docker-ce=$docker_version" "docker-ce-cli=$docker_version" containerd.io
+
+      - name: Verify the native ARM host and Jammy userland
+        run: |
+          test "$(uname -m)" = aarch64
+          python3 -c 'import platform; assert platform.libc_ver() == ("glibc", "2.35"), platform.libc_ver(); assert tuple(map(int, platform.release().split(".")[:2])) >= (6, 3), platform.release()'
 
       - name: Start the isolated Docker 29.9.0 daemon
         run: |

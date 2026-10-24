@@ -5,10 +5,16 @@ use std::fs::File;
 use opaal_platform::operational::{OperationalAdapter, OperationalErrorKind};
 use opaal_platform_posix::operational::PosixOperationalAdapter;
 
-#[cfg(all(target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64")))]
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
 static SNAPSHOT_OBSERVER: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-#[cfg(all(target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64")))]
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
 fn observe_native_image(kind: &str, path: &std::path::Path, snapshot: &File) {
     use std::os::unix::fs::FileExt;
 
@@ -41,7 +47,10 @@ fn observe_image_case(name: &str, observed: &str) {
     );
 }
 
-#[cfg(all(target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64")))]
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
 fn snapshot_handles() -> usize {
     std::fs::read_dir("/proc/self/fd")
         .unwrap()
@@ -54,7 +63,10 @@ fn snapshot_handles() -> usize {
         .count()
 }
 
-#[cfg(all(target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64")))]
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
 #[test]
 #[ignore = "requires the qualifier's attached syscall fault observer"]
 fn image_snapshot_syscall_fault() {
@@ -92,7 +104,10 @@ fn image_snapshot_syscall_fault() {
     );
 }
 
-#[cfg(all(target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64")))]
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
 #[test]
 fn image_maintained_script_with_seal_support_preserves_interpreter_descriptor() {
     use std::ffi::OsString;
@@ -139,7 +154,10 @@ fn image_maintained_script_with_seal_support_preserves_interpreter_descriptor() 
     assert_eq!(output.stdout(), b"descriptor");
 }
 
-#[cfg(not(all(target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64"))))]
+#[cfg(not(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+)))]
 #[test]
 fn native_frozen_image_snapshots_refuse_unsupported_hosts() {
     let source = File::open(std::env::current_exe().unwrap()).unwrap();
@@ -156,7 +174,10 @@ fn native_frozen_image_snapshots_refuse_unsupported_hosts() {
     );
 }
 
-#[cfg(all(target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64")))]
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
 #[test]
 fn native_frozen_image_seals_permissions_cancellation_and_descriptor_launch() {
     use std::ffi::OsString;
@@ -396,7 +417,10 @@ fn native_frozen_image_seals_permissions_cancellation_and_descriptor_launch() {
     }
 }
 
-#[cfg(all(target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64")))]
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
 #[test]
 fn native_frozen_lifetime_output_deadline_cancellation_and_owned_group() {
     use std::ffi::OsString;
@@ -597,7 +621,10 @@ fn native_frozen_lifetime_output_deadline_cancellation_and_owned_group() {
     fs::remove_dir_all(root).unwrap();
 }
 
-#[cfg(all(target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64")))]
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
 #[test]
 #[ignore = "requires an isolated noexec mount; set OPAAL_NATIVE_NOEXEC_ROOT"]
 fn image_original_noexec_mount_refuses() {
@@ -623,7 +650,10 @@ fn image_original_noexec_mount_refuses() {
     std::fs::remove_file(path).unwrap();
 }
 
-#[cfg(all(target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64")))]
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
 #[test]
 #[ignore = "requires setfacl without DAC override"]
 fn image_original_acl_refuses() {
@@ -674,7 +704,10 @@ fn image_original_acl_refuses() {
     std::fs::remove_file(path).unwrap();
 }
 
-#[cfg(all(target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64")))]
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
 #[test]
 #[ignore = "requires setcap in an isolated user namespace"]
 fn image_original_capabilities_refuse() {
