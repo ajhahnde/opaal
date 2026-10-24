@@ -611,8 +611,8 @@ def qualify(archive, fixtures, binaries, source, target, artifacts, live=None):
         binary = programs / "opaal"
         profile_name = "docker-cli-profile-aarch64.json" if target == "linux-aarch64" else "docker-cli-profile.json"
         profile = json.loads((inputs / profile_name).read_bytes())
-        require(profile["host"] == ("aarch64-unknown-linux-gnu" if target == "linux-aarch64" else
-                                     "x86_64-unknown-linux-gnu" if target == "linux-x86_64" else "aarch64-apple-darwin")
+        expected_host = "aarch64-unknown-linux-gnu" if target == "linux-aarch64" else "x86_64-unknown-linux-gnu"
+        require(profile["host"] == expected_host
                 and profile["cli_version"] == "29.9.0" and profile["engine_version"] == "29.9.0"
                 and profile["api_version"] == "1.48", "Docker CLI profile differs")
         require(success(command([binary, "--version"], directory, {"PATH": os.defpath}), "version")

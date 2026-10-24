@@ -505,15 +505,10 @@ jobs:
         shell: bash
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-          fetch-depth: 0
-
       - name: Install pinned Rust, Docker 29.9.0, and qualification tools
         run: |
           apt-get update
-          DEBIAN_FRONTEND=noninteractive apt-get install -y binutils build-essential ca-certificates curl python3 shellcheck strace
+          DEBIAN_FRONTEND=noninteractive apt-get install -y binutils build-essential ca-certificates curl git python3 shellcheck strace
           curl -fsSLo "$RUNNER_TEMP/rustup-init" https://static.rust-lang.org/rustup/archive/1.28.2/aarch64-unknown-linux-gnu/rustup-init
           printf '%s  %s\n' e3853c5a252fca15252d07cb23a1bdd9377a8c6f3efa01531109281ae47f841c "$RUNNER_TEMP/rustup-init" | sha256sum --check
           chmod 0755 "$RUNNER_TEMP/rustup-init"
@@ -533,6 +528,11 @@ jobs:
           apt-get update
           docker_version='5:29.9.0-1~ubuntu.22.04~jammy'
           DEBIAN_FRONTEND=noninteractive apt-get install -y "docker-ce=$docker_version" "docker-ce-cli=$docker_version" containerd.io
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
 
       - name: Verify the native ARM host and Jammy userland
         run: |
