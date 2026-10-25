@@ -4,10 +4,18 @@ All notable changes to OPAAL are documented here.
 
 ## [Unreleased]
 
+## [1.7.0]
+
 ### Added
 
-- Add native GNU/Linux AArch64 source, process, Docker inspection and release
-  candidate support. The AArch64 archive is not published by this change.
+- Add native GNU/Linux AArch64 support, including foreground processes,
+  controlled native tools, Docker inspection and CLI/language-server archives.
+  GNU/Linux AArch64 requires glibc 2.35 or newer and Linux kernel 6.3 or newer.
+
+### Fixed
+
+- Recognize split process-reaping trace records during native qualification,
+  preserving checks for the exact child and successful cleanup.
 
 ## [1.6.0]
 

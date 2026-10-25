@@ -11,7 +11,7 @@ on:
       - README.md
       - LICENSE
   push:
-    tags: [v1.6.0]
+    tags: [v1.7.0]
 
 permissions:
   contents: read
@@ -23,7 +23,7 @@ concurrency:
 jobs:
   release-binaries:
     name: release-binaries-${{ matrix.platform }}
-    if: github.event_name == 'push' || github.head_ref == 'release/opaal-1.6.0'
+    if: github.event_name == 'push' || github.head_ref == 'release/opaal-1.7.0'
     strategy:
       fail-fast: false
       matrix:
@@ -34,15 +34,43 @@ jobs:
           - runner: ubuntu-24.04-arm
             platform: linux-aarch64
             arch: aarch64
+            container: ubuntu:22.04@sha256:829f6df217bcbae2b371026e81711d1a787c61b2967ad09d015063663ebafbf7
           - runner: macos-15
             platform: macos-arm64
             arch: arm64
     runs-on: ${{ matrix.runner }}
+    container: ${{ matrix.container }}
+    defaults:
+      run:
+        shell: bash
     timeout-minutes: 40
     steps:
+      - name: Install the qualified Linux AArch64 build environment
+        if: matrix.platform == 'linux-aarch64'
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y binutils build-essential ca-certificates curl git
+          curl -fsSLo "$RUNNER_TEMP/rustup-init" https://static.rust-lang.org/rustup/archive/1.28.2/aarch64-unknown-linux-gnu/rustup-init
+          printf '%s  %s\n' e3853c5a252fca15252d07cb23a1bdd9377a8c6f3efa01531109281ae47f841c "$RUNNER_TEMP/rustup-init" | sha256sum --check
+          chmod 0755 "$RUNNER_TEMP/rustup-init"
+          "$RUNNER_TEMP/rustup-init" -y --profile minimal --default-host aarch64-unknown-linux-gnu --default-toolchain none --no-modify-path
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          curl -fsSLo "$RUNNER_TEMP/python.tar.gz" https://github.com/actions/python-versions/releases/download/3.12.15-36805895057/python-3.12.15-linux-22.04-arm64.tar.gz
+          printf '%s  %s\n' 753766e28452fe7946c9e7bab7428c02ece786da64d066af9bd390ac38ae3b79 "$RUNNER_TEMP/python.tar.gz" | sha256sum --check
+          python_prefix=/opt/hostedtoolcache/Python/3.12.15/arm64
+          mkdir -p "$python_prefix"
+          tar -xzf "$RUNNER_TEMP/python.tar.gz" -C "$python_prefix"
+          ln -s "$python_prefix/bin/python3" /usr/local/bin/python3
+          echo /usr/local/bin >> "$GITHUB_PATH"
+          env -i /usr/local/bin/python3 -c 'import platform, sys, tomllib; assert sys.version_info[:3] == (3, 12, 15), sys.version; assert platform.libc_ver() == ("glibc", "2.35"), platform.libc_ver()'
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+
+      - name: Mark the ARM container checkout safe for Git
+        if: matrix.platform == 'linux-aarch64'
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
       - name: Activate the pinned Rust toolchain
         run: |
@@ -51,7 +79,7 @@ jobs:
 
       - name: Verify the release tag
         if: github.event_name == 'push'
-        run: test "${GITHUB_REF_NAME}" = "v1.6.0"
+        run: test "${GITHUB_REF_NAME}" = "v1.7.0"
 
       - name: Verify the release host
         run: test "$(uname -m)" = "${{ matrix.arch }}"
@@ -74,7 +102,7 @@ jobs:
           codesign --verify --strict target/release/opaal
 
       - name: Verify the CLI release identity
-        run: test "$(target/release/opaal --version)" = "opaal 1.6.0"
+        run: test "$(target/release/opaal --version)" = "opaal 1.7.0"
 
       - name: Verify the release candidate boundary
         run: python3 ci/check_product.py release-candidate
@@ -85,12 +113,12 @@ jobs:
       - name: Upload the exact archive and checksum
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: opaal-v1.6.0-${{ matrix.platform }}-${{ github.sha }}
+          name: opaal-v1.7.0-${{ matrix.platform }}-${{ github.sha }}
           path: |
-            dist/opaal-v1.6.0-${{ matrix.platform }}.tar.gz
-            dist/opaal-v1.6.0-${{ matrix.platform }}.tar.gz.sha256
+            dist/opaal-v1.7.0-${{ matrix.platform }}.tar.gz
+            dist/opaal-v1.7.0-${{ matrix.platform }}.tar.gz.sha256
           if-no-files-found: error
           compression-level: 0
 
       - name: Record the binary result
-        run: echo "Built and archived OPAAL 1.6.0 for ${{ matrix.platform }} from ${{ github.sha }}. The operator publishes the checked archive and checksum after both tag jobs pass." >> "${GITHUB_STEP_SUMMARY}"
+        run: echo "Built and archived OPAAL 1.7.0 for ${{ matrix.platform }} from ${{ github.sha }}. The operator publishes the checked archive and checksum after all three tag jobs pass." >> "${GITHUB_STEP_SUMMARY}"

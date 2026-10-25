@@ -1291,7 +1291,7 @@
     },
     {
       "path": "ci/check_product.py",
-      "sha256": "a8ae8c46e50d84bfd86e8bb5e31488594dbee2fe03366008f1768cdfd4920933",
+      "sha256": "e49f91dea94a401c6f35c22784d75ee708c9c66f40fc3f580a2ecb4efcba58e3",
       "source_markers": 15,
       "constructors_or_assertions": [
         "command_json",
@@ -1413,7 +1413,7 @@
     },
     {
       "path": "ci/package_release.py",
-      "sha256": "48b7be4efe00e5121fd508e2734939f70a2c5aa46931ff73f877253a2da32ce2",
+      "sha256": "b75ca3b61618a819ebc321fb86d2b9649c39ea452c2bbfbb0ebb666587fface3",
       "source_markers": 2,
       "constructors_or_assertions": [
         "main",
@@ -1555,8 +1555,8 @@
     },
     {
       "path": "ci/qualify_native_images.py",
-      "sha256": "02203e519a64d2ffc306af824f36bc7f14410019e8ce260b380a078e05040bda",
-      "source_markers": 9,
+      "sha256": "1b99106d41c84e68124e287608a282dc1d3025692c4e67333206e9db8b89bf21",
+      "source_markers": 10,
       "constructors_or_assertions": [
         "acquisition_trace_observations",
         "finish_cases",
@@ -1566,7 +1566,8 @@
         "posix_image_cases",
         "qualify_images",
         "snapshot_fault_case",
-        "snapshot_fault_records"
+        "snapshot_fault_records",
+        "wait4_reaped"
       ],
       "role": "mixed-test-buffers",
       "reason": "Native preparation, image and evidence fixtures are intentionally retained; the named case and observer assertions bind their exact outcomes.",
@@ -1823,7 +1824,7 @@
     },
     {
       "path": "ci/tests/test_controlled_native_tools.py",
-      "sha256": "436dd259e763046002adf02ad44f0401fcfe31aea9058b697d5f8831172b21d2",
+      "sha256": "f9bb62df7ba300a1788954ac6d7e04bf84ae2d73fd7c00d6a4672d65757250ef",
       "source_markers": 50,
       "constructors_or_assertions": [
         "completed",
