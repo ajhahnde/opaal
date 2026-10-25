@@ -1913,10 +1913,11 @@
     },
     {
       "path": "ci/tests/test_docker_image_checks.py",
-      "sha256": "eeebebf84e2ee44cbee7821dfbfceec728018977cd286d0b95cc4e42e25953c9",
-      "source_markers": 10,
+      "sha256": "229199200f49886e9e7757c751281370539fe9a4722da55fac8ccb4cedea89d8",
+      "source_markers": 11,
       "constructors_or_assertions": [
         "run",
+        "test_arm_live_expectation_binds_the_loaded_manifest_not_its_config",
         "test_comparison_shell_redacts_parser_errors_and_refuses_output_failure",
         "test_decoder_corpus_materializes_exact_byte_utf8_and_depth_boundaries",
         "test_independent_python_comparison_matches_every_named_report_and_exit",

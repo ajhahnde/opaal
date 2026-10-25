@@ -260,6 +260,14 @@ jobs:
       - name: Exercise the native ARM performance smoke profile
         run: python3 benchmarks/run.py --profile smoke --output "$RUNNER_TEMP/benchmark-smoke-linux-aarch64.json"
 
+      - name: Retain native ARM performance evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: benchmark-smoke-linux-aarch64
+          path: ${{ runner.temp }}/benchmark-smoke-linux-aarch64.json
+          if-no-files-found: error
+
   random-native-linux:
     name: random-native-linux
     if: github.event_name == 'workflow_dispatch'
