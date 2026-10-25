@@ -590,7 +590,7 @@ pub fn worker_inputs(input: Option<&[u8]>) {
                     assert_eq!(socket.recv(&mut header)?, 36);
                     assert_eq!(header.as_slice(), frame(2, evaluation, 0, 0));
                     socket.send(b"invalid")?;
-                } else if stage == 1
+                } else if matches!(stage, 1 | 3 | 5)
                     && (1..=256).contains(&count)
                     && bytes == frame(3, 71, 1, count)
                 {
@@ -633,9 +633,13 @@ pub fn worker_inputs(input: Option<&[u8]>) {
 }
 
 pub fn valid_worker_inputs() {
-    for (stage, (tag, request, count)) in
-        [(1, 0, 0), (3, 1, 256), (5, 1, 0)].into_iter().enumerate()
-    {
+    for (stage, tag, request, count) in [
+        (0, 1, 0, 0),
+        (1, 3, 1, 256),
+        (2, 5, 1, 0),
+        (3, 3, 1, 256),
+        (5, 3, 1, 256),
+    ] {
         let mut input = vec![stage as u8, 0];
         input.extend(frame(tag, 71, request, count));
         worker_inputs(Some(&input));

@@ -3087,7 +3087,7 @@
     },
     {
       "path": "crates/opaal-platform-posix/tests/fixtures/standard_host_faults.rs",
-      "sha256": "a0c41164524abb4a0839343316ad17bac752a511d199b307813e473e8092fc79",
+      "sha256": "dbe1f1c8a31a36453aa847384c55939232eeb0507a76d50836501eb803ae176d",
       "source_markers": 0,
       "constructors_or_assertions": [
         "descriptors",

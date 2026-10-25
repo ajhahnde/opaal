@@ -16,6 +16,8 @@ All notable changes to OPAAL are documented here.
 
 - Recognize split process-reaping trace records during native qualification,
   preserving checks for the exact child and successful cleanup.
+- Handle valid entropy requests in the worker-protocol fuzz driver without
+  falsely reporting a stalled worker.
 
 ## [1.6.0]
 
