@@ -218,13 +218,13 @@ Init embeds the fixed version-matched example and selects the offline host lock.
 The parent must exist without symlink components. Destination must be absent.
 Files are exclusive mode0600; directories mode0700. Failure after creation
 retains partial files: inspect them separately and retry in a fresh destination.
-Live setup requires Linux x86_64 and explicit independently qualified Docker
+Live setup requires qualified Linux x86_64 or AArch64 and explicit Docker
 29.9.0 executable/socket facts. It hashes the executable without launching it,
 creates four empty directories and binds the unchanged profile. No provisioning,
 account reads, daemon connection or automatic plan acceptance occurs.
 
-Repository-check offline is tool-free on both qualified hosts. Its ci setup
-requires Linux x86_64 and an explicit native ELF image, hashes and inspects it
+Repository-check offline is tool-free on all qualified hosts. Its ci setup
+requires Linux x86_64 or AArch64 and an explicit native ELF image, hashes and inspects it
 without launching it, and sets only LC_ALL=C with no inherited environment.
 Native version and behavior remain unverified; child effects are unenforced.
 Image inspection cannot establish sealed snapshot or execution availability.

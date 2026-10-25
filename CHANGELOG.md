@@ -4,6 +4,11 @@ All notable changes to OPAAL are documented here.
 
 ## [Unreleased]
 
+### Added
+
+- Add native GNU/Linux AArch64 source, process, Docker inspection and release
+  candidate support. The AArch64 archive is not published by this change.
+
 ## [1.6.0]
 
 ### Added

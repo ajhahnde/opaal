@@ -60,8 +60,8 @@ def normalized_artifact(value: dict) -> dict:
 
 def project_workflow(run, work: Path, fixtures: Path, target: str) -> dict:
     shutil.copytree(fixtures / "project", work)
-    shutil.copyfile(work / ("tools-macos.toml" if target == "macos-arm64" else "tools-linux.toml"),
-                    work / "tools.toml")
+    lock = "tools-macos.toml" if target == "macos-arm64" else "tools-linux-aarch64.toml" if target == "linux-aarch64" else "tools-linux.toml"
+    shutil.copyfile(work / lock, work / "tools.toml")
     base = ("--project", "opaal.toml", "--task", "verify", "--environment", "ci")
     original = {path.name: path.read_bytes() for path in work.glob("*.toml")}
 
@@ -385,7 +385,8 @@ def qualify(archive: Path | None, fixture_archive: Path | None, binaries: Path |
             source: str, target: str) -> dict:
     require(SOURCE.fullmatch(source) is not None, "expected source must be a full Git identity")
     require((platform.system(), platform.machine()) == {
-        "macos-arm64": ("Darwin", "arm64"), "linux-x86_64": ("Linux", "x86_64")}[target], "host differs")
+        "macos-arm64": ("Darwin", "arm64"), "linux-x86_64": ("Linux", "x86_64"),
+        "linux-aarch64": ("Linux", "aarch64")}[target], "host differs")
     require(subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT).decode().strip() == source,
             "expected source differs from checkout head")
     paths = public_paths(ROOT)

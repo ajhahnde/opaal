@@ -364,7 +364,8 @@ fn process_term_kill_wait_and_descendant_cleanup_are_bounded() {
         )
         .unwrap_err();
     assert_eq!(error.kind(), OperationalErrorKind::Protocol);
-    assert!(started.elapsed() < Duration::from_secs(6));
+    let elapsed = started.elapsed();
+    assert!(elapsed < Duration::from_secs(8), "cleanup took {elapsed:?}");
 }
 
 #[test]

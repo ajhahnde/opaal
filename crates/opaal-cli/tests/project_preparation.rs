@@ -56,7 +56,11 @@ fn fixed_offline_assets_match_maintained_sources_and_private_modes() {
         "decode/cases.json",
         "operations/cases.json",
         "live/cases.json",
-        "docker-cli-profile.json",
+        if cfg!(all(target_os = "linux", target_arch = "aarch64")) {
+            "docker-cli-profile-aarch64.json"
+        } else {
+            "docker-cli-profile.json"
+        },
         "offline-authority.toml",
     ] {
         assert_eq!(
@@ -79,6 +83,8 @@ fn fixed_offline_assets_match_maintained_sources_and_private_modes() {
     );
     let host = if cfg!(target_os = "macos") {
         "macos"
+    } else if cfg!(target_arch = "aarch64") {
+        "linux-aarch64"
     } else {
         "linux"
     };
@@ -220,6 +226,9 @@ fn native_destination_and_parent_refusals() {
         "offline",
         if cfg!(target_os = "macos") {
             include_bytes!("../../../examples/image-check/offline-tools-macos.toml").as_slice()
+        } else if cfg!(target_arch = "aarch64") {
+            include_bytes!("../../../examples/image-check/offline-tools-linux-aarch64.toml")
+                .as_slice()
         } else {
             include_bytes!("../../../examples/image-check/offline-tools-linux.toml").as_slice()
         },

@@ -239,7 +239,8 @@ def references(binary: Path, inputs: Path, directory: Path, target: str) -> list
     # Independent lifecycle/comparison drivers remain qualification inputs.
     for name in ("comparison.py", "run-comparison.sh"):
         shutil.copyfile(inputs / name, template / name)
-    selected_lock = "offline-tools-linux.toml" if target == "linux-x86_64" else "offline-tools-macos.toml"
+    selected_lock = ("offline-tools-linux-aarch64.toml" if target == "linux-aarch64" else
+                     "offline-tools-linux.toml" if target == "linux-x86_64" else "offline-tools-macos.toml")
     require((template / "offline-tools.toml").read_bytes() == (inputs / selected_lock).read_bytes(),
             "embedded offline host lock differs")
     require((template / "opaal.toml").read_bytes() == (inputs / "offline.toml").read_bytes(),
@@ -470,7 +471,9 @@ def live_report_comparison(work: Path, live: dict, reference: str, expected: lis
                     ("Client", ("Version", "ApiVersion", "Os", "Arch")),
                     ("Server", ("Version", "ApiVersion", "MinAPIVersion", "Os", "Arch")))
                             for key in keys]
-                if selected[:5] != ["29.9.0", "1.48", "linux", "amd64", "29.9.0"] or selected[7:] != ["linux", "amd64"]:
+                expected_arch = "arm64" if platform.machine() == "aarch64" else "amd64"
+                if (selected[:5] != ["29.9.0", "1.48", "linux", expected_arch, "29.9.0"]
+                        or selected[7:] != ["linux", expected_arch]):
                     raise ValueError("server profile")
                 def api(text):
                     if not isinstance(text, str) or not re.fullmatch(r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)", text):
@@ -492,9 +495,10 @@ def live_report_comparison(work: Path, live: dict, reference: str, expected: lis
 
 
 def live_references(binary: Path, inputs: Path, directory: Path, live: dict) -> list[dict]:
-    require((platform.system(), platform.machine()) == ("Linux", "x86_64"),
-            "live qualification requires Linux x86_64")
-    expected = (live["id"], "linux/amd64", live["revision"])
+    require(platform.system() == "Linux" and platform.machine() in {"x86_64", "aarch64"},
+            "live qualification requires native Linux")
+    expected = (live["id"], "linux/arm64" if platform.machine() == "aarch64" else "linux/amd64",
+                live["revision"])
     require(all(expected), "live expectations require nonempty fields")
     report = {"passed": True, "checks": [
         {"name": name, "passed": True, "expected": value, "actual": value}
@@ -576,7 +580,8 @@ def live_references(binary: Path, inputs: Path, directory: Path, live: dict) -> 
 
 def qualify(archive, fixtures, binaries, source, target, artifacts, live=None):
     require((platform.system(), platform.machine()) == {
-        "linux-x86_64": ("Linux", "x86_64"), "macos-arm64": ("Darwin", "arm64")}[target],
+        "linux-x86_64": ("Linux", "x86_64"), "linux-aarch64": ("Linux", "aarch64"),
+        "macos-arm64": ("Darwin", "arm64")}[target],
         "candidate target differs from running host")
     require(subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT).decode().strip() == source,
             "expected source differs from checkout head")
@@ -604,6 +609,12 @@ def qualify(archive, fixtures, binaries, source, target, artifacts, live=None):
             inputs = ROOT / FIXTURES
             pm = fm = {"sha256": None}
         binary = programs / "opaal"
+        profile_name = "docker-cli-profile-aarch64.json" if target == "linux-aarch64" else "docker-cli-profile.json"
+        profile = json.loads((inputs / profile_name).read_bytes())
+        expected_host = "aarch64-unknown-linux-gnu" if target == "linux-aarch64" else "x86_64-unknown-linux-gnu"
+        require(profile["host"] == expected_host
+                and profile["cli_version"] == "29.9.0" and profile["engine_version"] == "29.9.0"
+                and profile["api_version"] == "1.48", "Docker CLI profile differs")
         require(success(command([binary, "--version"], directory, {"PATH": os.defpath}), "version")
                 == f"opaal {VERSION}\n".encode(), "binary version differs")
         try:
@@ -618,7 +629,7 @@ def qualify(archive, fixtures, binaries, source, target, artifacts, live=None):
                 "archive_sha256": pm["sha256"], "fixture_archive_sha256": fm["sha256"],
                 "fixture_sha256": {name: value for name, value in snapshot.items() if name.startswith(FIXTURES + "/")},
                 "live_target": ({"docker_sha256": hashlib.sha256(live["docker"].read_bytes()).hexdigest(),
-                                 "profile_sha256": hashlib.sha256((inputs / "docker-cli-profile.json").read_bytes()).hexdigest(),
+                                 "profile_sha256": hashlib.sha256((inputs / profile_name).read_bytes()).hexdigest(),
                                  "image_id": live["id"]} if live else None),
                 "cases": rows, "assertions": (["outside-checkout live first use", "exact report/exit/evidence",
                                                "safe directories remain empty", "ignored metadata redacted",

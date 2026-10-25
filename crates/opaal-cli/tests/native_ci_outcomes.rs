@@ -16,11 +16,7 @@ fn project(result: &str, body: &str, grant: bool) -> (ReportDir, String) {
     work.write("authority.toml", format!("schema_version = 1\nproject = 'native_check'\nenvironment = 'ci'\n{}", if grant {
         ["stdin.read", "stdout.write"].map(|effect| format!("[[rules]]\ndecision = 'grant'\neffect = '{effect}'\nscope = 'evaluation'\nrequired_enforcement = 'enforced'\n")).join("")
     } else { "rules = []\n".to_owned() }));
-    let platform = if cfg!(target_os = "macos") {
-        "aarch64-apple-darwin"
-    } else {
-        "x86_64-unknown-linux-gnu"
-    };
+    let platform = support::host_platform_triple();
     work.write("tools.toml", format!("schema_version = 1\nproject = 'native_check'\nenvironment = 'ci'\nplatform = '{platform}'\ntools = []\n[child_environment]\ninherit = []\n"));
     work.write("tasks.opaal", format!("import std::io as io\nimport std::data as data\naction run() -> {result} effects {{ stdin.read(); stdout.write(); }} {{ {body} }}\ntask sample = run\n"));
     let planned = work.run(&[

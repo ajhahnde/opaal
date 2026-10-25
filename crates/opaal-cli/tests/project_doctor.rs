@@ -134,12 +134,14 @@ fn multiple_controls_version_and_host_findings_are_safe() {
     )
     .unwrap();
     let lock = fs::read_to_string(project.0.join("offline-tools.toml")).unwrap();
-    let wrong = if cfg!(target_os = "macos") {
-        "x86_64-unknown-linux-gnu"
-    } else {
+    let current = if cfg!(all(target_os = "linux", target_arch = "aarch64")) {
+        "aarch64-unknown-linux-gnu"
+    } else if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
         "aarch64-apple-darwin"
+    } else {
+        "x86_64-unknown-linux-gnu"
     };
-    let current = if cfg!(target_os = "macos") {
+    let wrong = if current == "x86_64-unknown-linux-gnu" {
         "aarch64-apple-darwin"
     } else {
         "x86_64-unknown-linux-gnu"

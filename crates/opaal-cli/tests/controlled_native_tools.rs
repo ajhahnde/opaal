@@ -10,6 +10,15 @@ use opaal_runtime::workflow::{
 };
 use serde_json::Value;
 
+fn host_platform_triple() -> &'static str {
+    match (std::env::consts::OS, std::env::consts::ARCH) {
+        ("macos", "aarch64") => "aarch64-apple-darwin",
+        ("linux", "x86_64") => "x86_64-unknown-linux-gnu",
+        ("linux", "aarch64") => "aarch64-unknown-linux-gnu",
+        _ => panic!("unsupported native test host"),
+    }
+}
+
 fn lock_native_path(path: &Path) -> String {
     format!(
         "{{ encoding = 'base64url-nopad', platform = 'unix', value = '{}' }}",
@@ -96,6 +105,7 @@ fn preparation_offline_assets_policy_and_accepted_saved_routes() {
     for name in [
         "offline.toml",
         "offline-tools-linux.toml",
+        "offline-tools-linux-aarch64.toml",
         "offline-tools-macos.toml",
         "live.toml",
         "live-authority.toml",
@@ -319,7 +329,12 @@ fn preparation_native_doctor_unknown_and_invalid_images_never_launch() {
     let mut image = vec![0; 120];
     image[..7].copy_from_slice(b"\x7fELF\x02\x01\x01");
     image[16..18].copy_from_slice(&2_u16.to_le_bytes());
-    image[18..20].copy_from_slice(&62_u16.to_le_bytes());
+    let machine = if cfg!(target_arch = "aarch64") {
+        183_u16
+    } else {
+        62_u16
+    };
+    image[18..20].copy_from_slice(&machine.to_le_bytes());
     image[20..24].copy_from_slice(&1_u32.to_le_bytes());
     image[32..40].copy_from_slice(&64_u64.to_le_bytes());
     image[52..54].copy_from_slice(&64_u16.to_le_bytes());
@@ -329,7 +344,10 @@ fn preparation_native_doctor_unknown_and_invalid_images_never_launch() {
     fs::write(&tool, &image).unwrap();
     fs::set_permissions(&tool, fs::Permissions::from_mode(0o700)).unwrap();
     let live = parent.0.join("live");
-    if !cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+    if !cfg!(all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    )) {
         assert!(init_repository_project(&live, "ci", Some(&tool)).is_err());
         assert!(!live.exists());
         // Construct the same controls to diagnose unsupported native execution on this host.
@@ -341,7 +359,7 @@ fn preparation_native_doctor_unknown_and_invalid_images_never_launch() {
         fs::copy(owner.join("live.toml"), live.join("opaal.toml")).unwrap();
         let lock = fs::read_to_string(owner.join("live-tools.template.toml"))
             .unwrap()
-            .replace("x86_64-unknown-linux-gnu", "aarch64-apple-darwin")
+            .replace("x86_64-unknown-linux-gnu", host_platform_triple())
             .replace("@TOOL@", native_path(&tool)["value"].as_str().unwrap())
             .replace("@DIGEST@", &digest_bytes(&image));
         fs::write(live.join("live-tools.toml"), lock).unwrap();
@@ -635,13 +653,7 @@ required_enforcement = "enforced"
         )
         .unwrap();
         let tool = tool.canonicalize().unwrap();
-        let platform = if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
-            "x86_64-unknown-linux-gnu"
-        } else if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
-            "aarch64-apple-darwin"
-        } else {
-            "unsupported"
-        };
+        let platform = host_platform_triple();
         fs::write(
             root.join("tools.toml"),
             format!(
@@ -809,11 +821,7 @@ fn record_evidence_case(name: &str, observed: Value) {
         "/../../tests/golden/controlled-external-tools/evidence-cases.json"
     ));
     let inventory: Value = serde_json::from_slice(inventory_bytes).unwrap();
-    let host = match (std::env::consts::OS, std::env::consts::ARCH) {
-        ("macos", "aarch64") => "aarch64-apple-darwin",
-        ("linux", "x86_64") => "x86_64-unknown-linux-gnu",
-        _ => panic!("unsupported evidence host"),
-    };
+    let host = host_platform_triple();
     let row = inventory["cases"]
         .as_array()
         .unwrap()
@@ -974,7 +982,10 @@ task check = check
 "#,
             if standard_io { "stdout.write();" } else { "" }
         ));
-        #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+        #[cfg(all(
+            target_os = "linux",
+            any(target_arch = "x86_64", target_arch = "aarch64")
+        ))]
         {
             fs::write(
                 project.0.join("redaction.c"),
@@ -1024,7 +1035,10 @@ int main(int argc, char **argv) {
                 .unwrap();
         }
         let plan = project.plan();
-        let supported = cfg!(all(target_os = "linux", target_arch = "x86_64"));
+        let supported = cfg!(all(
+            target_os = "linux",
+            any(target_arch = "x86_64", target_arch = "aarch64")
+        ));
         assert_eq!(plan.is_executable(), supported);
         let wrong = project.run(&plan, &format!("sha256:{}", "0".repeat(64)));
         assert!(!wrong.status.success());
@@ -1177,7 +1191,10 @@ task check = check
         }
         fs::write(lock, document).unwrap();
         let plan = project.plan();
-        let supported = cfg!(all(target_os = "linux", target_arch = "x86_64"));
+        let supported = cfg!(all(
+            target_os = "linux",
+            any(target_arch = "x86_64", target_arch = "aarch64")
+        ));
         assert_eq!(plan.is_executable(), supported);
         assert_eq!(plan.value().get("standard_host").is_some(), standard_io);
         assert!(
@@ -1720,7 +1737,10 @@ fn evidence_corrupt_partial_and_missing_native_artifacts_never_prove_pass() {
     assert!(audit_journal(&corrupted).is_err());
 }
 
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
 #[test]
 #[ignore = "requires an explicitly supplied and independently identified ShellCheck image"]
 fn supplied_checker_snapshot_compatibility() {

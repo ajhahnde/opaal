@@ -1687,7 +1687,11 @@ fn validate_shared_cross_fields(
                 if effect == "process.run"
                     && rule["required_enforcement"] == "acknowledged-unenforced"
                     && process_platform.is_some_and(|platform| {
-                        (native_process && platform != "x86_64-unknown-linux-gnu")
+                        (native_process
+                            && !matches!(
+                                platform,
+                                "x86_64-unknown-linux-gnu" | "aarch64-unknown-linux-gnu"
+                            ))
                             || matches!(platform, "aarch64-apple-darwin" | "x86_64-apple-darwin")
                     }) =>
             {
@@ -4386,6 +4390,7 @@ mod bound_observers {
         let host = match (std::env::consts::OS, std::env::consts::ARCH) {
             ("macos", "aarch64") => "aarch64-apple-darwin",
             ("linux", "x86_64") => "x86_64-unknown-linux-gnu",
+            ("linux", "aarch64") => "aarch64-unknown-linux-gnu",
             _ => return,
         };
         let digest = format!("sha256:{}", "1".repeat(64));

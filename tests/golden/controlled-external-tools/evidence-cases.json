@@ -4,7 +4,8 @@
     {
       "name": "metadata-native-call",
       "hosts": [
-        "x86_64-unknown-linux-gnu"
+        "x86_64-unknown-linux-gnu",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "redaction",
@@ -31,7 +32,8 @@
       "name": "metadata-pure-unused-native",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "redaction",
@@ -58,7 +60,8 @@
       "name": "metadata-caught-throw",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "redaction",
@@ -85,7 +88,8 @@
       "name": "metadata-unhandled-throw",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "redaction",
@@ -111,7 +115,8 @@
     {
       "name": "metadata-maintained-only",
       "hosts": [
-        "x86_64-unknown-linux-gnu"
+        "x86_64-unknown-linux-gnu",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "redaction",
@@ -137,7 +142,8 @@
     {
       "name": "metadata-mixed-native-maintained",
       "hosts": [
-        "x86_64-unknown-linux-gnu"
+        "x86_64-unknown-linux-gnu",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "redaction",
@@ -163,7 +169,8 @@
     {
       "name": "metadata-mixed-no-stdio",
       "hosts": [
-        "x86_64-unknown-linux-gnu"
+        "x86_64-unknown-linux-gnu",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "redaction",
@@ -189,7 +196,8 @@
     {
       "name": "metadata-mixed-caught-throw",
       "hosts": [
-        "x86_64-unknown-linux-gnu"
+        "x86_64-unknown-linux-gnu",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "redaction",
@@ -215,7 +223,8 @@
     {
       "name": "metadata-mixed-unhandled-throw",
       "hosts": [
-        "x86_64-unknown-linux-gnu"
+        "x86_64-unknown-linux-gnu",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "redaction",
@@ -241,7 +250,8 @@
     {
       "name": "explicit-safe-report",
       "hosts": [
-        "x86_64-unknown-linux-gnu"
+        "x86_64-unknown-linux-gnu",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "redaction",
@@ -256,7 +266,8 @@
       "name": "metadata-argv-count-1",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "process-descriptor",
@@ -270,7 +281,8 @@
       "name": "metadata-argv-count-256",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "process-descriptor",
@@ -284,7 +296,8 @@
       "name": "metadata-argv-count-4096",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "process-descriptor",
@@ -298,7 +311,8 @@
       "name": "metadata-argv-count-4097",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "process-descriptor",
@@ -312,7 +326,8 @@
       "name": "metadata-argv-count-0",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "process-descriptor",
@@ -326,7 +341,8 @@
       "name": "forbidden-process-argv",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "metadata-injection",
@@ -340,7 +356,8 @@
       "name": "forbidden-process-argv-digest",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "metadata-injection",
@@ -354,7 +371,8 @@
       "name": "forbidden-process-stdout-digest",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "metadata-injection",
@@ -368,7 +386,8 @@
       "name": "forbidden-process-stderr-digest",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "metadata-injection",
@@ -382,7 +401,8 @@
       "name": "forbidden-process-value-digest",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "metadata-injection",
@@ -396,7 +416,8 @@
       "name": "forbidden-process-message",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "metadata-injection",
@@ -410,7 +431,8 @@
       "name": "forbidden-process-extra",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "metadata-injection",
@@ -424,7 +446,8 @@
       "name": "stale-acceptance",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "acceptance",
@@ -440,7 +463,8 @@
       "name": "stale-source",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "acceptance",
@@ -456,7 +480,8 @@
       "name": "stale-manifest",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "acceptance",
@@ -472,7 +497,8 @@
       "name": "stale-authority",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "acceptance",
@@ -488,7 +514,8 @@
       "name": "stale-tool-lock",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "acceptance",
@@ -504,7 +531,8 @@
       "name": "stale-input-bytes",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "acceptance",
@@ -520,7 +548,8 @@
       "name": "stale-native-bytes",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "acceptance",
@@ -536,7 +565,8 @@
       "name": "stale-native-path",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "acceptance",
@@ -552,7 +582,8 @@
       "name": "stale-child-environment",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "acceptance",
@@ -568,7 +599,8 @@
       "name": "stale-host",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "acceptance",
@@ -584,7 +616,8 @@
       "name": "stale-expiry",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "acceptance",
@@ -600,7 +633,8 @@
       "name": "stale-root",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "acceptance",
@@ -616,7 +650,8 @@
       "name": "bound-input-before-use-changed-bytes",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "input-race",
@@ -633,7 +668,8 @@
       "name": "bound-input-before-use-symlink",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "input-race",
@@ -650,7 +686,8 @@
       "name": "bound-input-before-use-same-bytes-replacement",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "input-race",
@@ -666,7 +703,8 @@
     {
       "name": "reference-persistent-child-change",
       "hosts": [
-        "x86_64-unknown-linux-gnu"
+        "x86_64-unknown-linux-gnu",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "input-race",
@@ -681,7 +719,8 @@
     {
       "name": "reference-child-change-and-restore",
       "hosts": [
-        "x86_64-unknown-linux-gnu"
+        "x86_64-unknown-linux-gnu",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "input-race",
@@ -697,7 +736,8 @@
       "name": "complete-pass",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "evidence",
@@ -712,7 +752,8 @@
       "name": "complete-negative",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "evidence",
@@ -727,7 +768,8 @@
       "name": "language-error",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "evidence",
@@ -742,7 +784,8 @@
       "name": "requested-cancellation",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "evidence",
@@ -758,7 +801,8 @@
       "name": "deadline-cancellation",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "evidence",
@@ -774,7 +818,8 @@
       "name": "missing-audit",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "evidence",
@@ -789,7 +834,8 @@
       "name": "journal-header-prefix",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "evidence",
@@ -804,7 +850,8 @@
       "name": "journal-truncated-terminal",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "evidence",
@@ -819,7 +866,8 @@
       "name": "future-receipt",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "evidence",
@@ -833,7 +881,8 @@
       "name": "future-audit",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "evidence",
@@ -847,7 +896,8 @@
       "name": "receipt-run-mismatch",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "evidence",
@@ -861,7 +911,8 @@
       "name": "audit-run-mismatch",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "evidence",
@@ -875,7 +926,8 @@
       "name": "receipt-plan-mismatch",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "evidence",
@@ -889,7 +941,8 @@
       "name": "receipt-partial-forgery",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "evidence",
@@ -903,7 +956,8 @@
       "name": "receipt-progress-forgery",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "evidence",
@@ -917,7 +971,8 @@
       "name": "audit-message-injection",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "evidence",
@@ -932,7 +987,8 @@
       "name": "audit-value-digest-injection",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "evidence",
@@ -947,7 +1003,8 @@
       "name": "audit-extra-field",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "evidence",
@@ -962,7 +1019,8 @@
       "name": "audit-digest-mismatch",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "evidence",
@@ -976,7 +1034,8 @@
       "name": "journal-corrupt-first-line",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "evidence",
@@ -990,7 +1049,8 @@
       "name": "journal-corrupt-middle-line",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "evidence",
@@ -1004,7 +1064,8 @@
       "name": "journal-reordered-attempt",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "evidence",
@@ -1019,7 +1080,8 @@
       "name": "journal-unmatched-after",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "evidence",
@@ -1034,7 +1096,8 @@
       "name": "explain-without-project",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "evidence",
@@ -1053,7 +1116,8 @@
       "name": "success-before-event-failure",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "finish-fault",
@@ -1070,7 +1134,8 @@
       "name": "success-after-event-failure",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "finish-fault",
@@ -1087,7 +1152,8 @@
       "name": "success-action-end-failure",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "finish-fault",
@@ -1104,7 +1170,8 @@
       "name": "success-terminal-failure",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "finish-fault",
@@ -1121,7 +1188,8 @@
       "name": "success-receipt-failure",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "finish-fault",
@@ -1138,7 +1206,8 @@
       "name": "success-audit-failure",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "finish-fault",
@@ -1155,7 +1224,8 @@
       "name": "success-summary-failure",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "finish-fault",
@@ -1172,7 +1242,8 @@
       "name": "success-cleanup-failure",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "finish-fault",
@@ -1189,7 +1260,8 @@
       "name": "error-before-event-failure",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "finish-fault",
@@ -1207,7 +1279,8 @@
       "name": "error-after-event-failure",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "finish-fault",
@@ -1225,7 +1298,8 @@
       "name": "error-action-end-failure",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "finish-fault",
@@ -1243,7 +1317,8 @@
       "name": "error-terminal-failure",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "finish-fault",
@@ -1261,7 +1336,8 @@
       "name": "error-receipt-failure",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "finish-fault",
@@ -1279,7 +1355,8 @@
       "name": "error-audit-failure",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "finish-fault",
@@ -1297,7 +1374,8 @@
       "name": "error-summary-failure",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "finish-fault",
@@ -1315,7 +1393,8 @@
       "name": "error-cleanup-failure",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "finish-fault",
@@ -1333,7 +1412,8 @@
       "name": "requested-cancellation-before-event-failure",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "finish-fault",
@@ -1351,7 +1431,8 @@
       "name": "requested-cancellation-after-event-failure",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "finish-fault",
@@ -1369,7 +1450,8 @@
       "name": "requested-cancellation-action-end-failure",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "finish-fault",
@@ -1387,7 +1469,8 @@
       "name": "requested-cancellation-terminal-failure",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "finish-fault",
@@ -1405,7 +1488,8 @@
       "name": "requested-cancellation-receipt-failure",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "finish-fault",
@@ -1423,7 +1507,8 @@
       "name": "requested-cancellation-audit-failure",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "finish-fault",
@@ -1441,7 +1526,8 @@
       "name": "requested-cancellation-summary-failure",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "finish-fault",
@@ -1459,7 +1545,8 @@
       "name": "requested-cancellation-cleanup-failure",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "finish-fault",
@@ -1477,7 +1564,8 @@
       "name": "native-under-v2",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "schema",
@@ -1492,7 +1580,8 @@
       "name": "native-under-v3",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "schema",
@@ -1507,7 +1596,8 @@
       "name": "native-under-v4",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "schema",
@@ -1522,7 +1612,8 @@
       "name": "native-v5-roundtrip",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "schema",
@@ -1539,7 +1630,8 @@
       "name": "maintained-v4-preserved",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "schema",
@@ -1554,7 +1646,8 @@
       "name": "plan-first-excess",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "document-bound",
@@ -1569,7 +1662,8 @@
       "name": "receipt-first-excess",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "document-bound",
@@ -1584,7 +1678,8 @@
       "name": "audit-first-excess",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "document-bound",
@@ -1599,7 +1694,8 @@
       "name": "journal-first-excess",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "document-bound",
@@ -1614,7 +1710,8 @@
       "name": "passive-task-list",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "observer",
@@ -1635,7 +1732,8 @@
       "name": "passive-task-inspect",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "observer",
@@ -1656,7 +1754,8 @@
       "name": "passive-check",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "observer",
@@ -1677,7 +1776,8 @@
       "name": "passive-doctor",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "observer",
@@ -1698,7 +1798,8 @@
       "name": "passive-plan",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "observer",
@@ -1719,7 +1820,8 @@
       "name": "passive-plan-inspect",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "observer",
@@ -1740,7 +1842,8 @@
       "name": "passive-lsp",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "observer",
@@ -1761,7 +1864,8 @@
       "name": "passive-help",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "observer",
@@ -1782,7 +1886,8 @@
       "name": "passive-interactive-prompt",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "observer",
@@ -1803,7 +1908,8 @@
       "name": "check-future-schema",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "artifact",
@@ -1819,7 +1925,8 @@
       "name": "check-native-required-version",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "artifact",
@@ -1835,7 +1942,8 @@
       "name": "check-native-locked-version",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "artifact",
@@ -1851,7 +1959,8 @@
       "name": "check-native-version-verified",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "artifact",
@@ -1867,7 +1976,8 @@
       "name": "check-unknown-field",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "artifact",
@@ -1883,7 +1993,8 @@
       "name": "plan-future-schema",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "artifact",
@@ -1899,7 +2010,8 @@
       "name": "plan-native-required-version",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "artifact",
@@ -1915,7 +2027,8 @@
       "name": "plan-native-locked-version",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "artifact",
@@ -1931,7 +2044,8 @@
       "name": "plan-native-version-verified",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "artifact",
@@ -1947,7 +2061,8 @@
       "name": "plan-unknown-field",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "artifact",
@@ -1963,7 +2078,8 @@
       "name": "audit-future-schema",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "artifact",
@@ -1979,7 +2095,8 @@
       "name": "audit-native-required-version",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "artifact",
@@ -1995,7 +2112,8 @@
       "name": "audit-native-locked-version",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "artifact",
@@ -2011,7 +2129,8 @@
       "name": "audit-native-version-verified",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "artifact",
@@ -2027,7 +2146,8 @@
       "name": "audit-unknown-field",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "artifact",
@@ -2043,7 +2163,8 @@
       "name": "receipt-missing-lf",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "encoding-sequence",
@@ -2057,7 +2178,8 @@
       "name": "receipt-noncanonical",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "encoding-sequence",
@@ -2071,7 +2193,8 @@
       "name": "receipt-invalid-utf8",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "encoding-sequence",
@@ -2085,7 +2208,8 @@
       "name": "receipt-extra-field",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "encoding-sequence",
@@ -2099,7 +2223,8 @@
       "name": "journal-duplicate-terminal",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "encoding-sequence",
@@ -2113,7 +2238,8 @@
       "name": "journal-missing-before",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "encoding-sequence",
@@ -2127,7 +2253,8 @@
       "name": "journal-digest-mismatch",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "encoding-sequence",
@@ -2141,7 +2268,8 @@
       "name": "journal-lines-exact",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "journal-bound",
@@ -2155,7 +2283,8 @@
       "name": "journal-lines-first-excess",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "journal-bound",
@@ -2169,7 +2298,8 @@
       "name": "journal-terminal-reserve",
       "hosts": [
         "x86_64-unknown-linux-gnu",
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
       ],
       "input": {
         "kind": "journal-bound",

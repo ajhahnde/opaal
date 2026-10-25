@@ -31,6 +31,23 @@ pub const INVALID: &[&str] = &[
 ];
 static NEXT: AtomicU64 = AtomicU64::new(0);
 
+pub fn host_platform_triple() -> &'static str {
+    match (std::env::consts::OS, std::env::consts::ARCH) {
+        ("linux", "x86_64") => "x86_64-unknown-linux-gnu",
+        ("linux", "aarch64") => "aarch64-unknown-linux-gnu",
+        ("macos", "aarch64") => "aarch64-apple-darwin",
+        _ => "unsupported",
+    }
+}
+
+pub fn linux_fixture_arch_suffix() -> &'static str {
+    if cfg!(all(target_os = "linux", target_arch = "aarch64")) {
+        "-aarch64"
+    } else {
+        ""
+    }
+}
+
 pub fn fixtures() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/golden/data-processing")
 }
@@ -70,12 +87,12 @@ impl ReportDir {
                 &format!(">={},<2.0.0", env!("CARGO_PKG_VERSION")),
             ),
         );
-        let platform = if cfg!(target_os = "macos") {
-            "macos"
+        let lock = if cfg!(target_os = "macos") {
+            "tools-macos.toml".to_owned()
         } else {
-            "linux"
+            format!("tools-linux{}.toml", linux_fixture_arch_suffix())
         };
-        result.write("tools.toml", fixture(&format!("tools-{platform}.toml")));
+        result.write("tools.toml", fixture(&lock));
         fs::create_dir(result.0.join("bin")).unwrap();
         symlink("/bin/cat", result.0.join("bin/cat")).unwrap();
         result

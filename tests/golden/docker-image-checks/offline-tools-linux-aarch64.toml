@@ -1,0 +1,7 @@
+schema_version = 1
+project = "image_check"
+environment = "offline"
+platform = "aarch64-unknown-linux-gnu"
+tools = []
+[child_environment]
+inherit = []

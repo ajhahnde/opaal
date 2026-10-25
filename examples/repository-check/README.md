@@ -1,7 +1,7 @@
 # Repository checks with a pinned native tool
 
-Requires OPAAL >=1.6.0,<2.0.0. The saved route works on macOS arm64 and
-Linux x86_64; live native execution requires Linux x86_64. Supply an independently
+Requires OPAAL >=1.6.0,<2.0.0. The saved route works on macOS arm64, Linux
+x86_64 and Linux AArch64; live native execution requires Linux x86_64 or AArch64. Supply an independently
 qualified ShellCheck executable for the live route. Setup never installs,
 discovers, downloads or launches a checker.
 
@@ -76,7 +76,7 @@ opaal task explain --receipt saved.receipt.json --audit saved.audit.json --forma
 
 ## Live first use
 
-Run separately on Linux x86_64 with the explicit independently qualified image.
+Run separately on Linux x86_64 or AArch64 with the explicit independently qualified image.
 The sample path is supplied by the operator, never created by OPAAL.
 
 ```sh

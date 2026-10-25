@@ -53,7 +53,8 @@ def byte_count(rendered: str) -> int:
 def qualify(archive: Path | None, fixtures: Path | None, binaries: Path | None,
             source: str, target: str) -> dict:
     require((platform.system(), platform.machine()) == {
-        "linux-x86_64": ("Linux", "x86_64"), "macos-arm64": ("Darwin", "arm64"),
+        "linux-x86_64": ("Linux", "x86_64"), "linux-aarch64": ("Linux", "aarch64"),
+        "macos-arm64": ("Darwin", "arm64"),
     }[target], "candidate target differs from running host")
     require(subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT).decode().strip() == source,
             "expected source differs from checkout head")
@@ -92,7 +93,8 @@ def qualify(archive: Path | None, fixtures: Path | None, binaries: Path | None,
         if tuple(map(int, VERSION.split("."))) < (1, 3, 0):
             manifest = work / "opaal.toml"
             manifest.write_text(manifest.read_text().replace(">=1.3.0,<2.0.0", f">={VERSION},<2.0.0"))
-        shutil.copyfile(work / ("tools-linux.toml" if target == "linux-x86_64" else "tools-macos.toml"), work / "tools.toml")
+        lock = "tools-macos.toml" if target == "macos-arm64" else "tools-linux-aarch64.toml" if target == "linux-aarch64" else "tools-linux.toml"
+        shutil.copyfile(work / lock, work / "tools.toml")
         environment = {"PATH": os.defpath}
         binary = programs / "opaal"
         def run(*arguments, stdin=None):
