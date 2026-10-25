@@ -57,9 +57,9 @@ effects describe required authority; they do not grant it. Effectful actions
 run only through the accepted-plan route, while scripts and interactive cells
 can use their explicitly bound native standard streams.
 
-The current binary archives cover Linux x86_64 and macOS arm64. Native source
-builds and qualification also support GNU/Linux AArch64 with glibc 2.35 or newer
-and Linux kernel 6.3 or newer; this change does not publish an AArch64 archive.
+Supported hosts are Linux x86_64, GNU/Linux AArch64 and macOS arm64.
+GNU/Linux AArch64 requires glibc 2.35 or newer and Linux kernel 6.3 or newer.
+The 1.7.0 release includes CLI and language-server archives for all three hosts.
 Controlled process execution is Linux-only; macOS can check and plan those tasks
 but refuses their execution. Host qualification establishes no downstream
 operating system or physical-device support. See the

@@ -38,6 +38,25 @@ FINISH_CASES = ("process-finish-failure", "process-cancel-and-finish-failure")
 LINUX_HOSTS = {"x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"}
 
 
+def wait4_reaped(calls, pid):
+    pending = {}
+    for thread, call in re.findall(r'^(\d+)[ \t]+(.*)$', calls, re.M):
+        if call.startswith('<... wait4 resumed>'):
+            entry = pending.pop(thread, None)
+            if entry is None:
+                continue
+            call = entry + call.removeprefix('<... wait4 resumed>')
+        elif call.startswith('wait4('):
+            pending.pop(thread, None)
+        else:
+            continue
+        if call.endswith('<unfinished ...>'):
+            pending[thread] = call.removesuffix('<unfinished ...>')
+        elif re.fullmatch(rf'wait4\({pid},.*\)\s+= {pid}(?:\s.*)?', call):
+            return True
+    return False
+
+
 def finish_launch_census(calls, pid):
     launches = re.findall(r'^(\d+)\s+execve\("([^"]+)", (\[[^\n]*?\]), ([^\n]*)', calls, re.M)
     require(len(launches) == len(re.findall(r'\bexecve\(', calls)) and "execveat(" not in calls,
@@ -59,7 +78,7 @@ def finish_launch_census(calls, pid):
             "finish observer launch census differs")
     for child, _, _, _ in workers:
         require(not Path(f"/proc/{child}").exists()
-                and re.search(rf'wait4\({child},.* = {child}', calls), "finish summary worker was not reaped")
+                and wait4_reaped(calls, child), "finish summary worker was not reaped")
     return {"native_launches": 1, "summary_workers": len(workers)}
 
 
@@ -95,7 +114,7 @@ def finish_cases(binary, inputs, output):
         require(len(injected) == 1 and re.search(rf'kill\(-{pid}, 0\)\s+= -1 EIO', injected[0]),
                 "finish fault did not hit the owned group check")
         census = finish_launch_census(calls, pid)
-        require(not Path(f"/proc/{pid}").exists() and re.search(rf'wait4\({pid},.* = {pid}', calls),
+        require(not Path(f"/proc/{pid}").exists() and wait4_reaped(calls, pid),
                 "finish observer child was not reaped")
         receipt = json.loads((work / "receipt.json").read_bytes())
         audit = json.loads((work / "audit.json").read_bytes())

@@ -225,7 +225,7 @@ python3 ci/qualify_standard_io_failures.py --binary target/debug/opaal --output 
 ```
 
 Use `linux-x86_64` or `linux-aarch64` on the matching Linux host. Working mode records an exact dirty-source snapshot
-and binary hashes; it supplies no committed-package claim. Both candidate jobs
+and binary hashes; it supplies no committed-package claim. All three candidate jobs
 package the [self-contained references](tests/golden/standard-input-output/README.md)
 with `ci/package_standard_input_output.py` and replay those exact fixtures and
 program archives outside the checkout. Copies of the maintained report core
@@ -346,7 +346,7 @@ Use the matching `linux-x86_64` or `linux-aarch64` value in both platform
 positions on Linux. Archive replay verifies
 the shared source identity, version, platform, complete fixture inventory,
 member hashes and modes before running the packaged CLI outside the checkout.
-Both candidate CI jobs retain the archives and replay evidence. This saved
+All three candidate CI jobs retain the archives and replay evidence. This saved
 reference replay leaves native fault cases and real-tool qualification separate.
 
 On Linux, add an explicit `--checker /absolute/path/to/shellcheck` for real

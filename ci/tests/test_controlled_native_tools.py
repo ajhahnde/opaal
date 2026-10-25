@@ -45,6 +45,17 @@ class NativeReferenceTests(unittest.TestCase):
         resumed = (base + extra).replace(f'{worker} execve("/proc/self/fd/65", ["opaal", "--opaal-standard-host-worker"], 0) = 0',
             f'{worker} execve("/proc/self/fd/65", ["opaal", "--opaal-standard-host-worker"], 0 <unfinished ...>\n{worker} <... execve resumed>) = 0')
         self.assertEqual(finish_launch_census(resumed, pid), {"native_launches": 1, "summary_workers": 1})
+        split_wait = (base + extra).replace(f'1 wait4({worker}, [], WNOHANG, NULL) = {worker}',
+            f'1 wait4({worker}, <unfinished ...>\n2 wait4(123, [], WNOHANG, NULL) = 0\n'
+            f'1 <... wait4 resumed>[], WNOHANG, NULL) = {worker}')
+        self.assertEqual(finish_launch_census(split_wait, pid), {"native_launches": 1, "summary_workers": 1})
+        for fault in (split_wait.replace('1 <... wait4 resumed>', '2 <... wait4 resumed>'),
+                      split_wait.replace(f'= {worker}', '= 0'),
+                      split_wait.replace(f'= {worker}', '= -1 ECHILD'),
+                      split_wait.replace(f'= {worker}', f'= {worker}0'),
+                      split_wait.replace(f'wait4({worker},', 'wait4(123,')):
+            with self.subTest(trace=fault), self.assertRaises(QualificationError):
+                finish_launch_census(fault, pid)
         for fault in (base + extra + extra, base + base, (base + extra).replace(' = 0', ' = -1 EIO', 1),
                       (base + extra).replace('"--opaal-standard-host-worker"', '"unrecognized"'),
                       (base + extra).replace('/proc/self/fd/65', '/tmp/worker'),
@@ -60,7 +71,8 @@ class NativeReferenceTests(unittest.TestCase):
             root = Path(temporary)
             executable = root / "tool"
             executable.write_bytes(b"tool")
-            for fault in (None, "injection", "fallback", "unreaped", "primary", "audit", "partial", "exit"):
+            for fault in (None, "split-wait", "split-wrong-thread", "split-unreaped", "split-missing-entry",
+                          "injection", "fallback", "unreaped", "primary", "audit", "partial", "exit"):
                 def seed(binary, work, **options):
                     work.mkdir()
                     self.assertEqual(options, {"native_image": b"compiled"})
@@ -83,6 +95,17 @@ class NativeReferenceTests(unittest.TestCase):
                         trace += '2 execve("/tmp/checker", [], 0) = 0\n'
                     elif fault == "unreaped":
                         trace = trace.replace(f" = {pid}\n", " = 0\n")
+                    elif fault and fault.startswith("split-"):
+                        entry = f'1 wait4({pid}, <unfinished ...>\n'
+                        resumed = f'1 <... wait4 resumed>[], WNOHANG, NULL) = {pid}\n'
+                        if fault == "split-wrong-thread":
+                            resumed = resumed.replace('1 <', '2 <')
+                        elif fault == "split-unreaped":
+                            resumed = resumed.replace(f'= {pid}', '= 0')
+                        elif fault == "split-missing-entry":
+                            entry = ''
+                        trace = trace.replace(f'1 wait4({pid}, [], WNOHANG, NULL) = {pid}\n',
+                            entry + '2 wait4(123, [], WNOHANG, NULL) = 0\n' + resumed)
                     (work / "syscalls").write_text(trace)
                     primary = {"class": "cancelled" if requested else "error",
                                "cancel_reason": "requested" if requested else None, "partial": fault != "partial"}
@@ -103,7 +126,7 @@ class NativeReferenceTests(unittest.TestCase):
                         rows, metadata = finish_cases(executable, ROOT / FIXTURES, root / str(fault))
                         case_results(cases, rows, [], "x86_64-unknown-linux-gnu", label="image")
                         self.assertEqual(set(metadata["cases"]), set(FINISH_CASES))
-                    if fault:
+                    if fault not in (None, "split-wait"):
                         with self.assertRaises(QualificationError):
                             observe()
                     else:
