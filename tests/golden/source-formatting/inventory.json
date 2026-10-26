@@ -3416,7 +3416,7 @@
     },
     {
       "path": "crates/opaal-platform-posix/tests/fixtures/standard_streams.rs",
-      "sha256": "ef8516db29c7e543df4cf10e8e7b11216f1f06784c025d0d8e74954422146ba4",
+      "sha256": "5b29b8328c8d8070a9349b486aef4e1bd959e506952f7ab978f81a91fe5b0d04",
       "source_markers": 0,
       "constructors_or_assertions": [
         "enable_syscall_fault",

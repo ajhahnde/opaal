@@ -347,8 +347,12 @@ pub fn run() {
         0
     );
     let mut writer = File::from(writer);
+    // SAFETY: sysconf reads the native page size without accessing caller memory.
+    let page_size = usize::try_from(unsafe { libc::sysconf(libc::_SC_PAGESIZE) }).unwrap();
+    assert!(page_size > 0 && page_size < payload.len());
+    let mut page = vec![0; page_size];
     loop {
-        match writer.write(&[0; 4096]) {
+        match writer.write(&page) {
             Ok(count) => assert!(count > 0),
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
             result => panic!("{result:?}"),
@@ -356,7 +360,8 @@ pub fn run() {
     }
     let mut host = PosixStandardHost::for_cli(71).unwrap();
     let mut reader = File::from(reader);
-    reader.read_exact(&mut [0; 4096]).unwrap();
+    // Linux needs a complete pipe-buffer page freed before another write can progress.
+    reader.read_exact(&mut page).unwrap();
     host.bind_stream(StandardStream::Stdout, writer.as_fd())
         .unwrap();
     let started = Instant::now();
