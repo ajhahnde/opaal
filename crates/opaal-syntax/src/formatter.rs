@@ -39,6 +39,7 @@ enum OpenDelimiter {
 
 #[derive(Default)]
 struct FormatLayout {
+    comma_after: BTreeSet<usize>,
     newline_before: BTreeSet<usize>,
     newline_after: BTreeSet<usize>,
     space_before: BTreeSet<usize>,
@@ -107,6 +108,43 @@ impl FormatLayout {
                         }
                     }
                     self.statements(&action.body.statements, tokens);
+                }
+                StatementKind::ModuleImportGroup(entries) => {
+                    let group_tokens =
+                        tokens_in(tokens, statement.span().start(), statement.span().end());
+                    let open = group_tokens
+                        .iter()
+                        .find(|token| token.kind() == TokenKind::Delimiter(Delimiter::LeftBrace))
+                        .unwrap();
+                    self.space_before.insert(open.span().start());
+                    self.newline_after.insert(open.span().end());
+                    self.newline_before.insert(statement.span().end() - 1);
+                    let mut remaining = group_tokens.iter();
+                    for entry in entries {
+                        self.newline_before.insert(entry.source.span().start());
+                        let end = entry.source.span().end().max(entry.alias.span().end());
+                        let next = remaining
+                            .by_ref()
+                            .find(|token| {
+                                token.span().start() >= end
+                                    && !matches!(
+                                        token.kind(),
+                                        TokenKind::Whitespace
+                                            | TokenKind::Newline
+                                            | TokenKind::Comment
+                                            | TokenKind::DocumentationComment
+                                            | TokenKind::LineContinuation
+                                    )
+                            })
+                            .unwrap();
+                        if next.kind() == TokenKind::Operator(Operator::Comma) {
+                            self.no_space_before.insert(next.span().start());
+                            self.newline_after.insert(next.span().end());
+                        } else {
+                            self.comma_after.insert(end);
+                            self.newline_after.insert(end);
+                        }
+                    }
                 }
                 StatementKind::Task(_) => {
                     for token in tokens_in(tokens, statement.span().start(), statement.span().end())
@@ -316,6 +354,9 @@ fn format_tokens(source: &SourceFile, tokens: &[Token], layout: &FormatLayout) -
                         .text(source)
                         .expect("lexer spans belong to their source"),
                 );
+                if layout.comma_after.contains(&token.span().end()) {
+                    output.push(',');
+                }
                 previous_syntax_token_end = Some(token.span().end());
 
                 if let Some(open) = opening_delimiter(kind, token.span().start(), layout) {

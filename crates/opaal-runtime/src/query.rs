@@ -1037,6 +1037,7 @@ impl<'a> CallFinder<'a> {
     fn statement(&mut self, statement: &'a Statement) {
         match statement.kind() {
             StatementKind::ModuleImport(_)
+            | StatementKind::ModuleImportGroup(_)
             | StatementKind::ModuleExport(_)
             | StatementKind::NominalType(_)
             | StatementKind::VariantType(_) => {}

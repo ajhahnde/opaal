@@ -280,3 +280,38 @@ fn canonical_goldens_and_bounded_large_sources_roundtrip() {
     assert!(large.len() >= 256 * 1024);
     roundtrip(&large);
 }
+
+#[test]
+fn import_groups_are_multiline_and_insert_only_the_missing_final_comma_before_comments() {
+    for (input, expected) in [
+        (
+            "import {std::math,std::io}",
+            "import {\n    std::math,\n    std::io,\n}\n",
+        ),
+        ("import {std::math,}", "import {\n    std::math,\n}\n"),
+        (
+            "import {std::math # final\n}",
+            "import {\n    std::math, # final\n}\n",
+        ),
+        (
+            "import {std::math ## final\n}",
+            "import {\n    std::math, ## final\n}\n",
+        ),
+        (
+            "import {'./a,b}.opaal' as tools}",
+            "import {\n    './a,b}.opaal' as tools,\n}\n",
+        ),
+    ] {
+        assert_eq!(roundtrip(input), expected);
+    }
+    roundtrip(
+        "import { # start\n std::math # origin\n as # alias\n m, ## between\n './界/a.opaal' # final\n}\nimport std::io\n",
+    );
+    for input in ["import {", "import {std::math,", "import std::math as"] {
+        let source = SourceFile::new(SourceId::new(9), "incomplete", input);
+        assert!(matches!(
+            format_source_opaal(&source),
+            FormatOutcome::Incomplete(_)
+        ));
+    }
+}

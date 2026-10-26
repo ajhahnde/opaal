@@ -191,6 +191,80 @@ def project_workflow(run, work: Path, fixtures: Path, target: str) -> dict:
                            "clock.wall declaration and refusal preserved", "TOML bytes preserved"]}
 
 
+def concise_imports(run, work: Path, fixtures: Path) -> dict:
+    destination = work / "concise-imports"
+    shutil.copytree(fixtures / "concise-imports", destination)
+
+    def invoke(*arguments):
+        return run(*arguments, cwd=destination)
+
+    cases = {}
+    for name in ("before.opaal", "after.opaal"):
+        success(invoke("check", name), "import check")
+        success(invoke("format", "--check", name, "helpers.opaal"), "import canonical bytes")
+        listed = json.loads(success(invoke("test", "--list", name, "--format", "json"), "import list"))
+        tested = json.loads(success(invoke("test", name, "--format", "json"), "import tests"))
+        require(listed["counts"]["discovered"] == 1 and listed["cases"][0]["name"] == "test_imports" and
+                tested["counts"]["passed"] == 1 and tested["completeness"] == "complete", "import pure results differ")
+        require(success(invoke(name), "import script") == b"", "pure imports printed implicitly")
+        cases[name] = {"listed": listed["counts"], "tested": tested["counts"]}
+    require(cases["before.opaal"] == cases["after.opaal"], "grouped test results differ")
+    for name in ("standalone.opaal", "conflict-recovery.opaal"):
+        success(invoke("check", name), "inferred check")
+        success(invoke("format", "--check", name), "inferred canonical bytes")
+        require(success(invoke(name), "inferred script") == b"", "inferred script printed")
+    for name, diagnostic in (("invalid-name.opaal", b"as alias"), ("conflict.opaal", b"MOD011")):
+        result = invoke("check", name)
+        require(result.returncode == 1 and diagnostic in result.stderr, "invalid import diagnostic differs")
+    shutil.copyfile(destination / "helpers.opaal", destination / "build-tools.opaal")
+    (destination / "recovered.opaal").write_text("import './build-tools.opaal' as tools\nlet result = tools::twice(3)\n")
+    success(invoke("check", "recovered.opaal"), "explicit local alias recovery")
+    require(success(invoke("recovered.opaal"), "local alias script") == b"", "recovered script printed")
+    success(invoke("format", "--write", "noncanonical.opaal"), "group format")
+    require((destination / "noncanonical.opaal").read_bytes() == (destination / "canonical.opaal").read_bytes(),
+            "group canonical bytes differ")
+    success(invoke("format", "--check", "noncanonical.opaal"), "group idempotence")
+    pending = run(cwd=destination, stdin=(destination / "incomplete.opaal").read_bytes())
+    require(pending.returncode == 0 and b"SYN002" in pending.stderr, "import group EOF differs")
+
+    project = work / "concise-project"
+    success(run("project", "init", "--example", "image-check", "--destination", project,
+                "--environment", "offline"), "offline import project")
+    source = project / "saved-tasks.opaal"
+    old_imports = ("import './policy.opaal' as policy\nimport std::docker as docker\n"
+                   "import std::data as data\nimport std::io as io\n")
+    original = source.read_text()
+    require(original.startswith(old_imports), "offline example imports changed")
+    baseline_imports = old_imports + "import project::context as context\nimport project::tools as locked\n"
+    grouped_imports = ("import {\n    './policy.opaal',\n    std::docker,\n    std::data,\n"
+                       "    std::io,\n    project::context,\n    project::tools as locked,\n}\n")
+    checks, inspections, listings = [], [], []
+    for imports in (baseline_imports, grouped_imports):
+        source.write_text(original.replace(old_imports, imports, 1))
+        success(run("check", "policy-tests.opaal", cwd=project), "offline policy check")
+        success(run("test", "policy-tests.opaal", cwd=project), "offline policy tests")
+        success(run("format", "--check", "saved-tasks.opaal", cwd=project), "offline canonical bytes")
+        listings.append(json.loads(success(run("task", "list", "--project", "opaal.toml", "--format", "json",
+                                              cwd=project), "offline task list")))
+        inspections.append(json.loads(success(run("task", "inspect", "--project", "opaal.toml", "saved",
+                                                  "--format", "json", cwd=project), "offline task inspect")))
+        checks.append(json.loads(success(run("check", "--project", "opaal.toml", "--task", "saved",
+            "--environment", "offline", "--input", "expected_id=sha256:" + "a" * 64,
+            "--input", "expected_platform=linux/amd64", "--input", "expected_revision=abc123",
+            "--format", "json", cwd=project), "offline project check")))
+    require(checks[0]["digest"] != checks[1]["digest"] and
+            checks[0]["sources"] != checks[1]["sources"], "source rewrite did not change identities")
+    require(normalized_artifact(checks[0]) == normalized_artifact(checks[1]), "project contract semantics changed")
+    for observations in (inspections, listings):
+        for observation in observations:
+            for task in observation["tasks"]:
+                task.pop("contract_digest")
+        require(observations[0] == observations[1], "project task metadata changed")
+    return {"pure_cases": cases, "project_checks": checks,
+            "assertions": ["literal aliases and explicit recovery", "canonical groups and incomplete EOF",
+                           "offline task identity/effects preserved; source identities changed"]}
+
+
 def framed_formatting(binary: Path, work: Path, fixtures: Path, environment: dict) -> list[str]:
     observations = []
     for encoding in ("utf-8", "utf-16"):
@@ -258,6 +332,9 @@ def framed_formatting(binary: Path, work: Path, fixtures: Path, environment: dic
                 send({"method": "initialized", "params": {}})
                 documents = [(name, (fixtures / name).read_text()) for name in
                              ("legacy.opaal", "canonical.opaal", "invalid.opaal", "incomplete.opaal")]
+                documents.extend((name, (fixtures / name).read_text()) for name in (
+                    "concise-imports/noncanonical.opaal", "concise-imports/canonical.opaal",
+                    "concise-imports/incomplete.opaal", "concise-imports/invalid-name.opaal"))
                 documents.append(("invalid-body.opaal", "def waiting()\nlet x = 1\n"))
                 for index, (name, text) in enumerate(documents):
                     uri = (work / f"document-{index}.opaal").as_uri()
@@ -265,8 +342,9 @@ def framed_formatting(binary: Path, work: Path, fixtures: Path, environment: dic
                         "uri": uri, "languageId": "opaal", "version": 1, "text": text}}})
                     params = {"textDocument": {"uri": uri}, "options": {"tabSize": 8, "insertSpaces": False}}
                     result = request("textDocument/formatting", params)["result"]
-                    if name == "legacy.opaal":
-                        canonical = (fixtures / "canonical.opaal").read_text()
+                    if name in ("legacy.opaal", "concise-imports/noncanonical.opaal"):
+                        canonical = (fixtures / ("canonical.opaal" if name == "legacy.opaal" else
+                                                  "concise-imports/canonical.opaal")).read_text()
                         require(result == [{"range": {"start": {"line": 0, "character": 0},
                                                        "end": {"line": len(text.splitlines()), "character": 0}},
                                             "newText": canonical}], "framed formatter bytes/range differ")
@@ -275,6 +353,16 @@ def framed_formatting(binary: Path, work: Path, fixtures: Path, environment: dic
                         require(request("textDocument/formatting", params)["result"] == [], "LSP is not idempotent")
                     else:
                         require(result == [], f"{name}: language server produced an edit")
+                uri = (work / "concise-imports/after.opaal").as_uri()
+                text = (fixtures / "concise-imports/after.opaal").read_text()
+                send({"method": "textDocument/didOpen", "params": {"textDocument": {
+                    "uri": uri, "languageId": "opaal", "version": 1, "text": text}}})
+                alias = {"textDocument": {"uri": uri}, "position": {"line": 3, "character": 8}}
+                definition = request("textDocument/definition", alias)["result"]
+                require(definition == {"uri": uri, "range": {"start": {"line": 3, "character": 7},
+                        "end": {"line": 3, "character": 14}}}, "inferred alias definition differs")
+                require("module `helpers`" in request("textDocument/hover", alias)["result"]["contents"]["value"],
+                        "inferred alias hover differs")
                 uri = (work / "unicode.opaal").as_uri()
                 text = (fixtures / "legacy.opaal").read_text() + "# 界🙂"
                 expected = (fixtures / "canonical.opaal").read_text() + "# 界🙂\n"
@@ -349,6 +437,15 @@ def terminal_continuation(binary: Path, work: Path, environment: dict) -> None:
         for expression, value in ((b"identity('ready')", b"ready"), (b"five()", b"5")):
             os.write(descriptor, expression + b"\r")
             read_until(rb"(?:^|\n)" + value + rb"\r?\n.*>> ")
+        for line in (b"import {", b"std::math,"):
+            os.write(descriptor, line + b"\r")
+            read_until(rb"\.\.\.> ")
+            require(b"error[" not in captured, "terminal submitted an open import group")
+        os.write(descriptor, b"std::value as values}\r")
+        read_until(rb">> ")
+        require(b"error[" not in captured, "terminal rejected an import group")
+        os.write(descriptor, b"math::abs(-7) + values::length([1, 2, 3])\r")
+        read_until(rb"(?:^|\n)10\r?\n.*>> ")
         os.write(descriptor, b"def cancelled()\r")
         read_until(rb"\.\.\.> ")
         os.write(descriptor, b"\x03")
@@ -495,6 +592,7 @@ def qualify(archive: Path | None, fixture_archive: Path | None, binaries: Path |
                              "canonical_sha256": digest(canonical)}
         project = root / "project"
         project_report = project_workflow(lambda *args: run(*args, cwd=project), project, fixtures, target)
+        imports_report = concise_imports(run, root, fixtures)
         lsp_report = framed_formatting(installed / "opaal-language-server", root, fixtures, environment)
         terminal_continuation(binary, root, environment)
         require(public_paths(ROOT) == paths and
@@ -508,7 +606,8 @@ def qualify(archive: Path | None, fixture_archive: Path | None, binaries: Path |
                 "binary_sha256": {name: digest((installed / name).read_bytes())
                                   for name in ("opaal", "opaal-language-server")},
                 "fixture_sha256": fixture_hashes, "parser_seeds": seed_census(ROOT, paths),
-                "project": project_report, "language_server": lsp_report, "bounded_cases": bounded,
+                "project": project_report, "concise_imports": imports_report,
+                "language_server": lsp_report, "bounded_cases": bounded,
                 "assertions": ["exact fixture/source/program identity", "legacy/canonical execution and checking",
                                "exact action/function/comment bytes and idempotence", "read-only check and mode/inode retention",
                                "invalid/incomplete/missing-semicolon preserve bytes", "raw typed/untyped continuation and EOF",

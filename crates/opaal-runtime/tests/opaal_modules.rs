@@ -54,28 +54,29 @@ impl ModuleSourceLoader for FakeModules {
 
 #[test]
 fn aliases_reexports_and_nominal_types_keep_one_identity_and_provenance() {
-    let modules = FakeModules::default()
+    for grouped in [false, true] {
+        let modules = FakeModules::default()
         .maps("/project/main.opaal", "/project/main.opaal")
         .maps("/project/facade.opaal", "/project/facade.opaal")
         .maps("/project/model.opaal", "/canonical/model.opaal")
         .maps("/project/model-alias.opaal", "/canonical/model.opaal")
         .contains(
             "/project/main.opaal",
-            concat!(
+            if grouped { "import {'./facade.opaal' as api, std::value as values}\nexport {api, values}\n" } else { concat!(
                 "\n",
                 "import './facade.opaal' as api\n",
                 "import std::value as values\n",
                 "export { api, values }\n",
-            ),
+            ) },
         )
         .contains(
             "/project/facade.opaal",
-            concat!(
+            if grouped { "import {'./model.opaal', './model-alias.opaal' as alternate}\nexport {model, alternate}\n" } else { concat!(
                 "\n",
                 "import './model.opaal' as model\n",
                 "import './model-alias.opaal' as alternate\n",
                 "export { model, alternate }\n",
-            ),
+            ) },
         )
         .contains(
             "/canonical/model.opaal",
@@ -89,87 +90,134 @@ fn aliases_reexports_and_nominal_types_keep_one_identity_and_provenance() {
             ),
         );
 
-    let program = ModuleProgramLoader::new(&modules, &modules)
-        .load(Path::new("/project/main.opaal"))
-        .expect("the canonical opaal module program loads without execution");
-    let root = program.graph().root();
-    let api = program.aliases().alias(root, "api").unwrap();
-    assert_eq!(api.requested(), Some(Path::new("./facade.opaal")));
-    assert_eq!(api.target().path(), Path::new("/project/facade.opaal"));
-    assert_eq!(api.target().origin(), &ModuleOrigin::Local);
-    assert_eq!(
-        program.aliases().export(root, "api").unwrap().target(),
-        api.target()
-    );
+        let program = ModuleProgramLoader::new(&modules, &modules)
+            .load(Path::new("/project/main.opaal"))
+            .expect("the canonical opaal module program loads without execution");
+        let root = program.graph().root();
+        let api = program.aliases().alias(root, "api").unwrap();
+        assert_eq!(api.requested(), Some(Path::new("./facade.opaal")));
+        assert_eq!(api.target().path(), Path::new("/project/facade.opaal"));
+        assert_eq!(api.target().origin(), &ModuleOrigin::Local);
+        assert_eq!(
+            program.aliases().export(root, "api").unwrap().target(),
+            api.target()
+        );
 
-    let values = program.aliases().alias(root, "values").unwrap();
-    assert_eq!(
-        values.target().origin(),
-        &ModuleOrigin::Standard {
-            namespace: "std".into(),
-            module: "value".into(),
+        let values = program.aliases().alias(root, "values").unwrap();
+        assert_eq!(
+            values.target().origin(),
+            &ModuleOrigin::Standard {
+                namespace: "std".into(),
+                module: "value".into(),
+            }
+        );
+        assert_eq!(
+            modules.loads.borrow().as_slice(),
+            [
+                PathBuf::from("/project/main.opaal"),
+                PathBuf::from("/project/facade.opaal"),
+                PathBuf::from("/canonical/model.opaal"),
+            ],
+            "compiled standard descriptors are never source-loaded"
+        );
+
+        let model = program
+            .aliases()
+            .resolve(root, &["api", "model"])
+            .expect("the explicit re-export traverses to the canonical model module");
+        assert_eq!(model.path(), Path::new("/canonical/model.opaal"));
+        assert_eq!(
+            program
+                .aliases()
+                .resolve(root, &["api", "alternate"])
+                .unwrap(),
+            model,
+            "two local spellings collapse to one canonical module identity"
+        );
+        let direct = program.types().nominal(model, "Item").unwrap();
+        let qualified = program
+            .resolve_nominal_type(root, &["api", "model", "Item"])
+            .unwrap();
+        assert_eq!(qualified.id(), direct.id());
+        assert_eq!(qualified.id().module(), model);
+        assert_eq!(qualified.id().name(), "Item");
+        assert_eq!(qualified.fields()[0].name(), "value");
+
+        let root_source = program.sources().source(root).unwrap();
+        let api_cursor = root_source.text().find("api").unwrap() + 1;
+        let SemanticHover::Module(alias_hover) = program
+            .semantic_queries(&standard_registry())
+            .hover_at(root, api_cursor)
+            .unwrap()
+        else {
+            panic!("module aliases use shared semantic hover metadata");
+        };
+        assert_eq!(alias_hover.target(), api.target());
+        assert_eq!(alias_hover.requested(), Some(Path::new("./facade.opaal")));
+
+        let model_source = program.sources().source(model).unwrap();
+        let item_cursor = model_source.text().find("Item").unwrap() + 1;
+        let SemanticHover::NominalType(type_hover) = program
+            .semantic_queries(&standard_registry())
+            .hover_at(model, item_cursor)
+            .unwrap()
+        else {
+            panic!("nominal declarations use shared semantic hover metadata");
+        };
+        assert_eq!(type_hover.nominal().id(), direct.id());
+
+        let help = ModuleHelpCatalog::snapshot(&program);
+        let item_help = help.query(root, "api::model::Item").unwrap();
+        assert_eq!(item_help.kind(), ModuleHelpKind::NominalType);
+        assert_eq!(item_help.nominal_type().unwrap().id(), direct.id());
+        let standard_help = help.query(root, "values").unwrap();
+        assert_eq!(standard_help.kind(), ModuleHelpKind::Module);
+        assert_eq!(standard_help.module().unwrap(), values.target());
+    }
+}
+
+#[test]
+fn grouped_conflicts_keep_both_locations_and_distinct_aliases_share_the_target() {
+    for source in [
+        "import {std::math, std::math}",
+        "import std::math\nimport std::math as math",
+    ] {
+        let modules = FakeModules::default()
+            .maps("/main.opaal", "/main.opaal")
+            .contains("/main.opaal", source);
+        let report = ModuleProgramLoader::new(&modules, &modules).analyze(Path::new("/main.opaal"));
+        let opaal_runtime::module::ModuleProgramError::Aliases(error) = report.issues()[0].error()
+        else {
+            panic!("expected alias conflict")
+        };
+        let diagnostic = error.diagnostic();
+        assert_eq!(diagnostic.code(), "MOD011");
+        assert_eq!(diagnostic.labels().len(), 2);
+        let source_file = report
+            .sources()
+            .iter()
+            .find_map(|source| {
+                (source.module().path() == Path::new("/main.opaal")).then_some(source.source())
+            })
+            .unwrap();
+        for label in diagnostic.labels() {
+            assert_eq!(source_file.slice(label.span()).unwrap(), "math");
         }
-    );
+        assert!(report.program().is_none());
+    }
+    let modules = FakeModules::default()
+        .maps("/main.opaal", "/main.opaal")
+        .contains("/main.opaal", "import {std::math, std::math as other_math}");
+    let program = ModuleProgramLoader::new(&modules, &modules)
+        .load(Path::new("/main.opaal"))
+        .unwrap();
+    let root = program.graph().root();
     assert_eq!(
-        modules.loads.borrow().as_slice(),
-        [
-            PathBuf::from("/project/main.opaal"),
-            PathBuf::from("/project/facade.opaal"),
-            PathBuf::from("/canonical/model.opaal"),
-        ],
-        "compiled standard descriptors are never source-loaded"
-    );
-
-    let model = program
-        .aliases()
-        .resolve(root, &["api", "model"])
-        .expect("the explicit re-export traverses to the canonical model module");
-    assert_eq!(model.path(), Path::new("/canonical/model.opaal"));
-    assert_eq!(
+        program.aliases().alias(root, "math").unwrap().target(),
         program
             .aliases()
-            .resolve(root, &["api", "alternate"])
-            .unwrap(),
-        model,
-        "two local spellings collapse to one canonical module identity"
+            .alias(root, "other_math")
+            .unwrap()
+            .target()
     );
-    let direct = program.types().nominal(model, "Item").unwrap();
-    let qualified = program
-        .resolve_nominal_type(root, &["api", "model", "Item"])
-        .unwrap();
-    assert_eq!(qualified.id(), direct.id());
-    assert_eq!(qualified.id().module(), model);
-    assert_eq!(qualified.id().name(), "Item");
-    assert_eq!(qualified.fields()[0].name(), "value");
-
-    let root_source = program.sources().source(root).unwrap();
-    let api_cursor = root_source.text().find("api").unwrap() + 1;
-    let SemanticHover::Module(alias_hover) = program
-        .semantic_queries(&standard_registry())
-        .hover_at(root, api_cursor)
-        .unwrap()
-    else {
-        panic!("module aliases use shared semantic hover metadata");
-    };
-    assert_eq!(alias_hover.target(), api.target());
-    assert_eq!(alias_hover.requested(), Some(Path::new("./facade.opaal")));
-
-    let model_source = program.sources().source(model).unwrap();
-    let item_cursor = model_source.text().find("Item").unwrap() + 1;
-    let SemanticHover::NominalType(type_hover) = program
-        .semantic_queries(&standard_registry())
-        .hover_at(model, item_cursor)
-        .unwrap()
-    else {
-        panic!("nominal declarations use shared semantic hover metadata");
-    };
-    assert_eq!(type_hover.nominal().id(), direct.id());
-
-    let help = ModuleHelpCatalog::snapshot(&program);
-    let item_help = help.query(root, "api::model::Item").unwrap();
-    assert_eq!(item_help.kind(), ModuleHelpKind::NominalType);
-    assert_eq!(item_help.nominal_type().unwrap().id(), direct.id());
-    let standard_help = help.query(root, "values").unwrap();
-    assert_eq!(standard_help.kind(), ModuleHelpKind::Module);
-    assert_eq!(standard_help.module().unwrap(), values.target());
 }

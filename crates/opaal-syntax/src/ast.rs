@@ -1,6 +1,6 @@
-use std::fmt;
+use std::{borrow::Cow, fmt};
 
-use crate::Span;
+use crate::{SourceFile, Span};
 
 /// A syntax value paired with the exact source range that produced it.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -49,6 +49,43 @@ impl Script {
         &self.statements
     }
 
+    /// Every individual import, without introducing a group binding or identity.
+    pub fn module_imports(&self) -> impl Iterator<Item = &ModuleAliasImport> {
+        self.statements
+            .iter()
+            .flat_map(|statement| statement.kind().module_imports())
+    }
+
+    /// Publication/retention units: one ordinary statement or one import entry.
+    pub fn semantic_statements<'a>(
+        &'a self,
+        source: &'a SourceFile,
+    ) -> impl Iterator<Item = Cow<'a, Statement>> {
+        self.statements.iter().flat_map(move |statement| {
+            let entries = match statement.kind() {
+                StatementKind::ModuleImportGroup(entries) => Some(entries.as_slice()),
+                _ => None,
+            };
+            (0..entries.map_or(1, <[_]>::len)).map(move |index| {
+                if let Some(entries) = entries {
+                    let entry = &entries[index];
+                    let span = source
+                        .span(
+                            entry.source.span().start()
+                                ..entry.source.span().end().max(entry.alias.span().end()),
+                        )
+                        .expect("import entries retain original source spans");
+                    Cow::Owned(Statement::new(
+                        StatementKind::ModuleImport(entry.clone()),
+                        span,
+                    ))
+                } else {
+                    Cow::Borrowed(statement)
+                }
+            })
+        })
+    }
+
     #[must_use]
     pub const fn span(&self) -> Span {
         self.span
@@ -79,6 +116,8 @@ pub type Statement = AstNode<StatementKind>;
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum StatementKind {
     ModuleImport(ModuleAliasImport),
+    /// A nonempty ordered list of the same entries as single imports.
+    ModuleImportGroup(Vec<ModuleAliasImport>),
     ModuleExport(ModuleExportStatement),
     NominalType(NominalTypeDeclaration),
     VariantType(VariantTypeDeclaration),
@@ -98,7 +137,19 @@ pub enum StatementKind {
     Job(JobStatement),
 }
 
-/// One OPAAL module imported under a required local alias.
+impl StatementKind {
+    /// Import entries in source order, preserving inferred and explicit alias spans.
+    #[must_use]
+    pub fn module_imports(&self) -> &[ModuleAliasImport] {
+        match self {
+            Self::ModuleImport(entry) => std::slice::from_ref(entry),
+            Self::ModuleImportGroup(entries) => entries,
+            _ => &[],
+        }
+    }
+}
+
+/// One OPAAL module with an explicit or parser-inferred local alias.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ModuleAliasImport {
     pub source: ModuleImportSource,

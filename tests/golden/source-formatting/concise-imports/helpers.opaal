@@ -1,0 +1,5 @@
+def twice(value: Int) -> Int
+{
+    value * 2
+}
+export { twice }

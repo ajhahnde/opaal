@@ -1,0 +1,5 @@
+import {
+    std::math,
+    std::math as other_math,
+}
+let result = math::abs(-7) + other_math::abs(-3)

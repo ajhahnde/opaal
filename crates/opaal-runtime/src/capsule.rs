@@ -2093,91 +2093,149 @@ mod tests {
                     .ok_or_else(|| ModuleSourceError::new("missing source"))
             }
         }
-        let sources = Sources(BTreeMap::from([
+        for first_import in [
+            "import './facade.opaal' as api",
+            "import {'./facade.opaal' as api, std::math, './bad.opaal'}",
+        ] {
+            let sources = Sources(BTreeMap::from([
             (PathBuf::from("/project/model.opaal"), "type Box[T] = { value: T }\ndef get[T](item: Box[T]) -> T { item.value }\nexport { Box, get }\n".to_owned()),
+            (PathBuf::from("/project/bad.opaal"), "let broken = 1 / 0\nexport {broken}\n".to_owned()),
             (PathBuf::from("/project/facade.opaal"), "import './model.opaal' as model\nexport { model }\n".to_owned()),
         ]));
-        let mut session = Session::new("/project", Environment::new(), options());
-        for text in [
-            "import './facade.opaal' as api",
-            "let item: api::model::Box[Int] = api::model::Box {value: 7}",
-            "def process(item: api::model::Box[Int]) -> Int { api::model::get[Int](item) }",
-            "let unpack = {|api::model::Box {value: x}: api::model::Box[Int]| x}",
-        ] {
-            session
-                .submit_with_source_loader(
-                    "cell",
-                    text,
-                    &sources,
-                    &sources,
-                    &opaal_platform_posix::PosixPlatform,
-                    &FakePlatform::full(),
-                    &FakeClock::new(),
-                    &mut Vec::new(),
-                )
-                .unwrap();
-        }
-        let wire = encode_background_capsule(
-            "next",
-            "",
-            Path::new("/project"),
-            &Environment::new(),
-            None,
-            session.scope(),
-            options(),
-        )
-        .unwrap();
-        drop(sources);
-        let decoded = decode_background_capsule(&wire).unwrap();
-        let caller = SourceFile::new(SourceId::new(50_000), "next", "process(item)");
-        let value = crate::eval::apply_callable(
-            decoded.scope().get("process").unwrap(),
-            vec![decoded.scope().get("item").unwrap().clone()],
-            &caller,
-            caller.span(0..caller.len()).unwrap(),
-            &mut Environment::new(),
-            &EvalLimits::default(),
-        )
-        .unwrap();
-        assert!(matches!(value, Completion::Value(Value::Int(7))));
-        assert_eq!(decoded.scope().get("item"), session.scope().get("item"));
-        let unpacked = crate::eval::apply_callable(
-            decoded.scope().get("unpack").unwrap(),
-            vec![decoded.scope().get("item").unwrap().clone()],
-            &caller,
-            caller.span(0..caller.len()).unwrap(),
-            &mut Environment::new(),
-            &EvalLimits::default(),
-        )
-        .unwrap();
-        assert!(matches!(unpacked, Completion::Value(Value::Int(7))));
-        let Value::Callable(process) = session.scope().get("process").unwrap() else {
-            panic!("callable")
-        };
-        let mut forged = snapshot_callable(process).unwrap();
-        forged.parameters[0].1 = ValueType::Any;
-        assert!(
-            restore_callable(forged, &mut 5_000_000)
-                .err()
+            let mut session = Session::new("/project", Environment::new(), options());
+            let first = session.submit_with_source_loader(
+                "cell",
+                first_import,
+                &sources,
+                &sources,
+                &opaal_platform_posix::PosixPlatform,
+                &FakePlatform::full(),
+                &FakeClock::new(),
+                &mut Vec::new(),
+            );
+            if first_import.contains("bad.opaal") {
+                assert!(first.unwrap_err().render().contains("bad.opaal"));
+                assert!(session.scope().get("bad::broken").is_none());
+            } else {
+                first.unwrap();
+            }
+            for text in [
+                "let item: api::model::Box[Int] = api::model::Box {value: 7}",
+                "def process(item: api::model::Box[Int]) -> Int { api::model::get[Int](item) }",
+                "let unpack = {|api::model::Box {value: x}: api::model::Box[Int]| x}",
+            ] {
+                session
+                    .submit_with_source_loader(
+                        "cell",
+                        text,
+                        &sources,
+                        &sources,
+                        &opaal_platform_posix::PosixPlatform,
+                        &FakePlatform::full(),
+                        &FakeClock::new(),
+                        &mut Vec::new(),
+                    )
+                    .unwrap();
+            }
+            let wire = encode_background_capsule(
+                "next",
+                "",
+                Path::new("/project"),
+                &Environment::new(),
+                None,
+                session.scope(),
+                options(),
+            )
+            .unwrap();
+            drop(sources);
+            let decoded = decode_background_capsule(&wire).unwrap();
+            let caller = SourceFile::new(SourceId::new(50_000), "next", "process(item)");
+            let value = crate::eval::apply_callable(
+                decoded.scope().get("process").unwrap(),
+                vec![decoded.scope().get("item").unwrap().clone()],
+                &caller,
+                caller.span(0..caller.len()).unwrap(),
+                &mut Environment::new(),
+                &EvalLimits::default(),
+            )
+            .unwrap();
+            assert!(matches!(value, Completion::Value(Value::Int(7))));
+            assert_eq!(decoded.scope().get("item"), session.scope().get("item"));
+            let unpacked = crate::eval::apply_callable(
+                decoded.scope().get("unpack").unwrap(),
+                vec![decoded.scope().get("item").unwrap().clone()],
+                &caller,
+                caller.span(0..caller.len()).unwrap(),
+                &mut Environment::new(),
+                &EvalLimits::default(),
+            )
+            .unwrap();
+            assert!(matches!(unpacked, Completion::Value(Value::Int(7))));
+            let Value::Callable(process) = session.scope().get("process").unwrap() else {
+                panic!("callable")
+            };
+            for invalid_count in [usize::MAX, 10_000] {
+                let mut forged = snapshot_callable(process).unwrap();
+                forged.type_context.cells[0].statement_count = invalid_count;
+                assert!(restore_callable(forged, &mut 5_000_000).is_err());
+            }
+            let mut forged = snapshot_callable(process).unwrap();
+            let target = forged.type_context.cells[0]
+                .local_imports
+                .values()
+                .next()
                 .unwrap()
-                .contains("signature")
-        );
-        let Value::NominalRecord(item) = session.scope().get("item").unwrap() else {
-            panic!("nominal record")
-        };
-        for fields in [
-            Vec::new(),
-            vec![(Arc::from("value"), Value::string("wrong type"))],
-        ] {
+                .clone();
+            forged.type_context.cells[0].local_imports.insert(0, target);
+            assert!(restore_callable(forged, &mut 5_000_000).is_err());
+            let mut forged = snapshot_callable(process).unwrap();
+            forged.parameters[0].1 = ValueType::Any;
+            assert!(
+                restore_callable(forged, &mut 5_000_000)
+                    .err()
+                    .unwrap()
+                    .contains("signature")
+            );
+            let Value::NominalRecord(item) = session.scope().get("item").unwrap() else {
+                panic!("nominal record")
+            };
+            for fields in [
+                Vec::new(),
+                vec![(Arc::from("value"), Value::string("wrong type"))],
+            ] {
+                let mut malformed = session.scope().clone();
+                malformed
+                    .declare(
+                        "malformed",
+                        BindingMutability::Immutable,
+                        Value::NominalRecord(Box::new(NominalRecordValue::new(
+                            item.id().clone(),
+                            item.type_arguments().to_vec(),
+                            fields,
+                        ))),
+                    )
+                    .unwrap();
+                let error = encode_background_capsule(
+                    "next",
+                    "",
+                    Path::new("/project"),
+                    &Environment::new(),
+                    None,
+                    &malformed,
+                    options(),
+                )
+                .unwrap_err();
+                assert!(error.to_string().contains("retained schema"), "{error}");
+            }
             let mut malformed = session.scope().clone();
             malformed
                 .declare(
-                    "malformed",
+                    "unresolved",
                     BindingMutability::Immutable,
                     Value::NominalRecord(Box::new(NominalRecordValue::new(
                         item.id().clone(),
-                        item.type_arguments().to_vec(),
-                        fields,
+                        vec![ValueType::TypeParameter("T".to_owned())],
+                        item.fields().to_vec(),
                     ))),
                 )
                 .unwrap();
@@ -2191,32 +2249,8 @@ mod tests {
                 options(),
             )
             .unwrap_err();
-            assert!(error.to_string().contains("retained schema"), "{error}");
-        }
-        let mut malformed = session.scope().clone();
-        malformed
-            .declare(
-                "unresolved",
-                BindingMutability::Immutable,
-                Value::NominalRecord(Box::new(NominalRecordValue::new(
-                    item.id().clone(),
-                    vec![ValueType::TypeParameter("T".to_owned())],
-                    item.fields().to_vec(),
-                ))),
-            )
-            .unwrap();
-        let error = encode_background_capsule(
-            "next",
-            "",
-            Path::new("/project"),
-            &Environment::new(),
-            None,
-            &malformed,
-            options(),
-        )
-        .unwrap_err();
-        assert!(error.to_string().contains("unresolved type argument"));
-        session
+            assert!(error.to_string().contains("unresolved type argument"));
+            session
             .submit_with_source_loader(
                 "cell",
                 "type Forward = { item: later::Box[Int] }\n1 / 0\nimport './model.opaal' as later",
@@ -2228,30 +2262,31 @@ mod tests {
                 &mut Vec::new(),
             )
             .unwrap_err();
-        // The initialized transitive snapshot supplies analysis metadata; the
-        // unreached alias itself stays unpublished.
-        assert!(session.scope().get("later::get").is_none());
-        session
-            .submit_with_value(
-                "cell",
-                "def forward(item: Forward) -> Int { item.item.value }",
-                &opaal_platform_posix::PosixPlatform,
-                &FakePlatform::full(),
-                &FakeClock::new(),
-                &mut Vec::new(),
+            // The initialized transitive snapshot supplies analysis metadata; the
+            // unreached alias itself stays unpublished.
+            assert!(session.scope().get("later::get").is_none());
+            session
+                .submit_with_value(
+                    "cell",
+                    "def forward(item: Forward) -> Int { item.item.value }",
+                    &opaal_platform_posix::PosixPlatform,
+                    &FakePlatform::full(),
+                    &FakeClock::new(),
+                    &mut Vec::new(),
+                )
+                .unwrap();
+            let wire = encode_background_capsule(
+                "next",
+                "",
+                Path::new("/project"),
+                &Environment::new(),
+                None,
+                session.scope(),
+                options(),
             )
             .unwrap();
-        let wire = encode_background_capsule(
-            "next",
-            "",
-            Path::new("/project"),
-            &Environment::new(),
-            None,
-            session.scope(),
-            options(),
-        )
-        .unwrap();
-        decode_background_capsule(&wire).unwrap();
+            decode_background_capsule(&wire).unwrap();
+        }
     }
 
     #[test]

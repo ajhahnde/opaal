@@ -349,6 +349,17 @@ fn path_completion_renders_reversible_bare_and_quoted_source() {
     ]);
     let engine = CompletionEngine::new(catalog);
 
+    for source in [
+        "import {'./two",
+        "import {std::math,'./two",
+        "import {\n std::math,\n './two",
+    ] {
+        let completed = engine.complete(source, source.len());
+        assert_eq!(completed.len(), 1);
+        assert_eq!(completed[0].value(), "'./two words'");
+        assert_eq!(&source[completed[0].replacement()], "'./two");
+    }
+
     assert_eq!(
         engine
             .complete("^cat ./two", 10)

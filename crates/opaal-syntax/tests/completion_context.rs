@@ -183,3 +183,33 @@ fn classification_is_checked_but_does_not_require_a_complete_ast() {
     assert_eq!(incomplete.context(), &CompletionContext::Name);
     assert_eq!(incomplete.prefix(), "na");
 }
+
+#[test]
+fn import_group_commas_delimit_quoted_path_replacements_without_changing_command_words() {
+    for input in [
+        "import {'./fi",
+        "import {std::math,'./fi",
+        "import {\n std::math,\n './fi",
+    ] {
+        let target = completion_target(input, input.len()).unwrap();
+        assert!(matches!(
+            target.context(),
+            CompletionContext::Path {
+                style: PathCompletionStyle::SingleQuoted,
+                ..
+            }
+        ));
+        assert_eq!(target.prefix(), "./fi");
+        assert_eq!(&input[target.replacement()], "'./fi");
+    }
+    let input = "import {std::math,'./a,b";
+    assert_eq!(
+        completion_target(input, input.len()).unwrap().prefix(),
+        "./a,b"
+    );
+    let input = "echo ./a,b";
+    assert_eq!(
+        completion_target(input, input.len()).unwrap().prefix(),
+        "./a,b"
+    );
+}

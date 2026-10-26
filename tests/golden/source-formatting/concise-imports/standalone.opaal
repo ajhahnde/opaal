@@ -1,0 +1,3 @@
+import std::math
+import std::value
+let result = math::abs(-7) + value::length([1, 2, 3])

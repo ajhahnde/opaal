@@ -925,10 +925,10 @@ impl ModuleAliasRegistry {
                     occupied.entry(name).or_insert(identifier.span());
                 }
             }
-            for statement in entry.script().statements() {
-                let StatementKind::ModuleImport(import) = statement.kind() else {
-                    continue;
-                };
+            for import in entry.script().module_imports() {
+                if control.is_cancelled() {
+                    break;
+                }
                 let name = entry
                     .source()
                     .slice(import.alias.span())
@@ -2413,6 +2413,7 @@ fn validate_callable_definitions(
                 );
             }
             StatementKind::ModuleImport(_)
+            | StatementKind::ModuleImportGroup(_)
             | StatementKind::ModuleExport(_)
             | StatementKind::NominalType(_)
             | StatementKind::VariantType(_)
@@ -2607,6 +2608,7 @@ impl<'a> CallableReadCollector<'a> {
         }
         match statement.kind() {
             StatementKind::ModuleImport(_)
+            | StatementKind::ModuleImportGroup(_)
             | StatementKind::ModuleExport(_)
             | StatementKind::NominalType(_)
             | StatementKind::VariantType(_)
@@ -3258,6 +3260,7 @@ pub(crate) struct RuntimeTypeContext {
 pub(crate) struct ReplTypeSource {
     pub(crate) source: Arc<SourceFile>,
     pub(crate) local_imports: BTreeMap<usize, ModuleId>,
+    // One ordinary statement or import entry; the private wire field stays unchanged.
     pub(crate) statement_count: usize,
     pub(crate) nominal_offsets: BTreeSet<usize>,
 }
@@ -3290,8 +3293,29 @@ impl RuntimeTypeContext {
             let ParseOutcome::Complete(parsed) = opaal_syntax::parse_opaal(&cell.source) else {
                 return Err("retained interactive source does not parse".to_owned());
             };
-            if cell.statement_count > parsed.statements().len() {
+            let units = parsed
+                .semantic_statements(&cell.source)
+                .map(std::borrow::Cow::into_owned)
+                .collect::<Vec<_>>();
+            if cell.statement_count > units.len() {
                 return Err("invalid retained statement count".to_owned());
+            }
+            let local_offsets = parsed
+                .module_imports()
+                .filter_map(|import| {
+                    matches!(
+                        import.source,
+                        opaal_syntax::ModuleImportSource::Local { .. }
+                    )
+                    .then_some(import.source.span().start())
+                })
+                .collect::<BTreeSet<_>>();
+            if !cell
+                .local_imports
+                .keys()
+                .all(|offset| local_offsets.contains(offset))
+            {
+                return Err("invalid retained import entry offset".to_owned());
             }
             let nominal_offsets = parsed
                 .statements()
@@ -3310,9 +3334,9 @@ impl RuntimeTypeContext {
             // Standard imports are compiled metadata and were available to the
             // original whole-cell analysis, even when execution stopped before
             // the import. Keep that input without publishing its alias.
-            let mut statements = parsed.statements()[..cell.statement_count].to_vec();
+            let mut statements = units[..cell.statement_count].to_vec();
             statements.extend(
-                parsed.statements()[cell.statement_count..]
+                units[cell.statement_count..]
                     .iter()
                     .filter(|statement| {
                         matches!(statement.kind(), StatementKind::ModuleImport(import)
@@ -3344,12 +3368,10 @@ impl RuntimeTypeContext {
             {
                 current.aliases.retain(|_, alias| {
                     alias.declaration_span.source_id() != cell.source.id()
-                        || parsed.statements()[..cell.statement_count]
-                            .iter()
-                            .any(|statement| {
-                                statement.span().start() <= alias.declaration_span.start()
-                                    && statement.span().end() >= alias.declaration_span.end()
-                            })
+                        || units[..cell.statement_count].iter().any(|statement| {
+                            statement.span().start() <= alias.declaration_span.start()
+                                && statement.span().end() >= alias.declaration_span.end()
+                        })
                 });
             }
             let retained = analyzed.retain_interactive_prefix(
@@ -3546,7 +3568,9 @@ impl RuntimeBindingTypes {
                     .iter()
                     .any(|program| program.types.by_module.contains_key(module))
         });
-        let prefix_end = script.statements()[..admitted]
+        let prefix_end = script
+            .semantic_statements(source)
+            .take(admitted)
             .last()
             .map_or(0, |statement| statement.span().end());
         let in_prefix = |span: Span| span.source_id() != source.id() || span.end() <= prefix_end;
@@ -3627,13 +3651,30 @@ impl RuntimeBindingTypes {
         retained.context =
             inherited.map_or_else(RuntimeTypeContext::default, |types| types.context.clone());
         retained.context.programs = programs.to_vec();
-        let local_imports = self.context.cells.last().map_or_else(BTreeMap::new, |cell| {
-            cell.local_imports.iter().filter(|(offset, target)| {
-                programs.iter().any(|program| program.types.by_module.contains_key(*target))
-                    || script.statements()[..admitted].iter().any(|statement|
-                        matches!(statement.kind(), StatementKind::ModuleImport(import) if import.source.span().start() == **offset))
-            }).map(|(offset, target)| (*offset, target.clone())).collect()
-        });
+        let local_imports =
+            self.context
+                .cells
+                .last()
+                .map_or_else(BTreeMap::new, |cell| {
+                    cell.local_imports
+                        .iter()
+                        .filter(|(offset, target)| {
+                            programs
+                                .iter()
+                                .any(|program| program.types.by_module.contains_key(*target))
+                                || script.semantic_statements(source).take(admitted).any(
+                                    |statement| {
+                                        statement
+                                            .kind()
+                                            .module_imports()
+                                            .iter()
+                                            .any(|import| import.source.span().start() == **offset)
+                                    },
+                                )
+                        })
+                        .map(|(offset, target)| (*offset, target.clone()))
+                        .collect()
+                });
         retained.context.cells.push(ReplTypeSource {
             source: Arc::new(source.clone()),
             local_imports,
@@ -3940,10 +3981,10 @@ impl RuntimeBindingTypes {
             occupied.insert(alias.name().to_owned());
         }
 
-        for statement in script.statements() {
-            let StatementKind::ModuleImport(import) = statement.kind() else {
-                continue;
-            };
+        for import in script.module_imports() {
+            if control.is_cancelled() {
+                break;
+            }
             let alias_name = source
                 .slice(import.alias.span())
                 .expect("parsed aliases belong to their source")
@@ -4074,10 +4115,10 @@ impl RuntimeBindingTypes {
                     script: standard_script,
                 };
                 let mut standard_aliases = ModuleAliases::default();
-                for statement in standard_entry.script().statements() {
-                    let StatementKind::ModuleImport(import) = statement.kind() else {
-                        continue;
-                    };
+                for import in standard_entry.script().module_imports() {
+                    if control.is_cancelled() {
+                        break;
+                    }
                     let opaal_syntax::ModuleImportSource::Standard {
                         namespace, module, ..
                     } = import.source
@@ -4185,7 +4226,7 @@ impl RuntimeBindingTypes {
         context.cells.push(ReplTypeSource {
             source: Arc::new(source.clone()),
             local_imports: local_imports.clone(),
-            statement_count: script.statements().len(),
+            statement_count: script.semantic_statements(source).count(),
             nominal_offsets: BTreeSet::new(),
         });
         Ok(Self {
@@ -4630,7 +4671,9 @@ impl<'a> TypeCollector<'a> {
             return Ok(());
         }
         match statement.kind() {
-            StatementKind::ModuleImport(_) | StatementKind::ModuleExport(_) => Ok(()),
+            StatementKind::ModuleImport(_)
+            | StatementKind::ModuleImportGroup(_)
+            | StatementKind::ModuleExport(_) => Ok(()),
             StatementKind::NominalType(_) | StatementKind::VariantType(_) => Ok(()),
             StatementKind::Declaration(declaration) => {
                 self.collect_nominal_pattern_references(&declaration.pattern);
@@ -5502,6 +5545,7 @@ impl<'a> SignatureValidator<'a> {
                 self.function_block_result(&statement.catch_block, signature)
             }
             StatementKind::ModuleImport(_)
+            | StatementKind::ModuleImportGroup(_)
             | StatementKind::ModuleExport(_)
             | StatementKind::NominalType(_)
             | StatementKind::VariantType(_)
@@ -5577,6 +5621,7 @@ impl<'a> SignatureValidator<'a> {
         }
         match statement.kind() {
             StatementKind::ModuleImport(_)
+            | StatementKind::ModuleImportGroup(_)
             | StatementKind::ModuleExport(_)
             | StatementKind::NominalType(_)
             | StatementKind::VariantType(_) => Ok(()),
@@ -8091,6 +8136,7 @@ impl<'a> ReferenceResolver<'a> {
         }
         match statement.kind() {
             StatementKind::ModuleImport(_)
+            | StatementKind::ModuleImportGroup(_)
             | StatementKind::ModuleExport(_)
             | StatementKind::NominalType(_)
             | StatementKind::VariantType(_) => Ok(()),
@@ -9029,6 +9075,7 @@ impl<'a> StaticEffectAnalyzer<'a> {
         }
         match statement.kind() {
             StatementKind::ModuleImport(_)
+            | StatementKind::ModuleImportGroup(_)
             | StatementKind::ModuleExport(_)
             | StatementKind::NominalType(_)
             | StatementKind::VariantType(_)
@@ -9660,6 +9707,7 @@ impl<'a> StaticPipelineAnalyzer<'a> {
         }
         match statement.kind() {
             StatementKind::ModuleImport(_)
+            | StatementKind::ModuleImportGroup(_)
             | StatementKind::ModuleExport(_)
             | StatementKind::NominalType(_)
             | StatementKind::VariantType(_) => {}
@@ -11347,49 +11395,47 @@ impl<'a> ModuleProgramLoader<'a> {
         let imports = script
             .statements()
             .iter()
-            .filter_map(|statement| match statement.kind() {
-                StatementKind::ModuleImport(import) => match import.source {
-                    opaal_syntax::ModuleImportSource::Local { path } => {
-                        let quoted = source
-                            .slice(path)
-                            .expect("parsed import spans belong to their source");
-                        Some(PendingModuleImport::Local {
-                            requested: PathBuf::from(&quoted[1..quoted.len() - 1]),
-                            span: path,
-                        })
+            .flat_map(|statement| statement.kind().module_imports())
+            .map(|import| match import.source {
+                opaal_syntax::ModuleImportSource::Local { path } => {
+                    let quoted = source
+                        .slice(path)
+                        .expect("parsed import spans belong to their source");
+                    PendingModuleImport::Local {
+                        requested: PathBuf::from(&quoted[1..quoted.len() - 1]),
+                        span: path,
                     }
-                    opaal_syntax::ModuleImportSource::Standard {
-                        namespace,
-                        module: standard,
-                        span,
-                    } => Some(PendingModuleImport::Standard {
-                        namespace: source
-                            .slice(namespace.span())
-                            .expect("standard namespace belongs to its source")
-                            .to_owned(),
-                        module: source
-                            .slice(standard.span())
-                            .expect("standard module belongs to its source")
-                            .to_owned(),
-                        span,
-                    }),
-                    opaal_syntax::ModuleImportSource::Project {
-                        namespace,
-                        module: project,
-                        span,
-                    } => Some(PendingModuleImport::Project {
-                        namespace: source
-                            .slice(namespace.span())
-                            .expect("project namespace belongs to its source")
-                            .to_owned(),
-                        module: source
-                            .slice(project.span())
-                            .expect("project module belongs to its source")
-                            .to_owned(),
-                        span,
-                    }),
+                }
+                opaal_syntax::ModuleImportSource::Standard {
+                    namespace,
+                    module: standard,
+                    span,
+                } => PendingModuleImport::Standard {
+                    namespace: source
+                        .slice(namespace.span())
+                        .expect("standard namespace belongs to its source")
+                        .to_owned(),
+                    module: source
+                        .slice(standard.span())
+                        .expect("standard module belongs to its source")
+                        .to_owned(),
+                    span,
                 },
-                _ => None,
+                opaal_syntax::ModuleImportSource::Project {
+                    namespace,
+                    module: project,
+                    span,
+                } => PendingModuleImport::Project {
+                    namespace: source
+                        .slice(namespace.span())
+                        .expect("project namespace belongs to its source")
+                        .to_owned(),
+                    module: source
+                        .slice(project.span())
+                        .expect("project module belongs to its source")
+                        .to_owned(),
+                    span,
+                },
             })
             .collect::<Vec<_>>();
         sources.register(module.clone(), source.clone(), script.clone());
@@ -11406,15 +11452,13 @@ impl<'a> ModuleProgramLoader<'a> {
                     .iter()
                     .find_map(|statement| match statement.kind() {
                         StatementKind::Task(_) => Some(statement.span()),
-                        StatementKind::ModuleImport(import)
-                            if matches!(
+                        _ => statement.kind().module_imports().iter().find_map(|import| {
+                            matches!(
                                 import.source,
                                 opaal_syntax::ModuleImportSource::Project { .. }
-                            ) =>
-                        {
-                            Some(import.source.span())
-                        }
-                        _ => None,
+                            )
+                            .then_some(import.source.span())
+                        }),
                     })
             });
             if let Some(span) = project_span {
@@ -11678,6 +11722,7 @@ impl SyntaxMetrics {
     fn statement(&mut self, statement: &Statement) {
         self.nodes += 1;
         match statement.kind() {
+            StatementKind::ModuleImportGroup(entries) => self.nodes += entries.len() as u64,
             StatementKind::ModuleImport(_) | StatementKind::ModuleExport(_) => {}
             StatementKind::NominalType(declaration) => {
                 for field in &declaration.fields {

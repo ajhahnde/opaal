@@ -1,5 +1,5 @@
 # class	path
 complete	complete/qualified-aliases.opaal
 complete	complete/nominal-type.opaal
-invalid	invalid/missing-alias.opaal
+complete	complete/inferred-alias.opaal
 invalid	invalid/named-import.opaal

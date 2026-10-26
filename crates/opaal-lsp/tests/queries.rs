@@ -1681,3 +1681,89 @@ fn complete_report_and_policy_observers_resolve_the_same_source_operations() {
         assert_eq!(signature["signatures"][0]["label"], expected);
     }
 }
+
+#[test]
+fn inferred_group_alias_locations_remain_original_utf8_and_utf16_subspans() {
+    let directory = TestDirectory::new();
+    fs::create_dir(directory.0.join("界🙂")).unwrap();
+    let uri = directory.uri("imports.opaal");
+    let library_uri = directory.uri("界🙂/library.opaal");
+    let text = "import { './界🙂/library.opaal', std::math as numbers }\nlet result = library::greet('hello')\nnumbers::abs(-7)\n";
+    let library = "def greet(name: String) -> String { return name }\nexport {greet}\n";
+    let mut workspace = Workspace::new();
+    workspace.open(uri.clone(), 1, text.into()).unwrap();
+    workspace
+        .open(library_uri.clone(), 1, library.into())
+        .unwrap();
+    for encoding in [PositionEncoding::Utf8, PositionEncoding::Utf16] {
+        let start = text.find("library.opaal").unwrap();
+        let control = RequestControl::new();
+        let definition = request(
+            &workspace,
+            encoding,
+            &control,
+            "textDocument/definition",
+            positional(&uri, text, start + 2, encoding),
+        )
+        .unwrap();
+        assert_eq!(definition["uri"], uri.as_str());
+        assert_eq!(
+            definition["range"]["start"],
+            position(text, start, encoding)
+        );
+        assert_eq!(
+            definition["range"]["end"],
+            position(text, start + "library".len(), encoding)
+        );
+        let hover = request(
+            &workspace,
+            encoding,
+            &control,
+            "textDocument/hover",
+            positional(&uri, text, start + 2, encoding),
+        )
+        .unwrap();
+        assert!(
+            hover["contents"]["value"]
+                .as_str()
+                .unwrap()
+                .contains("module `library`")
+        );
+        let call = text.rfind("greet").unwrap();
+        let definition = request(
+            &workspace,
+            encoding,
+            &control,
+            "textDocument/definition",
+            positional(&uri, text, call + 2, encoding),
+        )
+        .unwrap();
+        assert_eq!(definition["uri"], library_uri.as_str());
+        let mut params = positional(&uri, text, call + 2, encoding);
+        params["context"] = json!({"includeDeclaration":true});
+        let references = request(
+            &workspace,
+            encoding,
+            &control,
+            "textDocument/references",
+            params,
+        )
+        .unwrap();
+        assert_eq!(references.as_array().unwrap().len(), 3);
+        let edits = request(
+            &workspace,
+            encoding,
+            &control,
+            "textDocument/formatting",
+            json!({"textDocument":{"uri":uri.as_str()},"options":{}}),
+        )
+        .unwrap();
+        let source = SourceFile::new(SourceId::new(0), "expected", text);
+        let opaal_syntax::FormatOutcome::Complete(expected) =
+            opaal_syntax::format_source_opaal(&source)
+        else {
+            panic!("format")
+        };
+        assert_eq!(edits[0]["newText"], expected);
+    }
+}

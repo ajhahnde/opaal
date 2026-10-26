@@ -295,6 +295,45 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
     fn parse_module_import(&mut self) -> ParseResult<Statement> {
         let start = self.take().expect("import keyword is current").span();
         self.skip_inline();
+        if self.take_delimiter(Delimiter::LeftBrace).is_some() {
+            self.continuation_depth += 1;
+            let result = self.parse_module_import_group(start);
+            self.continuation_depth -= 1;
+            return result;
+        }
+        let entry = self.parse_module_import_entry()?;
+        let span = self.span(
+            start.start(),
+            entry.source.span().end().max(entry.alias.span().end()),
+        );
+        Ok(Statement::new(StatementKind::ModuleImport(entry), span))
+    }
+
+    fn parse_module_import_group(&mut self, start: Span) -> ParseResult<Statement> {
+        self.skip_layout();
+        let mut entries = vec![self.parse_module_import_entry()?];
+        loop {
+            self.skip_layout();
+            if let Some(close) = self.take_delimiter(Delimiter::RightBrace) {
+                return Ok(Statement::new(
+                    StatementKind::ModuleImportGroup(entries),
+                    self.span(start.start(), close.span().end()),
+                ));
+            }
+            self.expect_operator(Operator::Comma, "import entries require `,`")?;
+            self.skip_layout();
+            if let Some(close) = self.take_delimiter(Delimiter::RightBrace) {
+                return Ok(Statement::new(
+                    StatementKind::ModuleImportGroup(entries),
+                    self.span(start.start(), close.span().end()),
+                ));
+            }
+            entries.push(self.parse_module_import_entry()?);
+        }
+    }
+
+    fn parse_module_import_entry(&mut self) -> ParseResult<ModuleAliasImport> {
+        self.check_cancelled()?;
         let source = match self.current_kind() {
             Some(TokenKind::SingleQuoted) => {
                 let path = self.take().expect("local import path is current").span();
@@ -341,20 +380,41 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
                 }
             }
             _ => {
-                return Err(self.invalid_here(
+                return Err(self.expected(
                     "opaal import requires a local path or qualified standard module",
+                    IncompleteReason::Expression,
                 ));
             }
         };
         self.skip_inline();
-        self.expect_contextual_identifier("as", "opaal module import requires `as alias`")?;
-        self.skip_inline();
-        let alias = self.parse_identifier()?;
-        let span = self.span(start.start(), alias.span().end());
-        Ok(Statement::new(
-            StatementKind::ModuleImport(ModuleAliasImport { source, alias }),
-            span,
-        ))
+        let alias = if self.current().is_some_and(|token| {
+            token.kind() == TokenKind::Identifier
+                && self.source.slice(token.span()).ok() == Some("as")
+        }) {
+            self.take();
+            self.skip_inline();
+            self.parse_identifier()?
+        } else {
+            match source {
+                ModuleImportSource::Standard { module, .. }
+                | ModuleImportSource::Project { module, .. } => module,
+                ModuleImportSource::Local { path } => {
+                    let literal = self.source.slice(path).expect("parsed local path");
+                    let component = literal[1..literal.len() - 1].rsplit('/').next().unwrap();
+                    let stem = component.strip_suffix(".opaal").unwrap_or(component);
+                    let start = path.end() - 1 - component.len();
+                    let span = self.span(start, start + stem.len());
+                    if !crate::lexer::is_identifier(stem) {
+                        return Err(self.invalid_at(
+                            span,
+                            "local module name requires an explicit `as alias`",
+                        ));
+                    }
+                    Identifier::new(span)
+                }
+            }
+        };
+        Ok(ModuleAliasImport { source, alias })
     }
 
     fn parse_nominal_type(&mut self, top_level: bool) -> ParseResult<Statement> {

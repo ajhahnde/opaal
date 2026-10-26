@@ -16,8 +16,10 @@ command-line client, language server and platform adapters.
 OPAAL programs are UTF-8 `.opaal` files:
 
 ```opaal
-import std::value as value
-import std::io as io
+import {
+    std::value,
+    std::io,
+}
 
 def remaining[T](items: List[T])
 {
@@ -42,6 +44,16 @@ opaal format --check remaining.opaal
 The program prints `Result: 2` followed by one line feed. String interpolation
 converts the Int result to text for `io::println`. `check` analyzes source without
 executing it; `format --check` verifies the canonical style without rewriting it.
+
+Imports keep explicit origins: `import std::math` binds `math`, and
+`import './helpers.opaal'` binds `helpers` from the literal filename. Use `as`
+for a different name, such as `import std::value as values`, or for a filename
+that is not an identifier, such as `import './build-tools.opaal' as tools`.
+Groups collect the same entries in order, with a separate optional alias on each.
+A duplicate binding requires a different explicit alias. Groups introduce no new
+scope or transaction; existing explicit single imports remain valid. These
+forms require a toolchain built from this source; older releases require
+explicit aliases and separate declarations.
 
 Run `opaal` without a script in a terminal to start the interactive client.
 Completed expressions display their values there; scripts produce output through
