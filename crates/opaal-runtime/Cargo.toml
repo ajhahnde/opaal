@@ -18,7 +18,7 @@ opaal-syntax = { path = "../opaal-syntax" }
 # construction and the `preserve_order` feature — which would pull in
 # `indexmap`, `hashbrown`, and `equivalent` — is deliberately not enabled.
 serde = { version = "=1.0.229", default-features = false, features = ["std"] }
-serde_json = { version = "=1.0.151", default-features = false, features = ["std"] }
+serde_json = { version = "=1.0.154", default-features = false, features = ["std"] }
 semver = "=1.0.28"
 sha2 = "=0.10.9"
 toml = { version = "=0.8.23", default-features = false, features = ["parse"] }
@@ -26,7 +26,7 @@ toml = { version = "=0.8.23", default-features = false, features = ["parse"] }
 # scalar values. Keep the small, host-free width table exactly pinned because
 # this dependency is part of the standalone OPAAL host runtime.
 unicode-width = "=0.2.2"
-unicode-normalization = "=0.1.25"
+unicode-normalization = "=0.1.26"
 
 [dev-dependencies]
 opaal-platform-posix = { path = "../opaal-platform-posix" }
