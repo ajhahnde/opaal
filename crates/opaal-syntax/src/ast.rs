@@ -50,7 +50,7 @@ impl Script {
     }
 
     /// Every individual import, without introducing a group binding or identity.
-    pub fn module_imports(&self) -> impl Iterator<Item = &ModuleAliasImport> {
+    pub fn module_imports(&self) -> impl Iterator<Item = ModuleImportRef<'_>> {
         self.statements
             .iter()
             .flat_map(|statement| statement.kind().module_imports())
@@ -70,15 +70,9 @@ impl Script {
                 if let Some(entries) = entries {
                     let entry = &entries[index];
                     let span = source
-                        .span(
-                            entry.source.span().start()
-                                ..entry.source.span().end().max(entry.alias.span().end()),
-                        )
+                        .span(entry.source().span().start()..entry.end())
                         .expect("import entries retain original source spans");
-                    Cow::Owned(Statement::new(
-                        StatementKind::ModuleImport(entry.clone()),
-                        span,
-                    ))
+                    Cow::Owned(Statement::new(entry.statement_kind(), span))
                 } else {
                     Cow::Borrowed(statement)
                 }
@@ -116,8 +110,9 @@ pub type Statement = AstNode<StatementKind>;
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum StatementKind {
     ModuleImport(ModuleAliasImport),
+    ModuleMemberImport(ModuleMemberImport),
     /// A nonempty ordered list of the same entries as single imports.
-    ModuleImportGroup(Vec<ModuleAliasImport>),
+    ModuleImportGroup(Vec<ModuleImportEntry>),
     ModuleExport(ModuleExportStatement),
     NominalType(NominalTypeDeclaration),
     VariantType(VariantTypeDeclaration),
@@ -138,15 +133,116 @@ pub enum StatementKind {
 }
 
 impl StatementKind {
-    /// Import entries in source order, preserving inferred and explicit alias spans.
+    /// Import entries in source order, including terminal member selectors.
+    pub fn module_imports(&self) -> impl Iterator<Item = ModuleImportRef<'_>> {
+        let (single, group) = match self {
+            Self::ModuleImport(entry) => (Some(ModuleImportRef::Alias(entry)), &[][..]),
+            Self::ModuleMemberImport(entry) => (Some(ModuleImportRef::Members(entry)), &[][..]),
+            Self::ModuleImportGroup(entries) => (None, entries.as_slice()),
+            _ => (None, &[][..]),
+        };
+        single
+            .into_iter()
+            .chain(group.iter().map(ModuleImportEntry::as_ref))
+    }
+}
+
+/// One terminal entry in a flat import group.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ModuleImportEntry {
+    Alias(ModuleAliasImport),
+    Members(ModuleMemberImport),
+}
+
+impl ModuleImportEntry {
     #[must_use]
-    pub fn module_imports(&self) -> &[ModuleAliasImport] {
+    pub fn as_ref(&self) -> ModuleImportRef<'_> {
         match self {
-            Self::ModuleImport(entry) => std::slice::from_ref(entry),
-            Self::ModuleImportGroup(entries) => entries,
-            _ => &[],
+            Self::Alias(entry) => ModuleImportRef::Alias(entry),
+            Self::Members(entry) => ModuleImportRef::Members(entry),
         }
     }
+
+    #[must_use]
+    pub fn source(&self) -> ModuleImportSource {
+        self.as_ref().source()
+    }
+
+    #[must_use]
+    pub fn end(&self) -> usize {
+        self.as_ref().end()
+    }
+
+    #[must_use]
+    pub fn statement_kind(&self) -> StatementKind {
+        self.as_ref().statement_kind()
+    }
+}
+
+/// A borrowed module declaration, with no implicit alias for member selections.
+#[derive(Clone, Copy, Debug)]
+pub enum ModuleImportRef<'a> {
+    Alias(&'a ModuleAliasImport),
+    Members(&'a ModuleMemberImport),
+}
+
+impl<'a> ModuleImportRef<'a> {
+    #[must_use]
+    pub fn source(self) -> ModuleImportSource {
+        match self {
+            Self::Alias(entry) => entry.source,
+            Self::Members(entry) => entry.source,
+        }
+    }
+
+    #[must_use]
+    pub fn alias(self) -> Option<&'a ModuleAliasImport> {
+        match self {
+            Self::Alias(entry) => Some(entry),
+            Self::Members(_) => None,
+        }
+    }
+
+    #[must_use]
+    pub fn members(self) -> Option<&'a ModuleMemberImport> {
+        match self {
+            Self::Members(entry) => Some(entry),
+            Self::Alias(_) => None,
+        }
+    }
+
+    #[must_use]
+    pub fn end(self) -> usize {
+        match self {
+            Self::Alias(entry) => entry.source.span().end().max(entry.alias.span().end()),
+            Self::Members(entry) => entry.span.end(),
+        }
+    }
+
+    #[must_use]
+    pub fn statement_kind(self) -> StatementKind {
+        match self {
+            Self::Alias(entry) => StatementKind::ModuleImport(entry.clone()),
+            Self::Members(entry) => StatementKind::ModuleMemberImport(entry.clone()),
+        }
+    }
+}
+
+/// One origin and a nonempty list of selected exports, published together.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ModuleMemberImport {
+    pub source: ModuleImportSource,
+    pub members: Vec<ModuleMemberSelector>,
+    /// Original selector braces, including comments and optional trailing comma.
+    pub span: Span,
+}
+
+/// An exported name and its explicit or inferred immutable local spelling.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ModuleMemberSelector {
+    pub member: Identifier,
+    pub local: Identifier,
+    pub span: Span,
 }
 
 /// One OPAAL module with an explicit or parser-inferred local alias.

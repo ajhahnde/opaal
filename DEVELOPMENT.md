@@ -51,6 +51,27 @@ The downstream metadata/outcome defaults protected by
 `embedding_api_compatibility` remain unchanged. Existing `OperationalAdapter`
 implementations inherit snapshot refusal unless they explicitly implement it.
 
+Member imports extend the unpublished syntax API. `ModuleAliasImport { source,
+alias }` and `StatementKind::ModuleImport` keep their existing constructors.
+`StatementKind::ModuleMemberImport(ModuleMemberImport { source, members, span })`
+represents an origin with selector braces; each `ModuleMemberSelector { member,
+local, span }` retains the original exported and local identifier spans.
+`ModuleImportGroup` now holds `Vec<ModuleImportEntry>`: wrap existing entries in
+`ModuleImportEntry::Alias`, and use `ModuleImportEntry::Members` for selectors.
+
+`Script::module_imports()` and `StatementKind::module_imports()` now iterate
+`ModuleImportRef` values. Replace `.source` with `.source()`, use `.alias()` for
+an optional original alias entry, and `.members()` for an optional member list.
+Call `.end()` for the terminal source offset. Exhaustive statement visitors must
+handle `ModuleMemberImport`; grouped visitors can use `.statement_kind()` to
+visit each entry. `semantic_statements()` still yields one publication unit per
+outer entry, so all selectors in a member declaration are admitted together.
+`ModuleExport::target_module()` exposes the original defining module when a
+selected name is re-exported. Exhaustive matches on `ModuleAliasError` must also
+handle `UnknownMember { module, target, name, span, declaration_span }`, which
+reports a missing/private export at its selector and the private declaration
+when available. No serialized or binary AST compatibility is promised.
+
 ## Documentation example
 
 ```sh

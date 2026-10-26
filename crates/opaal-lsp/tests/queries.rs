@@ -1767,3 +1767,77 @@ fn inferred_group_alias_locations_remain_original_utf8_and_utf16_subspans() {
         assert_eq!(edits[0]["newText"], expected);
     }
 }
+
+#[test]
+fn member_imports_share_original_navigation_and_operation_metadata_in_both_encodings() {
+    let directory = TestDirectory::new();
+    let uri = directory.uri("members.opaal");
+    let model_uri = directory.uri("mødel.opaal");
+    let model = "def greet(name: String) -> String {return name}\nexport {greet}\n";
+    let text = "import './mødel.opaal'::{greet as welcome}\nlet marker = '界🙂'; let output = welcome('λ')\nimport std::math::{abs as magnitude_of}\nlet count = magnitude_of(-7)\n";
+    let mut workspace = Workspace::new();
+    workspace.open(model_uri.clone(), 1, model.into()).unwrap();
+    workspace.open(uri.clone(), 1, text.into()).unwrap();
+    for encoding in [PositionEncoding::Utf8, PositionEncoding::Utf16] {
+        let query = |method, cursor| {
+            request(
+                &workspace,
+                encoding,
+                &RequestControl::new(),
+                method,
+                positional(&uri, text, cursor, encoding),
+            )
+            .unwrap()
+        };
+        for cursor in [
+            text.find("greet").unwrap(),
+            text.find("welcome").unwrap(),
+            text.rfind("welcome").unwrap(),
+        ] {
+            let definition = query("textDocument/definition", cursor);
+            assert_eq!(definition["uri"], model_uri.as_str());
+            assert_eq!(definition["range"]["start"], position(model, 4, encoding));
+            assert_eq!(definition["range"]["end"], position(model, 9, encoding));
+            assert!(
+                query("textDocument/hover", cursor)["contents"]["value"]
+                    .as_str()
+                    .unwrap()
+                    .contains("greet")
+            );
+        }
+        let call = text.rfind("magnitude_of").unwrap();
+        assert!(
+            query("textDocument/hover", call)["contents"]["value"]
+                .as_str()
+                .unwrap()
+                .contains("std::math::abs")
+        );
+        let signature = query("textDocument/signatureHelp", call + "magnitude_of(".len());
+        assert_eq!(signature["activeParameter"], 0);
+        assert!(
+            signature["signatures"][0]["label"]
+                .as_str()
+                .unwrap()
+                .contains("abs")
+        );
+        let completion = query("textDocument/completion", call + 5);
+        assert!(
+            completion
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|item| item["label"] == "magnitude_of" && item["kind"] == 3)
+        );
+        let mut params = positional(&uri, text, text.rfind("welcome").unwrap(), encoding);
+        params["context"] = json!({"includeDeclaration":true});
+        let references = request(
+            &workspace,
+            encoding,
+            &RequestControl::new(),
+            "textDocument/references",
+            params,
+        )
+        .unwrap();
+        assert_eq!(references.as_array().unwrap().len(), 5, "{references}");
+    }
+}

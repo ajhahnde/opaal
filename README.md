@@ -55,6 +55,13 @@ scope or transaction; existing explicit single imports remain valid. These
 forms require a toolchain built from this source; older releases require
 explicit aliases and separate declarations.
 
+Select an exported member with `import std::math::{abs as magnitude_of}` and
+call `magnitude_of(-7)`. Member imports bind only the selected immutable names;
+they preserve the export's type, callable identity and authority requirements.
+Use `import './helpers.opaal'::{assess as check_policy}` for a local export, or
+mix selectors and module aliases in an outer group. Explicit export lists can
+re-export selected names. Wildcards and nested selectors are unsupported.
+
 Run `opaal` without a script in a terminal to start the interactive client.
 Completed expressions display their values there; scripts produce output through
 explicit I/O or foreground programs. An editor can use

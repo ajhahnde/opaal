@@ -88,7 +88,7 @@ impl InteractiveModules {
             if control.is_cancelled() {
                 return Err(PrepareError::Cancelled);
             }
-            let ModuleImportSource::Local { path } = import.source else {
+            let ModuleImportSource::Local { path } = import.source() else {
                 continue;
             };
             let quoted = source.slice(path).unwrap();
@@ -217,6 +217,10 @@ impl InteractiveModules {
                     alias.target(),
                 );
             }
+            crate::script::declare_selected_values(
+                &mut scope, program, &instances, &module, budget, limits,
+            )
+            .map_err(HostedEvaluationFailure::Runtime)?;
             let source = program.sources().source(&module).unwrap();
             match evaluate_module_initializer(
                 program.sources().script(&module).unwrap(),

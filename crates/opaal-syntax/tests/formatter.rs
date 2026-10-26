@@ -315,3 +315,19 @@ fn import_groups_are_multiline_and_insert_only_the_missing_final_comma_before_co
         ));
     }
 }
+
+#[test]
+fn member_imports_format_compact_and_comment_bearing_selectors() {
+    assert_eq!(
+        roundtrip("import std::math :: { abs ,floor as round_down }\n"),
+        "import std::math::{abs, floor as round_down}\n"
+    );
+    assert_eq!(
+        roundtrip("import std::math::{\nabs, # magnitude\nfloor as round_down\n}\n"),
+        "import std::math::{\n    abs, # magnitude\n    floor as round_down,\n}\n"
+    );
+    assert_eq!(
+        roundtrip("import {std::math::{abs},std::io}\n"),
+        "import {\n    std::math::{abs},\n    std::io,\n}\n"
+    );
+}

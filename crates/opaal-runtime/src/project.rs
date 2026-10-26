@@ -2228,6 +2228,10 @@ fn resolve_task_action<'a>(
             format!("action `{}` is not exported", segments.join("::")),
         ));
     }
+    let (owner, name) = modules
+        .aliases()
+        .selected_entity(owner, name)
+        .unwrap_or((owner, *name));
     modules.actions().action(owner, name).ok_or_else(|| {
         ProjectError::new(
             "TASK003",

@@ -1,0 +1,9 @@
+import './value.opaal'::{result}
+
+action readiness() -> Int
+effects {
+}
+{
+    return result()
+}
+task verify = readiness

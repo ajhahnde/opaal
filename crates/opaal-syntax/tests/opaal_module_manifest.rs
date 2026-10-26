@@ -171,7 +171,12 @@ fn concise_imports_keep_literal_aliases_and_original_entry_spans() {
             };
             let entries = script.module_imports().collect::<Vec<_>>();
             assert_eq!(entries.len(), 1);
-            assert_eq!(source.slice(entries[0].alias.span()).unwrap(), alias);
+            assert_eq!(
+                source
+                    .slice(entries[0].alias().unwrap().alias.span())
+                    .unwrap(),
+                alias
+            );
             let units = script.semantic_statements(&source).collect::<Vec<_>>();
             assert_eq!(units.len(), 1);
             assert!(source.slice(units[0].span()).unwrap().contains(origin));
@@ -260,6 +265,73 @@ fn concise_imports_classify_complete_incomplete_and_invalid_without_prefix_execu
         assert!(
             matches!(format_source_opaal(&source), FormatOutcome::Invalid(_)),
             "{input}"
+        );
+    }
+}
+
+#[test]
+fn member_selectors_preserve_tokens_without_creating_an_origin_alias() {
+    use opaal_syntax::{ModuleImportRef, StatementKind};
+    for text in [
+        "import std::math::{abs as magnitude_of}\n",
+        "import './not-a-module-name.opaal'::{Payload, make as create, code,}\n",
+        "import {std::math::{abs}, std::io, './x.opaal'::{value}}\n",
+    ] {
+        let source =
+            opaal_syntax::SourceFile::new(opaal_syntax::SourceId::new(90), "selectors", text);
+        let opaal_syntax::ParseOutcome::Complete(script) = opaal_syntax::parse_opaal(&source)
+        else {
+            panic!("{text}");
+        };
+        let entries = script.module_imports().collect::<Vec<_>>();
+        assert!(matches!(entries[0], ModuleImportRef::Members(_)));
+        for entry in entries {
+            if let Some(import) = entry.members() {
+                assert!(entry.alias().is_none());
+                assert!(source.slice(import.span).unwrap().starts_with('{'));
+                for selector in &import.members {
+                    assert!(!source.slice(selector.member.span()).unwrap().is_empty());
+                    assert!(!source.slice(selector.local.span()).unwrap().is_empty());
+                }
+            }
+        }
+        let units = script.semantic_statements(&source).collect::<Vec<_>>();
+        assert!(matches!(
+            units[0].kind(),
+            StatementKind::ModuleMemberImport(_)
+        ));
+    }
+}
+
+#[test]
+fn member_selector_recovery_distinguishes_missing_input_and_invalid_syntax() {
+    use opaal_syntax::{ParseOutcome, SourceFile, SourceId, parse_opaal};
+    for text in [
+        "import std::math::{",
+        "import std::math::{abs",
+        "import std::math::{abs as",
+        "import {std::math::{abs},",
+    ] {
+        let source = SourceFile::new(SourceId::new(91), "incomplete", text);
+        assert!(
+            matches!(parse_opaal(&source), ParseOutcome::Incomplete(_)),
+            "{text}: {:?}",
+            parse_opaal(&source)
+        );
+    }
+    for text in [
+        "import std::math::{}",
+        "import std::math::{*}",
+        "import std::math::{abs::{x}}",
+        "import std::math::{abs} as math",
+        "import math::{abs}",
+        "if true { import std::math::{abs} }",
+    ] {
+        let source = SourceFile::new(SourceId::new(92), "invalid", text);
+        assert!(
+            matches!(parse_opaal(&source), ParseOutcome::Invalid(_)),
+            "{text}: {:?}",
+            parse_opaal(&source)
         );
     }
 }

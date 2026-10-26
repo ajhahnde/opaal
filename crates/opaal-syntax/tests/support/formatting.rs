@@ -40,26 +40,35 @@ pub fn assert_roundtrip(source: &SourceFile) -> String {
 fn normalized_tokens(file: &SourceFile, script: &Script) -> Vec<(TokenKind, String)> {
     let tokens = lex_opaal(file);
     let mut insertions = std::collections::BTreeSet::new();
+    let mut list_ends = Vec::new();
     for statement in script.statements() {
         if let StatementKind::ModuleImportGroup(entries) = statement.kind() {
-            let entry = entries.last().unwrap();
-            let end = entry.source.span().end().max(entry.alias.span().end());
-            let next = tokens[tokens.partition_point(|token| token.span().start() < end)..]
-                .iter()
-                .find(|token| {
-                    !matches!(
-                        token.kind(),
-                        TokenKind::Whitespace
-                            | TokenKind::Newline
-                            | TokenKind::Comment
-                            | TokenKind::DocumentationComment
-                            | TokenKind::LineContinuation
-                    )
-                })
-                .unwrap();
-            if next.kind() == TokenKind::Delimiter(Delimiter::RightBrace) {
-                insertions.insert(end);
-            }
+            list_ends.push(entries.last().unwrap().end());
+        }
+        for import in statement
+            .kind()
+            .module_imports()
+            .filter_map(ModuleImportRef::members)
+        {
+            list_ends.push(import.members.last().unwrap().span.end());
+        }
+    }
+    for end in list_ends {
+        let next = tokens[tokens.partition_point(|token| token.span().start() < end)..]
+            .iter()
+            .find(|token| {
+                !matches!(
+                    token.kind(),
+                    TokenKind::Whitespace
+                        | TokenKind::Newline
+                        | TokenKind::Comment
+                        | TokenKind::DocumentationComment
+                        | TokenKind::LineContinuation
+                )
+            })
+            .unwrap();
+        if next.kind() == TokenKind::Delimiter(Delimiter::RightBrace) {
+            insertions.insert(end);
         }
     }
     let mut normalized = Vec::new();
@@ -362,7 +371,7 @@ impl Visit for CommandHead {
     }
 }
 
-variants!(StatementKind { ModuleImport(v), ModuleImportGroup(v), ModuleExport(v), NominalType(v), VariantType(v), Declaration(v), Assignment(v), Environment(v), Function(v), Action(v), Task(v), If(v), While(v), For(v), Match(v), Try(v), Throw(v), Control(v), Job(v) });
+variants!(StatementKind { ModuleImport(v), ModuleMemberImport(v), ModuleImportGroup(v), ModuleExport(v), NominalType(v), VariantType(v), Declaration(v), Assignment(v), Environment(v), Function(v), Action(v), Task(v), If(v), While(v), For(v), Match(v), Try(v), Throw(v), Control(v), Job(v) });
 variants!(ExpressionKind { Literal(v), Name(v), Qualified(v), List(v), Record(v), NominalRecord(v), Closure(v), GroupedJob(v), Call(v), Index(v), Member(v), Unary(v), Binary(v) });
 variants!(Pattern { Wildcard(v), Literal(v), Binding(v), List(v), NominalRecord(v), Variant(v) });
 variants!(ElseBranch { Block(v), If(v) });
@@ -557,4 +566,16 @@ fields!(FileRedirection {
     mode,
     operator_span,
     target
+});
+
+variants!(ModuleImportEntry { Alias(v), Members(v) });
+fields!(ModuleMemberImport {
+    source,
+    members,
+    span
+});
+fields!(ModuleMemberSelector {
+    member,
+    local,
+    span
 });

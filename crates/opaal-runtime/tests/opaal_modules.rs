@@ -221,3 +221,203 @@ fn grouped_conflicts_keep_both_locations_and_distinct_aliases_share_the_target()
             .target()
     );
 }
+
+#[test]
+fn selected_exports_keep_original_value_function_and_nominal_identity() {
+    let modules = FakeModules::default()
+        .maps("/work/main.opaal", "/work/main.opaal")
+        .maps("/work/model.opaal", "/work/model.opaal")
+        .maps("/work/facade.opaal", "/work/facade.opaal")
+        .contains("/work/model.opaal", "type Payload = {value: Int}\ndef make(value: Int) -> Payload { return Payload {value: value} }\nlet code = 7\nexport {Payload, make, code}\n")
+        .contains("/work/facade.opaal", "import './model.opaal'::{Payload, make, code}\nexport {Payload, make, code}\n")
+        .contains("/work/main.opaal", "import './facade.opaal'::{Payload, make as create, code}\nlet item: Payload = create(code)\nitem.value\n");
+    let program = ModuleProgramLoader::new(&modules, &modules)
+        .load(Path::new("/work/main.opaal"))
+        .unwrap_or_else(|error| panic!("{error:?}"));
+    let root = program.graph().root();
+    assert!(program.aliases().alias(root, "facade").is_none());
+    assert_eq!(
+        program
+            .resolve_nominal_type(root, &["Payload"])
+            .unwrap()
+            .id()
+            .module()
+            .path(),
+        Path::new("/work/model.opaal")
+    );
+    let source = program.sources().source(root).unwrap();
+    let reference = program
+        .names()
+        .references(root)
+        .iter()
+        .find(|reference| source.slice(reference.reference_span()).unwrap() == "create")
+        .unwrap();
+    let opaal_runtime::module::ModuleReferenceTarget::Imported { target_module, .. } =
+        reference.target()
+    else {
+        panic!("selected call must retain provenance");
+    };
+    assert_eq!(target_module.path(), Path::new("/work/model.opaal"));
+}
+
+#[test]
+fn member_imports_reject_missing_private_duplicate_and_reserved_names() {
+    for text in [
+        "import './model.opaal'::{private}\n",
+        "import './model.opaal'::{missing}\n",
+        "import './model.opaal'::{value, value}\n",
+        "import './model.opaal'::{value as status}\n",
+        "import './model.opaal'::{value}\nlet value = 2\n",
+        "import './model.opaal'::{value as model}\nimport './model.opaal' as model\n",
+    ] {
+        let modules = FakeModules::default()
+            .maps("/work/main.opaal", "/work/main.opaal")
+            .maps("/work/model.opaal", "/work/model.opaal")
+            .contains("/work/main.opaal", text)
+            .contains(
+                "/work/model.opaal",
+                "let value = 1\nlet private = 2\nexport {value}\n",
+            );
+        assert!(
+            ModuleProgramLoader::new(&modules, &modules)
+                .load(Path::new("/work/main.opaal"))
+                .is_err(),
+            "{text}"
+        );
+    }
+}
+
+#[test]
+fn selected_module_aliases_generics_and_variant_patterns_share_defining_identities() {
+    let modules = FakeModules::default()
+        .maps("/work/main.opaal", "/work/main.opaal")
+        .maps("/work/model.opaal", "/work/model.opaal")
+        .maps("/work/facade.opaal", "/work/facade.opaal")
+        .contains("/work/model.opaal", "type Box[T: Equal] = {value: T}\nenum Maybe[T: Equal] {Some(T), None}\ndef unwrap[T: Equal](item: Box[T]) -> T {return item.value}\nexport {Box, Maybe, unwrap}\n")
+        .contains("/work/facade.opaal", "import './model.opaal' as original\nimport './model.opaal'::{Box, Maybe, unwrap}\nexport {original, Box, Maybe, unwrap}\n")
+        .contains("/work/main.opaal", "import './facade.opaal'::{original as data, Box as Payload, Maybe as Optional, unwrap as extract}\nexport {test_value}\ndef test_value() -> Bool {\nlet item: Payload[Int] = data::Box {value: 7}\nlet selected: Optional[Int] = Optional::Some(extract(item))\nmatch selected { Optional::Some(value) => {return value == 7}\nOptional::None => {return false} }\n}\n");
+    let program = ModuleProgramLoader::new(&modules, &modules)
+        .load(Path::new("/work/main.opaal"))
+        .unwrap_or_else(|error| panic!("{error:?}"));
+    let (owner, signature) = program.exported_function("test_value").unwrap();
+    let result = opaal_runtime::script::invoke_pure_function(
+        &program,
+        &owner,
+        signature,
+        opaal_runtime::eval::CancellationToken::never(),
+        &mut opaal_runtime::eval::ResourceBudget::opaal(),
+    )
+    .unwrap();
+    assert!(matches!(
+        result,
+        opaal_runtime::eval::Completion::Value(opaal_runtime::Value::Bool(true))
+    ));
+    assert_eq!(
+        program
+            .aliases()
+            .alias(program.graph().root(), "data")
+            .unwrap()
+            .target()
+            .path(),
+        Path::new("/work/model.opaal")
+    );
+}
+
+#[test]
+fn selected_operations_share_pipeline_dispatch_and_editor_metadata() {
+    let modules = FakeModules::default().maps("/work/main.opaal", "/work/main.opaal")
+        .contains("/work/main.opaal", "import std::value::{length as count_items}\nexport {test_value}\ndef count() -> Int { [1, 2, 3] | count_items }\ndef test_value() -> Bool { return count() == 3 }\n");
+    let program = ModuleProgramLoader::new(&modules, &modules)
+        .load_for_frontend_with_commands(Path::new("/work/main.opaal"), &standard_registry())
+        .unwrap();
+    let (owner, signature) = program.exported_function("test_value").unwrap();
+    let result = opaal_runtime::script::invoke_pure_function(
+        &program,
+        &owner,
+        signature,
+        opaal_runtime::eval::CancellationToken::never(),
+        &mut opaal_runtime::eval::ResourceBudget::opaal(),
+    )
+    .unwrap();
+    assert!(matches!(
+        result,
+        opaal_runtime::eval::Completion::Value(opaal_runtime::Value::Bool(true))
+    ));
+    let registry = standard_registry();
+    let queries = program.semantic_queries(&registry);
+    let source = program.sources().source(&owner).unwrap();
+    let cursor = source.text().rfind("count_items").unwrap();
+    assert!(matches!(
+        queries.hover_at(&owner, cursor),
+        Some(SemanticHover::Operation(_))
+    ));
+    let names = queries.visible_names(&owner, source.len()).unwrap();
+    assert!(names.iter().any(|name| name.name() == "count_items"
+        && name.kind() == opaal_runtime::query::NameKind::ImportedFunction));
+}
+
+#[test]
+fn qualified_and_selected_facade_calls_keep_original_effects_and_navigation() {
+    for (import, call) in [
+        ("import './facade.opaal' as api", "api::selected()"),
+        ("import './facade.opaal'::{selected}", "selected()"),
+    ] {
+        let text = format!(
+            "{import}\nexport {{test_value}}\ndef test_value() -> Bool {{return {call} == 5}}\n"
+        );
+        let modules = FakeModules::default()
+            .maps("/work/main.opaal", "/work/main.opaal")
+            .maps("/work/facade.opaal", "/work/facade.opaal")
+            .maps("/work/model.opaal", "/work/model.opaal")
+            .contains("/work/main.opaal", &text)
+            .contains(
+                "/work/facade.opaal",
+                "import './model.opaal'::{original as selected}\nexport {selected}\n",
+            )
+            .contains(
+                "/work/model.opaal",
+                "def original() -> Int {return 5}\nexport {original}\n",
+            );
+        let program = ModuleProgramLoader::new(&modules, &modules)
+            .load(Path::new("/work/main.opaal"))
+            .unwrap();
+        let (owner, signature) = program.exported_function("test_value").unwrap();
+        assert!(
+            program
+                .function_effects(
+                    &owner,
+                    signature,
+                    &opaal_runtime::module::AnalysisControl::never()
+                )
+                .occurrences()
+                .is_empty(),
+            "{import}"
+        );
+        let registry = standard_registry();
+        let definition = program
+            .semantic_queries(&registry)
+            .definition_at(&owner, text.rfind(call).unwrap())
+            .unwrap();
+        assert_eq!(definition.module().path(), Path::new("/work/model.opaal"));
+        assert_eq!(
+            program
+                .sources()
+                .source(definition.module())
+                .unwrap()
+                .slice(definition.span())
+                .unwrap(),
+            "original"
+        );
+        assert!(matches!(
+            opaal_runtime::script::invoke_pure_function(
+                &program,
+                &owner,
+                signature,
+                opaal_runtime::eval::CancellationToken::never(),
+                &mut opaal_runtime::eval::ResourceBudget::opaal(),
+            )
+            .unwrap(),
+            opaal_runtime::eval::Completion::Value(opaal_runtime::Value::Bool(true))
+        ));
+    }
+}

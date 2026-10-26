@@ -458,6 +458,13 @@ pub enum ModuleOrigin {
 }
 
 impl ModuleId {
+    pub(crate) fn interactive() -> Self {
+        Self {
+            path: PathBuf::from("<interactive>"),
+            origin: ModuleOrigin::Local,
+        }
+    }
+
     pub(crate) fn local(path: PathBuf) -> Self {
         Self {
             path,
@@ -805,6 +812,56 @@ impl ModuleAliasExport {
 struct ModuleAliases {
     aliases: BTreeMap<String, ModuleAlias>,
     exports: BTreeMap<String, ModuleAliasExport>,
+    selections: BTreeMap<String, ModuleSelection>,
+    exported_names: BTreeMap<String, Span>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ModuleSelection {
+    pub name: String,
+    pub target: ModuleId,
+    pub member: String,
+    pub member_span: Span,
+    pub local_span: Span,
+    pub declaration_span: Span,
+}
+
+impl ModuleSelection {
+    pub(crate) fn charge(&self, budget: &mut crate::eval::ResourceBudget) -> bool {
+        let Some(bytes) = self.name.len().checked_add(self.member.len()) else {
+            return false;
+        };
+        budget.charge()
+            && budget.charge_collection_items(1)
+            && budget.charge_collection_bytes(bytes)
+    }
+}
+
+pub(crate) fn operation_stage_name(
+    stage: &opaal_syntax::Stage,
+) -> Option<opaal_syntax::QualifiedName> {
+    match stage.kind() {
+        StageKind::Expression(expression) => match expression.kind() {
+            ExpressionKind::Qualified(name) => Some(name.clone()),
+            ExpressionKind::Name(name) => Some(opaal_syntax::QualifiedName {
+                segments: vec![name.name],
+                span: expression.span(),
+            }),
+            _ => None,
+        },
+        StageKind::Command(command)
+            if command.head.kind() == CommandHeadKind::Bare && command.items.is_empty() =>
+        {
+            let [part] = command.head.word().parts() else {
+                return None;
+            };
+            matches!(part.kind(), WordPartKind::Bare).then(|| opaal_syntax::QualifiedName {
+                segments: vec![opaal_syntax::Identifier::new(part.span())],
+                span: command.head.span(),
+            })
+        }
+        _ => None,
+    }
 }
 
 /// Canonical alias and explicit re-export tables for a complete opaal program.
@@ -846,6 +903,99 @@ impl ModuleAliasRegistry {
             .flat_map(|aliases| aliases.exports.values())
     }
 
+    pub(crate) fn selections<'a>(
+        &'a self,
+        module: &ModuleId,
+    ) -> impl Iterator<Item = &'a ModuleSelection> {
+        self.by_module
+            .get(module)
+            .into_iter()
+            .flat_map(|table| table.selections.values())
+    }
+
+    pub(crate) fn selection(&self, module: &ModuleId, name: &str) -> Option<&ModuleSelection> {
+        self.by_module.get(module)?.selections.get(name)
+    }
+
+    /// Follow explicit selections/re-exports to the original entity, never ambient names.
+    pub(crate) fn selected_entity<'a>(
+        &'a self,
+        module: &'a ModuleId,
+        name: &'a str,
+    ) -> Option<(&'a ModuleId, &'a str)> {
+        let selection = self.selection(module, name)?;
+        self.exported_entity(&selection.target, &selection.member)
+    }
+
+    fn exported_entity<'a>(
+        &'a self,
+        module: &'a ModuleId,
+        name: &'a str,
+    ) -> Option<(&'a ModuleId, &'a str)> {
+        let mut owner = module;
+        let mut member = name;
+        for _ in 0..=self.by_module.len() {
+            if standard_operation(owner, member).is_some() {
+                return Some((owner, member));
+            }
+            let table = self.by_module.get(owner)?;
+            table.exported_names.get(member)?;
+            if let Some(selection) = table.selections.get(member) {
+                owner = &selection.target;
+                member = &selection.member;
+            } else {
+                return Some((owner, member));
+            }
+        }
+        None
+    }
+
+    pub(crate) fn resolve_entity<'a>(
+        &'a self,
+        module: &'a ModuleId,
+        segments: &'a [&'a str],
+    ) -> Option<(&'a ModuleId, &'a str)> {
+        let (name, modules) = segments.split_last()?;
+        if modules.is_empty() {
+            self.selected_entity(module, name).or(Some((module, name)))
+        } else {
+            let owner = self.resolve(module, modules)?;
+            self.exported_entity(owner, name).or(Some((owner, name)))
+        }
+    }
+
+    fn pipeline_operation(
+        &self,
+        module: &ModuleId,
+        source: &SourceFile,
+        stage: &opaal_syntax::Stage,
+        names: &ModuleNameRegistry,
+    ) -> Option<OperationDescriptor> {
+        let name = operation_stage_name(stage)?;
+        let segments = name
+            .segments
+            .iter()
+            .map(|segment| source.slice(segment.span()).ok())
+            .collect::<Option<Vec<_>>>()?;
+        if let [local] = segments.as_slice() {
+            let selection = self.selection(module, local)?;
+            if !matches!(names.reference(module, name.span)?.target(), ModuleReferenceTarget::Imported { alias_span, .. } if *alias_span == selection.local_span)
+            {
+                return None;
+            }
+        }
+        let (owner, member) = self.resolve_entity(module, &segments)?;
+        standard_operation(owner, member)
+    }
+
+    pub(crate) fn retain_selection(&mut self, module: ModuleId, selection: ModuleSelection) {
+        self.by_module
+            .entry(module)
+            .or_default()
+            .selections
+            .insert(selection.name.clone(), selection);
+    }
+
     pub(crate) fn operation_spellings(&self) -> Vec<String> {
         let mut spellings = self
             .by_module
@@ -857,6 +1007,16 @@ impl ModuleAliasRegistry {
                     .map(move |operation| format!("{}::{}", alias.name(), operation.id().name()))
             })
             .collect::<Vec<_>>();
+        for module in self.by_module.keys() {
+            for selection in self.selections(module) {
+                if self
+                    .selected_entity(module, &selection.name)
+                    .is_some_and(|(owner, member)| standard_operation(owner, member).is_some())
+                {
+                    spellings.push(selection.name.clone());
+                }
+            }
+        }
         spellings.sort();
         spellings.dedup();
         spellings
@@ -911,6 +1071,20 @@ impl ModuleAliasRegistry {
         }
 
         for entry in sources.entries() {
+            let table = registry.by_module.get_mut(entry.module()).unwrap();
+            for statement in entry.script().statements() {
+                if let StatementKind::ModuleExport(export) = statement.kind() {
+                    for name in &export.names {
+                        table.exported_names.insert(
+                            entry.source().slice(name.span()).unwrap().to_owned(),
+                            name.span(),
+                        );
+                    }
+                }
+            }
+        }
+
+        for entry in sources.entries() {
             if control.is_cancelled() {
                 return Ok(registry);
             }
@@ -926,6 +1100,81 @@ impl ModuleAliasRegistry {
                 }
             }
             for import in entry.script().module_imports() {
+                for identifier in import.alias().map(|alias| alias.alias).into_iter().chain(
+                    import
+                        .members()
+                        .into_iter()
+                        .flat_map(|entry| entry.members.iter().map(|member| member.local)),
+                ) {
+                    if !control.charge(AnalysisLimitKind::WorkUnits, 1) {
+                        return Ok(registry);
+                    }
+                    let name = entry.source().slice(identifier.span()).unwrap().to_owned();
+                    if let Some(first_span) = occupied.get(&name).copied() {
+                        errors.push(ModuleAliasError::Conflict {
+                            module: entry.module().clone(),
+                            name,
+                            first_span,
+                            duplicate_span: identifier.span(),
+                        });
+                    } else {
+                        occupied.insert(name, identifier.span());
+                    }
+                }
+            }
+            for import in entry
+                .script()
+                .module_imports()
+                .filter_map(opaal_syntax::ModuleImportRef::members)
+            {
+                let target = graph
+                    .imports()
+                    .iter()
+                    .find(|edge| {
+                        edge.importer() == entry.module() && edge.span() == import.source.span()
+                    })
+                    .expect("each import has a graph edge")
+                    .target();
+                for member in &import.members {
+                    if !control.charge(AnalysisLimitKind::WorkUnits, 1) {
+                        return Ok(registry);
+                    }
+                    let name = entry
+                        .source()
+                        .slice(member.local.span())
+                        .unwrap()
+                        .to_owned();
+                    if DynamicBinding::lookup(&name).is_some() {
+                        errors.push(ModuleAliasError::Conflict {
+                            module: entry.module().clone(),
+                            name,
+                            first_span: member.local.span(),
+                            duplicate_span: member.local.span(),
+                        });
+                        continue;
+                    }
+                    registry.retain_selection(
+                        entry.module().clone(),
+                        ModuleSelection {
+                            name,
+                            target: target.clone(),
+                            member: entry
+                                .source()
+                                .slice(member.member.span())
+                                .unwrap()
+                                .to_owned(),
+                            member_span: member.member.span(),
+                            local_span: member.local.span(),
+                            declaration_span: import.span,
+                        },
+                    );
+                }
+            }
+            for import in entry
+                .script()
+                .module_imports()
+                .filter_map(opaal_syntax::ModuleImportRef::alias)
+            {
                 if control.is_cancelled() {
                     break;
                 }
@@ -934,16 +1183,6 @@ impl ModuleAliasRegistry {
                     .slice(import.alias.span())
                     .expect("parsed aliases belong to their source")
                     .to_owned();
-                if let Some(first_span) = occupied.get(&name).copied() {
-                    errors.push(ModuleAliasError::Conflict {
-                        module: entry.module().clone(),
-                        name,
-                        first_span,
-                        duplicate_span: import.alias.span(),
-                    });
-                    continue;
-                }
-                occupied.insert(name.clone(), import.alias.span());
                 let edge = graph
                     .imports()
                     .iter()
@@ -1020,6 +1259,76 @@ impl ModuleAliasRegistry {
             }
         }
 
+        for entry in sources.entries() {
+            let selections = registry
+                .selections(entry.module())
+                .cloned()
+                .collect::<Vec<_>>();
+            for selection in selections {
+                if !control.charge(AnalysisLimitKind::WorkUnits, 1) {
+                    return Ok(registry);
+                }
+                let Some((owner, name)) = registry.selected_entity(entry.module(), &selection.name)
+                else {
+                    errors.push(ModuleAliasError::UnknownMember {
+                        module: entry.module().clone(),
+                        target: selection.target.clone(),
+                        name: selection.member.clone(),
+                        span: selection.member_span,
+                        declaration_span: sources
+                            .entries()
+                            .find(|source| source.module() == &selection.target)
+                            .and_then(|source| {
+                                source
+                                    .script()
+                                    .statements()
+                                    .iter()
+                                    .flat_map(top_level_declared_identifiers)
+                                    .find(|name| {
+                                        source.source().slice(name.span()).ok()
+                                            == Some(&selection.member)
+                                    })
+                            })
+                            .map(|name| name.span()),
+                    });
+                    continue;
+                };
+                if let Some(alias) = registry.alias(owner, name).cloned() {
+                    registry.retain_alias(ModuleAlias {
+                        name: selection.name.clone(),
+                        importer: entry.module().clone(),
+                        target: alias.target().clone(),
+                        requested: None,
+                        declaration_span: selection.local_span,
+                    });
+                }
+            }
+        }
+        // Re-export selected module aliases after all category identities are known.
+        for entry in sources.entries() {
+            let exported = registry
+                .by_module
+                .get(entry.module())
+                .unwrap()
+                .exported_names
+                .clone();
+            for (name, export_span) in exported {
+                if let Some(alias) = registry.alias(entry.module(), &name).cloned() {
+                    registry
+                        .by_module
+                        .get_mut(entry.module())
+                        .unwrap()
+                        .exports
+                        .entry(name.clone())
+                        .or_insert(ModuleAliasExport {
+                            name,
+                            target: alias.target().clone(),
+                            declaration_span: alias.declaration_span(),
+                            export_span,
+                        });
+                }
+            }
+        }
         if errors.is_empty() {
             Ok(registry)
         } else {
@@ -1032,11 +1341,17 @@ impl ModuleAliasRegistry {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ModuleExport {
     name: String,
+    target_module: ModuleId,
     declaration_span: Span,
     export_span: Span,
 }
 
 impl ModuleExport {
+    /// The canonical defining module, including selections and re-exports.
+    #[must_use]
+    pub const fn target_module(&self) -> &ModuleId {
+        &self.target_module
+    }
     /// The exact exported identifier spelling.
     #[must_use]
     pub fn name(&self) -> &str {
@@ -1251,7 +1566,7 @@ impl ModuleNameRegistry {
                 (
                     export.name.clone(),
                     ModuleReferenceTarget::Local {
-                        module: module.clone(),
+                        module: export.target_module().clone(),
                         declaration_span: export.declaration_span(),
                     },
                 )
@@ -1290,6 +1605,11 @@ impl ModuleNameRegistry {
                     }
                     names.locals.entry(name).or_insert(identifier.span());
                 }
+            }
+            for selection in aliases.selections(entry.module()) {
+                names
+                    .locals
+                    .insert(selection.name.clone(), selection.local_span);
             }
             registry.by_module.insert(entry.module().clone(), names);
         }
@@ -1339,11 +1659,40 @@ impl ModuleNameRegistry {
                     names.exports.insert(
                         name.clone(),
                         ModuleExport {
+                            target_module: entry.module().clone(),
                             name,
                             declaration_span,
                             export_span: identifier.span(),
                         },
                     );
+                }
+            }
+        }
+
+        for entry in sources.entries() {
+            if control.is_cancelled() {
+                return Ok(registry);
+            }
+            let selected_exports = aliases
+                .selections(entry.module())
+                .filter_map(|selection| {
+                    let (owner, name) = aliases.selected_entity(entry.module(), &selection.name)?;
+                    let declaration_span = registry
+                        .export(owner, name)
+                        .map_or(selection.local_span, ModuleExport::declaration_span);
+                    Some((selection.name.clone(), owner.clone(), declaration_span))
+                })
+                .collect::<Vec<_>>();
+            for (name, owner, declaration_span) in selected_exports {
+                if let Some(export) = registry
+                    .by_module
+                    .get_mut(entry.module())
+                    .unwrap()
+                    .exports
+                    .get_mut(&name)
+                {
+                    export.target_module = owner;
+                    export.declaration_span = declaration_span;
                 }
             }
         }
@@ -2413,6 +2762,7 @@ fn validate_callable_definitions(
                 );
             }
             StatementKind::ModuleImport(_)
+            | StatementKind::ModuleMemberImport(_)
             | StatementKind::ModuleImportGroup(_)
             | StatementKind::ModuleExport(_)
             | StatementKind::NominalType(_)
@@ -2608,6 +2958,7 @@ impl<'a> CallableReadCollector<'a> {
         }
         match statement.kind() {
             StatementKind::ModuleImport(_)
+            | StatementKind::ModuleMemberImport(_)
             | StatementKind::ModuleImportGroup(_)
             | StatementKind::ModuleExport(_)
             | StatementKind::NominalType(_)
@@ -3304,10 +3655,10 @@ impl RuntimeTypeContext {
                 .module_imports()
                 .filter_map(|import| {
                     matches!(
-                        import.source,
+                        import.source(),
                         opaal_syntax::ModuleImportSource::Local { .. }
                     )
-                    .then_some(import.source.span().start())
+                    .then_some(import.source().span().start())
                 })
                 .collect::<BTreeSet<_>>();
             if !cell
@@ -3339,14 +3690,18 @@ impl RuntimeTypeContext {
                 units[cell.statement_count..]
                     .iter()
                     .filter(|statement| {
-                        matches!(statement.kind(), StatementKind::ModuleImport(import)
-                    if matches!(import.source, opaal_syntax::ModuleImportSource::Standard { .. })
-                        || cell.local_imports.contains_key(&import.source.span().start()))
-                            || (cell.nominal_offsets.contains(&statement.span().start())
-                                && matches!(
-                                    statement.kind(),
-                                    StatementKind::NominalType(_) | StatementKind::VariantType(_)
-                                ))
+                        statement.kind().module_imports().any(|import| {
+                            matches!(
+                                import.source(),
+                                opaal_syntax::ModuleImportSource::Standard { .. }
+                            ) || cell
+                                .local_imports
+                                .contains_key(&import.source().span().start())
+                        }) || (cell.nominal_offsets.contains(&statement.span().start())
+                            && matches!(
+                                statement.kind(),
+                                StatementKind::NominalType(_) | StatementKind::VariantType(_)
+                            ))
                     })
                     .cloned(),
             );
@@ -3366,6 +3721,13 @@ impl RuntimeTypeContext {
                 .by_module
                 .get_mut(&ModuleId::local(PathBuf::from("<interactive>")))
             {
+                current.selections.retain(|_, selection| {
+                    selection.local_span.source_id() != cell.source.id()
+                        || units[..cell.statement_count].iter().any(|statement| {
+                            statement.span().start() <= selection.local_span.start()
+                                && statement.span().end() >= selection.local_span.end()
+                        })
+                });
                 current.aliases.retain(|_, alias| {
                     alias.declaration_span.source_id() != cell.source.id()
                         || units[..cell.statement_count].iter().any(|statement| {
@@ -3667,7 +4029,7 @@ impl RuntimeBindingTypes {
                                         statement
                                             .kind()
                                             .module_imports()
-                                            .iter()
+                                            .filter_map(opaal_syntax::ModuleImportRef::alias)
                                             .any(|import| import.source.span().start() == **offset)
                                     },
                                 )
@@ -3748,7 +4110,11 @@ impl RuntimeBindingTypes {
         } else {
             self.aliases.resolve(current, modules)?
         };
-        self.nominals_by_module.get(owner)?.get(*name)
+        let (owner, name) = self
+            .aliases
+            .selected_entity(owner, name)
+            .unwrap_or((owner, *name));
+        self.nominals_by_module.get(owner)?.get(name)
     }
 
     pub(crate) fn qualified_variant<'name>(
@@ -3765,12 +4131,8 @@ impl RuntimeBindingTypes {
         source: SourceId,
         segments: &[&str],
     ) -> Option<OperationDescriptor> {
-        let (name, modules) = segments.split_last()?;
-        if modules.is_empty() {
-            return None;
-        }
         let current = self.modules_by_source.get(&source)?;
-        let owner = self.aliases.resolve(current, modules)?;
+        let (owner, name) = self.aliases.resolve_entity(current, segments)?;
         standard_operation(owner, name)
     }
 
@@ -3779,12 +4141,8 @@ impl RuntimeBindingTypes {
         source: SourceId,
         segments: &[&str],
     ) -> Option<(ModuleId, String)> {
-        let (name, modules) = segments.split_last()?;
-        if modules.is_empty() {
-            return None;
-        }
         let current = self.modules_by_source.get(&source)?;
-        let owner = self.aliases.resolve(current, modules)?;
+        let (owner, name) = self.aliases.resolve_entity(current, segments)?;
         if standard_operation(owner, name).is_some() {
             return None;
         }
@@ -3792,7 +4150,62 @@ impl RuntimeBindingTypes {
             return None;
         };
         (namespace == "std" && crate::operational::is_source_module(module))
-            .then(|| (owner.clone(), (*name).to_owned()))
+            .then(|| (owner.clone(), name.to_owned()))
+    }
+
+    pub(crate) fn module_selections(
+        &self,
+        source: SourceId,
+    ) -> impl Iterator<Item = &ModuleSelection> {
+        self.modules_by_source
+            .get(&source)
+            .into_iter()
+            .flat_map(|module| self.aliases.selections(module))
+    }
+
+    pub(crate) fn selected_entity_at(
+        &self,
+        source: SourceId,
+        name: &str,
+        offset: usize,
+    ) -> Option<(ModuleId, String)> {
+        let current = self.modules_by_source.get(&source)?;
+        let selection = self.aliases.selection(current, name)?;
+        if selection.local_span.source_id() == source && selection.local_span.end() > offset {
+            return None;
+        }
+        self.selected_entity(source, name)
+    }
+
+    pub(crate) fn pipeline_operation(
+        &self,
+        source: &SourceFile,
+        stage: &opaal_syntax::Stage,
+        scope: &crate::ScopeStack,
+    ) -> Option<OperationDescriptor> {
+        let name = operation_stage_name(stage)?;
+        let segments = name
+            .segments
+            .iter()
+            .map(|segment| source.slice(segment.span()).ok())
+            .collect::<Option<Vec<_>>>()?;
+        if let [local] = segments.as_slice() {
+            if scope.get(local).is_some() {
+                return None;
+            }
+            self.selected_entity_at(source.id(), local, name.span.start())?;
+        }
+        self.qualified_operation(source.id(), &segments)
+    }
+
+    pub(crate) fn selected_entity(
+        &self,
+        source: SourceId,
+        name: &str,
+    ) -> Option<(ModuleId, String)> {
+        let current = self.modules_by_source.get(&source)?;
+        let (module, member) = self.aliases.selected_entity(current, name)?;
+        Some((module.clone(), member.to_owned()))
     }
 
     pub(crate) fn module_alias(&self, source: SourceId, name: &str) -> Option<&ModuleAlias> {
@@ -3971,17 +4384,42 @@ impl RuntimeBindingTypes {
             .iter()
             .flat_map(top_level_declared_identifiers)
             .map(|identifier| {
-                source
-                    .slice(identifier.span())
-                    .expect("parsed identifiers belong to their source")
-                    .to_owned()
+                (
+                    source
+                        .slice(identifier.span())
+                        .expect("parsed identifiers belong to their source")
+                        .to_owned(),
+                    identifier.span(),
+                )
             })
-            .collect::<BTreeSet<_>>();
+            .collect::<BTreeMap<_, _>>();
         for alias in aliases.aliases(entry.module()) {
-            occupied.insert(alias.name().to_owned());
+            occupied.insert(alias.name().to_owned(), alias.declaration_span());
         }
 
-        for import in script.module_imports() {
+        for selection in aliases.selections(entry.module()) {
+            occupied.insert(selection.name.clone(), selection.local_span);
+        }
+        for identifier in script
+            .statements()
+            .iter()
+            .flat_map(top_level_declared_identifiers)
+        {
+            let name = source.slice(identifier.span()).unwrap();
+            if let Some(selection) = inherited_aliases.selection(entry.module(), name) {
+                return Err(Diagnostic::new(
+                    Severity::Error,
+                    "MOD011",
+                    format!("imported name `{name}` conflicts"),
+                )
+                .with_primary(identifier.span(), "this name is already bound")
+                .with_secondary(selection.local_span, "the imported name was declared here"));
+            }
+        }
+        for import in script
+            .module_imports()
+            .filter_map(opaal_syntax::ModuleImportRef::alias)
+        {
             if control.is_cancelled() {
                 break;
             }
@@ -3989,7 +4427,7 @@ impl RuntimeBindingTypes {
                 .slice(import.alias.span())
                 .expect("parsed aliases belong to their source")
                 .to_owned();
-            if occupied.contains(&alias_name) {
+            if occupied.contains_key(&alias_name) {
                 return Err(Diagnostic::new(
                     Severity::Error,
                     "MOD011",
@@ -4051,9 +4489,55 @@ impl RuntimeBindingTypes {
                         declaration_span: import.alias.span(),
                     },
                 );
-            occupied.insert(alias_name);
+            occupied.insert(alias_name, import.alias.span());
         }
 
+        for import in script
+            .module_imports()
+            .filter_map(opaal_syntax::ModuleImportRef::members)
+        {
+            let target = match import.source {
+                opaal_syntax::ModuleImportSource::Standard { namespace, module, span } => {
+                    let namespace = source.slice(namespace.span()).unwrap();
+                    let module = source.slice(module.span()).unwrap();
+                    if !is_standard_module(namespace, module) { return Err(ModuleAliasError::UnknownStandard { module: entry.module().clone(), name: module.to_owned(), span }.diagnostic()); }
+                    ModuleId::standard(namespace, module)
+                }
+                opaal_syntax::ModuleImportSource::Local { path } => local_imports.get(&path.start()).cloned().ok_or_else(|| Diagnostic::new(Severity::Error, "MOD013", "interactive local module loading requires an explicit source capability").with_primary(path, "no source loader was supplied"))?,
+                opaal_syntax::ModuleImportSource::Project { span, .. } => return Err(Diagnostic::new(Severity::Error, "MOD013", "project imports require a project").with_primary(span, "select an explicit project")),
+            };
+            for member in &import.members {
+                if !control.charge(AnalysisLimitKind::WorkUnits, 1) {
+                    break;
+                }
+                let name = source.slice(member.local.span()).unwrap().to_owned();
+                let first = occupied.insert(name.clone(), member.local.span());
+                if first.is_some() || DynamicBinding::lookup(&name).is_some() {
+                    let diagnostic = Diagnostic::new(
+                        Severity::Error,
+                        "MOD011",
+                        format!("imported name `{name}` conflicts"),
+                    )
+                    .with_primary(member.local.span(), "this name is already bound");
+                    return Err(if let Some(first) = first {
+                        diagnostic.with_secondary(first, "the first binding was declared here")
+                    } else {
+                        diagnostic
+                    });
+                }
+                aliases.retain_selection(
+                    entry.module().clone(),
+                    ModuleSelection {
+                        name,
+                        target: target.clone(),
+                        member: source.slice(member.member.span()).unwrap().to_owned(),
+                        member_span: member.member.span(),
+                        local_span: member.local.span(),
+                        declaration_span: import.span,
+                    },
+                );
+            }
+        }
         let mut names = ModuleNameRegistry::default();
         let mut declarations = ModuleTypeRegistry::default();
         for program in programs {
@@ -4085,7 +4569,10 @@ impl RuntimeBindingTypes {
         let docker = ModuleId::standard("std", "docker");
         let wants_docker = aliases
             .aliases(entry.module())
-            .any(|alias| alias.target() == &docker);
+            .any(|alias| alias.target() == &docker)
+            || aliases
+                .selections(entry.module())
+                .any(|selection| selection.target == docker);
         for (index, (name, module_source)) in [
             ("outcome", STANDARD_OUTCOME_MODULE),
             ("docker", STANDARD_DOCKER_MODULE),
@@ -4097,6 +4584,9 @@ impl RuntimeBindingTypes {
             let wanted = aliases
                 .aliases(entry.module())
                 .any(|alias| alias.target() == &standard)
+                || aliases
+                    .selections(entry.module())
+                    .any(|selection| selection.target == standard)
                 || (name == "outcome" && wants_docker);
             if wanted && !declarations.by_module.contains_key(&standard) {
                 let standard_source = SourceFile::new(
@@ -4115,7 +4605,11 @@ impl RuntimeBindingTypes {
                     script: standard_script,
                 };
                 let mut standard_aliases = ModuleAliases::default();
-                for import in standard_entry.script().module_imports() {
+                for import in standard_entry
+                    .script()
+                    .module_imports()
+                    .filter_map(opaal_syntax::ModuleImportRef::alias)
+                {
                     if control.is_cancelled() {
                         break;
                     }
@@ -4188,6 +4682,7 @@ impl RuntimeBindingTypes {
                         standard_names.exports.insert(
                             name.to_owned(),
                             ModuleExport {
+                                target_module: standard.clone(),
                                 name: name.to_owned(),
                                 declaration_span,
                                 export_span: identifier.span(),
@@ -4195,9 +4690,119 @@ impl RuntimeBindingTypes {
                         );
                     }
                 }
+                aliases
+                    .by_module
+                    .entry(standard.clone())
+                    .or_default()
+                    .exported_names
+                    .extend(
+                        standard_names
+                            .exports
+                            .iter()
+                            .map(|(name, export)| (name.clone(), export.export_span())),
+                    );
                 names.by_module.insert(standard.clone(), standard_names);
                 declarations.by_module.insert(standard, types);
             }
+        }
+        let standard_targets = aliases
+            .selections(entry.module())
+            .map(|selection| selection.target.clone())
+            .collect::<BTreeSet<_>>();
+        for target in standard_targets {
+            if aliases.by_module.contains_key(&target) {
+                continue;
+            }
+            let Some(text) = standard_module_source(&target) else {
+                continue;
+            };
+            let compiled = SourceFile::new(
+                SourceId::new(u32::MAX - 100),
+                target.path().to_string_lossy(),
+                text,
+            );
+            let ControlledParseOutcome::Parsed(ParseOutcome::Complete(parsed)) =
+                parse_opaal_source(&compiled, &|| control.is_cancelled())
+            else {
+                return Err(Diagnostic::new(
+                    Severity::Error,
+                    "RUN001",
+                    "standard member analysis did not complete",
+                )
+                .with_primary(script.span(), "analysis cancelled"));
+            };
+            if !control.charge(AnalysisLimitKind::SourceBytes, text.len() as u64)
+                || !control.charge(
+                    AnalysisLimitKind::AstNodes,
+                    SyntaxMetrics::for_script(&parsed).nodes,
+                )
+            {
+                return Err(Diagnostic::new(
+                    Severity::Error,
+                    "RUN001",
+                    "standard member analysis resource limit exceeded",
+                )
+                .with_primary(script.span(), "analysis did not complete"));
+            }
+            let table = aliases.by_module.entry(target).or_default();
+            for statement in parsed.statements() {
+                if let StatementKind::ModuleExport(export) = statement.kind() {
+                    for name in &export.names {
+                        table
+                            .exported_names
+                            .insert(compiled.slice(name.span()).unwrap().to_owned(), name.span());
+                    }
+                }
+            }
+        }
+        for selection in aliases.selections(entry.module()) {
+            if aliases
+                .selected_entity(entry.module(), &selection.name)
+                .is_none()
+            {
+                return Err(ModuleAliasError::UnknownMember {
+                    module: entry.module().clone(),
+                    target: selection.target.clone(),
+                    name: selection.member.clone(),
+                    span: selection.member_span,
+                    declaration_span: programs.iter().find_map(|program| {
+                        program
+                            .sources()
+                            .entries()
+                            .find(|source| source.module() == &selection.target)
+                            .and_then(|source| {
+                                source
+                                    .script()
+                                    .statements()
+                                    .iter()
+                                    .flat_map(top_level_declared_identifiers)
+                                    .find(|name| {
+                                        source.source().slice(name.span()).ok()
+                                            == Some(&selection.member)
+                                    })
+                            })
+                            .map(|name| name.span())
+                    }),
+                }
+                .diagnostic());
+            }
+        }
+        let selected_aliases = aliases
+            .selections(entry.module())
+            .filter_map(|selection| {
+                let (owner, member) = aliases.selected_entity(entry.module(), &selection.name)?;
+                let alias = aliases.alias(owner, member)?;
+                Some(ModuleAlias {
+                    name: selection.name.clone(),
+                    importer: entry.module().clone(),
+                    target: alias.target().clone(),
+                    requested: None,
+                    declaration_span: selection.local_span,
+                })
+            })
+            .collect::<Vec<_>>();
+        for alias in selected_aliases {
+            aliases.retain_alias(alias);
         }
         let (types, errors) =
             TypeCollector::new(&entry, &aliases, &names, &declarations, control).collect();
@@ -4672,6 +5277,7 @@ impl<'a> TypeCollector<'a> {
         }
         match statement.kind() {
             StatementKind::ModuleImport(_)
+            | StatementKind::ModuleMemberImport(_)
             | StatementKind::ModuleImportGroup(_)
             | StatementKind::ModuleExport(_) => Ok(()),
             StatementKind::NominalType(_) | StatementKind::VariantType(_) => Ok(()),
@@ -5049,6 +5655,10 @@ impl<'a> TypeCollector<'a> {
         if type_index != 0 && self.names.export(owner, type_name).is_none() {
             return;
         }
+        let (owner, type_name) = self
+            .aliases
+            .selected_entity(owner, type_name)
+            .unwrap_or((owner, type_name));
         let Some(nominal) = self.declarations.nominal(owner, type_name) else {
             return;
         };
@@ -5090,6 +5700,10 @@ impl<'a> TypeCollector<'a> {
         if type_name_index != 0 && self.names.export(owner, type_name).is_none() {
             return None;
         }
+        let (owner, type_name) = self
+            .aliases
+            .selected_entity(owner, type_name)
+            .unwrap_or((owner, type_name));
         let nominal = self.declarations.nominal(owner, type_name)?.clone();
         if nominal.id() != id.as_ref() {
             return None;
@@ -5215,7 +5829,13 @@ impl<'a> TypeCollector<'a> {
         };
         let nominal = nominal_owner.and_then(|owner| {
             (segments.len() == 1 || self.names.export(owner, name).is_some())
-                .then(|| self.declarations.nominal(owner, name))
+                .then(|| {
+                    let (owner, name) = self
+                        .aliases
+                        .selected_entity(owner, name)
+                        .unwrap_or((owner, name));
+                    self.declarations.nominal(owner, name)
+                })
                 .flatten()
         });
         let value_type = if segments.len() == 1 && name == "List" {
@@ -5545,6 +6165,7 @@ impl<'a> SignatureValidator<'a> {
                 self.function_block_result(&statement.catch_block, signature)
             }
             StatementKind::ModuleImport(_)
+            | StatementKind::ModuleMemberImport(_)
             | StatementKind::ModuleImportGroup(_)
             | StatementKind::ModuleExport(_)
             | StatementKind::NominalType(_)
@@ -5621,6 +6242,7 @@ impl<'a> SignatureValidator<'a> {
         }
         match statement.kind() {
             StatementKind::ModuleImport(_)
+            | StatementKind::ModuleMemberImport(_)
             | StatementKind::ModuleImportGroup(_)
             | StatementKind::ModuleExport(_)
             | StatementKind::NominalType(_)
@@ -5932,19 +6554,15 @@ impl<'a> SignatureValidator<'a> {
         let mut value_type = self.expression_with_expected(expression, first_expected)?;
         let mut result_span = expression.span();
         for stage in &pipeline.stages()[1..] {
-            let StageKind::Expression(stage_expression) = stage.kind() else {
-                return Ok(Some((pipeline.span(), ValueType::Status)));
-            };
-            let ExpressionKind::Qualified(name) = stage_expression.kind() else {
-                self.errors
-                    .borrow_mut()
-                    .push(ModuleTypeError::InvalidOperationStage {
-                        module: self.entry.module().clone(),
-                        stage_span: stage.span(),
-                    });
-                return Ok(Some((stage.span(), ValueType::Any)));
-            };
-            let Some(operation) = self.operation_for_qualified(name) else {
+            let Some(operation) = self.aliases.pipeline_operation(
+                self.entry.module(),
+                self.entry.source(),
+                stage,
+                self.names,
+            ) else {
+                if matches!(stage.kind(), StageKind::Command(_)) {
+                    return Ok(Some((pipeline.span(), ValueType::Status)));
+                }
                 self.errors
                     .borrow_mut()
                     .push(ModuleTypeError::InvalidOperationStage {
@@ -6216,7 +6834,8 @@ impl<'a> SignatureValidator<'a> {
             if let Some(owner) = self.aliases.resolve(self.entry.module(), &modules) {
                 let value_name = self.text(value_name.span());
                 if let Some(export) = self.names.export(owner, value_name) {
-                    return self.declaration_type(owner, export.declaration_span());
+                    return self
+                        .declaration_type(export.target_module(), export.declaration_span());
                 }
             }
         }
@@ -6828,6 +7447,14 @@ impl<'a> SignatureValidator<'a> {
         {
             return Ok(Some(value_type));
         }
+        if let ExpressionKind::Name(reference) = call.callee.kind()
+            && let Some(selection) = self.aliases.selection(self.entry.module(), self.text(reference.name.span()))
+            && self.names.reference(self.entry.module(), call.callee.span()).is_some_and(|reference| matches!(reference.target(), ModuleReferenceTarget::Imported { alias_span, .. } if *alias_span == selection.local_span))
+            && let Some((owner, name)) = self.aliases.selected_entity(self.entry.module(), &selection.name)
+            && let Some(operation) = standard_operation(owner, name)
+        {
+            return self.operation_call_type(&operation, call_span, call, expected_result);
+        }
         if let ExpressionKind::Qualified(name) = call.callee.kind()
             && let Some(operation) = self.operation_for_qualified(name)
         {
@@ -7267,6 +7894,10 @@ impl<'a> SignatureValidator<'a> {
         if !modules.is_empty() && self.names.export(owner, nominal_name).is_none() {
             return None;
         }
+        let (owner, nominal_name) = self
+            .aliases
+            .selected_entity(owner, nominal_name)
+            .unwrap_or((owner, nominal_name));
         self.types.nominal(owner, nominal_name)
     }
 
@@ -7285,6 +7916,10 @@ impl<'a> SignatureValidator<'a> {
         let owner = self.aliases.resolve(self.entry.module(), &modules)?;
         let function = self.text(function.span());
         self.names.export(owner, function)?;
+        let (owner, function) = self
+            .aliases
+            .selected_entity(owner, function)
+            .unwrap_or((owner, function));
         let signature = self
             .types
             .functions(owner)
@@ -7297,16 +7932,15 @@ impl<'a> SignatureValidator<'a> {
         &self,
         name: &opaal_syntax::QualifiedName,
     ) -> Option<OperationDescriptor> {
-        let (operation, modules) = name.segments.split_last()?;
-        if modules.is_empty() {
-            return None;
-        }
-        let modules = modules
+        let segments = name
+            .segments
             .iter()
             .map(|segment| self.text(segment.span()))
             .collect::<Vec<_>>();
-        let owner = self.aliases.resolve(self.entry.module(), &modules)?;
-        standard_operation(owner, self.text(operation.span()))
+        let (owner, name) = self
+            .aliases
+            .resolve_entity(self.entry.module(), &segments)?;
+        standard_operation(owner, name)
     }
 
     fn unknown_standard_operation(&self, name: &opaal_syntax::QualifiedName) -> Option<String> {
@@ -7778,6 +8412,10 @@ impl<'a> SignatureValidator<'a> {
         if !modules.is_empty() && self.names.export(owner, type_name).is_none() {
             return None;
         }
+        let (owner, type_name) = self
+            .aliases
+            .selected_entity(owner, type_name)
+            .unwrap_or((owner, type_name));
         self.types.nominal(owner, type_name)
     }
 
@@ -8135,8 +8773,67 @@ impl<'a> ReferenceResolver<'a> {
             return Ok(());
         }
         match statement.kind() {
+            StatementKind::ModuleMemberImport(_) | StatementKind::ModuleImportGroup(_) => {
+                for import in statement
+                    .kind()
+                    .module_imports()
+                    .filter_map(opaal_syntax::ModuleImportRef::members)
+                {
+                    for member in &import.members {
+                        if !self.control.charge(AnalysisLimitKind::WorkUnits, 1) {
+                            return Ok(());
+                        }
+
+                        let local = self.text(member.local.span()).to_owned();
+                        let Some((owner, name)) =
+                            self.aliases.selected_entity(self.entry.module(), &local)
+                        else {
+                            continue;
+                        };
+                        if self.aliases.alias(self.entry.module(), &local).is_some() {
+                            continue;
+                        }
+                        let export = self.registry.export(owner, name);
+                        let target = ModuleReferenceTarget::Imported {
+                            alias_span: member.local.span(),
+                            target_module: owner.clone(),
+                            declaration_span: export
+                                .map_or(member.member.span(), ModuleExport::declaration_span),
+                            export_span: export
+                                .map_or(member.member.span(), ModuleExport::export_span),
+                        };
+                        self.references.push(ModuleNameReference {
+                            name: local.clone(),
+                            reference_span: member.member.span(),
+                            target: target.clone(),
+                        });
+                        if member.local != member.member {
+                            self.references.push(ModuleNameReference {
+                                name: local.clone(),
+                                reference_span: member.local.span(),
+                                target: target.clone(),
+                            });
+                        }
+                        self.scopes.last_mut().unwrap().bindings.insert(
+                            local.clone(),
+                            Some(ReferenceBinding {
+                                target: target.clone(),
+                                mutable: false,
+                                callable_depth: self.callable_depth,
+                            }),
+                        );
+                        self.visible.push(ModuleVisibleBinding {
+                            name: local,
+                            target,
+                            scope_span: self.entry.script().span(),
+                            visible_from: statement.span().end(),
+                            depth: self.scopes.len() - 1,
+                        });
+                    }
+                }
+                Ok(())
+            }
             StatementKind::ModuleImport(_)
-            | StatementKind::ModuleImportGroup(_)
             | StatementKind::ModuleExport(_)
             | StatementKind::NominalType(_)
             | StatementKind::VariantType(_) => Ok(()),
@@ -8541,7 +9238,7 @@ impl<'a> ReferenceResolver<'a> {
             reference_span: qualified.span,
             target: ModuleReferenceTarget::Imported {
                 alias_span: alias.declaration_span(),
-                target_module: owner.clone(),
+                target_module: export.target_module().clone(),
                 declaration_span: export.declaration_span(),
                 export_span: export.export_span(),
             },
@@ -8933,15 +9630,12 @@ impl ModuleEffectRegistry {
             if control.is_cancelled() || initialized.contains(module) {
                 return;
             }
-            for alias in aliases.aliases(module) {
-                visit(
-                    alias.target(),
-                    aliases,
-                    direct,
-                    initialized,
-                    summary,
-                    control,
-                );
+            for target in aliases.aliases(module).map(ModuleAlias::target).chain(
+                aliases
+                    .selections(module)
+                    .map(|selection| &selection.target),
+            ) {
+                visit(target, aliases, direct, initialized, summary, control);
             }
             if initialized.insert(module.clone())
                 && let Some(module_summary) = direct.get(module)
@@ -9075,6 +9769,7 @@ impl<'a> StaticEffectAnalyzer<'a> {
         }
         match statement.kind() {
             StatementKind::ModuleImport(_)
+            | StatementKind::ModuleMemberImport(_)
             | StatementKind::ModuleImportGroup(_)
             | StatementKind::ModuleExport(_)
             | StatementKind::NominalType(_)
@@ -9188,12 +9883,17 @@ impl<'a> StaticEffectAnalyzer<'a> {
                 && matches!(pipeline.stages(), [stage] if matches!(stage.kind(), StageKind::Expression(_))))
         {
             for (index, stage) in pipeline.stages().iter().enumerate() {
-                let StageKind::Expression(expression) = stage.kind() else {
-                    unreachable!("a pure operation pipeline contains only expressions")
-                };
-                self.expression(expression);
-                if index > 0 {
-                    self.call(stage.span(), expression, &[]);
+                if let StageKind::Expression(expression) = stage.kind() {
+                    self.expression(expression);
+                    if index > 0 {
+                        self.call(stage.span(), expression, &[]);
+                    }
+                } else if let Some(name) = operation_stage_name(stage) {
+                    self.call(
+                        stage.span(),
+                        &Expression::new(ExpressionKind::Qualified(name), stage.span()),
+                        &[],
+                    );
                 }
             }
             return;
@@ -9216,18 +9916,13 @@ impl<'a> StaticEffectAnalyzer<'a> {
     }
 
     fn pure_operation_pipeline(&self, pipeline: &Pipeline) -> bool {
-        if pipeline.stages().len() < 2 {
-            return false;
-        }
-        matches!(pipeline.stages()[0].kind(), StageKind::Expression(_))
+        pipeline.stages().len() > 1
+            && matches!(pipeline.stages()[0].kind(), StageKind::Expression(_))
             && pipeline.stages()[1..].iter().all(|stage| {
-                let StageKind::Expression(expression) = stage.kind() else {
-                    return false;
-                };
-                let ExpressionKind::Qualified(name) = expression.kind() else {
-                    return false;
-                };
-                self.qualified_operation(name).is_some()
+                self.semantics
+                    .aliases
+                    .pipeline_operation(&self.module, &self.source, stage, self.semantics.names)
+                    .is_some()
             })
     }
 
@@ -9235,25 +9930,16 @@ impl<'a> StaticEffectAnalyzer<'a> {
         &self,
         name: &opaal_syntax::QualifiedName,
     ) -> Option<OperationDescriptor> {
-        let (operation, modules) = name.segments.split_last()?;
-        if modules.is_empty() {
-            return None;
-        }
-        let modules = modules
+        let segments = name
+            .segments
             .iter()
-            .map(|segment| {
-                self.source
-                    .slice(segment.span())
-                    .expect("qualified operation spans belong to their source")
-            })
-            .collect::<Vec<_>>();
-        let owner = self.semantics.aliases.resolve(&self.module, &modules)?;
-        standard_operation(
-            owner,
-            self.source
-                .slice(operation.span())
-                .expect("operation spans belong to their source"),
-        )
+            .map(|segment| self.source.slice(segment.span()).ok())
+            .collect::<Option<Vec<_>>>()?;
+        let (owner, member) = self
+            .semantics
+            .aliases
+            .resolve_entity(&self.module, &segments)?;
+        standard_operation(owner, member)
     }
 
     fn pipeline_is_standalone_help(&self, pipeline: &Pipeline) -> bool {
@@ -9451,37 +10137,57 @@ impl<'a> StaticEffectAnalyzer<'a> {
         if self.control.is_cancelled() {
             return;
         }
-        let Some(reference) = self.semantics.names.reference(&self.module, callee.span()) else {
-            if let ExpressionKind::Qualified(name) = callee.kind()
-                && let Some(operation) = self.qualified_operation(name)
-            {
-                for overload in operation.overloads() {
-                    for (parameter, argument) in overload.parameters().iter().zip(arguments) {
-                        if parameter.callback().is_some() {
-                            if let ExpressionKind::Closure(closure) = argument.kind() {
-                                let previous = std::mem::replace(&mut self.function_body, true);
-                                self.chain(&closure.body);
-                                self.function_body = previous;
-                            } else {
-                                self.call(argument.span(), argument, &[]);
-                            }
+        let operation = match callee.kind() {
+            ExpressionKind::Qualified(name) => self.qualified_operation(name),
+            ExpressionKind::Name(name) => self
+                .semantics
+                .names
+                .reference(&self.module, callee.span())
+                .and_then(|reference| {
+                    let ModuleReferenceTarget::Imported { alias_span, .. } = reference.target()
+                    else {
+                        return None;
+                    };
+                    let local = self.source.slice(name.name.span()).ok()?;
+                    let selection = self.semantics.aliases.selection(&self.module, local)?;
+                    if *alias_span != selection.local_span {
+                        return None;
+                    }
+                    let (owner, member) = self
+                        .semantics
+                        .aliases
+                        .selected_entity(&self.module, local)?;
+                    standard_operation(owner, member)
+                }),
+            _ => None,
+        };
+        if let Some(operation) = operation {
+            for overload in operation.overloads() {
+                for (parameter, argument) in overload.parameters().iter().zip(arguments) {
+                    if parameter.callback().is_some() {
+                        if let ExpressionKind::Closure(closure) = argument.kind() {
+                            let previous = std::mem::replace(&mut self.function_body, true);
+                            self.chain(&closure.body);
+                            self.function_body = previous;
+                        } else {
+                            self.call(argument.span(), argument, &[]);
                         }
                     }
                 }
-                for request in operation.downstream().effects().iter() {
-                    let effect = match request.effect() {
-                        opaal_platform::AuthorityEffect::EntropySystem => {
-                            ModuleEffect::EntropySystem
-                        }
-                        opaal_platform::AuthorityEffect::StdinRead => ModuleEffect::StdinRead,
-                        opaal_platform::AuthorityEffect::StdoutWrite => ModuleEffect::StdoutWrite,
-                        opaal_platform::AuthorityEffect::StderrWrite => ModuleEffect::StderrWrite,
-                        _ => continue,
-                    };
-                    self.summary.push(effect, call_span);
-                }
-                return;
             }
+            for request in operation.downstream().effects().iter() {
+                let effect = match request.effect() {
+                    opaal_platform::AuthorityEffect::EntropySystem => ModuleEffect::EntropySystem,
+                    opaal_platform::AuthorityEffect::StdinRead => ModuleEffect::StdinRead,
+                    opaal_platform::AuthorityEffect::StdoutWrite => ModuleEffect::StdoutWrite,
+                    opaal_platform::AuthorityEffect::StderrWrite => ModuleEffect::StderrWrite,
+                    _ => continue,
+                };
+                self.summary.push(effect, call_span);
+            }
+            return;
+        }
+        let Some(reference) = self.semantics.names.reference(&self.module, callee.span()) else {
             if let ExpressionKind::Name(reference) = callee.kind()
                 && let Some(intrinsic) = self
                     .source
@@ -9663,6 +10369,7 @@ struct StaticPipelineAnalyzer<'a> {
     module: &'a ModuleId,
     source: &'a SourceFile,
     names: &'a ModuleNameRegistry,
+    aliases: &'a ModuleAliasRegistry,
     commands: &'a CommandRegistry,
     errors: Vec<ModulePipelineError>,
     control: &'a AnalysisControl,
@@ -9674,6 +10381,7 @@ impl<'a> StaticPipelineAnalyzer<'a> {
         source: &'a SourceFile,
         script: &'a Script,
         names: &'a ModuleNameRegistry,
+        aliases: &'a ModuleAliasRegistry,
         commands: &'a CommandRegistry,
         control: &'a AnalysisControl,
     ) -> Vec<ModulePipelineError> {
@@ -9681,6 +10389,7 @@ impl<'a> StaticPipelineAnalyzer<'a> {
             module,
             source,
             names,
+            aliases,
             commands,
             errors: Vec::new(),
             control,
@@ -9707,6 +10416,7 @@ impl<'a> StaticPipelineAnalyzer<'a> {
         }
         match statement.kind() {
             StatementKind::ModuleImport(_)
+            | StatementKind::ModuleMemberImport(_)
             | StatementKind::ModuleImportGroup(_)
             | StatementKind::ModuleExport(_)
             | StatementKind::NominalType(_)
@@ -9801,10 +10511,13 @@ impl<'a> StaticPipelineAnalyzer<'a> {
         for fault in analyze_pipeline_carriers(&contracts, &operators) {
             self.errors.push(self.carrier_diagnostic(pipeline, fault));
         }
-        let pure_opaal_expression_pipeline = pipeline
-            .stages()
-            .iter()
-            .all(|stage| matches!(stage.kind(), StageKind::Expression(_)));
+        let pure_opaal_expression_pipeline = pipeline.stages().iter().all(|stage| {
+            matches!(stage.kind(), StageKind::Expression(_))
+                || self
+                    .aliases
+                    .pipeline_operation(self.module, self.source, stage, self.names)
+                    .is_some()
+        });
         if pipeline.stages().len() > 1 && !pure_opaal_expression_pipeline {
             for stage in pipeline.stages() {
                 if matches!(stage.kind(), StageKind::Expression(_)) {
@@ -10535,7 +11248,7 @@ impl ModuleProgram {
         let (module, span) = resolve_function_declaration(
             &self.sources,
             &self.names,
-            root,
+            export.target_module(),
             export.declaration_span(),
         )?;
         self.types
@@ -10663,6 +11376,10 @@ impl ModuleProgram {
         if !modules.is_empty() && self.names.export(owner, name).is_none() {
             return None;
         }
+        let (owner, name) = self
+            .aliases
+            .selected_entity(owner, name)
+            .unwrap_or((owner, name));
         self.types.nominal(owner, name)
     }
 
@@ -10674,11 +11391,7 @@ impl ModuleProgram {
         module: &ModuleId,
         qualified: &[&str],
     ) -> Option<OperationDescriptor> {
-        let (name, modules) = qualified.split_last()?;
-        if modules.is_empty() {
-            return None;
-        }
-        let owner = self.aliases.resolve(module, modules)?;
+        let (owner, name) = self.aliases.resolve_entity(module, qualified)?;
         standard_operation(owner, name)
     }
 
@@ -11149,6 +11862,7 @@ impl<'a> ModuleProgramLoader<'a> {
                             entry.source(),
                             script,
                             &names,
+                            &aliases,
                             commands,
                             &control,
                         )
@@ -11396,7 +12110,7 @@ impl<'a> ModuleProgramLoader<'a> {
             .statements()
             .iter()
             .flat_map(|statement| statement.kind().module_imports())
-            .map(|import| match import.source {
+            .map(|import| match import.source() {
                 opaal_syntax::ModuleImportSource::Local { path } => {
                     let quoted = source
                         .slice(path)
@@ -11452,12 +12166,12 @@ impl<'a> ModuleProgramLoader<'a> {
                     .iter()
                     .find_map(|statement| match statement.kind() {
                         StatementKind::Task(_) => Some(statement.span()),
-                        _ => statement.kind().module_imports().iter().find_map(|import| {
+                        _ => statement.kind().module_imports().find_map(|import| {
                             matches!(
-                                import.source,
+                                import.source(),
                                 opaal_syntax::ModuleImportSource::Project { .. }
                             )
-                            .then_some(import.source.span())
+                            .then_some(import.source().span())
                         }),
                     })
             });
@@ -11722,7 +12436,15 @@ impl SyntaxMetrics {
     fn statement(&mut self, statement: &Statement) {
         self.nodes += 1;
         match statement.kind() {
-            StatementKind::ModuleImportGroup(entries) => self.nodes += entries.len() as u64,
+            StatementKind::ModuleImportGroup(entries) => {
+                self.nodes += entries.len() as u64;
+                for entry in entries {
+                    if let Some(import) = entry.as_ref().members() {
+                        self.nodes += import.members.len() as u64;
+                    }
+                }
+            }
+            StatementKind::ModuleMemberImport(import) => self.nodes += import.members.len() as u64,
             StatementKind::ModuleImport(_) | StatementKind::ModuleExport(_) => {}
             StatementKind::NominalType(declaration) => {
                 for field in &declaration.fields {
@@ -12048,6 +12770,13 @@ impl SyntaxMetrics {
 /// A failure in the closed opaal module-alias and re-export namespace.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ModuleAliasError {
+    UnknownMember {
+        module: ModuleId,
+        target: ModuleId,
+        name: String,
+        span: Span,
+        declaration_span: Option<Span>,
+    },
     UnknownStandard {
         module: ModuleId,
         name: String,
@@ -12071,7 +12800,8 @@ impl ModuleAliasError {
     #[must_use]
     pub const fn module(&self) -> &ModuleId {
         match self {
-            Self::UnknownStandard { module, .. }
+            Self::UnknownMember { module, .. }
+            | Self::UnknownStandard { module, .. }
             | Self::Conflict { module, .. }
             | Self::DuplicateExport { module, .. } => module,
         }
@@ -12080,6 +12810,19 @@ impl ModuleAliasError {
     #[must_use]
     pub fn diagnostic(&self) -> Diagnostic {
         match self {
+            Self::UnknownMember {
+                span,
+                declaration_span,
+                ..
+            } => {
+                let diagnostic = Diagnostic::new(Severity::Error, "MOD014", self.to_string())
+                    .with_primary(*span, "this member is not exported by the selected module");
+                if let Some(declaration) = declaration_span {
+                    diagnostic.with_secondary(*declaration, "this declaration is private")
+                } else {
+                    diagnostic
+                }
+            }
             Self::UnknownStandard { span, .. } => {
                 Diagnostic::new(Severity::Error, "MOD010", self.to_string()).with_primary(
                     *span,
@@ -12107,6 +12850,11 @@ impl ModuleAliasError {
 impl fmt::Display for ModuleAliasError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::UnknownMember { target, name, .. } => write!(
+                formatter,
+                "module `{}` does not export `{name}`",
+                target.path().display()
+            ),
             Self::UnknownStandard { name, .. } => {
                 write!(formatter, "unknown standard module `std::{name}`")
             }

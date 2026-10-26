@@ -302,11 +302,8 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
             return result;
         }
         let entry = self.parse_module_import_entry()?;
-        let span = self.span(
-            start.start(),
-            entry.source.span().end().max(entry.alias.span().end()),
-        );
-        Ok(Statement::new(StatementKind::ModuleImport(entry), span))
+        let span = self.span(start.start(), entry.end());
+        Ok(Statement::new(entry.statement_kind(), span))
     }
 
     fn parse_module_import_group(&mut self, start: Span) -> ParseResult<Statement> {
@@ -332,7 +329,7 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
         }
     }
 
-    fn parse_module_import_entry(&mut self) -> ParseResult<ModuleAliasImport> {
+    fn parse_module_import_entry(&mut self) -> ParseResult<crate::ModuleImportEntry> {
         self.check_cancelled()?;
         let source = match self.current_kind() {
             Some(TokenKind::SingleQuoted) => {
@@ -387,6 +384,16 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
             }
         };
         self.skip_inline();
+        if self.take_operator(Operator::Colon).is_some() {
+            self.expect_operator(Operator::Colon, "member selector requires `::`")?;
+            self.skip_inline();
+            let open =
+                self.expect_delimiter(Delimiter::LeftBrace, "member selector requires `{`")?;
+            self.continuation_depth += 1;
+            let result = self.parse_module_members(source, open.span());
+            self.continuation_depth -= 1;
+            return result;
+        }
         let alias = if self.current().is_some_and(|token| {
             token.kind() == TokenKind::Identifier
                 && self.source.slice(token.span()).ok() == Some("as")
@@ -414,7 +421,61 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
                 }
             }
         };
-        Ok(ModuleAliasImport { source, alias })
+        Ok(crate::ModuleImportEntry::Alias(ModuleAliasImport {
+            source,
+            alias,
+        }))
+    }
+
+    fn parse_module_members(
+        &mut self,
+        source: ModuleImportSource,
+        open: Span,
+    ) -> ParseResult<crate::ModuleImportEntry> {
+        self.skip_layout();
+        let mut members = Vec::new();
+        loop {
+            self.check_cancelled()?;
+            let member = self.parse_identifier()?;
+            self.skip_layout();
+            let local = if self.current().is_some_and(|token| {
+                token.kind() == TokenKind::Identifier
+                    && self.source.slice(token.span()).ok() == Some("as")
+            }) {
+                self.take();
+                self.skip_layout();
+                self.parse_identifier()?
+            } else {
+                member
+            };
+            let span = self.span(member.span().start(), local.span().end());
+            members.push(crate::ModuleMemberSelector {
+                member,
+                local,
+                span,
+            });
+            self.skip_layout();
+            if let Some(close) = self.take_delimiter(Delimiter::RightBrace) {
+                return Ok(crate::ModuleImportEntry::Members(
+                    crate::ModuleMemberImport {
+                        source,
+                        members,
+                        span: self.span(open.start(), close.span().end()),
+                    },
+                ));
+            }
+            self.expect_operator(Operator::Comma, "member selectors require `,`")?;
+            self.skip_layout();
+            if let Some(close) = self.take_delimiter(Delimiter::RightBrace) {
+                return Ok(crate::ModuleImportEntry::Members(
+                    crate::ModuleMemberImport {
+                        source,
+                        members,
+                        span: self.span(open.start(), close.span().end()),
+                    },
+                ));
+            }
+        }
     }
 
     fn parse_nominal_type(&mut self, top_level: bool) -> ParseResult<Statement> {

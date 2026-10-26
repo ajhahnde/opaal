@@ -1,0 +1,7 @@
+import std::math::{abs as magnitude_of}
+let magnitude = magnitude_of(-7)
+export {test_value}
+def test_value() -> Bool
+{
+    return magnitude == 7
+}

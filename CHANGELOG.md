@@ -6,6 +6,9 @@ All notable changes to OPAAL are documented here.
 
 ### Added
 
+- Select named exports with `import std::math::{abs as magnitude_of}` or local
+  and project origins. Selected names preserve original identities and authority,
+  support explicit re-exports, and work across checking, formatting and editors.
 - Allow module imports to omit a repeated alias and collect entries in a flat,
   ordered group. Explicit renaming remains available for every entry; existing
   single imports remain valid. New syntax requires a matching toolchain.

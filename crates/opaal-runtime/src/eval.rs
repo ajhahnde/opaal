@@ -2154,6 +2154,7 @@ pub(crate) fn evaluate_module_initializer(
             !matches!(
                 statement.kind(),
                 StatementKind::ModuleImport(_)
+                    | StatementKind::ModuleMemberImport(_)
                     | StatementKind::ModuleImportGroup(_)
                     | StatementKind::ModuleExport(_)
             )
@@ -2823,6 +2824,7 @@ impl Evaluator<'_, '_> {
         self.charge(span)?;
         match statement.kind() {
             StatementKind::ModuleImport(_)
+            | StatementKind::ModuleMemberImport(_)
             | StatementKind::ModuleImportGroup(_)
             | StatementKind::ModuleExport(_) => Ok(Flow::Fallthrough(None)),
             StatementKind::NominalType(_) | StatementKind::VariantType(_) => {
@@ -3610,11 +3612,13 @@ impl Evaluator<'_, '_> {
         {
             return self.expression_with_expected(expression, scope, expected);
         }
-        if pipeline
-            .stages()
-            .iter()
-            .all(|stage| matches!(stage.kind(), StageKind::Expression(_)))
-        {
+        if pipeline.stages().iter().all(|stage| {
+            matches!(stage.kind(), StageKind::Expression(_))
+                || self
+                    .binding_types
+                    .pipeline_operation(&self.source, stage, scope)
+                    .is_some()
+        }) {
             let mut stages = pipeline.stages().iter();
             let first = stages
                 .next()
@@ -3625,26 +3629,13 @@ impl Evaluator<'_, '_> {
             let mut value = self.expression(expression, scope)?;
             for stage in stages {
                 self.check_cancel(stage.span())?;
-                let StageKind::Expression(expression) = stage.kind() else {
-                    unreachable!("the pure pipeline predicate accepts only expressions")
-                };
-                let ExpressionKind::Qualified(name) = expression.kind() else {
-                    // opaal-foundation-boundary(carrier-refusal): OPAAL value pipelines accept only qualified operation stages.
+                let Some(operation) =
+                    self.binding_types
+                        .pipeline_operation(&self.source, stage, scope)
+                else {
                     return Err(
                         self.unsupported("non-operation value pipeline stage", stage.span())
                     );
-                };
-                let segments = name
-                    .segments
-                    .iter()
-                    .map(|segment| self.text(segment.span()))
-                    .collect::<Vec<_>>();
-                let Some(operation) = self
-                    .binding_types
-                    .qualified_operation(self.source.id(), &segments)
-                else {
-                    // opaal-foundation-boundary(carrier-refusal): Unknown OPAAL operation stages cannot consume a value carrier.
-                    return Err(self.unsupported("unknown value pipeline operation", stage.span()));
                 };
                 if !operation.supports_value_pipeline() {
                     return Err(
@@ -3727,6 +3718,21 @@ impl Evaluator<'_, '_> {
             ExpressionKind::Literal(literal) => self.literal(literal, scope),
             ExpressionKind::Name(reference) => {
                 let name = self.text(reference.name.span());
+                if scope.get(name).is_none()
+                    && self
+                        .binding_types
+                        .selected_entity_at(self.source.id(), name, span.start())
+                        .is_some()
+                {
+                    return self.qualified_value(
+                        &opaal_syntax::QualifiedName {
+                            segments: vec![reference.name],
+                            span,
+                        },
+                        span,
+                        expected,
+                    );
+                }
                 self.binding_value(name, scope, span)
             }
             ExpressionKind::Qualified(name) => {
@@ -3816,7 +3822,7 @@ impl Evaluator<'_, '_> {
         span: Span,
         expected: Option<&ValueType>,
     ) -> Eval<Value> {
-        if name.segments.len() >= 2 {
+        if !name.segments.is_empty() {
             let segments = name
                 .segments
                 .iter()
@@ -4697,7 +4703,29 @@ impl Evaluator<'_, '_> {
             return Ok((value, result_type));
         }
 
-        if let ExpressionKind::Qualified(name) = call.callee.kind() {
+        let selected_name;
+        let operation_name = match call.callee.kind() {
+            ExpressionKind::Qualified(name) => Some(name),
+            ExpressionKind::Name(reference)
+                if scope.get(self.text(reference.name.span())).is_none()
+                    && self
+                        .binding_types
+                        .selected_entity_at(
+                            self.source.id(),
+                            self.text(reference.name.span()),
+                            call.callee.span().start(),
+                        )
+                        .is_some() =>
+            {
+                selected_name = opaal_syntax::QualifiedName {
+                    segments: vec![reference.name],
+                    span: call.callee.span(),
+                };
+                Some(&selected_name)
+            }
+            _ => None,
+        };
+        if let Some(name) = operation_name {
             let segments = name
                 .segments
                 .iter()
@@ -6070,6 +6098,7 @@ fn find_callable_in_statement(
 ) -> Option<RestoredCallableSyntax> {
     match statement.kind() {
         StatementKind::ModuleImport(_)
+        | StatementKind::ModuleMemberImport(_)
         | StatementKind::ModuleImportGroup(_)
         | StatementKind::ModuleExport(_)
         | StatementKind::NominalType(_)

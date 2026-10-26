@@ -21,13 +21,13 @@ if __package__:
     from .check_source_formatting import public_paths, seed_census
     from .package_data_processing import SOURCE, digest
     from .package_release import PLATFORMS, ROOT, VERSION
-    from .package_source_formatting import FIXTURES
+    from .package_source_formatting import FIXTURES, MEMBER_IMPORT_FIXTURES
     from .qualify_data_processing import require, success, unpack
 else:
     from check_source_formatting import public_paths, seed_census
     from package_data_processing import SOURCE, digest
     from package_release import PLATFORMS, ROOT, VERSION
-    from package_source_formatting import FIXTURES
+    from package_source_formatting import FIXTURES, MEMBER_IMPORT_FIXTURES
     from qualify_data_processing import require, success, unpack
 
 PAIRS = (("legacy.opaal", "canonical.opaal"), ("legacy-effects.opaal", "effects.opaal"),
@@ -58,7 +58,7 @@ def normalized_artifact(value: dict) -> dict:
     return value
 
 
-def project_workflow(run, work: Path, fixtures: Path, target: str) -> dict:
+def project_workflow(run, work: Path, fixtures: Path, target: str, *, member_imports: bool = False) -> dict:
     shutil.copytree(fixtures / "project", work)
     lock = "tools-macos.toml" if target == "macos-arm64" else "tools-linux-aarch64.toml" if target == "linux-aarch64" else "tools-linux.toml"
     shutil.copyfile(work / lock, work / "tools.toml")
@@ -67,10 +67,13 @@ def project_workflow(run, work: Path, fixtures: Path, target: str) -> dict:
 
     def verify_contract(value: dict, name: str, effects: bytes = b"") -> None:
         path = work / "tasks.opaal"
-        require(len(value["sources"]) == 1 and value["sources"][0]["digest"] == "sha256:" + digest(path.read_bytes()) and
-                value["sources"][0]["size"] == path.stat().st_size and value["sources"][0]["module"] == str(path),
-                "project source digest/size/module differs")
-        graph = digest(os.fsencode(path) + b"\0" + path.read_bytes() + b"\xff")
+        expected_paths = [path] + ([work / "value.opaal"] if member_imports and name == "readiness" else [])
+        expected_sources = {str(source): {"digest": "sha256:" + digest(source.read_bytes()), "size": source.stat().st_size} for source in expected_paths}
+        require({source["module"]: {"digest": source["digest"], "size": source["size"]} for source in value["sources"]} == expected_sources, "project source census/digests differ")
+        graph_bytes = b"".join(os.fsencode(source) + b"\0" + source.read_bytes() + b"\xff" for source in sorted(expected_paths))
+        if len(expected_paths) > 1:
+            graph_bytes += b"std::math\0\xff"
+        graph = digest(graph_bytes)
         expected = "sha256:" + digest(os.fsencode(path) + b"\0" + name.encode() + b"->Int" +
                                       effects + b"\0" + graph.encode())
         require(value["task"]["contract_digest"] == expected, "source-derived action contract differs")
@@ -122,7 +125,21 @@ def project_workflow(run, work: Path, fixtures: Path, target: str) -> dict:
 
     source = work / "tasks.opaal"
     canonical = source.read_bytes()
-    source.write_bytes((work / "legacy-tasks.opaal").read_bytes())
+    if member_imports:
+        canonical = (fixtures / "explicit-member-imports/project-tasks.opaal").read_bytes()
+        source.write_bytes(canonical.replace(b"import './value.opaal'::{result}", b"import './value.opaal'::{ result }", 1))
+        for name in ("value.opaal", "policy-tests.opaal", "policy-negative.opaal"):
+            shutil.copyfile(fixtures / "explicit-member-imports" / name, work / name)
+        refused_check = run("check", "tasks.opaal")
+        refused_test = run("test", "tasks.opaal", "--format", "json")
+        require(refused_check.returncode == 1 and b"PROJECT001" in refused_check.stderr and refused_test.returncode == 2 and json.loads(refused_test.stdout)["failure"] == "TEST_SOURCE", "standalone task admission changed")
+        success(run("check", "policy-tests.opaal"), "member standalone policy check")
+        for case, code, passed, failed in (("test_value", 0, 1, 0), ("test_negative", 1, 0, 1)):
+            result = run("test", "policy-tests.opaal" if passed else "policy-negative.opaal", "--case", case, "--format", "json")
+            value = json.loads(result.stdout)
+            require(result.returncode == code and value["counts"]["selected"] == 1 and value["counts"]["passed"] == passed and value["counts"]["failed"] == failed and value["completeness"] == "complete", "member project named test differs")
+    else:
+        source.write_bytes((work / "legacy-tasks.opaal").read_bytes())
     legacy_inspection = success(run("task", "inspect", "--project", "opaal.toml", "verify"), "inspect legacy")
     require(b"signature readiness() -> Int\n" in legacy_inspection and
             b"effects\ntools\n" in legacy_inspection, "task result/effects differ")
@@ -265,6 +282,44 @@ def concise_imports(run, work: Path, fixtures: Path) -> dict:
                            "offline task identity/effects preserved; source identities changed"]}
 
 
+def explicit_member_imports(run, work: Path, fixtures: Path, target: str) -> dict:
+    destination = work / "explicit-member-imports"
+    original = fixtures / "explicit-member-imports"
+    require({path.name for path in original.iterdir()} == set(MEMBER_IMPORT_FIXTURES), "member fixture census differs")
+    shutil.copytree(original, destination)
+
+    def invoke(*arguments):
+        return run(*arguments, cwd=destination)
+
+    cases = {}
+    for name in ("before.opaal", "after.opaal", "alternate.opaal", "local-main.opaal", "pipeline.opaal"):
+        success(invoke("check", name), "member source check")
+        success(invoke("format", "--check", name), "member canonical bytes")
+        result = json.loads(success(invoke("test", name, "--case", "test_value", "--format", "json"), "member pure test"))
+        require(result["counts"]["selected"] == result["counts"]["passed"] == 1 and result["completeness"] == "complete", "member pure result differs")
+        require(success(invoke(name), "member script") == b"", "member source printed implicitly")
+        cases[name] = result["counts"]
+    require(cases["before.opaal"] == cases["after.opaal"] == cases["alternate.opaal"], "member spelling changed results")
+    require(success(invoke("io-allowed.opaal"), "member I/O") == b"ready\n", "member I/O bytes differ")
+    denied = invoke("test", "io-pure.opaal", "--format", "json")
+    value = json.loads(denied.stdout)
+    require(denied.returncode == 2 and value["counts"]["passed"] == 0 and value["counts"]["unrun"] == 1 and b"TEST_EFFECT" in denied.stdout and b"must-not-print" not in denied.stdout + denied.stderr, "selected I/O acquired pure authority")
+    for name, code in (("missing.opaal", b"MOD014"), ("private.opaal", b"MOD014"), ("duplicate.opaal", b"MOD011")):
+        result = invoke("check", name)
+        require(result.returncode == 1 and not result.stdout and code in result.stderr, "member diagnostic differs")
+    success(invoke("format", "--write", "noncanonical.opaal"), "member format")
+    require((destination / "noncanonical.opaal").read_bytes() == (destination / "canonical.opaal").read_bytes(), "member canonical bytes differ")
+    success(invoke("format", "--check", "noncanonical.opaal"), "member idempotence")
+    pending = run(cwd=destination, stdin=(destination / "incomplete.opaal").read_bytes())
+    require(pending.returncode == 0 and b"SYN002" in pending.stderr, "member incomplete EOF differs")
+    raw = run(cwd=destination, stdin=b"import std::math::{\nabs as magnitude_of,\n}\nmagnitude_of(-7)\n")
+    require(raw.returncode == 0 and not raw.stderr and b"7\n" in raw.stdout, "member raw continuation or retention differs")
+    project = work / "member-project"
+    project_report = project_workflow(lambda *args: run(*args, cwd=project), project, fixtures, target, member_imports=True)
+    return {"fixture_cases": sorted(MEMBER_IMPORT_FIXTURES), "pure_cases": cases, "project": project_report,
+            "assertions": ["before/after/alternate Int 7 and original facade identity", "allowed I/O and pure refusal", "missing/private/duplicate diagnostics", "canonical comments and raw multiline retention"]}
+
+
 def framed_formatting(binary: Path, work: Path, fixtures: Path, environment: dict) -> list[str]:
     observations = []
     for encoding in ("utf-8", "utf-16"):
@@ -334,7 +389,9 @@ def framed_formatting(binary: Path, work: Path, fixtures: Path, environment: dic
                              ("legacy.opaal", "canonical.opaal", "invalid.opaal", "incomplete.opaal")]
                 documents.extend((name, (fixtures / name).read_text()) for name in (
                     "concise-imports/noncanonical.opaal", "concise-imports/canonical.opaal",
-                    "concise-imports/incomplete.opaal", "concise-imports/invalid-name.opaal"))
+                    "concise-imports/incomplete.opaal", "concise-imports/invalid-name.opaal",
+                    "explicit-member-imports/noncanonical.opaal", "explicit-member-imports/canonical.opaal",
+                    "explicit-member-imports/incomplete.opaal"))
                 documents.append(("invalid-body.opaal", "def waiting()\nlet x = 1\n"))
                 for index, (name, text) in enumerate(documents):
                     uri = (work / f"document-{index}.opaal").as_uri()
@@ -342,9 +399,9 @@ def framed_formatting(binary: Path, work: Path, fixtures: Path, environment: dic
                         "uri": uri, "languageId": "opaal", "version": 1, "text": text}}})
                     params = {"textDocument": {"uri": uri}, "options": {"tabSize": 8, "insertSpaces": False}}
                     result = request("textDocument/formatting", params)["result"]
-                    if name in ("legacy.opaal", "concise-imports/noncanonical.opaal"):
+                    if name in ("legacy.opaal", "concise-imports/noncanonical.opaal", "explicit-member-imports/noncanonical.opaal"):
                         canonical = (fixtures / ("canonical.opaal" if name == "legacy.opaal" else
-                                                  "concise-imports/canonical.opaal")).read_text()
+                                                  name.replace("noncanonical.opaal", "canonical.opaal"))).read_text()
                         require(result == [{"range": {"start": {"line": 0, "character": 0},
                                                        "end": {"line": len(text.splitlines()), "character": 0}},
                                             "newText": canonical}], "framed formatter bytes/range differ")
@@ -446,6 +503,15 @@ def terminal_continuation(binary: Path, work: Path, environment: dict) -> None:
         require(b"error[" not in captured, "terminal rejected an import group")
         os.write(descriptor, b"math::abs(-7) + values::length([1, 2, 3])\r")
         read_until(rb"(?:^|\n)10\r?\n.*>> ")
+        for line in (b"import std::math::{", b"abs as magnitude_of,"):
+            os.write(descriptor, line + b"\r")
+            read_until(rb"\.\.\.> ")
+            require(b"error[" not in captured, "terminal submitted an open member selector")
+        os.write(descriptor, b"}\r")
+        read_until(rb">> ")
+        require(b"error[" not in captured, "terminal rejected a member selector")
+        os.write(descriptor, b"magnitude_of(-7)\r")
+        read_until(rb"(?:^|\n)7\r?\n.*>> ")
         os.write(descriptor, b"def cancelled()\r")
         read_until(rb"\.\.\.> ")
         os.write(descriptor, b"\x03")
@@ -593,6 +659,7 @@ def qualify(archive: Path | None, fixture_archive: Path | None, binaries: Path |
         project = root / "project"
         project_report = project_workflow(lambda *args: run(*args, cwd=project), project, fixtures, target)
         imports_report = concise_imports(run, root, fixtures)
+        members_report = explicit_member_imports(run, root, fixtures, target)
         lsp_report = framed_formatting(installed / "opaal-language-server", root, fixtures, environment)
         terminal_continuation(binary, root, environment)
         require(public_paths(ROOT) == paths and
@@ -606,14 +673,14 @@ def qualify(archive: Path | None, fixture_archive: Path | None, binaries: Path |
                 "binary_sha256": {name: digest((installed / name).read_bytes())
                                   for name in ("opaal", "opaal-language-server")},
                 "fixture_sha256": fixture_hashes, "parser_seeds": seed_census(ROOT, paths),
-                "project": project_report, "concise_imports": imports_report,
+                "project": project_report, "concise_imports": imports_report, "explicit_member_imports": members_report,
                 "language_server": lsp_report, "bounded_cases": bounded,
                 "assertions": ["exact fixture/source/program identity", "legacy/canonical execution and checking",
                                "exact action/function/comment bytes and idempotence", "read-only check and mode/inode retention",
                                "invalid/incomplete/missing-semicolon preserve bytes", "raw typed/untyped continuation and EOF",
                                "formatting never imports or invokes source", "batch preflight refuses symlink/directory/missing/duplicate/non-source",
                                "1024 siblings, 64 nested blocks, 280 KiB Unicode parse/idempotence within 30-second command deadlines",
-                               "native terminal typed/untyped continuation, retained values, cancel and EOF"]}
+                               "native terminal function/import/member continuation, retained values, cancel and EOF"]}
 
 
 def main() -> None:

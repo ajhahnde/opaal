@@ -1,0 +1,7 @@
+import './facade.opaal'::{Payload, make as create, code}
+let item: Payload = create(code)
+export {test_value}
+def test_value() -> Bool
+{
+    return item.value == 7
+}

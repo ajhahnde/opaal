@@ -600,8 +600,15 @@ impl Session {
             .map_or(self.interactive_modules.programs.as_slice(), |prepared| {
                 prepared.programs.as_slice()
             });
-        for import in script.module_imports() {
-            let name = source.slice(import.alias.span()).unwrap();
+        for identifier in script.module_imports().flat_map(|import| {
+            import.alias().map(|entry| entry.alias).into_iter().chain(
+                import
+                    .members()
+                    .into_iter()
+                    .flat_map(|entry| entry.members.iter().map(|member| member.local)),
+            )
+        }) {
+            let name = source.slice(identifier.span()).unwrap();
             if self.scope.get(name).is_some() {
                 return Err(render(
                     &source,
@@ -610,7 +617,7 @@ impl Session {
                         "MOD011",
                         format!("module alias `{name}` conflicts"),
                     )
-                    .with_primary(import.alias.span(), "this name is already bound")],
+                    .with_primary(identifier.span(), "this name is already bound")],
                 ));
             }
         }
@@ -854,6 +861,138 @@ impl Session {
                         }
                         opaal_aliases.retain_alias(alias);
                     }
+                }
+                StatementKind::ModuleMemberImport(import) if imports_analyzed => {
+                    if imports.is_some() {
+                        for selection in binding_types
+                            .module_selections(source_file.id())
+                            .filter(|selection| selection.declaration_span == import.span)
+                        {
+                            if cancellation.is_cancelled() {
+                                return Ok((
+                                    SubmitOutcome::Cancelled(crate::eval::Cancellation::new(
+                                        cancellation.reason(),
+                                        selection.local_span,
+                                    )),
+                                    last_value,
+                                ));
+                            }
+                            if !selection.charge(budget)
+                                || interactive_modules
+                                    .items
+                                    .saturating_add(budget.collection_items() - previous_items)
+                                    > MAX_RETAINED_ITEMS
+                                || interactive_modules
+                                    .bytes
+                                    .saturating_add(budget.collection_bytes() - previous_bytes)
+                                    > MAX_RETAINED_BYTES
+                            {
+                                return Err(runtime(
+                                    source_file,
+                                    &RuntimeError::new(
+                                        RuntimeErrorKind::ResourceBudgetExceeded,
+                                        selection.local_span,
+                                    ),
+                                ));
+                            }
+                        }
+                    }
+
+                    if let Some(prepared) = imports
+                        && let Some(program) = prepared.imports.get(&import.source.span().start())
+                    {
+                        match interactive_modules.initialize(
+                            program,
+                            limits,
+                            budget,
+                            previous_items,
+                            previous_bytes,
+                        ) {
+                            Ok(HostedEvaluationOutcome::Value(_)) => {}
+                            Ok(HostedEvaluationOutcome::Cancelled(cancelled)) => {
+                                return Ok((SubmitOutcome::Cancelled(cancelled), last_value));
+                            }
+                            Ok(HostedEvaluationOutcome::Refused(refusal)) => {
+                                return Ok((SubmitOutcome::Refused(refusal), last_value));
+                            }
+                            Ok(_) => unreachable!("a pure initializer cannot exit or stop"),
+                            Err(HostedEvaluationFailure::Runtime(error)) => {
+                                return Err(runtime(source_file, &error));
+                            }
+                            Err(HostedEvaluationFailure::Output(error)) => {
+                                return Err(SubmitError::Output(error));
+                            }
+                        }
+                    }
+                    if let Some(prepared) = imports {
+                        interactive_modules.resolutions.extend(
+                            prepared
+                                .resolutions
+                                .iter()
+                                .filter(|(_, target)| {
+                                    interactive_modules
+                                        .sources
+                                        .keys()
+                                        .any(|module| module.path() == target.as_path())
+                                })
+                                .map(|(requested, target)| (requested.clone(), target.clone())),
+                        );
+                    }
+                    let selections = binding_types
+                        .module_selections(source_file.id())
+                        .filter(|selection| selection.declaration_span == import.span)
+                        .cloned()
+                        .collect::<Vec<_>>();
+                    let mut pending_scope = scope.clone();
+                    let mut pending_aliases = opaal_aliases.clone();
+                    for selection in selections {
+                        if cancellation.is_cancelled() {
+                            return Ok((
+                                SubmitOutcome::Cancelled(crate::eval::Cancellation::new(
+                                    cancellation.reason(),
+                                    selection.local_span,
+                                )),
+                                last_value,
+                            ));
+                        }
+                        if let Some((owner, name)) =
+                            binding_types.selected_entity(source_file.id(), &selection.name)
+                            && let Some(value) = interactive_modules
+                                .instances
+                                .get(&owner)
+                                .and_then(|exports| exports.get(&name))
+                        {
+                            pending_scope
+                                .declare(
+                                    selection.name.clone(),
+                                    crate::BindingMutability::Immutable,
+                                    value.clone(),
+                                )
+                                .expect("member analysis rejects conflicts");
+                        }
+                        if let Some(alias) = binding_types
+                            .module_alias(source_file.id(), &selection.name)
+                            .cloned()
+                        {
+                            if let Some(prepared) = imports
+                                && let Some(program) =
+                                    prepared.imports.get(&import.source.span().start())
+                            {
+                                declare_qualified_alias_values(
+                                    &mut pending_scope,
+                                    program,
+                                    &interactive_modules.instances,
+                                    alias.name(),
+                                    alias.target(),
+                                );
+                            }
+                            pending_aliases.retain_alias(alias);
+                        }
+                        pending_aliases
+                            .retain_selection(crate::module::ModuleId::interactive(), selection);
+                    }
+                    *scope = pending_scope;
+                    *opaal_aliases = pending_aliases;
                 }
                 StatementKind::ModuleExport(_) if imports_analyzed => {}
                 StatementKind::Job(job)
@@ -4192,6 +4331,85 @@ mod interactive_retention_tests {
             &FakeClock::new(),
             &mut Vec::new(),
         )
+    }
+
+    #[test]
+    fn selected_local_callbacks_restore_with_their_original_source_context() {
+        use crate::capsule::{decode_background_capsule, encode_background_capsule};
+        use crate::eval::{Completion, EvalLimits, apply_callable};
+        use crate::module::{
+            ModuleCanonicalizer, ModulePathError, ModuleSourceError, ModuleSourceLoader,
+        };
+        use opaal_syntax::{SourceFile, SourceId};
+        struct Modules;
+        impl ModuleCanonicalizer for Modules {
+            fn canonicalize(
+                &self,
+                candidate: &Path,
+            ) -> Result<std::path::PathBuf, ModulePathError> {
+                Ok(candidate.components().collect())
+            }
+        }
+        impl ModuleSourceLoader for Modules {
+            fn load(&self, module: &crate::module::ModuleId) -> Result<Vec<u8>, ModuleSourceError> {
+                assert_eq!(module.path(), Path::new("/work/model.opaal"));
+                Ok(b"let code = -7\ndef identity(value: Int) -> Int {return value}\nexport {code, identity}\n".to_vec())
+            }
+        }
+        let sources = Modules;
+        let mut session = Session::new("/work", Environment::new(), SessionOptions::default());
+        let submit = |session: &mut Session, sources: &Modules, text: &str| {
+            session
+                .submit_with_source_loader(
+                    "cell",
+                    text,
+                    sources,
+                    sources,
+                    &PosixPlatform,
+                    &FakePlatform::full(),
+                    &FakeClock::new(),
+                    &mut Vec::new(),
+                )
+                .unwrap()
+                .1
+        };
+        submit(
+            &mut session,
+            &sources,
+            "import './model.opaal'::{code, identity as original}",
+        );
+        submit(
+            &mut session,
+            &sources,
+            "import std::math::{abs as magnitude_of}",
+        );
+        submit(
+            &mut session,
+            &sources,
+            "def process() -> Int {return magnitude_of(original(code))}",
+        );
+        let wire = encode_background_capsule(
+            "next",
+            "",
+            Path::new("/work"),
+            &Environment::new(),
+            None,
+            session.scope(),
+            SessionOptions::default(),
+        )
+        .unwrap();
+        let decoded = decode_background_capsule(&wire).unwrap();
+        let caller = SourceFile::new(SourceId::new(500), "caller", "process()");
+        let value = apply_callable(
+            decoded.scope().get("process").unwrap(),
+            vec![],
+            &caller,
+            caller.span(0..9).unwrap(),
+            &mut Environment::new(),
+            &EvalLimits::default(),
+        )
+        .unwrap();
+        assert!(matches!(value, Completion::Value(Value::Int(7))));
     }
 
     #[test]

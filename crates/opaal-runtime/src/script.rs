@@ -58,6 +58,7 @@ pub fn invoke_pure_function(
                 alias.target(),
             );
         }
+        declare_selected_values(&mut scope, program, &instances, &owner, budget, &limits)?;
         let source = program
             .sources()
             .source(&owner)
@@ -450,6 +451,24 @@ fn execute_module_program_with_standard_host(
             .sources()
             .script(&module)
             .expect("a loaded module program registers every syntax tree");
+        if let Err(error) = declare_selected_values(
+            &mut scope,
+            program,
+            &instances,
+            &module,
+            &mut budget,
+            limits,
+        ) {
+            outcome = Err(ScriptFailure::module_submit(
+                SubmitError::Runtime {
+                    error: Box::new(error),
+                    rendered: String::new(),
+                },
+                source,
+                program.sources(),
+            ));
+            break;
+        }
         match session.submit_module_source(
             source,
             script,
@@ -589,6 +608,24 @@ pub fn execute_project_task_outcome(
             .sources()
             .script(&module)
             .expect("a loaded project registers every syntax tree");
+        if let Err(error) = declare_selected_values(
+            &mut scope,
+            program,
+            &instances,
+            &module,
+            &mut budget,
+            &initialization_limits,
+        ) {
+            outcome = Err(ScriptFailure::module_submit(
+                SubmitError::Runtime {
+                    error: Box::new(error),
+                    rendered: String::new(),
+                },
+                source,
+                program.sources(),
+            ));
+            break;
+        }
         match session.submit_module_source(
             source,
             script,
@@ -878,6 +915,44 @@ pub(crate) fn declare_qualified_alias_values(
     }
 }
 
+pub(crate) fn declare_selected_values(
+    scope: &mut ScopeStack,
+    program: &ModuleProgram,
+    instances: &BTreeMap<ModuleId, BTreeMap<String, Value>>,
+    module: &ModuleId,
+    budget: &mut ResourceBudget,
+    limits: &EvalLimits,
+) -> Result<(), RuntimeError> {
+    let cancellation = limits.cancellation_token();
+    for selection in program.aliases().selections(module) {
+        // Evaluation observes the sticky cancellation before using this local scope.
+        if cancellation.is_cancelled() {
+            break;
+        }
+        if !selection.charge(budget) {
+            return Err(RuntimeError::new(
+                RuntimeErrorKind::ResourceBudgetExceeded,
+                selection.local_span,
+            ));
+        }
+        if program.aliases().alias(module, &selection.name).is_some() {
+            continue;
+        }
+        if let Some((owner, name)) = program.aliases().selected_entity(module, &selection.name)
+            && let Some(value) = instances.get(owner).and_then(|exports| exports.get(name))
+        {
+            scope
+                .declare(
+                    selection.name.clone(),
+                    BindingMutability::Immutable,
+                    value.clone(),
+                )
+                .expect("member analysis rejects binding collisions");
+        }
+    }
+    Ok(())
+}
+
 pub(crate) fn module_initialization_order(program: &ModuleProgram) -> Vec<ModuleId> {
     fn visit(
         program: &ModuleProgram,
@@ -892,8 +967,18 @@ pub(crate) fn module_initialization_order(program: &ModuleProgram) -> Vec<Module
             initialized.insert(module.clone());
             return;
         }
-        for alias in program.aliases().aliases(module) {
-            visit(program, alias.target(), initialized, order);
+        for target in program
+            .aliases()
+            .aliases(module)
+            .map(crate::module::ModuleAlias::target)
+            .chain(
+                program
+                    .aliases()
+                    .selections(module)
+                    .map(|selection| &selection.target),
+            )
+        {
+            visit(program, target, initialized, order);
         }
         if initialized.insert(module.clone()) {
             order.push(module.clone());

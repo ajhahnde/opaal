@@ -1,0 +1,7 @@
+import std::io::{println}
+export {test_output}
+def test_output() -> Bool
+{
+    println('must-not-print')
+    return true
+}

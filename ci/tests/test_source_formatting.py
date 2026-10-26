@@ -128,6 +128,13 @@ class QualificationComparisonTests(unittest.TestCase):
             self.assertNotEqual(normalized_artifact(legacy), normalized_artifact(candidate))
         self.assertEqual(legacy["digest"], "old")
 
+    def test_packaging_refuses_an_incomplete_member_fixture_census(self) -> None:
+        self.assertEqual(len(package_source_formatting.MEMBER_IMPORT_FIXTURES), 19)
+        replies = [b"", b"a" * 40 + b"\n", b"tests/golden/source-formatting/explicit-member-imports/after.opaal\0"]
+        with patch("ci.package_source_formatting.subprocess.check_output", side_effect=replies):
+            with self.assertRaisesRegex(ValueError, "member import fixture census"):
+                package_source_formatting.main()
+
     def test_packaging_refuses_dirty_source_before_writing(self) -> None:
         with patch("ci.package_source_formatting.subprocess.check_output", return_value=b" M tasks.opaal\n"):
             with self.assertRaisesRegex(ValueError, "clean committed checkout"):
