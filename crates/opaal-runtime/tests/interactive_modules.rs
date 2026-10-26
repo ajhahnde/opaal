@@ -647,3 +647,221 @@ fn groups_keep_expanded_single_step_charging_and_partial_publication_at_every_bu
     assert!(singles.contains(&(true, true, true)));
     assert_eq!(states("import {'./a.opaal', './b.opaal'}"), singles);
 }
+
+#[test]
+fn selected_values_functions_and_operations_survive_later_cells() {
+    let sources = Sources::default();
+    sources.put(
+        "/work/model.opaal",
+        "let code = 7\ndef make(value: Int) -> Int { return value + 1 }\nexport {code, make}\n",
+    );
+    let mut session = session();
+    submit(
+        &mut session,
+        &sources,
+        "import './model.opaal'::{code, make as create}",
+    );
+    assert_eq!(
+        submit(&mut session, &sources, "create(code)"),
+        Value::Int(8)
+    );
+    submit(
+        &mut session,
+        &sources,
+        "import std::math::{abs as magnitude_of}",
+    );
+    assert_eq!(
+        submit(&mut session, &sources, "magnitude_of(-7)"),
+        Value::Int(7)
+    );
+    assert_eq!(sources.reads.borrow().len(), 1);
+}
+
+#[test]
+fn cancellation_during_selector_admission_publishes_no_names() {
+    use opaal_runtime::eval::{CancellationToken, EvalLimits, ResourceBudget};
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+    let sources = Sources::default();
+    let run = |cancel_at| {
+        let mut session = session();
+        let polls = Arc::new(AtomicUsize::new(0));
+        let observed = Arc::clone(&polls);
+        let token = CancellationToken::from_fn(move || {
+            observed.fetch_add(1, Ordering::Relaxed) >= cancel_at
+        });
+        let result = session
+            .submit_with_source_loader_and_limits(
+                "cell",
+                "import std::math::{abs as first, abs as second}",
+                &sources,
+                &sources,
+                &EvalLimits::pure_opaal(token, ResourceBudget::opaal()),
+                &NoExecutables,
+                &FakePlatform::full(),
+                &FakeClock::new(),
+                &mut Vec::new(),
+            )
+            .unwrap();
+        (session, result.0, polls.load(Ordering::Relaxed))
+    };
+    let count = run(usize::MAX).2;
+    assert!(count > 2);
+    for schedule in 0..count {
+        let (session, outcome, _) = run(schedule);
+        assert!(
+            matches!(outcome, SubmitOutcome::Cancelled(_)),
+            "{schedule}: {outcome:?}"
+        );
+        assert!(
+            !session
+                .visible_operation_names()
+                .iter()
+                .any(|name| name == "first" || name == "second")
+        );
+    }
+}
+
+#[test]
+fn selected_operational_source_functions_keep_pure_refusal() {
+    let sources = Sources::default();
+    let mut session = session();
+    submit(&mut session, &sources, "import std::filesystem::{read}");
+    let mut output = Vec::new();
+    let (outcome, _) = session
+        .submit_with_source_loader(
+            "cell",
+            "read('must-not-read', 1)",
+            &sources,
+            &sources,
+            &NoExecutables,
+            &FakePlatform::full(),
+            &FakeClock::new(),
+            &mut output,
+        )
+        .unwrap();
+    assert!(matches!(outcome, SubmitOutcome::Refused(_)));
+    assert!(output.is_empty());
+}
+
+#[test]
+fn failed_member_initializer_retains_only_prior_declarations_and_can_retry() {
+    let sources = Sources::default();
+    sources.put("/work/good.opaal", "let answer = 42\nexport {answer}\n");
+    sources.put("/work/bad.opaal", "let broken = 1 / 0\nexport {broken}\n");
+    let mut session = session();
+    let result = session.submit_with_source_loader(
+        "cell",
+        "let before = 9\nimport {'./good.opaal'::{answer}, './bad.opaal'::{broken}}",
+        &sources,
+        &sources,
+        &NoExecutables,
+        &FakePlatform::full(),
+        &FakeClock::new(),
+        &mut Vec::new(),
+    );
+    assert!(result.is_err());
+    assert_eq!(session.scope().get("before"), Some(&Value::Int(9)));
+    assert_eq!(session.scope().get("answer"), Some(&Value::Int(42)));
+    assert!(session.scope().get("broken").is_none());
+    assert_eq!(
+        submit(&mut session, &sources, "answer + before"),
+        Value::Int(51)
+    );
+    sources.put("/work/bad.opaal", "let broken = 3\nexport {broken}\n");
+    submit(&mut session, &sources, "import './bad.opaal'::{broken}");
+    assert_eq!(submit(&mut session, &sources, "broken"), Value::Int(3));
+}
+
+#[test]
+fn selected_operations_follow_lexical_publication_and_nested_shadowing() {
+    let sources = Sources::default();
+    let mut session = session();
+    let error = session
+        .submit_with_source_loader(
+            "cell",
+            "magnitude_of(-7)\nimport std::math::{abs as magnitude_of}",
+            &sources,
+            &sources,
+            &NoExecutables,
+            &FakePlatform::full(),
+            &FakeClock::new(),
+            &mut Vec::new(),
+        )
+        .unwrap_err();
+    assert!(error.render().contains("magnitude_of"));
+    assert!(
+        !session
+            .visible_operation_names()
+            .iter()
+            .any(|name| name == "magnitude_of")
+    );
+    submit(
+        &mut session,
+        &sources,
+        "import std::math::{abs as magnitude_of}",
+    );
+    for text in ["let magnitude_of = 1", "import std::math as magnitude_of"] {
+        assert!(
+            session
+                .submit_with_source_loader(
+                    "cell",
+                    text,
+                    &sources,
+                    &sources,
+                    &NoExecutables,
+                    &FakePlatform::full(),
+                    &FakeClock::new(),
+                    &mut Vec::new()
+                )
+                .is_err()
+        );
+    }
+    submit(
+        &mut session,
+        &sources,
+        "def shadow() -> Int {let magnitude_of = {|value| value + 1}; return magnitude_of(-7)}",
+    );
+    assert_eq!(submit(&mut session, &sources, "shadow()"), Value::Int(-6));
+    submit(
+        &mut session,
+        &sources,
+        "import std::value::{length as count_items}",
+    );
+    submit(
+        &mut session,
+        &sources,
+        "def count() -> Int {[1, 2, 3] | count_items}",
+    );
+    assert_eq!(submit(&mut session, &sources, "count()"), Value::Int(3));
+}
+
+#[test]
+fn selected_name_collisions_report_both_original_locations() {
+    let sources = Sources::default();
+    for text in [
+        "let taken = 1\nimport std::math::{abs as taken}",
+        "import std::math::{abs as taken, abs as taken}",
+    ] {
+        let error = session()
+            .submit_with_source_loader(
+                "cell",
+                text,
+                &sources,
+                &sources,
+                &NoExecutables,
+                &FakePlatform::full(),
+                &FakeClock::new(),
+                &mut Vec::new(),
+            )
+            .unwrap_err();
+        let rendered = error.render();
+        assert!(rendered.contains("MOD011"), "{rendered}");
+        assert!(
+            rendered.contains("the first binding was declared here"),
+            "{rendered}"
+        );
+    }
+}

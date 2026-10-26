@@ -1,0 +1,7 @@
+import std::math::{abs}
+export {result}
+
+def result() -> Int
+{
+    return abs(-5)
+}

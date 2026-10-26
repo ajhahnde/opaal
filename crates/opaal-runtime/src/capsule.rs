@@ -2003,6 +2003,14 @@ mod tests {
             decode_background_capsule(&wire).unwrap()
         };
         let decoded = round_trip(
+            "import std::math::{abs as magnitude_of}\ndef process() -> Int { return magnitude_of(-7) }",
+        );
+        assert!(matches!(
+            apply(decoded.scope().get("process").unwrap(), vec![]).unwrap(),
+            Completion::Value(Value::Int(7))
+        ));
+
+        let decoded = round_trip(
             "import std::list as list\nlet amount = 3\ndef transform(x: Int) -> Int { x + amount }\ndef process(items: List[Int]) -> List[Int] { list::map[Int, Int](items, transform) }",
         );
         let process = decoded.scope().get("process").unwrap();

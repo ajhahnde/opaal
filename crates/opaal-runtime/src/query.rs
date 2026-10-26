@@ -473,20 +473,20 @@ impl SemanticQueries<'_> {
             .filter(|export| export.name().starts_with(name_prefix))
             .map(|export| {
                 let definition = SourceLocation {
-                    module: owner.clone(),
+                    module: export.target_module().clone(),
                     span: export.declaration_span(),
                 };
                 let function = self
                     .program
                     .types()
-                    .function(owner, export.declaration_span())
+                    .function(export.target_module(), export.declaration_span())
                     .is_some();
                 let value_type = if function {
                     ValueType::Function
                 } else {
                     self.program
                         .types()
-                        .binding_type(owner, export.declaration_span())
+                        .binding_type(export.target_module(), export.declaration_span())
                         .cloned()
                         .unwrap_or(ValueType::Any)
                 };
@@ -517,8 +517,23 @@ impl SemanticQueries<'_> {
             .visible_bindings(module, cursor)
             .into_iter()
             .map(|binding| {
-                let (definition, value_type, function, imported) =
+                let (mut definition, mut value_type, mut function, imported) =
                     self.target_metadata(binding.target());
+                if let ModuleReferenceTarget::Imported { alias_span, .. } = binding.target()
+                    && self
+                        .program
+                        .aliases()
+                        .selection(module, binding.name())
+                        .is_some_and(|selection| selection.local_span == *alias_span)
+                    && self
+                        .program
+                        .resolve_operation(module, &[binding.name()])
+                        .is_some()
+                {
+                    definition = None;
+                    value_type = ValueType::Function;
+                    function = true;
+                }
                 let kind = match (binding.target(), function, imported) {
                     (ModuleReferenceTarget::DynamicStatus, _, _) => NameKind::DynamicBinding,
                     (ModuleReferenceTarget::ScriptArguments, _, _) => NameKind::ScriptArguments,
@@ -589,7 +604,7 @@ impl SemanticQueries<'_> {
         }
         for entry in self.program.sources().entries() {
             for export in self.program.names().exports(entry.module()) {
-                if entry.module() == definition.module()
+                if export.target_module() == definition.module()
                     && export.declaration_span() == definition.span()
                 {
                     locations.push(SourceLocation {
@@ -659,6 +674,16 @@ impl SemanticQueries<'_> {
                 }));
             }
             let (definition, value_type, function, _) = self.target_metadata(&target);
+            if let Some(definition) = &definition
+                && let Some(nominal) = self
+                    .program
+                    .types()
+                    .nominal_at(definition.module(), definition.span().start())
+            {
+                return Some(SemanticHover::NominalType(NominalTypeHover {
+                    nominal: nominal.clone(),
+                }));
+            }
             if function {
                 let definition = definition?;
                 let signature = self
@@ -720,11 +745,13 @@ impl SemanticQueries<'_> {
         let script = self.program.sources().script(module)?;
         let source = self.program.sources().source(module)?;
         let (call, call_span) = CallFinder::new(offset).find(script.statements())?;
-        let ExpressionKind::Qualified(name) = call.callee.kind() else {
-            return None;
-        };
-        let segments = qualified_segments(source, name)?;
-        let operation = self.program.resolve_operation(module, &segments)?;
+        let operation = match call.callee.kind() {
+            ExpressionKind::Qualified(name) => self
+                .program
+                .resolve_operation(module, &qualified_segments(source, name)?),
+            ExpressionKind::Name(_) => self.operation_at(module, call.callee.span().start()),
+            _ => None,
+        }?;
         let active_parameter = call
             .arguments
             .iter()
@@ -804,7 +831,17 @@ impl SemanticQueries<'_> {
             .aliases()
             .aliases(module)
             .find(|alias| contains(alias.declaration_span(), offset))
-            .map(|alias| alias.target())?;
+            .map(|alias| alias.target())
+            .or_else(|| {
+                self.program
+                    .aliases()
+                    .selections(module)
+                    .find(|selection| {
+                        contains(selection.member_span, offset)
+                            || contains(selection.local_span, offset)
+                    })
+                    .map(|selection| &selection.target)
+            })?;
         Some(ModuleImportEffects {
             target: target.clone(),
             direct: self.program.effects().direct(target).clone(),
@@ -835,6 +872,14 @@ impl SemanticQueries<'_> {
     fn operation_at(&self, module: &ModuleId, offset: usize) -> Option<OperationDescriptor> {
         let script = self.program.sources().script(module)?;
         let source = self.program.sources().source(module)?;
+        if let Some((name, ModuleReferenceTarget::Imported { alias_span, .. })) =
+            self.program.names().target_at(module, offset)
+            && let Some(selection) = self.program.aliases().selection(module, &name)
+            && selection.local_span == alias_span
+            && let Some(operation) = self.program.resolve_operation(module, &[&name])
+        {
+            return Some(operation);
+        }
         let qualified = CallFinder::new(offset).find_qualified(script.statements())?;
         let segments = qualified_segments(source, qualified)?;
         self.program.resolve_operation(module, &segments)
@@ -1037,6 +1082,7 @@ impl<'a> CallFinder<'a> {
     fn statement(&mut self, statement: &'a Statement) {
         match statement.kind() {
             StatementKind::ModuleImport(_)
+            | StatementKind::ModuleMemberImport(_)
             | StatementKind::ModuleImportGroup(_)
             | StatementKind::ModuleExport(_)
             | StatementKind::NominalType(_)

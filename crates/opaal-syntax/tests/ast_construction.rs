@@ -218,3 +218,42 @@ fn redirect_item(
 fn span(source: &SourceFile, range: std::ops::Range<usize>) -> opaal_syntax::Span {
     source.span(range).unwrap()
 }
+
+#[test]
+fn module_import_constructors_keep_aliases_and_selectors_distinct() {
+    use opaal_syntax::{
+        ModuleAliasImport, ModuleImportEntry, ModuleImportSource, ModuleMemberImport,
+        ModuleMemberSelector,
+    };
+    let source = SourceFile::new(
+        SourceId::new(73),
+        "imports.opaal",
+        "std::math::{abs as absolute}",
+    );
+    let origin = ModuleImportSource::Standard {
+        namespace: Identifier::new(span(&source, 0..3)),
+        module: Identifier::new(span(&source, 5..9)),
+        span: span(&source, 0..9),
+    };
+    let old = ModuleAliasImport {
+        source: origin,
+        alias: Identifier::new(span(&source, 5..9)),
+    };
+    let member = ModuleMemberImport {
+        source: origin,
+        members: vec![ModuleMemberSelector {
+            member: Identifier::new(span(&source, 12..15)),
+            local: Identifier::new(span(&source, 19..27)),
+            span: span(&source, 12..27),
+        }],
+        span: span(&source, 11..28),
+    };
+    let statement = StatementKind::ModuleImportGroup(vec![
+        ModuleImportEntry::Alias(old.clone()),
+        ModuleImportEntry::Members(member),
+    ]);
+    let entries = statement.module_imports().collect::<Vec<_>>();
+    assert_eq!(entries[0].alias(), Some(&old));
+    assert!(entries[1].alias().is_none());
+    assert_eq!(entries[1].members().unwrap().members.len(), 1);
+}

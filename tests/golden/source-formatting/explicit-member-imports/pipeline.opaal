@@ -1,0 +1,12 @@
+import std::value::{length as count_items}
+export {test_value}
+
+def count() -> Int
+{
+    [1, 2, 3] | count_items
+}
+
+def test_value() -> Bool
+{
+    return count() == 3
+}

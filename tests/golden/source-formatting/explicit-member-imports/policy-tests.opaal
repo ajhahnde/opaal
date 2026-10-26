@@ -1,0 +1,7 @@
+import './value.opaal'::{result}
+export {test_value}
+
+def test_value() -> Bool
+{
+    return result() == 5
+}

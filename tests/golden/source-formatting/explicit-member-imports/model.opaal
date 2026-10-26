@@ -1,0 +1,8 @@
+type Payload = {value: Int}
+def make(value: Int) -> Payload
+{
+    return Payload {value: value}
+}
+let code = 7
+let private = 42
+export {Payload, make, code}

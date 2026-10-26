@@ -1,0 +1,2 @@
+import './model.opaal'::{Payload, make, code}
+export {Payload, make, code}

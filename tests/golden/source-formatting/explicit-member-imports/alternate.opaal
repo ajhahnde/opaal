@@ -1,0 +1,9 @@
+import std::math
+import std::math::{abs as magnitude_of}
+let left = math::abs(-7)
+let right = magnitude_of(-7)
+export {test_value}
+def test_value() -> Bool
+{
+    return left == right
+}

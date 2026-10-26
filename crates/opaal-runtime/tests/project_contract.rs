@@ -872,3 +872,20 @@ fn all_project_origins_are_shared_by_singles_groups_and_missing_project_refusals
         assert!(error.to_string().contains("project"));
     }
 }
+
+#[test]
+fn selected_actions_and_project_values_keep_their_original_project_identity() {
+    let manifest =
+        parse_project_manifest(Path::new("/project/opaal.toml"), MANIFEST.as_bytes()).unwrap();
+    let sources = MemorySources(BTreeMap::from([
+        (PathBuf::from("/project/tasks.opaal"), b"import './actions.opaal'::{ready as selected}\nimport project::context::{root as project_root}\nlet saved = project_root\ntask release = selected\n".to_vec()),
+        (PathBuf::from("/project/actions.opaal"), b"action ready() -> Int effects {} {return 5}\nexport {ready}\n".to_vec()),
+    ]));
+    let project = load_project_program(manifest, &sources, &sources).unwrap();
+    let action = project.task("release").unwrap().action();
+    assert_eq!(action.id().name(), "ready");
+    assert_eq!(
+        action.id().module().path(),
+        Path::new("/project/actions.opaal")
+    );
+}

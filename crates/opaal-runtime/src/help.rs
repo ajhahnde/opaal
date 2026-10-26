@@ -93,6 +93,14 @@ impl ModuleHelpCatalog {
         if segments.iter().any(|segment| segment.is_empty()) {
             return None;
         }
+        if let Some(operation) = self.program.resolve_operation(module, &segments) {
+            return Some(ModuleHelpEntry {
+                kind: ModuleHelpKind::Operation,
+                module: None,
+                nominal_type: None,
+                operation: Some(operation),
+            });
+        }
         if segments.len() == 1 {
             if let Some(target) = self.program.aliases().resolve(module, &segments) {
                 return Some(ModuleHelpEntry {
@@ -102,20 +110,15 @@ impl ModuleHelpCatalog {
                     operation: None,
                 });
             }
-            let nominal = self.program.types().nominal(module, segments[0])?.clone();
+            let nominal = self
+                .program
+                .resolve_nominal_type(module, &segments)?
+                .clone();
             return Some(ModuleHelpEntry {
                 kind: ModuleHelpKind::NominalType,
                 module: None,
                 nominal_type: Some(nominal),
                 operation: None,
-            });
-        }
-        if let Some(operation) = self.program.resolve_operation(module, &segments) {
-            return Some(ModuleHelpEntry {
-                kind: ModuleHelpKind::Operation,
-                module: None,
-                nominal_type: None,
-                operation: Some(operation),
             });
         }
         let nominal = self

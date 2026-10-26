@@ -293,12 +293,18 @@ impl<'source> SpanChecker<'source> {
                     opaal_syntax::ModuleImportSource::Local { .. } => {}
                 }
             }
+            StatementKind::ModuleMemberImport(import) => {
+                self.span(import.source.span());
+                self.span(import.span);
+                for member in &import.members {
+                    self.identifier(member.member);
+                    self.identifier(member.local);
+                    self.span(member.span);
+                }
+            }
             StatementKind::ModuleImportGroup(entries) => {
                 for import in entries {
-                    self.statement(&Statement::new(
-                        StatementKind::ModuleImport(import.clone()),
-                        statement.span(),
-                    ));
+                    self.statement(&Statement::new(import.statement_kind(), statement.span()));
                 }
             }
             StatementKind::ModuleExport(export) => {

@@ -561,3 +561,51 @@ fn grouping_preserves_dependency_initialization_order_instead_of_imposing_lexica
     }
     assert_eq!(errors[0], errors[1]);
 }
+
+#[test]
+fn member_selectors_charge_exact_analysis_and_retained_binding_boundaries() {
+    let text = "import std::math::{abs as first, abs as second}\n";
+    let sources = resource_sources(text);
+    let report = loader(&sources).analyze_with_limits(
+        Path::new("/project/main.opaal"),
+        AnalysisLimits::unlimited(),
+    );
+    assert!(report.program().is_some(), "{:?}", report.issues());
+    for kind in [
+        AnalysisLimitKind::AstNodes,
+        AnalysisLimitKind::WorkUnits,
+        AnalysisLimitKind::SourceBytes,
+    ] {
+        let used = report.usage().get(kind);
+        for ceiling in [used, used - 1] {
+            let outcome = loader(&sources).analyze_with_limits_controlled(
+                Path::new("/project/main.opaal"),
+                &AnalysisControl::never(),
+                AnalysisLimits::unlimited().with_limit(kind, ceiling),
+            );
+            assert!(
+                if ceiling == used {
+                    matches!(outcome, ModuleAnalysisOutcome::Complete(ref report) if report.program().is_some())
+                } else {
+                    matches!(outcome, ModuleAnalysisOutcome::BudgetExceeded(error) if error.kind() == kind)
+                },
+                "{kind:?} {ceiling}: {outcome:?}"
+            );
+        }
+    }
+    let program = report.program().unwrap();
+    for (items, bytes, succeeds) in [(2, 17, true), (1, 17, false), (2, 16, false)] {
+        let limits = EvalLimits::pure_opaal(
+            CancellationToken::never(),
+            ResourceBudget::steps(100)
+                .with_collection_items(items)
+                .with_collection_bytes(bytes),
+        );
+        let outcome = execute(program, &limits);
+        assert_eq!(
+            matches!(outcome.primary(), PrimaryOutcome::Completed(_)),
+            succeeds,
+            "items={items}, bytes={bytes}: {outcome:?}"
+        );
+    }
+}

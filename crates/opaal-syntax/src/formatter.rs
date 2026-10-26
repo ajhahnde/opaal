@@ -66,6 +66,11 @@ impl FormatLayout {
 
     fn statements(&mut self, statements: &[Statement], tokens: &[Token]) {
         for statement in statements {
+            for import in statement.kind().module_imports() {
+                if let Some(members) = import.members() {
+                    self.member_import(members, tokens);
+                }
+            }
             match statement.kind() {
                 StatementKind::Function(function) => {
                     self.signature(tokens_in(
@@ -121,8 +126,8 @@ impl FormatLayout {
                     self.newline_before.insert(statement.span().end() - 1);
                     let mut remaining = group_tokens.iter();
                     for entry in entries {
-                        self.newline_before.insert(entry.source.span().start());
-                        let end = entry.source.span().end().max(entry.alias.span().end());
+                        self.newline_before.insert(entry.source().span().start());
+                        let end = entry.end();
                         let next = remaining
                             .by_ref()
                             .find(|token| {
@@ -172,6 +177,7 @@ impl FormatLayout {
                     self.statements(&handler.catch_block.statements, tokens);
                 }
                 StatementKind::ModuleImport(_)
+                | StatementKind::ModuleMemberImport(_)
                 | StatementKind::ModuleExport(_)
                 | StatementKind::NominalType(_)
                 | StatementKind::VariantType(_)
@@ -181,6 +187,58 @@ impl FormatLayout {
                 | StatementKind::Throw(_)
                 | StatementKind::Control(_)
                 | StatementKind::Job(_) => {}
+            }
+        }
+    }
+
+    fn member_import(&mut self, import: &crate::ModuleMemberImport, tokens: &[Token]) {
+        let list = tokens_in(tokens, import.span.start(), import.span.end());
+        let multiline = list.iter().any(|token| {
+            matches!(
+                token.kind(),
+                TokenKind::Newline | TokenKind::Comment | TokenKind::DocumentationComment
+            )
+        });
+        self.no_space_before.insert(import.span.start());
+        for token in tokens_in(tokens, import.source.span().end(), import.span.start()) {
+            self.no_space_before.insert(token.span().start());
+            self.no_space_after.insert(token.span().end());
+        }
+        if multiline {
+            self.newline_after.insert(import.span.start() + 1);
+            self.newline_before.insert(import.span.end() - 1);
+            for member in &import.members {
+                self.newline_before.insert(member.member.span().start());
+                let next = list
+                    .iter()
+                    .find(|token| {
+                        token.span().start() >= member.span.end()
+                            && !matches!(
+                                token.kind(),
+                                TokenKind::Whitespace
+                                    | TokenKind::Newline
+                                    | TokenKind::Comment
+                                    | TokenKind::DocumentationComment
+                                    | TokenKind::LineContinuation
+                            )
+                    })
+                    .unwrap();
+                if next.kind() == TokenKind::Operator(Operator::Comma) {
+                    self.no_space_before.insert(next.span().start());
+                    self.newline_after.insert(next.span().end());
+                } else {
+                    self.comma_after.insert(member.span.end());
+                    self.newline_after.insert(member.span.end());
+                }
+            }
+        } else {
+            self.no_space_after.insert(import.span.start() + 1);
+            self.no_space_before.insert(import.span.end() - 1);
+            for token in list {
+                if token.kind() == TokenKind::Operator(Operator::Comma) {
+                    self.no_space_before.insert(token.span().start());
+                    self.space_after.insert(token.span().end());
+                }
             }
         }
     }
