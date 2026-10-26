@@ -600,20 +600,18 @@ impl Session {
             .map_or(self.interactive_modules.programs.as_slice(), |prepared| {
                 prepared.programs.as_slice()
             });
-        for statement in script.statements() {
-            if let StatementKind::ModuleImport(import) = statement.kind() {
-                let name = source.slice(import.alias.span()).unwrap();
-                if self.scope.get(name).is_some() {
-                    return Err(render(
-                        &source,
-                        &[Diagnostic::new(
-                            Severity::Error,
-                            "MOD011",
-                            format!("module alias `{name}` conflicts"),
-                        )
-                        .with_primary(import.alias.span(), "this name is already bound")],
-                    ));
-                }
+        for import in script.module_imports() {
+            let name = source.slice(import.alias.span()).unwrap();
+            if self.scope.get(name).is_some() {
+                return Err(render(
+                    &source,
+                    &[Diagnostic::new(
+                        Severity::Error,
+                        "MOD011",
+                        format!("module alias `{name}` conflicts"),
+                    )
+                    .with_primary(import.alias.span(), "this name is already bound")],
+                ));
             }
         }
         let inherited_types = self.interactive_modules.binding_types.clone();
@@ -769,7 +767,8 @@ impl Session {
         let admission_control =
             crate::module::AnalysisControl::cooperative(move || admission_token.is_cancelled())
                 .for_run(crate::module::AnalysisLimits::OPAAL);
-        for statement in script.statements() {
+        for unit in script.semantic_statements(source_file) {
+            let statement = unit.as_ref();
             let cancellation = limits.cancellation_token();
             if imports.is_some() && cancellation.is_cancelled() {
                 return Ok((

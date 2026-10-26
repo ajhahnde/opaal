@@ -443,3 +443,207 @@ fn a_declaration_cannot_publish_types_from_a_later_local_import() {
         Value::Int(7)
     );
 }
+
+#[test]
+fn partial_import_groups_retain_first_entry_nominals_callables_and_retry_without_reload() {
+    for prefix in ["", "let before = 9\n"] {
+        for middle in ["", "std::math,"] {
+            let sources = Sources::default();
+            sources.put("/work/good.opaal", "type Item = { value: Int }\ndef make(value: Int) -> Item { return Item {value: value} }\nexport {Item, make}\n");
+            sources.put("/work/bad.opaal", "let broken = 1 / 0\nexport {broken}\n");
+            let mut session = session();
+            let error = session
+                .submit_with_source_loader(
+                    "cell",
+                    format!("{prefix}import {{'./good.opaal', {middle} './bad.opaal'}}"),
+                    &sources,
+                    &sources,
+                    &NoExecutables,
+                    &FakePlatform::full(),
+                    &FakeClock::new(),
+                    &mut Vec::new(),
+                )
+                .unwrap_err();
+            assert!(error.render().contains("bad.opaal"), "{}", error.render());
+            assert!(session.scope().get("bad::broken").is_none());
+            assert_eq!(
+                session.scope().get("before"),
+                (!prefix.is_empty()).then_some(&Value::Int(9))
+            );
+            submit(
+                &mut session,
+                &sources,
+                "let item: good::Item = good::make(42)\ndef read() -> Int { item.value }",
+            );
+            sources.put(
+                "/work/good.opaal",
+                "invalid after successful initialization",
+            );
+            assert_eq!(submit(&mut session, &sources, "read()"), Value::Int(42));
+            sources.put("/work/bad.opaal", "let broken = 3\nexport {broken}\n");
+            submit(&mut session, &sources, "import './bad.opaal'");
+            assert_eq!(submit(&mut session, &sources, "bad::broken"), Value::Int(3));
+            assert_eq!(
+                sources
+                    .reads
+                    .borrow()
+                    .iter()
+                    .filter(|path| path.ends_with("good.opaal"))
+                    .count(),
+                1
+            );
+        }
+    }
+}
+
+#[test]
+fn cancellation_schedules_preserve_the_same_import_publication_prefixes() {
+    use opaal_runtime::eval::{CancellationToken, EvalLimits, ResourceBudget};
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+    let states = |text: &str| {
+        let run = |cancel_at| {
+            let sources = Sources::default();
+            for name in ["a", "b"] {
+                sources.put(
+                    &format!("/work/{name}.opaal"),
+                    "let answer = 42\nexport {answer}\n",
+                );
+            }
+            let mut session = session();
+            let polls = Arc::new(AtomicUsize::new(0));
+            let observed = Arc::clone(&polls);
+            let token = CancellationToken::from_fn(move || {
+                observed.fetch_add(1, Ordering::Relaxed) >= cancel_at
+            });
+            let limits = EvalLimits::pure_opaal(token, ResourceBudget::opaal());
+            let outcome = session
+                .submit_with_source_loader_and_limits(
+                    "cell",
+                    text,
+                    &sources,
+                    &sources,
+                    &limits,
+                    &NoExecutables,
+                    &FakePlatform::full(),
+                    &FakeClock::new(),
+                    &mut Vec::new(),
+                )
+                .unwrap();
+            let state = (
+                session.scope().get("a::answer").is_some(),
+                session.scope().get("b::answer").is_some(),
+            );
+            assert!(!state.1 || state.0);
+            if state.0 {
+                sources.put("/work/a.opaal", "invalid snapshot replacement");
+                assert_eq!(submit(&mut session, &sources, "a::answer"), Value::Int(42));
+            }
+            (state, outcome, polls.load(Ordering::Relaxed))
+        };
+        let (_, outcome, count) = run(usize::MAX);
+        assert_eq!(outcome.0, SubmitOutcome::Continued);
+        let mut states = std::collections::BTreeSet::from([(true, true)]);
+        for cancel_at in 0..count {
+            states.insert(run(cancel_at).0);
+        }
+        states
+    };
+    let singles = states("import './a.opaal' as a\nimport './b.opaal' as b");
+    assert_eq!(
+        singles,
+        std::collections::BTreeSet::from([(false, false), (true, false), (true, true)])
+    );
+    assert_eq!(states("import {'./a.opaal', './b.opaal'}"), singles);
+}
+
+#[test]
+fn a_partial_first_group_charges_its_retained_cell_once_like_expanded_singles() {
+    for source in [
+        "import './good.opaal' as good\nimport './bad.opaal' as bad",
+        "import {'./good.opaal', './bad.opaal'}",
+    ] {
+        let sources = Sources::default();
+        sources.put("/work/good.opaal", "let answer = 42\nexport {answer}\n");
+        sources.put("/work/bad.opaal", "let broken = 1 / 0\nexport {broken}\n");
+        let mut session = session();
+        assert!(
+            session
+                .submit_with_source_loader(
+                    "cell",
+                    source,
+                    &sources,
+                    &sources,
+                    &NoExecutables,
+                    &FakePlatform::full(),
+                    &FakeClock::new(),
+                    &mut Vec::new()
+                )
+                .is_err()
+        );
+        for _ in 0..253 {
+            assert_eq!(
+                submit(&mut session, &sources, "good::answer"),
+                Value::Int(42)
+            );
+        }
+        let failure = session
+            .submit_with_source_loader(
+                "cell",
+                "1",
+                &sources,
+                &sources,
+                &NoExecutables,
+                &FakePlatform::full(),
+                &FakeClock::new(),
+                &mut Vec::new(),
+            )
+            .unwrap_err();
+        assert!(failure.render().contains("retained source limit"));
+    }
+}
+
+#[test]
+fn groups_keep_expanded_single_step_charging_and_partial_publication_at_every_budget() {
+    let sources = Sources::default();
+    for name in ["a", "b"] {
+        sources.put(
+            &format!("/work/{name}.opaal"),
+            "let answer = 42\nexport {answer}\n",
+        );
+    }
+    let states = |source: &str| {
+        (0..32)
+            .map(|steps| {
+                let mut session = session();
+                let limits = opaal_runtime::eval::EvalLimits::pure_opaal(
+                    opaal_runtime::eval::CancellationToken::never(),
+                    opaal_runtime::eval::ResourceBudget::steps(steps),
+                );
+                let outcome = session.submit_with_source_loader_and_limits(
+                    "cell",
+                    source,
+                    &sources,
+                    &sources,
+                    &limits,
+                    &NoExecutables,
+                    &FakePlatform::full(),
+                    &FakeClock::new(),
+                    &mut Vec::new(),
+                );
+                let a = session.scope().get("a::answer").is_some();
+                let b = session.scope().get("b::answer").is_some();
+                if let Err(error) = &outcome {
+                    assert!(error.render().contains("budget"), "{}", error.render());
+                }
+                (outcome.is_ok(), a, b)
+            })
+            .collect::<Vec<_>>()
+    };
+    let singles = states("import './a.opaal' as a\nimport './b.opaal' as b");
+    assert!(singles.contains(&(false, true, false)));
+    assert!(singles.contains(&(true, true, true)));
+    assert_eq!(states("import {'./a.opaal', './b.opaal'}"), singles);
+}

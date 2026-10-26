@@ -763,6 +763,15 @@ impl<'source> Lexer<'source> {
     }
 }
 
+pub(crate) fn is_identifier(text: &str) -> bool {
+    text.as_bytes()
+        .first()
+        .copied()
+        .is_some_and(is_identifier_start)
+        && text.bytes().all(is_identifier_continue)
+        && keyword(text).is_none()
+}
+
 fn is_identifier_start(byte: u8) -> bool {
     byte.is_ascii_alphabetic() || byte == b'_'
 }

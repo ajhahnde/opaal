@@ -1,5 +1,5 @@
 
-import std::value as value
+import std::value
 
 enum Selection[T] {
     Selected(T),

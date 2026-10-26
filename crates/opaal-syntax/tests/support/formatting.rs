@@ -30,15 +30,49 @@ pub fn assert_roundtrip(source: &SourceFile) -> String {
         format_source_opaal(&rewritten),
         FormatOutcome::Complete(formatted.clone())
     );
-    let tokens = |file: &SourceFile| {
-        lex_opaal(file)
-            .iter()
-            .filter(|token| !matches!(token.kind(), TokenKind::Whitespace | TokenKind::Newline))
-            .map(|token| (token.kind(), token.text(file).unwrap().to_owned()))
-            .collect::<Vec<_>>()
-    };
-    assert_eq!(tokens(source), tokens(&rewritten));
+    assert_eq!(
+        normalized_tokens(source, &script),
+        normalized_tokens(&rewritten, &reparsed)
+    );
     formatted
+}
+
+fn normalized_tokens(file: &SourceFile, script: &Script) -> Vec<(TokenKind, String)> {
+    let tokens = lex_opaal(file);
+    let mut insertions = std::collections::BTreeSet::new();
+    for statement in script.statements() {
+        if let StatementKind::ModuleImportGroup(entries) = statement.kind() {
+            let entry = entries.last().unwrap();
+            let end = entry.source.span().end().max(entry.alias.span().end());
+            let next = tokens[tokens.partition_point(|token| token.span().start() < end)..]
+                .iter()
+                .find(|token| {
+                    !matches!(
+                        token.kind(),
+                        TokenKind::Whitespace
+                            | TokenKind::Newline
+                            | TokenKind::Comment
+                            | TokenKind::DocumentationComment
+                            | TokenKind::LineContinuation
+                    )
+                })
+                .unwrap();
+            if next.kind() == TokenKind::Delimiter(Delimiter::RightBrace) {
+                insertions.insert(end);
+            }
+        }
+    }
+    let mut normalized = Vec::new();
+    for token in tokens
+        .iter()
+        .filter(|token| !matches!(token.kind(), TokenKind::Whitespace | TokenKind::Newline))
+    {
+        normalized.push((token.kind(), token.text(file).unwrap().to_owned()));
+        if insertions.contains(&token.span().end()) {
+            normalized.push((TokenKind::Operator(Operator::Comma), ",".to_owned()));
+        }
+    }
+    normalized
 }
 
 struct Context<'a> {
@@ -328,7 +362,7 @@ impl Visit for CommandHead {
     }
 }
 
-variants!(StatementKind { ModuleImport(v), ModuleExport(v), NominalType(v), VariantType(v), Declaration(v), Assignment(v), Environment(v), Function(v), Action(v), Task(v), If(v), While(v), For(v), Match(v), Try(v), Throw(v), Control(v), Job(v) });
+variants!(StatementKind { ModuleImport(v), ModuleImportGroup(v), ModuleExport(v), NominalType(v), VariantType(v), Declaration(v), Assignment(v), Environment(v), Function(v), Action(v), Task(v), If(v), While(v), For(v), Match(v), Try(v), Throw(v), Control(v), Job(v) });
 variants!(ExpressionKind { Literal(v), Name(v), Qualified(v), List(v), Record(v), NominalRecord(v), Closure(v), GroupedJob(v), Call(v), Index(v), Member(v), Unary(v), Binary(v) });
 variants!(Pattern { Wildcard(v), Literal(v), Binding(v), List(v), NominalRecord(v), Variant(v) });
 variants!(ElseBranch { Block(v), If(v) });

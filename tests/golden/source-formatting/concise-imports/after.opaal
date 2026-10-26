@@ -1,0 +1,11 @@
+import {
+    std::math,
+    std::value as values,
+    './helpers.opaal',
+}
+
+def test_imports() -> Bool
+{
+    math::abs(-7) + values::length([1, 2, 3]) + helpers::twice(3) == 16
+}
+export { test_imports }

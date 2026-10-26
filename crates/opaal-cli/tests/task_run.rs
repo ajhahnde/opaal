@@ -647,3 +647,37 @@ fn racing_runs_keep_one_exclusive_evidence_owner() {
         project.read("receipt.json")["run_id"]
     );
 }
+
+#[test]
+fn rewriting_imports_stales_the_plan_before_effects_and_fresh_grouped_execution_keeps_outcomes() {
+    let project = Project::new();
+    let old_digest = project.plan("abc123");
+    let path = project.0.join("saved-tasks.opaal");
+    let source = fs::read_to_string(&path).unwrap();
+    let old = "import './policy.opaal' as policy\nimport std::docker as docker\nimport std::data as data\nimport std::io as io\n";
+    assert!(source.starts_with(old));
+    fs::write(
+        &path,
+        source.replacen(
+            old,
+            "import {\n    './policy.opaal',\n    std::docker,\n    std::data,\n    std::io,\n}\n",
+            1,
+        ),
+    )
+    .unwrap();
+    let input = fs::read(project.0.join("fixtures/image.json")).unwrap();
+    let stale = project.run(&old_digest, &input, true);
+    assert_eq!(stale.status.code(), Some(2), "{stale:?}");
+    assert!(stale.stdout.is_empty());
+    assert!(!project.0.join("run.jsonl").exists());
+    assert!(!project.0.join("receipt.json").exists());
+    fs::rename(project.0.join("plan.json"), project.0.join("old.plan.json")).unwrap();
+    let new_digest = project.plan("abc123");
+    assert_ne!(old_digest, new_digest);
+    let run = project.run(&new_digest, &input, true);
+    assert_eq!(run.status.code(), Some(0), "{run:?}");
+    assert_eq!(project.read("receipt.json")["plan_digest"], new_digest);
+    let audit = project.read("audit.json");
+    assert_eq!(audit["completeness"], "complete");
+    assert_eq!(audit["primary"], project.read("receipt.json")["primary"]);
+}

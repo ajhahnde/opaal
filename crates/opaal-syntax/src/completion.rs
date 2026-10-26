@@ -68,10 +68,32 @@ pub fn completion_target(source: &str, cursor: usize) -> Option<CompletionTarget
     }
     let source_file = SourceFile::new(SourceId::new(0), "<completion>", source);
     let tokens = lex_opaal(&source_file);
-    let active = ActiveWord::at(source, &tokens, cursor)?;
+    let prefix = &tokens[..tokens.partition_point(|token| token.span().start() < cursor)];
+    let import_group = prefix
+        .iter()
+        .rposition(|token| token.kind() == TokenKind::Keyword(crate::Keyword::Import))
+        .is_some_and(|start| {
+            let mut after_import = prefix[start + 1..].iter().filter(|token| {
+                !matches!(
+                    token.kind(),
+                    TokenKind::Whitespace
+                        | TokenKind::Comment
+                        | TokenKind::DocumentationComment
+                        | TokenKind::LineContinuation
+                )
+            });
+            after_import
+                .next()
+                .is_some_and(|token| token.kind() == TokenKind::Delimiter(Delimiter::LeftBrace))
+                && !after_import
+                    .any(|token| token.kind() == TokenKind::Delimiter(Delimiter::RightBrace))
+        });
+    let active = ActiveWord::at(source, &tokens, cursor, import_group)?;
     let prior = significant_before(&tokens, active.range.start);
     let stage = current_stage(&prior);
-    let context = if prior.last().is_some_and(|token| {
+    let context = if import_group && is_path_spelling(&active) {
+        path_context(source, &tokens, &active)
+    } else if prior.last().is_some_and(|token| {
         matches!(
             token.kind(),
             TokenKind::InterpolationStart | TokenKind::Delimiter(Delimiter::LeftBrace)
@@ -105,11 +127,15 @@ struct ActiveWord {
 }
 
 impl ActiveWord {
-    fn at(source: &str, tokens: &[Token], cursor: usize) -> Option<Self> {
+    fn at(source: &str, tokens: &[Token], cursor: usize, import_group: bool) -> Option<Self> {
+        let is_component = |kind| {
+            is_word_component(kind)
+                && !(import_group && kind == TokenKind::Operator(Operator::Comma))
+        };
         let containing = tokens.iter().position(|token| {
             token.span().start() <= cursor
                 && cursor <= token.span().end()
-                && is_word_component(token.kind())
+                && is_component(token.kind())
         });
 
         let Some(index) = containing else {
@@ -129,14 +155,14 @@ impl ActiveWord {
         let mut first = index;
         while first > 0
             && tokens[first - 1].span().end() == tokens[first].span().start()
-            && is_word_component(tokens[first - 1].kind())
+            && is_component(tokens[first - 1].kind())
         {
             first -= 1;
         }
         let mut last = index;
         while last + 1 < tokens.len()
             && tokens[last].span().end() == tokens[last + 1].span().start()
-            && is_word_component(tokens[last + 1].kind())
+            && is_component(tokens[last + 1].kind())
         {
             last += 1;
         }

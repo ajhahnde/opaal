@@ -474,3 +474,90 @@ fn cancellation_wins_at_each_polled_schedule_without_becoming_a_budget_error() {
         );
     }
 }
+
+#[test]
+fn import_groups_charge_every_entry_and_accept_only_the_exact_analysis_boundaries() {
+    for count in [1, 32] {
+        let entries = (0..count)
+            .map(|i| format!("std::math as m{i}"))
+            .collect::<Vec<_>>();
+        let singles = entries
+            .iter()
+            .map(|entry| format!("import {entry}\n"))
+            .collect::<String>();
+        let group = format!("import {{ {} }}\n", entries.join(","));
+        let analyze = |text: &str| {
+            loader(&resource_sources(text)).analyze_with_limits(
+                Path::new("/project/main.opaal"),
+                AnalysisLimits::unlimited(),
+            )
+        };
+        let single_report = analyze(&singles);
+        let group_report = analyze(&group);
+        assert!(
+            group_report.program().is_some(),
+            "{:?}",
+            group_report.issues()
+        );
+        assert_eq!(
+            group_report.usage().get(AnalysisLimitKind::AstNodes),
+            single_report.usage().get(AnalysisLimitKind::AstNodes) + 1
+        );
+        for kind in [
+            AnalysisLimitKind::AstNodes,
+            AnalysisLimitKind::WorkUnits,
+            AnalysisLimitKind::Modules,
+            AnalysisLimitKind::SourceBytes,
+        ] {
+            let used = group_report.usage().get(kind);
+            for limit in [used, used - 1] {
+                let outcome = loader(&resource_sources(&group)).analyze_with_limits_controlled(
+                    Path::new("/project/main.opaal"),
+                    &AnalysisControl::never(),
+                    AnalysisLimits::unlimited().with_limit(kind, limit),
+                );
+                if limit == used {
+                    assert!(
+                        matches!(outcome, ModuleAnalysisOutcome::Complete(ref report) if report.program().is_some()),
+                        "{outcome:?}"
+                    );
+                } else {
+                    assert!(
+                        matches!(outcome, ModuleAnalysisOutcome::BudgetExceeded(error) if error.kind() == kind),
+                        "{outcome:?}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn grouping_preserves_dependency_initialization_order_instead_of_imposing_lexical_order() {
+    let mut errors = Vec::new();
+    for source in [
+        "import './z.opaal' as z\nimport './a.opaal' as a",
+        "import {'./z.opaal', './a.opaal'}",
+    ] {
+        let sources = Sources::default()
+            .maps("/project/main.opaal", "/project/main.opaal")
+            .maps("/project/z.opaal", "/project/z.opaal")
+            .maps("/project/a.opaal", "/project/a.opaal")
+            .contains("/project/main.opaal", source)
+            .contains("/project/a.opaal", "let broken = 1 / 0\nexport {broken}\n")
+            .contains("/project/z.opaal", "let broken = 2 / 0\nexport {broken}\n");
+        let program = loader(&sources)
+            .load(Path::new("/project/main.opaal"))
+            .unwrap();
+        let outcome = execute(
+            &program,
+            &EvalLimits::pure_opaal(CancellationToken::never(), ResourceBudget::opaal()),
+        );
+        let PrimaryOutcome::Error(error) = outcome.primary() else {
+            panic!("{outcome:?}")
+        };
+        assert!(error.render().contains("/project/a.opaal"));
+        errors.push(error.render().to_owned());
+    }
+    assert_eq!(errors[0], errors[1]);
+}

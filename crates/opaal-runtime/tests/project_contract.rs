@@ -246,9 +246,10 @@ task release = ready
 
 #[test]
 fn explicit_project_task_and_documents_bind_without_execution() {
-    let manifest_path = Path::new("/project/opaal.toml");
-    let manifest = parse_project_manifest(manifest_path, MANIFEST.as_bytes()).unwrap();
-    let source = br#"import project::context as project
+    for grouped in [false, true] {
+        let manifest_path = Path::new("/project/opaal.toml");
+        let manifest = parse_project_manifest(manifest_path, MANIFEST.as_bytes()).unwrap();
+        let source = br#"import project::context as project
 import project::tools as tools
 
 action ready(candidate: String) -> String
@@ -263,49 +264,61 @@ effects {
 
 task release = ready
 "#;
-    let sources = MemorySources(BTreeMap::from([(
-        PathBuf::from("/project/tasks.opaal"),
-        source.to_vec(),
-    )]));
-    let project = load_project_program(manifest.clone(), &sources, &sources).unwrap();
-    let authority = parse_authority_document(&manifest, "ci", AUTHORITY.as_bytes()).unwrap();
-    let tools = parse_tool_lock(&manifest, "ci", LOCK.as_bytes()).unwrap();
-    let checked = check_project(
-        &project,
-        "release",
-        "ci",
-        &authority,
-        &tools,
-        [("candidate".to_owned(), "artifact.tar".to_owned())],
-    )
-    .unwrap();
+        let source = if grouped {
+            String::from_utf8(source.to_vec())
+                .unwrap()
+                .replace(
+                    "import project::context as project\nimport project::tools as tools",
+                    "import {project::context as project, project::tools}",
+                )
+                .into_bytes()
+        } else {
+            source.to_vec()
+        };
+        let sources = MemorySources(BTreeMap::from([(
+            PathBuf::from("/project/tasks.opaal"),
+            source.to_vec(),
+        )]));
+        let project = load_project_program(manifest.clone(), &sources, &sources).unwrap();
+        let authority = parse_authority_document(&manifest, "ci", AUTHORITY.as_bytes()).unwrap();
+        let tools = parse_tool_lock(&manifest, "ci", LOCK.as_bytes()).unwrap();
+        let checked = check_project(
+            &project,
+            "release",
+            "ci",
+            &authority,
+            &tools,
+            [("candidate".to_owned(), "artifact.tar".to_owned())],
+        )
+        .unwrap();
 
-    assert_eq!(checked.task().id().qualified_name(), "demo::release");
-    assert_eq!(checked.task().action().id().name(), "ready");
-    assert_eq!(checked.task().effects().len(), 2);
-    assert_eq!(manifest.id().name(), "demo");
-    assert_eq!(
-        manifest.tools()["git"].id().qualified_name(),
-        "demo::tool::git"
-    );
-    assert_eq!(
-        manifest.environments()["ci"].id().qualified_name(),
-        "demo::environment::ci"
-    );
-    assert_eq!(checked.downstream().project(), Some(manifest.id()));
-    assert_eq!(checked.downstream().task(), Some(checked.task().id()));
-    assert_eq!(
-        checked.downstream().environment(),
-        Some(manifest.environments()["ci"].id())
-    );
-    assert_eq!(
-        checked.downstream().action(),
-        Some(checked.task().action().id())
-    );
-    assert_eq!(manifest.id().manifest_path(), manifest_path);
-    assert_eq!(manifest.id().root(), Path::new("/project"));
-    assert!(manifest.id().manifest_digest().starts_with("sha256:"));
-    assert_eq!(manifest.id().manifest_digest().len(), 71);
+        assert_eq!(checked.task().id().qualified_name(), "demo::release");
+        assert_eq!(checked.task().action().id().name(), "ready");
+        assert_eq!(checked.task().effects().len(), 2);
+        assert_eq!(manifest.id().name(), "demo");
+        assert_eq!(
+            manifest.tools()["git"].id().qualified_name(),
+            "demo::tool::git"
+        );
+        assert_eq!(
+            manifest.environments()["ci"].id().qualified_name(),
+            "demo::environment::ci"
+        );
+        assert_eq!(checked.downstream().project(), Some(manifest.id()));
+        assert_eq!(checked.downstream().task(), Some(checked.task().id()));
+        assert_eq!(
+            checked.downstream().environment(),
+            Some(manifest.environments()["ci"].id())
+        );
+        assert_eq!(
+            checked.downstream().action(),
+            Some(checked.task().action().id())
+        );
+        assert_eq!(manifest.id().manifest_path(), manifest_path);
+        assert_eq!(manifest.id().root(), Path::new("/project"));
+        assert!(manifest.id().manifest_digest().starts_with("sha256:"));
+        assert_eq!(manifest.id().manifest_digest().len(), 71);
+    }
 }
 
 #[test]
@@ -812,4 +825,50 @@ task release = ready
         project.task("release").unwrap().action().id().name(),
         "ready"
     );
+}
+
+#[test]
+fn all_project_origins_are_shared_by_singles_groups_and_missing_project_refusals() {
+    let manifest = MANIFEST.replace(
+        "[tools.git]\nadapter = \"git\"\nversion = \">=2.39.0,<3.0.0\"\n",
+        "",
+    );
+    let manifest_text = format!(
+        "{manifest}\n[tools.docker]\nadapter = 'docker'\nversion = '=29.9.0'\n[targets.ci]\nadapter = 'docker'\ntool = 'docker'\nsocket = {{encoding = 'base64url-nopad', platform = 'unix', value = 'L3RtcC9kb2NrZXIuc29jaw'}}\nconfig_directory = 'docker-empty'\napi_version = '1.48'\n"
+    );
+    let manifest =
+        parse_project_manifest(Path::new("/project/opaal.toml"), manifest_text.as_bytes()).unwrap();
+    let entries = [
+        "project::context",
+        "project::tools",
+        "project::endpoints",
+        "project::secrets",
+        "project::targets",
+    ];
+    for source in [
+        entries
+            .iter()
+            .map(|entry| format!("import {entry}\n"))
+            .collect::<String>(),
+        format!("import {{ {} }}\n", entries.join(",")),
+    ] {
+        let sources = MemorySources(BTreeMap::from([(
+            PathBuf::from("/project/tasks.opaal"),
+            source.into_bytes(),
+        )]));
+        let project = load_project_program(manifest.clone(), &sources, &sources).unwrap();
+        let modules = project.modules();
+        for name in ["context", "tools", "endpoints", "secrets", "targets"] {
+            assert!(
+                modules
+                    .aliases()
+                    .alias(modules.graph().root(), name)
+                    .is_some()
+            );
+        }
+        let error = opaal_runtime::module::ModuleProgramLoader::new(&sources, &sources)
+            .load(Path::new("/project/tasks.opaal"))
+            .unwrap_err();
+        assert!(error.to_string().contains("project"));
+    }
 }

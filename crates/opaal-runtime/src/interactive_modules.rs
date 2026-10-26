@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use opaal_syntax::{ModuleImportSource, Script, SourceFile, StatementKind};
+use opaal_syntax::{ModuleImportSource, Script, SourceFile};
 
 use crate::eval::{
     EvalLimits, HostedEvaluationFailure, HostedEvaluationOutcome, ResourceBudget,
@@ -84,13 +84,10 @@ impl InteractiveModules {
         let mut imports = BTreeMap::new();
         let mut work_remaining = 5_000_000;
         let mut nodes_remaining = 1_000_000;
-        for statement in script.statements() {
+        for import in script.module_imports() {
             if control.is_cancelled() {
                 return Err(PrepareError::Cancelled);
             }
-            let StatementKind::ModuleImport(import) = statement.kind() else {
-                continue;
-            };
             let ModuleImportSource::Local { path } = import.source else {
                 continue;
             };

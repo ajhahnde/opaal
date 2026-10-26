@@ -4,6 +4,12 @@ All notable changes to OPAAL are documented here.
 
 ## [Unreleased]
 
+### Added
+
+- Allow module imports to omit a repeated alias and collect entries in a flat,
+  ordered group. Explicit renaming remains available for every entry; existing
+  single imports remain valid. New syntax requires a matching toolchain.
+
 ## [1.7.0]
 
 ### Added

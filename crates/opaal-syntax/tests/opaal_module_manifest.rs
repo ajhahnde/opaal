@@ -151,3 +151,115 @@ fn module_root() -> PathBuf {
         .join("../..")
         .join("tests/opaal-foundation/language/modules")
 }
+
+#[test]
+fn concise_imports_keep_literal_aliases_and_original_entry_spans() {
+    for (origin, alias) in [
+        ("std::math", "math"),
+        ("project::context", "context"),
+        ("'./helpers.opaal'", "helpers"),
+        ("'./界/helpers.opaal'", "helpers"),
+        ("'./helpers'", "helpers"),
+        ("'./as.opaal'", "as"),
+        ("'./UPPER_2.opaal'", "UPPER_2"),
+        ("'./a,b}.opaal' as tools", "tools"),
+    ] {
+        for input in [format!("import {origin}"), format!("import {{ {origin} }}")] {
+            let source = SourceFile::new(SourceId::new(401), "alias", &input);
+            let ParseOutcome::Complete(script) = parse_opaal(&source) else {
+                panic!("{input}")
+            };
+            let entries = script.module_imports().collect::<Vec<_>>();
+            assert_eq!(entries.len(), 1);
+            assert_eq!(source.slice(entries[0].alias.span()).unwrap(), alias);
+            let units = script.semantic_statements(&source).collect::<Vec<_>>();
+            assert_eq!(units.len(), 1);
+            assert!(source.slice(units[0].span()).unwrap().contains(origin));
+        }
+    }
+    for component in [
+        "",
+        "1a",
+        "build-tools",
+        "a.txt",
+        "a.opaal.opaal",
+        "a.OPAAL",
+        "界",
+        "let",
+        ".",
+        "..",
+        "back\\name",
+    ] {
+        let input = format!(
+            "import './{component}{}'",
+            if component.is_empty() { "" } else { ".opaal" }
+        );
+        let source = SourceFile::new(SourceId::new(402), "invalid-alias", &input);
+        let ParseOutcome::Invalid(diagnostics) = parse_opaal(&source) else {
+            panic!("{input}")
+        };
+        assert!(
+            diagnostics[0].message().contains("as alias"),
+            "{diagnostics:?}"
+        );
+        let explicit = SourceFile::new(
+            SourceId::new(403),
+            "explicit",
+            format!("{input} as renamed"),
+        );
+        assert!(matches!(parse_opaal(&explicit), ParseOutcome::Complete(_)));
+    }
+}
+
+#[test]
+fn concise_imports_classify_complete_incomplete_and_invalid_without_prefix_execution() {
+    for input in [
+        "import std::math",
+        "import {std::math}",
+        "import {std::math, std::io,}",
+        "import {std::math\n as\n m, # next\n './x.opaal'}",
+    ] {
+        let source = SourceFile::new(SourceId::new(404), "complete", input);
+        assert!(
+            matches!(parse_opaal(&source), ParseOutcome::Complete(_)),
+            "{input}"
+        );
+    }
+    for input in [
+        "import",
+        "import std::",
+        "import {",
+        "import { std::math,",
+        "import std::math as",
+        "import {std::math as",
+    ] {
+        let source = SourceFile::new(SourceId::new(405), "incomplete", input);
+        assert!(
+            matches!(parse_opaal(&source), ParseOutcome::Incomplete(_)),
+            "{input}: {:?}",
+            parse_opaal(&source)
+        );
+    }
+    for input in [
+        "import {}",
+        "import {, std::math}",
+        "import {std::math,, std::io}",
+        "import {std::math std::io}",
+        "import {{std::math}}",
+        "import {std::math} as all",
+        "import std::{math, io}",
+        "import math",
+        "import {std::math, } bad",
+        "def f() { import {std::math} }",
+    ] {
+        let source = SourceFile::new(SourceId::new(406), "invalid", input);
+        assert!(
+            matches!(parse_opaal(&source), ParseOutcome::Invalid(_)),
+            "{input}"
+        );
+        assert!(
+            matches!(format_source_opaal(&source), FormatOutcome::Invalid(_)),
+            "{input}"
+        );
+    }
+}

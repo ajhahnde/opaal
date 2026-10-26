@@ -2153,7 +2153,9 @@ pub(crate) fn evaluate_module_initializer(
         .filter(|statement| {
             !matches!(
                 statement.kind(),
-                StatementKind::ModuleImport(_) | StatementKind::ModuleExport(_)
+                StatementKind::ModuleImport(_)
+                    | StatementKind::ModuleImportGroup(_)
+                    | StatementKind::ModuleExport(_)
             )
         })
         .cloned()
@@ -2820,9 +2822,9 @@ impl Evaluator<'_, '_> {
         let span = statement.span();
         self.charge(span)?;
         match statement.kind() {
-            StatementKind::ModuleImport(_) | StatementKind::ModuleExport(_) => {
-                Ok(Flow::Fallthrough(None))
-            }
+            StatementKind::ModuleImport(_)
+            | StatementKind::ModuleImportGroup(_)
+            | StatementKind::ModuleExport(_) => Ok(Flow::Fallthrough(None)),
             StatementKind::NominalType(_) | StatementKind::VariantType(_) => {
                 Ok(Flow::Fallthrough(None))
             }
@@ -6068,6 +6070,7 @@ fn find_callable_in_statement(
 ) -> Option<RestoredCallableSyntax> {
     match statement.kind() {
         StatementKind::ModuleImport(_)
+        | StatementKind::ModuleImportGroup(_)
         | StatementKind::ModuleExport(_)
         | StatementKind::NominalType(_)
         | StatementKind::VariantType(_) => None,
