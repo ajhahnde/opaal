@@ -1,0 +1,11 @@
+export {test_value}
+def test_value() -> Bool
+{
+    mut total: Int = 7
+    try {
+        total /= 0
+    } catch failure {
+        total
+    }
+    return total == 7
+}

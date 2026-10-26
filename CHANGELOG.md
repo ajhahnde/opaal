@@ -6,6 +6,8 @@ All notable changes to OPAAL are documented here.
 
 ### Added
 
+- Update mutable numeric variables with `+=`, `-=`, `*=`, `/=` and `%=` using
+  the existing arithmetic, type and assignment rules.
 - Select named exports with `import std::math::{abs as magnitude_of}` or local
   and project origins. Selected names preserve original identities and authority,
   support explicit re-exports, and work across checking, formatting and editors.

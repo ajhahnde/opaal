@@ -211,6 +211,44 @@ fn every_analysis_counter_accepts_the_exact_boundary_and_refuses_first_excess() 
 }
 
 #[test]
+fn compound_assignment_charges_its_lowered_read_and_binary_at_exact_analysis_limits() {
+    let compound = "mut total = 7\ntotal += 2\ntotal\n";
+    let expanded = "mut total = 7\ntotal = total + 2\ntotal\n";
+    let analyze = |text: &str| {
+        loader(&resource_sources(text)).analyze_with_limits(
+            Path::new("/project/main.opaal"),
+            AnalysisLimits::unlimited(),
+        )
+    };
+    let baseline = analyze(compound);
+    let old = analyze(expanded);
+    assert!(baseline.program().is_some(), "{:?}", baseline.issues());
+    for kind in [AnalysisLimitKind::AstNodes, AnalysisLimitKind::WorkUnits] {
+        let used = baseline.usage().get(kind);
+        assert!(used > 0);
+        if kind == AnalysisLimitKind::AstNodes {
+            assert_eq!(used, old.usage().get(kind));
+        }
+        for (limit, complete) in [(used, true), (used - 1, false)] {
+            let outcome = loader(&resource_sources(compound)).analyze_with_limits_controlled(
+                Path::new("/project/main.opaal"),
+                &AnalysisControl::never(),
+                AnalysisLimits::unlimited().with_limit(kind, limit),
+            );
+            if complete {
+                assert!(
+                    matches!(outcome, ModuleAnalysisOutcome::Complete(ref report) if report.program().is_some())
+                );
+            } else {
+                assert!(
+                    matches!(outcome, ModuleAnalysisOutcome::BudgetExceeded(e) if e.kind() == kind && e.limit() == limit)
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn inferred_nested_list_depth_is_measured_without_an_annotation() {
     let sources = resource_sources("[[[1]]]\n");
     let baseline = loader(&sources).analyze_with_limits(

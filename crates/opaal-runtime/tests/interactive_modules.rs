@@ -79,6 +79,45 @@ fn submit(session: &mut Session, sources: &Sources, text: &str) -> Value {
 }
 
 #[test]
+fn compound_assignments_survive_later_cells_restored_callbacks_and_failed_publication() {
+    let sources = Sources::default();
+    let mut session = session();
+    submit(&mut session, &sources, "import std::math\nimport std::list");
+    submit(
+        &mut session,
+        &sources,
+        "def step(seed: Int) -> Int { mut total = seed; total += math::abs(-2); return total }",
+    );
+    assert_eq!(
+        submit(&mut session, &sources, "list::map([1, 2], step)"),
+        Value::list(vec![Value::Int(3), Value::Int(4)])
+    );
+    submit(&mut session, &sources, "mut total: Int = 7");
+    submit(&mut session, &sources, "total +=\n2");
+    assert_eq!(submit(&mut session, &sources, "total"), Value::Int(9));
+    let failed = session.submit_with_source_loader(
+        "failed",
+        "let before = 3\ntotal /= 0\nlet unpublished = 4",
+        &sources,
+        &sources,
+        &NoExecutables,
+        &FakePlatform::full(),
+        &FakeClock::new(),
+        &mut Vec::new(),
+    );
+    assert!(failed.is_err());
+    assert_eq!(
+        submit(&mut session, &sources, "total + before"),
+        Value::Int(12)
+    );
+    assert!(session.scope().get("unpublished").is_none());
+    assert_eq!(
+        submit(&mut session, &sources, "list::map([3], step)"),
+        Value::list(vec![Value::Int(5)])
+    );
+}
+
+#[test]
 fn same_report_module_builds_and_formats_values_across_cells() {
     let sources = Sources::default();
     sources.put(

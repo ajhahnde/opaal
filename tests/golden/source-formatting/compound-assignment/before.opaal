@@ -1,0 +1,11 @@
+mut total: Int = 10
+total = total + 3
+total = total * 2
+total = total - 6
+total = total / 3
+total = total % 4
+export {test_value}
+def test_value() -> Bool
+{
+    return total == 2
+}

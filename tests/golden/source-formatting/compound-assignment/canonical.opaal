@@ -1,0 +1,11 @@
+# 界🙂
+def result() -> Int
+{
+    mut total: Int = 10
+    total += 3 # kept
+    total *= 2
+    total -= 6
+    total /= 3
+    total %= 4
+    return total
+}
