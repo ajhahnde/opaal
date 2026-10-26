@@ -21,13 +21,13 @@ if __package__:
     from .check_source_formatting import public_paths, seed_census
     from .package_data_processing import SOURCE, digest
     from .package_release import PLATFORMS, ROOT, VERSION
-    from .package_source_formatting import FIXTURES, MEMBER_IMPORT_FIXTURES
+    from .package_source_formatting import FIXTURES, MEMBER_IMPORT_FIXTURES, COMPOUND_ASSIGNMENT_FIXTURES
     from .qualify_data_processing import require, success, unpack
 else:
     from check_source_formatting import public_paths, seed_census
     from package_data_processing import SOURCE, digest
     from package_release import PLATFORMS, ROOT, VERSION
-    from package_source_formatting import FIXTURES, MEMBER_IMPORT_FIXTURES
+    from package_source_formatting import FIXTURES, MEMBER_IMPORT_FIXTURES, COMPOUND_ASSIGNMENT_FIXTURES
     from qualify_data_processing import require, success, unpack
 
 PAIRS = (("legacy.opaal", "canonical.opaal"), ("legacy-effects.opaal", "effects.opaal"),
@@ -58,7 +58,8 @@ def normalized_artifact(value: dict) -> dict:
     return value
 
 
-def project_workflow(run, work: Path, fixtures: Path, target: str, *, member_imports: bool = False) -> dict:
+def project_workflow(run, work: Path, fixtures: Path, target: str, *, member_imports: bool = False,
+                     compound_assignments: bool = False) -> dict:
     shutil.copytree(fixtures / "project", work)
     lock = "tools-macos.toml" if target == "macos-arm64" else "tools-linux-aarch64.toml" if target == "linux-aarch64" else "tools-linux.toml"
     shutil.copyfile(work / lock, work / "tools.toml")
@@ -138,6 +139,22 @@ def project_workflow(run, work: Path, fixtures: Path, target: str, *, member_imp
             result = run("test", "policy-tests.opaal" if passed else "policy-negative.opaal", "--case", case, "--format", "json")
             value = json.loads(result.stdout)
             require(result.returncode == code and value["counts"]["selected"] == 1 and value["counts"]["passed"] == passed and value["counts"]["failed"] == failed and value["completeness"] == "complete", "member project named test differs")
+    elif compound_assignments:
+        canonical = (fixtures / "compound-assignment/project-tasks.opaal").read_bytes()
+        source.write_bytes(canonical.replace(b"total += 5", b"total+=5", 1))
+        for name in ("policy-tests.opaal", "policy-negative.opaal"):
+            shutil.copyfile(fixtures / "compound-assignment" / name, work / name)
+        success(run("check", "policy-tests.opaal"), "compound standalone policy check")
+        for case, name, code, passed, failed in (
+            ("test_value", "policy-tests.opaal", 0, 1, 0),
+            ("test_negative", "policy-negative.opaal", 1, 0, 1),
+        ):
+            result = run("test", name, "--case", case, "--format", "json")
+            value = json.loads(result.stdout)
+            require(result.returncode == code and value["counts"]["selected"] == 1 and
+                    value["counts"]["passed"] == passed and value["counts"]["failed"] == failed and
+                    value["counts"]["error"] == value["counts"]["unrun"] == 0 and
+                    value["completeness"] == "complete", "compound named policy test differs")
     else:
         source.write_bytes((work / "legacy-tasks.opaal").read_bytes())
     legacy_inspection = success(run("task", "inspect", "--project", "opaal.toml", "verify"), "inspect legacy")
@@ -176,7 +193,11 @@ def project_workflow(run, work: Path, fixtures: Path, target: str, *, member_imp
     require(legacy_audit == audit("fresh", fresh), "execution/audit semantics changed with layout")
 
     # Declaring an effect is sufficient to require authority even when its body is pure.
-    source.write_bytes((fixtures / "legacy-annotated.opaal").read_bytes() + b"task verify = annotated\n")
+    if compound_assignments:
+        source.write_bytes(canonical.replace(b"readiness", b"annotated").replace(
+            b"effects {\n}", b"effects {\n clock.wall();\n}"))
+    else:
+        source.write_bytes((fixtures / "legacy-annotated.opaal").read_bytes() + b"task verify = annotated\n")
     denied_checks, denied_plans = [], []
     for label in ("denied-legacy", "denied-canonical"):
         result = run("check", *base, "--format", "json")
@@ -320,6 +341,56 @@ def explicit_member_imports(run, work: Path, fixtures: Path, target: str) -> dic
             "assertions": ["before/after/alternate Int 7 and original facade identity", "allowed I/O and pure refusal", "missing/private/duplicate diagnostics", "canonical comments and raw multiline retention"]}
 
 
+def compound_assignment(run, work: Path, fixtures: Path, target: str) -> dict:
+    original = fixtures / "compound-assignment"
+    destination = work / "compound-assignment"
+    require({path.name for path in original.iterdir()} == set(COMPOUND_ASSIGNMENT_FIXTURES),
+            "compound fixture census differs")
+    shutil.copytree(original, destination)
+
+    def invoke(*arguments, **options):
+        return run(*arguments, cwd=destination, **options)
+
+    cases = {}
+    for name in ("before.opaal", "after.opaal", "alternate.opaal", "failure.opaal", "policy-tests.opaal"):
+        success(invoke("check", name), "compound source check")
+        success(invoke("format", "--check", name), "compound canonical bytes")
+        value = json.loads(success(invoke("test", name, "--case", "test_value", "--format", "json"),
+                                   "compound pure test"))
+        require(value["counts"]["selected"] == value["counts"]["passed"] == 1 and
+                value["completeness"] == "complete", "compound pure result differs")
+        require(success(invoke(name), "compound script") == b"", "compound source printed implicitly")
+        cases[name] = value["counts"]
+    require(success(invoke("io-allowed.opaal", stdin=b"23"), "compound once-only RHS") == b"30\n",
+            "compound RHS order/count/result differs")
+    denied = invoke("test", "io-pure.opaal", "--format", "json")
+    value = json.loads(denied.stdout)
+    require(denied.returncode == 2 and value["counts"]["passed"] == 0 and
+            value["counts"]["unrun"] == 1 and b"TEST_EFFECT" in denied.stdout and
+            b"private-sentinel" not in denied.stdout + denied.stderr, "compound RHS acquired pure authority")
+    for name, code in (("wrong-type.opaal", b"SIG008"), ("immutable.opaal", b"BND001"),
+                       ("captured.opaal", b"BND003")):
+        result = invoke("check", name)
+        require(result.returncode == 1 and not result.stdout and code in result.stderr,
+                "compound diagnostic differs")
+    success(invoke("format", "--write", "noncanonical.opaal"), "compound format")
+    require((destination / "noncanonical.opaal").read_bytes() == (destination / "canonical.opaal").read_bytes(),
+            "compound canonical bytes differ")
+    success(invoke("format", "--check", "noncanonical.opaal"), "compound idempotence")
+    pending = run(cwd=destination, stdin=(destination / "incomplete.opaal").read_bytes())
+    require(pending.returncode == 0 and b"SYN002" in pending.stderr, "compound incomplete EOF differs")
+    raw = run(cwd=destination, stdin=b"mut total = 7\ntotal +=\n2\ntotal\n")
+    require(raw.returncode == 0 and not raw.stderr and b"...> " in raw.stdout and b"9\n" in raw.stdout,
+            "compound raw continuation or retained value differs")
+    project = work / "compound-project"
+    report = project_workflow(lambda *args: run(*args, cwd=project), project, fixtures, target,
+                              compound_assignments=True)
+    return {"fixture_cases": sorted(COMPOUND_ASSIGNMENT_FIXTURES), "pure_cases": cases, "project": report,
+            "assertions": ["five operators; before/after Int 2; negative division/remainder; failed store",
+                           "once-only RHS and pure authority refusal", "type/immutable/captured diagnostics",
+                           "canonical comments; raw continuation and retained value"]}
+
+
 def framed_formatting(binary: Path, work: Path, fixtures: Path, environment: dict) -> list[str]:
     observations = []
     for encoding in ("utf-8", "utf-16"):
@@ -391,7 +462,8 @@ def framed_formatting(binary: Path, work: Path, fixtures: Path, environment: dic
                     "concise-imports/noncanonical.opaal", "concise-imports/canonical.opaal",
                     "concise-imports/incomplete.opaal", "concise-imports/invalid-name.opaal",
                     "explicit-member-imports/noncanonical.opaal", "explicit-member-imports/canonical.opaal",
-                    "explicit-member-imports/incomplete.opaal"))
+                    "explicit-member-imports/incomplete.opaal", "compound-assignment/noncanonical.opaal",
+                    "compound-assignment/canonical.opaal", "compound-assignment/incomplete.opaal"))
                 documents.append(("invalid-body.opaal", "def waiting()\nlet x = 1\n"))
                 for index, (name, text) in enumerate(documents):
                     uri = (work / f"document-{index}.opaal").as_uri()
@@ -399,7 +471,8 @@ def framed_formatting(binary: Path, work: Path, fixtures: Path, environment: dic
                         "uri": uri, "languageId": "opaal", "version": 1, "text": text}}})
                     params = {"textDocument": {"uri": uri}, "options": {"tabSize": 8, "insertSpaces": False}}
                     result = request("textDocument/formatting", params)["result"]
-                    if name in ("legacy.opaal", "concise-imports/noncanonical.opaal", "explicit-member-imports/noncanonical.opaal"):
+                    if name in ("legacy.opaal", "concise-imports/noncanonical.opaal", "explicit-member-imports/noncanonical.opaal",
+                                "compound-assignment/noncanonical.opaal"):
                         canonical = (fixtures / ("canonical.opaal" if name == "legacy.opaal" else
                                                   name.replace("noncanonical.opaal", "canonical.opaal"))).read_text()
                         require(result == [{"range": {"start": {"line": 0, "character": 0},
@@ -420,6 +493,21 @@ def framed_formatting(binary: Path, work: Path, fixtures: Path, environment: dic
                         "end": {"line": 3, "character": 14}}}, "inferred alias definition differs")
                 require("module `helpers`" in request("textDocument/hover", alias)["result"]["contents"]["value"],
                         "inferred alias hover differs")
+                uri = (work / "compound-query.opaal").as_uri()
+                text = "# 界🙂\nmut total: Int = 7\ntotal += 2\ntotal\n"
+                send({"method": "textDocument/didOpen", "params": {"textDocument": {
+                    "uri": uri, "languageId": "opaal", "version": 1, "text": text}}})
+                target = {"textDocument": {"uri": uri}, "position": {"line": 2, "character": 1}}
+                definition = request("textDocument/definition", target)["result"]
+                require(definition == {"uri": uri, "range": {"start": {"line": 1, "character": 4},
+                        "end": {"line": 1, "character": 9}}}, "compound target definition differs")
+                require("Int" in request("textDocument/hover", target)["result"]["contents"]["value"],
+                        "compound target hover differs")
+                references = request("textDocument/references", {**target, "context": {"includeDeclaration": True}})["result"]
+                require(references == [definition] + [
+                    {"uri": uri, "range": {"start": {"line": line, "character": 0},
+                                           "end": {"line": line, "character": 5}}} for line in (2, 3)],
+                    "compound read/write references duplicate or lose the source token")
                 uri = (work / "unicode.opaal").as_uri()
                 text = (fixtures / "legacy.opaal").read_text() + "# 界🙂"
                 expected = (fixtures / "canonical.opaal").read_text() + "# 界🙂\n"
@@ -512,6 +600,16 @@ def terminal_continuation(binary: Path, work: Path, environment: dict) -> None:
         require(b"error[" not in captured, "terminal rejected a member selector")
         os.write(descriptor, b"magnitude_of(-7)\r")
         read_until(rb"(?:^|\n)7\r?\n.*>> ")
+        os.write(descriptor, b"mut total = 7\r")
+        read_until(rb">> ")
+        os.write(descriptor, b"total +=\r")
+        read_until(rb"\.\.\.> ")
+        require(b"error[" not in captured, "terminal submitted an incomplete compound RHS")
+        os.write(descriptor, b"2\r")
+        read_until(rb">> ")
+        require(b"error[" not in captured, "terminal rejected compound assignment")
+        os.write(descriptor, b"total\r")
+        read_until(rb"(?:^|\n)9\r?\n.*>> ")
         os.write(descriptor, b"def cancelled()\r")
         read_until(rb"\.\.\.> ")
         os.write(descriptor, b"\x03")
@@ -660,6 +758,7 @@ def qualify(archive: Path | None, fixture_archive: Path | None, binaries: Path |
         project_report = project_workflow(lambda *args: run(*args, cwd=project), project, fixtures, target)
         imports_report = concise_imports(run, root, fixtures)
         members_report = explicit_member_imports(run, root, fixtures, target)
+        compound_report = compound_assignment(run, root, fixtures, target)
         lsp_report = framed_formatting(installed / "opaal-language-server", root, fixtures, environment)
         terminal_continuation(binary, root, environment)
         require(public_paths(ROOT) == paths and
@@ -674,6 +773,7 @@ def qualify(archive: Path | None, fixture_archive: Path | None, binaries: Path |
                                   for name in ("opaal", "opaal-language-server")},
                 "fixture_sha256": fixture_hashes, "parser_seeds": seed_census(ROOT, paths),
                 "project": project_report, "concise_imports": imports_report, "explicit_member_imports": members_report,
+                "compound_assignment": compound_report,
                 "language_server": lsp_report, "bounded_cases": bounded,
                 "assertions": ["exact fixture/source/program identity", "legacy/canonical execution and checking",
                                "exact action/function/comment bytes and idempotence", "read-only check and mode/inode retention",

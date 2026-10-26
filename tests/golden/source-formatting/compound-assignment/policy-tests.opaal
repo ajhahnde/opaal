@@ -1,0 +1,15 @@
+def result() -> Int
+{
+    mut total: Int = 10
+    total += 5
+    total *= 2
+    total -= 5
+    total /= 5
+    total %= 6
+    return total
+}
+export {test_value}
+def test_value() -> Bool
+{
+    return result() == 5
+}

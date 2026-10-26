@@ -16,6 +16,12 @@ MEMBER_IMPORT_FIXTURES = (
     "duplicate.opaal", "incomplete.opaal", "noncanonical.opaal", "canonical.opaal",
     "pipeline.opaal", "project-tasks.opaal", "value.opaal", "policy-tests.opaal", "policy-negative.opaal",
 )
+COMPOUND_ASSIGNMENT_FIXTURES = (
+    "before.opaal", "after.opaal", "alternate.opaal", "failure.opaal",
+    "noncanonical.opaal", "canonical.opaal", "incomplete.opaal", "wrong-type.opaal",
+    "immutable.opaal", "captured.opaal", "project-tasks.opaal", "policy-tests.opaal",
+    "policy-negative.opaal", "io-allowed.opaal", "io-pure.opaal",
+)
 
 
 
@@ -29,6 +35,9 @@ def main() -> None:
     members = {name.removeprefix("explicit-member-imports/") for name in names if name.startswith("explicit-member-imports/")}
     if members != set(MEMBER_IMPORT_FIXTURES):
         raise ValueError("member import fixture census differs from the committed source")
+    compound = {name.removeprefix("compound-assignment/") for name in names if name.startswith("compound-assignment/")}
+    if compound != set(COMPOUND_ASSIGNMENT_FIXTURES):
+        raise ValueError("compound assignment fixture census differs from the committed source")
     archive = package_examples(ROOT, names, source, directory=FIXTURES, name="source-formatting")
     print(archive.relative_to(ROOT))
 

@@ -1,0 +1,13 @@
+import std::io
+export {test_value}
+def amount() -> Int
+{
+    io::println('private-sentinel')
+    return 2
+}
+def test_value() -> Bool
+{
+    mut total = 7
+    total += amount()
+    return total == 9
+}

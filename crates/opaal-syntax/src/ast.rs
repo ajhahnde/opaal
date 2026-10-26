@@ -363,6 +363,8 @@ impl fmt::Debug for Declaration {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Assignment {
     pub target: NameReference,
+    /// Compound assignments retain a binary value with the target as its left
+    /// operand and the original two-character operator span.
     pub value: Expression,
 }
 

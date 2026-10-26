@@ -3,6 +3,19 @@
 use opaal_syntax::{CompletionContext, PathCompletionStyle, completion_target};
 
 #[test]
+fn compound_assignment_rhs_is_an_expression_and_command_words_remain_whole() {
+    for operator in ["+=", "-=", "*=", "/=", "%="] {
+        let text = format!("total {operator} am");
+        let target = completion_target(&text, text.len()).unwrap();
+        assert_eq!(target.context(), &CompletionContext::Expression);
+        assert_eq!(target.prefix(), "am");
+        let command = format!("^echo a{operator}b");
+        let target = completion_target(&command, command.len()).unwrap();
+        assert_eq!(target.prefix(), format!("a{operator}b"));
+    }
+}
+
+#[test]
 fn command_name_flag_and_path_contexts_are_source_spanned() {
     let command = completion_target("ec", 2).expect("an incomplete head remains classifiable");
     assert_eq!(

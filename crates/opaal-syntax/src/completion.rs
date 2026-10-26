@@ -100,14 +100,22 @@ pub fn completion_target(source: &str, cursor: usize) -> Option<CompletionTarget
         )
     }) {
         CompletionContext::Name
-    } else if prior
-        .last()
-        .is_some_and(|token| token.kind() == TokenKind::Operator(Operator::Assign))
-        || tokens.iter().any(|token| {
-            token.span().start() == active.range.end
-                && token.kind() == TokenKind::Delimiter(Delimiter::LeftParenthesis)
-        })
-    {
+    } else if prior.last().is_some_and(|token| {
+        matches!(
+            token.kind(),
+            TokenKind::Operator(
+                Operator::Assign
+                    | Operator::AddAssign
+                    | Operator::SubtractAssign
+                    | Operator::MultiplyAssign
+                    | Operator::DivideAssign
+                    | Operator::RemainderAssign
+            )
+        )
+    }) || tokens.iter().any(|token| {
+        token.span().start() == active.range.end
+            && token.kind() == TokenKind::Delimiter(Delimiter::LeftParenthesis)
+    }) {
         CompletionContext::Expression
     } else {
         classify_context(source, &tokens, stage, &active)
@@ -458,6 +466,11 @@ fn is_word_component(kind: TokenKind) -> bool {
             | TokenKind::DoubleQuoteEnd
             | TokenKind::Operator(
                 Operator::Assign
+                    | Operator::AddAssign
+                    | Operator::SubtractAssign
+                    | Operator::MultiplyAssign
+                    | Operator::DivideAssign
+                    | Operator::RemainderAssign
                     | Operator::Equal
                     | Operator::NotEqual
                     | Operator::Plus

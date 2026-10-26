@@ -109,6 +109,77 @@ fn bindings_and_assignment_follow_scope_rules() {
 }
 
 #[test]
+fn compound_assignment_matches_expanded_arithmetic_results_and_errors() {
+    for operator in ["+", "-", "*", "/", "%"] {
+        for (left, right) in [
+            ("7", "3"),
+            ("-7", "3"),
+            ("7", "-3"),
+            ("7.0", "3"),
+            ("7", "3.0"),
+            ("-0.0", "3.0"),
+            ("7", "0"),
+            ("7.0", "-0.0"),
+            ("9223372036854775807", "2"),
+            ("1e308", "1e308"),
+            ("'private-sentinel'", "2"),
+            ("[1]", "[2]"),
+            ("null", "2"),
+        ] {
+            let compound = format!("mut x = {left}\nx {operator}= {right}\nx");
+            let expanded = format!("mut x = {left}\nx = x {operator} {right}\nx");
+            match (run(&compound), run(&expanded)) {
+                (Ok(actual), Ok(expected)) => assert_eq!(actual, expected, "{compound}"),
+                (Err(actual), Err(expected)) => {
+                    assert_eq!(actual.kind(), expected.kind(), "{compound}")
+                }
+                results => panic!("compound/expanded differ: {compound}: {results:?}"),
+            }
+        }
+    }
+    assert_eq!(
+        ok("mut x = -7\nx /= 3\nlet divided = x\nx = -7\nx %= 3\n[divided, x]"),
+        Value::list(vec![int(-3), int(2)])
+    );
+    assert_eq!(
+        ok("mut x = 3\nx += 0.5\nx"),
+        Value::from(opaal_runtime::FiniteFloat::new(3.5).unwrap())
+    );
+}
+
+#[test]
+fn compound_assignment_keeps_shadowing_and_stores_only_successful_results() {
+    assert_eq!(ok("mut x = 7\nif true { mut x = 1; x += 2 }\nx"), int(7));
+    assert_eq!(
+        ok("mut x = 7\ntry { x /= 0 } catch failure { null }\nx"),
+        int(7)
+    );
+    assert_eq!(
+        ok(
+            "def fail() { throw 'failure' }\nmut x = 7\ntry { x += fail() } catch failure { null }\nx"
+        ),
+        int(7)
+    );
+    for (source, expected) in [
+        (
+            "missing += 1 / 0",
+            ScopeError::UnknownBinding("missing".to_owned()),
+        ),
+        (
+            "let x = 1\nx += 2",
+            ScopeError::ImmutableBinding("x".to_owned()),
+        ),
+        (
+            "status += 1",
+            ScopeError::ImmutableBinding("status".to_owned()),
+        ),
+        ("argv += 1", ScopeError::UnknownBinding("argv".to_owned())),
+    ] {
+        assert_eq!(err(source), RuntimeErrorKind::Scope(expected));
+    }
+}
+
+#[test]
 fn if_else_selects_the_matching_block() {
     assert_eq!(
         ok("mut r = 0\nif 1 < 2 { r = 1 } else { r = 2 }\nr"),

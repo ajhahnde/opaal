@@ -1,0 +1,5 @@
+import std::io
+import std::data
+mut total = 7
+total += data::json_decode(io::read_stdin(2))
+io::println("{total}")

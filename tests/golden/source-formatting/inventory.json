@@ -285,6 +285,107 @@
       "assertion": "crates/opaal-cli/tests/formatter_e2e.rs"
     },
     {
+      "path": "tests/golden/source-formatting/compound-assignment/after.opaal",
+      "role": "positive",
+      "reason": "Arithmetic compound assignment, underlying numeric/assignment rules and unchanged observers.",
+      "assertion": "ci/qualify_source_formatting.py"
+    },
+    {
+      "path": "tests/golden/source-formatting/compound-assignment/alternate.opaal",
+      "role": "positive",
+      "reason": "Arithmetic compound assignment, underlying numeric/assignment rules and unchanged observers.",
+      "assertion": "ci/qualify_source_formatting.py"
+    },
+    {
+      "path": "tests/golden/source-formatting/compound-assignment/before.opaal",
+      "role": "positive",
+      "reason": "Arithmetic compound assignment, underlying numeric/assignment rules and unchanged observers.",
+      "assertion": "ci/qualify_source_formatting.py"
+    },
+    {
+      "path": "tests/golden/source-formatting/compound-assignment/canonical.opaal",
+      "role": "positive",
+      "reason": "Arithmetic compound assignment, underlying numeric/assignment rules and unchanged observers.",
+      "assertion": "ci/qualify_source_formatting.py"
+    },
+    {
+      "path": "tests/golden/source-formatting/compound-assignment/captured.opaal",
+      "role": "semantic-negative",
+      "reason": "Arithmetic compound assignment, underlying numeric/assignment rules and unchanged observers.",
+      "assertion": "ci/qualify_source_formatting.py",
+      "sha256": "58201a2284d2b1bb04d4ce73c35ddbba43783ac7e93b8f0f09cd892f61d9a3d6"
+    },
+    {
+      "path": "tests/golden/source-formatting/compound-assignment/failure.opaal",
+      "role": "positive",
+      "reason": "Arithmetic compound assignment, underlying numeric/assignment rules and unchanged observers.",
+      "assertion": "ci/qualify_source_formatting.py"
+    },
+    {
+      "path": "tests/golden/source-formatting/compound-assignment/immutable.opaal",
+      "role": "semantic-negative",
+      "reason": "Arithmetic compound assignment, underlying numeric/assignment rules and unchanged observers.",
+      "assertion": "ci/qualify_source_formatting.py",
+      "sha256": "ee7ba6d9428782b8adac0725ed16a011c6e5a7723354ce9c9854c79808652d99"
+    },
+    {
+      "path": "tests/golden/source-formatting/compound-assignment/incomplete.opaal",
+      "role": "syntax-incomplete",
+      "reason": "Arithmetic compound assignment, underlying numeric/assignment rules and unchanged observers.",
+      "assertion": "ci/qualify_source_formatting.py",
+      "sha256": "7efe9e45e70d41cc9fb08d35304c12f18bb20cd766a2de72bdb0a9e6ab164b1d",
+      "format_diagnostic": "SYN002",
+      "format_message": "incomplete input: expression requires another operand"
+    },
+    {
+      "path": "tests/golden/source-formatting/compound-assignment/io-allowed.opaal",
+      "role": "positive",
+      "reason": "Arithmetic compound assignment, underlying numeric/assignment rules and unchanged observers.",
+      "assertion": "ci/qualify_source_formatting.py"
+    },
+    {
+      "path": "tests/golden/source-formatting/compound-assignment/io-pure.opaal",
+      "role": "refused",
+      "reason": "Arithmetic compound assignment, underlying numeric/assignment rules and unchanged observers.",
+      "assertion": "ci/qualify_source_formatting.py",
+      "sha256": "02a8d23bdba21f09cf5415694ead0260ce452d36139e1791994ec38ea826ed84"
+    },
+    {
+      "path": "tests/golden/source-formatting/compound-assignment/noncanonical.opaal",
+      "role": "noncanonical",
+      "reason": "Arithmetic compound assignment, underlying numeric/assignment rules and unchanged observers.",
+      "assertion": "ci/qualify_source_formatting.py",
+      "sha256": "27430ad6691d48a9b065f4d25ef9ed7fa2dd5f5c9a036347801acb98abb4f317",
+      "format_diagnostic": "FMT001",
+      "format_message": "source is not canonically formatted"
+    },
+    {
+      "path": "tests/golden/source-formatting/compound-assignment/policy-negative.opaal",
+      "role": "runtime-negative",
+      "reason": "Arithmetic compound assignment, underlying numeric/assignment rules and unchanged observers.",
+      "assertion": "ci/qualify_source_formatting.py",
+      "sha256": "ae62cf0b47371d00ba1401d664494a7397b7c922bc74a043d8c368acb44a15ed"
+    },
+    {
+      "path": "tests/golden/source-formatting/compound-assignment/policy-tests.opaal",
+      "role": "positive",
+      "reason": "Arithmetic compound assignment, underlying numeric/assignment rules and unchanged observers.",
+      "assertion": "ci/qualify_source_formatting.py"
+    },
+    {
+      "path": "tests/golden/source-formatting/compound-assignment/project-tasks.opaal",
+      "role": "positive",
+      "reason": "Arithmetic compound assignment, underlying numeric/assignment rules and unchanged observers.",
+      "assertion": "ci/qualify_source_formatting.py"
+    },
+    {
+      "path": "tests/golden/source-formatting/compound-assignment/wrong-type.opaal",
+      "role": "semantic-negative",
+      "reason": "Arithmetic compound assignment, underlying numeric/assignment rules and unchanged observers.",
+      "assertion": "ci/qualify_source_formatting.py",
+      "sha256": "09de81aab73efd4d7d73a87ec9bf6b8880500a60d9b92111fca403c7e297e765"
+    },
+    {
       "path": "tests/golden/source-formatting/concise-imports/after.opaal",
       "role": "positive",
       "reason": "Concise import qualification: exact syntax, canonical bytes, pure results or intentional failure.",
@@ -602,6 +703,12 @@
       "role": "positive",
       "reason": "Canonical native processor or CI assessment reference; typed project tasks run only through the explicit project route.",
       "assertion": "ci/qualify_standard_input_output.py"
+    },
+    {
+      "path": "tests/opaal-foundation/language/grammar/complete/compound-assignment.opaal",
+      "role": "positive",
+      "reason": "All five compound operators seed the shared lexer, parser, expansion and resource fuzz corpora.",
+      "assertion": "crates/opaal-syntax/tests/opaal_language_manifest.rs"
     },
     {
       "path": "tests/opaal-foundation/language/grammar/complete/declaration-first.opaal",
@@ -1615,8 +1722,8 @@
     },
     {
       "path": "ci/package_source_formatting.py",
-      "sha256": "aa4bbeb11ee5041ae38457b1d387483e7962f5e820d483fe2218908af3725be8",
-      "source_markers": 20,
+      "sha256": "98d74d8f8f14b2c93d941f305239829660e10ca1e8156aed0441f02b9c196d83",
+      "source_markers": 35,
       "constructors_or_assertions": [
         "main",
         "module constants/imports"
@@ -1860,10 +1967,11 @@
     },
     {
       "path": "ci/qualify_source_formatting.py",
-      "sha256": "369080dd63db0c33c44bcfa92652d4ad5823bb9a718f03af8a9c6e312fe081be",
-      "source_markers": 143,
+      "sha256": "7d71023a6cc3cdedc609e16fd3cb1747e33c6a141d491b7fa23369d41ea5a097",
+      "source_markers": 171,
       "constructors_or_assertions": [
         "audit",
+        "compound_assignment",
         "concise_imports",
         "execute",
         "explicit_member_imports",
@@ -2198,8 +2306,8 @@
     },
     {
       "path": "ci/tests/test_source_formatting.py",
-      "sha256": "853189f94b8d44661362e68ded0750eb690d8ec8c7db63c96fcc834886b245a3",
-      "source_markers": 23,
+      "sha256": "b817b724b7d1baa9e75ab2fe51b7b2ab1923596cb4243dc4f8191547582cbedf",
+      "source_markers": 25,
       "constructors_or_assertions": [
         "census",
         "setUp",
@@ -2209,6 +2317,7 @@
         "test_embedded_sources_and_non_opaal_seeds_are_discovered",
         "test_fixture_bytes_roles_and_symlinks_fail_closed",
         "test_new_markdown_directory_and_changed_fence_fail",
+        "test_packaging_refuses_an_incomplete_compound_fixture_census",
         "test_packaging_refuses_an_incomplete_member_fixture_census",
         "test_packaging_refuses_dirty_source_before_writing",
         "test_source_receipts_change_but_authority_and_results_still_compare",
@@ -2937,7 +3046,7 @@
     },
     {
       "path": "crates/opaal-cli/tests/syntax_highlighting.rs",
-      "sha256": "68a7c71099ea93ba64104c80f770659077262b244b45d6e52b120d8967afca72",
+      "sha256": "ce90b177f8ee6c66fc61ac07d7129080856e591a2ff65eb9394b5687ac4ea734",
       "source_markers": 2,
       "constructors_or_assertions": [
         "incomplete_multiline_source_keeps_token_styles_without_error_coloring",
@@ -3873,6 +3982,17 @@
       "assertion": "crates/opaal-runtime/tests/closure.rs"
     },
     {
+      "path": "crates/opaal-runtime/tests/compound_assignment.rs",
+      "sha256": "974e7f02c1a9460970d7eadbab304f8230d404f2d1d9aaa06fa277d2ea9574c3",
+      "source_markers": 3,
+      "constructors_or_assertions": [
+        "compound_assignment_uses_original_type_and_mutability_checks"
+      ],
+      "role": "mixed-test-buffers",
+      "reason": "Compound-assignment contract tests include complete, rejected and incomplete source buffers.",
+      "assertion": "crates/opaal-runtime/tests/compound_assignment.rs"
+    },
+    {
       "path": "crates/opaal-runtime/tests/controlled_native_tools.rs",
       "sha256": "af6142b4ff6bfed5c558a78f119e9f91bfe8e160cd04fd80344f68084fe3a1db",
       "source_markers": 2,
@@ -4069,9 +4189,10 @@
     },
     {
       "path": "crates/opaal-runtime/tests/evaluation.rs",
-      "sha256": "30731566caf6816dc739631d4bb348b631053dc35d63031ef0c197a10489239a",
-      "source_markers": 4,
+      "sha256": "76fb3eab894df300129f86ae23e4ff6c75a30128eb31b73840621aabcbfbd638",
+      "source_markers": 5,
       "constructors_or_assertions": [
+        "compound_assignment_keeps_shadowing_and_stores_only_successful_results",
         "deferred_forms_report_precise_errors_with_spans",
         "run"
       ],
@@ -4119,8 +4240,8 @@
     },
     {
       "path": "crates/opaal-runtime/tests/interactive_modules.rs",
-      "sha256": "deb294e3e1c8cd6891e703479ca968c02fa197934a1e8e9810afb019baafb3b3",
-      "source_markers": 79,
+      "sha256": "985f021f93baf22dbea0aa6a7049d6931e0f10c6613bf10f76e426d5b520b7b9",
+      "source_markers": 80,
       "constructors_or_assertions": [
         "a_declaration_cannot_publish_types_from_a_later_local_import",
         "a_partial_first_group_charges_its_retained_cell_once_like_expanded_singles",
@@ -4129,6 +4250,7 @@
         "cancellation_at_every_observed_import_poll_leaves_no_alias_or_snapshot",
         "cancellation_schedules_preserve_the_same_import_publication_prefixes",
         "canonical_snapshots_survive_source_changes_and_transitive_nominals",
+        "compound_assignments_survive_later_cells_restored_callbacks_and_failed_publication",
         "dependency_and_cell_share_the_step_budget_and_failed_cells_can_retry",
         "failed_initialization_does_not_publish_and_prior_statements_survive",
         "failed_member_initializer_retains_only_prior_declarations_and_can_retry",
@@ -4271,11 +4393,12 @@
     },
     {
       "path": "crates/opaal-runtime/tests/opaal_resources.rs",
-      "sha256": "af5fa3a590a85954c67dbe6a83ea6dd6988c31e47c20e4acdd6952ad25fb770c",
-      "source_markers": 39,
+      "sha256": "2b63302293ebffdf330c63974e02633badfed26476e34e0f831caa4335142dc3",
+      "source_markers": 41,
       "constructors_or_assertions": [
         "analysis_source",
         "collection_and_call_depth_limits_refuse_the_first_excess",
+        "compound_assignment_charges_its_lowered_read_and_binary_at_exact_analysis_limits",
         "diagnostic_budget_refuses_instead_of_publishing_a_truncated_report",
         "every_analysis_counter_accepts_the_exact_boundary_and_refuses_first_excess",
         "grouping_preserves_dependency_initialization_order_instead_of_imposing_lexical_order",
@@ -4821,7 +4944,7 @@
     },
     {
       "path": "crates/opaal-syntax/src/completion.rs",
-      "sha256": "f52fc4e79e22364e251a5939d180021a0b44ca87d04fa4526043ec5d5d529abb",
+      "sha256": "939624d310cf6df3d37c7122c6c599b6791a81bac0f42a8dcc327bcd2c7a0691",
       "source_markers": 1,
       "constructors_or_assertions": [
         "completion_target"
@@ -4832,7 +4955,7 @@
     },
     {
       "path": "crates/opaal-syntax/src/parser.rs",
-      "sha256": "89a9e3a5ff620011a754e8b447907ee837067e6dea00c4bb63cbcc8726775dcf",
+      "sha256": "e9e79d16314d1524977dedb341cf06cf89fa7c182245ef8ae8e257272775125b",
       "source_markers": 1,
       "constructors_or_assertions": [
         "parse_module_import_entry"
@@ -4871,11 +4994,12 @@
     },
     {
       "path": "crates/opaal-syntax/tests/completion_context.rs",
-      "sha256": "30c62bc4af044b3d9389201e238557086f27cf310c8c90fb63b303824deb8016",
+      "sha256": "9afd32d312657164476f3bd57bfb0c0fafa935da36663ecba1c9b602016594bc",
       "source_markers": 0,
       "constructors_or_assertions": [
         "classification_is_checked_but_does_not_require_a_complete_ast",
         "command_name_flag_and_path_contexts_are_source_spanned",
+        "compound_assignment_rhs_is_an_expression_and_command_words_remain_whole",
         "executable_and_interpolated_paths_keep_their_grammar_boundaries",
         "import_group_commas_delimit_quoted_path_replacements_without_changing_command_words",
         "quoted_and_glob_paths_retain_decoded_prefixes_and_source_styles"
@@ -4883,6 +5007,19 @@
       "role": "mixed-test-buffers",
       "reason": "Conservative test owner includes helper-based source buffers, partial completion inputs and non-source harnesses; the named tests/assertions retain their exact contracts.",
       "assertion": "crates/opaal-syntax/tests/completion_context.rs"
+    },
+    {
+      "path": "crates/opaal-syntax/tests/compound_assignment.rs",
+      "sha256": "cf58bb4d783766c87d8db13509ad9d9a8aeb0064fd88160918bb65e2be478cbc",
+      "source_markers": 10,
+      "constructors_or_assertions": [
+        "compound_assignment_is_not_an_expression_or_a_chained_assignment",
+        "compound_assignment_lowers_once_with_original_operand_and_operator_spans",
+        "formatting_spaces_only_assignment_tokens_and_preserves_command_words"
+      ],
+      "role": "mixed-test-buffers",
+      "reason": "Compound-assignment contract tests include complete, rejected and incomplete source buffers.",
+      "assertion": "crates/opaal-syntax/tests/compound_assignment.rs"
     },
     {
       "path": "crates/opaal-syntax/tests/documentation_comments.rs",
@@ -6712,6 +6849,111 @@
       "sha256": "ea53ffb9ee392ea5557ca76dc245fead33b124322fdedaa7e24832af2db5250a"
     },
     {
+      "path": "tests/golden/source-formatting/compound-assignment/after.opaal",
+      "targets": [
+        "parser"
+      ],
+      "sha256": "3bb08a57542c155dcd506f1a210fd54c88fb0d759ca3b26d5734975d3a92f90d"
+    },
+    {
+      "path": "tests/golden/source-formatting/compound-assignment/alternate.opaal",
+      "targets": [
+        "parser"
+      ],
+      "sha256": "1b3d87d46f11aa34f79403319c5cc1fb9723513d57b34ddd506496b22b1f5de4"
+    },
+    {
+      "path": "tests/golden/source-formatting/compound-assignment/before.opaal",
+      "targets": [
+        "parser"
+      ],
+      "sha256": "aa344888843101c4e9e9f7f58790332b84e4dffef863e023bbc31cbd3818cd30"
+    },
+    {
+      "path": "tests/golden/source-formatting/compound-assignment/canonical.opaal",
+      "targets": [
+        "parser"
+      ],
+      "sha256": "a2da58fca1b6c53e6f645e190e39fe97d2158b57abaf268699f8aeea2a940539"
+    },
+    {
+      "path": "tests/golden/source-formatting/compound-assignment/captured.opaal",
+      "targets": [
+        "parser"
+      ],
+      "sha256": "58201a2284d2b1bb04d4ce73c35ddbba43783ac7e93b8f0f09cd892f61d9a3d6"
+    },
+    {
+      "path": "tests/golden/source-formatting/compound-assignment/failure.opaal",
+      "targets": [
+        "parser"
+      ],
+      "sha256": "62d9070915ff26df61888b6cc8be8e17858be46db8ce2d6a48b28d396b665064"
+    },
+    {
+      "path": "tests/golden/source-formatting/compound-assignment/immutable.opaal",
+      "targets": [
+        "parser"
+      ],
+      "sha256": "ee7ba6d9428782b8adac0725ed16a011c6e5a7723354ce9c9854c79808652d99"
+    },
+    {
+      "path": "tests/golden/source-formatting/compound-assignment/incomplete.opaal",
+      "targets": [
+        "parser"
+      ],
+      "sha256": "7efe9e45e70d41cc9fb08d35304c12f18bb20cd766a2de72bdb0a9e6ab164b1d"
+    },
+    {
+      "path": "tests/golden/source-formatting/compound-assignment/io-allowed.opaal",
+      "targets": [
+        "parser"
+      ],
+      "sha256": "77effe81e3dd905c29a35a064f0c2b36e88606d1c99355ee5688b95f9331f975"
+    },
+    {
+      "path": "tests/golden/source-formatting/compound-assignment/io-pure.opaal",
+      "targets": [
+        "parser"
+      ],
+      "sha256": "02a8d23bdba21f09cf5415694ead0260ce452d36139e1791994ec38ea826ed84"
+    },
+    {
+      "path": "tests/golden/source-formatting/compound-assignment/noncanonical.opaal",
+      "targets": [
+        "parser"
+      ],
+      "sha256": "27430ad6691d48a9b065f4d25ef9ed7fa2dd5f5c9a036347801acb98abb4f317"
+    },
+    {
+      "path": "tests/golden/source-formatting/compound-assignment/policy-negative.opaal",
+      "targets": [
+        "parser"
+      ],
+      "sha256": "ae62cf0b47371d00ba1401d664494a7397b7c922bc74a043d8c368acb44a15ed"
+    },
+    {
+      "path": "tests/golden/source-formatting/compound-assignment/policy-tests.opaal",
+      "targets": [
+        "parser"
+      ],
+      "sha256": "175c64bebd65f416903cd4991df792ae60183f8f9b5f882161004e42ba349637"
+    },
+    {
+      "path": "tests/golden/source-formatting/compound-assignment/project-tasks.opaal",
+      "targets": [
+        "parser"
+      ],
+      "sha256": "ce7fb29ece6e65dd1eb8da7c1813b3e0f4eccd5d7758535851ce6d5120c1468e"
+    },
+    {
+      "path": "tests/golden/source-formatting/compound-assignment/wrong-type.opaal",
+      "targets": [
+        "parser"
+      ],
+      "sha256": "09de81aab73efd4d7d73a87ec9bf6b8880500a60d9b92111fca403c7e297e765"
+    },
+    {
       "path": "tests/golden/source-formatting/concise-imports/after.opaal",
       "targets": [
         "parser"
@@ -6990,6 +7232,17 @@
         "parser"
       ],
       "sha256": "0a9b97d74a4e151ec85c5f93027ca35cce3cec7a3c74828d48f4089b8bd56e76"
+    },
+    {
+      "path": "tests/opaal-foundation/language/grammar/complete/compound-assignment.opaal",
+      "targets": [
+        "lexer",
+        "parser",
+        "expander",
+        "resources",
+        "secret_sinks"
+      ],
+      "sha256": "8967508e7eedc9d01eca9e52981ff823f6050e6f4cc57551e7a727615a772c03"
     },
     {
       "path": "tests/opaal-foundation/language/grammar/complete/declaration-first.opaal",

@@ -160,6 +160,29 @@ impl FormatLayout {
                         }
                     }
                 }
+                StatementKind::Assignment(assignment) => {
+                    if let crate::ExpressionKind::Binary(binary) = assignment.value.kind() {
+                        for token in tokens_in(
+                            tokens,
+                            binary.operator.span().start(),
+                            binary.operator.span().end(),
+                        ) {
+                            if matches!(
+                                token.kind(),
+                                TokenKind::Operator(
+                                    Operator::AddAssign
+                                        | Operator::SubtractAssign
+                                        | Operator::MultiplyAssign
+                                        | Operator::DivideAssign
+                                        | Operator::RemainderAssign
+                                )
+                            ) {
+                                self.space_before.insert(token.span().start());
+                                self.space_after.insert(token.span().end());
+                            }
+                        }
+                    }
+                }
                 StatementKind::If(branch) => self.if_statement(branch, tokens),
                 StatementKind::While(loop_statement) => {
                     self.statements(&loop_statement.body.statements, tokens)
@@ -182,7 +205,6 @@ impl FormatLayout {
                 | StatementKind::NominalType(_)
                 | StatementKind::VariantType(_)
                 | StatementKind::Declaration(_)
-                | StatementKind::Assignment(_)
                 | StatementKind::Environment(_)
                 | StatementKind::Throw(_)
                 | StatementKind::Control(_)

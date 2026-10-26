@@ -62,6 +62,12 @@ Use `import './helpers.opaal'::{assess as check_policy}` for a local export, or
 mix selectors and module aliases in an outer group. Explicit export lists can
 re-export selected names. Wildcards and nested selectors are unsupported.
 
+Mutable numeric variables also accept `total += amount`, `-=`, `*=`, `/=` and
+`%=`. Each reads the target, evaluates the right-hand side once and stores only
+a successful result compatible with the variable's declared type. Division and
+remainder keep their existing floor rules. These forms require a toolchain
+built from this source; released toolchains can use `total = total + amount`.
+
 Run `opaal` without a script in a terminal to start the interactive client.
 Completed expressions display their values there; scripts produce output through
 explicit I/O or foreground programs. An editor can use

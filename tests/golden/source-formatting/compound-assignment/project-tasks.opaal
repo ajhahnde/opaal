@@ -1,0 +1,17 @@
+def result() -> Int
+{
+    mut total: Int = 10
+    total += 5
+    total *= 2
+    total -= 5
+    total /= 5
+    total %= 6
+    return total
+}
+action readiness() -> Int
+effects {
+}
+{
+    return result()
+}
+task verify = readiness

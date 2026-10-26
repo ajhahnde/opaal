@@ -1,0 +1,5 @@
+mut total = 7
+def update()
+{
+    total += 1
+}

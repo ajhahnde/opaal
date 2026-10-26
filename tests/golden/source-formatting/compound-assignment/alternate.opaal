@@ -1,0 +1,10 @@
+mut total: Int = -7
+total /= 3
+let divided = total
+total = -7
+total %= 3
+export {test_value}
+def test_value() -> Bool
+{
+    return [divided, total] == [-3, 2]
+}

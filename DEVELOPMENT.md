@@ -51,6 +51,18 @@ The downstream metadata/outcome defaults protected by
 `embedding_api_compatibility` remain unchanged. Existing `OperationalAdapter`
 implementations inherit snapshot refusal unless they explicitly implement it.
 
+Compound assignment keeps the existing `Assignment { target, value }`
+constructor and `StatementKind::Assignment` variant. Parsed `total += amount`
+has a binary `value`: its left operand is the original target reference, its
+right operand is `amount`, and its `BinaryOperator::Add` node retains the exact
+`+=` source span. Existing expression walkers therefore visit the target read
+and RHS once. A source consumer that previously assumed every binary operator
+span spells a one-character arithmetic token must also accept the corresponding
+two-character assignment token. Exhaustive `Operator` matches must handle
+`AddAssign`, `SubtractAssign`, `MultiplyAssign`, `DivideAssign` and
+`RemainderAssign`; existing AST construction calls need no change. ASTs remain
+unpublished source APIs without a serialized or binary compatibility promise.
+
 Member imports extend the unpublished syntax API. `ModuleAliasImport { source,
 alias }` and `StatementKind::ModuleImport` keep their existing constructors.
 `StatementKind::ModuleMemberImport(ModuleMemberImport { source, members, span })`

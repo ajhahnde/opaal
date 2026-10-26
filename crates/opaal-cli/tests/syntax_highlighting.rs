@@ -5,6 +5,21 @@ use opaal_cli::highlight::{HighlightKind, SyntaxHighlighter};
 use opaal_syntax::{ParseOutcome, SourceFile, SourceId, parse_opaal};
 
 #[test]
+fn compound_assignment_operators_keep_their_complete_source_ranges() {
+    for operator in ["+=", "-=", "*=", "/=", "%="] {
+        for text in [
+            format!("mut total = 7\ntotal {operator} 2"),
+            format!("total {operator}\n"),
+        ] {
+            let segments = SyntaxHighlighter::new().highlight(&text);
+            assert_lossless(&text, &segments);
+            assert_segment(&segments, operator, HighlightKind::Operator);
+            assert!(segments.iter().all(|s| s.kind() != HighlightKind::Invalid));
+        }
+    }
+}
+
+#[test]
 fn complete_source_uses_stable_semantic_categories_without_changing_text() {
     let source = "## documented\nlet cafe = 42\n^echo \"hello 💡 {name}\" | check # note";
     let segments = SyntaxHighlighter::new().highlight(source);

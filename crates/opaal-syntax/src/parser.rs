@@ -627,9 +627,28 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
         let target = self.parse_name_reference()?;
         let start = target.span;
         self.skip_inline();
-        self.expect_operator(Operator::Assign, "assignment requires `=`")?;
+        let token = self.take().expect("assignment lookahead found an operator");
+        let operator = match token.kind() {
+            TokenKind::Operator(Operator::Assign) => None,
+            TokenKind::Operator(Operator::AddAssign) => Some(BinaryOperator::Add),
+            TokenKind::Operator(Operator::SubtractAssign) => Some(BinaryOperator::Subtract),
+            TokenKind::Operator(Operator::MultiplyAssign) => Some(BinaryOperator::Multiply),
+            TokenKind::Operator(Operator::DivideAssign) => Some(BinaryOperator::Divide),
+            TokenKind::Operator(Operator::RemainderAssign) => Some(BinaryOperator::Remainder),
+            _ => unreachable!("assignment lookahead found an operator"),
+        };
         self.skip_layout();
         let value = self.parse_expression()?;
+        let value = if let Some(operator) = operator {
+            self.binary(
+                Expression::new(ExpressionKind::Name(target), target.span),
+                operator,
+                token.span(),
+                value,
+            )
+        } else {
+            value
+        };
         let span = self.span(start.start(), value.span().end());
         Ok(Statement::new(
             StatementKind::Assignment(Assignment { target, value }),
@@ -2391,6 +2410,13 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
         let open = self.take().expect("group opener is current");
         self.continuation_depth += 1;
         self.skip_layout();
+        if self.current_kind() == Some(TokenKind::Identifier)
+            && self.name_is_assignment()
+            && let Some(token) = self.next_non_inline(self.position + 1)
+            && token.kind() != TokenKind::Operator(Operator::Assign)
+        {
+            return Err(self.invalid_at(token.span(), "compound assignment requires a statement"));
+        }
         let chain = self.parse_conditional_chain()?;
         self.skip_layout();
         if self.current_kind() == Some(TokenKind::Operator(Operator::Background)) {
@@ -2444,7 +2470,19 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
 
     fn name_is_assignment(&self) -> bool {
         self.next_non_inline(self.position + 1)
-            .is_some_and(|token| token.kind() == TokenKind::Operator(Operator::Assign))
+            .is_some_and(|token| {
+                matches!(
+                    token.kind(),
+                    TokenKind::Operator(
+                        Operator::Assign
+                            | Operator::AddAssign
+                            | Operator::SubtractAssign
+                            | Operator::MultiplyAssign
+                            | Operator::DivideAssign
+                            | Operator::RemainderAssign
+                    )
+                )
+            })
     }
 
     fn starts_expression_stage(&self) -> bool {
@@ -3043,6 +3081,11 @@ fn is_bare_word_token(kind: TokenKind) -> bool {
             | TokenKind::WordText
             | TokenKind::Operator(
                 Operator::Assign
+                    | Operator::AddAssign
+                    | Operator::SubtractAssign
+                    | Operator::MultiplyAssign
+                    | Operator::DivideAssign
+                    | Operator::RemainderAssign
                     | Operator::Equal
                     | Operator::NotEqual
                     | Operator::Plus
