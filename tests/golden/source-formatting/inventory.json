@@ -76,6 +76,12 @@
       "assertion": "ci/qualify_numeric_operations.py"
     },
     {
+      "path": "examples/readme_example.opaal",
+      "role": "positive",
+      "reason": "Executable README quick guide; identical README fence is checked, formatted and run by the documentation validator.",
+      "assertion": "ci/check_docs.py"
+    },
+    {
       "path": "examples/repository-check/policy-tests.opaal",
       "role": "positive",
       "reason": "Named repository-check policy cases cover pass, negative and invalid input without effectful execution.",
@@ -1865,17 +1871,7 @@
     {
       "path": "README.md",
       "ordinal": 0,
-      "sha256": "47dc7390f85c5cdb56c41b13cf1d0199212d653874e38b32acb8cf1ad7a3025e"
-    },
-    {
-      "path": "README.md",
-      "ordinal": 1,
-      "sha256": "a1fe9e7f068cea26708f687de193bbb43dfd914edc07f4570ff43ba1d7bf1e14"
-    },
-    {
-      "path": "README.md",
-      "ordinal": 2,
-      "sha256": "1a9bc57fb6f192cb6423321ac33188bcab8812751a76af96e0f2db59085f96d9"
+      "sha256": "91f469b2bfd5ad22d96cdff28a6f715d2d66f665f7db077f7c2518adca8849f4"
     }
   ],
   "embedded_owners": [
@@ -1993,7 +1989,7 @@
     },
     {
       "path": "ci/check_product.py",
-      "sha256": "e49f91dea94a401c6f35c22784d75ee708c9c66f40fc3f580a2ecb4efcba58e3",
+      "sha256": "0f32b2a1f82312291fb7389403d5692cfd3e32b7ff87c8b761a7f6930d402b4b",
       "source_markers": 15,
       "constructors_or_assertions": [
         "command_json",
@@ -2115,7 +2111,7 @@
     },
     {
       "path": "ci/package_release.py",
-      "sha256": "b75ca3b61618a819ebc321fb86d2b9649c39ea452c2bbfbb0ebb666587fface3",
+      "sha256": "1da85b2ed62ad3ba797a13d4071a725a328f20d6ae802c068c47f680526dacf1",
       "source_markers": 2,
       "constructors_or_assertions": [
         "main",

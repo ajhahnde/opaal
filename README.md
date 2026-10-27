@@ -11,96 +11,58 @@ command-line client, language server and platform adapters.
 [Downloads](https://opaal-lang.org/download/) ·
 [Changelog](CHANGELOG.md)
 
-## Try OPAAL
+## OPAAL at a glance
 
-OPAAL programs are UTF-8 `.opaal` files:
+OPAAL programs are UTF-8 `.opaal` files. This example is also saved as
+[examples/readme_example.opaal](examples/readme_example.opaal):
 
 ```opaal
 import {
-    std::value,
-    std::io,
+    std::value::{length as len},
+    std::io::{println},
 }
 
 def remaining[T](items: List[T])
 {
     match items {
         [] => { return 0 }
-        [first, ...rest] => { return value::length(rest) }
+        [first, ...rest] => { return len(rest) }
     }
 }
 
-io::print("Result: ")
-io::println("{remaining(["build", "test", "review"])}")
+let list_string = ["build", "test", "review"]
+
+mut list_int = [1, 2, 3, 4]
+println("Result 1: {remaining(list_int)}")
+list_int = [...list_int, 5, 6]
+
+println("Result 2: {remaining(list_string)}")
+println("Result 3: {remaining(list_int)}")
 ```
 
-Save this as `remaining.opaal`. With OPAAL installed, run:
+Output:
 
-```sh
-opaal remaining.opaal
-opaal check remaining.opaal
-opaal format --check remaining.opaal
+```text
+Result 1: 3
+Result 2: 2
+Result 3: 5
 ```
 
-The program prints `Result: 2` followed by one line feed. String interpolation
-converts the Int result to text for `io::println`. `check` analyzes source without
-executing it; `format --check` verifies the canonical style without rewriting it.
+The imports select two standard-library functions, giving `length` the local
+name `len`. `remaining[T]` works with lists of integers or strings: `match`
+handles the empty list, or separates `[first, ...rest]` and counts `rest`.
 
-Imports keep explicit origins: `import std::math` binds `math`, and
-`import './helpers.opaal'` binds `helpers` from the literal filename. Use `as`
-for a different name, such as `import std::value as values`, or for a filename
-that is not an identifier, such as `import './build-tools.opaal' as tools`.
-Groups collect the same entries in order, with a separate optional alias on each.
-A duplicate binding requires a different explicit alias. Groups introduce no new
-scope or transaction; existing explicit single imports remain valid. These
-forms require a toolchain built from this source; older releases require
-explicit aliases and separate declarations.
+`mut` allows `list_int` to be reassigned. `[...list_int, 5, 6]` builds a new
+list from its existing items followed by `5` and `6`. Inside a string,
+`{remaining(list_int)}` inserts the function's result as text; `println`
+prints the resulting string followed by a newline.
 
-Select an exported member with `import std::math::{abs as magnitude_of}` and
-call `magnitude_of(-7)`. Member imports bind only the selected immutable names;
-they preserve the export's type, callable identity and authority requirements.
-Use `import './helpers.opaal'::{assess as check_policy}` for a local export, or
-mix selectors and module aliases in an outer group. Explicit export lists can
-re-export selected names. Wildcards and nested selectors are unsupported.
+See the [learning guides](https://opaal-lang.org/learn/) for a full introduction.
 
-Mutable numeric variables also accept `total += amount`, `-=`, `*=`, `/=` and
-`%=`. Each reads the target, evaluates the right-hand side once and stores only
-a successful result compatible with the variable's declared type. Division and
-remainder keep their existing floor rules. These forms require a toolchain
-built from this source; released toolchains can use `total = total + amount`.
-
-Compose lists with explicit spreads such as `[...defaults, extra, ...more]`.
-Each spread evaluates once and expands a list one level in source order;
-ordinary elements and nested lists keep their values. Only lists can be spread.
-This spelling requires a toolchain built from this source.
-
-```opaal
-let defaults = [1, 2]
-let combined = [...defaults, 3]
-combined
-```
-
-Record fields can use the same name once: `{name}` means `{name: name}`, and
-`Server {name}` constructs a nominal record using the existing value of `name`.
-In a nominal pattern, `Server {name}` declares a local binding for that field.
-Explicit fields can be mixed with shorthand; formatting keeps the chosen
-spelling. These forms require a toolchain built from this source.
-
-```opaal
-type Server = {name: String, port: Int}
-let name = 'api'
-let port = 8080
-let server = Server {name, port}
-let Server {name: label, port: selected} = server
-[label, selected]
-```
-
-Bind shorthand-only constructors to a value before using them as an `if`,
-`while`, `for` or `match` header, or use an explicit first field there. Braces
-at those outer header boundaries retain their existing block meaning. A
-standalone named stage also keeps command dispatch; use a value binding when
-constructing a nominal record. Quoted keys still require explicit values;
-anonymous patterns, record spread and default fields are unsupported.
-
+`opaal check examples/readme_example.opaal` analyzes source without executing it,
+`opaal format --check examples/readme_example.opaal` verifies the canonical
+style without rewriting it,
+and `opaal format --write examples/readme_example.opaal` formats the file.
 
 Run `opaal` without a script in a terminal to start the interactive client.
 Completed expressions display their values there; scripts produce output through
@@ -116,9 +78,11 @@ effects describe required authority; they do not grant it. Effectful actions
 run only through the accepted-plan route, while scripts and interactive cells
 can use their explicitly bound native standard streams.
 
+## Platform availability
+
 Supported hosts are Linux x86_64, GNU/Linux AArch64 and macOS arm64.
 GNU/Linux AArch64 requires glibc 2.35 or newer and Linux kernel 6.3 or newer.
-The 1.7.0 release includes CLI and language-server archives for all three hosts.
+Release archives include the CLI and language server for all three hosts.
 Controlled process execution is Linux-only; macOS can check and plan those tasks
 but refuses their execution. Host qualification establishes no downstream
 operating system or physical-device support. See the
@@ -146,9 +110,9 @@ native standard streams or Random:
 codesign --force --sign - --options kill target/debug/opaal
 ```
 
-Run the example with `target/debug/opaal remaining.opaal`. Reapply the image
-policy after rebuilding. Full build, test and native qualification instructions
-are in [Development](DEVELOPMENT.md).
+Run the example with `target/debug/opaal examples/readme_example.opaal`.
+Reapply the image policy after rebuilding. Full build, test and native
+qualification instructions are in [Development](DEVELOPMENT.md).
 
 ## Contributing
 
