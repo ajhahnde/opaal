@@ -486,3 +486,19 @@ fn interpolated_names_and_path_tails_complete_without_evaluation() {
             .any(|completion| completion.value() == "/first\"")
     );
 }
+
+#[test]
+fn list_spread_completion_replaces_only_the_operand_name() {
+    let registry = CommandRegistry::new();
+    let mut scope = ScopeStack::new();
+    scope
+        .declare("items", BindingMutability::Immutable, Value::list(vec![]))
+        .unwrap();
+    let engine = CompletionEngine::new(CompletionCatalog::from_runtime(&registry, &scope));
+    for text in ["[...it]", "let values = [\n...it"] {
+        let cursor = text.find("it").unwrap() + 2;
+        let completions = engine.complete(text, cursor);
+        assert_eq!(completions[0].value(), "items");
+        assert_eq!(completions[0].replacement(), (cursor - 2)..cursor);
+    }
+}

@@ -1,0 +1,3 @@
+let invalid: Any = 7
+let combined = [...invalid]
+combined

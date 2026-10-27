@@ -289,3 +289,45 @@ fn complete(text: &str) -> opaal_syntax::Script {
 fn source_text(text: &str, span: opaal_syntax::Span) -> &str {
     &text[span.start()..span.end()]
 }
+
+#[test]
+fn list_literal_spreads_keep_marker_operand_and_precedence_spans() {
+    use opaal_syntax::ListItem;
+    let text = "let values = [1, ...make()[0] + [2], ...[],]\n";
+    let script = complete(text);
+    let StatementKind::Declaration(declaration) = script.statements()[0].kind() else {
+        panic!("declaration")
+    };
+    let ExpressionKind::List(items) = declaration.value.kind() else {
+        panic!("list")
+    };
+    assert_eq!(items.len(), 3);
+    assert!(matches!(&items[0], ListItem::Element(_)));
+    let ListItem::Spread { marker, operand } = &items[1] else {
+        panic!("spread")
+    };
+    assert_eq!(source_text(text, *marker), "...");
+    assert_eq!(source_text(text, operand.span()), "make()[0] + [2]");
+    assert!(matches!(operand.kind(), ExpressionKind::Binary(_)));
+    for text in ["[...7]", "[...{x: 1}]", "[...[], 1, ...[2]]"] {
+        complete(text);
+    }
+    for text in ["[...]", "[......items]", "[...items other]", "[1 ...items]"] {
+        assert!(
+            matches!(
+                parse_opaal(&SourceFile::new(SourceId::new(0), "invalid", text)),
+                ParseOutcome::Invalid(_)
+            ),
+            "{text}"
+        );
+    }
+    for text in ["[...", "[...items", "[1,\n..."] {
+        assert!(
+            matches!(
+                parse_opaal(&SourceFile::new(SourceId::new(0), "incomplete", text)),
+                ParseOutcome::Incomplete(_)
+            ),
+            "{text}"
+        );
+    }
+}

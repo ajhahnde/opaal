@@ -68,6 +68,18 @@ a successful result compatible with the variable's declared type. Division and
 remainder keep their existing floor rules. These forms require a toolchain
 built from this source; released toolchains can use `total = total + amount`.
 
+Compose lists with explicit spreads such as `[...defaults, extra, ...more]`.
+Each spread evaluates once and expands a list one level in source order;
+ordinary elements and nested lists keep their values. Only lists can be spread.
+This spelling requires a toolchain built from this source.
+
+```opaal
+let defaults = [1, 2]
+let combined = [...defaults, 3]
+combined
+```
+
+
 Run `opaal` without a script in a terminal to start the interactive client.
 Completed expressions display their values there; scripts produce output through
 explicit I/O or foreground programs. An editor can use

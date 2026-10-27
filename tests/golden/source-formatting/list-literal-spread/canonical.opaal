@@ -1,0 +1,5 @@
+# 界🙂 keeps the operand and marker
+let items = [1, 2]
+let result = [ ...items, # first
+...[], 3]
+result

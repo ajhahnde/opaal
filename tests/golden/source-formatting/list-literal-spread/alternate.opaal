@@ -1,0 +1,4 @@
+let empty: List[Int] = []
+let nested = [[4]]
+let combined = [...empty, ...[1, 2], 3, ...nested]
+combined

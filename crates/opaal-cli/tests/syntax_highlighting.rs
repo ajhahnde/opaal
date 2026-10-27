@@ -120,3 +120,17 @@ fn assert_segment(
         "missing {kind:?} segment {text:?}: {segments:?}"
     );
 }
+
+#[test]
+fn list_literal_spreads_keep_complete_and_incomplete_token_styles() {
+    for text in ["let result = [...items, 3]", "let result = [\n..."] {
+        let segments = SyntaxHighlighter::new().highlight(text);
+        assert_lossless(text, &segments);
+        assert_segment(&segments, "...", HighlightKind::Operator);
+        assert!(
+            segments
+                .iter()
+                .all(|segment| segment.kind() != HighlightKind::Invalid)
+        );
+    }
+}

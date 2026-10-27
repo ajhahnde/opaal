@@ -904,3 +904,37 @@ fn selected_name_collisions_report_both_original_locations() {
         );
     }
 }
+
+#[test]
+fn list_spreads_retain_values_and_callbacks_inside_spread_operands_across_cells() {
+    let sources = Sources::default();
+    let mut session = session();
+    submit(&mut session, &sources, "import std::list");
+    submit(
+        &mut session,
+        &sources,
+        "let items = [1, 2]\nlet combined = [...items, 3]",
+    );
+    assert_eq!(
+        submit(&mut session, &sources, "combined"),
+        Value::list(vec![Value::Int(1), Value::Int(2), Value::Int(3)])
+    );
+    submit(
+        &mut session,
+        &sources,
+        "let callbacks = [...[{|x: Int| -> Int x + 1}]]",
+    );
+    assert_eq!(
+        submit(&mut session, &sources, "list::map([3], callbacks[0])"),
+        Value::list(vec![Value::Int(4)])
+    );
+    submit(
+        &mut session,
+        &sources,
+        "def spread[T](items: List[T]) -> List[T] { return [...items] }",
+    );
+    assert_eq!(
+        submit(&mut session, &sources, "spread[Int]([4, 5])"),
+        Value::list(vec![Value::Int(4), Value::Int(5)])
+    );
+}

@@ -60,6 +60,11 @@ impl FormatLayout {
             layout.no_space_after.insert(span.start() + 1);
             layout.no_space_before.insert(span.end() - 1);
         }
+        for token in tokens {
+            if token.kind() == TokenKind::Operator(Operator::Spread) {
+                layout.no_space_after.insert(token.span().end());
+            }
+        }
         layout.statements(script.statements(), tokens);
         layout
     }

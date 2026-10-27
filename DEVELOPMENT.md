@@ -84,6 +84,17 @@ handle `UnknownMember { module, target, name, span, declaration_span }`, which
 reports a missing/private export at its selector and the private declaration
 when available. No serialized or binary AST compatibility is promised.
 
+List literals now hold `Vec<ListItem>` in `ExpressionKind::List`. To migrate
+an existing `Vec<Expression>` constructor, use
+`ExpressionKind::List(expressions.into_iter().map(ListItem::from).collect())`.
+An ordinary item is `ListItem::Element(expression)`; an explicit spread is
+`ListItem::Spread { marker, operand }`, with separate original marker and operand
+spans. Structural visitors call `item.expression()` for either variant; semantic
+visitors must distinguish expansion from ordinary insertion. Exhaustive
+`ModuleTypeError` matches also handle `ListSpreadValueMismatch { module, span,
+actual }`; command spread keeps its existing variants and diagnostics.
+No serialized or binary AST compatibility is promised.
+
 ## Documentation example
 
 ```sh

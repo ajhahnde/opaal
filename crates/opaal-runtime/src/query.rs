@@ -1218,7 +1218,7 @@ impl<'a> CallFinder<'a> {
             }
             ExpressionKind::List(items) => {
                 for item in items {
-                    self.expression(item);
+                    self.expression(item.expression());
                 }
             }
             ExpressionKind::Record(entries) => {

@@ -21,13 +21,13 @@ if __package__:
     from .check_source_formatting import public_paths, seed_census
     from .package_data_processing import SOURCE, digest
     from .package_release import PLATFORMS, ROOT, VERSION
-    from .package_source_formatting import FIXTURES, MEMBER_IMPORT_FIXTURES, COMPOUND_ASSIGNMENT_FIXTURES
+    from .package_source_formatting import FIXTURES, MEMBER_IMPORT_FIXTURES, COMPOUND_ASSIGNMENT_FIXTURES, LIST_LITERAL_SPREAD_FIXTURES
     from .qualify_data_processing import require, success, unpack
 else:
     from check_source_formatting import public_paths, seed_census
     from package_data_processing import SOURCE, digest
     from package_release import PLATFORMS, ROOT, VERSION
-    from package_source_formatting import FIXTURES, MEMBER_IMPORT_FIXTURES, COMPOUND_ASSIGNMENT_FIXTURES
+    from package_source_formatting import FIXTURES, MEMBER_IMPORT_FIXTURES, COMPOUND_ASSIGNMENT_FIXTURES, LIST_LITERAL_SPREAD_FIXTURES
     from qualify_data_processing import require, success, unpack
 
 PAIRS = (("legacy.opaal", "canonical.opaal"), ("legacy-effects.opaal", "effects.opaal"),
@@ -59,7 +59,7 @@ def normalized_artifact(value: dict) -> dict:
 
 
 def project_workflow(run, work: Path, fixtures: Path, target: str, *, member_imports: bool = False,
-                     compound_assignments: bool = False) -> dict:
+                     compound_assignments: bool = False, list_spreads: bool = False) -> dict:
     shutil.copytree(fixtures / "project", work)
     lock = "tools-macos.toml" if target == "macos-arm64" else "tools-linux-aarch64.toml" if target == "linux-aarch64" else "tools-linux.toml"
     shutil.copyfile(work / lock, work / "tools.toml")
@@ -139,12 +139,14 @@ def project_workflow(run, work: Path, fixtures: Path, target: str, *, member_imp
             result = run("test", "policy-tests.opaal" if passed else "policy-negative.opaal", "--case", case, "--format", "json")
             value = json.loads(result.stdout)
             require(result.returncode == code and value["counts"]["selected"] == 1 and value["counts"]["passed"] == passed and value["counts"]["failed"] == failed and value["completeness"] == "complete", "member project named test differs")
-    elif compound_assignments:
-        canonical = (fixtures / "compound-assignment/project-tasks.opaal").read_bytes()
-        source.write_bytes(canonical.replace(b"total += 5", b"total+=5", 1))
+    elif compound_assignments or list_spreads:
+        feature = "list-literal-spread" if list_spreads else "compound-assignment"
+        canonical = (fixtures / feature / "project-tasks.opaal").read_bytes()
+        source.write_bytes(canonical.replace(b"...defaults", b"... defaults", 1) if list_spreads else
+                           canonical.replace(b"total += 5", b"total+=5", 1))
         for name in ("policy-tests.opaal", "policy-negative.opaal"):
-            shutil.copyfile(fixtures / "compound-assignment" / name, work / name)
-        success(run("check", "policy-tests.opaal"), "compound standalone policy check")
+            shutil.copyfile(fixtures / feature / name, work / name)
+        success(run("check", "policy-tests.opaal"), "standalone policy check")
         for case, name, code, passed, failed in (
             ("test_value", "policy-tests.opaal", 0, 1, 0),
             ("test_negative", "policy-negative.opaal", 1, 0, 1),
@@ -154,7 +156,7 @@ def project_workflow(run, work: Path, fixtures: Path, target: str, *, member_imp
             require(result.returncode == code and value["counts"]["selected"] == 1 and
                     value["counts"]["passed"] == passed and value["counts"]["failed"] == failed and
                     value["counts"]["error"] == value["counts"]["unrun"] == 0 and
-                    value["completeness"] == "complete", "compound named policy test differs")
+                    value["completeness"] == "complete", "named policy test differs")
     else:
         source.write_bytes((work / "legacy-tasks.opaal").read_bytes())
     legacy_inspection = success(run("task", "inspect", "--project", "opaal.toml", "verify"), "inspect legacy")
@@ -193,7 +195,7 @@ def project_workflow(run, work: Path, fixtures: Path, target: str, *, member_imp
     require(legacy_audit == audit("fresh", fresh), "execution/audit semantics changed with layout")
 
     # Declaring an effect is sufficient to require authority even when its body is pure.
-    if compound_assignments:
+    if compound_assignments or list_spreads:
         source.write_bytes(canonical.replace(b"readiness", b"annotated").replace(
             b"effects {\n}", b"effects {\n clock.wall();\n}"))
     else:
@@ -391,6 +393,62 @@ def compound_assignment(run, work: Path, fixtures: Path, target: str) -> dict:
                            "canonical comments; raw continuation and retained value"]}
 
 
+def list_literal_spread(run, work: Path, fixtures: Path, target: str) -> dict:
+    original = fixtures / "list-literal-spread"
+    destination = work / "list-literal-spread"
+    require({path.name for path in original.iterdir()} == set(LIST_LITERAL_SPREAD_FIXTURES),
+            "list literal spread fixture census differs")
+    shutil.copytree(original, destination)
+
+    def invoke(*arguments, **options):
+        return run(*arguments, cwd=destination, **options)
+
+    cases = {}
+    for name, expected in (("before.opaal", b"[1, 2, 3]"), ("after.opaal", b"[1, 2, 3]"),
+                           ("alternate.opaal", b"[1, 2, 3, [4]]")):
+        success(invoke("check", name), "list source check")
+        success(invoke("format", "--check", name), "list canonical bytes")
+        require(success(invoke(name), "list script") == b"", "list script printed implicitly")
+        observed = invoke(stdin=(destination / name).read_bytes())
+        require(observed.returncode == 0 and not observed.stderr and expected + b"\n" in observed.stdout,
+                "list before/after value differs")
+        cases[name] = expected.decode()
+    invalid = invoke("format", "--check", "invalid.opaal")
+    require(invalid.returncode == 1 and not invalid.stdout and b"OP1000" in invalid.stderr,
+            "invalid list spread grammar differs")
+    success(invoke("check", "failure.opaal"), "dynamic spread check")
+    for name, code in (("failure.opaal", b"RUN001"), ("known-non-list.opaal", b"SIG020")):
+        failed = invoke(name) if name == "failure.opaal" else invoke("check", name)
+        require(failed.returncode == 1 and not failed.stdout and code in failed.stderr,
+                "list spread failure class differs")
+    require(success(invoke("io-allowed.opaal"), "list once-only ordered operands") == b"first\nmiddle\nlast\n",
+            "list operand order/count differs")
+    failed = invoke("io-failure.opaal")
+    require(failed.returncode == 1 and failed.stdout == b"first\n" and b"never" not in failed.stdout,
+            "failed spread evaluated a later operand or lost earlier output")
+    denied = invoke("test", "io-pure.opaal", "--format", "json")
+    result = json.loads(denied.stdout)
+    require(denied.returncode == 2 and result["counts"]["passed"] == 0 and
+            result["counts"]["unrun"] == 1 and b"TEST_EFFECT" in denied.stdout and
+            b"private-sentinel" not in denied.stdout + denied.stderr, "spread acquired pure authority")
+    success(invoke("format", "--write", "noncanonical.opaal"), "list format")
+    require((destination / "noncanonical.opaal").read_bytes() == (destination / "canonical.opaal").read_bytes(),
+            "list canonical bytes differ")
+    success(invoke("format", "--check", "noncanonical.opaal"), "list idempotence")
+    pending = invoke(stdin=(destination / "incomplete.opaal").read_bytes())
+    require(pending.returncode == 0 and b"SYN002" in pending.stderr, "list incomplete EOF differs")
+    raw = invoke(stdin=b"let items = [1, 2]\nlet result = [\n...items,\n3]\nresult\n")
+    require(raw.returncode == 0 and not raw.stderr and b"...> " in raw.stdout and
+            b"[1, 2, 3]\n" in raw.stdout, "list continuation/retention differs")
+    project = work / "list-project"
+    report = project_workflow(lambda *args: run(*args, cwd=project), project, fixtures, target,
+                              list_spreads=True)
+    return {"fixture_cases": sorted(LIST_LITERAL_SPREAD_FIXTURES), "values": cases, "project": report,
+            "assertions": ["before/after/alternate exact values", "static and dynamic non-list refusal",
+                           "once-only ordered operands and early failure", "pure authority refusal",
+                           "canonical comments; raw continuation and retained value"]}
+
+
 def framed_formatting(binary: Path, work: Path, fixtures: Path, environment: dict) -> list[str]:
     observations = []
     for encoding in ("utf-8", "utf-16"):
@@ -463,7 +521,9 @@ def framed_formatting(binary: Path, work: Path, fixtures: Path, environment: dic
                     "concise-imports/incomplete.opaal", "concise-imports/invalid-name.opaal",
                     "explicit-member-imports/noncanonical.opaal", "explicit-member-imports/canonical.opaal",
                     "explicit-member-imports/incomplete.opaal", "compound-assignment/noncanonical.opaal",
-                    "compound-assignment/canonical.opaal", "compound-assignment/incomplete.opaal"))
+                    "compound-assignment/canonical.opaal", "compound-assignment/incomplete.opaal",
+                    "list-literal-spread/noncanonical.opaal", "list-literal-spread/canonical.opaal",
+                    "list-literal-spread/incomplete.opaal", "list-literal-spread/invalid.opaal"))
                 documents.append(("invalid-body.opaal", "def waiting()\nlet x = 1\n"))
                 for index, (name, text) in enumerate(documents):
                     uri = (work / f"document-{index}.opaal").as_uri()
@@ -472,7 +532,7 @@ def framed_formatting(binary: Path, work: Path, fixtures: Path, environment: dic
                     params = {"textDocument": {"uri": uri}, "options": {"tabSize": 8, "insertSpaces": False}}
                     result = request("textDocument/formatting", params)["result"]
                     if name in ("legacy.opaal", "concise-imports/noncanonical.opaal", "explicit-member-imports/noncanonical.opaal",
-                                "compound-assignment/noncanonical.opaal"):
+                                "compound-assignment/noncanonical.opaal", "list-literal-spread/noncanonical.opaal"):
                         canonical = (fixtures / ("canonical.opaal" if name == "legacy.opaal" else
                                                   name.replace("noncanonical.opaal", "canonical.opaal"))).read_text()
                         require(result == [{"range": {"start": {"line": 0, "character": 0},
@@ -508,6 +568,24 @@ def framed_formatting(binary: Path, work: Path, fixtures: Path, environment: dic
                     {"uri": uri, "range": {"start": {"line": line, "character": 0},
                                            "end": {"line": line, "character": 5}}} for line in (2, 3)],
                     "compound read/write references duplicate or lose the source token")
+                uri = (work / "spread-query.opaal").as_uri()
+                text = "import std::list\nlet items = [1, 2]\nlet result = ['界🙂', ...list::reverse(items)]\n"
+                send({"method": "textDocument/didOpen", "params": {"textDocument": {
+                    "uri": uri, "languageId": "opaal", "version": 1, "text": text}}})
+                prefix = "let result = ['界🙂', ...list::reverse("
+                character = len(prefix.encode()) if encoding == "utf-8" else len(prefix.encode("utf-16-le")) // 2
+                target = {"textDocument": {"uri": uri}, "position": {"line": 2, "character": character}}
+                definition = request("textDocument/definition", target)["result"]
+                require(definition == {"uri": uri, "range": {"start": {"line": 1, "character": 4},
+                        "end": {"line": 1, "character": 9}}}, "spread operand definition differs")
+                require("items" in request("textDocument/hover", target)["result"]["contents"]["value"],
+                        "spread operand hover differs")
+                require(bool(request("textDocument/signatureHelp", target)["result"]["signatures"]),
+                        "spread operand call signature was lost")
+                references = request("textDocument/references", {**target, "context": {"includeDeclaration": True}})["result"]
+                require(references == [definition, {"uri": uri, "range": {
+                    "start": {"line": 2, "character": character},
+                    "end": {"line": 2, "character": character + 5}}}], "spread references/Unicode positions differ")
                 uri = (work / "unicode.opaal").as_uri()
                 text = (fixtures / "legacy.opaal").read_text() + "# 界🙂"
                 expected = (fixtures / "canonical.opaal").read_text() + "# 界🙂\n"
@@ -610,6 +688,14 @@ def terminal_continuation(binary: Path, work: Path, environment: dict) -> None:
         require(b"error[" not in captured, "terminal rejected compound assignment")
         os.write(descriptor, b"total\r")
         read_until(rb"(?:^|\n)9\r?\n.*>> ")
+        for line in (b"let spread = [", b"...[1, 2],"):
+            os.write(descriptor, line + b"\r")
+            read_until(rb"\.\.\.> ")
+            require(b"error[" not in captured, "terminal submitted an incomplete list spread")
+        os.write(descriptor, b"3]\r")
+        read_until(rb">> ")
+        os.write(descriptor, b"spread\r")
+        read_until(rb"(?:^|\n)\[1, 2, 3\]\r?\n.*>> ")
         os.write(descriptor, b"def cancelled()\r")
         read_until(rb"\.\.\.> ")
         os.write(descriptor, b"\x03")
@@ -759,6 +845,7 @@ def qualify(archive: Path | None, fixture_archive: Path | None, binaries: Path |
         imports_report = concise_imports(run, root, fixtures)
         members_report = explicit_member_imports(run, root, fixtures, target)
         compound_report = compound_assignment(run, root, fixtures, target)
+        spread_report = list_literal_spread(run, root, fixtures, target)
         lsp_report = framed_formatting(installed / "opaal-language-server", root, fixtures, environment)
         terminal_continuation(binary, root, environment)
         require(public_paths(ROOT) == paths and
@@ -773,7 +860,7 @@ def qualify(archive: Path | None, fixture_archive: Path | None, binaries: Path |
                                   for name in ("opaal", "opaal-language-server")},
                 "fixture_sha256": fixture_hashes, "parser_seeds": seed_census(ROOT, paths),
                 "project": project_report, "concise_imports": imports_report, "explicit_member_imports": members_report,
-                "compound_assignment": compound_report,
+                "compound_assignment": compound_report, "list_literal_spread": spread_report,
                 "language_server": lsp_report, "bounded_cases": bounded,
                 "assertions": ["exact fixture/source/program identity", "legacy/canonical execution and checking",
                                "exact action/function/comment bytes and idempotence", "read-only check and mode/inode retention",

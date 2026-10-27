@@ -1,0 +1,5 @@
+let items = [1, 2]
+let result = [...[], ...items, 3, ...[[4]]]
+if result != [1, 2, 3, [4]] {
+    throw 'list spread changed the values'
+}

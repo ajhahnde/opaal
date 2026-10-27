@@ -521,7 +521,10 @@ impl<'source> SpanChecker<'source> {
             ExpressionKind::Qualified(name) => self.qualified_name(name),
             ExpressionKind::List(items) => {
                 for item in items {
-                    self.expression(item);
+                    if let opaal_syntax::ListItem::Spread { marker, .. } = item {
+                        self.span(*marker);
+                    }
+                    self.expression(item.expression());
                 }
             }
             ExpressionKind::Record(entries) => {

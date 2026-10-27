@@ -149,6 +149,17 @@ class QualificationComparisonTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "compound assignment fixture census"):
                 package_source_formatting.main()
 
+    def test_packaging_refuses_an_incomplete_list_spread_fixture_census(self) -> None:
+        paths = [f"tests/golden/source-formatting/{folder}/{name}" for folder, names in (
+            ("explicit-member-imports", package_source_formatting.MEMBER_IMPORT_FIXTURES),
+            ("compound-assignment", package_source_formatting.COMPOUND_ASSIGNMENT_FIXTURES),
+        ) for name in names]
+        paths.append("tests/golden/source-formatting/list-literal-spread/after.opaal")
+        replies = [b"", b"a" * 40 + b"\n", ("\0".join(paths) + "\0").encode()]
+        with patch("ci.package_source_formatting.subprocess.check_output", side_effect=replies):
+            with self.assertRaisesRegex(ValueError, "list literal spread fixture census"):
+                package_source_formatting.main()
+
 
 if __name__ == "__main__":
     unittest.main()

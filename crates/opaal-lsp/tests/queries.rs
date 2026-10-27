@@ -1841,3 +1841,55 @@ fn member_imports_share_original_navigation_and_operation_metadata_in_both_encod
         assert_eq!(references.as_array().unwrap().len(), 5, "{references}");
     }
 }
+
+#[test]
+fn list_spread_operands_keep_original_symbols_and_utf16_locations() {
+    let directory = TestDirectory::new();
+    let uri = directory.uri("spread.opaal");
+    let text =
+        "import std::list\nlet items = [1, 2]\nlet result = ['界🙂', ...list::reverse(items)]\n";
+    let mut workspace = Workspace::new();
+    workspace.open(uri.clone(), 1, text.into()).unwrap();
+    for encoding in [PositionEncoding::Utf8, PositionEncoding::Utf16] {
+        let query = |method, cursor| {
+            request(
+                &workspace,
+                encoding,
+                &RequestControl::new(),
+                method,
+                positional(&uri, text, cursor, encoding),
+            )
+            .unwrap()
+        };
+        let offset = text.rfind("items").unwrap();
+        assert_eq!(
+            query("textDocument/definition", offset),
+            json!({
+                "uri": uri.as_str(), "range": {"start": {"line": 1, "character": 4}, "end": {"line": 1, "character": 9}}
+            })
+        );
+        assert!(
+            query("textDocument/hover", offset)["contents"]["value"]
+                .as_str()
+                .unwrap()
+                .contains("items")
+        );
+        assert!(
+            !query("textDocument/signatureHelp", offset)["signatures"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+        let references = request(&workspace, encoding, &RequestControl::new(), "textDocument/references",
+            json!({"textDocument": {"uri": uri.as_str()}, "position": position(text, offset, encoding),
+                   "context": {"includeDeclaration": true}})).unwrap();
+        assert_eq!(references.as_array().unwrap().len(), 2);
+        assert!(
+            references
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|reference| reference["range"]["start"] == position(text, offset, encoding))
+        );
+    }
+}

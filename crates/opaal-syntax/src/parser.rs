@@ -7,16 +7,16 @@ use crate::{
     Declaration, Delimiter, Diagnostic, DocumentationBlock, EffectRequest, ElseBranch,
     EnvironmentStatement, Expression, ExpressionKind, FileRedirection, ForStatement,
     FunctionDefinition, Identifier, IfStatement, IncompleteInput, IncompleteReason,
-    IndexExpression, IoNumber, JobStatement, Keyword, ListPattern, Literal, LiteralKind, MatchArm,
-    MatchStatement, MemberExpression, ModuleAliasImport, ModuleExportStatement, ModuleImportSource,
-    NameReference, NominalRecordExpression, NominalRecordFieldExpression, NominalRecordPattern,
-    NominalTypeDeclaration, NominalTypeField, NumberKind, Operator, OutputMode, Parameter, Pattern,
-    PatternField, PipeOperator, Pipeline, QualifiedName, RecordEntry, RecordKey, Redirection,
-    RedirectionKind, Script, Severity, SourceFile, Span, Stage, StageKind, Statement,
-    StatementKind, StaticEffectArgument, SyntaxClassification, TaskDefinition, Token, TokenKind,
-    TryStatement, TypeConstraint, TypeParameter, TypeReference, UnaryExpression, UnaryOperator,
-    VariantDeclaration, VariantPattern, VariantTypeDeclaration, WhileStatement, Word, WordPart,
-    WordPartKind,
+    IndexExpression, IoNumber, JobStatement, Keyword, ListItem, ListPattern, Literal, LiteralKind,
+    MatchArm, MatchStatement, MemberExpression, ModuleAliasImport, ModuleExportStatement,
+    ModuleImportSource, NameReference, NominalRecordExpression, NominalRecordFieldExpression,
+    NominalRecordPattern, NominalTypeDeclaration, NominalTypeField, NumberKind, Operator,
+    OutputMode, Parameter, Pattern, PatternField, PipeOperator, Pipeline, QualifiedName,
+    RecordEntry, RecordKey, Redirection, RedirectionKind, Script, Severity, SourceFile, Span,
+    Stage, StageKind, Statement, StatementKind, StaticEffectArgument, SyntaxClassification,
+    TaskDefinition, Token, TokenKind, TryStatement, TypeConstraint, TypeParameter, TypeReference,
+    UnaryExpression, UnaryOperator, VariantDeclaration, VariantPattern, VariantTypeDeclaration,
+    WhileStatement, Word, WordPart, WordPartKind,
 };
 
 /// The result of parsing one source file.
@@ -2351,7 +2351,15 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
         self.skip_layout();
         let mut values = Vec::new();
         while !self.at_delimiter(Some(Delimiter::RightBracket)) {
-            values.push(self.parse_expression()?);
+            let marker = self.take_operator(Operator::Spread);
+            let operand = self.parse_expression()?;
+            values.push(match marker {
+                Some(marker) => ListItem::Spread {
+                    marker: marker.span(),
+                    operand,
+                },
+                None => ListItem::Element(operand),
+            });
             self.skip_layout();
             if self.take_operator(Operator::Comma).is_none() {
                 break;
