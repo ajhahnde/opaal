@@ -1,0 +1,21 @@
+import {
+    std::value::{length as len},
+    std::io::{println},
+}
+
+def remaining[T](items: List[T])
+{
+    match items {
+        [] => { return 0 }
+        [first, ...rest] => { return len(rest) }
+    }
+}
+
+let list_string = ["build", "test", "review"]
+
+mut list_int = [1, 2, 3, 4]
+println("Result 1: {remaining(list_int)}")
+list_int = [...list_int, 5, 6]
+
+println("Result 2: {remaining(list_string)}")
+println("Result 3: {remaining(list_int)}")

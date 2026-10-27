@@ -4,11 +4,12 @@ All notable changes to OPAAL are documented here.
 
 ## [Unreleased]
 
+## [1.8.0]
+
 ### Added
 
 - Export local top-level declarations with trailing-star prefixes such as
   `export { test_*, Item }`, with shared checking, formatting and editor support.
-
 - Write same-name record fields and nominal pattern bindings once, as
   `{name}` or `Server {name}`, with existing lookup, typing and binding rules
   across checking, formatting and editors.
@@ -22,6 +23,11 @@ All notable changes to OPAAL are documented here.
 - Allow module imports to omit a repeated alias and collect entries in a flat,
   ordered group. Explicit renaming remains available for every entry; existing
   single imports remain valid. New syntax requires a matching toolchain.
+
+### Fixed
+
+- Make native standard-stream test fixtures respect host page sizes, including
+  hosts with 16 KiB pages.
 
 ## [1.7.0]
 
