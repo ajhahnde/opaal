@@ -160,6 +160,18 @@ class QualificationComparisonTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "list literal spread fixture census"):
                 package_source_formatting.main()
 
+    def test_packaging_refuses_an_incomplete_record_shorthand_fixture_census(self) -> None:
+        paths = [f"tests/golden/source-formatting/{folder}/{name}" for folder, names in (
+            ("explicit-member-imports", package_source_formatting.MEMBER_IMPORT_FIXTURES),
+            ("compound-assignment", package_source_formatting.COMPOUND_ASSIGNMENT_FIXTURES),
+            ("list-literal-spread", package_source_formatting.LIST_LITERAL_SPREAD_FIXTURES),
+        ) for name in names]
+        paths.append("tests/golden/source-formatting/record-shorthand/after.opaal")
+        replies = [b"", b"a" * 40 + b"\n", ("\0".join(paths) + "\0").encode()]
+        with patch("ci.package_source_formatting.subprocess.check_output", side_effect=replies):
+            with self.assertRaisesRegex(ValueError, "record shorthand fixture census"):
+                package_source_formatting.main()
+
 
 if __name__ == "__main__":
     unittest.main()

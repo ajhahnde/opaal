@@ -1,0 +1,20 @@
+type Server = {name: String, port: Int}
+def port_of(Server {name, port}: Server) -> Int
+{
+    return port
+}
+def selected(server: Server) -> Int
+{
+    match server {
+        Server {name, port} if port > 0 => {
+            return port_of(server)
+        }
+        Server {name, port} => {
+            return 0
+        }
+    }
+    return 0
+}
+let server = Server {name: 'api', port: 8080}
+let other = Server {name: 'api', port: 0}
+[selected(server), selected(other)]

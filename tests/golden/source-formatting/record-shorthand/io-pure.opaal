@@ -1,0 +1,9 @@
+import std::io
+export {test_value}
+
+def test_value() -> Bool
+{
+    let private = 'private-sentinel'
+    let fields = {private, effect: io::println(private)}
+    return true
+}

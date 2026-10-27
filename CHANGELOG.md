@@ -6,6 +6,9 @@ All notable changes to OPAAL are documented here.
 
 ### Added
 
+- Write same-name record fields and nominal pattern bindings once, as
+  `{name}` or `Server {name}`, with existing lookup, typing and binding rules
+  across checking, formatting and editors.
 - Compose list literals with explicit, ordered one-level spreads such as
   `[...items, extra]`, with shared checking, formatting and editor support.
 - Update mutable numeric variables with `+=`, `-=`, `*=`, `/=` and `%=` using

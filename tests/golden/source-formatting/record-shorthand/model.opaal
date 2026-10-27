@@ -1,0 +1,2 @@
+export {Box}
+type Box[T] = {value: T}

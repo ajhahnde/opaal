@@ -649,6 +649,64 @@ fn member_selectors_charge_exact_analysis_and_retained_binding_boundaries() {
 }
 
 #[test]
+fn record_shorthand_analysis_charges_fields_references_and_bindings_exactly() {
+    let source = "type Item = {value: Int}\nlet value = 7\nlet item = Item {value}\ndef pick(Item {value}: Item) -> Int { return value }\nlet fields = {value, result: pick(item)}\n";
+    let sources = resource_sources(source);
+    let report = loader(&sources).analyze_with_limits(
+        Path::new("/project/main.opaal"),
+        AnalysisLimits::unlimited(),
+    );
+    assert!(report.program().is_some(), "{:?}", report.issues());
+    let expanded = source
+        .replace("Item {value}", "Item {value: value}")
+        .replace("{value,", "{value: value,");
+    let expanded_sources = resource_sources(&expanded);
+    let expanded_report = loader(&expanded_sources).analyze_with_limits(
+        Path::new("/project/main.opaal"),
+        AnalysisLimits::unlimited(),
+    );
+    assert!(
+        expanded_report.program().is_some(),
+        "{:?}",
+        expanded_report.issues()
+    );
+    for kind in [
+        AnalysisLimitKind::SourceBytes,
+        AnalysisLimitKind::AstNodes,
+        AnalysisLimitKind::TypeDepth,
+        AnalysisLimitKind::WorkUnits,
+    ] {
+        let used = report.usage().get(kind);
+        assert!(used > 0);
+        if matches!(
+            kind,
+            AnalysisLimitKind::AstNodes | AnalysisLimitKind::TypeDepth
+        ) {
+            assert_eq!(
+                used,
+                expanded_report.usage().get(kind),
+                "{kind:?}: hidden shorthand work must equal explicit work"
+            );
+        }
+        for limit in [used, used - 1] {
+            let outcome = loader(&sources).analyze_with_limits_controlled(
+                Path::new("/project/main.opaal"),
+                &AnalysisControl::never(),
+                AnalysisLimits::unlimited().with_limit(kind, limit),
+            );
+            assert!(
+                if limit == used {
+                    matches!(outcome, ModuleAnalysisOutcome::Complete(ref report) if report.program().is_some())
+                } else {
+                    matches!(outcome, ModuleAnalysisOutcome::BudgetExceeded(ref error) if error.kind() == kind)
+                },
+                "{kind:?} {limit}: {outcome:?}"
+            );
+        }
+    }
+}
+
+#[test]
 fn list_literal_spread_analysis_charges_source_nodes_depth_and_work_exactly() {
     let source =
         "let items: List[Int] = [1, 2]\nlet result = [...[], ...items, ...[[3]]]\nresult\n";

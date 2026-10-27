@@ -133,6 +133,7 @@ struct Parser<'source, 'control, 'metadata> {
     position: usize,
     continuation_depth: usize,
     control_condition_depth: usize,
+    block_header_depth: Option<usize>,
     value_chain_depth: usize,
     diagnostics: Vec<Diagnostic>,
     is_cancelled: &'control dyn Fn() -> bool,
@@ -152,6 +153,7 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
             position: 0,
             continuation_depth: 0,
             control_condition_depth: 0,
+            block_header_depth: None,
             value_chain_depth: 0,
             diagnostics: Vec::new(),
             is_cancelled,
@@ -977,7 +979,7 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
         self.skip_inline();
         self.expect_keyword(Keyword::In, "for binding requires `in`")?;
         self.skip_layout();
-        let iterable = self.parse_expression()?;
+        let iterable = self.parse_block_header_expression()?;
         self.skip_inline();
         let body = self.parse_block()?;
         let span = self.span(start.start(), body.span.end());
@@ -994,7 +996,7 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
     fn parse_match(&mut self) -> ParseResult<Statement> {
         let start = self.take().expect("match keyword is current").span();
         self.skip_inline();
-        let value = self.parse_expression()?;
+        let value = self.parse_block_header_expression()?;
         self.skip_inline();
         self.expect_delimiter(Delimiter::LeftBrace, "match requires an arm block")?;
         self.skip_separators();
@@ -1073,12 +1075,24 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
                     self.skip_layout();
                     let mut fields = Vec::new();
                     while !self.at_delimiter(Some(Delimiter::RightBrace)) {
+                        self.check_cancelled()?;
                         let field = self.parse_identifier()?;
                         let field_start = field.span().start();
                         self.skip_inline();
-                        self.expect_operator(Operator::Colon, "record pattern field requires `:`")?;
-                        self.skip_layout();
-                        let pattern = self.parse_pattern()?;
+                        let pattern = if self.at_shorthand_end() {
+                            if self.source.slice(field.span()).ok() == Some("_") {
+                                Pattern::Wildcard(field.span())
+                            } else {
+                                Pattern::Binding(field)
+                            }
+                        } else {
+                            self.expect_operator(
+                                Operator::Colon,
+                                "record pattern field requires `:`",
+                            )?;
+                            self.skip_layout();
+                            self.parse_pattern()?
+                        };
                         let span = self.span(field_start, self.pattern_span(&pattern).end());
                         fields.push(PatternField {
                             name: field,
@@ -1450,9 +1464,18 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
 
     fn parse_control_condition(&mut self) -> ParseResult<ConditionalChain> {
         self.control_condition_depth += 1;
+        let previous = self.block_header_depth.replace(self.continuation_depth);
         let condition = self.parse_conditional_chain();
+        self.block_header_depth = previous;
         self.control_condition_depth -= 1;
         condition
+    }
+
+    fn parse_block_header_expression(&mut self) -> ParseResult<Expression> {
+        let previous = self.block_header_depth.replace(self.continuation_depth);
+        let expression = self.parse_expression();
+        self.block_header_depth = previous;
+        expression
     }
 
     fn parse_value_chain(&mut self) -> ParseResult<ConditionalChain> {
@@ -2128,9 +2151,8 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
                         let field = self.parse_identifier()?;
                         let field_start = field.span().start();
                         self.skip_inline();
-                        self.expect_operator(Operator::Colon, "nominal field requires `:`")?;
-                        self.skip_layout();
-                        let value = self.parse_expression()?;
+                        let value =
+                            self.parse_record_field_value(field, "nominal field requires `:`")?;
                         fields.push(NominalRecordFieldExpression {
                             name: field,
                             span: self.span(field_start, value.span().end()),
@@ -2394,9 +2416,13 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
                 None => return Err(self.incomplete_here(IncompleteReason::Expression)),
             };
             self.skip_inline();
-            self.expect_operator(Operator::Colon, "record entry requires `:`")?;
-            self.skip_layout();
-            let value = self.parse_expression()?;
+            let value = if let RecordKey::Identifier(name) = &key {
+                self.parse_record_field_value(*name, "record entry requires `:`")?
+            } else {
+                self.expect_operator(Operator::Colon, "record entry requires `:`")?;
+                self.skip_layout();
+                self.parse_expression()?
+            };
             let span = self.span(start.start(), value.span().end());
             entries.push(RecordEntry { key, value, span });
             self.skip_layout();
@@ -2412,6 +2438,35 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
         self.continuation_depth -= 1;
         let span = self.span(open.span().start(), close.span().end());
         Ok(Expression::new(ExpressionKind::Record(entries), span))
+    }
+
+    fn at_shorthand_end(&self) -> bool {
+        self.next_non_layout_position(self.position)
+            .is_some_and(|position| {
+                matches!(
+                    self.tokens[position].kind(),
+                    TokenKind::Operator(Operator::Comma)
+                        | TokenKind::Delimiter(Delimiter::RightBrace)
+                )
+            })
+    }
+
+    fn parse_record_field_value(
+        &mut self,
+        name: Identifier,
+        message: &str,
+    ) -> ParseResult<Expression> {
+        self.check_cancelled()?;
+        if self.at_shorthand_end() {
+            let span = name.span();
+            return Ok(Expression::new(
+                ExpressionKind::Name(NameReference { name, span }),
+                span,
+            ));
+        }
+        self.expect_operator(Operator::Colon, message)?;
+        self.skip_layout();
+        self.parse_expression()
     }
 
     fn parse_grouped_job(&mut self) -> ParseResult<Expression> {
@@ -2621,11 +2676,17 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
                 self.next_non_layout_position(first + 1)
                     .is_some_and(|position| {
                         let colon = &self.tokens[position];
-                        colon.kind() == TokenKind::Operator(Operator::Colon)
+                        (colon.kind() == TokenKind::Operator(Operator::Colon)
                             && !self.tokens.get(position + 1).is_some_and(|second| {
                                 second.kind() == TokenKind::Operator(Operator::Colon)
                                     && colon.is_adjacent_to(second)
-                            })
+                            }))
+                            || (self.block_header_depth != Some(self.continuation_depth)
+                                && matches!(
+                                    colon.kind(),
+                                    TokenKind::Operator(Operator::Comma)
+                                        | TokenKind::Delimiter(Delimiter::RightBrace)
+                                ))
                     })
             }
             _ => false,
@@ -3112,4 +3173,38 @@ fn is_bare_word_token(kind: TokenKind) -> bool {
                     | Operator::Caret
             )
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[test]
+    fn cancellation_is_polled_during_shorthand_field_parsing_after_lexing() {
+        for prefix in ["let fields = {", "let fields = Item {", "let Item {"] {
+            let suffix = if prefix == "let Item {" {
+                "} = item"
+            } else {
+                "}"
+            };
+            let file = SourceFile::new(
+                crate::SourceId::new(81),
+                "record.opaal",
+                format!("{prefix}{}{suffix}", vec!["value"; 512].join(",")),
+            );
+            let lex_polls = AtomicUsize::new(0);
+            lex_opaal_with_control(&file, &|| {
+                lex_polls.fetch_add(1, Ordering::Relaxed);
+                false
+            })
+            .unwrap();
+            let polls = AtomicUsize::new(0);
+            let outcome = parse_opaal_with_control(&file, &|| {
+                polls.fetch_add(1, Ordering::Relaxed) >= lex_polls.load(Ordering::Relaxed) + 20
+            });
+            assert_eq!(outcome, ControlledParseOutcome::Cancelled);
+            assert!(matches!(parse_opaal(&file), ParseOutcome::Complete(_)));
+        }
+    }
 }

@@ -79,6 +79,28 @@ let combined = [...defaults, 3]
 combined
 ```
 
+Record fields can use the same name once: `{name}` means `{name: name}`, and
+`Server {name}` constructs a nominal record using the existing value of `name`.
+In a nominal pattern, `Server {name}` declares a local binding for that field.
+Explicit fields can be mixed with shorthand; formatting keeps the chosen
+spelling. These forms require a toolchain built from this source.
+
+```opaal
+type Server = {name: String, port: Int}
+let name = 'api'
+let port = 8080
+let server = Server {name, port}
+let Server {name: label, port: selected} = server
+[label, selected]
+```
+
+Bind shorthand-only constructors to a value before using them as an `if`,
+`while`, `for` or `match` header, or use an explicit first field there. Braces
+at those outer header boundaries retain their existing block meaning. A
+standalone named stage also keeps command dispatch; use a value binding when
+constructing a nominal record. Quoted keys still require explicit values;
+anonymous patterns, record spread and default fields are unsupported.
+
 
 Run `opaal` without a script in a terminal to start the interactive client.
 Completed expressions display their values there; scripts produce output through

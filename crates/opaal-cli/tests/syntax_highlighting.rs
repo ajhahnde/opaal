@@ -5,6 +5,23 @@ use opaal_cli::highlight::{HighlightKind, SyntaxHighlighter};
 use opaal_syntax::{ParseOutcome, SourceFile, SourceId, parse_opaal};
 
 #[test]
+fn record_shorthand_keeps_complete_and_continuing_source_lossless() {
+    for text in [
+        "let name = '界🙂'\nlet record = {name}\n",
+        "type Item = {name: String}\nlet record = Item {name}\nlet Item {name: selected} = record\n",
+        "let record = Item {\nname,\n",
+    ] {
+        let segments = SyntaxHighlighter::new().highlight(text);
+        assert_lossless(text, &segments);
+        assert!(
+            segments
+                .iter()
+                .all(|segment| segment.kind() != HighlightKind::Invalid)
+        );
+    }
+}
+
+#[test]
 fn compound_assignment_operators_keep_their_complete_source_ranges() {
     for operator in ["+=", "-=", "*=", "/=", "%="] {
         for text in [

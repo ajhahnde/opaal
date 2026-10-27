@@ -1,0 +1,7 @@
+import './policy-tests.opaal' as subject
+export {test_negative}
+
+def test_negative() -> Bool
+{
+    return subject::test_value() == false
+}

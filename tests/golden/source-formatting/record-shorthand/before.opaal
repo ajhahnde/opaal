@@ -1,0 +1,7 @@
+type Server = {name: String, port: Int}
+let name = 'api'
+let port = 8080
+let fields = {name: name, port: port}
+let server = Server {name: name, port: port}
+let Server {name: label, port: bound_port} = server
+[fields.name, label, bound_port]

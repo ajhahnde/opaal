@@ -488,6 +488,22 @@ fn interpolated_names_and_path_tails_complete_without_evaluation() {
 }
 
 #[test]
+fn record_shorthand_completion_replaces_only_the_value_name() {
+    let registry = CommandRegistry::new();
+    let mut scope = ScopeStack::new();
+    scope
+        .declare("name", BindingMutability::Immutable, Value::string("api"))
+        .unwrap();
+    let engine = CompletionEngine::new(CompletionCatalog::from_runtime(&registry, &scope));
+    for text in ["let fields = {na}", "let item = Item {\nna"] {
+        let cursor = text.rfind("na").unwrap() + 2;
+        let completions = engine.complete(text, cursor);
+        assert_eq!(completions[0].value(), "name");
+        assert_eq!(completions[0].replacement(), (cursor - 2)..cursor);
+    }
+}
+
+#[test]
 fn list_spread_completion_replaces_only_the_operand_name() {
     let registry = CommandRegistry::new();
     let mut scope = ScopeStack::new();
