@@ -1,0 +1,7 @@
+export { test_* }
+def test_good() -> Bool
+{
+    throw "must-not-run"
+    return true
+}
+let test_bad = true

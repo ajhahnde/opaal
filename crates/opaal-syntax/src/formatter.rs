@@ -77,6 +77,19 @@ impl FormatLayout {
                 }
             }
             match statement.kind() {
+                StatementKind::ModuleExport(export) => {
+                    for token in tokens_in(tokens, statement.span().start(), statement.span().end())
+                    {
+                        if token.kind() == TokenKind::Operator(Operator::Comma) {
+                            self.no_space_before.insert(token.span().start());
+                        }
+                    }
+                    for selector in &export.names {
+                        if let crate::ModuleExportSelector::Prefix { marker, .. } = selector {
+                            self.no_space_before.insert(marker.start());
+                        }
+                    }
+                }
                 StatementKind::Function(function) => {
                     self.signature(tokens_in(
                         tokens,
@@ -206,7 +219,6 @@ impl FormatLayout {
                 }
                 StatementKind::ModuleImport(_)
                 | StatementKind::ModuleMemberImport(_)
-                | StatementKind::ModuleExport(_)
                 | StatementKind::NominalType(_)
                 | StatementKind::VariantType(_)
                 | StatementKind::Declaration(_)

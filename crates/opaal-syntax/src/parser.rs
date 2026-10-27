@@ -690,7 +690,7 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
     fn parse_module_name_list(
         &mut self,
         empty_message: &str,
-    ) -> ParseResult<(Vec<Identifier>, Token)> {
+    ) -> ParseResult<(Vec<crate::ModuleExportSelector>, Token)> {
         self.expect_delimiter(Delimiter::LeftBrace, "module name list requires `{`")?;
         self.skip_layout();
         if self.at_delimiter(Some(Delimiter::RightBrace)) {
@@ -698,7 +698,21 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
         }
         let mut names = Vec::new();
         loop {
-            names.push(self.parse_identifier()?);
+            let name = self.parse_identifier()?;
+            while self.current_kind() == Some(TokenKind::Whitespace) {
+                if (self.is_cancelled)() {
+                    break;
+                }
+                self.position += 1;
+            }
+            names.push(if let Some(star) = self.take_operator(Operator::Star) {
+                crate::ModuleExportSelector::Prefix {
+                    prefix: name,
+                    marker: star.span(),
+                }
+            } else {
+                crate::ModuleExportSelector::Name(name)
+            });
             self.skip_layout();
             if self.take_operator(Operator::Comma).is_none() {
                 break;

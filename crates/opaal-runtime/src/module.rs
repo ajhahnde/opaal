@@ -813,7 +813,118 @@ struct ModuleAliases {
     aliases: BTreeMap<String, ModuleAlias>,
     exports: BTreeMap<String, ModuleAliasExport>,
     selections: BTreeMap<String, ModuleSelection>,
-    exported_names: BTreeMap<String, Span>,
+    exported_names: BTreeMap<String, ExpandedExport>,
+    export_errors: Vec<ModuleNameError>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ExpandedExport {
+    span: Span,
+    is_prefix: bool,
+}
+
+fn expand_exports(
+    module: &ModuleId,
+    source: &SourceFile,
+    script: &Script,
+    control: &AnalysisControl,
+) -> (BTreeMap<String, ExpandedExport>, Vec<ModuleNameError>) {
+    let mut declarations = BTreeSet::new();
+    let mut selected = BTreeMap::<String, ExpandedExport>::new();
+    let mut errors = Vec::new();
+    for statement in script.statements() {
+        if control.is_cancelled() {
+            return (selected, errors);
+        }
+        for identifier in top_level_declared_identifiers(statement) {
+            let name = source.slice(identifier.span()).unwrap();
+            if !control.charge(
+                AnalysisLimitKind::WorkUnits,
+                (name.len() as u64 + 1) * (u64::from(declarations.len().max(1).ilog2()) + 2),
+            ) {
+                return (selected, errors);
+            }
+            declarations.insert(name);
+        }
+    }
+    for statement in script.statements() {
+        let StatementKind::ModuleExport(export) = statement.kind() else {
+            continue;
+        };
+        for selector in &export.names {
+            if control.is_cancelled() {
+                return (selected, errors);
+            }
+            let (identifier, is_prefix) = match selector {
+                opaal_syntax::ModuleExportSelector::Name(name) => (*name, false),
+                opaal_syntax::ModuleExportSelector::Prefix { prefix, .. } => (*prefix, true),
+            };
+            let spelling = source.slice(identifier.span()).unwrap();
+            let span = selector.span();
+            let mut matched = false;
+            // Ordered traversal bounds prefix comparisons and avoids scanning unrelated names.
+            if !control.charge(
+                AnalysisLimitKind::WorkUnits,
+                (spelling.len() as u64 + 1) * (u64::from(declarations.len().max(1).ilog2()) + 2),
+            ) {
+                return (selected, errors);
+            }
+            let mut candidates = declarations.range(spelling..);
+            loop {
+                if control.is_cancelled() {
+                    return (selected, errors);
+                }
+                if !control.charge(AnalysisLimitKind::WorkUnits, spelling.len() as u64 + 1) {
+                    return (selected, errors);
+                }
+                let name = if is_prefix {
+                    let Some(name) = candidates.next() else {
+                        break;
+                    };
+                    if !name.starts_with(spelling) {
+                        break;
+                    }
+                    *name
+                } else {
+                    spelling
+                };
+                matched = true;
+                if !control.charge(
+                    AnalysisLimitKind::WorkUnits,
+                    (name.len() as u64 + 1) * (u64::from(selected.len().max(1).ilog2()) + 2),
+                ) {
+                    return (selected, errors);
+                }
+                if let Some(first) = selected.get(name) {
+                    if !control.charge(AnalysisLimitKind::Diagnostics, 1) {
+                        return (selected, errors);
+                    }
+                    errors.push(ModuleNameError::DuplicateExport {
+                        module: module.clone(),
+                        name: name.to_owned(),
+                        first_span: first.span,
+                        duplicate_span: span,
+                    });
+                } else {
+                    selected.insert(name.to_owned(), ExpandedExport { span, is_prefix });
+                }
+                if !is_prefix {
+                    break;
+                }
+            }
+            if !matched {
+                if !control.charge(AnalysisLimitKind::Diagnostics, 1) {
+                    return (selected, errors);
+                }
+                errors.push(ModuleNameError::UnmatchedExportPrefix {
+                    module: module.clone(),
+                    prefix: spelling.to_owned(),
+                    export_span: span,
+                });
+            }
+        }
+    }
+    (selected, errors)
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1072,15 +1183,10 @@ impl ModuleAliasRegistry {
 
         for entry in sources.entries() {
             let table = registry.by_module.get_mut(entry.module()).unwrap();
-            for statement in entry.script().statements() {
-                if let StatementKind::ModuleExport(export) = statement.kind() {
-                    for name in &export.names {
-                        table.exported_names.insert(
-                            entry.source().slice(name.span()).unwrap().to_owned(),
-                            name.span(),
-                        );
-                    }
-                }
+            (table.exported_names, table.export_errors) =
+                expand_exports(entry.module(), entry.source(), entry.script(), control);
+            if control.is_cancelled() {
+                return Ok(registry);
             }
         }
 
@@ -1220,43 +1326,33 @@ impl ModuleAliasRegistry {
         }
 
         for entry in sources.entries() {
-            for statement in entry.script().statements() {
-                let StatementKind::ModuleExport(export) = statement.kind() else {
+            let table = registry.by_module.get_mut(entry.module()).unwrap();
+            for (name, selection) in &table.exported_names {
+                if selection.is_prefix {
+                    continue;
+                }
+                let Some(alias) = table.aliases.get(name) else {
                     continue;
                 };
-                for identifier in &export.names {
-                    let name = entry
-                        .source()
-                        .slice(identifier.span())
-                        .expect("parsed export names belong to their source")
-                        .to_owned();
-                    let aliases = registry
-                        .by_module
-                        .get_mut(entry.module())
-                        .expect("each source has an alias table");
-                    let Some(alias) = aliases.aliases.get(&name) else {
-                        continue;
-                    };
-                    if let Some(first) = aliases.exports.get(&name) {
-                        errors.push(ModuleAliasError::DuplicateExport {
-                            module: entry.module().clone(),
-                            name,
-                            first_span: first.export_span(),
-                            duplicate_span: identifier.span(),
-                        });
-                        continue;
-                    }
-                    aliases.exports.insert(
-                        name.clone(),
-                        ModuleAliasExport {
-                            name,
-                            target: alias.target().clone(),
-                            declaration_span: alias.declaration_span(),
-                            export_span: identifier.span(),
-                        },
-                    );
-                }
+                table.exports.insert(
+                    name.clone(),
+                    ModuleAliasExport {
+                        name: name.clone(),
+                        target: alias.target().clone(),
+                        declaration_span: alias.declaration_span(),
+                        export_span: selection.span,
+                    },
+                );
             }
+        }
+
+        if errors.is_empty()
+            && registry
+                .by_module
+                .values()
+                .any(|table| !table.export_errors.is_empty())
+        {
+            return Ok(registry);
         }
 
         for entry in sources.entries() {
@@ -1312,7 +1408,7 @@ impl ModuleAliasRegistry {
                 .unwrap()
                 .exported_names
                 .clone();
-            for (name, export_span) in exported {
+            for (name, selection) in exported {
                 if let Some(alias) = registry.alias(entry.module(), &name).cloned() {
                     registry
                         .by_module
@@ -1324,7 +1420,7 @@ impl ModuleAliasRegistry {
                             name,
                             target: alias.target().clone(),
                             declaration_span: alias.declaration_span(),
-                            export_span,
+                            export_span: selection.span,
                         });
                 }
             }
@@ -1344,6 +1440,7 @@ pub struct ModuleExport {
     target_module: ModuleId,
     declaration_span: Span,
     export_span: Span,
+    is_prefix: bool,
 }
 
 impl ModuleExport {
@@ -1364,7 +1461,13 @@ impl ModuleExport {
         self.declaration_span
     }
 
-    /// The identifier in the explicit export list.
+    /// Whether this export was generated by a prefix selector.
+    #[must_use]
+    pub const fn is_prefix(&self) -> bool {
+        self.is_prefix
+    }
+
+    /// The originating exact-name or prefix selector range.
     #[must_use]
     pub const fn export_span(&self) -> Span {
         self.export_span
@@ -1561,7 +1664,7 @@ impl ModuleNameRegistry {
         names
             .exports
             .values()
-            .find(|export| span_contains(export.export_span(), offset))
+            .find(|export| !export.is_prefix() && span_contains(export.export_span(), offset))
             .map(|export| {
                 (
                     export.name.clone(),
@@ -1618,54 +1721,37 @@ impl ModuleNameRegistry {
             if control.is_cancelled() {
                 return Ok(registry);
             }
-            for statement in entry.script().statements() {
-                let StatementKind::ModuleExport(export) = statement.kind() else {
-                    continue;
-                };
-                for identifier in &export.names {
-                    let name = entry
-                        .source()
-                        .slice(identifier.span())
-                        .expect("parsed identifiers belong to their module source")
-                        .to_owned();
-                    let names = registry
-                        .by_module
-                        .get_mut(entry.module())
-                        .expect("every registered source has a name table");
-                    let Some(declaration_span) = names.locals.get(&name).copied() else {
-                        if aliases.export(entry.module(), &name).is_some() {
-                            continue;
-                        }
-                        poisoned_exports
-                            .entry(entry.module().clone())
-                            .or_default()
-                            .insert(name.clone());
-                        errors.push(ModuleNameError::UnknownExport {
-                            module: entry.module().clone(),
-                            name,
-                            export_span: identifier.span(),
-                        });
-                        continue;
-                    };
-                    if let Some(first) = names.exports.get(&name) {
-                        errors.push(ModuleNameError::DuplicateExport {
-                            module: entry.module().clone(),
-                            name,
-                            first_span: first.export_span(),
-                            duplicate_span: identifier.span(),
-                        });
+            let table = aliases.by_module.get(entry.module()).unwrap();
+            let names = registry.by_module.get_mut(entry.module()).unwrap();
+            for (name, selection) in &table.exported_names {
+                if control.is_cancelled() {
+                    return Ok(registry);
+                }
+                let Some(declaration_span) = names.locals.get(name).copied() else {
+                    if aliases.export(entry.module(), name).is_some() {
                         continue;
                     }
-                    names.exports.insert(
-                        name.clone(),
-                        ModuleExport {
-                            target_module: entry.module().clone(),
-                            name,
-                            declaration_span,
-                            export_span: identifier.span(),
-                        },
-                    );
-                }
+                    poisoned_exports
+                        .entry(entry.module().clone())
+                        .or_default()
+                        .insert(name.clone());
+                    errors.push(ModuleNameError::UnknownExport {
+                        module: entry.module().clone(),
+                        name: name.clone(),
+                        export_span: selection.span,
+                    });
+                    continue;
+                };
+                names.exports.insert(
+                    name.clone(),
+                    ModuleExport {
+                        target_module: entry.module().clone(),
+                        name: name.clone(),
+                        declaration_span,
+                        export_span: selection.span,
+                        is_prefix: selection.is_prefix,
+                    },
+                );
             }
         }
 
@@ -4661,46 +4747,55 @@ impl RuntimeBindingTypes {
                 // Type resolution checks exports as well as declarations. Retained
                 // aliases need the same visibility as an import in this submission.
                 let mut standard_names = ModuleNames::default();
-                for statement in standard_entry.script().statements() {
-                    let StatementKind::ModuleExport(export) = statement.kind() else {
-                        continue;
-                    };
-                    for identifier in &export.names {
-                        let name = standard_entry.source().slice(identifier.span()).unwrap();
-                        let declaration_span = types
-                            .nominals
-                            .get(name)
-                            .map(NominalType::declaration_span)
-                            .or_else(|| {
-                                types
-                                    .functions
-                                    .iter()
-                                    .find(|function| function.name() == name)
-                                    .map(FunctionSignature::declaration_span)
-                            })
-                            .expect("compiled standard export has a declaration");
-                        standard_names.exports.insert(
-                            name.to_owned(),
-                            ModuleExport {
-                                target_module: standard.clone(),
-                                name: name.to_owned(),
-                                declaration_span,
-                                export_span: identifier.span(),
-                            },
-                        );
-                    }
+                let (selected, export_errors) = expand_exports(
+                    &standard,
+                    standard_entry.source(),
+                    standard_entry.script(),
+                    control,
+                );
+                assert!(
+                    export_errors.is_empty(),
+                    "compiled standard exports must resolve"
+                );
+                for (name, selection) in selected {
+                    let declaration_span = types
+                        .nominals
+                        .get(&name)
+                        .map(NominalType::declaration_span)
+                        .or_else(|| {
+                            types
+                                .functions
+                                .iter()
+                                .find(|function| function.name() == name)
+                                .map(FunctionSignature::declaration_span)
+                        })
+                        .expect("compiled standard export has a declaration");
+                    standard_names.exports.insert(
+                        name.clone(),
+                        ModuleExport {
+                            target_module: standard.clone(),
+                            name,
+                            declaration_span,
+                            export_span: selection.span,
+                            is_prefix: selection.is_prefix,
+                        },
+                    );
                 }
+
                 aliases
                     .by_module
                     .entry(standard.clone())
                     .or_default()
                     .exported_names
-                    .extend(
-                        standard_names
-                            .exports
-                            .iter()
-                            .map(|(name, export)| (name.clone(), export.export_span())),
-                    );
+                    .extend(standard_names.exports.iter().map(|(name, export)| {
+                        (
+                            name.clone(),
+                            ExpandedExport {
+                                span: export.export_span(),
+                                is_prefix: export.is_prefix(),
+                            },
+                        )
+                    }));
                 names.by_module.insert(standard.clone(), standard_names);
                 declarations.by_module.insert(standard, types);
             }
@@ -4744,16 +4839,9 @@ impl RuntimeBindingTypes {
                 )
                 .with_primary(script.span(), "analysis did not complete"));
             }
-            let table = aliases.by_module.entry(target).or_default();
-            for statement in parsed.statements() {
-                if let StatementKind::ModuleExport(export) = statement.kind() {
-                    for name in &export.names {
-                        table
-                            .exported_names
-                            .insert(compiled.slice(name.span()).unwrap().to_owned(), name.span());
-                    }
-                }
-            }
+            let table = aliases.by_module.entry(target.clone()).or_default();
+            (table.exported_names, table.export_errors) =
+                expand_exports(&target, &compiled, &parsed, control);
         }
         for selection in aliases.selections(entry.module()) {
             if aliases
@@ -11840,6 +11928,24 @@ impl<'a> ModuleProgramLoader<'a> {
                 }));
             }
         };
+        let export_errors = aliases
+            .by_module
+            .values()
+            .flat_map(|table| table.export_errors.iter())
+            .cloned()
+            .collect::<Vec<_>>();
+        if !export_errors.is_empty() {
+            let issues = export_errors
+                .into_iter()
+                .map(|error| ModuleAnalysisIssue::new(ModuleProgramError::Names(Box::new(error))))
+                .collect();
+            return ModuleAnalysisOutcome::Complete(Box::new(ModuleAnalysisReport {
+                sources: retained,
+                issues,
+                program: None,
+                usage: control.usage(),
+            }));
+        }
         let names_result = ModuleNameRegistry::analyze(&graph, &sources, &aliases, &control);
         if control.is_cancelled() {
             return Self::stopped_outcome(&control);
@@ -12907,6 +13013,12 @@ pub enum ModuleNameError {
         name: String,
         export_span: Span,
     },
+    /// A prefix selects no source-local top-level declaration.
+    UnmatchedExportPrefix {
+        module: ModuleId,
+        prefix: String,
+        export_span: Span,
+    },
     /// One module exports the same name more than once.
     DuplicateExport {
         module: ModuleId,
@@ -12950,6 +13062,7 @@ impl ModuleNameError {
         match self {
             Self::ReservedBinding { module, .. }
             | Self::UnknownExport { module, .. }
+            | Self::UnmatchedExportPrefix { module, .. }
             | Self::DuplicateExport { module, .. }
             | Self::UnknownReference { module, .. }
             | Self::DuplicateBinding { module, .. }
@@ -12976,6 +13089,12 @@ impl ModuleNameError {
                 *export_span,
                 format!("no top-level declaration or function named `{name}`"),
             ),
+            Self::UnmatchedExportPrefix { export_span, .. } => {
+                Diagnostic::new(Severity::Error, "MOD005", self.to_string()).with_primary(
+                    *export_span,
+                    "prefix matches no local top-level declaration",
+                )
+            }
             Self::DuplicateExport {
                 first_span,
                 duplicate_span,
@@ -13042,6 +13161,10 @@ impl fmt::Display for ModuleNameError {
                 formatter,
                 "module `{}` cannot export unknown name `{name}`",
                 module.path().display()
+            ),
+            Self::UnmatchedExportPrefix { prefix, .. } => write!(
+                formatter,
+                "export prefix `{prefix}*` matches no local top-level declaration"
             ),
             Self::DuplicateExport { module, name, .. } => write!(
                 formatter,

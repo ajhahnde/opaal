@@ -39,6 +39,25 @@ RECORD_SHORTHAND_FIXTURES = (
     "io-allowed.opaal", "io-failure.opaal", "io-pure.opaal",
 )
 
+GROUPED_EXPORT_FIXTURES = (
+    "after.opaal",
+    "before.opaal",
+    "canonical.opaal",
+    "duplicate.opaal",
+    "explicit-reexports.opaal",
+    "imports-only.opaal",
+    "incomplete.opaal",
+    "invalid-inventory.opaal",
+    "invalid.opaal",
+    "main.opaal",
+    "model.opaal",
+    "no-match.opaal",
+    "noncanonical.opaal",
+    "project-tasks.opaal",
+    "purity.opaal",
+)
+
+
 
 
 def main() -> None:
@@ -60,6 +79,9 @@ def main() -> None:
     records = {name.removeprefix("record-shorthand/") for name in names if name.startswith("record-shorthand/")}
     if records != set(RECORD_SHORTHAND_FIXTURES):
         raise ValueError("record shorthand fixture census differs from the committed source")
+    exports = {name.removeprefix("grouped-export-prefixes/") for name in names if name.startswith("grouped-export-prefixes/")}
+    if exports != set(GROUPED_EXPORT_FIXTURES):
+        raise ValueError("grouped export fixture census differs from the committed source")
     archive = package_examples(ROOT, names, source, directory=FIXTURES, name="source-formatting")
     print(archive.relative_to(ROOT))
 

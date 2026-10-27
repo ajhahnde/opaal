@@ -27,6 +27,17 @@ pub struct Span {
 }
 
 impl Span {
+    /// Covers two ranges from the same source.
+    #[must_use]
+    pub fn cover(self, other: Self) -> Self {
+        assert_eq!(self.source_id, other.source_id);
+        Self {
+            source_id: self.source_id,
+            start: self.start.min(other.start),
+            end: self.end.max(other.end),
+        }
+    }
+
     #[must_use]
     pub const fn source_id(self) -> SourceId {
         self.source_id

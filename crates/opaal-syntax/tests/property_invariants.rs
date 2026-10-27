@@ -309,7 +309,14 @@ impl<'source> SpanChecker<'source> {
             }
             StatementKind::ModuleExport(export) => {
                 for name in &export.names {
-                    self.identifier(*name);
+                    self.span(name.span());
+                    match name {
+                        opaal_syntax::ModuleExportSelector::Name(name) => self.identifier(*name),
+                        opaal_syntax::ModuleExportSelector::Prefix { prefix, marker } => {
+                            self.identifier(*prefix);
+                            self.span(*marker);
+                        }
+                    }
                 }
             }
             StatementKind::NominalType(declaration) => {

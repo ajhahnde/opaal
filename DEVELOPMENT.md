@@ -118,10 +118,36 @@ target/debug/opaal examples/language-foundation.opaal
 Pure non-interactive evaluation does not print its final value. Examples must not depend on authority that
 the pure foundation does not grant.
 
+## Export prefixes
+
+Use `export { test_*, Item }` to mix exact names with source-local prefixes.
+One trailing `*` selects every top-level declaration whose name starts with the
+identifier, anywhere in the file. This includes destructured bindings, functions,
+actions and type names; imported aliases/members, nested bindings, task aliases
+and enum members are excluded. `check*` also matches `check` itself. Spaces/tabs
+may precede the star; formatting binds it to the prefix. A newline, comment or
+continuation cannot split the pair. Bare stars, globs and prefix imports are invalid.
+
+Each prefix must match (`MOD005`); selecting a name twice is `MOD006`, with the
+second selector primary and the first secondary. Exact imported names can still
+be explicitly re-exported. Adding a matching declaration deliberately grows the
+public API and invalidates existing source-bound project plans. File imports
+resolve concrete original identities. Direct interactive exports remain inert
+metadata and never retain a selector for later cells.
+
+The unpublished Rust syntax API changes `ModuleExportStatement.names` to
+`Vec<ModuleExportSelector>`. Wrap existing identifiers in `Name(identifier)`;
+`Prefix { prefix, marker }` retains both tokens, and `.span()` covers the selector.
+Visitors must handle both variants. `ModuleExport::is_prefix()` distinguishes
+generated selections; `export_span()` returns the originating selector range.
+Prefix tokens have no singular hover/definition target, and concrete reference
+searches omit them. Exhaustive `ModuleNameError` matches must handle
+`UnmatchedExportPrefix`. There is no serialized/binary AST compatibility promise.
+
 ## Pure policy tests
 
 Export ordinary non-generic zero-argument Bool functions whose names start with
-`test_`. List their signatures without initialization, or run them sequentially
+`test_`, explicitly or with `export { test_* }`. List their signatures without initialization, or run them sequentially
 in fresh module contexts:
 
 ```sh
