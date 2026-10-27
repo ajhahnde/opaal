@@ -1,0 +1,5 @@
+type Server = {name: String, port: Int}
+let server = Server {name: 'api', port: 8080}
+let Server {name, port} = server
+let project = {|Server {name, port}| [name, port]}
+project(server)

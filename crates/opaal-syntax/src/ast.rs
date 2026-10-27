@@ -587,6 +587,7 @@ pub struct NominalRecordPattern {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PatternField {
     pub name: Identifier,
+    /// Shorthand binds at the field token's own span.
     pub pattern: Pattern,
     pub span: Span,
 }
@@ -710,6 +711,7 @@ pub enum LiteralKind {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RecordEntry {
     pub key: RecordKey,
+    /// Shorthand is an ordinary name reference at the identifier key's span.
     pub value: Expression,
     pub span: Span,
 }
@@ -723,6 +725,7 @@ pub struct NominalRecordExpression {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct NominalRecordFieldExpression {
     pub name: Identifier,
+    /// Shorthand is an ordinary name reference at the field token's span.
     pub value: Expression,
     pub span: Span,
 }

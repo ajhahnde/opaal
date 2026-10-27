@@ -773,6 +773,149 @@
       "assertion": "ci/qualify_source_formatting.py"
     },
     {
+      "path": "tests/golden/source-formatting/record-shorthand/after.opaal",
+      "role": "positive",
+      "reason": "Same-name record construction and nominal pattern binding; exact values, failures, source identity, authority and shared observers.",
+      "assertion": "ci/qualify_source_formatting.py"
+    },
+    {
+      "path": "tests/golden/source-formatting/record-shorthand/alternate.opaal",
+      "role": "positive",
+      "reason": "Same-name record construction and nominal pattern binding; exact values, failures, source identity, authority and shared observers.",
+      "assertion": "ci/qualify_source_formatting.py"
+    },
+    {
+      "path": "tests/golden/source-formatting/record-shorthand/before.opaal",
+      "role": "positive",
+      "reason": "Same-name record construction and nominal pattern binding; exact values, failures, source identity, authority and shared observers.",
+      "assertion": "ci/qualify_source_formatting.py"
+    },
+    {
+      "path": "tests/golden/source-formatting/record-shorthand/canonical.opaal",
+      "role": "positive",
+      "reason": "Same-name record construction and nominal pattern binding; exact values, failures, source identity, authority and shared observers.",
+      "assertion": "ci/qualify_source_formatting.py"
+    },
+    {
+      "path": "tests/golden/source-formatting/record-shorthand/duplicate.opaal",
+      "role": "runtime-negative",
+      "reason": "Same-name record construction and nominal pattern binding; exact values, failures, source identity, authority and shared observers.",
+      "assertion": "ci/qualify_source_formatting.py",
+      "sha256": "b5d893cfaccfa9cf7eb0037ee2f4770092f774c36dac9be658d5370550f28e54"
+    },
+    {
+      "path": "tests/golden/source-formatting/record-shorthand/failure.opaal",
+      "role": "semantic-negative",
+      "reason": "Same-name record construction and nominal pattern binding; exact values, failures, source identity, authority and shared observers.",
+      "assertion": "ci/qualify_source_formatting.py",
+      "sha256": "80556aeab4dba2a7ffc54a7ab1d495310fdd3c3d39aa265dccefd3a32a4780bb"
+    },
+    {
+      "path": "tests/golden/source-formatting/record-shorthand/incomplete.opaal",
+      "role": "syntax-incomplete",
+      "reason": "Same-name record construction and nominal pattern binding; exact values, failures, source identity, authority and shared observers.",
+      "assertion": "ci/qualify_source_formatting.py",
+      "sha256": "5ea74c13b1dedddc9af45969a1eb74137016b87a46a70af2db93b98423204150",
+      "format_diagnostic": "SYN002",
+      "format_message": "incomplete input: opening brace requires a closing brace"
+    },
+    {
+      "path": "tests/golden/source-formatting/record-shorthand/invalid.opaal",
+      "role": "syntax-invalid",
+      "reason": "Same-name record construction and nominal pattern binding; exact values, failures, source identity, authority and shared observers.",
+      "assertion": "ci/qualify_source_formatting.py",
+      "sha256": "e96445d55f3a435d6327706d6dd800878d77399c31b6bd82d48f9be31b62a7a6",
+      "format_diagnostic": "OP1000",
+      "format_message": "record entry requires `:`"
+    },
+    {
+      "path": "tests/golden/source-formatting/record-shorthand/io-allowed.opaal",
+      "role": "positive",
+      "reason": "Same-name record construction and nominal pattern binding; exact values, failures, source identity, authority and shared observers.",
+      "assertion": "ci/qualify_source_formatting.py"
+    },
+    {
+      "path": "tests/golden/source-formatting/record-shorthand/io-failure.opaal",
+      "role": "runtime-negative",
+      "reason": "Same-name record construction and nominal pattern binding; exact values, failures, source identity, authority and shared observers.",
+      "assertion": "ci/qualify_source_formatting.py",
+      "sha256": "8976cb23e3fd94b9469d183c009e8296948d19396c13e23c4fad3acee65272da"
+    },
+    {
+      "path": "tests/golden/source-formatting/record-shorthand/io-pure.opaal",
+      "role": "refused",
+      "reason": "Same-name record construction and nominal pattern binding; exact values, failures, source identity, authority and shared observers.",
+      "assertion": "ci/qualify_source_formatting.py",
+      "sha256": "8372e9a66bce6b3311477434213030c5385d2dea579f949e04893cd33f59c59c"
+    },
+    {
+      "path": "tests/golden/source-formatting/record-shorthand/missing.opaal",
+      "role": "semantic-negative",
+      "reason": "Same-name record construction and nominal pattern binding; exact values, failures, source identity, authority and shared observers.",
+      "assertion": "ci/qualify_source_formatting.py",
+      "sha256": "9f7cc1b02c53ed7198de2d5d12b02b4d351eafbcf747a847fda0314dd8f64f6f"
+    },
+    {
+      "path": "tests/golden/source-formatting/record-shorthand/model.opaal",
+      "role": "positive",
+      "reason": "Same-name record construction and nominal pattern binding; exact values, failures, source identity, authority and shared observers.",
+      "assertion": "ci/qualify_source_formatting.py"
+    },
+    {
+      "path": "tests/golden/source-formatting/record-shorthand/noncanonical.opaal",
+      "role": "noncanonical",
+      "reason": "Same-name record construction and nominal pattern binding; exact values, failures, source identity, authority and shared observers.",
+      "assertion": "ci/qualify_source_formatting.py",
+      "sha256": "bdf173a8ea03118e0ab9a516a1c90c57341e9dadbc9bc64a995c65af50885b4d",
+      "format_diagnostic": "FMT001",
+      "format_message": "source is not canonically formatted"
+    },
+    {
+      "path": "tests/golden/source-formatting/record-shorthand/patterns.opaal",
+      "role": "positive",
+      "reason": "Same-name record construction and nominal pattern binding; exact values, failures, source identity, authority and shared observers.",
+      "assertion": "ci/qualify_source_formatting.py"
+    },
+    {
+      "path": "tests/golden/source-formatting/record-shorthand/policy-negative.opaal",
+      "role": "runtime-negative",
+      "reason": "Same-name record construction and nominal pattern binding; exact values, failures, source identity, authority and shared observers.",
+      "assertion": "ci/qualify_source_formatting.py",
+      "sha256": "5e6344791551cad7ba0df0e83e01edb1894f9ddb9caf252b89c1c9fc1fe3c546"
+    },
+    {
+      "path": "tests/golden/source-formatting/record-shorthand/policy-tests.opaal",
+      "role": "positive",
+      "reason": "Same-name record construction and nominal pattern binding; exact values, failures, source identity, authority and shared observers.",
+      "assertion": "ci/qualify_source_formatting.py"
+    },
+    {
+      "path": "tests/golden/source-formatting/record-shorthand/project-tasks.opaal",
+      "role": "positive",
+      "reason": "Same-name record construction and nominal pattern binding; exact values, failures, source identity, authority and shared observers.",
+      "assertion": "ci/qualify_source_formatting.py"
+    },
+    {
+      "path": "tests/golden/source-formatting/record-shorthand/qualified.opaal",
+      "role": "positive",
+      "reason": "Same-name record construction and nominal pattern binding; exact values, failures, source identity, authority and shared observers.",
+      "assertion": "ci/qualify_source_formatting.py"
+    },
+    {
+      "path": "tests/golden/source-formatting/record-shorthand/unknown.opaal",
+      "role": "semantic-negative",
+      "reason": "Same-name record construction and nominal pattern binding; exact values, failures, source identity, authority and shared observers.",
+      "assertion": "ci/qualify_source_formatting.py",
+      "sha256": "54258a5f049b3174057ab2daf088c13c8a4976eb8085563f06400b6c8d0fa9ac"
+    },
+    {
+      "path": "tests/golden/source-formatting/record-shorthand/wrong-type.opaal",
+      "role": "semantic-negative",
+      "reason": "Same-name record construction and nominal pattern binding; exact values, failures, source identity, authority and shared observers.",
+      "assertion": "ci/qualify_source_formatting.py",
+      "sha256": "bc3a8279919682764c0912647df010146482605c3c57a7c7c72669d3c1d72c3a"
+    },
+    {
       "path": "tests/golden/standard-input-output/ci-job-check/assess.opaal",
       "role": "positive",
       "reason": "Canonical native processor or CI assessment reference; typed project tasks run only through the explicit project route.",
@@ -1586,6 +1729,11 @@
       "path": "README.md",
       "ordinal": 1,
       "sha256": "a1fe9e7f068cea26708f687de193bbb43dfd914edc07f4570ff43ba1d7bf1e14"
+    },
+    {
+      "path": "README.md",
+      "ordinal": 2,
+      "sha256": "1a9bc57fb6f192cb6423321ac33188bcab8812751a76af96e0f2db59085f96d9"
     }
   ],
   "embedded_owners": [
@@ -1837,8 +1985,8 @@
     },
     {
       "path": "ci/package_source_formatting.py",
-      "sha256": "1f264d97ff0682438020bec65b638afaa134b9abe1fdf5c114c08e9a83a4e6bc",
-      "source_markers": 50,
+      "sha256": "60ebbda313311fe2fd3c8f2fbd0ad36b396d1b561c038bb0c39087f753b76738",
+      "source_markers": 71,
       "constructors_or_assertions": [
         "main",
         "module constants/imports"
@@ -2082,8 +2230,8 @@
     },
     {
       "path": "ci/qualify_source_formatting.py",
-      "sha256": "6916ba44c1ac7b35ba68dc4634ab1351956b799f7df6c7a60e7937196412e913",
-      "source_markers": 195,
+      "sha256": "c4d8fa8d679c3f77f6c6f6049be9140b6853c369425158a32c65a24ee56bce8e",
+      "source_markers": 227,
       "constructors_or_assertions": [
         "audit",
         "compound_assignment",
@@ -2101,10 +2249,13 @@
         "qualify",
         "read_until",
         "receive",
+        "record_position",
+        "record_shorthand",
         "request",
         "run",
         "send",
         "terminal_continuation",
+        "units",
         "verify_contract"
       ],
       "role": "source-infrastructure",
@@ -2422,8 +2573,8 @@
     },
     {
       "path": "ci/tests/test_source_formatting.py",
-      "sha256": "9d2d61c407ef29abd1e86eb27ed728f6838356dfcb4f89f1e46db067bfd1214d",
-      "source_markers": 27,
+      "sha256": "523a31b8a8929112947f0274050780e25d961f367c23dc71ba19be1961a09b4c",
+      "source_markers": 29,
       "constructors_or_assertions": [
         "census",
         "setUp",
@@ -2436,6 +2587,7 @@
         "test_packaging_refuses_an_incomplete_compound_fixture_census",
         "test_packaging_refuses_an_incomplete_list_spread_fixture_census",
         "test_packaging_refuses_an_incomplete_member_fixture_census",
+        "test_packaging_refuses_an_incomplete_record_shorthand_fixture_census",
         "test_packaging_refuses_dirty_source_before_writing",
         "test_source_receipts_change_but_authority_and_results_still_compare",
         "write"
@@ -2676,7 +2828,7 @@
     },
     {
       "path": "crates/opaal-cli/tests/context_aware_completion.rs",
-      "sha256": "b83b706d82015d6deffd0954b00bf5141dc6357e9b1caa554e7d7e494d3d49fa",
+      "sha256": "2ed6460d1c5e0e9e1cb1c356380aea0b4013e8b2b84397af3bdd64f511b8c1fc",
       "source_markers": 17,
       "constructors_or_assertions": [
         "expression_completion_uses_intrinsics_and_respects_lexical_shadowing",
@@ -3163,7 +3315,7 @@
     },
     {
       "path": "crates/opaal-cli/tests/syntax_highlighting.rs",
-      "sha256": "4997fce64e3d10a85c37ebba37f9b1d8c05c4de777945fe8e8be12c77d87004a",
+      "sha256": "9d57d7d0672344fc06c786361664131da435a59b6fdd6bf46daea2d314905b2b",
       "source_markers": 2,
       "constructors_or_assertions": [
         "incomplete_multiline_source_keeps_token_styles_without_error_coloring",
@@ -4358,8 +4510,8 @@
     },
     {
       "path": "crates/opaal-runtime/tests/interactive_modules.rs",
-      "sha256": "7f407d232b8af216fce428d85a0b67a66ece393f8f8fb6cc3bbcb144a1187963",
-      "source_markers": 80,
+      "sha256": "1d0340dd568c32cdf4c16a441ce0274e3afea7fe09c05c186b1db55e038875e3",
+      "source_markers": 81,
       "constructors_or_assertions": [
         "a_declaration_cannot_publish_types_from_a_later_local_import",
         "a_partial_first_group_charges_its_retained_cell_once_like_expanded_singles",
@@ -4375,6 +4527,7 @@
         "groups_keep_expanded_single_step_charging_and_partial_publication_at_every_budget",
         "local_source_capability_is_explicit_and_initializers_have_no_host",
         "partial_import_groups_retain_first_entry_nominals_callables_and_retry_without_reload",
+        "record_shorthand_survives_later_cells_and_restored_pattern_callbacks",
         "same_report_module_builds_and_formats_values_across_cells",
         "selected_operations_follow_lexical_publication_and_nested_shadowing",
         "selected_values_functions_and_operations_survive_later_cells"
@@ -4526,8 +4679,8 @@
     },
     {
       "path": "crates/opaal-runtime/tests/opaal_resources.rs",
-      "sha256": "94f854e3e5e6bd1615e288d49f4412748590c3624bb7b674855a505f869cfce2",
-      "source_markers": 43,
+      "sha256": "fa9aebdcc67a784af7a0ad1b8fb96a67957fe2dda04da8349d831c231c856e32",
+      "source_markers": 46,
       "constructors_or_assertions": [
         "analysis_source",
         "collection_and_call_depth_limits_refuse_the_first_excess",
@@ -4541,6 +4694,7 @@
         "member_selectors_charge_exact_analysis_and_retained_binding_boundaries",
         "one_runtime_step_budget_crosses_statement_and_module_boundaries",
         "program",
+        "record_shorthand_analysis_charges_fields_references_and_bindings_exactly",
         "resource_sources",
         "source_limit_requests_only_the_ceiling_plus_one_byte"
       ],
@@ -4781,6 +4935,17 @@
       "role": "mixed-test-buffers",
       "reason": "Random contract or native host test owner; preserve scripted source, refusal, diagnostic and malformed-input assertions.",
       "assertion": "crates/opaal-runtime/tests/random_sampling.rs"
+    },
+    {
+      "path": "crates/opaal-runtime/tests/record_shorthand.rs",
+      "sha256": "79127a566f82d338654144e206d3ef2d7173659b710cc47524c97b14f82d176b",
+      "source_markers": 3,
+      "constructors_or_assertions": [
+        "construction_and_all_existing_pattern_contexts_share_expanded_semantics"
+      ],
+      "role": "mixed-test-buffers",
+      "reason": "Explicit shorthand syntax/semantic contract buffers and assertions.",
+      "assertion": "crates/opaal-runtime/tests/record_shorthand.rs"
     },
     {
       "path": "crates/opaal-runtime/tests/runtime_errors.rs",
@@ -5089,9 +5254,10 @@
     },
     {
       "path": "crates/opaal-syntax/src/parser.rs",
-      "sha256": "96587d079153747748fa139ac183480eb823cd428c2abd1c2d49b134ad7aeef2",
-      "source_markers": 1,
+      "sha256": "3967e9f70bdb56737b89e4701ea412774e21d257467539c86b2dcdd8a5cb4cd3",
+      "source_markers": 3,
       "constructors_or_assertions": [
+        "cancellation_is_polled_during_shorthand_field_parsing_after_lexing",
         "parse_module_import_entry"
       ],
       "role": "source-infrastructure",
@@ -5332,6 +5498,18 @@
       "role": "mixed-test-buffers",
       "reason": "Retain complete, legacy, invalid and incomplete source buffers and their source-position assertions; canonical output is asserted only by formatting owners.",
       "assertion": "crates/opaal-syntax/tests/property_invariants.rs"
+    },
+    {
+      "path": "crates/opaal-syntax/tests/record_shorthand.rs",
+      "sha256": "184f8ea590fe5027d4fe6f4a6643f681704873a10255581080a27836253113cb",
+      "source_markers": 3,
+      "constructors_or_assertions": [
+        "formatting_preserves_spelling_comments_and_control_command_boundaries",
+        "source"
+      ],
+      "role": "mixed-test-buffers",
+      "reason": "Explicit shorthand syntax/semantic contract buffers and assertions.",
+      "assertion": "crates/opaal-syntax/tests/record_shorthand.rs"
     },
     {
       "path": "crates/opaal-syntax/tests/source_diagnostics.rs",
@@ -6014,6 +6192,13 @@
       "sha256": "6b6c1b795997389d737f3675ca476c13e2deee890fb0886185a57ce74e7f53ad"
     },
     {
+      "path": "fuzz/seeds/expander/record-shorthand",
+      "targets": [
+        "expander"
+      ],
+      "sha256": "557e5aba2546b9b61bb8b1e53b87fadd91c14ebdc343993696b1e09a685ebb39"
+    },
+    {
       "path": "fuzz/seeds/numeric_operations_limits/vector-0-0",
       "targets": [
         "numeric_operations_limits"
@@ -6376,6 +6561,13 @@
         "random_limits"
       ],
       "sha256": "c9b057f5b460fa22c8b14b0324487b5408a279d77bb155c975973c8cf1b0c528"
+    },
+    {
+      "path": "fuzz/seeds/resources/record-shorthand",
+      "targets": [
+        "resources"
+      ],
+      "sha256": "a709e0eb11d5054459434958f6f556435ce659b9a293efc54e86e9787dd2135e"
     },
     {
       "path": "fuzz/seeds/stdio_limits/operation-0-limit-0",
@@ -7475,6 +7667,153 @@
         "parser"
       ],
       "sha256": "0a9b97d74a4e151ec85c5f93027ca35cce3cec7a3c74828d48f4089b8bd56e76"
+    },
+    {
+      "path": "tests/golden/source-formatting/record-shorthand/after.opaal",
+      "targets": [
+        "parser"
+      ],
+      "sha256": "306be97ef1ae0dde2a9b91fe0573427868861e506a23cbce08853df7b6eac253"
+    },
+    {
+      "path": "tests/golden/source-formatting/record-shorthand/alternate.opaal",
+      "targets": [
+        "parser"
+      ],
+      "sha256": "5266d776a44ffe6e919743c3f3d554ed4527b43a47ed346df90f5753531454f9"
+    },
+    {
+      "path": "tests/golden/source-formatting/record-shorthand/before.opaal",
+      "targets": [
+        "parser"
+      ],
+      "sha256": "ab38bb65c10b70e10938476f18f3418a8d71b6a6f4b6c2b9eded43ce147aabaa"
+    },
+    {
+      "path": "tests/golden/source-formatting/record-shorthand/canonical.opaal",
+      "targets": [
+        "parser"
+      ],
+      "sha256": "91031736279ba2af990a3b6802cd9d334965aabd4588ffe697b17423793d60b5"
+    },
+    {
+      "path": "tests/golden/source-formatting/record-shorthand/duplicate.opaal",
+      "targets": [
+        "parser"
+      ],
+      "sha256": "b5d893cfaccfa9cf7eb0037ee2f4770092f774c36dac9be658d5370550f28e54"
+    },
+    {
+      "path": "tests/golden/source-formatting/record-shorthand/failure.opaal",
+      "targets": [
+        "parser"
+      ],
+      "sha256": "80556aeab4dba2a7ffc54a7ab1d495310fdd3c3d39aa265dccefd3a32a4780bb"
+    },
+    {
+      "path": "tests/golden/source-formatting/record-shorthand/incomplete.opaal",
+      "targets": [
+        "parser"
+      ],
+      "sha256": "5ea74c13b1dedddc9af45969a1eb74137016b87a46a70af2db93b98423204150"
+    },
+    {
+      "path": "tests/golden/source-formatting/record-shorthand/invalid.opaal",
+      "targets": [
+        "parser"
+      ],
+      "sha256": "e96445d55f3a435d6327706d6dd800878d77399c31b6bd82d48f9be31b62a7a6"
+    },
+    {
+      "path": "tests/golden/source-formatting/record-shorthand/io-allowed.opaal",
+      "targets": [
+        "parser"
+      ],
+      "sha256": "f3bda45b27cf3a07f6cfbb26d64793914c3acbfecdb18d1aef176d5a27a132a0"
+    },
+    {
+      "path": "tests/golden/source-formatting/record-shorthand/io-failure.opaal",
+      "targets": [
+        "parser"
+      ],
+      "sha256": "8976cb23e3fd94b9469d183c009e8296948d19396c13e23c4fad3acee65272da"
+    },
+    {
+      "path": "tests/golden/source-formatting/record-shorthand/io-pure.opaal",
+      "targets": [
+        "parser"
+      ],
+      "sha256": "8372e9a66bce6b3311477434213030c5385d2dea579f949e04893cd33f59c59c"
+    },
+    {
+      "path": "tests/golden/source-formatting/record-shorthand/missing.opaal",
+      "targets": [
+        "parser"
+      ],
+      "sha256": "9f7cc1b02c53ed7198de2d5d12b02b4d351eafbcf747a847fda0314dd8f64f6f"
+    },
+    {
+      "path": "tests/golden/source-formatting/record-shorthand/model.opaal",
+      "targets": [
+        "parser"
+      ],
+      "sha256": "f8fa7ed738e5814d021166e09f7bc01c9428b3258e73ecae325ad1873434914d"
+    },
+    {
+      "path": "tests/golden/source-formatting/record-shorthand/noncanonical.opaal",
+      "targets": [
+        "parser"
+      ],
+      "sha256": "bdf173a8ea03118e0ab9a516a1c90c57341e9dadbc9bc64a995c65af50885b4d"
+    },
+    {
+      "path": "tests/golden/source-formatting/record-shorthand/patterns.opaal",
+      "targets": [
+        "parser"
+      ],
+      "sha256": "8b1ee7d1775e64517917887668a1716c1a14613cf9291fec0c704d24e70f04f4"
+    },
+    {
+      "path": "tests/golden/source-formatting/record-shorthand/policy-negative.opaal",
+      "targets": [
+        "parser"
+      ],
+      "sha256": "5e6344791551cad7ba0df0e83e01edb1894f9ddb9caf252b89c1c9fc1fe3c546"
+    },
+    {
+      "path": "tests/golden/source-formatting/record-shorthand/policy-tests.opaal",
+      "targets": [
+        "parser"
+      ],
+      "sha256": "86ea1be2a2c4215df58d686fc2fc4e7b79e5f2e2c5b8a59bb7c5b76943ebfb47"
+    },
+    {
+      "path": "tests/golden/source-formatting/record-shorthand/project-tasks.opaal",
+      "targets": [
+        "parser"
+      ],
+      "sha256": "1034375dfeaeb1ad2b53d3c62f65732ddd41b249cead1b77059b62444416bf71"
+    },
+    {
+      "path": "tests/golden/source-formatting/record-shorthand/qualified.opaal",
+      "targets": [
+        "parser"
+      ],
+      "sha256": "a0bc01bb2909af4492ba04fb02d82e075cac84ab3a73f2edd8201fee83eb5032"
+    },
+    {
+      "path": "tests/golden/source-formatting/record-shorthand/unknown.opaal",
+      "targets": [
+        "parser"
+      ],
+      "sha256": "54258a5f049b3174057ab2daf088c13c8a4976eb8085563f06400b6c8d0fa9ac"
+    },
+    {
+      "path": "tests/golden/source-formatting/record-shorthand/wrong-type.opaal",
+      "targets": [
+        "parser"
+      ],
+      "sha256": "bc3a8279919682764c0912647df010146482605c3c57a7c7c72669d3c1d72c3a"
     },
     {
       "path": "tests/opaal-foundation/language/grammar/complete/compound-assignment.opaal",

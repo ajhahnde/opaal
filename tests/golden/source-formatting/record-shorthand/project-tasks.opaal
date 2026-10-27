@@ -1,0 +1,24 @@
+type Server = {name: String, port: Int}
+
+def result() -> Int
+{
+    let name = 'api'
+    let port = 5
+    let server = Server {name, port}
+    let Server {name: label, port: selected} = server
+    return selected
+}
+
+action readiness() -> Int
+effects {
+}
+{
+    return result()
+}
+task verify = readiness
+
+export {test_value}
+def test_value() -> Bool
+{
+    return result() == 5
+}

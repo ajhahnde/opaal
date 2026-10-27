@@ -31,6 +31,14 @@ LIST_LITERAL_SPREAD_FIXTURES = (
     "io-failure.opaal", "io-pure.opaal",
 )
 
+RECORD_SHORTHAND_FIXTURES = (
+    "before.opaal", "after.opaal", "alternate.opaal", "model.opaal", "qualified.opaal",
+    "patterns.opaal", "failure.opaal", "duplicate.opaal", "unknown.opaal", "missing.opaal",
+    "wrong-type.opaal", "invalid.opaal", "incomplete.opaal", "noncanonical.opaal",
+    "canonical.opaal", "project-tasks.opaal", "policy-tests.opaal", "policy-negative.opaal",
+    "io-allowed.opaal", "io-failure.opaal", "io-pure.opaal",
+)
+
 
 
 def main() -> None:
@@ -49,6 +57,9 @@ def main() -> None:
     spreads = {name.removeprefix("list-literal-spread/") for name in names if name.startswith("list-literal-spread/")}
     if spreads != set(LIST_LITERAL_SPREAD_FIXTURES):
         raise ValueError("list literal spread fixture census differs from the committed source")
+    records = {name.removeprefix("record-shorthand/") for name in names if name.startswith("record-shorthand/")}
+    if records != set(RECORD_SHORTHAND_FIXTURES):
+        raise ValueError("record shorthand fixture census differs from the committed source")
     archive = package_examples(ROOT, names, source, directory=FIXTURES, name="source-formatting")
     print(archive.relative_to(ROOT))
 

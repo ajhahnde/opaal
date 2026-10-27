@@ -1,0 +1,5 @@
+import './model.opaal' as model
+let value = 7
+let boxed: model::Box[Int] = model::Box {value}
+let model::Box {value: selected} = boxed
+selected

@@ -95,6 +95,18 @@ visitors must distinguish expansion from ordinary insertion. Exhaustive
 actual }`; command spread keeps its existing variants and diagnostics.
 No serialized or binary AST compatibility is promised.
 
+Record shorthand keeps the existing `RecordEntry`,
+`NominalRecordFieldExpression` and `PatternField` constructors. A parsed
+shorthand value is an ordinary `ExpressionKind::Name(NameReference)` whose
+identifier and expression spans equal the field token span. A shorthand
+pattern uses `Pattern::Binding` at the same token (`Pattern::Wildcard` for
+`_`). Existing walkers continue visiting each value or binding once; consumers
+must allow a key and its value/binding to share a span. Do not infer two tokens
+or insert a colon from the AST: retain source tokens when preserving the chosen
+spelling. Lexical queries at that shared token refer to the value or fresh
+binding. Nominal field identity remains owned by its record type. No new AST
+variant, constructor migration, serialized format or binary promise is added.
+
 ## Documentation example
 
 ```sh

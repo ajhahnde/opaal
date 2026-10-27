@@ -79,6 +79,54 @@ fn submit(session: &mut Session, sources: &Sources, text: &str) -> Value {
 }
 
 #[test]
+fn record_shorthand_survives_later_cells_and_restored_pattern_callbacks() {
+    let sources = Sources::default();
+    let mut session = session();
+    submit(
+        &mut session,
+        &sources,
+        "import std::list\ntype Item = {value: Int}",
+    );
+    submit(
+        &mut session,
+        &sources,
+        "def make(value: Int) -> Item { let item = Item {value}; return item }",
+    );
+    submit(
+        &mut session,
+        &sources,
+        "let pick = {|Item {value}: Item| -> Int value}",
+    );
+    assert_eq!(
+        submit(
+            &mut session,
+            &sources,
+            "list::map([make(3), make(7)], pick)"
+        ),
+        Value::list(vec![Value::Int(3), Value::Int(7)])
+    );
+    assert!(
+        session
+            .submit_with_source_loader(
+                "failed",
+                "let unpublished = {missing}",
+                &sources,
+                &sources,
+                &NoExecutables,
+                &FakePlatform::full(),
+                &FakeClock::new(),
+                &mut Vec::new()
+            )
+            .is_err()
+    );
+    assert!(session.scope().get("unpublished").is_none());
+    assert_eq!(
+        submit(&mut session, &sources, "pick(make(9))"),
+        Value::Int(9)
+    );
+}
+
+#[test]
 fn compound_assignments_survive_later_cells_restored_callbacks_and_failed_publication() {
     let sources = Sources::default();
     let mut session = session();

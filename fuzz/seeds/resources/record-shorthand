@@ -1,0 +1,6 @@
+ÿÿÿÿÿtype Item = {value: Int}
+let value = 7
+let item = Item {value}
+let fields = {value, explicit: value}
+let pick = {|Item {value}: Item| -> Int value}
+pick(item)
