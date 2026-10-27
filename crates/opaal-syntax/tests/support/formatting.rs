@@ -372,6 +372,22 @@ impl Visit for CommandHead {
 }
 
 variants!(StatementKind { ModuleImport(v), ModuleMemberImport(v), ModuleImportGroup(v), ModuleExport(v), NominalType(v), VariantType(v), Declaration(v), Assignment(v), Environment(v), Function(v), Action(v), Task(v), If(v), While(v), For(v), Match(v), Try(v), Throw(v), Control(v), Job(v) });
+impl Visit for ListItem {
+    fn visit(&self, context: &mut Context<'_>) {
+        match self {
+            Self::Element(expression) => {
+                context.tag("element");
+                expression.visit(context);
+            }
+            Self::Spread { marker, operand } => {
+                context.tag("spread");
+                context.text(*marker);
+                operand.visit(context);
+            }
+        }
+    }
+}
+
 variants!(ExpressionKind { Literal(v), Name(v), Qualified(v), List(v), Record(v), NominalRecord(v), Closure(v), GroupedJob(v), Call(v), Index(v), Member(v), Unary(v), Binary(v) });
 variants!(Pattern { Wildcard(v), Literal(v), Binding(v), List(v), NominalRecord(v), Variant(v) });
 variants!(ElseBranch { Block(v), If(v) });

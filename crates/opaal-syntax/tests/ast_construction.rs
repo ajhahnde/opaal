@@ -257,3 +257,23 @@ fn module_import_constructors_keep_aliases_and_selectors_distinct() {
     assert!(entries[1].alias().is_none());
     assert_eq!(entries[1].members().unwrap().members.len(), 1);
 }
+
+#[test]
+fn list_item_construction_migrates_plain_expressions_and_retains_spread_spans() {
+    use opaal_syntax::ListItem;
+    let source = SourceFile::new(SourceId::new(72), "list.opaal", "[1, ...2]");
+    let expressions = vec![integer(&source, 1..2)];
+    let ordinary = Expression::new(
+        ExpressionKind::List(expressions.into_iter().map(ListItem::from).collect()),
+        span(&source, 0..9),
+    );
+    let ExpressionKind::List(items) = ordinary.kind() else {
+        panic!("list")
+    };
+    assert_eq!(source.slice(items[0].expression().span()).unwrap(), "1");
+    let spread = ListItem::Spread {
+        marker: span(&source, 4..7),
+        operand: integer(&source, 7..8),
+    };
+    assert_eq!(source.slice(spread.expression().span()).unwrap(), "2");
+}

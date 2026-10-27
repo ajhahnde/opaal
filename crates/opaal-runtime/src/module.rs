@@ -21,9 +21,9 @@ use std::sync::{Arc, Mutex};
 use opaal_syntax::{
     BinaryOperator, Block, Closure, CommandHeadKind, CommandItemKind, ConditionalChain,
     ControlTransfer, ControlledParseOutcome, Diagnostic, ElseBranch, Expression, ExpressionKind,
-    Identifier, LiteralKind, MatchArm, ParseOutcome, Pattern, Pipeline, RecordKey, RedirectionKind,
-    Script, Severity, SourceFile, SourceId, Span, StageKind, Statement, StatementKind,
-    TypeConstraint, TypeReference, UnaryOperator, Word, WordPart, WordPartKind,
+    Identifier, ListItem, LiteralKind, MatchArm, ParseOutcome, Pattern, Pipeline, RecordKey,
+    RedirectionKind, Script, Severity, SourceFile, SourceId, Span, StageKind, Statement,
+    StatementKind, TypeConstraint, TypeReference, UnaryOperator, Word, WordPart, WordPartKind,
     parse_opaal_with_control, render_diagnostic_sources,
 };
 use sha2::{Digest, Sha256};
@@ -3064,9 +3064,9 @@ impl<'a> CallableReadCollector<'a> {
                     is_callee: false,
                 })
             }
-            ExpressionKind::List(elements) => {
-                elements.iter().for_each(|element| self.expression(element))
-            }
+            ExpressionKind::List(elements) => elements
+                .iter()
+                .for_each(|element| self.expression(element.expression())),
             ExpressionKind::Record(entries) => {
                 for entry in entries {
                     if let RecordKey::DoubleQuoted(part) = &entry.key {
@@ -5456,7 +5456,7 @@ impl<'a> TypeCollector<'a> {
             }
             ExpressionKind::List(elements) => {
                 for element in elements {
-                    self.expression(element)?;
+                    self.expression(element.expression())?;
                 }
                 Ok(())
             }
@@ -6670,27 +6670,7 @@ impl<'a> SignatureValidator<'a> {
                 .reference(self.entry.module(), expression.span())
                 .and_then(|reference| self.reference_type(reference.target()))),
             ExpressionKind::Qualified(name) => Ok(self.qualified_value_type(name, expected)),
-            ExpressionKind::List(elements) => {
-                let mut element_type = None;
-                let expected_element = match expected {
-                    Some(ValueType::List(element)) => Some(element.as_ref()),
-                    _ => None,
-                };
-                for element in elements {
-                    let Some(current) = self.expression_with_expected(element, expected_element)?
-                    else {
-                        return Ok(None);
-                    };
-                    if let Some(previous) = &element_type {
-                        if previous != &current {
-                            return Ok(None);
-                        }
-                    } else {
-                        element_type = Some(current);
-                    }
-                }
-                Ok(element_type.map(|element| ValueType::List(Box::new(element))))
-            }
+            ExpressionKind::List(elements) => self.list_literal_type(elements, expected, false),
             ExpressionKind::Record(entries) => {
                 for entry in entries {
                     if let RecordKey::DoubleQuoted(part) = &entry.key {
@@ -8243,25 +8223,7 @@ impl<'a> SignatureValidator<'a> {
                 }
             }
             ExpressionKind::List(elements) => {
-                let expected_element = match expected {
-                    Some(ValueType::List(element)) => Some(element.as_ref()),
-                    _ => None,
-                };
-                let mut element_type = None;
-                for element in elements {
-                    let Some(current) = self.operation_argument_type(element, expected_element)?
-                    else {
-                        return Ok(None);
-                    };
-                    if element_type
-                        .as_ref()
-                        .is_some_and(|previous| previous != &current)
-                    {
-                        return Ok(None);
-                    }
-                    element_type = Some(current);
-                }
-                return Ok(element_type.map(|element| ValueType::List(Box::new(element))));
+                return self.list_literal_type(elements, expected, true);
             }
             ExpressionKind::Index(index) => {
                 let target = self.operation_argument_type(&index.target, None)?;
@@ -8280,6 +8242,62 @@ impl<'a> SignatureValidator<'a> {
             _ => {}
         }
         self.expression_with_expected(expression, expected)
+    }
+
+    fn list_literal_type(
+        &self,
+        items: &[ListItem],
+        expected: Option<&ValueType>,
+        operation: bool,
+    ) -> Result<Option<ValueType>, Box<ModuleTypeError>> {
+        let expected_element = match expected {
+            Some(ValueType::List(element)) => Some(element.as_ref()),
+            _ => None,
+        };
+        let mut element_type = None;
+        let mut homogeneous = true;
+        for item in items {
+            let operand = item.expression();
+            let current = match item {
+                ListItem::Element(_) if operation => {
+                    self.operation_argument_type(operand, expected_element)?
+                }
+                ListItem::Element(_) => self.expression_with_expected(operand, expected_element)?,
+                ListItem::Spread { .. } => {
+                    match self.operation_argument_type(operand, expected)? {
+                        Some(ValueType::List(element)) => Some(*element),
+                        Some(ValueType::Any) => None,
+                        Some(actual) => {
+                            self.errors.borrow_mut().push(
+                                ModuleTypeError::ListSpreadValueMismatch {
+                                    module: self.entry.module().clone(),
+                                    span: operand.span(),
+                                    actual,
+                                },
+                            );
+                            None
+                        }
+                        None if empty_list_literal(operand, self.control) => continue,
+                        None => None,
+                    }
+                }
+            };
+            if current.is_none()
+                || element_type
+                    .as_ref()
+                    .is_some_and(|previous| Some(previous) != current.as_ref())
+            {
+                homogeneous = false;
+            }
+            if current.is_some() {
+                element_type = current;
+            }
+        }
+        Ok(if homogeneous {
+            element_type.map(|element| ValueType::List(Box::new(element)))
+        } else {
+            None
+        })
     }
 
     fn callback_error(
@@ -9058,7 +9076,7 @@ impl<'a> ReferenceResolver<'a> {
             ExpressionKind::Qualified(name) => self.qualified(name),
             ExpressionKind::List(elements) => {
                 for element in elements {
-                    self.expression(element)?;
+                    self.expression(element.expression())?;
                 }
                 Ok(())
             }
@@ -10096,7 +10114,7 @@ impl<'a> StaticEffectAnalyzer<'a> {
             ExpressionKind::Qualified(_) => {}
             ExpressionKind::List(items) => {
                 for item in items {
-                    self.expression(item);
+                    self.expression(item.expression());
                 }
             }
             ExpressionKind::Record(entries) => {
@@ -10910,7 +10928,7 @@ impl<'a> StaticPipelineAnalyzer<'a> {
             ExpressionKind::Name(_) | ExpressionKind::Qualified(_) => {}
             ExpressionKind::List(elements) => {
                 for element in elements {
-                    self.expression(element);
+                    self.expression(element.expression());
                 }
             }
             ExpressionKind::Record(entries) => {
@@ -12614,7 +12632,10 @@ impl SyntaxMetrics {
                 let depth = 1_u64.saturating_add(
                     elements
                         .iter()
-                        .map(|element| self.expression(element))
+                        .map(|element| {
+                            self.nodes += 1;
+                            self.expression(element.expression())
+                        })
                         .max()
                         .unwrap_or(1),
                 );
@@ -13053,6 +13074,18 @@ impl fmt::Display for ModuleNameError {
 
 impl std::error::Error for ModuleNameError {}
 
+fn empty_list_literal(expression: &Expression, control: &AnalysisControl) -> bool {
+    if control.is_cancelled() {
+        return false;
+    }
+    match expression.kind() {
+        ExpressionKind::List(items) => items.iter().all(|item| {
+            matches!(item, ListItem::Spread { operand, .. } if empty_list_literal(operand, control))
+        }),
+        _ => false,
+    }
+}
+
 /// A failure while resolving annotations or validating a known function call.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ModuleTypeError {
@@ -13175,6 +13208,11 @@ pub enum ModuleTypeError {
         actual: ValueType,
         annotation_span: Span,
     },
+    ListSpreadValueMismatch {
+        module: ModuleId,
+        span: Span,
+        actual: ValueType,
+    },
     SpreadValueMismatch {
         module: ModuleId,
         span: Span,
@@ -13276,6 +13314,7 @@ impl ModuleTypeError {
             | Self::UnknownOperation { module, .. }
             | Self::AmbiguousOperationGeneric { module, .. }
             | Self::ResultMismatch { module, .. }
+            | Self::ListSpreadValueMismatch { module, .. }
             | Self::SpreadValueMismatch { module, .. }
             | Self::SpreadElementMismatch { module, .. }
             | Self::ThrowMismatch { module, .. }
@@ -13312,7 +13351,8 @@ impl ModuleTypeError {
                 construction_span, ..
             } => *construction_span,
             Self::ResultMismatch { result_span, .. } => *result_span,
-            Self::SpreadValueMismatch { span, .. }
+            Self::ListSpreadValueMismatch { span, .. }
+            | Self::SpreadValueMismatch { span, .. }
             | Self::SpreadElementMismatch { span, .. }
             | Self::ThrowMismatch { span, .. } => *span,
             Self::AssignmentMismatch {
@@ -13485,7 +13525,8 @@ impl ModuleTypeError {
                     format!("this result is `{actual}`, expected `{expected}`"),
                 )
                 .with_secondary(*annotation_span, "function result type declared here"),
-            Self::SpreadValueMismatch { span, actual, .. } => {
+            Self::ListSpreadValueMismatch { span, actual, .. }
+            | Self::SpreadValueMismatch { span, actual, .. } => {
                 Diagnostic::new(Severity::Error, "SIG020", self.to_string()).with_primary(
                     *span,
                     format!("this spread is `{actual}`; expected `List[T]`"),
@@ -13769,6 +13810,11 @@ impl fmt::Display for ModuleTypeError {
             } => write!(
                 formatter,
                 "module `{}` returns `{actual}` from `{name}`; expected `{expected}`",
+                module.path().display()
+            ),
+            Self::ListSpreadValueMismatch { module, actual, .. } => write!(
+                formatter,
+                "module `{}` spreads `{actual}` inside a list literal; expected `List[T]`",
                 module.path().display()
             ),
             Self::SpreadValueMismatch { module, actual, .. } => write!(

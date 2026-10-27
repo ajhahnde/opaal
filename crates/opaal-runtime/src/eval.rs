@@ -24,10 +24,10 @@ use opaal_platform::{
 use opaal_syntax::{
     AndChain, Assignment, BinaryOperator, Block, CallExpression, Closure, CommandItemKind,
     ConditionalChain, ControlTransfer, Declaration, ElseBranch, EnvironmentStatement, Expression,
-    ExpressionKind, ForStatement, FunctionDefinition, IfStatement, Literal, LiteralKind, MatchArm,
-    MatchStatement, Parameter, Pattern, Pipeline, RecordKey, RedirectionKind, Script, SourceFile,
-    Span, StageKind, Statement, StatementKind, TryStatement, UnaryOperator, WhileStatement, Word,
-    WordPart, WordPartKind,
+    ExpressionKind, ForStatement, FunctionDefinition, IfStatement, ListItem, Literal, LiteralKind,
+    MatchArm, MatchStatement, Parameter, Pattern, Pipeline, RecordKey, RedirectionKind, Script,
+    SourceFile, Span, StageKind, Statement, StatementKind, TryStatement, UnaryOperator,
+    WhileStatement, Word, WordPart, WordPartKind,
 };
 
 mod data_operations;
@@ -460,8 +460,7 @@ pub enum RuntimeErrorKind {
     /// An ordinary word interpolation produced a value that cannot become an
     /// argument. `actual` names the offending value family.
     WordValueNotWordEligible { actual: &'static str },
-    /// A `...{expression}` spread whose value did not hold a `List`. `actual` names the
-    /// offending value family.
+    /// A command or list-literal spread whose value did not hold a `List`.
     SpreadValueNotList { actual: &'static str },
     /// A `...{expression}` spread element that cannot become an argument. `index` is the
     /// zero-based list position and `actual` names the offending value family.
@@ -3748,20 +3747,9 @@ impl Evaluator<'_, '_> {
                     self.qualified_value(name, span, expected)
                 }
             }
-            ExpressionKind::List(elements) => {
-                if !self.budget.charge_collection_items(elements.len()) {
-                    return Err(self.error(RuntimeErrorKind::ResourceBudgetExceeded, span));
-                }
-                let mut values = Vec::with_capacity(elements.len());
-                let expected_element = match expected {
-                    Some(ValueType::List(element)) => Some(element.as_ref()),
-                    _ => None,
-                };
-                for element in elements {
-                    values.push(self.expression_with_expected(element, scope, expected_element)?);
-                }
-                Ok(Value::list(values))
-            }
+            ExpressionKind::List(elements) => self
+                .list_literal(elements, scope, expected, span, false)
+                .map(|(value, _)| value),
             ExpressionKind::Record(entries) => {
                 if !self.budget.charge_collection_items(entries.len()) {
                     return Err(self.error(RuntimeErrorKind::ResourceBudgetExceeded, span));
@@ -4559,6 +4547,123 @@ impl Evaluator<'_, '_> {
             .map(|(value, _)| value)
     }
 
+    fn list_literal(
+        &mut self,
+        items: &[ListItem],
+        scope: &mut ScopeStack,
+        expected: Option<&ValueType>,
+        span: Span,
+        infer: bool,
+    ) -> Eval<(Value, Option<ValueType>)> {
+        let expected_element = match expected {
+            Some(ValueType::List(element)) => Some(element.as_ref()),
+            _ => None,
+        };
+        let expands = items
+            .iter()
+            .any(|item| matches!(item, ListItem::Spread { .. }));
+        let mut values = if expands {
+            Vec::new()
+        } else {
+            if !self.budget.charge_collection_items(items.len()) {
+                return Err(self.error(RuntimeErrorKind::ResourceBudgetExceeded, span));
+            }
+            Vec::with_capacity(items.len())
+        };
+        let mut element_type = None;
+        let mut homogeneous = true;
+        for item in items {
+            let operand = item.expression();
+            let spreading = matches!(item, ListItem::Spread { .. });
+            let operand_expected = if spreading {
+                expected
+            } else {
+                expected_element
+            };
+            let (value, declared) = if infer {
+                self.operation_argument(operand, scope, operand_expected)?
+            } else {
+                (
+                    self.expression_with_expected(operand, scope, operand_expected)?,
+                    None,
+                )
+            };
+            let dynamic_spread = spreading && declared == Some(ValueType::Any);
+            let current = if infer {
+                match declared {
+                    Some(ValueType::Any) if spreading => None,
+                    Some(ValueType::List(element)) if spreading => Some(*element),
+                    Some(declared) => Some(declared),
+                    None if spreading => match &value {
+                        Value::List(elements) if elements.is_empty() => None,
+                        _ => self
+                            .complete_value_type(&value, operand.span())?
+                            .and_then(|actual| {
+                                if let ValueType::List(element) = actual {
+                                    Some(*element)
+                                } else {
+                                    None
+                                }
+                            }),
+                    },
+                    None => self.complete_value_type(&value, operand.span())?,
+                }
+            } else {
+                None
+            };
+            if spreading {
+                let Value::List(elements) = &value else {
+                    return Err(self.error(
+                        RuntimeErrorKind::SpreadValueNotList {
+                            actual: value.family_name(),
+                        },
+                        operand.span(),
+                    ));
+                };
+                for element in elements.iter() {
+                    self.check_cancel(operand.span())?;
+                    self.charge(operand.span())?;
+                    self.reserve_list_item(&mut values, usize::MAX, operand.span())?;
+                    values.push(element.clone());
+                }
+                if elements.is_empty() && current.is_none() && !dynamic_spread {
+                    continue;
+                }
+            } else {
+                if expands {
+                    self.reserve_list_item(&mut values, usize::MAX, operand.span())?;
+                }
+                values.push(value);
+            }
+            if current.is_none()
+                || element_type
+                    .as_ref()
+                    .is_some_and(|previous| Some(previous) != current.as_ref())
+            {
+                homogeneous = false;
+            }
+            if current.is_some() {
+                element_type = current;
+            }
+        }
+        if expands {
+            // Charge Arc result storage separately; ordinary literals keep their existing budget.
+            let bytes = values
+                .len()
+                .checked_mul(size_of::<Value>())
+                .and_then(|bytes| bytes.checked_add(2 * size_of::<usize>()))
+                .ok_or_else(|| self.error(RuntimeErrorKind::ResourceBudgetExceeded, span))?;
+            self.retain_collection_bytes(bytes, span)?;
+            self.check_cancel(span)?;
+        }
+        let result_type = if homogeneous {
+            element_type.map(|element| ValueType::List(Box::new(element)))
+        } else {
+            Some(ValueType::Any)
+        };
+        Ok((Value::list(values), result_type))
+    }
+
     fn operation_argument(
         &mut self,
         expression: &Expression,
@@ -4597,43 +4702,7 @@ impl Evaluator<'_, '_> {
                         self.error(RuntimeErrorKind::ResourceBudgetExceeded, expression.span())
                     );
                 }
-                let result = (|| {
-                    if !self.budget.charge_collection_items(elements.len()) {
-                        return Err(
-                            self.error(RuntimeErrorKind::ResourceBudgetExceeded, expression.span())
-                        );
-                    }
-                    let expected_element = match expected {
-                        Some(ValueType::List(element)) => Some(element.as_ref()),
-                        _ => None,
-                    };
-                    let mut values = Vec::with_capacity(elements.len());
-                    let mut element_type = None;
-                    let mut homogeneous = true;
-                    for element in elements {
-                        let (value, declared) =
-                            self.operation_argument(element, scope, expected_element)?;
-                        let actual = match declared {
-                            Some(declared) => Some(declared),
-                            None => self.complete_value_type(&value, element.span())?,
-                        };
-                        if actual.is_none()
-                            || element_type
-                                .as_ref()
-                                .is_some_and(|previous| Some(previous) != actual.as_ref())
-                        {
-                            homogeneous = false;
-                        }
-                        element_type = actual;
-                        values.push(value);
-                    }
-                    let result_type = if homogeneous {
-                        element_type.map(|element| ValueType::List(Box::new(element)))
-                    } else {
-                        Some(ValueType::Any)
-                    };
-                    Ok((Value::list(values), result_type))
-                })();
+                let result = self.list_literal(elements, scope, expected, expression.span(), true);
                 self.budget.leave_call();
                 result
             }
@@ -6283,7 +6352,7 @@ fn find_callable_in_expression(
         ExpressionKind::Name(_) | ExpressionKind::Qualified(_) => None,
         ExpressionKind::List(elements) => elements
             .iter()
-            .find_map(|element| find_callable_in_expression(element, snapshot)),
+            .find_map(|element| find_callable_in_expression(element.expression(), snapshot)),
         ExpressionKind::Record(entries) => entries.iter().find_map(|entry| {
             let key = match &entry.key {
                 RecordKey::DoubleQuoted(part) => find_callable_in_word_part(part, snapshot),

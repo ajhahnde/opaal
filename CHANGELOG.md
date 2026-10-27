@@ -6,6 +6,8 @@ All notable changes to OPAAL are documented here.
 
 ### Added
 
+- Compose list literals with explicit, ordered one-level spreads such as
+  `[...items, extra]`, with shared checking, formatting and editor support.
 - Update mutable numeric variables with `+=`, `-=`, `*=`, `/=` and `%=` using
   the existing arithmetic, type and assignment rules.
 - Select named exports with `import std::math::{abs as magnitude_of}` or local

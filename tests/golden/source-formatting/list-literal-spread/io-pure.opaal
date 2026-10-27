@@ -1,0 +1,11 @@
+import std::io
+export {test_value}
+def values()
+{
+    io::println('private-sentinel')
+    return [1]
+}
+def test_value() -> Bool
+{
+    return [...values()] == [1]
+}

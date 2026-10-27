@@ -505,7 +505,12 @@ impl Evaluator<'_, '_> {
         Ok(())
     }
 
-    fn reserve_list_item(&mut self, output: &mut Vec<Value>, limit: usize, span: Span) -> Eval<()> {
+    pub(super) fn reserve_list_item(
+        &mut self,
+        output: &mut Vec<Value>,
+        limit: usize,
+        span: Span,
+    ) -> Eval<()> {
         self.check_cancel(span)?;
         if !self.budget.charge_collection_items(1) {
             return Err(self.error(RuntimeErrorKind::ResourceBudgetExceeded, span));

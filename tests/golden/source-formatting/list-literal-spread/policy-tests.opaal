@@ -1,0 +1,11 @@
+export {test_value}
+def result() -> Int
+{
+    let defaults = [1, 2]
+    let values = [...defaults, 5]
+    return values[2]
+}
+def test_value() -> Bool
+{
+    return result() == 5
+}

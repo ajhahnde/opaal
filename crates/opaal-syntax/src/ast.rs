@@ -635,7 +635,7 @@ pub enum ExpressionKind {
     Literal(Literal),
     Name(NameReference),
     Qualified(QualifiedName),
-    List(Vec<Expression>),
+    List(Vec<ListItem>),
     Record(Vec<RecordEntry>),
     NominalRecord(NominalRecordExpression),
     Closure(Closure),
@@ -645,6 +645,32 @@ pub enum ExpressionKind {
     Member(MemberExpression),
     Unary(UnaryExpression),
     Binary(BinaryExpression),
+}
+
+/// One list-literal slot, retaining the explicit spread marker separately.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ListItem {
+    Element(Expression),
+    Spread { marker: Span, operand: Expression },
+}
+
+impl ListItem {
+    #[must_use]
+    pub const fn expression(&self) -> &Expression {
+        match self {
+            Self::Element(expression)
+            | Self::Spread {
+                operand: expression,
+                ..
+            } => expression,
+        }
+    }
+}
+
+impl From<Expression> for ListItem {
+    fn from(expression: Expression) -> Self {
+        Self::Element(expression)
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

@@ -23,6 +23,14 @@ COMPOUND_ASSIGNMENT_FIXTURES = (
     "policy-negative.opaal", "io-allowed.opaal", "io-pure.opaal",
 )
 
+LIST_LITERAL_SPREAD_FIXTURES = (
+    "before.opaal", "after.opaal", "alternate.opaal", "failure.opaal",
+    "known-non-list.opaal", "invalid.opaal", "incomplete.opaal",
+    "noncanonical.opaal", "canonical.opaal", "project-tasks.opaal",
+    "policy-tests.opaal", "policy-negative.opaal", "io-allowed.opaal",
+    "io-failure.opaal", "io-pure.opaal",
+)
+
 
 
 def main() -> None:
@@ -38,6 +46,9 @@ def main() -> None:
     compound = {name.removeprefix("compound-assignment/") for name in names if name.startswith("compound-assignment/")}
     if compound != set(COMPOUND_ASSIGNMENT_FIXTURES):
         raise ValueError("compound assignment fixture census differs from the committed source")
+    spreads = {name.removeprefix("list-literal-spread/") for name in names if name.startswith("list-literal-spread/")}
+    if spreads != set(LIST_LITERAL_SPREAD_FIXTURES):
+        raise ValueError("list literal spread fixture census differs from the committed source")
     archive = package_examples(ROOT, names, source, directory=FIXTURES, name="source-formatting")
     print(archive.relative_to(ROOT))
 

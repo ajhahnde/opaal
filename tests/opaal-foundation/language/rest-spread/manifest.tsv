@@ -1,5 +1,6 @@
 # class	path	diagnostic
 complete	complete/build-arguments.opaal	-
+complete	complete/list-literal-spread.opaal	-
 cli	complete/cli-arguments.opaal	-
 syntax	complete/explicit-spread.opaal	-
 invalid	invalid/non-list-spread.opaal	SIG020

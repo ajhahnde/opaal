@@ -331,3 +331,36 @@ fn member_imports_format_compact_and_comment_bearing_selectors() {
         "import {\n    std::math::{abs},\n    std::io,\n}\n"
     );
 }
+
+#[test]
+fn list_literal_spreads_preserve_comments_tokens_and_one_level_spelling() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/golden/source-formatting/list-literal-spread");
+    let source = SourceFile::new(
+        SourceId::new(3_100),
+        "spread.opaal",
+        std::fs::read_to_string(root.join("noncanonical.opaal")).unwrap(),
+    );
+    assert_eq!(
+        complete_format(&source),
+        std::fs::read_to_string(root.join("canonical.opaal")).unwrap()
+    );
+    formatting::assert_roundtrip(&source);
+}
+
+#[test]
+fn list_spread_spacing_keeps_existing_command_and_pattern_grammars() {
+    let source = SourceFile::new(
+        SourceId::new(3_101),
+        "rest.opaal",
+        "let [first, ...rest] = [1, 2]\n",
+    );
+    assert_eq!(complete_format(&source), source.text());
+    for text in ["let [first, ... rest] = [1, 2]", "^echo ... {items}"] {
+        let source = SourceFile::new(SourceId::new(3_102), "invalid.opaal", text);
+        assert!(matches!(
+            format_source_opaal(&source),
+            FormatOutcome::Invalid(_)
+        ));
+    }
+}

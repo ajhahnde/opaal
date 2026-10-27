@@ -1,0 +1,3 @@
+let defaults = [1, 2]
+let combined = [...defaults, 3]
+combined
