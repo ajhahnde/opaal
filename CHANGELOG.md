@@ -6,6 +6,9 @@ All notable changes to OPAAL are documented here.
 
 ### Added
 
+- Export local top-level declarations with trailing-star prefixes such as
+  `export { test_*, Item }`, with shared checking, formatting and editor support.
+
 - Write same-name record fields and nominal pattern bindings once, as
   `{name}` or `Server {name}`, with existing lookup, typing and binding rules
   across checking, formatting and editors.

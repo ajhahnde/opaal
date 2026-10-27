@@ -335,3 +335,65 @@ fn member_selector_recovery_distinguishes_missing_input_and_invalid_syntax() {
         );
     }
 }
+
+#[test]
+fn export_prefix_selectors_retain_tokens_and_reject_other_wildcards() {
+    use opaal_syntax::ModuleExportSelector;
+    for text in [
+        "export { test_* }\n",
+        "export { public, check *, Item }\n",
+        "export {\n# kept\ntest_*,\n}\n",
+    ] {
+        let source = SourceFile::new(SourceId::new(401), "prefix.opaal", text);
+        let ParseOutcome::Complete(script) = parse_opaal(&source) else {
+            panic!("{text}");
+        };
+        let StatementKind::ModuleExport(export) = script.statements()[0].kind() else {
+            panic!();
+        };
+        let selector = export
+            .names
+            .iter()
+            .find(|selector| matches!(selector, ModuleExportSelector::Prefix { .. }))
+            .unwrap();
+        let ModuleExportSelector::Prefix { prefix, marker } = selector else {
+            panic!();
+        };
+        assert_eq!(source.slice(*marker).unwrap(), "*");
+        assert_eq!(selector.span(), prefix.span().cover(*marker));
+        assert!(source.slice(selector.span()).unwrap().ends_with('*'));
+    }
+    for text in [
+        "export {}",
+        "export { * }",
+        "export { *test }",
+        "export { test** }",
+        "export { te*st }",
+        "export { 'test_*' }",
+        "export { m::test* }",
+        "export { test* as name }",
+        "export { {test*} }",
+        "export { test\n* }",
+        "export { test # comment\n* }",
+        "export { test \\\n* }",
+        "if true { export {test*} }",
+        "import std::math::{abs*}",
+    ] {
+        let source = SourceFile::new(SourceId::new(402), "invalid.opaal", text);
+        assert!(
+            matches!(parse_opaal(&source), ParseOutcome::Invalid(_)),
+            "{text}"
+        );
+    }
+    for text in ["export {", "export { test_", "export {\n test_*,\n"] {
+        let source = SourceFile::new(SourceId::new(403), "incomplete.opaal", text);
+        assert!(
+            matches!(parse_opaal(&source), ParseOutcome::Incomplete(_)),
+            "{text}"
+        );
+    }
+    for text in ["export VALUE = 2 * 3\n", "echo test*\n"] {
+        let source = SourceFile::new(SourceId::new(404), "unchanged.opaal", text);
+        assert!(matches!(parse_opaal(&source), ParseOutcome::Complete(_)));
+    }
+}

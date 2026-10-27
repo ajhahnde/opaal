@@ -1,0 +1,3 @@
+import std::math as check_math
+import std::math::{abs as check_abs}
+export { check_* }

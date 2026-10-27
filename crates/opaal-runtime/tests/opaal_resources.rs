@@ -744,3 +744,86 @@ fn list_literal_spread_analysis_charges_source_nodes_depth_and_work_exactly() {
         }
     }
 }
+
+#[test]
+fn prefix_expansion_is_bounded_at_exact_work_and_diagnostic_limits() {
+    let declarations = (0..1024)
+        .map(|index| format!("let check_{index:04} = {index}\n"))
+        .collect::<String>();
+    for selectors in ["check_*", "check_*, check*", "absent_*, missing_*"] {
+        let text = format!("export {{{selectors}}}\n{declarations}");
+        let sources = resource_sources(&text);
+        let report = loader(&sources).analyze_with_limits(
+            Path::new("/project/main.opaal"),
+            AnalysisLimits::unlimited(),
+        );
+        assert_eq!(report.program().is_some(), selectors == "check_*");
+        for kind in [AnalysisLimitKind::WorkUnits, AnalysisLimitKind::Diagnostics] {
+            let used = report.usage().get(kind);
+            if used == 0 {
+                continue;
+            }
+            for (limit, accepted) in [(used, true), (used - 1, false)] {
+                let outcome = loader(&sources).analyze_with_limits_controlled(
+                    Path::new("/project/main.opaal"),
+                    &AnalysisControl::never(),
+                    AnalysisLimits::unlimited().with_limit(kind, limit),
+                );
+                if accepted {
+                    assert!(
+                        matches!(outcome, ModuleAnalysisOutcome::Complete(_)),
+                        "{kind:?}: {outcome:?}"
+                    );
+                } else {
+                    assert!(
+                        matches!(outcome, ModuleAnalysisOutcome::BudgetExceeded(_)),
+                        "{kind:?}: {outcome:?}"
+                    );
+                }
+            }
+        }
+        let polls = Arc::new(AtomicUsize::new(0));
+        let observed = polls.clone();
+        let control =
+            AnalysisControl::cooperative(move || observed.fetch_add(1, Ordering::SeqCst) >= 5000);
+        assert!(matches!(
+            loader(&sources).analyze_with_limits_controlled(
+                Path::new("/project/main.opaal"),
+                &control,
+                AnalysisLimits::unlimited()
+            ),
+            ModuleAnalysisOutcome::Cancelled
+        ));
+    }
+}
+
+#[test]
+fn cancellation_at_every_prefix_analysis_poll_never_accepts_partial_exports() {
+    let sources =
+        resource_sources("export {check_*}\nlet check_a = 1\nlet check_b = 2\nlet check_c = 3\n");
+    let polls = Arc::new(AtomicUsize::new(0));
+    let observed = polls.clone();
+    let counting = AnalysisControl::cooperative(move || {
+        observed.fetch_add(1, Ordering::SeqCst);
+        false
+    });
+    assert!(matches!(loader(&sources).analyze_with_limits_controlled(
+        Path::new("/project/main.opaal"), &counting, AnalysisLimits::unlimited()),
+        ModuleAnalysisOutcome::Complete(report) if report.program().is_some()));
+    for stop in 0..polls.load(Ordering::SeqCst) {
+        let observed = Arc::new(AtomicUsize::new(0));
+        let control =
+            AnalysisControl::cooperative(move || observed.fetch_add(1, Ordering::SeqCst) >= stop);
+        assert!(
+            matches!(
+                loader(&sources).analyze_with_limits_controlled(
+                    Path::new("/project/main.opaal"),
+                    &control,
+                    AnalysisLimits::unlimited()
+                ),
+                ModuleAnalysisOutcome::Cancelled
+            ),
+            "poll {stop} accepted a partial program"
+        );
+    }
+}

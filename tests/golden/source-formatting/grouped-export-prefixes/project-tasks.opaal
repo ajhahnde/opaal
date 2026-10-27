@@ -1,0 +1,8 @@
+export { read* }
+action readiness() -> Int
+effects {
+}
+{
+    return 5
+}
+task verify = readiness

@@ -8,3 +8,6 @@ module	incomplete	incomplete/open-block.opaal	-
 module	invalid	invalid/leading-pipe.opaal	OP1000
 repl	complete	repl/complete.opaal	-
 repl	invalid	invalid/leading-pipe.opaal	OP1000
+module	complete	complete/grouped-export-prefixes.opaal	-
+module	invalid	invalid/grouped-export-prefixes.opaal	OP1000
+module	incomplete	incomplete/grouped-export-prefixes.opaal	-

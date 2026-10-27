@@ -1893,3 +1893,76 @@ fn list_spread_operands_keep_original_symbols_and_utf16_locations() {
         );
     }
 }
+
+#[test]
+fn prefix_selectors_have_no_singular_target_and_concrete_uses_keep_identity() {
+    for encoding in [PositionEncoding::Utf8, PositionEncoding::Utf16] {
+        let directory = TestDirectory::new();
+        let uri = directory.uri("prefix.opaal");
+        let text =
+            "export { check_* }\nlet check_value: Int = 5\nlet result = ['界🙂', check_value]\n";
+        let mut workspace = Workspace::new();
+        workspace.open(uri.clone(), 1, text.into()).unwrap();
+        let control = RequestControl::new();
+        for offset in text.find("check_*").unwrap()..text.find("check_*").unwrap() + 7 {
+            let params = positional(&uri, text, offset, encoding);
+            for method in ["textDocument/hover", "textDocument/definition"] {
+                assert!(
+                    request(&workspace, encoding, &control, method, params.clone())
+                        .unwrap()
+                        .is_null()
+                );
+            }
+            let mut refs = params;
+            refs["context"] = json!({"includeDeclaration": true});
+            assert_eq!(
+                request(
+                    &workspace,
+                    encoding,
+                    &control,
+                    "textDocument/references",
+                    refs
+                )
+                .unwrap(),
+                json!([])
+            );
+        }
+        let params = positional(&uri, text, text.rfind("check_value").unwrap(), encoding);
+        let definition = request(
+            &workspace,
+            encoding,
+            &control,
+            "textDocument/definition",
+            params.clone(),
+        )
+        .unwrap();
+        assert_eq!(definition["uri"], uri.as_str());
+        assert_eq!(
+            definition["range"]["start"],
+            json!({"line": 1, "character": 4})
+        );
+        assert!(
+            !request(
+                &workspace,
+                encoding,
+                &control,
+                "textDocument/hover",
+                params.clone()
+            )
+            .unwrap()
+            .is_null()
+        );
+        let mut refs = params;
+        refs["context"] = json!({"includeDeclaration": true});
+        let references = request(
+            &workspace,
+            encoding,
+            &control,
+            "textDocument/references",
+            refs,
+        )
+        .unwrap();
+        assert_eq!(references.as_array().unwrap().len(), 2);
+        assert_eq!(references[0], definition);
+    }
+}

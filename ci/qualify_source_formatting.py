@@ -21,13 +21,13 @@ if __package__:
     from .check_source_formatting import public_paths, seed_census
     from .package_data_processing import SOURCE, digest
     from .package_release import PLATFORMS, ROOT, VERSION
-    from .package_source_formatting import FIXTURES, MEMBER_IMPORT_FIXTURES, COMPOUND_ASSIGNMENT_FIXTURES, LIST_LITERAL_SPREAD_FIXTURES, RECORD_SHORTHAND_FIXTURES
+    from .package_source_formatting import FIXTURES, MEMBER_IMPORT_FIXTURES, COMPOUND_ASSIGNMENT_FIXTURES, LIST_LITERAL_SPREAD_FIXTURES, RECORD_SHORTHAND_FIXTURES, GROUPED_EXPORT_FIXTURES
     from .qualify_data_processing import require, success, unpack
 else:
     from check_source_formatting import public_paths, seed_census
     from package_data_processing import SOURCE, digest
     from package_release import PLATFORMS, ROOT, VERSION
-    from package_source_formatting import FIXTURES, MEMBER_IMPORT_FIXTURES, COMPOUND_ASSIGNMENT_FIXTURES, LIST_LITERAL_SPREAD_FIXTURES, RECORD_SHORTHAND_FIXTURES
+    from package_source_formatting import FIXTURES, MEMBER_IMPORT_FIXTURES, COMPOUND_ASSIGNMENT_FIXTURES, LIST_LITERAL_SPREAD_FIXTURES, RECORD_SHORTHAND_FIXTURES, GROUPED_EXPORT_FIXTURES
     from qualify_data_processing import require, success, unpack
 
 PAIRS = (("legacy.opaal", "canonical.opaal"), ("legacy-effects.opaal", "effects.opaal"),
@@ -59,7 +59,7 @@ def normalized_artifact(value: dict) -> dict:
 
 
 def project_workflow(run, work: Path, fixtures: Path, target: str, *, member_imports: bool = False,
-                     compound_assignments: bool = False, list_spreads: bool = False, record_shorthands: bool = False) -> dict:
+                     compound_assignments: bool = False, list_spreads: bool = False, record_shorthands: bool = False, grouped_exports: bool = False) -> dict:
     shutil.copytree(fixtures / "project", work)
     lock = "tools-macos.toml" if target == "macos-arm64" else "tools-linux-aarch64.toml" if target == "linux-aarch64" else "tools-linux.toml"
     shutil.copyfile(work / lock, work / "tools.toml")
@@ -126,7 +126,15 @@ def project_workflow(run, work: Path, fixtures: Path, target: str, *, member_imp
 
     source = work / "tasks.opaal"
     canonical = source.read_bytes()
-    if member_imports:
+    if grouped_exports:
+        canonical = (fixtures / "grouped-export-prefixes/project-tasks.opaal").read_bytes()
+        source.write_bytes(canonical.replace(b"read*", b"read *", 1))
+        refused_check = run("check", "tasks.opaal")
+        refused_test = run("test", "tasks.opaal", "--format", "json")
+        require(refused_check.returncode == 1 and b"PROJECT001" in refused_check.stderr and
+                refused_test.returncode == 2 and json.loads(refused_test.stdout)["failure"] == "TEST_SOURCE",
+                "prefix task standalone admission changed")
+    elif member_imports:
         canonical = (fixtures / "explicit-member-imports/project-tasks.opaal").read_bytes()
         source.write_bytes(canonical.replace(b"import './value.opaal'::{result}", b"import './value.opaal'::{ result }", 1))
         for name in ("value.opaal", "policy-tests.opaal", "policy-negative.opaal"):
@@ -195,9 +203,24 @@ def project_workflow(run, work: Path, fixtures: Path, target: str, *, member_imp
             normalized_artifact(legacy) == normalized_artifact(fresh), "project semantics changed with layout")
     require(legacy_audit == audit("fresh", fresh), "execution/audit semantics changed with layout")
 
+    if grouped_exports:
+        expanded = plan("expanded-stale")
+        source.write_bytes(canonical + b"let read_added = 1\n")
+        success(run("check", *base), "prefix addition project check")
+        # Remove only the project task alias to inspect the same declarations as a file API.
+        probe = work / "export-probe.opaal"
+        probe.write_bytes(source.read_bytes().replace(b"task verify = readiness\n", b""))
+        observed = run(stdin=b"import './export-probe.opaal' as probe\nprobe::read_added\n")
+        require(observed.returncode == 0 and not observed.stderr and b"1\n" in observed.stdout,
+                "new prefix match absent from concrete API")
+        refused = execute("expanded-stale", expanded)
+        require(refused.returncode == 1 and b"EXECUTE_STALE" in refused.stderr and
+                not (work / "expanded-stale.run.jsonl").exists(), "prefix addition accepted a stale plan")
+        source.write_bytes(canonical)
+
     # Declaring an effect is sufficient to require authority even when its body is pure.
-    if compound_assignments or list_spreads or record_shorthands:
-        source.write_bytes(canonical.replace(b"readiness", b"annotated").replace(
+    if compound_assignments or list_spreads or record_shorthands or grouped_exports:
+        source.write_bytes(canonical.replace(b"readiness", b"annotated").replace(b"read*", b"annotated*").replace(
             b"effects {\n}", b"effects {\n clock.wall();\n}"))
     else:
         source.write_bytes((fixtures / "legacy-annotated.opaal").read_bytes() + b"task verify = annotated\n")
@@ -513,6 +536,130 @@ def record_shorthand(run, work: Path, fixtures: Path, target: str) -> dict:
                            "canonical chosen spelling and comments; raw continuation and retention"]}
 
 
+def grouped_export_prefixes(run, work: Path, fixtures: Path, target: str) -> dict:
+    original = fixtures / "grouped-export-prefixes"
+    destination = work / "grouped-export-prefixes"
+    require({path.name for path in original.iterdir()} == set(GROUPED_EXPORT_FIXTURES),
+            "grouped export fixture census differs")
+    shutil.copytree(original, destination)
+
+    def invoke(*arguments, **options):
+        return run(*arguments, cwd=destination, **options)
+
+    def tests(name, *, list_only=False, case=None, exit_code=0, failure=None):
+        result = invoke("test", *(('--list',) if list_only else ()), name,
+                        *(('--case', case) if case else ()), "--format", "json")
+        require(result.returncode == exit_code and not result.stderr,
+                f"{name}: test status differs: {result.returncode} {result.stdout!r} {result.stderr!r}")
+        value = json.loads(result.stdout)
+        require(value["failure"] == failure and b"GROUPED_EXPORT_CANARY" not in result.stdout,
+                f"{name}: admission or redaction differs")
+        return value
+
+    inventories = []
+    for name in ("before.opaal", "after.opaal", "main.opaal", "explicit-reexports.opaal"):
+        success(invoke("check", name), "prefix module check")
+        success(invoke("format", "--check", name), "prefix canonical bytes")
+    for name in ("before.opaal", "after.opaal"):
+        listed = tests(name, list_only=True)
+        executed = tests(name)
+        require([case["name"] for case in listed["cases"]] == ["test_caught", "test_pass"] and
+                executed["counts"]["passed"] == 2, "prefix policy inventory/results differ")
+        # These files intentionally differ only in their root source identity.
+        for case in listed["cases"]:
+            case["callable_id"].pop("module")
+        inventories.append(listed["cases"])
+    require(inventories[0] == inventories[1], "explicit/prefix callable signatures differ")
+    require(tests("after.opaal", case="test_pass")["counts"]["passed"] == 1,
+            "exact selection changed")
+    after = destination / "after.opaal"
+    after.write_bytes(after.read_bytes() + b"def test_added() -> Bool\n{\n    return true\n}\n")
+    require([case["name"] for case in tests("after.opaal", list_only=True)["cases"]] ==
+            ["test_added", "test_caught", "test_pass"] and tests("after.opaal")["counts"]["passed"] == 3,
+            "new declaration required an export-list edit")
+    require([case["name"] for case in tests("main.opaal", list_only=True)["cases"]] == ["test_model"],
+            "nominal/variant inventory differs")
+    tests("main.opaal", exit_code=2, failure="TEST_EFFECT")
+    observed = invoke(stdin=b"import './main.opaal' as api\napi::test_model()\n")
+    require(observed.returncode == 0 and not observed.stderr and b"true\n" in observed.stdout,
+            "ordinary nominal/variant invocation differs")
+    for name, code, location in (("no-match.opaal", b"MOD005", b":1:10"),
+                                ("duplicate.opaal", b"MOD006", b":1:18"),
+                                ("imports-only.opaal", b"MOD005", b":3:10")):
+        result = invoke("check", name)
+        require(result.returncode == 1 and not result.stdout and code in result.stderr and
+                name.encode() + location in result.stderr, f"{name}: selector diagnostic differs")
+        tests(name, exit_code=2, failure="TEST_SOURCE")
+    for list_only, case in ((True, None), (False, None), (False, "test_good")):
+        tests("invalid-inventory.opaal", list_only=list_only, case=case,
+              exit_code=2, failure="TEST_SIGNATURE")
+    require(len(tests("purity.opaal", list_only=True)["cases"]) == 2, "list checked function purity")
+    tests("purity.opaal", exit_code=2, failure="TEST_EFFECT")
+    require(tests("purity.opaal", case="test_good")["counts"]["passed"] == 1,
+            "unselected effectful body blocked pure case")
+    purity = destination / "purity.opaal"
+    purity.write_bytes(b"let initial = env('GROUPED_EXPORT_CANARY')\n" + purity.read_bytes())
+    tests("purity.opaal", list_only=True)
+    tests("purity.opaal", case="test_good", exit_code=2, failure="TEST_EFFECT")
+    success(invoke("format", "--write", "noncanonical.opaal"), "prefix format")
+    require((destination / "noncanonical.opaal").read_bytes() == (destination / "canonical.opaal").read_bytes(),
+            "prefix canonical bytes differ")
+    success(invoke("format", "--check", "noncanonical.opaal"), "prefix idempotence")
+    for name, code in (("invalid.opaal", b"OP1000"), ("incomplete.opaal", b"SYN002")):
+        path = destination / name
+        before = path.read_bytes()
+        invalid = invoke("format", "--write", name)
+        require(invalid.returncode == 1 and code in invalid.stderr and path.read_bytes() == before,
+                "invalid prefix rewrite changed source")
+    pending = invoke(stdin=(destination / "incomplete.opaal").read_bytes())
+    require(pending.returncode == 0 and pending.stderr.count(b"SYN002") == 1,
+            "prefix raw EOF differs")
+    raw = invoke(stdin=b"import './model.opaal' as model\nmodel::check_sum()\nlet retained = model::check_sum()\nexport {\nmissing_*,\n}\nretained\nlet missing_later = 1\nretained\n")
+    require(raw.returncode == 0 and not raw.stderr and raw.stdout.count(b"5\n") == 3 and b"...> " in raw.stdout,
+            "prefix raw file import/retention or inert export differs")
+    adversarial = destination / "large.opaal"
+    declarations = b"".join(f"let check_{index:04} = {index}\n".encode() for index in range(1024))
+    for selectors, code in ((b"check_*", None), (b"check_*, check*", b"MOD006"), (b"absent_*", b"MOD005")):
+        adversarial.write_bytes(b"export {" + selectors + b"}\n" + declarations)
+        checked = invoke("check", adversarial.name)
+        require(checked.returncode == (1 if code else 0) and (code in checked.stderr if code else not checked.stderr),
+                "bounded prefix analysis differs")
+    examples = {}
+    for folder, names in (
+        ("image-check", ["test_empty_expectation", "test_empty_revision", "test_invalid_decoder", "test_json_roundtrip",
+                         "test_missing_revision", "test_negative_id", "test_negative_platform", "test_negative_revision",
+                         "test_pass", "test_unsupported_descriptor"]),
+        ("repository-check", ["test_acquisition", "test_bad_shape", "test_findings", "test_inconsistent", "test_manifest", "test_pass"]),
+    ):
+        example = destination / folder
+        shutil.copytree(ROOT / "examples" / folder, example)
+        policy = example / "policy-tests.opaal"
+        automatic = policy.read_bytes()
+        baseline = automatic.replace(b"export { test_* }", ("export { " + ", ".join(names) + " }").encode())
+        results = []
+        for source in (baseline, automatic):
+            policy.write_bytes(source)
+            success(invoke("check", policy), "real policy check")
+            success(invoke("format", "--check", policy), "real policy format")
+            listed = tests(str(policy), list_only=True)
+            result = tests(str(policy))
+            require([case["name"] for case in listed["cases"]] == names and result["counts"]["passed"] == len(names),
+                    "real policy inventory/results changed")
+            results.append((listed["cases"], result["cases"]))
+        require(results[0] == results[1], "real policy callable identities changed")
+        examples[folder] = names
+    project = work / "prefix-project"
+    report = project_workflow(lambda *args, **options: run(*args, cwd=project, **options), project, fixtures, target,
+                              grouped_exports=True)
+    return {"fixture_cases": sorted(GROUPED_EXPORT_FIXTURES), "examples": examples, "project": report,
+            "assertions": ["explicit/prefix inventory and callable parity; automatic addition",
+                           "local general exports, member imports and nominal/variant identity",
+                           "no-match/import exclusion/duplicate spans; invalid inventory before cases",
+                           "list skips purity; selected calls and all initializers retain admission",
+                           "canonical bytes, invalid/incomplete preservation; raw retained import and inert exports",
+                           "1024 declarations, overlaps and no-match under existing deadlines"]}
+
+
 def framed_formatting(binary: Path, work: Path, fixtures: Path, environment: dict) -> list[str]:
     observations = []
     for encoding in ("utf-8", "utf-16"):
@@ -589,7 +736,9 @@ def framed_formatting(binary: Path, work: Path, fixtures: Path, environment: dic
                     "list-literal-spread/noncanonical.opaal", "list-literal-spread/canonical.opaal",
                     "list-literal-spread/incomplete.opaal", "list-literal-spread/invalid.opaal",
                     "record-shorthand/noncanonical.opaal", "record-shorthand/canonical.opaal",
-                    "record-shorthand/incomplete.opaal", "record-shorthand/invalid.opaal"))
+                    "record-shorthand/incomplete.opaal", "record-shorthand/invalid.opaal",
+                    "grouped-export-prefixes/noncanonical.opaal", "grouped-export-prefixes/canonical.opaal",
+                    "grouped-export-prefixes/incomplete.opaal", "grouped-export-prefixes/invalid.opaal"))
                 documents.append(("invalid-body.opaal", "def waiting()\nlet x = 1\n"))
                 for index, (name, text) in enumerate(documents):
                     uri = (work / f"document-{index}.opaal").as_uri()
@@ -599,7 +748,7 @@ def framed_formatting(binary: Path, work: Path, fixtures: Path, environment: dic
                     result = request("textDocument/formatting", params)["result"]
                     if name in ("legacy.opaal", "concise-imports/noncanonical.opaal", "explicit-member-imports/noncanonical.opaal",
                                 "compound-assignment/noncanonical.opaal", "list-literal-spread/noncanonical.opaal",
-                                "record-shorthand/noncanonical.opaal"):
+                                "record-shorthand/noncanonical.opaal", "grouped-export-prefixes/noncanonical.opaal"):
                         canonical = (fixtures / ("canonical.opaal" if name == "legacy.opaal" else
                                                   name.replace("noncanonical.opaal", "canonical.opaal"))).read_text()
                         require(result == [{"range": {"start": {"line": 0, "character": 0},
@@ -665,6 +814,35 @@ def framed_formatting(binary: Path, work: Path, fixtures: Path, environment: dic
                         "record shorthand pattern did not declare a fresh binding")
                 require(request("textDocument/references", {**target, "context": {"includeDeclaration": True}})["result"] ==
                         [binding, record_position(6, 11, 15)], "record shorthand binding references differ")
+                uri = (work / "prefix-query.opaal").as_uri()
+                text = "export { check_* }\nlet check_value: Int = 5\nlet result = ['界🙂', check_value]\n"
+                send({"method": "textDocument/didOpen", "params": {"textDocument": {
+                    "uri": uri, "languageId": "opaal", "version": 1, "text": text}}})
+                for character in range(9, 16):
+                    target = {"textDocument": {"uri": uri}, "position": {"line": 0, "character": character}}
+                    require(request("textDocument/hover", target)["result"] is None and
+                            request("textDocument/definition", target)["result"] is None and
+                            request("textDocument/references", {**target, "context": {"includeDeclaration": True}})["result"] == [],
+                            "prefix selector acquired a singular query target")
+                prefix = "let result = ['界🙂', "
+                character = len(prefix.encode()) if encoding == "utf-8" else len(prefix.encode("utf-16-le")) // 2
+                target = {"textDocument": {"uri": uri}, "position": {"line": 2, "character": character}}
+                definition = {"uri": uri, "range": {"start": {"line": 1, "character": 4},
+                                                   "end": {"line": 1, "character": 15}}}
+                require(request("textDocument/definition", target)["result"] == definition and
+                        "Int" in request("textDocument/hover", target)["result"]["contents"]["value"],
+                        "prefix concrete use lost definition or type")
+                require(request("textDocument/references", {**target, "context": {"includeDeclaration": True}})["result"] ==
+                        [definition, {"uri": uri, "range": {"start": {"line": 2, "character": character},
+                                                           "end": {"line": 2, "character": character + 11}}}],
+                        "prefix metadata leaked into concrete references")
+                updated = text + "let check_added = 1\ncheck_added\n"
+                send({"method": "textDocument/didChange", "params": {"textDocument": {"uri": uri, "version": 2},
+                     "contentChanges": [{"text": updated}]}})
+                target = {"textDocument": {"uri": uri}, "position": {"line": 4, "character": 1}}
+                require(request("textDocument/definition", target)["result"] == {"uri": uri, "range": {
+                    "start": {"line": 3, "character": 4}, "end": {"line": 3, "character": 15}}},
+                    "prefix changed snapshot did not expose new declaration")
                 uri = (work / "spread-query.opaal").as_uri()
                 text = "import std::list\nlet items = [1, 2]\nlet result = ['界🙂', ...list::reverse(items)]\n"
                 send({"method": "textDocument/didOpen", "params": {"textDocument": {
@@ -803,6 +981,30 @@ def terminal_continuation(binary: Path, work: Path, environment: dict) -> None:
         read_until(rb">> ")
         os.write(descriptor, b"record.record_name\r")
         read_until(rb"(?:^|\n)7\r?\n.*>> ")
+        os.write(descriptor, b"import './grouped-export-prefixes/model.opaal' as model\r")
+        read_until(rb">> ")
+        require(b"error[" not in captured, "terminal prefix module import failed")
+        os.write(descriptor, b"model::check_sum()\r")
+        read_until(rb"(?:^|\n)5\r?\n.*>> ")
+        os.write(descriptor, b"let retained = model::check_sum()\r")
+        read_until(rb">> ")
+        for line in (b"export {", b"missing_*,"):
+            os.write(descriptor, line + b"\r")
+            read_until(rb"\.\.\.> ")
+        os.write(descriptor, b"}\r")
+        read_until(rb">> ")
+        require(b"error[" not in captured, "terminal direct prefix export became strict")
+        for line in (b"export {", b"missing_*,"):
+            os.write(descriptor, line + b"\r")
+            read_until(rb"\.\.\.> ")
+        os.write(descriptor, b"\x03")
+        read_until(rb">> ")
+        os.write(descriptor, b"retained\r")
+        read_until(rb"(?:^|\n)5\r?\n.*>> ")
+        os.write(descriptor, b"let missing_later = 1\r")
+        read_until(rb">> ")
+        os.write(descriptor, b"retained\r")
+        read_until(rb"(?:^|\n)5\r?\n.*>> ")
         os.write(descriptor, b"def cancelled()\r")
         read_until(rb"\.\.\.> ")
         os.write(descriptor, b"\x03")
@@ -954,6 +1156,7 @@ def qualify(archive: Path | None, fixture_archive: Path | None, binaries: Path |
         compound_report = compound_assignment(run, root, fixtures, target)
         spread_report = list_literal_spread(run, root, fixtures, target)
         record_report = record_shorthand(run, root, fixtures, target)
+        exports_report = grouped_export_prefixes(run, root, fixtures, target)
         lsp_report = framed_formatting(installed / "opaal-language-server", root, fixtures, environment)
         terminal_continuation(binary, root, environment)
         require(public_paths(ROOT) == paths and
@@ -968,7 +1171,7 @@ def qualify(archive: Path | None, fixture_archive: Path | None, binaries: Path |
                                   for name in ("opaal", "opaal-language-server")},
                 "fixture_sha256": fixture_hashes, "parser_seeds": seed_census(ROOT, paths),
                 "project": project_report, "concise_imports": imports_report, "explicit_member_imports": members_report,
-                "compound_assignment": compound_report, "list_literal_spread": spread_report, "record_shorthand": record_report,
+                "compound_assignment": compound_report, "list_literal_spread": spread_report, "record_shorthand": record_report, "grouped_export_prefixes": exports_report,
                 "language_server": lsp_report, "bounded_cases": bounded,
                 "assertions": ["exact fixture/source/program identity", "legacy/canonical execution and checking",
                                "exact action/function/comment bytes and idempotence", "read-only check and mode/inode retention",

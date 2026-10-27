@@ -364,3 +364,15 @@ fn list_spread_spacing_keeps_existing_command_and_pattern_grammars() {
         ));
     }
 }
+
+#[test]
+fn export_prefixes_tighten_only_the_marker_and_keep_comments_and_order() {
+    assert_eq!(
+        roundtrip("export   { exact, check \t* , Item }\n"),
+        "export { exact, check*, Item }\n"
+    );
+    let formatted = roundtrip("export {\n# selectors\ncheck *, # local\nexact,\n}\n");
+    assert!(formatted.contains("check*, # local"), "{formatted}");
+    assert!(formatted.contains("# selectors"));
+    assert!(formatted.find("check*").unwrap() < formatted.find("exact").unwrap());
+}

@@ -1,0 +1,12 @@
+import './model.opaal' as model
+import './model.opaal'::{check_sum as sum, Item, Choice}
+export { test_* }
+def test_model() -> Bool
+{
+    let item: Item = model::Item { value: sum() }
+    let choice: Choice = Choice::Yes(item.value)
+    match choice {
+        Choice::Yes(value) => { return (value == 5) }
+        Choice::No => { return false }
+    }
+}

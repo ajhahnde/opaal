@@ -99,7 +99,8 @@ Usage:
   opaal test [--list] [--case NAME] [--format text|json] [--] SOURCE
   opaal test --help
 
-Only root exports named test_ are discovered, in name order. Each must resolve
+Root exports named test_ are discovered in name order; export { test_* } selects
+local declarations automatically. Each must resolve
 to a non-generic ordinary zero-argument Bool function. --case selects one exact
 export; signatures of the entire inventory are still validated. --list never
 initializes source. Running admits only statically proven pure initializers and

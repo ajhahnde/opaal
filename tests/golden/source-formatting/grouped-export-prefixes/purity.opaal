@@ -1,0 +1,10 @@
+export { test_* }
+def test_good() -> Bool
+{
+    return true
+}
+def test_effect() -> Bool
+{
+    let value = env('GROUPED_EXPORT_CANARY')
+    return true
+}

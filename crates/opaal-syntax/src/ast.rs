@@ -285,7 +285,24 @@ impl ModuleImportSource {
 /// One explicit module export list.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ModuleExportStatement {
-    pub names: Vec<Identifier>,
+    pub names: Vec<ModuleExportSelector>,
+}
+
+/// One exact name or source-local trailing-star prefix in an export list.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ModuleExportSelector {
+    Name(Identifier),
+    Prefix { prefix: Identifier, marker: Span },
+}
+
+impl ModuleExportSelector {
+    #[must_use]
+    pub fn span(self) -> Span {
+        match self {
+            Self::Name(name) => name.span(),
+            Self::Prefix { prefix, marker } => prefix.span().cover(marker),
+        }
+    }
 }
 
 /// The first nominal OPAAL record type form.

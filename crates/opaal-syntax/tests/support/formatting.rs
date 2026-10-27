@@ -431,6 +431,21 @@ variants!(OutputMode { Truncate, Append });
 
 fields!(ModuleAliasImport { source, alias });
 fields!(ModuleExportStatement { names });
+impl Visit for ModuleExportSelector {
+    fn visit(&self, context: &mut Context<'_>) {
+        match self {
+            Self::Name(name) => {
+                context.tag("Name");
+                name.visit(context);
+            }
+            Self::Prefix { prefix, marker } => {
+                context.tag("Prefix");
+                prefix.visit(context);
+                marker.visit(context);
+            }
+        }
+    }
+}
 fields!(NominalTypeDeclaration {
     name,
     type_parameters,

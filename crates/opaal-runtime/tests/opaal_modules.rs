@@ -421,3 +421,151 @@ fn qualified_and_selected_facade_calls_keep_original_effects_and_navigation() {
         ));
     }
 }
+
+#[test]
+fn prefix_exports_are_source_local_whole_file_and_keep_concrete_navigation() {
+    let model = concat!(
+        "export { check*, Item, Choice }\n",
+        "import std::math as check_math\nimport std::math::{abs as check_abs}\n",
+        "type Item = { value: Int }\nenum Choice { Yes(Int), No }\n",
+        "let [check_left, [check_right]] = [2, [3]]\nlet check = 0\n",
+        "mut check_mut = 1\n",
+        "def check_sum() -> Int { return check_left + check_right }\n",
+        "action check_action() -> Int effects {} { return 5 }\n",
+        "def hidden() -> Int { let check_nested = 9; return check_nested }\n",
+    );
+    let modules = FakeModules::default()
+        .maps("/main.opaal", "/main.opaal").maps("/model.opaal", "/model.opaal")
+        .maps("/facade.opaal", "/facade.opaal")
+        .contains("/model.opaal", model)
+        .contains("/facade.opaal", "import './model.opaal'::{check_sum, Item, Choice}\nexport {check_sum, Item, Choice}\n")
+        .contains("/main.opaal", "import './model.opaal' as model\nimport './facade.opaal'::{check_sum as sum, Item, Choice}\nlet item: Item = model::Item {value: sum()}\nlet choice: Choice = Choice::Yes(item.value)\n");
+    let program = ModuleProgramLoader::new(&modules, &modules)
+        .load_for_frontend(Path::new("/main.opaal"))
+        .unwrap_or_else(|error| panic!("{}", error.render()));
+    let owner = program
+        .aliases()
+        .alias(program.graph().root(), "model")
+        .unwrap()
+        .target()
+        .clone();
+    let exports = program
+        .names()
+        .exports(&owner)
+        .map(|export| export.name())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        exports,
+        [
+            "Choice",
+            "Item",
+            "check",
+            "check_action",
+            "check_left",
+            "check_mut",
+            "check_right",
+            "check_sum"
+        ]
+    );
+    let commands = standard_registry();
+    let queries = program.semantic_queries(&commands);
+    for offset in model.find("check*").unwrap()..model.find("check*").unwrap() + 6 {
+        assert!(queries.hover_at(&owner, offset).is_none());
+        assert!(queries.definition_at(&owner, offset).is_none());
+    }
+    let definition = queries
+        .definition_at(&owner, model.rfind("check_left").unwrap())
+        .unwrap();
+    let references = queries.references_to(&definition, false);
+    assert_eq!(references.len(), 1);
+    assert_eq!(
+        references[0].span().start(),
+        model.rfind("check_left").unwrap()
+    );
+    assert!(
+        program
+            .names()
+            .export(&owner, "check_sum")
+            .unwrap()
+            .is_prefix()
+    );
+    assert!(!program.names().export(&owner, "Item").unwrap().is_prefix());
+}
+
+#[test]
+fn prefix_no_match_and_overlap_diagnostics_cover_both_original_selectors() {
+    for (source, code, primary, secondary) in [
+        (
+            "export { absent_* }\nlet present = 1\n",
+            "MOD005",
+            "absent_*",
+            None,
+        ),
+        (
+            "import std::math as check_math\nimport std::math::{abs as check_abs}\nexport {check_*}\n",
+            "MOD005",
+            "check_*",
+            None,
+        ),
+        (
+            "export {test_*, test_one}\ndef test_one() -> Bool { return true }\n",
+            "MOD006",
+            "test_one",
+            Some("test_*"),
+        ),
+        (
+            "export {test_one}\nexport {test_*}\ndef test_one() -> Bool { return true }\n",
+            "MOD006",
+            "test_*",
+            Some("test_one"),
+        ),
+        (
+            "export {test*, test_*}\ndef test_one() -> Bool { return true }\n",
+            "MOD006",
+            "test_*",
+            Some("test*"),
+        ),
+        (
+            "import std::math as math\nexport { math, math }\n",
+            "MOD006",
+            "math",
+            Some("math"),
+        ),
+        (
+            "export {Test*}\nlet test_one = 1\n",
+            "MOD005",
+            "Test*",
+            None,
+        ),
+    ] {
+        let modules = FakeModules::default()
+            .maps("/main.opaal", "/main.opaal")
+            .contains("/main.opaal", source);
+        let error = ModuleProgramLoader::new(&modules, &modules)
+            .load(Path::new("/main.opaal"))
+            .unwrap_err();
+        let diagnostic = error.diagnostics().remove(0);
+        let rendered = format!("{diagnostic:?}");
+        assert_eq!(
+            &source[diagnostic.labels()[0].span().start()..diagnostic.labels()[0].span().end()],
+            primary
+        );
+        if let Some(first) = secondary {
+            assert_eq!(
+                &source[diagnostic.labels()[1].span().start()..diagnostic.labels()[1].span().end()],
+                first
+            );
+        }
+        assert_eq!(diagnostic.code(), code, "{rendered}");
+        if code == "MOD005" {
+            assert!(rendered.contains("matches no local top-level declaration"));
+        }
+    }
+    let modules = FakeModules::default().maps("/main.opaal", "/main.opaal")
+        .contains("/main.opaal", "import std::math as check_math\nimport std::math::{abs as check_abs}\nexport { check_*, check_math, check_abs }\nlet check_value = 5\n");
+    assert!(
+        ModuleProgramLoader::new(&modules, &modules)
+            .load(Path::new("/main.opaal"))
+            .is_ok()
+    );
+}

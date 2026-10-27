@@ -3,7 +3,7 @@ import std::docker as docker
 import std::record as record
 import std::string as string
 import './policy.opaal' as policy
-export { test_pass, test_negative_id, test_negative_platform, test_negative_revision, test_missing_revision, test_empty_revision, test_empty_expectation, test_invalid_decoder, test_unsupported_descriptor, test_json_roundtrip }
+export { test_* }
 
 def saved_image() -> Record
 {

@@ -986,3 +986,23 @@ fn list_spreads_retain_values_and_callbacks_inside_spread_operands_across_cells(
         Value::list(vec![Value::Int(4), Value::Int(5)])
     );
 }
+
+#[test]
+fn prefix_file_exports_and_inert_direct_exports_survive_retained_cells() {
+    let sources = Sources::default();
+    sources.put("/work/model.opaal", "export {check_*}\nlet [check_left, check_right] = [2, 3]\ndef check_sum() -> Int { return check_left + check_right }\n");
+    let mut session = session();
+    submit(&mut session, &sources, "import './model.opaal' as model");
+    assert_eq!(
+        submit(&mut session, &sources, "model::check_sum()"),
+        Value::Int(5)
+    );
+    submit(&mut session, &sources, "let retained = model::check_sum()");
+    submit(&mut session, &sources, "export {\n missing_*,\n}");
+    assert_eq!(submit(&mut session, &sources, "retained"), Value::Int(5));
+    submit(&mut session, &sources, "let missing_later = 1");
+    assert_eq!(
+        submit(&mut session, &sources, "retained + missing_later"),
+        Value::Int(6)
+    );
+}

@@ -3,3 +3,5 @@ complete	complete/qualified-aliases.opaal
 complete	complete/nominal-type.opaal
 complete	complete/inferred-alias.opaal
 invalid	invalid/named-import.opaal
+complete	complete/grouped-export-prefixes.opaal
+invalid	invalid/grouped-export-prefixes.opaal

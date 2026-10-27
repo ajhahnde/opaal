@@ -532,3 +532,66 @@ fn repeated_long_callable_ids_refuse_before_retaining_an_oversized_inventory() {
         Some("TEST_RESOURCE")
     );
 }
+
+#[test]
+fn prefix_inventory_preserves_full_signatures_and_selected_purity_boundaries() {
+    let pure = "export {test_*}\ndef test_good() -> Bool { return true }\n";
+    let effect = format!(
+        "{pure}def test_effect() -> Bool {{ let value = env('GROUPED_EXPORT_CANARY'); return true }}\n"
+    );
+    for (source, list, case, expected) in [
+        (effect.clone(), true, None, None),
+        (effect.clone(), false, None, Some("TEST_EFFECT")),
+        (effect.clone(), false, Some("test_good"), None),
+        (
+            format!("let initial = env('GROUPED_EXPORT_CANARY')\n{effect}"),
+            true,
+            None,
+            None,
+        ),
+        (
+            format!("let initial = env('GROUPED_EXPORT_CANARY')\n{effect}"),
+            false,
+            Some("test_good"),
+            Some("TEST_EFFECT"),
+        ),
+        (
+            format!("{pure}let test_bad = true\n"),
+            true,
+            None,
+            Some("TEST_SIGNATURE"),
+        ),
+        (
+            format!("{pure}let test_bad = true\n"),
+            false,
+            Some("test_good"),
+            Some("TEST_SIGNATURE"),
+        ),
+    ] {
+        let (exit, view) = run(&source, list, case, TestLimits::default());
+        assert_eq!(exit, if expected.is_some() { 2 } else { 0 }, "{view}");
+        match expected {
+            Some(reason) => assert_eq!(view["failure"], reason),
+            None => assert!(view["failure"].is_null()),
+        }
+    }
+    let (exit, before) = run(
+        &pure.replace("test_*", "test_good"),
+        false,
+        None,
+        TestLimits::default(),
+    );
+    assert_eq!(exit, 0);
+    let (exit, after) = run(pure, false, None, TestLimits::default());
+    assert_eq!(exit, 0);
+    assert_eq!(before["cases"], after["cases"]);
+    let (exit, added) = run(
+        &format!("{pure}def test_added() -> Bool {{ return true }}\n"),
+        false,
+        None,
+        TestLimits::default(),
+    );
+    assert_eq!(exit, 0);
+    assert_eq!(added["counts"]["passed"], 2);
+    assert_eq!(added["cases"][0]["name"], "test_added");
+}

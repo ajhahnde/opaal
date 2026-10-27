@@ -1,0 +1,14 @@
+export { test_* }
+def test_pass() -> Bool
+{
+    return true
+}
+def test_caught() -> Bool
+{
+    try {
+        throw "expected"
+    } catch error {
+        return (error.category == "user")
+    }
+    return false
+}

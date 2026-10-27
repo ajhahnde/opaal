@@ -1,5 +1,5 @@
 import './policy.opaal' as policy
-export { test_pass, test_findings, test_manifest, test_bad_shape, test_acquisition, test_inconsistent }
+export { test_* }
 
 def manifest() -> Record
 {

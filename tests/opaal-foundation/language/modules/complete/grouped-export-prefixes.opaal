@@ -1,0 +1,8 @@
+export { check_*, Item, Choice }
+type Item = { value: Int }
+enum Choice { Yes(Int), No }
+let [check_left, check_right] = [2, 3]
+def check_sum() -> Int
+{
+    return (check_left + check_right)
+}

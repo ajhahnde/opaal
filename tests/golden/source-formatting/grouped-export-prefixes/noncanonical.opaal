@@ -1,0 +1,2 @@
+export   { test_ * }
+def test_pass()->Bool { return true }
