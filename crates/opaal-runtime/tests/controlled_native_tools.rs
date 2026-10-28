@@ -569,7 +569,7 @@ fn native_frozen_pure_initializer_and_default_embedding_have_no_process_host() {
         ),
         (
             "default-embedding-call",
-            "action denied() -> Bool effects { process.run(tools::checker); } { let result = process::run(tools::checker, [])\nreturn true }\ndenied()",
+            "action denied() -> Bool { effects { process.run(tools::checker), }  let result = process::run(tools::checker, [])\nreturn true }\ndenied()",
         ),
     ] {
         let source = Source(format!(

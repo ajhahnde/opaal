@@ -61,7 +61,7 @@ fn qualify(cancelled: bool, cleanup_failed: bool) {
     );
     let count = if cancelled { 251 } else { 250 };
     work.write("tasks.opaal", format!(
-        "import std::random as random\naction sample() -> Bool effects {{ entropy.system(); }} {{ let sample = random::bytes({count})\nreturn true }}\ntask sample = sample\n"
+        "import std::random as random\naction sample() -> Bool {{ effects {{ entropy.system(), }}  let sample = random::bytes({count})\nreturn true }}\ntask sample = sample\n"
     ));
     let manifest = work.0.join("opaal.toml");
     let plan = work.0.join("sample.plan.json");

@@ -185,7 +185,7 @@ fn controlled_project_returns_exact_reference_values_with_only_progress_evidence
     let mut journal = Journal::default();
     let (outcome, script, cleanup) = run(
         r#"
-action sample() -> Record effects { entropy.system(); } {
+action sample() -> Record { effects { entropy.system(), }
     let shard = random::int(0, 3)
     let fraction = random::float()
     let identifier = random::bytes(3)
@@ -237,9 +237,9 @@ fn nested_calls_share_one_host_and_settle_candidate_reservations() {
     let mut journal = Journal::default();
     let (outcome, script, cleanup) = run(
         r#"
-action draw() -> Int effects { entropy.system(); } { return random::int(0, 3) }
-action sibling() -> Int effects {} { return 987654321 }
-action sample() -> Int effects { entropy.system(); } {
+action draw() -> Int { effects { entropy.system(), }  return random::int(0, 3) }
+action sibling() -> Int { effects {}  return 987654321 }
+action sample() -> Int { effects { entropy.system(), }
     let ignored = sibling()
     let first = draw()
     let second = draw()
@@ -287,7 +287,7 @@ fn before_failure_does_no_host_work_and_after_failure_preserves_primary() {
             ..Journal::default()
         };
         let (outcome, script, _) = run(
-            "action sample() -> Float effects { entropy.system(); } { return random::float() }",
+            "action sample() -> Float { effects { entropy.system(), }  return random::float() }",
             h,
             &mut journal,
         );
@@ -325,7 +325,7 @@ fn admission_persistence_consumes_the_original_operation_deadline() {
         ..Default::default()
     };
     let (outcome, script, _) = run(
-        "action sample() -> Float effects { entropy.system(); } { return random::float() }",
+        "action sample() -> Float { effects { entropy.system(), }  return random::float() }",
         h,
         &mut journal,
     );
@@ -365,7 +365,7 @@ fn no_draw_calls_still_require_declared_grant_and_exact_host_binding() {
             }
         }
         let (outcome, script, _) = run(
-            "action sample() -> Int effects { entropy.system(); } { return random::int(7, 8) }",
+            "action sample() -> Int { effects { entropy.system(), }  return random::int(7, 8) }",
             h,
             &mut Journal::default(),
         );
@@ -385,7 +385,7 @@ fn catches_do_not_restore_consumed_entropy_budget() {
     let mut journal = Journal::default();
     let (outcome, script, _) = run(
         r#"
-action sample() -> Float effects { entropy.system(); } {
+action sample() -> Float { effects { entropy.system(), }
     try { let ignored = random::float() } catch error {}
     try { let ignored = random::float() } catch error {}
     return random::float()
@@ -410,7 +410,7 @@ fn cumulative_limits_survive_calls_and_cleanup_stays_secondary_to_cancellation()
     let mut journal = Journal::default();
     let (outcome, script, _) = run(
         r#"
-action sample() -> Int effects { entropy.system(); } {
+action sample() -> Int { effects { entropy.system(), }
     let first = random::int(0, 4)
     let second = random::int(0, 4)
     return random::int(0, 4)
@@ -436,7 +436,7 @@ action sample() -> Int effects { entropy.system(); } {
         ..Default::default()
     };
     let (outcome, script, cleanup) = run(
-        "action sample() -> Float effects { entropy.system(); } { return random::float() }",
+        "action sample() -> Float { effects { entropy.system(), }  return random::float() }",
         h,
         &mut journal,
     );
@@ -507,12 +507,12 @@ import std::data as data
 import std::string as string
 import std::process as process
 import project::tools as tools
-action draw() -> Int effects { entropy.system(); } { return random::int(987654321, 987654322) }
-action sibling(argument: String) -> Bytes effects { process.run(tools::git); } {
+action draw() -> Int { effects { entropy.system(), }  return random::int(987654321, 987654322) }
+action sibling(argument: String) -> Bytes { effects { process.run(tools::git), }
     let result = process::run(tools::git, [argument])
     return result.stdout
 }
-action sample() -> Bytes effects { entropy.system(); process.run(tools::git); } {
+action sample() -> Bytes { effects { entropy.system(), process.run(tools::git), }
     let value = draw()
     return sibling(string::decode_utf8(data::json_encode(value)))
 }
@@ -636,7 +636,7 @@ fn simultaneous_entropy_cleanup_and_journal_failures_keep_fixed_secondary_eviden
         ..Default::default()
     };
     let (outcome, script, cleanup) = run(
-        "action sample() -> Float effects { entropy.system(); } { return random::float() }",
+        "action sample() -> Float { effects { entropy.system(), }  return random::float() }",
         h,
         &mut journal,
     );

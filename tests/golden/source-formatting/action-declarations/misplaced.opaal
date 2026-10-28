@@ -1,0 +1,1 @@
+action bad() -> Int { effects {} if true { effects {} } return 1 }

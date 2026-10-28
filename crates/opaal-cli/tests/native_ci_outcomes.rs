@@ -18,7 +18,7 @@ fn project(result: &str, body: &str, grant: bool) -> (ReportDir, String) {
     } else { "rules = []\n".to_owned() }));
     let platform = support::host_platform_triple();
     work.write("tools.toml", format!("schema_version = 1\nproject = 'native_check'\nenvironment = 'ci'\nplatform = '{platform}'\ntools = []\n[child_environment]\ninherit = []\n"));
-    work.write("tasks.opaal", format!("import std::io as io\nimport std::data as data\naction run() -> {result} effects {{ stdin.read(); stdout.write(); }} {{ {body} }}\ntask sample = run\n"));
+    work.write("tasks.opaal", format!("import std::io as io\nimport std::data as data\naction run() -> {result} {{ effects {{ stdin.read(), stdout.write(), }}  {body} }}\ntask sample = run\n"));
     let planned = work.run(&[
         "plan",
         "--project",

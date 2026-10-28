@@ -28,7 +28,7 @@ impl ModuleSourceLoader for MemorySources {
 #[test]
 fn action_identity_carries_signature_effects_and_a_stable_digest() {
     let path = PathBuf::from("/project/main.opaal");
-    let text = b"action ready(candidate: String) -> String\neffects {\n    clock.wall;\n    clock.wall;\n}\n{\n    return candidate\n}\n".to_vec();
+    let text = b"action ready(candidate: String) -> String\n{\neffects {\n    clock.wall,\n    clock.wall,\n}\n\n    return candidate\n}\n".to_vec();
     let sources = MemorySources(BTreeMap::from([(path.clone(), text)]));
     let program = ModuleProgramLoader::new(&sources, &sources)
         .load(&path)
@@ -74,31 +74,44 @@ fn action_diagnostic_codes(text: &str) -> Vec<String> {
 #[test]
 fn action_call_graph_is_static_acyclic_and_effect_closed() {
     let missing = action_diagnostic_codes(
-        "action leaf() -> String effects { clock.wall; } { return 'ok' }\n\
-         action root() -> String effects {} { return leaf() }\n",
+        "action leaf() -> String { effects { clock.wall, }  return 'ok' }\naction root() -> String { effects {}  return leaf() }\n",
     );
     assert!(missing.contains(&"ACT007".to_owned()), "{missing:?}");
 
     let function = action_diagnostic_codes(
-        "action leaf() -> String effects {} { return 'ok' }\n\
-         def invalid() -> String { return leaf() }\n",
+        "action leaf() -> String { effects {}  return 'ok' }\ndef invalid() -> String { return leaf() }\n",
     );
     assert!(function.contains(&"ACT005".to_owned()), "{function:?}");
 
-    let cycle = action_diagnostic_codes("action first() -> String effects {} { return first() }\n");
+    let cycle =
+        action_diagnostic_codes("action first() -> String { effects {}  return first() }\n");
     assert!(cycle.contains(&"ACT008".to_owned()), "{cycle:?}");
 
     let valid = action_diagnostic_codes(
-        "action leaf() -> String effects { clock.wall; } { return 'ok' }\n\
-         action root() -> String effects { clock.wall; } { return leaf() }\n",
+        "action leaf() -> String { effects { clock.wall, }  return 'ok' }\naction root() -> String { effects { clock.wall, }  return leaf() }\n",
     );
     assert!(valid.is_empty(), "{valid:?}");
 }
 
 #[test]
+fn contained_requests_keep_the_existing_semantic_limit() {
+    for count in [64, 65] {
+        let requests = "clock.wall(),".repeat(count);
+        let codes = action_diagnostic_codes(&format!(
+            "action bounded() -> Int {{ effects {{ {requests} }} return 1 }}"
+        ));
+        if count == 64 {
+            assert!(codes.is_empty(), "{codes:?}");
+        } else {
+            assert_eq!(codes, ["ACT004"]);
+        }
+    }
+}
+
+#[test]
 fn invalid_action_contracts_are_source_diagnostics() {
     let path = PathBuf::from("/project/main.opaal");
-    let text = b"action broken(candidate) -> String effects { unknown.work; } { return 'done' }\n"
+    let text = b"action broken(candidate) -> String { effects { unknown.work, }  return 'done' }\n"
         .to_vec();
     let sources = MemorySources(BTreeMap::from([(path.clone(), text)]));
     let report = ModuleProgramLoader::new(&sources, &sources).analyze(&path);
@@ -112,12 +125,12 @@ fn invalid_action_contracts_are_source_diagnostics() {
     assert!(codes.contains(&"ACT002".to_owned()), "{codes:?}");
 
     let dynamic = action_diagnostic_codes(
-        "let suffix = 'wall'\naction broken() -> String effects { filesystem.read(\"{suffix}\"); } { return 'done' }\n",
+        "let suffix = 'wall'\naction broken() -> String { effects { filesystem.read(\"{suffix}\"), }  return 'done' }\n",
     );
     assert!(dynamic.contains(&"ACT011".to_owned()), "{dynamic:?}");
 
     let value = action_diagnostic_codes(
-        "action leaf() -> String effects {} { return 'ok' }\nlet saved = leaf\n",
+        "action leaf() -> String { effects {}  return 'ok' }\nlet saved = leaf\n",
     );
     assert!(value.contains(&"ACT006".to_owned()), "{value:?}");
 }
@@ -125,11 +138,7 @@ fn invalid_action_contracts_are_source_diagnostics() {
 #[test]
 fn nested_action_reads_and_first_excess_call_depth_are_diagnosed() {
     let nested = action_diagnostic_codes(
-        "action leaf() -> String effects {} { return 'ok' }\n\
-         def invalid(flag: Bool) -> String {\n\
-             if flag { return leaf() }\n\
-             return 'done'\n\
-         }\n",
+        "action leaf() -> String { effects {}  return 'ok' }\ndef invalid(flag: Bool) -> String {\nif flag { return leaf() }\nreturn 'done'\n}\n",
     );
     assert!(nested.contains(&"ACT005".to_owned()), "{nested:?}");
 
@@ -138,12 +147,12 @@ fn nested_action_reads_and_first_excess_call_depth_are_diagnosed() {
     let sources = MemorySources(BTreeMap::from([
         (
             root.clone(),
-            b"import './library.opaal' as lib\naction stores() -> String effects {} { let saved = lib::leaf\nreturn 'done' }\n"
+            b"import './library.opaal' as lib\naction stores() -> String { effects {}  let saved = lib::leaf\nreturn 'done' }\n"
                 .to_vec(),
         ),
         (
             library,
-            b"export { leaf }\naction leaf() -> String effects {} { return 'ok' }\n".to_vec(),
+            b"export { leaf }\naction leaf() -> String { effects {}  return 'ok' }\n".to_vec(),
         ),
     ]));
     let imported_value = ModuleProgramLoader::new(&sources, &sources)
@@ -166,7 +175,7 @@ fn nested_action_reads_and_first_excess_call_depth_are_diagnosed() {
             format!("return action{}()", index + 1)
         };
         deep.push_str(&format!(
-            "action action{index}() -> String effects {{}} {{ {body} }}\n"
+            "action action{index}() -> String {{ effects {{}}  {body} }}\n"
         ));
     }
     let deep = action_diagnostic_codes(&deep);

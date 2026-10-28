@@ -99,7 +99,7 @@ def qualify(binary: Path, output: Path) -> dict:
             (work / "plan.json").unlink(missing_ok=True)
             (work / "tasks.opaal").write_text(
                 "import std::io as io\nimport std::random as random\nimport std::string as string\n"
-                "action sample() -> Bool effects { " + " ".join(role + "();" for role in roles) + " } {\n"
+                "action sample() -> Bool { effects { " + " ".join(role + "()," for role in roles) + " }\n"
                 + body.replace("return ", "") + "\nreturn true\n}\ntask sample = sample\n")
             result = run("plan", "--project", "opaal.toml", "--task", "sample", "--environment", "ci",
                          "--expires-in", "900s", "--out", "plan.json")
@@ -414,8 +414,8 @@ def qualify(binary: Path, output: Path) -> dict:
         (work / "tasks.opaal").write_text(
             'import project::endpoints as endpoints\nimport project::secrets as secrets\n'
             'import std::http as http\n'
-            'action sample() -> Bool effects { network.http(endpoints::cancel); '
-            'secret.reveal(secrets::token, endpoints::cancel); } {\n'
+            'action sample() -> Bool { effects { network.http(endpoints::cancel), '
+            'secret.reveal(secrets::token, endpoints::cancel), }\n'
             'let header = http::secret_header("authorization", secrets::token)\n'
             'http::request(endpoints::cancel, "GET", {}, header, null, 1024)\n'
             'return true\n}\ntask sample = sample\n')

@@ -78,7 +78,7 @@ tool_lock = "tools.toml"
 "#,
     )
     .unwrap();
-    let source = support::Source("import std::io as io\nexport { run }\naction run() -> Null effects { stdin.read(); stdout.write(); stderr.write(); } { let input = io::read_stdin(4)\nio::write_stdout(input)\nreturn io::eprintln('processed') }\ntask sample = run".into());
+    let source = support::Source("import std::io as io\nexport { run }\naction run() -> Null { effects { stdin.read(), stdout.write(), stderr.write(), }  let input = io::read_stdin(4)\nio::write_stdout(input)\nreturn io::eprintln('processed') }\ntask sample = run".into());
     let project = load_project_program(manifest, &source, &source).unwrap();
     let tools = parse_tool_lock(
         project.manifest(),

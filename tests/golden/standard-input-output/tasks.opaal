@@ -3,12 +3,13 @@ import std::string as string
 export { run }
 
 action run() -> Null
-effects {
-    stdin.read();
-    stdout.write();
-    stderr.write();
-}
 {
+    effects {
+        stdin.read(),
+        stdout.write(),
+        stderr.write(),
+    }
+
     let input = io::read_stdin(4096)
     let text = string::decode_utf8(input)
     io::print(text)

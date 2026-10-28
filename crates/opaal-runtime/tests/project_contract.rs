@@ -207,8 +207,8 @@ fn entropy_effect_and_selected_environment_grant_use_only_evaluation_scope() {
     let manifest =
         parse_project_manifest(Path::new("/project/opaal.toml"), MANIFEST.as_bytes()).unwrap();
     let source = br#"import std::random as random
-action sample() -> Int effects { entropy.system(); } { return random::int(0, 4) }
-action ready() -> Int effects { entropy.system(); } { return sample() }
+action sample() -> Int { effects { entropy.system(), }  return random::int(0, 4) }
+action ready() -> Int { effects { entropy.system(), }  return sample() }
 task release = ready
 "#;
     let sources = MemorySources(BTreeMap::from([(
@@ -234,8 +234,8 @@ task release = ready
     );
     assert!(parse_authority_document(&manifest, "ci", duplicate.as_bytes()).is_err());
     let undeclared = String::from_utf8(source.to_vec()).unwrap().replace(
-        "action ready() -> Int effects { entropy.system(); }",
-        "action ready() -> Int effects {}",
+        "action ready() -> Int { effects { entropy.system(), }",
+        "action ready() -> Int { effects {}",
     );
     let sources = MemorySources(BTreeMap::from([(
         PathBuf::from("/project/tasks.opaal"),
@@ -253,12 +253,13 @@ fn explicit_project_task_and_documents_bind_without_execution() {
 import project::tools as tools
 
 action ready(candidate: String) -> String
+{
 effects {
-    filesystem.read(project::root);
-    process.run(tools::git);
+    filesystem.read(project::root),
+    process.run(tools::git),
 }
 
-{
+
     return candidate
 }
 
@@ -385,8 +386,9 @@ import std::url as url
 import std::version as version
 
 action nominal_surface(input: String) -> String
-effects {}
 {
+effects {}
+
     let parsed_version = version::parse(input)
     let parsed_url = url::parse("https://example.com/")
     return version::render(parsed_version)
@@ -655,7 +657,7 @@ fn hostile_schema_boundaries_and_native_encodings_refuse() {
 fn task_inputs_are_bounded_and_checked_against_the_declared_type() {
     let manifest_path = Path::new("/project/opaal.toml");
     let manifest = parse_project_manifest(manifest_path, MANIFEST.as_bytes()).unwrap();
-    let source = br#"action ready(candidate: Int) -> Int effects {} { return candidate }
+    let source = br#"action ready(candidate: Int) -> Int { effects {}  return candidate }
 task release = ready
 "#;
     let sources = MemorySources(BTreeMap::from([(
@@ -702,7 +704,7 @@ task release = ready
 fn tasks_inspect_but_cannot_bind_parameter_types_without_an_exact_input_spelling() {
     let manifest =
         parse_project_manifest(Path::new("/project/opaal.toml"), MANIFEST.as_bytes()).unwrap();
-    let source = br#"action ready(candidate: List[String]) -> String effects {} { return "ready" }
+    let source = br#"action ready(candidate: List[String]) -> String { effects {}  return "ready" }
 task release = ready
 "#;
     let sources = MemorySources(BTreeMap::from([(
@@ -741,7 +743,7 @@ task release = ready
 fn project_loading_rejects_unknown_bare_command_heads() {
     let manifest =
         parse_project_manifest(Path::new("/project/opaal.toml"), MANIFEST.as_bytes()).unwrap();
-    let source = br#"action ready() -> Status effects {} {
+    let source = br#"action ready() -> Status { effects {}
     misspelled
 }
 task release = ready
@@ -765,10 +767,11 @@ fn effect_closure_uses_project_identity_instead_of_local_alias_spelling() {
     let root = br#"import './child.opaal' as child
 import project::context as project
 action ready(candidate: String) -> String
-effects {
-    filesystem.read(project::root);
-}
 {
+effects {
+    filesystem.read(project::root),
+}
+
     return child::read(candidate)
 }
 task release = ready
@@ -776,10 +779,11 @@ task release = ready
     let child = br#"import project::context as context
 export { read }
 action read(candidate: String) -> String
-effects {
-    filesystem.read(context::root);
-}
 {
+effects {
+    filesystem.read(context::root),
+}
+
     return candidate
 }
 "#;
@@ -797,8 +801,9 @@ fn project_identities_require_explicit_imports_and_context_paths_remain_project_
         parse_project_manifest(Path::new("/project/opaal.toml"), MANIFEST.as_bytes()).unwrap();
 
     let raw = br#"action ready() -> String
-effects { filesystem.read(project::context::root); }
-{ return "ready" }
+{
+effects { filesystem.read(project::context::root), }
+ return "ready" }
 task release = ready
 "#;
     let sources = MemorySources(BTreeMap::from([(
@@ -813,7 +818,7 @@ task release = ready
 
     let value = br#"import project::context as project
 let saved = project::root
-action ready() -> String effects {} { return "ready" }
+action ready() -> String { effects {}  return "ready" }
 task release = ready
 "#;
     let sources = MemorySources(BTreeMap::from([(
@@ -879,7 +884,7 @@ fn selected_actions_and_project_values_keep_their_original_project_identity() {
         parse_project_manifest(Path::new("/project/opaal.toml"), MANIFEST.as_bytes()).unwrap();
     let sources = MemorySources(BTreeMap::from([
         (PathBuf::from("/project/tasks.opaal"), b"import './actions.opaal'::{ready as selected}\nimport project::context::{root as project_root}\nlet saved = project_root\ntask release = selected\n".to_vec()),
-        (PathBuf::from("/project/actions.opaal"), b"action ready() -> Int effects {} {return 5}\nexport {ready}\n".to_vec()),
+        (PathBuf::from("/project/actions.opaal"), b"action ready() -> Int { effects {} return 5}\nexport {ready}\n".to_vec()),
     ]));
     let project = load_project_program(manifest, &sources, &sources).unwrap();
     let action = project.task("release").unwrap().action();

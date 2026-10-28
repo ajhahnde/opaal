@@ -19,7 +19,7 @@ impl ModuleCanonicalizer for Source<'_> {
 }
 impl ModuleSourceLoader for Source<'_> {
     fn load(&self, _: &ModuleId) -> Result<Vec<u8>, ModuleSourceError> {
-        Ok(format!("import std::process as process\nimport project::tools as tools\naction check() -> Bool effects {{ process.run(tools::checker); }} {{\n{}\n}}\ntask check = check\n", self.0).into_bytes())
+        Ok(format!("import std::process as process\nimport project::tools as tools\naction check() -> Bool {{ effects {{ process.run(tools::checker), }} \n{}\n}}\ntask check = check\n", self.0).into_bytes())
     }
 }
 impl opaal_runtime::resolve::ExecutableProbe for Source<'_> {

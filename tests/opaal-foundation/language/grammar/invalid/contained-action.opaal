@@ -1,0 +1,1 @@
+action bad() -> Int { effects {} effects {} return 1 }

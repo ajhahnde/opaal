@@ -185,8 +185,8 @@ fn known_invalid_shapes_types_generics_and_actions_fail_analysis_even_when_empty
         "list::map[Int, Int]([])",
         "list::map[Int, Int]([], 4)",
         "let wrong = {|x: Int, y: Int| -> Int x}\nlist::map[Int, Int]([], wrong)",
-        "action ready(x: Int) -> Int effects {} { x }\nlist::map[Int, Int]([], ready)",
-        "action ready(x: Int) -> Int effects { clock.wall; } { x }\nlist::map[Int, Int]([], ready)",
+        "action ready(x: Int) -> Int { effects {}  x }\nlist::map[Int, Int]([], ready)",
+        "action ready(x: Int) -> Int { effects { clock.wall, }  x }\nlist::map[Int, Int]([], ready)",
         "def predicate[X: Ordered](x: X) -> Bool { true }\nlist::filter[Bool]([], predicate)",
         "def extra[X, Y](x: X) -> X { x }\nlist::map[Int, Int]([], extra)",
         "def choose[X](x: X) -> X { x }\nlist::map[Int, String]([], choose)",
@@ -396,9 +396,9 @@ fn direct_value(source: &str) -> Value {
 
 #[test]
 fn interactive_runtime_preflight_rejects_both_action_kinds_without_host_refusal() {
-    for effects in ["", "clock.wall;"] {
+    for effects in ["", "clock.wall,"] {
         let source = format!(
-            "action ready(x: Int) -> Int effects {{ {effects} }} {{ x }}\nlist::map[Int, Int]([], ready)"
+            "action ready(x: Int) -> Int {{ effects {{ {effects} }}  x }}\nlist::map[Int, Int]([], ready)"
         );
         let error = direct(&source).unwrap_err();
         let opaal_runtime::session::SubmitError::Runtime { error, .. } = error else {
@@ -543,7 +543,7 @@ fn list_queries_short_circuit_and_keep_exact_empty_identities() {
     for name in ["any", "all", "count", "find"] {
         for callback in ["{|x: Int| -> Int 1}", "{|x, y| true}", "ready"] {
             let source = format!(
-                "action ready(x: Int) -> Bool effects {{}} {{ true }}\nlist::{name}[Int]([], {callback})"
+                "action ready(x: Int) -> Bool {{ effects {{}}  true }}\nlist::{name}[Int]([], {callback})"
             );
             assert!(try_load(&source).is_err(), "{source}");
         }

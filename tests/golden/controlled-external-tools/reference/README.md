@@ -1,5 +1,11 @@
 # Repository checks with a pinned native tool
 
+The action sources use one outer body with a first static effects prologue and
+comma-separated requests. They require the matching toolchain; when upgrading
+from detached effects blocks, migrate the source and regenerate and explicitly
+accept plans before executing it. The first supporting release owns the new
+minimum toolchain version.
+
 Requires OPAAL >=1.6.0,<2.0.0. The saved route works on macOS arm64, Linux
 x86_64 and Linux AArch64; live native execution requires Linux x86_64 or AArch64. Supply an independently
 qualified ShellCheck executable for the live route. Setup never installs,

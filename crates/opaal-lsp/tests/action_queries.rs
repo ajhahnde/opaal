@@ -43,17 +43,7 @@ fn action_identity_signature_effects_and_definition_are_shared() {
         std::env::temp_dir().join(format!("opaal-lsp-action-queries-{}", std::process::id()));
     fs::create_dir_all(&directory).unwrap();
     let uri = DocumentUri::from_absolute_path(&directory.join("main.opaal")).unwrap();
-    let text = concat!(
-        "## Observe one value.\n",
-        "action observe(value: String) -> String\n",
-        "effects {\n",
-        "    clock.wall;\n",
-        "}\n",
-        "{\n",
-        "    return value\n",
-        "}\n",
-        "let result = observe('ready')\n",
-    );
+    let text = "## Observe one value.\naction observe(value: String) -> String\n{\neffects {\n    clock.wall,\n}\n\n    return value\n}\nlet result = observe('ready')\n";
     let mut workspace = Workspace::new();
     workspace.open(uri.clone(), 1, text.to_owned()).unwrap();
     let analysis = workspace
@@ -223,4 +213,44 @@ fn native_project_uses_shared_process_policy_and_effect_observers_without_a_lock
     .unwrap();
     assert_eq!(edits, json!([]));
     fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn contained_action_errors_keep_original_unicode_ranges_and_refuse_formatting() {
+    for text in [
+        "action old(value: String) -> String effects {} {}\n",
+        "action duplicate(value: String) -> String { effects {} let label = '界🙂'\neffects {} }\n",
+        "action semi(value: String) -> String { effects { filesystem.read('界🙂'); } }\n",
+    ] {
+        let directory = std::env::temp_dir();
+        let uri =
+            DocumentUri::from_absolute_path(&directory.join("opaal-action-error.opaal")).unwrap();
+        let mut workspace = Workspace::new();
+        workspace.open(uri.clone(), 1, text.to_owned()).unwrap();
+        let result = workspace
+            .diagnostic_snapshot()
+            .analyze_diagnostics(PositionEncoding::Utf16)
+            .unwrap();
+        let diagnostic = &result.documents()[0].diagnostics()[0];
+        assert_eq!(diagnostic.code(), Some("OP1000"));
+        let offset = if text.contains(';') {
+            text.find(';').unwrap()
+        } else {
+            text.rfind("effects").unwrap()
+        };
+        let file = SourceFile::new(SourceId::new(0), "error", text);
+        let expected = file.text_position(offset, PositionEncoding::Utf16).unwrap();
+        assert_eq!(diagnostic.range().start(), expected);
+        let edits = prepare_request(
+            &workspace.diagnostic_snapshot(),
+            PositionEncoding::Utf16,
+            RequestControl::new(),
+            "textDocument/formatting",
+            &json!({"textDocument": {"uri": uri.as_str()},
+            "options": {"tabSize": 4, "insertSpaces": true}}),
+        )
+        .finish(&workspace)
+        .unwrap();
+        assert_eq!(edits, json!([]));
+    }
 }

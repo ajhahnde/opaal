@@ -21,13 +21,13 @@ if __package__:
     from .check_source_formatting import public_paths, seed_census
     from .package_data_processing import SOURCE, digest
     from .package_release import PLATFORMS, ROOT, VERSION
-    from .package_source_formatting import FIXTURES, MEMBER_IMPORT_FIXTURES, COMPOUND_ASSIGNMENT_FIXTURES, LIST_LITERAL_SPREAD_FIXTURES, RECORD_SHORTHAND_FIXTURES, GROUPED_EXPORT_FIXTURES
+    from .package_source_formatting import FIXTURES, MEMBER_IMPORT_FIXTURES, COMPOUND_ASSIGNMENT_FIXTURES, LIST_LITERAL_SPREAD_FIXTURES, RECORD_SHORTHAND_FIXTURES, GROUPED_EXPORT_FIXTURES, ACTION_DECLARATION_FIXTURES
     from .qualify_data_processing import require, success, unpack
 else:
     from check_source_formatting import public_paths, seed_census
     from package_data_processing import SOURCE, digest
     from package_release import PLATFORMS, ROOT, VERSION
-    from package_source_formatting import FIXTURES, MEMBER_IMPORT_FIXTURES, COMPOUND_ASSIGNMENT_FIXTURES, LIST_LITERAL_SPREAD_FIXTURES, RECORD_SHORTHAND_FIXTURES, GROUPED_EXPORT_FIXTURES
+    from package_source_formatting import FIXTURES, MEMBER_IMPORT_FIXTURES, COMPOUND_ASSIGNMENT_FIXTURES, LIST_LITERAL_SPREAD_FIXTURES, RECORD_SHORTHAND_FIXTURES, GROUPED_EXPORT_FIXTURES, ACTION_DECLARATION_FIXTURES
     from qualify_data_processing import require, success, unpack
 
 PAIRS = (("legacy.opaal", "canonical.opaal"), ("legacy-effects.opaal", "effects.opaal"),
@@ -220,8 +220,10 @@ def project_workflow(run, work: Path, fixtures: Path, target: str, *, member_imp
 
     # Declaring an effect is sufficient to require authority even when its body is pure.
     if compound_assignments or list_spreads or record_shorthands or grouped_exports:
+        empty = b"    effects {\n    }"
+        require(canonical.count(empty) == 1, "expected one empty action prologue")
         source.write_bytes(canonical.replace(b"readiness", b"annotated").replace(b"read*", b"annotated*").replace(
-            b"effects {\n}", b"effects {\n clock.wall();\n}"))
+            empty, b"    effects {\n        clock.wall(),\n    }"))
     else:
         source.write_bytes((fixtures / "legacy-annotated.opaal").read_bytes() + b"task verify = annotated\n")
     denied_checks, denied_plans = [], []
@@ -660,6 +662,119 @@ def grouped_export_prefixes(run, work: Path, fixtures: Path, target: str) -> dic
                            "1024 declarations, overlaps and no-match under existing deadlines"]}
 
 
+def action_declarations(run, binary: Path, root: Path, fixtures: Path, target: str) -> dict:
+    inputs = fixtures / "action-declarations"
+    require({path.name for path in inputs.iterdir()} == set(ACTION_DECLARATION_FIXTURES),
+            "action declaration fixture census differs")
+    canonical = (inputs / "canonical.opaal").read_bytes()
+    path = root / "action-format.opaal"
+    path.write_bytes((inputs / "noncanonical.opaal").read_bytes())
+    success(run("format", "--write", path), "contained action format")
+    require(path.read_bytes() == canonical, "contained action canonical bytes differ")
+    success(run("format", "--check", path), "contained action idempotence")
+    success(run("check", path), "contained action check")
+    for name in ("pure.opaal", "requests.opaal"):
+        before = (inputs / name).read_bytes()
+        expected = before
+        if name == "requests.opaal":
+            require(before.count(b"clock.wall() #") == 1, "expected one missing request comma")
+            expected = before.replace(b"clock.wall() #", b"clock.wall(), #")
+        path.write_bytes(before)
+        success(run("format", "--write", path), f"contained action {name} format")
+        require(path.read_bytes() == expected, f"{name}: contained action canonical bytes differ")
+        success(run("format", "--check", path), f"contained action {name} idempotence")
+    errors = {}
+    for name in ACTION_DECLARATION_FIXTURES:
+        if name in ("canonical.opaal", "noncanonical.opaal", "pure.opaal", "io.opaal", "requests.opaal"):
+            continue
+        before = (inputs / name).read_bytes()
+        path.write_bytes(before)
+        result = run("format", "--write", path)
+        code = b"SYN002" if name == "incomplete.opaal" else b"OP1000"
+        require(result.returncode == 1 and not result.stdout and code in result.stderr and path.read_bytes() == before,
+                f"{name}: invalid action was rewritten or accepted")
+        errors[name] = code.decode()
+    interactive = run(stdin=canonical + b"identity('ready')\n"
+                      b"action bad() -> Int { effects {} effects {} return 1 }\nbad()\nidentity('retained')\n")
+    require(interactive.returncode == 0 and b"ready\n" in interactive.stdout and b"retained\n" in interactive.stdout
+            and interactive.stderr.count(b"error[") == 2 and b"OP1000" in interactive.stderr,
+            "contained action continuation or invalid-cell publication differs")
+    pending = run(stdin=(inputs / "incomplete.opaal").read_bytes())
+    require(pending.returncode == 0 and pending.stdout.count(b"...> ") == 4 and b"SYN002" in pending.stderr,
+            "inner effects close completed an action")
+
+    work = root / "action-stream"
+    shutil.copytree(fixtures / "project", work)
+    lock = "tools-macos.toml" if target == "macos-arm64" else "tools-linux-aarch64.toml" if target == "linux-aarch64" else "tools-linux.toml"
+    shutil.copyfile(work / lock, work / "tools.toml")
+    source = work / "tasks.opaal"
+    stream = (inputs / "io.opaal").read_bytes()
+    # The same bounded task is used for static, accepted, stale and failed transfers.
+    source.write_bytes(stream.replace(b"    effects {", b"    effects{"))
+    invoke = lambda *args, **kwargs: run(*args, cwd=work, **kwargs)
+    base = ("--project", "opaal.toml", "--task", "echo", "--environment", "ci")
+    denied = json.loads(invoke("check", *base, "--format", "json").stdout)
+    require(denied["outcome"]["class"] == "refused" and
+            {row["verdict"] for row in denied["authority"]["requests"]} == {"denied"},
+            "stream declaration granted authority")
+    authority = 'schema_version = 1\nproject = "formatting_example"\nenvironment = "ci"\n'
+    for role in ("stdin.read", "stdout.write"):
+        authority += f'[[rules]]\ndecision = "grant"\neffect = "{role}"\nscope = "evaluation"\nrequired_enforcement = "enforced"\n'
+    (work / "authority.toml").write_text(authority)
+    checked = json.loads(success(invoke("check", *base, "--format", "json"), "stream check"))
+    require([row["effect"] for row in checked["authority"]["requests"]] == ["stdin.read", "stdout.write"],
+            "stream normalized requests differ")
+    success(invoke("plan", *base, "--expires-in", "900s", "--out", "old.plan.json"), "noncanonical stream plan")
+    old = json.loads((work / "old.plan.json").read_bytes())
+    success(invoke("format", "--write", source), "stream format")
+    stale = invoke("execute", "--plan", "old.plan.json", "--accept", old["digest"], "--journal", "stale.jsonl", "--receipt-out", "stale.receipt.json")
+    require(stale.returncode == 1 and b"EXECUTE_STALE" in stale.stderr and not (work / "stale.jsonl").exists(),
+            "formatting accepted a stale stream plan")
+    success(invoke("plan", "inspect", "old.plan.json"), "old plan inspection")
+    success(invoke("plan", *base, "--expires-in", "900s", "--out", "plan.json"), "fresh stream plan")
+    plan = json.loads((work / "plan.json").read_bytes())
+    require(plan["task"]["contract_digest"] != old["task"]["contract_digest"] and not list(work.glob("*.jsonl")),
+            "source migration identity or nonexecuting planning differs")
+    inert = root / "action-inert.opaal"
+    inert.write_bytes(stream.replace(b"task echo = echo_input\n", b""))
+    result = run(inert, stdin=b"unconsumed")
+    require(result.returncode == 0 and not result.stdout and not result.stderr, "declaration performed I/O")
+    for name, payload, expected in (("empty", b"", b""), ("bytes", b"\x00\xffGr\xc3\xbc\xc3\x9fe\n", b"\x00\xffGr\xc3\xbc\xc3\x9fe\n"),
+                                    ("cap", b"a" * 4096, b"a" * 4096), ("excess", b"a" * 4097, b"")):
+        result = invoke("execute", "--plan", "plan.json", "--accept", plan["digest"], "--journal", name + ".jsonl",
+                        "--receipt-out", name + ".receipt.json", stdin=payload)
+        receipt = json.loads((work / (name + ".receipt.json")).read_bytes())
+        require(result.returncode == (1 if name == "excess" else 0) and result.stdout == expected and not result.stderr
+                and receipt["primary"]["class"] == ("error" if name == "excess" else "success")
+                and receipt["progress"]["stdin.read"]["confirmed_bytes"] == len(payload)
+                and receipt["progress"]["stdout.write"]["confirmed_bytes"] == len(expected),
+                f"contained stream {name}: bytes/outcome/progress differ")
+        success(invoke("audit", "--project", "opaal.toml", "--journal", name + ".jsonl", "--out", name + ".audit.json"), "stream audit")
+        audit = json.loads((work / (name + ".audit.json")).read_bytes())
+        require(audit["primary"] == receipt["primary"] and audit["completeness"] == "complete", "stream audit differs")
+    reader, writer = os.pipe()
+    os.close(reader)
+    try:
+        child = subprocess.Popen([str(binary), "execute", "--plan", "plan.json", "--accept", plan["digest"],
+                                  "--journal", "broken.jsonl", "--receipt-out", "broken.receipt.json"],
+                                 cwd=work, env={"PATH": os.defpath}, stdin=subprocess.PIPE, stdout=writer, stderr=subprocess.PIPE)
+    finally:
+        os.close(writer)
+    _, diagnostics = child.communicate(b"hello", timeout=30)
+    receipt = json.loads((work / "broken.receipt.json").read_bytes())
+    require(child.returncode == 1 and not diagnostics and receipt["primary"]["class"] == "error"
+            and receipt["primary"]["code"] == "EXECUTE_LANGUAGE" and receipt["primary"]["partial"] is True
+            and receipt["progress"]["stdin.read"]["confirmed_bytes"] == 5
+            and receipt["progress"]["stdout.write"]["confirmed_bytes"] == 0,
+            "contained stream Broken Pipe outcome/progress differs")
+    return {"fixtures": list(ACTION_DECLARATION_FIXTURES), "errors": errors,
+            "assertions": ["one grammar and contextual effects name", "canonical bytes and no invalid rewrites",
+                           "pure task formatting; final request comma precedes comment and preserves literal punctuation",
+                           "outer-brace raw continuation; invalid cell publishes nothing", "declaration/check/plan perform no transfers",
+                           "denied grants; exact requests", "formatting stales accepted identity; old plan inspectable; fresh plan succeeds",
+                           "empty/binary/exact-cap/first-excess and Broken Pipe transfers with exact receipts and audit"]}
+
+
 def framed_formatting(binary: Path, work: Path, fixtures: Path, environment: dict) -> list[str]:
     observations = []
     for encoding in ("utf-8", "utf-16"):
@@ -738,7 +853,10 @@ def framed_formatting(binary: Path, work: Path, fixtures: Path, environment: dic
                     "record-shorthand/noncanonical.opaal", "record-shorthand/canonical.opaal",
                     "record-shorthand/incomplete.opaal", "record-shorthand/invalid.opaal",
                     "grouped-export-prefixes/noncanonical.opaal", "grouped-export-prefixes/canonical.opaal",
-                    "grouped-export-prefixes/incomplete.opaal", "grouped-export-prefixes/invalid.opaal"))
+                    "grouped-export-prefixes/incomplete.opaal", "grouped-export-prefixes/invalid.opaal",
+                    "action-declarations/noncanonical.opaal", "action-declarations/canonical.opaal",
+                    "action-declarations/old-form.opaal", "action-declarations/semicolon.opaal",
+                    "action-declarations/duplicate-block.opaal", "action-declarations/incomplete.opaal"))
                 documents.append(("invalid-body.opaal", "def waiting()\nlet x = 1\n"))
                 for index, (name, text) in enumerate(documents):
                     uri = (work / f"document-{index}.opaal").as_uri()
@@ -748,7 +866,8 @@ def framed_formatting(binary: Path, work: Path, fixtures: Path, environment: dic
                     result = request("textDocument/formatting", params)["result"]
                     if name in ("legacy.opaal", "concise-imports/noncanonical.opaal", "explicit-member-imports/noncanonical.opaal",
                                 "compound-assignment/noncanonical.opaal", "list-literal-spread/noncanonical.opaal",
-                                "record-shorthand/noncanonical.opaal", "grouped-export-prefixes/noncanonical.opaal"):
+                                "record-shorthand/noncanonical.opaal", "grouped-export-prefixes/noncanonical.opaal",
+                                "action-declarations/noncanonical.opaal"):
                         canonical = (fixtures / ("canonical.opaal" if name == "legacy.opaal" else
                                                   name.replace("noncanonical.opaal", "canonical.opaal"))).read_text()
                         require(result == [{"range": {"start": {"line": 0, "character": 0},
@@ -861,6 +980,28 @@ def framed_formatting(binary: Path, work: Path, fixtures: Path, environment: dic
                 require(references == [definition, {"uri": uri, "range": {
                     "start": {"line": 2, "character": character},
                     "end": {"line": 2, "character": character + 5}}}], "spread references/Unicode positions differ")
+                uri = (work / "action-query.opaal").as_uri()
+                text = (fixtures / "action-declarations/canonical.opaal").read_text() + "let result = identity('界🙂')\n"
+                send({"method": "textDocument/didOpen", "params": {"textDocument": {
+                    "uri": uri, "languageId": "opaal", "version": 1, "text": text}}})
+                def action_position(offset):
+                    prefix = text[:offset]
+                    line = prefix.count("\n")
+                    tail = prefix.rsplit("\n", 1)[-1]
+                    character = len(tail.encode()) if encoding == "utf-8" else len(tail.encode("utf-16-le")) // 2
+                    return {"line": line, "character": character}
+                declaration = text.index("action identity") + len("action ")
+                call = text.rindex("identity(")
+                definition = {"uri": uri, "range": {"start": action_position(declaration),
+                                                   "end": action_position(declaration + len("identity"))}}
+                target = {"textDocument": {"uri": uri}, "position": action_position(call)}
+                require(request("textDocument/definition", target)["result"] == definition and
+                        "action identity(value: String) -> String" in request("textDocument/hover", target)["result"]["contents"]["value"],
+                        "contained action lost its original signature or definition")
+                references = request("textDocument/references", {**target, "context": {"includeDeclaration": True}})["result"]
+                require(references == [definition, {"uri": uri, "range": {"start": action_position(call),
+                        "end": action_position(call + len("identity"))}}], "contained action reference ranges differ")
+
                 uri = (work / "unicode.opaal").as_uri()
                 text = (fixtures / "legacy.opaal").read_text() + "# 界🙂"
                 expected = (fixtures / "canonical.opaal").read_text() + "# 界🙂\n"
@@ -932,6 +1073,23 @@ def terminal_continuation(binary: Path, work: Path, environment: dict) -> None:
             os.write(descriptor, b"}\r")
             read_until(rb">> ")
             require(b"error[" not in captured, "terminal rejected a complete declaration")
+        for line in (b"action action_identity(value: String) -> String", b"{", b"    effects {", b"    }", b"    return value"):
+            os.write(descriptor, line + b"\r")
+            read_until(rb"\.\.\.> ")
+            require(b"error[" not in captured, "terminal completed an action before its outer close")
+        os.write(descriptor, b"}\r")
+        read_until(rb">> ")
+        os.write(descriptor, b"action_identity('action-ready')\r")
+        read_until(rb"(?:^|\n)action-ready\r?\n.*>> ")
+        os.write(descriptor, b"action broken() -> Int { effects {} effects {} return 1 }\r")
+        read_until(rb"error\[OP1000\].*>> ")
+        os.write(descriptor, b"broken()\r")
+        read_until(rb"error\[.*>> ")
+        for line in (b"action cancelled_action() -> Int", b"{", b"effects {}"):
+            os.write(descriptor, line + b"\r")
+            read_until(rb"\.\.\.> ")
+        os.write(descriptor, b"\x03")
+        read_until(rb">> ")
         for expression, value in ((b"identity('ready')", b"ready"), (b"five()", b"5")):
             os.write(descriptor, expression + b"\r")
             read_until(rb"(?:^|\n)" + value + rb"\r?\n.*>> ")
@@ -1102,7 +1260,7 @@ def qualify(archive: Path | None, fixture_archive: Path | None, binaries: Path |
                 require(success(run(path.name), "canonical script") == b"", "script execution changed")
                 success(run("check", path.name), "canonical script check")
         negatives = [(name, (fixtures / name).read_bytes(), code) for name, code in
-                     (("invalid.opaal", "OP1000"), ("incomplete.opaal", "SYN002"), ("missing-semicolon.opaal", "OP1000"))]
+                     (("invalid.opaal", "OP1000"), ("incomplete.opaal", "SYN002"), ("missing-comma.opaal", "OP1000"))]
         negatives.append(("invalid-body.opaal", b"def waiting()\nlet x = 1\n", "OP1000"))
         for name, data, code in negatives:
             path = root / name
@@ -1157,6 +1315,7 @@ def qualify(archive: Path | None, fixture_archive: Path | None, binaries: Path |
         spread_report = list_literal_spread(run, root, fixtures, target)
         record_report = record_shorthand(run, root, fixtures, target)
         exports_report = grouped_export_prefixes(run, root, fixtures, target)
+        actions_report = action_declarations(run, binary, root, fixtures, target)
         lsp_report = framed_formatting(installed / "opaal-language-server", root, fixtures, environment)
         terminal_continuation(binary, root, environment)
         require(public_paths(ROOT) == paths and
@@ -1172,10 +1331,10 @@ def qualify(archive: Path | None, fixture_archive: Path | None, binaries: Path |
                 "fixture_sha256": fixture_hashes, "parser_seeds": seed_census(ROOT, paths),
                 "project": project_report, "concise_imports": imports_report, "explicit_member_imports": members_report,
                 "compound_assignment": compound_report, "list_literal_spread": spread_report, "record_shorthand": record_report, "grouped_export_prefixes": exports_report,
-                "language_server": lsp_report, "bounded_cases": bounded,
+                "action_declarations": actions_report, "language_server": lsp_report, "bounded_cases": bounded,
                 "assertions": ["exact fixture/source/program identity", "legacy/canonical execution and checking",
                                "exact action/function/comment bytes and idempotence", "read-only check and mode/inode retention",
-                               "invalid/incomplete/missing-semicolon preserve bytes", "raw typed/untyped continuation and EOF",
+                               "invalid/incomplete/missing-comma preserve bytes", "raw typed/untyped continuation and EOF",
                                "formatting never imports or invokes source", "batch preflight refuses symlink/directory/missing/duplicate/non-source",
                                "1024 siblings, 64 nested blocks, 280 KiB Unicode parse/idempotence within 30-second command deadlines",
                                "native terminal function/import/member continuation, retained values, cancel and EOF"]}

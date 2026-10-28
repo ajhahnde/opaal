@@ -5,10 +5,11 @@ import std::data as data
 export { summarize }
 
 action summarize() -> Record
-effects {
-    filesystem.write(project::evidence);
-}
 {
+    effects {
+        filesystem.write(project::evidence),
+    }
+
     let result = report::build()
     fs::write_atomic(project::evidence, data::json_encode(result))
     return result

@@ -1,0 +1,6 @@
+## Preserve the value and its original identity.
+def effects(value:String)->String{return value}
+
+action identity(value:String)->String {effects{}
+
+return effects(value)}

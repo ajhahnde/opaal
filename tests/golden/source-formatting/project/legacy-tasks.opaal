@@ -1,4 +1,5 @@
-action readiness() -> Int effects {} {
+action readiness() -> Int { effects {}
+
     def result() -> Int { return 5 }
     return result()
 }

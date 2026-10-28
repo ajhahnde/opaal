@@ -42,6 +42,11 @@ fn normalized_tokens(file: &SourceFile, script: &Script) -> Vec<(TokenKind, Stri
     let mut insertions = std::collections::BTreeSet::new();
     let mut list_ends = Vec::new();
     for statement in script.statements() {
+        if let StatementKind::Action(action) = statement.kind()
+            && let Some(last) = action.effects.last()
+        {
+            list_ends.push(last.span.end());
+        }
         if let StatementKind::ModuleImportGroup(entries) = statement.kind() {
             list_ends.push(entries.last().unwrap().end());
         }

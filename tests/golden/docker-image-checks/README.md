@@ -1,5 +1,11 @@
 # Docker image checks
 
+The action sources use one outer body with a first static effects prologue and
+comma-separated requests. They require the matching toolchain; when upgrading
+from detached effects blocks, migrate the source and regenerate and explicitly
+accept plans before executing it. The first supporting release owns the new
+minimum toolchain version.
+
 These references require OPAAL 1.5.0 or later. Saved-input checks need no
 Docker executable, daemon, account configuration, or network connection.
 `policy.opaal` is the shared pure policy for saved and live data.

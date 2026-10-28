@@ -120,6 +120,6 @@ fn wrong_types_arity_generics_and_result_types_fail_without_endpoint_access() {
             .iter()
             .any(|site| site.effect() == ModuleEffect::StderrWrite)
     );
-    assert!(try_load("action run() -> Null effects { stdin.read(1); } { return null }").is_err());
-    assert!(try_load("action run() -> Null effects { stdout.write(); stderr.write(); } { io::print('x')\nreturn io::eprintln('y') }").is_ok());
+    assert!(try_load("action run() -> Null { effects { stdin.read(1), }  return null }").is_err());
+    assert!(try_load("action run() -> Null { effects { stdout.write(), stderr.write(), }  io::print('x')\nreturn io::eprintln('y') }").is_ok());
 }

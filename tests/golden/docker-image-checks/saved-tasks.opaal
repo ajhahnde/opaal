@@ -6,12 +6,13 @@ export { check_saved }
 
 ## Check saved image data without contacting Docker.
 action check_saved(expected_id: String, expected_platform: String, expected_revision: String) -> Bool
-effects {
-    stdin.read();
-    stdout.write();
-    stderr.write();
-}
 {
+    effects {
+        stdin.read(),
+        stdout.write(),
+        stderr.write(),
+    }
+
     let input = io::read_stdin(1048576)
     mut document = {}
     try {

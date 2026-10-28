@@ -238,7 +238,7 @@ fn pure_functions_callbacks_empty_actions_aliases_and_startup_never_invoke_the_h
     for body in [
         "def pure() -> Int { return random::int(7, 8) }\npure()",
         "let callback = {|| random::bytes(0)}\ncallback()",
-        "action empty() -> Int effects {} { return random::int(7, 8) }\nempty()",
+        "action empty() -> Int { effects {}  return random::int(7, 8) }\nempty()",
         "let alias = random::int\nalias(7, 8)",
         "import std::list as list\nlist::map[Int, Int]([1], {|x| random::int(7, 8)})",
     ] {
@@ -273,7 +273,7 @@ fn declared_action_uses_the_same_operation_and_rejects_a_wrong_host_result() {
     let mut host = Host::new(&[], &[]);
     assert_eq!(
         value(
-            "action sample() -> Int effects { entropy.system(); } { return random::int(7, 8) }\nsample()",
+            "action sample() -> Int { effects { entropy.system(), }  return random::int(7, 8) }\nsample()",
             &mut host
         ),
         Value::Int(7)

@@ -113,8 +113,8 @@ fn constructed(
 fn direct_capsule_wire_and_restored_permission_are_preserved() {
     for text in [
         "def candidate() -> Int { return 7 }",
-        "action candidate() -> Int effects {} { return 7 }",
-        "action candidate() -> Int effects { clock.wall; clock.wall; } { return 7 }",
+        "action candidate() -> Int { effects {}  return 7 }",
+        "action candidate() -> Int { effects { clock.wall, clock.wall, }  return 7 }",
     ]
     .iter()
     {
@@ -182,13 +182,13 @@ fn function(callable: &Arc<dyn Callable>) -> &CallableValue {
 fn complete_source_oracle_and_mismatched_ast_are_equal() {
     for (text, expected) in [
         ("def candidate() -> Int { return 7 }", false),
-        ("action candidate() -> Int effects {} { return 7 }", false),
+        ("action candidate() -> Int { effects {}  return 7 }", false),
         (
-            "action candidate() -> Int effects { clock.wall; } { return 7 }",
+            "action candidate() -> Int { effects { clock.wall, }  return 7 }",
             true,
         ),
         (
-            "action candidate() -> Int effects { clock.wall; clock.wall; } { return 7 }",
+            "action candidate() -> Int { effects { clock.wall, clock.wall, }  return 7 }",
             true,
         ),
     ] {
@@ -207,7 +207,7 @@ fn complete_source_oracle_and_mismatched_ast_are_equal() {
             source.span(0..1).unwrap()
         ));
     }
-    let valid = "action candidate() -> Int effects { clock.wall; } { return 7 }";
+    let valid = "action candidate() -> Int { effects { clock.wall, }  return 7 }";
     let original = SourceFile::new(SourceId::new(1), "same.opaal", valid);
     let ast = definition(&parsed(&original).statements()[0]);
     let nested = Arc::new(SourceFile::new(
@@ -227,8 +227,8 @@ fn complete_source_oracle_and_mismatched_ast_are_equal() {
     assert!(!stored(function(&nested_callable)));
     for text in [
         format!("{valid}\nlet ="),
-        "action candidate() -> Int effects { clock.wall; } {".to_owned(),
-        valid.replace("clock.wall;", "           "),
+        "action candidate() -> Int { effects { clock.wall, } ".to_owned(),
+        valid.replace("clock.wall,", "           "),
     ] {
         let retained = Arc::new(SourceFile::new(SourceId::new(1), "same.opaal", text));
         let value = constructed(&ast, Arc::clone(&retained), false);
@@ -274,7 +274,7 @@ fn live_permission_denial_precedes_type_depth_and_body() {
     let source = Arc::new(SourceFile::new(
         SourceId::new(3),
         "effect.opaal",
-        "action candidate(value: Int) -> Int effects { clock.wall; } { return value }",
+        "action candidate(value: Int) -> Int { effects { clock.wall, }  return value }",
     ));
     let ast = definition(&parsed(&source).statements()[0]);
     for analyzed in [false, true] {
@@ -365,8 +365,8 @@ fn live_permission_denial_precedes_type_depth_and_body() {
 fn reconstructed_direct_actions_recompute_fact_and_reject_bad_signatures() {
     for text in [
         "def candidate() -> Int { return 7 }",
-        "action candidate() -> Int effects {} { return 7 }",
-        "action candidate() -> Int effects { clock.wall; } { return 7 }",
+        "action candidate() -> Int { effects {}  return 7 }",
+        "action candidate() -> Int { effects { clock.wall, }  return 7 }",
     ] {
         let source = Arc::new(SourceFile::new(SourceId::new(4), "restore.opaal", text));
         let ast = definition(&parsed(&source).statements()[0]);
@@ -498,17 +498,17 @@ fn clear_probe() {
 
 #[test]
 fn first_use_sequential_truth_table() {
-    let valid = "action candidate() -> Int effects { clock.wall; clock.wall; } { return 7 }";
+    let valid = "action candidate() -> Int { effects { clock.wall, clock.wall, }  return 7 }";
     let ast_source = SourceFile::new(SourceId::new(51), "same.opaal", valid);
     let action_ast = definition(&parsed(&ast_source).statements()[0]);
     let fixtures = [
         "def candidate() -> Int { return 7 }".to_owned(),
-        "action candidate() -> Int effects {} { return 7 }".to_owned(),
+        "action candidate() -> Int { effects {}  return 7 }".to_owned(),
         valid.to_owned(),
-        valid.replace("clock.wall; clock.wall;", "clock.wall;"),
+        valid.replace("clock.wall, clock.wall,", "clock.wall,"),
         format!("{valid}\nlet ="),
-        "action candidate() -> Int effects { clock.wall; } {".to_owned(),
-        valid.replace("clock.wall; clock.wall;", "                       "),
+        "action candidate() -> Int { effects { clock.wall, } ".to_owned(),
+        valid.replace("clock.wall, clock.wall,", "                       "),
         format!("if true {{ {valid} }}"),
     ];
     for text in fixtures {
@@ -602,7 +602,7 @@ fn first_use_pre_guard_paths_stay_cold() {
 fn first_use_live_permission_and_failed_calls() {
     for analyzed in [false, true] {
         let c = fresh(
-            "action candidate(value: Int) -> Int effects { clock.wall; } { return value }",
+            "action candidate(value: Int) -> Int { effects { clock.wall, }  return value }",
             analyzed,
         );
         let mut host = ToggleHost::new();
@@ -725,7 +725,7 @@ fn first_use_clone_family_and_collisions() {
     assert!(!function(&identical).effect_requirement());
     assert_eq!(count(), 2);
     let effect = fresh(
-        "action candidate(value: Int) -> Int effects { clock.wall; } { return value }",
+        "action candidate(value: Int) -> Int { effects { clock.wall, }  return value }",
         false,
     );
     let ast = definition(&parsed(&function(&effect).family.source).statements()[0]);
@@ -736,7 +736,7 @@ fn first_use_clone_family_and_collisions() {
             .family
             .source
             .text()
-            .replace("clock.wall;", "           "),
+            .replace("clock.wall,", "           "),
     ));
     let different = constructed(&ast, false_bytes, false);
     assert_eq!(
@@ -758,7 +758,7 @@ fn first_use_concurrent_cold_publication() {
     for (text, expected) in [
         ("def candidate() -> Int { return 7 }", false),
         (
-            "action candidate() -> Int effects { clock.wall; } { return 7 }",
+            "action candidate() -> Int { effects { clock.wall, }  return 7 }",
             true,
         ),
     ] {
@@ -857,7 +857,7 @@ fn first_use_reentrant_and_unwind() {
     ));
     assert_eq!(count(), 1);
     let c = fresh(
-        "action candidate() -> Int effects { clock.wall; } { return 7 }",
+        "action candidate() -> Int { effects { clock.wall, }  return 7 }",
         false,
     );
     install_probe(&c, || panic!("pre-publication test panic"));
@@ -880,8 +880,8 @@ fn first_use_reentrant_and_unwind() {
 fn first_use_restore_and_wire() {
     for text in [
         "def candidate() -> Int { return 7 }",
-        "action candidate() -> Int effects {} { return 7 }",
-        "action candidate() -> Int effects { clock.wall; } { return 7 }",
+        "action candidate() -> Int { effects {}  return 7 }",
+        "action candidate() -> Int { effects { clock.wall, }  return 7 }",
         "let candidate = {|| 7}",
         "def candidate[X](value: X) -> X { return value }",
         "import std::list as list\ndef identity(x: Int) -> Int { x }\ndef candidate() -> List[Int] { list::map[Int, Int]([1], identity) }",

@@ -6859,7 +6859,7 @@ mod tests {
                 "operational standard module",
             ),
             (
-                "action effect() -> String effects { clock.wall; } { return 'done' }\nlet run = {|value| effect()}\nrun(null)\n",
+                "action effect() -> String { effects { clock.wall, }  return 'done' }\nlet run = {|value| effect()}\nrun(null)\n",
                 "effectful action execution",
             ),
         ] {

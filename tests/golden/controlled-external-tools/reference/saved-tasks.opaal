@@ -4,11 +4,12 @@ import std::io as io
 export { check_saved }
 
 action check_saved() -> Bool
-effects {
-    stdin.read();
-    stdout.write();
-}
 {
+    effects {
+        stdin.read(),
+        stdout.write(),
+    }
+
     mut report = {}
     try {
         let saved: Record = data::json_decode(io::read_stdin(1048576))

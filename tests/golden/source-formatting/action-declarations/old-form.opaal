@@ -1,0 +1,6 @@
+action identity(value: String) -> String
+effects {
+}
+{
+    return value
+}

@@ -431,7 +431,7 @@ fn prefix_exports_are_source_local_whole_file_and_keep_concrete_navigation() {
         "let [check_left, [check_right]] = [2, [3]]\nlet check = 0\n",
         "mut check_mut = 1\n",
         "def check_sum() -> Int { return check_left + check_right }\n",
-        "action check_action() -> Int effects {} { return 5 }\n",
+        "action check_action() -> Int { effects {}  return 5 }\n",
         "def hidden() -> Int { let check_nested = 9; return check_nested }\n",
     );
     let modules = FakeModules::default()

@@ -25,16 +25,17 @@ type Readiness = {
 }
 
 action release_readiness(candidate: Path) -> Readiness
-effects {
-    filesystem.read(project::root);
-    filesystem.write(project::evidence);
-    process.run(tools::git);
-    process.run(tools::cargo);
-    network.http(endpoints::readiness);
-    secret.reveal(secrets::readiness_token, endpoints::readiness);
-    clock.wall;
-}
 {
+    effects {
+        filesystem.read(project::root),
+        filesystem.write(project::evidence),
+        process.run(tools::git),
+        process.run(tools::cargo),
+        network.http(endpoints::readiness),
+        secret.reveal(secrets::readiness_token, endpoints::readiness),
+        clock.wall,
+    }
+
     let manifest_path = path::join(project::root, "Cargo.toml")
     let lock_path = path::join(project::root, "Cargo.lock")
     let candidate_bytes = fs::read(candidate, 16777216)
@@ -74,16 +75,18 @@ effects {
     return report
 }
 action inspect_path(repo: Path) -> Path
-effects {
-}
 {
+    effects {
+    }
+
     repo
 }
 action unsupported_many(candidate: Path) -> Path
-effects {
-    secret.reveal(secrets::readiness_token, endpoints::readiness);
-    secret.reveal(secrets::secondary_token, endpoints::readiness);
-}
 {
+    effects {
+        secret.reveal(secrets::readiness_token, endpoints::readiness),
+        secret.reveal(secrets::secondary_token, endpoints::readiness),
+    }
+
     candidate
 }

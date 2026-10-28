@@ -103,7 +103,7 @@ fn imported_initializers_and_pure_bodies_cannot_acquire_the_root_binding() {
         "def pure() -> Int { return random::int(7, 8) }\npure()",
         "let callback = {|| random::bytes(0)}\ncallback()",
         "import std::list as list\nlist::map[Int, Int]([1], {|x| random::int(7, 8)})",
-        "action pure() -> Int effects {} { return random::int(7, 8) }\npure()",
+        "action pure() -> Int { effects {}  return random::int(7, 8) }\npure()",
     ] {
         let harness = Harness::new(&[], &[]);
         let script = harness.script.clone();
@@ -159,7 +159,7 @@ fn explicitly_declared_entropy_actions_use_the_bound_root() {
     let harness = Harness::new(&[], &[]);
     let script = harness.script.clone();
     let outcome = run(
-        "action sample() -> Int effects { entropy.system(); } { return random::int(7, 8) }\nsample()",
+        "action sample() -> Int { effects { entropy.system(), }  return random::int(7, 8) }\nsample()",
         harness,
     );
     let PrimaryOutcome::Completed(completed) = outcome.primary() else {

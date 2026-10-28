@@ -167,10 +167,19 @@ language Errors retain their existing semantics and consumed counters.
 ## Source formatting
 
 Use one canonical style for named functions and actions: the signature precedes
-the body brace on its own line, and actions place `effects {` on a separate line
-with semicolon-terminated requests. Control blocks, records and closures retain
-their existing layout. Old same-line declarations remain executable; formatting
-is an explicit check or rewrite, rather than an execution requirement.
+the body brace on its own line. Actions require a first static `effects { ... }`
+prologue inside that body, with comma-separated requests and an optional final
+comma. Formatting uses one request per line with a trailing comma. Empty effects
+remain explicit. Control blocks, records and closures retain their existing
+layout. Complete same-line declarations remain executable; formatting is an
+explicit check or rewrite, rather than an execution requirement.
+
+`ActionDefinition` retains its fields: `body.span` covers the outer action braces,
+`effects_span` covers the nested keyword and block, and `body.statements` contains
+only executable statements. Each `EffectRequest.span` ends at its last request
+token, excluding the comma and following trivia. Effects remain static metadata;
+their textual nesting supplies neither local scope nor authority. The superseded
+detached effects/body form is invalid and the formatter never converts it.
 
 Give the formatter an explicit list of owned project sources:
 

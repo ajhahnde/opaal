@@ -3,11 +3,12 @@ import project::tools as tools
 
 ## Check one release candidate contract without executing it.
 action release(candidate: String) -> String
-effects {
-    filesystem.read(project::root);
-    process.run(tools::git);
-}
 {
+    effects {
+        filesystem.read(project::root),
+        process.run(tools::git),
+    }
+
     return candidate
 }
 

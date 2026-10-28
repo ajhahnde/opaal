@@ -2028,8 +2028,8 @@ mod tests {
         ));
 
         for definition in [
-            "action callback(x: Int) -> Int effects {} { x }",
-            "action callback(x: Int) -> Int effects { clock.wall; } { x }",
+            "action callback(x: Int) -> Int { effects {}  x }",
+            "action callback(x: Int) -> Int { effects { clock.wall, }  x }",
             "def callback[X](x: Int) -> Int { x }",
         ] {
             let text = format!(

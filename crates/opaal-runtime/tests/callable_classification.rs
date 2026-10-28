@@ -26,13 +26,13 @@ fn raw_default_types_preserve_syntactic_effect_refusal_on_every_call() {
     for (text, refuses) in [
         ("def candidate() -> Int { return 7 }", false),
         ("let candidate = {|| 7}", false),
-        ("action candidate() -> Int effects {} { return 7 }", false),
+        ("action candidate() -> Int { effects {}  return 7 }", false),
         (
-            "action candidate() -> Int effects { clock.wall; } { return 7 }",
+            "action candidate() -> Int { effects { clock.wall, }  return 7 }",
             true,
         ),
         (
-            "action candidate() -> Int effects { clock.wall; clock.wall; } { return 7 }",
+            "action candidate() -> Int { effects { clock.wall, clock.wall, }  return 7 }",
             true,
         ),
     ] {
@@ -63,8 +63,8 @@ fn raw_default_types_preserve_syntactic_effect_refusal_on_every_call() {
 
 #[test]
 fn retained_callables_keep_defining_bytes_when_source_identity_is_reused() {
-    let (_, old) = construct("action candidate() -> Int effects { clock.wall; } { return 7 }");
-    let (_, new) = construct("action candidate() -> Int effects {} { return 9 }");
+    let (_, old) = construct("action candidate() -> Int { effects { clock.wall, }  return 7 }");
+    let (_, new) = construct("action candidate() -> Int { effects {}  return 9 }");
     let caller = SourceFile::new(SourceId::new(42), "same.opaal", "candidate()");
     for _ in 0..3 {
         let apply = |value| {

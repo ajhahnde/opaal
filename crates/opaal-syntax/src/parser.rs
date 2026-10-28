@@ -251,6 +251,21 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
     ) -> ParseResult<Statement> {
         self.check_cancelled()?;
         self.skip_inline();
+        if self.current().is_some_and(|token| {
+            token.kind() == TokenKind::Identifier
+                && self.source.slice(token.span()).ok() == Some("effects")
+        }) {
+            let position = self.position;
+            self.position += 1;
+            self.skip_layout();
+            let block = self.at_delimiter(Some(Delimiter::LeftBrace));
+            self.position = position;
+            if block {
+                return Err(
+                    self.invalid_here("effects block is allowed only as the first action prologue")
+                );
+            }
+        }
         match self.current_kind() {
             Some(TokenKind::Keyword(Keyword::Import)) if top_level => self.parse_module_import(),
             Some(TokenKind::Keyword(Keyword::Import)) => {
@@ -800,13 +815,24 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
         self.skip_layout();
         let return_type = self.parse_type_reference()?;
         self.skip_layout();
-        let effects_keyword =
-            self.expect_contextual_identifier("effects", "action requires `effects {}`")?;
-        self.skip_inline();
+        let open = self.expect_delimiter(
+            Delimiter::LeftBrace,
+            "action requires `{` before its `effects {}` prologue; move effects inside the action block",
+        )?;
+        self.skip_layout();
+        let effects_keyword = self.expect_contextual_identifier(
+            "effects",
+            "action requires a first `effects {}` prologue",
+        )?;
+        self.skip_layout();
         let (effects, effects_block_span) = self.parse_effect_block()?;
         let effects_span = self.span(effects_keyword.span().start(), effects_block_span.end());
-        self.skip_layout();
-        let body = self.parse_block()?;
+        let statements = self.parse_statement_list(Some(Delimiter::RightBrace))?;
+        let close = self.expect_delimiter(Delimiter::RightBrace, "action block is not closed")?;
+        let body = Block {
+            statements,
+            span: self.span(open.span().start(), close.span().end()),
+        };
         let span = self.span(start.start(), body.span.end());
         Ok(Statement::new(
             StatementKind::Action(ActionDefinition {
@@ -833,6 +859,7 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
             self.expect_operator(Operator::Dot, "capability requires `family.operation`")?;
             let operation = self.parse_identifier()?;
             let capability_span = self.span(start, operation.span().end());
+            let mut end = capability_span.end();
             self.skip_inline();
             let mut arguments = Vec::new();
             if self.take_delimiter(Delimiter::LeftParenthesis).is_some() {
@@ -863,14 +890,15 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
                     }
                     self.skip_layout();
                 }
-                self.expect_delimiter(
-                    Delimiter::RightParenthesis,
-                    "effect arguments are not closed",
-                )?;
+                end = self
+                    .expect_delimiter(
+                        Delimiter::RightParenthesis,
+                        "effect arguments are not closed",
+                    )?
+                    .span()
+                    .end();
                 self.skip_inline();
             }
-            let semicolon =
-                self.expect_operator(Operator::Semicolon, "effect request requires `;`")?;
             requests.push(EffectRequest {
                 capability: CapabilityName {
                     family,
@@ -878,8 +906,16 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
                     span: capability_span,
                 },
                 arguments,
-                span: self.span(start, semicolon.span().end()),
+                span: self.span(start, end),
             });
+            self.skip_layout();
+            if self.at_delimiter(Some(Delimiter::RightBrace)) {
+                break;
+            }
+            self.expect_operator(
+                Operator::Comma,
+                "effect requests require `,` instead of `;`",
+            )?;
             self.skip_layout();
         }
         let right = self.expect_delimiter(Delimiter::RightBrace, "effects block is not closed")?;

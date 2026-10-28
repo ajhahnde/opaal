@@ -244,7 +244,7 @@ tool_lock = "tools.toml"
     assert_eq!(fs::read(&marker).unwrap(), b"initializer\naction\ntool\n");
     fs::remove_file(&marker).unwrap();
     let text = format!(
-        "import project::tools as tools\nimport std::process as process\n^sh \"{}\" \"initializer\"\naction check() -> Bool effects {{ process.run(tools::checker); }} {{\n    let result = process::run(tools::checker, [\"action\"])\n    throw \"SENSITIVE_PASSIVE_ACTION\"\n}}\naction outer() -> Bool effects {{ process.run(tools::checker); }} {{ return check() }}\ntask check = outer\n",
+        "import project::tools as tools\nimport std::process as process\n^sh \"{}\" \"initializer\"\naction check() -> Bool {{ effects {{ process.run(tools::checker), }} \n    let result = process::run(tools::checker, [\"action\"])\n    throw \"SENSITIVE_PASSIVE_ACTION\"\n}}\naction outer() -> Bool {{ effects {{ process.run(tools::checker), }}  return check() }}\ntask check = outer\n",
         tool.display()
     );
     fs::write(directory.path("tasks.opaal"), &text).unwrap();

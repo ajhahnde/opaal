@@ -85,7 +85,7 @@ fn field_and_binding_validation_and_failure_publication_are_unchanged() {
         Value::Int(1)
     );
     for parameter in ["Item {value}", "Item {value: value}"] {
-        assert!(try_load(&format!("type Item = {{value: Int}}\naction pick({parameter}: Item) -> Int effects {{}} {{ return value }}")).is_ok());
+        assert!(try_load(&format!("type Item = {{value: Int}}\naction pick({parameter}: Item) -> Int {{ effects {{}}  return value }}")).is_ok());
     }
 }
 
