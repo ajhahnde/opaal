@@ -302,18 +302,17 @@ def qualify(archive: Path, examples: Path, version: str, source: str, platform: 
         actual, opaal_measurement = measure([binary, "json-report.opaal"], work, environment)
         baseline, python_measurement = measure([sys.executable, work / "reference.py", work / "jobs.json"], work, environment)
         require(actual == baseline, "10000-job report differs from reference")
-        # Bind the unchanged bundled files; only the project floor may be adapted.
+        # Bind every bundled file to its unchanged archive identity.
         for entry in examples_manifest["members"]:
             relative = PurePosixPath(entry["path"]).relative_to(work.name).as_posix()
             if relative == "jobs.json":
                 (work / relative).write_bytes(default)
-            expected_digest = digest(adapted) if relative == "opaal.toml" else entry["sha256"]
-            require(digest((work / relative).read_bytes()) == expected_digest, "bundled source changed during qualification")
+            require(digest((work / relative).read_bytes()) == entry["sha256"], "bundled source changed during qualification")
         return {
             "schema_version": 1, "source": source, "version": version, "platform": platform,
             "archive_sha256": binaries_manifest["sha256"], "examples_sha256": examples_manifest["sha256"],
-            "project_manifest": {"original_sha256": digest(original_manifest), "qualified_sha256": digest(adapted),
-                                 "version_floor_adapted": original_manifest != adapted},
+            "project_manifest": {"original_sha256": digest(original_manifest), "qualified_sha256": digest(original_manifest),
+                                 "version_floor_adapted": False},
             "comparisons": comparisons, "invalid_cases": list(INVALID),
             "controlled_cases": 7, "interactive_cases": 7, "outside_checkout": True,
             "resource_observations": {"jobs": 10000, "report_sha256": digest(actual),
