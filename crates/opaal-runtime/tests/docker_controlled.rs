@@ -193,7 +193,7 @@ fn run_task(
         parse_project_manifest(Path::new("/fixture/opaal.toml"), MANIFEST.as_bytes()).unwrap();
     let input_type = input.as_ref().map_or("Bytes", |(kind, _)| *kind);
     let source = support::Source(format!(
-        "import std::docker as docker\nimport std::data as data\nimport std::outcome as outcome\nimport project::targets as targets\nimport project::tools as tools\ntype Wrapper = {{ target: docker::TargetIdentity }}\naction check(input: {input_type}) -> {result_type} effects {{ process.run(tools::docker); }} {{ {body} }}\ntask check = check\n"
+        "import std::docker as docker\nimport std::data as data\nimport std::outcome as outcome\nimport project::targets as targets\nimport project::tools as tools\ntype Wrapper = {{ target: docker::TargetIdentity }}\naction check(input: {input_type}) -> {result_type} {{ effects {{ process.run(tools::docker), }}  {body} }}\ntask check = check\n"
     ));
     let project = load_project_program(manifest, &source, &source).unwrap();
     let executable = b"retained Docker test executable";

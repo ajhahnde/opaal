@@ -1,7 +1,8 @@
 action readiness() -> Int
-effects {
-}
 {
+    effects {
+    }
+
     def result() -> Int
     {
         return 5

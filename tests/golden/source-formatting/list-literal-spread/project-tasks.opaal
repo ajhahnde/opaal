@@ -5,9 +5,10 @@ def result() -> Int
     return values[2]
 }
 action readiness() -> Int
-effects {
-}
 {
+    effects {
+    }
+
     return result()
 }
 task verify = readiness

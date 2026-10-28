@@ -1,8 +1,9 @@
 export { read* }
 action readiness() -> Int
-effects {
-}
 {
+    effects {
+    }
+
     return 5
 }
 task verify = readiness

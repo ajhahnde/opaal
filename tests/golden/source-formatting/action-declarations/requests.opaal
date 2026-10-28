@@ -1,0 +1,8 @@
+action inert() -> String
+{
+    effects { # static metadata
+        filesystem.read('a,;{}'), # punctuation stays literal
+        clock.wall() # insert comma before this comment
+    }
+    return 'value'
+}

@@ -1,0 +1,11 @@
+export { identity }
+
+action identity(value: String) -> String
+{
+    effects {
+    }
+
+    return value
+}
+
+task verify = identity

@@ -8,12 +8,13 @@ export { check_image }
 
 ## Check one available image against explicit delivery expectations.
 action check_image(image: String, expected_id: String, expected_platform: String, expected_revision: String) -> Bool
-effects {
-    process.run(tools::docker);
-    stdout.write();
-    stderr.write();
-}
 {
+    effects {
+        process.run(tools::docker),
+        stdout.write(),
+        stderr.write(),
+    }
+
     let inspected = docker::inspect_image(targets::ci, image)
     let result = policy::assess(inspected, expected_id, expected_platform, expected_revision)
     io::write_stdout(data::json_encode(result))

@@ -4,12 +4,13 @@ import std::io as io
 export { run }
 
 action run() -> Bool
-effects {
-    stdin.read();
-    stdout.write();
-    stderr.write();
-}
 {
+    effects {
+        stdin.read(),
+        stdout.write(),
+        stderr.write(),
+    }
+
     let input = io::read_stdin(65536)
     let result = assess::evaluate(data::json_decode(input))
     io::write_stdout(data::json_encode(result))

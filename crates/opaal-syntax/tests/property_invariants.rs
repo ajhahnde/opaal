@@ -399,8 +399,19 @@ impl<'source> SpanChecker<'source> {
                 }
                 self.type_reference(&action.return_type);
                 self.span(action.effects_span);
+                assert!(action.body.span.start() < action.effects_span.start());
+                assert!(action.effects_span.end() < action.body.span.end());
                 for effect in &action.effects {
                     self.span(effect.span);
+                    assert!(action.effects_span.start() < effect.span.start());
+                    assert!(effect.span.end() < action.effects_span.end());
+                    assert!(
+                        !self
+                            .source
+                            .slice(effect.span)
+                            .unwrap()
+                            .ends_with([',', ';'])
+                    );
                     self.span(effect.capability.span);
                     self.identifier(effect.capability.family);
                     self.identifier(effect.capability.operation);

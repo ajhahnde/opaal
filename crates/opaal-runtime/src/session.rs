@@ -4241,7 +4241,7 @@ mod ambient_process_policy_tests {
                 "operational standard module",
             ),
             (
-                "action effect() -> String effects { clock.wall; } { return 'done' }\n^tool \"{effect()}\"\n",
+                "action effect() -> String { effects { clock.wall, }  return 'done' }\n^tool \"{effect()}\"\n",
                 "effectful action execution",
             ),
         ] {

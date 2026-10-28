@@ -87,10 +87,10 @@ authority = "authority.toml"
 tool_lock = "tools.toml"
 ''')
     parameters = "input: Path" if input_file else ""
-    source = "action check(" + parameters + ") -> Bool effects {} { " + body + " }\ntask check = check\n"
+    source = "action check(" + parameters + ") -> Bool { effects {} " + body + " }\ntask check = check\n"
     if native_image is not None:
         source = ('import std::process as process\nimport project::tools as tools\n'
-                  'action check() -> Bool effects { process.run(tools::checker); } {\n'
+                  'action check() -> Bool { effects { process.run(tools::checker), } \n'
                   'let result = process::run(tools::checker, [])\nreturn true\n}\ntask check = check\n')
     (work / "tasks.opaal").write_text(source)
     bindings = []
@@ -200,7 +200,7 @@ def passive_case(binary, work, observer):
     source = '''import project::tools as tools
 import std::process as process
 ^printf "SENSITIVE_PASSIVE_INITIALIZER"
-action check() -> Bool effects { process.run(tools::checker); } {
+action check() -> Bool { effects { process.run(tools::checker), }
     process::run(tools::checker, ["SENSITIVE_PASSIVE_ARGV"])
     throw "SENSITIVE_PASSIVE_ACTION"
 }

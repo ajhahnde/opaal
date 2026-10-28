@@ -100,7 +100,7 @@ fn initializer_summary_traces_wrappers_to_the_canonical_entropy_effect() {
             .any(|site| site.effect() == ModuleEffect::EntropySystem)
     );
     let program =
-        load("action sample() -> Int effects { entropy.system(); } { return random::int(0, 4) }");
+        load("action sample() -> Int { effects { entropy.system(), }  return random::int(0, 4) }");
     let action = program
         .actions()
         .action(program.graph().root(), "sample")
@@ -108,6 +108,6 @@ fn initializer_summary_traces_wrappers_to_the_canonical_entropy_effect() {
     assert_eq!(action.effects()[0].capability(), "entropy.system");
     assert!(action.effects()[0].arguments().is_empty());
     assert!(
-        try_load("action sample() -> Int effects { entropy.system(1); } { return 1 }").is_err()
+        try_load("action sample() -> Int { effects { entropy.system(1), }  return 1 }").is_err()
     );
 }

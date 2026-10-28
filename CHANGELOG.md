@@ -4,6 +4,18 @@ All notable changes to OPAAL are documented here.
 
 ## [Unreleased]
 
+### Changed
+
+- Actions now contain their mandatory static effects prologue inside one outer
+  body, with comma-separated requests. Move the old body opening brace before
+  `effects`, indent the prologue, and replace request semicolons with commas:
+  `action ready() -> Int { effects { clock.wall(), } return 5 }`.
+  This is an intentional source break within 1.x. Only the contained form is
+  supported; formatting rejects old syntax without rewriting it. Result types,
+  effect requirements and grants retain their meaning. Edited sources require
+  fresh plans and explicit acceptance before execution. Use the first supporting
+  toolchain; example and template minimum versions must be raised at release.
+
 ## [1.8.0]
 
 ### Added

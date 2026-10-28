@@ -137,8 +137,8 @@ fn journal_records(work: &ReportDir) -> Vec<serde_json::Value> {
 fn controlled_native_calls_bind_selected_grants_and_emit_only_progress() {
     let work = controlled_fixture(
         r#"import std::random as random
-action draw() -> Int effects { entropy.system(); } { return random::int(0, 4) }
-action sample() -> Record effects { entropy.system(); } {
+action draw() -> Int { effects { entropy.system(), }  return random::int(0, 4) }
+action sample() -> Record { effects { entropy.system(), }
     let shard = draw()
     let fraction = random::float()
     let identifier = random::bytes(3)
@@ -211,11 +211,11 @@ import std::path as path
 import std::data as data
 import std::string as string
 import project::context as project
-action sibling(suffix: Int) -> Bytes effects {{ filesystem.read(project::root); }} {{
+action sibling(suffix: Int) -> Bytes {{ effects {{ filesystem.read(project::root), }}
     let name = string::join(['path-canary-', string::decode_utf8(data::json_encode(suffix))], '')
     return fs::read(path::join(project::root, name), 64)
 }}
-action sample() -> Bytes effects {{ entropy.system(); filesystem.read(project::root); }} {{
+action sample() -> Bytes {{ effects {{ entropy.system(), filesystem.read(project::root), }}
     if false {{ let ignored = random::float() }}
     let min = random::int(4729, 4730)
     let suffix = random::int(min, min + 1)
@@ -290,12 +290,12 @@ fn nested_random_derived_http_methods_bodies_and_errors_never_enter_evidence() {
             r#"import std::random as random
 import std::http as http
 import project::endpoints as endpoints
-action draw() -> Int effects {{ entropy.system(); }} {{ return random::int(0, 2) }}
-action sibling(method: String, body: Bytes) -> Bytes effects {{ network.http(endpoints::sample); }} {{
+action draw() -> Int {{ effects {{ entropy.system(), }}  return random::int(0, 2) }}
+action sibling(method: String, body: Bytes) -> Bytes {{ effects {{ network.http(endpoints::sample), }}
     let response = http::request(endpoints::sample, method, {{}}, null, body, 64)
     return response.body
 }}
-action sample() -> Bytes effects {{ entropy.system(); network.http(endpoints::sample); }} {{
+action sample() -> Bytes {{ effects {{ entropy.system(), network.http(endpoints::sample), }}
     let selector = draw()
     mut method = 'GET'
     if selector == 1 {{ method = 'POST' }}
@@ -417,7 +417,7 @@ task sample = sample
 
 #[test]
 fn altered_accepted_limits_and_denied_grants_refuse_before_journal_creation() {
-    let source = "import std::random as random\naction sample() -> Int effects { entropy.system(); } { return random::int(7, 8) }\ntask sample = sample\n";
+    let source = "import std::random as random\naction sample() -> Int { effects { entropy.system(), }  return random::int(7, 8) }\ntask sample = sample\n";
     let work = controlled_fixture(source);
     let plan = controlled_plan(&work);
     let mut changed = plan.value().clone();
@@ -624,7 +624,7 @@ import std::data as data
 import std::string as string
 import std::process as process
 import project::tools as tools
-action sample() -> Bytes effects { entropy.system(); process.run(tools::git); } {
+action sample() -> Bytes { effects { entropy.system(), process.run(tools::git), }
     let sample = random::int(987654321, 987654325)
     let argument = string::decode_utf8(data::json_encode(sample))
     let result = process::run(tools::git, [argument])

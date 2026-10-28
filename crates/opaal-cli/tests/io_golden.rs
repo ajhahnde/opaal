@@ -37,7 +37,7 @@ fn controlled(work: &ReportDir, body: &str) -> String {
     work.write("authority.toml", format!("schema_version = 1\nproject = 'stream_processor'\nenvironment = 'ci'\n{}", ["entropy.system", "stdin.read", "stdout.write", "stderr.write"].map(|effect| format!("[[rules]]\ndecision = 'grant'\neffect = '{effect}'\nscope = 'evaluation'\nrequired_enforcement = 'enforced'\n")).join("")));
     let platform = support::host_platform_triple();
     work.write("tools.toml", format!("schema_version = 1\nproject = 'stream_processor'\nenvironment = 'ci'\nplatform = '{platform}'\ntools = []\n[child_environment]\ninherit = []\n"));
-    work.write("tasks.opaal", format!("import std::io as io\nimport std::random as random\nimport std::string as string\naction process() -> Null effects {{ entropy.system(); stdin.read(); stdout.write(); stderr.write(); }} {{ {body} }}\ntask process = process\n"));
+    work.write("tasks.opaal", format!("import std::io as io\nimport std::random as random\nimport std::string as string\naction process() -> Null {{ effects {{ entropy.system(), stdin.read(), stdout.write(), stderr.write(), }}  {body} }}\ntask process = process\n"));
     let planned = work.run(&[
         "plan",
         "--project",

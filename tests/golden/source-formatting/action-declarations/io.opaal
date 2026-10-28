@@ -1,0 +1,16 @@
+import std::io as io
+export { echo_input }
+
+action echo_input() -> Bool
+{
+    effects {
+        stdin.read(),
+        stdout.write(),
+    }
+
+    let input = io::read_stdin(4096)
+    io::write_stdout(input)
+    return true
+}
+
+task echo = echo_input

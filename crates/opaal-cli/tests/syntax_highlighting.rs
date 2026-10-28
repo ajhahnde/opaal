@@ -22,6 +22,23 @@ fn record_shorthand_keeps_complete_and_continuing_source_lossless() {
 }
 
 #[test]
+fn contained_actions_keep_complete_and_incomplete_highlighting_lossless() {
+    for text in [
+        "action identity(value: String) -> String\n{\n    effects {}\n",
+        "action identity(value: String) -> String { effects {} return value }\n",
+    ] {
+        let segments = SyntaxHighlighter::new().highlight(text);
+        assert_lossless(text, &segments);
+        assert!(segments.iter().all(|s| s.kind() != HighlightKind::Invalid));
+        assert_segment(&segments, "action", HighlightKind::Keyword);
+    }
+    let text = "action old() -> Int effects {} {}";
+    let segments = SyntaxHighlighter::new().highlight(text);
+    assert_lossless(text, &segments);
+    assert_segment(&segments, "effects", HighlightKind::Invalid);
+}
+
+#[test]
 fn compound_assignment_operators_keep_their_complete_source_ranges() {
     for operator in ["+=", "-=", "*=", "/=", "%="] {
         for text in [

@@ -103,14 +103,41 @@ impl FormatLayout {
                     self.signature(tokens_in(
                         tokens,
                         statement.span().start(),
-                        action.effects_span.start(),
+                        action.body.span.start(),
                     ));
                     self.newline_before.insert(action.effects_span.start());
                     self.newline_before.insert(action.effects_span.end() - 1);
                     self.newline_after.insert(action.effects_span.end());
                     self.declaration_body(&action.body);
+                    let effect_tokens = tokens_in(
+                        tokens,
+                        action.effects_span.start(),
+                        action.effects_span.end(),
+                    );
+                    let mut remaining = effect_tokens.iter();
                     for request in &action.effects {
-                        self.newline_after.insert(request.span.end());
+                        let end = request.span.end();
+                        let next = remaining
+                            .by_ref()
+                            .find(|token| {
+                                token.span().start() >= end
+                                    && !matches!(
+                                        token.kind(),
+                                        TokenKind::Whitespace
+                                            | TokenKind::Newline
+                                            | TokenKind::Comment
+                                            | TokenKind::DocumentationComment
+                                            | TokenKind::LineContinuation
+                                    )
+                            })
+                            .unwrap();
+                        if next.kind() == TokenKind::Operator(Operator::Comma) {
+                            self.no_space_before.insert(next.span().start());
+                            self.newline_after.insert(next.span().end());
+                        } else {
+                            self.comma_after.insert(end);
+                            self.newline_after.insert(end);
+                        }
                     }
                     self.spacing(
                         tokens_in(

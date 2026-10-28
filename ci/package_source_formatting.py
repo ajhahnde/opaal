@@ -57,7 +57,11 @@ GROUPED_EXPORT_FIXTURES = (
     "purity.opaal",
 )
 
-
+ACTION_DECLARATION_FIXTURES = (
+    "canonical.opaal", "noncanonical.opaal", "pure.opaal", "io.opaal",
+    "old-form.opaal", "semicolon.opaal", "missing-effects.opaal", "missing-result.opaal",
+    "duplicate-block.opaal", "misplaced.opaal", "incomplete.opaal", "requests.opaal",
+)
 
 
 def main() -> None:
@@ -82,6 +86,9 @@ def main() -> None:
     exports = {name.removeprefix("grouped-export-prefixes/") for name in names if name.startswith("grouped-export-prefixes/")}
     if exports != set(GROUPED_EXPORT_FIXTURES):
         raise ValueError("grouped export fixture census differs from the committed source")
+    actions = {name.removeprefix("action-declarations/") for name in names if name.startswith("action-declarations/")}
+    if actions != set(ACTION_DECLARATION_FIXTURES):
+        raise ValueError("action declaration fixture census differs from the committed source")
     archive = package_examples(ROOT, names, source, directory=FIXTURES, name="source-formatting")
     print(archive.relative_to(ROOT))
 

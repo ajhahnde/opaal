@@ -178,18 +178,20 @@ tool_lock = "tools.toml"
         r#"import project::context as project
 import project::tools as tools
 action normalize(candidate: String) -> String
-effects {}
 {
+effects {}
+
     return candidate
 }
 
 ## Check one candidate without executing it.
 action ready(candidate: String) -> String
-effects {
-    filesystem.read(project::root);
-    process.run(tools::git);
-}
 {
+effects {
+    filesystem.read(project::root),
+    process.run(tools::git),
+}
+
     return normalize(candidate)
 }
 task release = ready
@@ -257,13 +259,15 @@ tool_lock = "tools.toml"
     project.write(
         "tasks.opaal",
         r#"action inspect_path(repo: Path) -> Path
-effects {}
 {
+effects {}
+
     repo
 }
 action inspect_pair(repo: Path, label: String) -> Path
-effects {}
 {
+effects {}
+
     repo
 }
 task secretfree = inspect_path
@@ -340,11 +344,12 @@ tool_lock = "tools.toml"
         r#"import project::endpoints as endpoints
 import project::secrets as secrets
 action unsupported() -> Null
-effects {
-    secret.reveal(secrets::one, endpoints::sink);
-    secret.reveal(secrets::two, endpoints::sink);
-}
 {
+effects {
+    secret.reveal(secrets::one, endpoints::sink),
+    secret.reveal(secrets::two, endpoints::sink),
+}
+
     null
 }
 task many = unsupported
@@ -419,7 +424,7 @@ fn runtime_help_uses_the_shared_action_identity_and_effects() {
     let project = TempProject::new();
     let script = project.write(
         "help.opaal",
-        "action observe(value: String) -> String effects { clock.wall; } { return value }\nhelp observe\n",
+        "action observe(value: String) -> String { effects { clock.wall, }  return value }\nhelp observe\n",
     );
     let output = opaal([script.as_os_str()]);
     assert!(output.status.success(), "{output:?}");
@@ -546,13 +551,15 @@ fn task_discovery_shares_closed_sorted_static_metadata() {
     project.write("tasks.opaal", &r#"let never = 1 / 0
 ## Unicode résumé and control CONTROL text.
 action inspect_path(repo: Path) -> Path
-effects {}
 {
+effects {}
+
     repo
 }
 action typed(n: Null, b: Bool, i: Int, f: Float, s: String, bytes: Bytes, d: Duration, size: ByteSize, record: Record) -> Bool
-effects {}
 {
+effects {}
+
     true
 }
 task zulu = inspect_path
@@ -712,8 +719,9 @@ fn digest_view_requires_successful_exclusive_plan_persistence() {
         "tasks.opaal",
         r#"import project::context as project
 action inspect_path(repo: Path) -> Path
-effects { filesystem.read(project::root); }
 {
+effects { filesystem.read(project::root), }
+
     repo
 }
 
@@ -1198,17 +1206,19 @@ fn inherited_secret_declarations_are_one_requirement_not_a_repeated_reveal() {
         r#"import project::endpoints as endpoints
 import project::secrets as secrets
 action leaf() -> Null
-effects {
-    secret.reveal(secrets::one, endpoints::sink);
-}
 {
+effects {
+    secret.reveal(secrets::one, endpoints::sink),
+}
+
     null
 }
 action root() -> Null
-effects {
-    secret.reveal(secrets::one, endpoints::sink);
-}
 {
+effects {
+    secret.reveal(secrets::one, endpoints::sink),
+}
+
     leaf()
 }
 task many = root
@@ -1318,10 +1328,11 @@ fn repeated_reveal_and_multiple_sinks_are_valid_refused_artifacts() {
         r#"import project::endpoints as endpoints
 import project::secrets as secrets
 action unsupported() -> Null
-effects {
-    secret.reveal(secrets::one, endpoints::sink);
-}
 {
+effects {
+    secret.reveal(secrets::one, endpoints::sink),
+}
+
     null
 }
 task many = unsupported
@@ -1653,20 +1664,22 @@ import project::tools as tools
 import project::endpoints as endpoints
 import project::secrets as secrets
 action normalize(candidate: String) -> String
-effects {}
 {
+effects {}
+
     return candidate
 }
 action ready(candidate: String) -> String
+{
 effects {
-    filesystem.read(project::root);
-    process.run(tools::git);
-    network.http(endpoints::readiness);
-    secret.reveal(secrets::token, endpoints::readiness);
+    filesystem.read(project::root),
+    process.run(tools::git),
+    network.http(endpoints::readiness),
+    secret.reveal(secrets::token, endpoints::readiness),
 }
 
 
-{
+
     return normalize(candidate)
 }
 task release = ready
@@ -1988,11 +2001,12 @@ import project::secrets as secrets
 import std::http as http
 
 action recover() -> String
-effects {
-    network.http(endpoints::failing);
-    secret.reveal(secrets::token, endpoints::failing);
-}
 {
+effects {
+    network.http(endpoints::failing),
+    secret.reveal(secrets::token, endpoints::failing),
+}
+
     let authorization = http::secret_header("authorization", secrets::token)
     try {
         http::request(endpoints::failing, "GET", {}, authorization, null, 1024)
@@ -2200,15 +2214,16 @@ type Readiness = {
 }
 
 action release_readiness(candidate: Path) -> Readiness
-effects {
-    filesystem.read(project::root);
-    filesystem.write(project::evidence);
-    process.run(tools::git);
-    network.http(endpoints::readiness);
-    secret.reveal(secrets::readiness_token, endpoints::readiness);
-    clock.wall;
-}
 {
+effects {
+    filesystem.read(project::root),
+    filesystem.write(project::evidence),
+    process.run(tools::git),
+    network.http(endpoints::readiness),
+    secret.reveal(secrets::readiness_token, endpoints::readiness),
+    clock.wall,
+}
+
     let manifest_path = path::join(project::root, "Cargo.toml")
     let lock_path = path::join(project::root, "Cargo.lock")
     let candidate_bytes = fs::read(candidate, 16777216)

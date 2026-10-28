@@ -402,7 +402,7 @@ fn preparation_native_doctor_unknown_and_invalid_images_never_launch() {
     fs::write(
         &source,
         format!(
-            "{}\naction no_tool() -> Bool effects {{}} {{ return true }}\ntask pure_check = no_tool\n",
+            "{}\naction no_tool() -> Bool {{ effects {{}}  return true }}\ntask pure_check = no_tool\n",
             fs::read_to_string(&source).unwrap().replace("export { check_repository }", "export { check_repository, no_tool }")
         ),
     )
@@ -918,7 +918,7 @@ fn unused_native_tool_selects_v5_for_pure_tasks_and_caught_errors_without_host_r
         ("throw 'payload-canary'", 2),
     ] {
         let project = Project::new(&format!(
-            "action check() -> Bool effects {{}} {{ {body} }}\ntask check = check\n"
+            "action check() -> Bool {{ effects {{}}  {body} }}\ntask check = check\n"
         ));
         let plan = project.plan();
         assert!(plan.is_executable());
@@ -973,14 +973,14 @@ fn accepted_native_process_omits_payload_and_preserves_explicit_report() {
             r#"import project::tools as tools
 import std::process as process
 import std::io as io
-action check() -> Bool effects {{ process.run(tools::checker); {} }} {{
+action check() -> Bool {{ effects {{ process.run(tools::checker), {} }}
     let result = process::run(tools::checker, ["%s", "payload-canary ; $() ä"])
     {report}
     return (result.status.code == 0)
 }}
 task check = check
 "#,
-            if standard_io { "stdout.write();" } else { "" }
+            if standard_io { "stdout.write()," } else { "" }
         ));
         #[cfg(all(
             target_os = "linux",
@@ -1117,7 +1117,7 @@ fn evidence_mixed_tools_redact_probes_calls_and_errors_without_fictitious_host_r
 import std::process as process
 import std::io as io
 import std::data as data
-action check() -> Bool effects {{ process.run(tools::git); {} {} }} {{
+action check() -> Bool {{ effects {{ process.run(tools::git), {} {} }}
     let maintained = process::run(tools::git, ["payload-canary-argv ; $() ä"])
     {}
     {}
@@ -1126,11 +1126,11 @@ action check() -> Bool effects {{ process.run(tools::git); {} {} }} {{
 task check = check
 "#,
             if native {
-                "process.run(tools::checker);"
+                "process.run(tools::checker),"
             } else {
                 ""
             },
-            if standard_io { "stdout.write();" } else { "" },
+            if standard_io { "stdout.write()," } else { "" },
             if native {
                 "let result = process::run(tools::checker, [\"%s\", \"payload-canary-native\"])"
             } else {
@@ -1305,7 +1305,7 @@ fn acceptance_revalidates_native_project_controls_inputs_and_tool_before_evidenc
         "root",
     ] {
         let project = Project::new(
-            "action check(input: Path) -> Bool effects {} { return true }\ntask check = check\n",
+            "action check(input: Path) -> Bool { effects {}  return true }\ntask check = check\n",
         );
         let tool = project.0.join("local-tool");
         fs::copy(Path::new("/usr/bin/printf").canonicalize().unwrap(), &tool).unwrap();
@@ -1397,16 +1397,7 @@ fn acceptance_bound_input_is_checked_at_use_after_execution_has_begun() {
 
     for change in ["bytes", "symlink", "same-bytes-replacement"] {
         let project = Project::new(
-            "import std::io as io\nimport std::filesystem as fs\nimport project::context as project\n\
-             action check(input: Path) -> Bool\n\
-             effects { stdin.read(); stdout.write(); filesystem.read(project::root); }\n\
-             {\n\
-                 io::println('ready')\n\
-                 io::read_stdin(1)\n\
-                 let value = fs::read(input, 64)\n\
-                 io::println('read')\n\
-                 return true\n\
-             }\ntask check = check\n",
+            "import std::io as io\nimport std::filesystem as fs\nimport project::context as project\naction check(input: Path) -> Bool\n{\neffects { stdin.read(), stdout.write(), filesystem.read(project::root), }\n\nio::println('ready')\nio::read_stdin(1)\nlet value = fs::read(input, 64)\nio::println('read')\nreturn true\n}\ntask check = check\n",
         );
         let authority = project.0.join("authority.toml");
         let mut file = fs::OpenOptions::new().append(true).open(authority).unwrap();
@@ -1503,7 +1494,7 @@ fn observers_native_project_never_evaluate_initializers_actions_or_tools() {
         r#"import project::tools as tools
 import std::process as process
 ^printf "payload-canary-initializer"
-action check() -> Bool effects { process.run(tools::checker); } {
+action check() -> Bool { effects { process.run(tools::checker), }
     let result = process::run(tools::checker, ["payload-canary-argv"])
     throw "payload-canary-action"
 }
@@ -1619,7 +1610,7 @@ task check = check
 fn evidence_corrupt_partial_and_missing_native_artifacts_never_prove_pass() {
     use opaal_runtime::workflow::digest_value;
     let project =
-        Project::new("action check() -> Bool effects {} { return true }\ntask check = check\n");
+        Project::new("action check() -> Bool { effects {}  return true }\ntask check = check\n");
     let plan = project.plan();
     assert_eq!(project.run(&plan, plan.digest()).status.code(), Some(0));
     let audit = project.audit();
@@ -1748,7 +1739,7 @@ fn supplied_checker_snapshot_compatibility() {
     let project = Project::with_tool(
         r#"import project::tools as tools
 import std::process as process
-action check() -> Bool effects { process.run(tools::checker); } {
+action check() -> Bool { effects { process.run(tools::checker), }
     let result = process::run(tools::checker, ["--norc", "--format=json1", "--shell=sh", "--severity=style", "--", "check.sh"])
     return (result.status.code == 0)
 }

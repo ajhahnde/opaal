@@ -155,7 +155,7 @@ impl StaticTarget {
         let path = native_path(&work.0.join("docker"));
         let platform = support::host_platform_triple();
         work.write("opaal.toml",format!("schema_version=1\n[project]\nname='image_check'\nroot_module='tasks.opaal'\nrequired_opaal='>=1.4.0,<2.0.0'\n[paths]\nroot='.'\nevidence='output'\n[tools.docker]\nadapter='docker'\nversion='=29.9.0'\n[targets.ci]\nadapter='docker'\ntool='docker'\nsocket={{encoding='base64url-nopad',platform='unix',value='{}'}}\nconfig_directory='docker-empty'\napi_version='1.48'\n[environments.ci]\nauthority='authority.toml'\ntool_lock='tools.toml'\n",native_path(&socket)["value"].as_str().unwrap()));
-        work.write("tasks.opaal","import std::docker as docker\nimport project::targets as targets\nimport project::tools as tools\naction verify() -> Bool effects { process.run(tools::docker); } {\nlet image = docker::inspect_image(targets::ci, 'example:test')\nreturn image.os == 'linux'\n}\ntask verify = verify\n");
+        work.write("tasks.opaal","import std::docker as docker\nimport project::targets as targets\nimport project::tools as tools\naction verify() -> Bool { effects { process.run(tools::docker), } \nlet image = docker::inspect_image(targets::ci, 'example:test')\nreturn image.os == 'linux'\n}\ntask verify = verify\n");
         work.write("authority.toml","schema_version=1\nproject='image_check'\nenvironment='ci'\n[[rules]]\ndecision='grant'\neffect='process.run'\nscope='tool.docker'\nrequired_enforcement='acknowledge-unenforced'\n");
         work.write("tools.toml",format!("schema_version=1\nproject='image_check'\nenvironment='ci'\nplatform='{platform}'\n[child_environment]\ninherit=[]\n[[tools]]\nid='docker'\nadapter='docker'\npath={{encoding='base64url-nopad',platform='unix',value='{}'}}\nversion='29.9.0'\ndigest='{}'\n",path["value"].as_str().unwrap(),digest_bytes(b"this static canary must never execute")));
         Self {
@@ -401,8 +401,8 @@ fn stream_preflight_observes_the_socket_without_opening_it_as_a_control_file() {
     fixture.work.write(
         "tasks.opaal",
         fs::read_to_string(&tasks).unwrap().replace(
-            "process.run(tools::docker);",
-            "process.run(tools::docker); stdout.write(); stderr.write();",
+            "process.run(tools::docker),",
+            "process.run(tools::docker), stdout.write(), stderr.write(),",
         ),
     );
     fixture.work.write(

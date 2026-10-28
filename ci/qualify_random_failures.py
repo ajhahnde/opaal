@@ -72,7 +72,7 @@ def qualify(binary: Path, output: Path) -> dict:
         manifest = work / "opaal.toml"
         manifest.write_text(manifest.read_text().replace(">=1.3.0", f">={VERSION}"))
         (work / "tasks.opaal").write_text("""import std::random as random
-action sample() -> Bytes effects { entropy.system(); } {
+action sample() -> Bytes { effects { entropy.system(), }
     return random::bytes(1048576)
 }
 task sample = sample
@@ -192,7 +192,7 @@ int main(void) {
             (work / "tasks.opaal").write_text("""import std::random as random
 import std::process as process
 import project::tools as tools
-action sample() -> Int effects { entropy.system(); process.run(tools::git); } {
+action sample() -> Int { effects { entropy.system(), process.run(tools::git), }
     let ignored = process::run(tools::git, [])
     return random::int(7, 8)
 }

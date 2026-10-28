@@ -72,7 +72,7 @@ fn pure_functions_callbacks_and_undeclared_actions_refuse_before_transfer() {
         "def pure() -> Null { return io::print('x') }\npure()",
         "let callback = {|| io::print('x')}\ncallback()",
         "import std::list as list\nlist::map[Int, Null]([1], {|x| io::print('x')})",
-        "action pure() -> Null effects {} { return io::print('x') }\npure()",
+        "action pure() -> Null { effects {}  return io::print('x') }\npure()",
     ] {
         let h = Harness::new(b"sentinel");
         let script = h.script.clone();
@@ -88,8 +88,8 @@ fn pure_functions_callbacks_and_undeclared_actions_refuse_before_transfer() {
 #[test]
 fn undeclared_sibling_or_nested_streams_and_entropy_cannot_borrow_another_effect() {
     for body in [
-        "action run() -> Null effects { stdout.write(); } { return io::eprint('x') }\nrun()",
-        "import std::random as random\naction run() -> Int effects { stdout.write(); } { return random::int(7, 8) }\nrun()",
+        "action run() -> Null { effects { stdout.write(), }  return io::eprint('x') }\nrun()",
+        "import std::random as random\naction run() -> Int { effects { stdout.write(), }  return random::int(7, 8) }\nrun()",
     ] {
         let h = Harness::new(b"sentinel");
         let script = h.script.clone();
@@ -100,7 +100,7 @@ fn undeclared_sibling_or_nested_streams_and_entropy_cannot_borrow_another_effect
         );
         assert!(script.lock().unwrap().calls.is_empty());
     }
-    assert!(support::try_load("action child() -> Null effects { stderr.write(); } { return io::eprint('x') }\naction run() -> Null effects { stdout.write(); } { return child() }\nrun()").is_err());
+    assert!(support::try_load("action child() -> Null { effects { stderr.write(), }  return io::eprint('x') }\naction run() -> Null { effects { stdout.write(), }  return child() }\nrun()").is_err());
 }
 
 #[test]
@@ -124,7 +124,7 @@ fn declared_action_runs_and_catching_overflow_does_not_restore_consumed_input() 
     let h = Harness::new(b"abc");
     let script = h.script.clone();
     let outcome = run(
-        "action run() -> Bytes effects { stdin.read(); stdout.write(); } {\ntry { let ignored = io::read_stdin(1) } catch error { 0 }\nlet rest = io::read_stdin(1)\nio::write_stdout(rest)\nreturn rest\n}\nrun()",
+        "action run() -> Bytes { effects { stdin.read(), stdout.write(), } \ntry { let ignored = io::read_stdin(1) } catch error { 0 }\nlet rest = io::read_stdin(1)\nio::write_stdout(rest)\nreturn rest\n}\nrun()",
         h,
     );
     let PrimaryOutcome::Completed(completed) = outcome.primary() else {

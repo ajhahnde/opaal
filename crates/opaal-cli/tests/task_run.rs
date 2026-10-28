@@ -205,7 +205,7 @@ fn pure_task_views_compare_the_receipts_metadata_projection_and_allow_discarded_
     ] {
         let project = Project::new();
         fs::write(project.0.join("saved-tasks.opaal"), format!(
-            "action saved(expected_id: String, expected_platform: String, expected_revision: String) -> {result_type} effects {{}} {{ return {value} }}\ntask saved = saved\n"
+            "action saved(expected_id: String, expected_platform: String, expected_revision: String) -> {result_type} {{ effects {{}}  return {value} }}\ntask saved = saved\n"
         )).unwrap();
         let digest = project.plan("abc123");
         let run = project.run(&digest, b"", selected);
@@ -512,7 +512,7 @@ impl Write for BrokenSummary {
 #[test]
 fn summary_failure_prevents_success_and_native_output_paths_keep_their_bytes() {
     let project = Project::new();
-    fs::write(project.0.join("saved-tasks.opaal"), "action saved(expected_id: String, expected_platform: String, expected_revision: String) -> Bool effects {} { return true }\ntask saved = saved\n").unwrap();
+    fs::write(project.0.join("saved-tasks.opaal"), "action saved(expected_id: String, expected_platform: String, expected_revision: String) -> Bool { effects {}  return true }\ntask saved = saved\n").unwrap();
     let digest = project.plan("abc123");
     #[cfg(target_os = "linux")]
     let native = PathBuf::from(std::ffi::OsString::from_vec(

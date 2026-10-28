@@ -68,15 +68,25 @@ fn roundtrip(text: &str) -> String {
 fn action_layout_preserves_punctuation_inside_command_words() {
     for command in [",eturn value", "echo key:value a,b"] {
         for source in [
-            format!("action sample() -> Int effects {{}} {{ {command} }}\n"),
-            format!("action sample() -> Int effects {{}} {{ if true {{ {command} }} }}\n"),
+            format!("action sample() -> Int {{ effects {{}}  {command} }}\n"),
+            format!("action sample() -> Int {{ effects {{}}  if true {{ {command} }} }}\n"),
         ] {
             let formatted = roundtrip(&source);
             assert!(formatted.contains(command), "{formatted}");
         }
     }
     roundtrip(
-        "##Keep the same value.\naction identity(value:String)->String # signature\neffects{ clock.wall; # declaration only\n}\n# body comment\n{ ,eturn value }\n",
+        "##Keep the same value.\naction identity(value:String)->String # signature\n{\neffects{ clock.wall, # declaration only\n}\n# body comment\n ,eturn value }\n",
+    );
+}
+
+#[test]
+fn contained_requests_insert_only_a_final_comma_before_comments() {
+    let text = "action value() -> String { effects { # open\nfilesystem.read('a,;{}'), # first\nclock.wall # last\n} # close\nreturn 'line\r\n界🙂' }\n";
+    let formatted = roundtrip(text);
+    assert_eq!(
+        formatted,
+        "action value() -> String\n{\n    effects { # open\n        filesystem.read('a,;{}'), # first\n        clock.wall, # last\n    } # close\n    return 'line\r\n界🙂'\n}\n"
     );
 }
 
@@ -108,8 +118,8 @@ fn semantic_oracle_detects_changed_spellings_structure_and_documentation_attachm
             "def identity(value: String) -> Int { return value }\n",
         ),
         (
-            "action value() -> Int effects { clock.wall; } { return 1 }\n",
-            "action value() -> Int effects { clock.monotonic; } { return 1 }\n",
+            "action value() -> Int { effects { clock.wall, }  return 1 }\n",
+            "action value() -> Int { effects { clock.monotonic, }  return 1 }\n",
         ),
         (
             "def value() { return 1; 2 }\n",
@@ -183,7 +193,7 @@ fn every_declaration_block_is_visited_and_other_braces_keep_their_policy() {
     let nested = "def nested() { return 1 }";
     for block in [
         format!("def outer() {{\n{nested}\n}}\n"),
-        format!("action outer() -> Int effects {{}} {{\n{nested}\n}}\n"),
+        format!("action outer() -> Int {{ effects {{}} \n{nested}\n}}\n"),
         format!("if true {{\n{nested}\n}} else {{\n{nested}\n}}\n"),
         format!("if true {{}} else if false {{\n{nested}\n}}\n"),
         format!("while true {{\n{nested}\n}}\n"),
@@ -209,17 +219,17 @@ fn every_declaration_block_is_visited_and_other_braces_keep_their_policy() {
 #[test]
 fn forced_breaks_preserve_trailing_comments_and_blank_lines() {
     for text in [
-        "##Keep the same value.\naction identity(value: String) -> String # signature\neffects { # effects-open\n    clock.wall; # request\n} # effects-close\n# before body\n{ # body-open\n    return value\n} # body-close\n",
+        "##Keep the same value.\naction identity(value: String) -> String # signature\n{\n    effects { # effects-open\n        clock.wall, # request\n    } # effects-close\n    # before body\n    # body-open\n    return value\n} # body-close\n",
         "##Keep the same value.\ndef identity(value: String) -> String # signature\n\n# before body\n{ # body-open\n\n    return value\n\n} # body-close\n\n",
         "def empty()\n{\n\n}\n\n# after\n",
         "def empty()\n\n{\n}\n",
-        "action empty() -> Int\n\neffects {\n}\n\n{\n}\n",
+        "action empty() -> Int\n\n{\n    effects {\n    }\n\n\n}\n",
     ] {
         assert_eq!(roundtrip(text), text);
     }
     assert_eq!(
-        roundtrip("action empty()->Int effects{}{} # close\n"),
-        "action empty() -> Int\neffects {\n}\n{\n} # close\n"
+        roundtrip("action empty()->Int { effects{}} # close\n"),
+        "action empty() -> Int\n{\n    effects {\n    }\n} # close\n"
     );
 }
 

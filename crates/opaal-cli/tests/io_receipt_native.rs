@@ -90,7 +90,7 @@ fn prepare(primary: &str) -> (support::ReportDir, PathBuf, String) {
         std::fs::read(fixtures.join(format!("tools-{target}.toml"))).unwrap(),
     );
     work.write("tasks.opaal", format!(
-        "import std::io as io\naction run() -> Bool effects {{ stdout.write(); }} {{ io::print('{CANARY}')\n{} }}\ntask sample = run\n",
+        "import std::io as io\naction run() -> Bool {{ effects {{ stdout.write(), }}  io::print('{CANARY}')\n{} }}\ntask sample = run\n",
         match primary { "error" => "throw 'error-payload-canary'", "false" => "return false", _ => "return true" }
     ));
     let plan = work.0.join("plan.json");

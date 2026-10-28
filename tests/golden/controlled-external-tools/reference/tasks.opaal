@@ -8,12 +8,13 @@ import std::io as io
 export { check_repository }
 
 action check_repository(script: Path, manifest: Path) -> Bool
-effects {
-    process.run(tools::checker);
-    filesystem.read(project::root);
-    stdout.write();
-}
 {
+    effects {
+        process.run(tools::checker),
+        filesystem.read(project::root),
+        stdout.write(),
+    }
+
     let before = fs::read(script, 65536)
     let manifest_bytes = fs::read(manifest, 65536)
     let result = process::run(tools::checker, ["--norc", "--format=json1", "--shell=sh", "--severity=style", "--", "{script}"])

@@ -3,10 +3,11 @@ import std::random as random
 export { run }
 
 action run() -> Record
-effects {
-    entropy.system();
-}
 {
+    effects {
+        entropy.system(),
+    }
+
     let shard = random::int(0, 4)
     let fraction = random::float()
     let identifier = random::bytes(16)
