@@ -87,12 +87,8 @@ def qualify(archive: Path | None, fixtures: Path | None, binaries: Path | None,
             program_manifest = fixture_manifest = {"sha256": None}
         work = directory / "sample"
         shutil.copytree(inputs, work)
-        require('required_opaal = ">=1.3.0,<2.0.0"' in (work / "opaal.toml").read_text(),
-                "Random reference must require its first delivering release")
-        # Qualification of an unreleased binary changes only this isolated copy.
-        if tuple(map(int, VERSION.split("."))) < (1, 3, 0):
-            manifest = work / "opaal.toml"
-            manifest.write_text(manifest.read_text().replace(">=1.3.0,<2.0.0", f">={VERSION},<2.0.0"))
+        require('required_opaal = ">=1.9.0,<2.0.0"' in (work / "opaal.toml").read_text(),
+                "Random reference version floor differs")
         lock = "tools-macos.toml" if target == "macos-arm64" else "tools-linux-aarch64.toml" if target == "linux-aarch64" else "tools-linux.toml"
         shutil.copyfile(work / lock, work / "tools.toml")
         environment = {"PATH": os.defpath}

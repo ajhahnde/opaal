@@ -1,8 +1,7 @@
 # Bounded Random fixtures
 
-These fixtures require the bounded Random API in OPAAL 1.3.0 or later.
-The 1.3.0 candidate uses the committed project version requirement without
-adjustment. Released 1.2.0 binaries do not provide this API.
+These migrated action fixtures require OPAAL 1.9.0 or later and below 2.0.0.
+Qualification uses the committed project version requirement unchanged.
 
 `source.opaal` samples a shard in [0,4), a finite 53-bit fraction in [0,1), a
 16-byte identifier and empty Bytes, catches an invalid interval and prints the

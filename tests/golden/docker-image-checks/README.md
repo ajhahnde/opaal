@@ -1,12 +1,11 @@
 # Docker image checks
 
 The action sources use one outer body with a first static effects prologue and
-comma-separated requests. They require the matching toolchain; when upgrading
+comma-separated requests. They require OPAAL 1.9.0 or later; when upgrading
 from detached effects blocks, migrate the source and regenerate and explicitly
-accept plans before executing it. The first supporting release owns the new
-minimum toolchain version.
+accept plans before executing it. Migrated projects require `>=1.9.0,<2.0.0`.
 
-These references require OPAAL 1.5.0 or later. Saved-input checks need no
+These references require OPAAL 1.9.0 or later. Saved-input checks need no
 Docker executable, daemon, account configuration, or network connection.
 `policy.opaal` is the shared pure policy for saved and live data.
 
@@ -23,7 +22,7 @@ assets, creates directories mode0700 and files mode0600, and never overwrites or
 merges an existing destination, including a dangling symlink. Failed setup leaves
 partial files for inspection; use a fresh destination for the next attempt.
 Creation is not crash-atomic. Native paths retain their bytes; filesystems that
-reject those bytes refuse setup. Generated controls require `>=1.5.0,<2.0.0`.
+reject those bytes refuse setup. Generated controls require `>=1.9.0,<2.0.0`.
 Existing project copies keep their original version requirement.
 
 Doctor reads only explicit local controls, source, declared input files and

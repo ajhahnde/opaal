@@ -4,6 +4,8 @@ All notable changes to OPAAL are documented here.
 
 ## [Unreleased]
 
+## [1.9.0]
+
 ### Changed
 
 - Actions now contain their mandatory static effects prologue inside one outer
@@ -13,8 +15,9 @@ All notable changes to OPAAL are documented here.
   This is an intentional source break within 1.x. Only the contained form is
   supported; formatting rejects old syntax without rewriting it. Result types,
   effect requirements and grants retain their meaning. Edited sources require
-  fresh plans and explicit acceptance before execution. Use the first supporting
-  toolchain; example and template minimum versions must be raised at release.
+  fresh plans and explicit acceptance before execution. Use OPAAL 1.9.0 or later;
+  migrated runnable projects and templates require `>=1.9.0,<2.0.0`, so older
+  toolchains refuse them before loading source.
 
 ## [1.8.0]
 

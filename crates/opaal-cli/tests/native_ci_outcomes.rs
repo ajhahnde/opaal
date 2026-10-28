@@ -12,7 +12,7 @@ use support::{ReportDir, success};
 
 fn project(result: &str, body: &str, grant: bool) -> (ReportDir, String) {
     let work = ReportDir::new();
-    work.write("opaal.toml", "schema_version = 1\n[project]\nname = 'native_check'\nroot_module = 'tasks.opaal'\nrequired_opaal = '>=1.3.0,<2.0.0'\n[paths]\nroot = '.'\nevidence = 'output'\n[environments.ci]\nauthority = 'authority.toml'\ntool_lock = 'tools.toml'\n");
+    work.write("opaal.toml", "schema_version = 1\n[project]\nname = 'native_check'\nroot_module = 'tasks.opaal'\nrequired_opaal = '>=1.9.0,<2.0.0'\n[paths]\nroot = '.'\nevidence = 'output'\n[environments.ci]\nauthority = 'authority.toml'\ntool_lock = 'tools.toml'\n");
     work.write("authority.toml", format!("schema_version = 1\nproject = 'native_check'\nenvironment = 'ci'\n{}", if grant {
         ["stdin.read", "stdout.write"].map(|effect| format!("[[rules]]\ndecision = 'grant'\neffect = '{effect}'\nscope = 'evaluation'\nrequired_enforcement = 'enforced'\n")).join("")
     } else { "rules = []\n".to_owned() }));

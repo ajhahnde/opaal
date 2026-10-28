@@ -103,7 +103,7 @@ fn fixed_offline_assets_match_maintained_sources_and_private_modes() {
     assert!(
         fs::read_to_string(request.destination.join("opaal.toml"))
             .unwrap()
-            .contains(">=1.5.0,<2.0.0")
+            .contains(">=1.9.0,<2.0.0")
     );
     let output = Command::new(env!("CARGO_BIN_EXE_opaal"))
         .current_dir(&request.destination)

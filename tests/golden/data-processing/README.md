@@ -39,9 +39,8 @@ The independent Python reference rejects invalid JSON and job data too.
 
 `tasks.opaal`, `opaal.toml` and `authority.toml` describe the filesystem-only
 project route. Copy `tools-linux.toml` or `tools-macos.toml` to `tools.toml` in a
-fresh example directory. The project requires OPAAL 1.2.0. Automated tests of
-an unreleased binary adjust only the copied manifest's version floor to that
-binary's actual version; they do not change the published fixture.
+fresh example directory. The migrated action syntax requires OPAAL 1.9.0 or
+later and below 2.0.0. Qualification uses the committed requirement unchanged.
 
 Project execution binds the source graph and `--input-file` content to an
 accepted plan, records the read/write effects, and writes `report.json`.

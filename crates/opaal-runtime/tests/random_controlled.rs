@@ -88,7 +88,7 @@ schema_version = 1
 [project]
 name = "sample"
 root_module = "tasks.opaal"
-required_opaal = ">=1.2.0,<2.0.0"
+required_opaal = ">=1.9.0,<2.0.0"
 [paths]
 root = "."
 evidence = "result.json"
@@ -488,7 +488,7 @@ schema_version = 1
 [project]
 name = "sample"
 root_module = "tasks.opaal"
-required_opaal = ">=1.2.0,<2.0.0"
+required_opaal = ">=1.9.0,<2.0.0"
 [paths]
 root = "."
 evidence = "result.json"
