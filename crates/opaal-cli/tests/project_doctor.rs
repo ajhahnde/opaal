@@ -125,7 +125,7 @@ fn multiple_controls_version_and_host_findings_are_safe() {
     let manifest = fs::read_to_string(project.0.join("opaal.toml")).unwrap();
     fs::write(
         project.0.join("opaal.toml"),
-        manifest.replace(">=1.5.0,<2.0.0", ">=99.0.0"),
+        manifest.replace(">=1.9.0,<2.0.0", ">=99.0.0"),
     )
     .unwrap();
     fs::write(

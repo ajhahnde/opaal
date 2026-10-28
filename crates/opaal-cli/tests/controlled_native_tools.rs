@@ -621,7 +621,7 @@ impl Project {
 [project]
 name = "native_test"
 root_module = "tasks.opaal"
-required_opaal = ">=1.6.0,<2.0.0"
+required_opaal = ">=1.9.0,<2.0.0"
 [paths]
 root = "."
 evidence = "output"

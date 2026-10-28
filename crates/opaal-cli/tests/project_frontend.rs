@@ -161,7 +161,7 @@ fn fixture() -> (TempProject, PathBuf, PathBuf, PathBuf) {
 [project]
 name = "demo"
 root_module = "tasks.opaal"
-required_opaal = ">=1.0.0-alpha.1,<2.0.0"
+required_opaal = ">=1.9.0,<2.0.0"
 [paths]
 root = "."
 evidence = "evidence.json"
@@ -244,7 +244,7 @@ fn path_fixture() -> (TempProject, PathBuf) {
 [project]
 name = "path_demo"
 root_module = "tasks.opaal"
-required_opaal = ">=1.0.0-alpha.1,<2.0.0"
+required_opaal = ">=1.9.0,<2.0.0"
 [paths]
 root = "."
 evidence = "evidence.json"
@@ -318,7 +318,7 @@ fn many_secret_fixture() -> (TempProject, PathBuf) {
 [project]
 name = "many_secret_demo"
 root_module = "tasks.opaal"
-required_opaal = ">=1.0.0-alpha.1,<2.0.0"
+required_opaal = ">=1.9.0,<2.0.0"
 [paths]
 root = "."
 evidence = "evidence.json"
@@ -1638,7 +1638,7 @@ fn accepted_execution_revalidates_probes_refuses_unused_secret_and_audits() {
 [project]
 name = "execute_demo"
 root_module = "tasks.opaal"
-required_opaal = ">=1.0.0-alpha.1,<2.0.0"
+required_opaal = ">=1.9.0,<2.0.0"
 [paths]
 root = "."
 evidence = "evidence.json"
@@ -1977,7 +1977,7 @@ fn caught_adapter_failure_finishes_successfully_with_partial_evidence() {
 [project]
 name = "caught_failure"
 root_module = "tasks.opaal"
-required_opaal = ">=1.0.0-alpha.1,<2.0.0"
+required_opaal = ">=1.9.0,<2.0.0"
 [paths]
 root = "."
 evidence = "evidence.json"
@@ -2168,7 +2168,7 @@ fn accepted_execution_runs_the_maintained_readiness_modules() {
 [project]
 name = "readiness_demo"
 root_module = "tasks.opaal"
-required_opaal = ">=1.0.0-alpha.1,<2.0.0"
+required_opaal = ">=1.9.0,<2.0.0"
 [paths]
 root = "."
 evidence = "evidence.json"

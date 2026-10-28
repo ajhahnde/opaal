@@ -230,7 +230,7 @@ def references(binary: Path, inputs: Path, directory: Path, target: str) -> list
     environment = {"PATH": str(binary.parent) + os.pathsep + os.defpath}
     success(command([binary, "project", "init", "--example", "image-check", "--destination",
                      template, "--environment", "offline"], directory, environment), "native offline setup")
-    require('required_opaal = ">=1.5.0,<2.0.0"' in (template / "opaal.toml").read_text(),
+    require('required_opaal = ">=1.9.0,<2.0.0"' in (template / "opaal.toml").read_text(),
             "reference version floor differs")
     for path in template.rglob("*"):
         if path.is_file() and path.name not in {"opaal.toml", "offline-tools.toml"}:

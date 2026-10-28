@@ -1,8 +1,7 @@
 # Standard input and output
 
-These offline references require the standard-stream APIs in OPAAL 1.3.0 or
-later. The 1.3.0 candidate uses the committed project version requirements
-without adjustment. Released 1.2.0 binaries do not implement these calls.
+These migrated offline references require OPAAL 1.9.0 or later and below 2.0.0.
+Qualification uses the committed project version requirements unchanged.
 
 Extract the matching Linux x86_64 or macOS arm64 program archive and the
 `standard-input-output` fixture archive into a fresh directory. Follow the

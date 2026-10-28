@@ -222,8 +222,8 @@ This records program, fixture and working-source digests without claiming
 committed archive qualification. On a clean committed checkout, both host CI
 jobs package the separate fixture bundle with `ci/package_source_formatting.py`
 and replay it with the exact binary archive, retaining reports in `dist/`.
-The fixture project requires OPAAL 1.2 or later. Release qualification uses
-its committed version requirement without development adaptation.
+The migrated fixture project requires OPAAL 1.9 or later and below 2.0. Release
+qualification uses its committed version requirement without development adaptation.
 
 ## Benchmarks
 
@@ -292,7 +292,7 @@ the qualifier. It checks real source domains, retained interactive cells and
 help, pure/domain refusal, controlled progress and metadata-only inspection,
 and stale-source refusal outside the checkout. No version or publication is
 performed. The [Random fixture guide](tests/golden/random-values/README.md)
-explains the first-release floor and the independent Python reference.
+explains the current syntax floor and the independent Python reference.
 
 A manual CI run on the candidate branch also runs `random-native-linux`.
 It exercises the native host and CLI tests, real worker and maintained-probe
@@ -570,7 +570,7 @@ substitute for complete native fault, package, host or candidate qualification.
 uses the compiled reference assets and host lock without installation/cwd lookup.
 Live Linux setup additionally requires explicit `--docker`, `--socket` and
 `--qualified-version 29.9.0`; these are independently qualified caller facts.
-Generated projects require OPAAL1.5 or later in the existing compatibility field.
+Generated projects require OPAAL1.9 or later and below2.0 in the existing compatibility field.
 Existing controls are neither rewritten nor upgraded. The old setup script is
 retained only in `tests/fixtures/image-check-legacy/` for comparison.
 
@@ -579,8 +579,8 @@ prepares the fixed saved policy without tools on all qualified hosts. Its
 Linux x86_64 and AArch64 `ci` forms require exactly one absolute `--tool` ELF executable;
 Docker flags and `--qualified-version` refuse. It hashes and structurally
 inspects the original executable without launching it or creating a snapshot.
-Generated repository controls require >=1.6.0,<2.0.0 and declare only LC_ALL=C
-with `inherit=[]`. Existing image-check controls retain their1.5 minimum.
+Generated repository controls require >=1.9.0,<2.0.0 and declare only LC_ALL=C
+with `inherit=[]`. Generated image-check controls require OPAAL1.9 or later and below2.0.
 
 Setup validates controls/facts before creating an absent directory, then uses
 descriptor-relative exclusive no-follow writes and syncs. Its fixed inventory

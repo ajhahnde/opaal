@@ -215,7 +215,7 @@ fn native_frozen_passive_lsp_case() {
 [project]
 name = "native_test"
 root_module = "tasks.opaal"
-required_opaal = ">=1.6.0,<2.0.0"
+required_opaal = ">=1.9.0,<2.0.0"
 [paths]
 root = "."
 evidence = "output"
@@ -492,7 +492,7 @@ fn explicit_project_selection_uses_saved_modules_and_editor_overlays() {
             "[project]\n",
             "name = \"editor_demo\"\n",
             "root_module = \"tasks.opaal\"\n",
-            "required_opaal = \">=1.0.0-alpha.1,<2.0.0\"\n",
+            "required_opaal = \">=1.9.0,<2.0.0\"\n",
             "[paths]\n",
             "root = \"project\"\n",
             "evidence = \"evidence.json\"\n",
@@ -616,7 +616,7 @@ fn project_references_survive_an_unrelated_root_error() {
             "[project]\n",
             "name = \"editor_demo\"\n",
             "root_module = \"a.opaal\"\n",
-            "required_opaal = \">=1.0.0-alpha.1,<2.0.0\"\n",
+            "required_opaal = \">=1.9.0,<2.0.0\"\n",
             "[paths]\n",
             "root = \"project\"\n",
             "evidence = \"evidence.json\"\n",
@@ -677,7 +677,7 @@ fn root_uri_never_selects_a_project_and_outside_documents_stay_standalone() {
             "[project]\n",
             "name = \"editor_demo\"\n",
             "root_module = \"tasks.opaal\"\n",
-            "required_opaal = \">=1.0.0-alpha.1,<2.0.0\"\n",
+            "required_opaal = \">=1.9.0,<2.0.0\"\n",
             "[paths]\n",
             "root = \"project\"\n",
             "evidence = \"evidence.json\"\n",
@@ -849,7 +849,7 @@ fn project_source_symlinks_cannot_become_editor_overlays() {
             "[project]\n",
             "name = \"editor_demo\"\n",
             "root_module = \"tasks.opaal\"\n",
-            "required_opaal = \">=1.0.0-alpha.1,<2.0.0\"\n",
+            "required_opaal = \">=1.9.0,<2.0.0\"\n",
             "[paths]\n",
             "root = \"project\"\n",
             "evidence = \"evidence.json\"\n",

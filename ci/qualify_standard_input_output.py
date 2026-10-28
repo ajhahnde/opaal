@@ -37,9 +37,7 @@ def references(binary: Path, inputs: Path, directory: Path, target: str) -> list
     environment = {"PATH": str(binary.parent) + os.pathsep + os.defpath}
     for sample in [work, work / "ci-job-check"]:
         manifest = sample / "opaal.toml"
-        require('required_opaal = ">=1.3.0,<2.0.0"' in manifest.read_text(), "reference version floor differs")
-        if tuple(map(int, VERSION.split("."))) < (1, 3, 0):
-            manifest.write_text(manifest.read_text().replace(">=1.3.0,<2.0.0", f">={VERSION},<2.0.0"))
+        require('required_opaal = ">=1.9.0,<2.0.0"' in manifest.read_text(), "reference version floor differs")
         lock = "tools-macos.toml" if target == "macos-arm64" else "tools-linux-aarch64.toml" if target == "linux-aarch64" else "tools-linux.toml"
         shutil.copyfile(sample / lock, sample / "tools.toml")
     def run(sample, *arguments, stdin=None):

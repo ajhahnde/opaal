@@ -245,11 +245,8 @@ def qualify(archive: Path, examples: Path, version: str, source: str, platform: 
                 f"opaal {version}\n".encode(), "binary version differs")
         language_server(installed / "opaal-language-server", root, environment)
         original_manifest = (work / "opaal.toml").read_bytes()
-        floor = b'>=1.2.0,<2.0.0'
+        floor = b'>=1.9.0,<2.0.0'
         require(original_manifest.count(floor) == 1, "unexpected example version requirement")
-        adapted = original_manifest if tuple(map(int, version.split("."))) >= (1, 2, 0) else original_manifest.replace(
-            floor, f">={version},<2.0.0".encode())
-        (work / "opaal.toml").write_bytes(adapted)
         tool = ("tools-macos.toml" if platform == "macos-arm64" else
                 "tools-linux-aarch64.toml" if platform == "linux-aarch64" else "tools-linux.toml")
         shutil.copyfile(work / tool, work / "tools.toml")

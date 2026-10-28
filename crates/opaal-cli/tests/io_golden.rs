@@ -33,7 +33,7 @@ fn packaged_processor_and_ci_job_check_references_use_public_entry_points() {
 }
 
 fn controlled(work: &ReportDir, body: &str) -> String {
-    work.write("opaal.toml", "schema_version = 1\n[project]\nname = 'stream_processor'\nroot_module = 'tasks.opaal'\nrequired_opaal = '>=1.2.0,<2.0.0'\n[paths]\nroot = '.'\nevidence = 'output'\n[environments.ci]\nauthority = 'authority.toml'\ntool_lock = 'tools.toml'\n");
+    work.write("opaal.toml", "schema_version = 1\n[project]\nname = 'stream_processor'\nroot_module = 'tasks.opaal'\nrequired_opaal = '>=1.9.0,<2.0.0'\n[paths]\nroot = '.'\nevidence = 'output'\n[environments.ci]\nauthority = 'authority.toml'\ntool_lock = 'tools.toml'\n");
     work.write("authority.toml", format!("schema_version = 1\nproject = 'stream_processor'\nenvironment = 'ci'\n{}", ["entropy.system", "stdin.read", "stdout.write", "stderr.write"].map(|effect| format!("[[rules]]\ndecision = 'grant'\neffect = '{effect}'\nscope = 'evaluation'\nrequired_enforcement = 'enforced'\n")).join("")));
     let platform = support::host_platform_triple();
     work.write("tools.toml", format!("schema_version = 1\nproject = 'stream_processor'\nenvironment = 'ci'\nplatform = '{platform}'\ntools = []\n[child_environment]\ninherit = []\n"));

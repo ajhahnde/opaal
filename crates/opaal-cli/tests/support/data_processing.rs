@@ -79,14 +79,7 @@ impl ReportDir {
         ] {
             result.write(name, fixture(name));
         }
-        let manifest = String::from_utf8(fixture("opaal.toml")).unwrap();
-        result.write(
-            "opaal.toml",
-            manifest.replace(
-                ">=1.2.0,<2.0.0",
-                &format!(">={},<2.0.0", env!("CARGO_PKG_VERSION")),
-            ),
-        );
+        result.write("opaal.toml", fixture("opaal.toml"));
         let lock = if cfg!(target_os = "macos") {
             "tools-macos.toml".to_owned()
         } else {
