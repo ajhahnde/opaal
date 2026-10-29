@@ -2,6 +2,7 @@
 complete	complete/domain-types.opaal	-
 complete	complete/closure-result.opaal	-
 complete	complete/list-and-record-patterns.opaal	-
+complete	complete/heterogeneous-list-patterns.opaal	-
 complete	complete/generic-inference.opaal	-
 complete	complete/cross-module-main.opaal	-
 complete	complete/reexport-main.opaal	-
@@ -33,6 +34,8 @@ invalid	invalid/ambiguous-variant.opaal	SIG010
 invalid	invalid/declaration-annotation-mismatch.opaal	SIG019
 invalid	invalid/destructured-alias-conflict.opaal	MOD011
 runtime-invalid	invalid/destructuring-mismatch.opaal	value does not match the pattern
+runtime-invalid	invalid/destructured-homogeneous-assignment.opaal	binding expects Int, found string
+runtime-invalid	invalid/destructured-homogeneous-rest-assignment.opaal	binding expects List[Int], found list
 runtime-invalid	invalid/generic-result-boundary.opaal	function result expects Int, found string
 runtime-invalid	invalid/cross-module-pattern-identity.opaal	value does not match the pattern
 runtime-invalid	invalid/dynamic-record-constraint.opaal	does not satisfy `Equal`

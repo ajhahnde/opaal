@@ -2977,7 +2977,10 @@ impl Evaluator<'_, '_> {
         }
         if !matches!(declaration.pattern, Pattern::Binding(_)) {
             let checkpoint = scope.clone();
-            let pattern_type = value_type.clone().or_else(|| runtime_value_type(&value));
+            let pattern_type = match value_type.as_ref() {
+                Some(value_type) => Some(value_type.clone()),
+                None => self.complete_value_type(&value, declaration.value.span())?,
+            };
             if !self.pattern_matches(
                 &declaration.pattern,
                 &value,
@@ -3228,7 +3231,7 @@ impl Evaluator<'_, '_> {
         subject: &Value,
         scope: &mut ScopeStack,
     ) -> Eval<Option<Flow>> {
-        let subject_type = runtime_value_type(subject);
+        let subject_type = self.complete_value_type(subject, arm.span)?;
         if !self.pattern_matches(
             &arm.pattern,
             subject,

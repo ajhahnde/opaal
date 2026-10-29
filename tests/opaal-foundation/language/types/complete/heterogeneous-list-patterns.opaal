@@ -1,0 +1,28 @@
+def pair() -> List[Any]
+{
+    return [1, "Text"]
+}
+
+let [number, text] = pair()
+if number != 1 || text != "Text" { throw "inferred bindings changed" }
+
+let [annotated_number, annotated_text]: List[Any] = pair()
+if annotated_number != 1 || annotated_text != "Text" { throw "annotated bindings changed" }
+
+mut [changed_number, changed_text] = pair()
+changed_number = "Changed"
+changed_text = 2
+if changed_number != "Changed" || changed_text != 2 { throw "Any bindings were narrowed" }
+
+let [head, ...tail] = pair()
+let [tail_text] = tail
+if head != 1 || tail_text != "Text" { throw "rest bindings changed" }
+
+let [[nested_number, nested_text]] = [pair()]
+if nested_number != 1 || nested_text != "Text" { throw "nested bindings changed" }
+
+match pair() {
+    [matched_number, matched_text] => {
+        if matched_number != 1 || matched_text != "Text" { throw "match bindings changed" }
+    }
+}

@@ -1679,6 +1679,12 @@
       "assertion": "tests/opaal-foundation/language/types/manifest.tsv"
     },
     {
+      "path": "tests/opaal-foundation/language/types/complete/heterogeneous-list-patterns.opaal",
+      "role": "positive",
+      "reason": "complete corpus role; owning manifest expectation: -",
+      "assertion": "tests/opaal-foundation/language/types/manifest.tsv"
+    },
+    {
       "path": "tests/opaal-foundation/language/types/complete/list-and-record-patterns.opaal",
       "role": "positive",
       "reason": "complete corpus role; owning manifest expectation: -",
@@ -1769,6 +1775,20 @@
       "reason": "invalid corpus role; owning manifest expectation: MOD011",
       "assertion": "tests/opaal-foundation/language/types/manifest.tsv",
       "sha256": "678d49b55655aae90e24aedb0a773192b0d93d0fb3e478f04e3dc111f64c53d8"
+    },
+    {
+      "path": "tests/opaal-foundation/language/types/invalid/destructured-homogeneous-assignment.opaal",
+      "role": "runtime-negative",
+      "reason": "runtime-invalid corpus role; owning manifest expectation: binding expects Int, found string",
+      "assertion": "tests/opaal-foundation/language/types/manifest.tsv",
+      "sha256": "fd39cbb78219249d6858a80ad641fa54c115675684724c6b4b6fb1546e1ccd53"
+    },
+    {
+      "path": "tests/opaal-foundation/language/types/invalid/destructured-homogeneous-rest-assignment.opaal",
+      "role": "runtime-negative",
+      "reason": "runtime-invalid corpus role; owning manifest expectation: binding expects List[Int], found list",
+      "assertion": "tests/opaal-foundation/language/types/manifest.tsv",
+      "sha256": "bed8f293b893c904724e4b3cdc9e118aa6ce81976bdd6c9c2f6ae0e0736890a4"
     },
     {
       "path": "tests/opaal-foundation/language/types/invalid/destructuring-mismatch.opaal",
@@ -4207,7 +4227,7 @@
     },
     {
       "path": "crates/opaal-runtime/src/eval.rs",
-      "sha256": "f24514bfcf28875b905e248a12a917cb0bbd7a3c9e02aee82fcbfedf78e14595",
+      "sha256": "a8910e5e2a2b130a07078156b71373e97db09ebe0fc5d928c311d197ec88357e",
       "source_markers": 17,
       "constructors_or_assertions": [
         "ambient_process_policy_propagates_into_lazy_transform_closures",
@@ -9095,6 +9115,17 @@
       "sha256": "7f478c90c6d5fd024eef73ceb057d28df6dc3570f05905d986ca57c5a7b31385"
     },
     {
+      "path": "tests/opaal-foundation/language/types/complete/heterogeneous-list-patterns.opaal",
+      "targets": [
+        "lexer",
+        "parser",
+        "expander",
+        "resources",
+        "secret_sinks"
+      ],
+      "sha256": "ff4996d1269d32c29e0d19a88af799de762ae5a86bf662556eff0e46af50d005"
+    },
+    {
       "path": "tests/opaal-foundation/language/types/complete/list-and-record-patterns.opaal",
       "targets": [
         "lexer",
@@ -9247,6 +9278,28 @@
         "secret_sinks"
       ],
       "sha256": "678d49b55655aae90e24aedb0a773192b0d93d0fb3e478f04e3dc111f64c53d8"
+    },
+    {
+      "path": "tests/opaal-foundation/language/types/invalid/destructured-homogeneous-assignment.opaal",
+      "targets": [
+        "lexer",
+        "parser",
+        "expander",
+        "resources",
+        "secret_sinks"
+      ],
+      "sha256": "fd39cbb78219249d6858a80ad641fa54c115675684724c6b4b6fb1546e1ccd53"
+    },
+    {
+      "path": "tests/opaal-foundation/language/types/invalid/destructured-homogeneous-rest-assignment.opaal",
+      "targets": [
+        "lexer",
+        "parser",
+        "expander",
+        "resources",
+        "secret_sinks"
+      ],
+      "sha256": "bed8f293b893c904724e4b3cdc9e118aa6ce81976bdd6c9c2f6ae0e0736890a4"
     },
     {
       "path": "tests/opaal-foundation/language/types/invalid/destructuring-mismatch.opaal",

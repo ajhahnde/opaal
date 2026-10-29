@@ -1,0 +1,7 @@
+def dynamic(value)
+{
+    return value
+}
+
+mut [number, ...rest] = [1, 2]
+rest = dynamic(["wrong"])

@@ -4,6 +4,12 @@ All notable changes to OPAAL are documented here.
 
 ## [Unreleased]
 
+### Fixed
+
+- Destructuring heterogeneous lists no longer narrows every binding to the
+  first element's type. Declaration and match patterns inspect the complete
+  value under the existing evaluation budget and cancellation checks.
+
 ### Added
 
 - The four standard print helpers accept one `Any` argument and display ordinary
