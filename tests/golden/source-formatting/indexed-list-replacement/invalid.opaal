@@ -1,0 +1,2 @@
+mut items = [[1]]
+items[0][0] = 2

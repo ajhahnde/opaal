@@ -1,0 +1,2 @@
+mut items: List[Int] = [1]
+items["private-index"] = 2

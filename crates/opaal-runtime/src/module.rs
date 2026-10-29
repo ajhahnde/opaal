@@ -2854,6 +2854,7 @@ fn validate_callable_definitions(
             | StatementKind::NominalType(_)
             | StatementKind::VariantType(_)
             | StatementKind::Declaration(_)
+            | StatementKind::IndexedAssignment(_)
             | StatementKind::Assignment(_)
             | StatementKind::Environment(_)
             | StatementKind::Task(_)
@@ -3053,6 +3054,10 @@ impl<'a> CallableReadCollector<'a> {
             | StatementKind::Action(_)
             | StatementKind::Task(_) => {}
             StatementKind::Declaration(declaration) => self.expression(&declaration.value),
+            StatementKind::IndexedAssignment(assignment) => {
+                self.expression(&assignment.index);
+                self.expression(&assignment.value);
+            }
             StatementKind::Assignment(assignment) => self.expression(&assignment.value),
             StatementKind::Environment(environment) => {
                 if let opaal_syntax::EnvironmentStatement::Export { value, .. } = environment {
@@ -5380,6 +5385,10 @@ impl<'a> TypeCollector<'a> {
                 }
                 self.expression(&declaration.value)
             }
+            StatementKind::IndexedAssignment(assignment) => {
+                self.expression(&assignment.index)?;
+                self.expression(&assignment.value)
+            }
             StatementKind::Assignment(assignment) => self.expression(&assignment.value),
             StatementKind::Environment(environment) => match environment {
                 opaal_syntax::EnvironmentStatement::Export { value, .. } => self.expression(value),
@@ -6259,6 +6268,7 @@ impl<'a> SignatureValidator<'a> {
             | StatementKind::NominalType(_)
             | StatementKind::VariantType(_)
             | StatementKind::Declaration(_)
+            | StatementKind::IndexedAssignment(_)
             | StatementKind::Assignment(_)
             | StatementKind::Environment(_)
             | StatementKind::Function(_)
@@ -6376,6 +6386,7 @@ impl<'a> SignatureValidator<'a> {
                 }
                 Ok(())
             }
+            StatementKind::IndexedAssignment(assignment) => self.indexed_assignment(assignment),
             StatementKind::Assignment(assignment) => self.assignment(assignment),
             StatementKind::Environment(environment) => match environment {
                 opaal_syntax::EnvironmentStatement::Export { value, .. } => {
@@ -6466,6 +6477,74 @@ impl<'a> SignatureValidator<'a> {
             Some(ElseBranch::If(nested)) => self.if_statement(nested.kind()),
             None => Ok(()),
         }
+    }
+
+    fn indexed_assignment(
+        &self,
+        assignment: &opaal_syntax::IndexedAssignment,
+    ) -> Result<(), Box<ModuleTypeError>> {
+        let reference = self
+            .names
+            .reference(self.entry.module(), assignment.target.span)
+            .expect("clean name analysis resolves every assignment target");
+        let (target_module, declaration_span) = match reference.target() {
+            ModuleReferenceTarget::Local {
+                module,
+                declaration_span,
+            } => (module, *declaration_span),
+            ModuleReferenceTarget::Imported {
+                target_module,
+                declaration_span,
+                ..
+            } => (target_module, *declaration_span),
+            ModuleReferenceTarget::DynamicStatus | ModuleReferenceTarget::ScriptArguments => {
+                return Ok(());
+            }
+        };
+        let root = self.types.binding_type(target_module, declaration_span);
+        let expected = match root {
+            Some(ValueType::List(element)) => Some(element.as_ref()),
+            Some(ValueType::Any) | None => None,
+            Some(actual) => {
+                self.errors
+                    .borrow_mut()
+                    .push(ModuleTypeError::IndexedAssignmentTargetMismatch {
+                        module: self.entry.module().clone(),
+                        span: assignment.target.span,
+                        actual: actual.clone(),
+                        declaration_span,
+                    });
+                None
+            }
+        };
+        if let Some(actual) = self.expression(&assignment.index)?
+            && !matches!(actual, ValueType::Int | ValueType::Any)
+        {
+            self.errors
+                .borrow_mut()
+                .push(ModuleTypeError::IndexedAssignmentIndexMismatch {
+                    module: self.entry.module().clone(),
+                    span: assignment.index.span(),
+                    actual,
+                });
+        }
+        let actual = self.expression_with_expected(&assignment.value, expected)?;
+        if let (Some(expected), Some(actual)) = (expected, actual)
+            && actual != ValueType::Any
+            && !expected.accepts_type(&actual)
+        {
+            self.errors
+                .borrow_mut()
+                .push(ModuleTypeError::AssignmentMismatch {
+                    module: self.entry.module().clone(),
+                    name: reference.name().to_owned(),
+                    assignment_span: assignment.value.span(),
+                    expected: expected.clone(),
+                    actual,
+                    declaration_span,
+                });
+        }
+        Ok(())
     }
 
     fn assignment(
@@ -8951,6 +9030,11 @@ impl<'a> ReferenceResolver<'a> {
                     declaration.mutable,
                 )
             }
+            StatementKind::IndexedAssignment(assignment) => {
+                self.assignment_target(assignment.target.name.span(), assignment.target.span)?;
+                self.expression(&assignment.index)?;
+                self.expression(&assignment.value)
+            }
             StatementKind::Assignment(assignment) => {
                 self.assignment_target(assignment.target.name.span(), assignment.target.span)?;
                 self.expression(&assignment.value)
@@ -9884,6 +9968,10 @@ impl<'a> StaticEffectAnalyzer<'a> {
             | StatementKind::Action(_)
             | StatementKind::Task(_) => {}
             StatementKind::Declaration(declaration) => self.expression(&declaration.value),
+            StatementKind::IndexedAssignment(assignment) => {
+                self.expression(&assignment.index);
+                self.expression(&assignment.value);
+            }
             StatementKind::Assignment(assignment) => self.expression(&assignment.value),
             StatementKind::Environment(environment) => {
                 self.summary
@@ -10528,6 +10616,10 @@ impl<'a> StaticPipelineAnalyzer<'a> {
             | StatementKind::NominalType(_)
             | StatementKind::VariantType(_) => {}
             StatementKind::Declaration(declaration) => self.expression(&declaration.value),
+            StatementKind::IndexedAssignment(assignment) => {
+                self.expression(&assignment.index);
+                self.expression(&assignment.value);
+            }
             StatementKind::Assignment(assignment) => self.expression(&assignment.value),
             StatementKind::Environment(environment) => {
                 if let opaal_syntax::EnvironmentStatement::Export { value, .. } = environment {
@@ -12589,6 +12681,10 @@ impl SyntaxMetrics {
                 }
                 self.expression(&declaration.value);
             }
+            StatementKind::IndexedAssignment(assignment) => {
+                self.expression(&assignment.index);
+                self.expression(&assignment.value);
+            }
             StatementKind::Assignment(assignment) => {
                 self.expression(&assignment.value);
             }
@@ -13351,6 +13447,17 @@ pub enum ModuleTypeError {
         span: Span,
         actual: ValueType,
     },
+    IndexedAssignmentTargetMismatch {
+        module: ModuleId,
+        span: Span,
+        actual: ValueType,
+        declaration_span: Span,
+    },
+    IndexedAssignmentIndexMismatch {
+        module: ModuleId,
+        span: Span,
+        actual: ValueType,
+    },
     AssignmentMismatch {
         module: ModuleId,
         name: String,
@@ -13441,6 +13548,8 @@ impl ModuleTypeError {
             | Self::SpreadValueMismatch { module, .. }
             | Self::SpreadElementMismatch { module, .. }
             | Self::ThrowMismatch { module, .. }
+            | Self::IndexedAssignmentTargetMismatch { module, .. }
+            | Self::IndexedAssignmentIndexMismatch { module, .. }
             | Self::AssignmentMismatch { module, .. }
             | Self::BindingMismatch { module, .. }
             | Self::GenericArity { module, .. }
@@ -13478,6 +13587,8 @@ impl ModuleTypeError {
             | Self::SpreadValueMismatch { span, .. }
             | Self::SpreadElementMismatch { span, .. }
             | Self::ThrowMismatch { span, .. } => *span,
+            Self::IndexedAssignmentTargetMismatch { span, .. }
+            | Self::IndexedAssignmentIndexMismatch { span, .. } => *span,
             Self::AssignmentMismatch {
                 assignment_span, ..
             } => *assignment_span,
@@ -13666,6 +13777,18 @@ impl ModuleTypeError {
                     *span,
                     format!("this value is `{actual}`; throw requires `String` or `Error`"),
                 )
+            }
+            Self::IndexedAssignmentTargetMismatch {
+                span,
+                actual,
+                declaration_span,
+                ..
+            } => Diagnostic::new(Severity::Error, "SIG023", self.to_string())
+                .with_primary(*span, format!("this target is `{actual}`, expected a List"))
+                .with_secondary(*declaration_span, "binding type declared here"),
+            Self::IndexedAssignmentIndexMismatch { span, actual, .. } => {
+                Diagnostic::new(Severity::Error, "SIG024", self.to_string())
+                    .with_primary(*span, format!("this index is `{actual}`, expected Int"))
             }
             Self::AssignmentMismatch {
                 assignment_span,
@@ -13953,6 +14076,16 @@ impl fmt::Display for ModuleTypeError {
             Self::ThrowMismatch { module, actual, .. } => write!(
                 formatter,
                 "module `{}` throws `{actual}`; expected `String` or `Error`",
+                module.path().display()
+            ),
+            Self::IndexedAssignmentTargetMismatch { module, actual, .. } => write!(
+                formatter,
+                "module `{}` uses indexed assignment on `{actual}`; expected a List target",
+                module.path().display()
+            ),
+            Self::IndexedAssignmentIndexMismatch { module, actual, .. } => write!(
+                formatter,
+                "module `{}` uses index `{actual}`; indexed assignment requires Int",
                 module.path().display()
             ),
             Self::AssignmentMismatch {

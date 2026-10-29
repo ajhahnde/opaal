@@ -1,0 +1,5 @@
+mut items = [1]
+def change()
+{
+    items[0] = 2
+}

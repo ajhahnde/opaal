@@ -1,0 +1,17 @@
+def replaced[T](input: List[T], position: Int, replacement: T) -> List[T]
+{
+    mut output: List[T] = input
+    output[position] = replacement
+    return output
+}
+export {test_value}
+def test_value() -> Bool
+{
+    mut mixed: List[Any] = [1, "two"]
+    mixed[0] = false
+    let result: List[Int] = replaced[Int]([1, 2], 1, 8)
+    if result[1] == 8 && mixed == [false, "two"] {
+        return true
+    }
+    return false
+}

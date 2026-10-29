@@ -1,0 +1,19 @@
+import std::io
+export {test_index, test_rhs}
+def effect() -> Int
+{
+    io::println("private-sentinel")
+    return 0
+}
+def test_index() -> Bool
+{
+    mut items = [1]
+    items[effect()] = 2
+    return true
+}
+def test_rhs() -> Bool
+{
+    mut items = [1]
+    items[0] = effect()
+    return true
+}

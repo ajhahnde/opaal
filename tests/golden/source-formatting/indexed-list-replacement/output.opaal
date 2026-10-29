@@ -1,0 +1,4 @@
+import std::io::{println}
+mut items: List[String] = ["pending"]
+items[0] = "ok"
+println(items[0])

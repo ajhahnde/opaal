@@ -21,13 +21,13 @@ if __package__:
     from .check_source_formatting import public_paths, seed_census
     from .package_data_processing import SOURCE, digest
     from .package_release import PLATFORMS, ROOT, VERSION
-    from .package_source_formatting import FIXTURES, MEMBER_IMPORT_FIXTURES, COMPOUND_ASSIGNMENT_FIXTURES, LIST_LITERAL_SPREAD_FIXTURES, RECORD_SHORTHAND_FIXTURES, GROUPED_EXPORT_FIXTURES, ACTION_DECLARATION_FIXTURES
+    from .package_source_formatting import FIXTURES, MEMBER_IMPORT_FIXTURES, COMPOUND_ASSIGNMENT_FIXTURES, LIST_LITERAL_SPREAD_FIXTURES, RECORD_SHORTHAND_FIXTURES, GROUPED_EXPORT_FIXTURES, ACTION_DECLARATION_FIXTURES, INDEXED_REPLACEMENT_FIXTURES
     from .qualify_data_processing import require, success, unpack
 else:
     from check_source_formatting import public_paths, seed_census
     from package_data_processing import SOURCE, digest
     from package_release import PLATFORMS, ROOT, VERSION
-    from package_source_formatting import FIXTURES, MEMBER_IMPORT_FIXTURES, COMPOUND_ASSIGNMENT_FIXTURES, LIST_LITERAL_SPREAD_FIXTURES, RECORD_SHORTHAND_FIXTURES, GROUPED_EXPORT_FIXTURES, ACTION_DECLARATION_FIXTURES
+    from package_source_formatting import FIXTURES, MEMBER_IMPORT_FIXTURES, COMPOUND_ASSIGNMENT_FIXTURES, LIST_LITERAL_SPREAD_FIXTURES, RECORD_SHORTHAND_FIXTURES, GROUPED_EXPORT_FIXTURES, ACTION_DECLARATION_FIXTURES, INDEXED_REPLACEMENT_FIXTURES
     from qualify_data_processing import require, success, unpack
 
 PAIRS = (("legacy.opaal", "canonical.opaal"), ("legacy-effects.opaal", "effects.opaal"),
@@ -59,7 +59,7 @@ def normalized_artifact(value: dict) -> dict:
 
 
 def project_workflow(run, work: Path, fixtures: Path, target: str, *, member_imports: bool = False,
-                     compound_assignments: bool = False, list_spreads: bool = False, record_shorthands: bool = False, grouped_exports: bool = False) -> dict:
+                     compound_assignments: bool = False, list_spreads: bool = False, record_shorthands: bool = False, grouped_exports: bool = False, indexed_replacements: bool = False) -> dict:
     shutil.copytree(fixtures / "project", work)
     lock = "tools-macos.toml" if target == "macos-arm64" else "tools-linux-aarch64.toml" if target == "linux-aarch64" else "tools-linux.toml"
     shutil.copyfile(work / lock, work / "tools.toml")
@@ -108,8 +108,8 @@ def project_workflow(run, work: Path, fixtures: Path, target: str, *, member_imp
         result = json.loads((work / f"{label}.audit.json").read_bytes())
         require(result["completeness"] == "complete" and result["cleanup"] == [] and
                 result["primary"]["class"] == "success" and result["primary"]["partial"] is False and
-                result["primary"]["value_digest"] == "sha256:" + digest(b"5"),
-                "project did not return Int 5 successfully")
+                result["primary"]["value_digest"] == "sha256:" + digest(b"8" if indexed_replacements else b"5"),
+                "project result digest differs")
         require(result["plan_digest"] == result["accepted_plan_digest"] == value["digest"],
                 "audit does not bind the accepted receipt")
         require([event["kind"] for event in result["events"]] ==
@@ -147,10 +147,11 @@ def project_workflow(run, work: Path, fixtures: Path, target: str, *, member_imp
             result = run("test", "policy-tests.opaal" if passed else "policy-negative.opaal", "--case", case, "--format", "json")
             value = json.loads(result.stdout)
             require(result.returncode == code and value["counts"]["selected"] == 1 and value["counts"]["passed"] == passed and value["counts"]["failed"] == failed and value["completeness"] == "complete", "member project named test differs")
-    elif compound_assignments or list_spreads or record_shorthands:
-        feature = "record-shorthand" if record_shorthands else "list-literal-spread" if list_spreads else "compound-assignment"
+    elif compound_assignments or list_spreads or record_shorthands or indexed_replacements:
+        feature = "indexed-list-replacement" if indexed_replacements else "record-shorthand" if record_shorthands else "list-literal-spread" if list_spreads else "compound-assignment"
         canonical = (fixtures / feature / "project-tasks.opaal").read_bytes()
-        source.write_bytes(canonical.replace(b"def result() -> Int\n{", b"def result() -> Int {", 1) if record_shorthands else
+        source.write_bytes(canonical.replace(b"items[1] = 8", b"items [1]=8", 1) if indexed_replacements else
+                           canonical.replace(b"def result() -> Int\n{", b"def result() -> Int {", 1) if record_shorthands else
                            canonical.replace(b"...defaults", b"... defaults", 1) if list_spreads else
                            canonical.replace(b"total += 5", b"total+=5", 1))
         for name in ("policy-tests.opaal", "policy-negative.opaal"):
@@ -219,7 +220,7 @@ def project_workflow(run, work: Path, fixtures: Path, target: str, *, member_imp
         source.write_bytes(canonical)
 
     # Declaring an effect is sufficient to require authority even when its body is pure.
-    if compound_assignments or list_spreads or record_shorthands or grouped_exports:
+    if compound_assignments or list_spreads or record_shorthands or grouped_exports or indexed_replacements:
         empty = b"    effects {\n    }"
         require(canonical.count(empty) == 1, "expected one empty action prologue")
         source.write_bytes(canonical.replace(b"readiness", b"annotated").replace(b"read*", b"annotated*").replace(
@@ -252,7 +253,7 @@ def project_workflow(run, work: Path, fixtures: Path, target: str, *, member_imp
             "task_value_digest": legacy_audit["primary"]["value_digest"],
             "assertions": ["same task signature/effects with verified source-derived contract regeneration",
                            "same check/plan fields except source-derived digests/sizes and receipt times",
-                           "Int 5 and identical primary/action audit payloads", "empty tools/secrets/effects",
+                           f"Int {8 if indexed_replacements else 5} and identical primary/action audit payloads", "empty tools/secrets/effects",
                            "stale receipt refuses without journal", "fresh receipt succeeds",
                            "clock.wall declaration and refusal preserved", "TOML bytes preserved"]}
 
@@ -417,6 +418,66 @@ def compound_assignment(run, work: Path, fixtures: Path, target: str) -> dict:
             "assertions": ["five operators; before/after Int 2; negative division/remainder; failed store",
                            "once-only RHS and pure authority refusal", "type/immutable/captured diagnostics",
                            "canonical comments; raw continuation and retained value"]}
+
+
+def indexed_list_replacement(run, work: Path, fixtures: Path, target: str) -> dict:
+    original = fixtures / "indexed-list-replacement"
+    destination = work / "indexed-list-replacement"
+    require({path.name for path in original.iterdir()} == set(INDEXED_REPLACEMENT_FIXTURES),
+            "indexed replacement fixture census differs")
+    shutil.copytree(original, destination)
+
+    def invoke(*arguments, **options):
+        return run(*arguments, cwd=destination, **options)
+
+    cases = {}
+    for name in ("before.opaal", "after.opaal", "alternate.opaal", "failure.opaal", "policy-tests.opaal"):
+        success(invoke("check", name), "indexed source check")
+        success(invoke("format", "--check", name), "indexed canonical bytes")
+        value = json.loads(success(invoke("test", name, "--case", "test_value", "--format", "json"),
+                                   "indexed pure test"))
+        require(value["counts"]["selected"] == value["counts"]["passed"] == 1 and
+                value["counts"]["failed"] == value["counts"]["error"] == value["counts"]["unrun"] == 0 and
+                value["completeness"] == "complete", "indexed pure result differs")
+        require(success(invoke(name), "indexed script") == b"", "indexed statement printed implicitly")
+        cases[name] = value["counts"]
+    require(success(invoke("output.opaal"), "indexed public output") == b"ok\n", "indexed output differs")
+    require(success(invoke("io-allowed.opaal"), "indexed once-only index/RHS") == b"index\nrhs\n1\n",
+            "indexed evaluation order/count differs")
+    require(success(invoke("io-failure.opaal", stdin=b"123"), "indexed bounds before RHS") == b"123\n",
+            "indexed bounds evaluated RHS")
+    success(invoke("check", "io-pure.opaal"), "indexed static non-execution")
+    denied = invoke("test", "io-pure.opaal", "--format", "json")
+    value = json.loads(denied.stdout)
+    require(denied.returncode == 2 and value["counts"]["passed"] == 0 and
+            value["counts"]["unrun"] == 2 and b"TEST_EFFECT" in denied.stdout and
+            b"private-sentinel" not in denied.stdout + denied.stderr, "indexed expression acquired pure authority")
+    for name, code in (("wrong-target.opaal", b"SIG023"), ("wrong-index.opaal", b"SIG024"),
+                       ("wrong-type.opaal", b"SIG008"), ("immutable.opaal", b"BND001"),
+                       ("captured.opaal", b"BND003"), ("invalid.opaal", b"OP1000")):
+        result = invoke("check", name)
+        require(result.returncode == 1 and not result.stdout and code in result.stderr,
+                "indexed diagnostic differs")
+    failure = invoke("dynamic-failure.opaal")
+    require(failure.returncode == 1 and b"RUN001" in failure.stderr and not failure.stdout and
+            b"private-sentinel" not in failure.stderr, "indexed dynamic diagnostic leaked payload or changed")
+    success(invoke("format", "--write", "noncanonical.opaal"), "indexed format")
+    require((destination / "noncanonical.opaal").read_bytes() == (destination / "canonical.opaal").read_bytes(),
+            "indexed canonical bytes differ")
+    success(invoke("format", "--check", "noncanonical.opaal"), "indexed idempotence")
+    pending = run(cwd=destination, stdin=(destination / "incomplete.opaal").read_bytes())
+    require(pending.returncode == 0 and b"SYN002" in pending.stderr, "indexed incomplete EOF differs")
+    raw = run(cwd=destination, stdin=b"mut items: List[Int] = [1, 2]\nlet saved = items\nitems[\n1] =\n8\n[items, saved]\n")
+    require(raw.returncode == 0 and not raw.stderr and b"...> " in raw.stdout and
+            b"[[1, 8], [1, 2]]\n" in raw.stdout, "indexed raw continuation or aliases differ")
+    project = work / "indexed-project"
+    report = project_workflow(lambda *args: run(*args, cwd=project), project, fixtures, target,
+                              indexed_replacements=True)
+    return {"fixture_cases": sorted(INDEXED_REPLACEMENT_FIXTURES), "pure_cases": cases, "project": report,
+            "assertions": ["before/after Int 1; generic/Any and alias isolation; caught failures",
+                           "root/index/RHS order and once-only I/O; static non-execution; pure refusal",
+                           "target/index/replacement diagnostics; no runtime payload leak",
+                           "canonical comments; raw continuation; retained aliases; accepted/stale project Int 8"]}
 
 
 def list_literal_spread(run, work: Path, fixtures: Path, target: str) -> dict:
@@ -848,6 +909,8 @@ def framed_formatting(binary: Path, work: Path, fixtures: Path, environment: dic
                     "explicit-member-imports/noncanonical.opaal", "explicit-member-imports/canonical.opaal",
                     "explicit-member-imports/incomplete.opaal", "compound-assignment/noncanonical.opaal",
                     "compound-assignment/canonical.opaal", "compound-assignment/incomplete.opaal",
+                    "indexed-list-replacement/noncanonical.opaal", "indexed-list-replacement/canonical.opaal",
+                    "indexed-list-replacement/incomplete.opaal", "indexed-list-replacement/invalid.opaal",
                     "list-literal-spread/noncanonical.opaal", "list-literal-spread/canonical.opaal",
                     "list-literal-spread/incomplete.opaal", "list-literal-spread/invalid.opaal",
                     "record-shorthand/noncanonical.opaal", "record-shorthand/canonical.opaal",
@@ -865,7 +928,7 @@ def framed_formatting(binary: Path, work: Path, fixtures: Path, environment: dic
                     params = {"textDocument": {"uri": uri}, "options": {"tabSize": 8, "insertSpaces": False}}
                     result = request("textDocument/formatting", params)["result"]
                     if name in ("legacy.opaal", "concise-imports/noncanonical.opaal", "explicit-member-imports/noncanonical.opaal",
-                                "compound-assignment/noncanonical.opaal", "list-literal-spread/noncanonical.opaal",
+                                "compound-assignment/noncanonical.opaal", "indexed-list-replacement/noncanonical.opaal", "list-literal-spread/noncanonical.opaal",
                                 "record-shorthand/noncanonical.opaal", "grouped-export-prefixes/noncanonical.opaal",
                                 "action-declarations/noncanonical.opaal"):
                         canonical = (fixtures / ("canonical.opaal" if name == "legacy.opaal" else
@@ -903,6 +966,26 @@ def framed_formatting(binary: Path, work: Path, fixtures: Path, environment: dic
                     {"uri": uri, "range": {"start": {"line": line, "character": 0},
                                            "end": {"line": line, "character": 5}}} for line in (2, 3)],
                     "compound read/write references duplicate or lose the source token")
+                uri = (work / "indexed-query.opaal").as_uri()
+                lines = ["mut items: List[Int] = [1]", "let position = 0", "let replacement = 8",
+                         "# 界🙂", "items[({label: '界🙂', position}).position] = replacement", "items"]
+                send({"method": "textDocument/didOpen", "params": {"textDocument": {
+                    "uri": uri, "languageId": "opaal", "version": 1, "text": "\n".join(lines) + "\n"}}})
+                def indexed_range(line, start, end):
+                    def units(prefix):
+                        return len(prefix.encode("utf-8")) if encoding == "utf-8" else len(prefix.encode("utf-16-le")) // 2
+                    return {"uri": uri, "range": {"start": {"line": line, "character": units(lines[line][:start])},
+                                                  "end": {"line": line, "character": units(lines[line][:end])}}}
+                for name, declared_line, declared_start in (("items", 0, 4), ("position", 1, 4), ("replacement", 2, 4)):
+                    start = lines[4].index(name)
+                    reference = indexed_range(4, start, start + len(name))
+                    params = {"textDocument": {"uri": uri}, "position": reference["range"]["start"]}
+                    definition = indexed_range(declared_line, declared_start, declared_start + len(name))
+                    require(request("textDocument/definition", params)["result"] == definition,
+                            "indexed original definition differs")
+                    references = request("textDocument/references", {**params, "context": {"includeDeclaration": False}})["result"]
+                    require(references.count(reference) == 1, "indexed reference missing or duplicated")
+                    require(request("textDocument/hover", params)["result"] is not None, "indexed hover missing")
                 uri = (work / "record-query.opaal").as_uri()
                 lines = ["type Item = {name: Int}", "let name: Int = 7", "let item = Item {name}",
                          "let fields = {label: '界🙂', name}", "def pick(Item {name}: Item) -> Int",
@@ -1121,6 +1204,19 @@ def terminal_continuation(binary: Path, work: Path, environment: dict) -> None:
         require(b"error[" not in captured, "terminal rejected compound assignment")
         os.write(descriptor, b"total\r")
         read_until(rb"(?:^|\n)9\r?\n.*>> ")
+        os.write(descriptor, b"mut items: List[Int] = [1, 2]\r")
+        read_until(rb"\r?\n.*>> ")
+        os.write(descriptor, b"let saved = items\r")
+        read_until(rb"\r?\n.*>> ")
+        for line in (b"items[", b"1] ="):
+            os.write(descriptor, line + b"\r")
+            read_until(rb"\r?\n.*\.\.\.> ")
+            require(b"error[" not in captured, "terminal submitted incomplete indexed replacement")
+        os.write(descriptor, b"8\r")
+        read_until(rb"\r?\n.*>> ")
+        os.write(descriptor, b"[items, saved]\r")
+        read_until(rb"(?:^|\n)\[\[1, 8\], \[1, 2\]\]\r?\n.*>> ")
+        require(b"error[" not in captured, "terminal rejected indexed replacement")
         for line in (b"let spread = [", b"...[1, 2],"):
             os.write(descriptor, line + b"\r")
             read_until(rb"\.\.\.> ")
@@ -1312,6 +1408,7 @@ def qualify(archive: Path | None, fixture_archive: Path | None, binaries: Path |
         imports_report = concise_imports(run, root, fixtures)
         members_report = explicit_member_imports(run, root, fixtures, target)
         compound_report = compound_assignment(run, root, fixtures, target)
+        indexed_report = indexed_list_replacement(run, root, fixtures, target)
         spread_report = list_literal_spread(run, root, fixtures, target)
         record_report = record_shorthand(run, root, fixtures, target)
         exports_report = grouped_export_prefixes(run, root, fixtures, target)
@@ -1330,7 +1427,7 @@ def qualify(archive: Path | None, fixture_archive: Path | None, binaries: Path |
                                   for name in ("opaal", "opaal-language-server")},
                 "fixture_sha256": fixture_hashes, "parser_seeds": seed_census(ROOT, paths),
                 "project": project_report, "concise_imports": imports_report, "explicit_member_imports": members_report,
-                "compound_assignment": compound_report, "list_literal_spread": spread_report, "record_shorthand": record_report, "grouped_export_prefixes": exports_report,
+                "compound_assignment": compound_report, "indexed_list_replacement": indexed_report, "list_literal_spread": spread_report, "record_shorthand": record_report, "grouped_export_prefixes": exports_report,
                 "action_declarations": actions_report, "language_server": lsp_report, "bounded_cases": bounded,
                 "assertions": ["exact fixture/source/program identity", "legacy/canonical execution and checking",
                                "exact action/function/comment bytes and idempotence", "read-only check and mode/inode retention",

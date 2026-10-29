@@ -118,6 +118,7 @@ pub enum StatementKind {
     VariantType(VariantTypeDeclaration),
     Declaration(Declaration),
     Assignment(Assignment),
+    IndexedAssignment(IndexedAssignment),
     Environment(EnvironmentStatement),
     Function(FunctionDefinition),
     Action(ActionDefinition),
@@ -382,6 +383,16 @@ pub struct Assignment {
     pub target: NameReference,
     /// Compound assignments retain a binary value with the target as its left
     /// operand and the original two-character operator span.
+    pub value: Expression,
+}
+
+/// Replacement of one slot in an existing mutable list binding.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct IndexedAssignment {
+    pub target: NameReference,
+    pub index: Expression,
+    pub brackets: Span,
+    pub operator: Span,
     pub value: Expression,
 }
 

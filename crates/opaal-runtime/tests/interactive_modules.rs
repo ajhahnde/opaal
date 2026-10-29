@@ -1006,3 +1006,52 @@ fn prefix_file_exports_and_inert_direct_exports_survive_retained_cells() {
         Value::Int(6)
     );
 }
+
+#[test]
+fn indexed_replacement_retains_cell_types_aliases_and_index_only_callables() {
+    let sources = Sources::default();
+    let mut session = session();
+    submit(&mut session, &sources, "mut items: List[Int] = [1, 2]");
+    submit(&mut session, &sources, "let saved = items");
+    submit(&mut session, &sources, "items[1] = 8");
+    assert_eq!(
+        submit(&mut session, &sources, "[items, saved]"),
+        Value::list(vec![
+            Value::list(vec![Value::Int(1), Value::Int(8)]),
+            Value::list(vec![Value::Int(1), Value::Int(2)])
+        ])
+    );
+    submit(&mut session, &sources, "def position() -> Int { return 1 }");
+    submit(
+        &mut session,
+        &sources,
+        "def replace(input: List[Int]) -> List[Int] { mut result = input\nresult[position()] = 9\nreturn result }",
+    );
+    assert_eq!(
+        submit(&mut session, &sources, "replace(items)"),
+        Value::list(vec![Value::Int(1), Value::Int(9)])
+    );
+    submit(
+        &mut session,
+        &sources,
+        "def wrong() -> Any { return 'private-sentinel' }",
+    );
+    submit(
+        &mut session,
+        &sources,
+        "try { items[0] = wrong() } catch failure { null }",
+    );
+    assert_eq!(
+        submit(&mut session, &sources, "items"),
+        Value::list(vec![Value::Int(1), Value::Int(8)])
+    );
+    submit(&mut session, &sources, "import std::list");
+    assert_eq!(
+        submit(
+            &mut session,
+            &sources,
+            "list::map([[1,2]], {|input: List[Int]| -> List[Int] replace(input)})"
+        ),
+        Value::list(vec![Value::list(vec![Value::Int(1), Value::Int(9)])])
+    );
+}

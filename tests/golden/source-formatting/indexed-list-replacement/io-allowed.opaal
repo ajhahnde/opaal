@@ -1,0 +1,5 @@
+import std::io
+import std::value::{length}
+mut items: List[Int] = [1, 2]
+items[length([io::println("index")])] = length([io::println("rhs")])
+io::println(items[1])

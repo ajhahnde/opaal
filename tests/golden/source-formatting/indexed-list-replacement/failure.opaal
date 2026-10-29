@@ -1,0 +1,42 @@
+def dynamic_value() -> Any
+{
+    return "private-sentinel"
+}
+def rejects[T: Equal](input: List[T]) -> Bool
+{
+    mut output: List[T] = input
+    let saved = output
+    try {
+        output[0] = dynamic_value()
+    } catch failure {
+        if output == input && saved == input {
+            return true
+        }
+    }
+    return false
+}
+export {test_value}
+def test_value() -> Bool
+{
+    mut items: List[Int] = [10]
+    let saved = items
+    try {
+        items[-1] = 20
+    } catch failure {
+        null
+    }
+    try {
+        items[1] = 20
+    } catch failure {
+        null
+    }
+    try {
+        items[0] = dynamic_value()
+    } catch failure {
+        null
+    }
+    if items == [10] && saved == [10] && rejects[Int]([10]) && rejects[List[Int]]([[10]]) {
+        return true
+    }
+    return false
+}

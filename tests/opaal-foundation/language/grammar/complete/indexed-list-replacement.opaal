@@ -1,0 +1,9 @@
+#limits1234
+def position() -> Int
+{
+    return 0
+}
+mut items: List[List[Int]] = [[1, 2], [3, 4]]
+let saved = items
+items[position()] = [5, 6]
+[items, saved]

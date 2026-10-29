@@ -2011,7 +2011,7 @@ pub fn index(target: &Value, index: &Value) -> Result<Value, OperationError> {
     }
 }
 
-fn checked_position(index: i64, length: usize) -> Result<usize, OperationError> {
+pub(crate) fn checked_position(index: i64, length: usize) -> Result<usize, OperationError> {
     if index < 0 {
         return Err(OperationError::NegativeIndex { index });
     }

@@ -376,7 +376,7 @@ impl Visit for CommandHead {
     }
 }
 
-variants!(StatementKind { ModuleImport(v), ModuleMemberImport(v), ModuleImportGroup(v), ModuleExport(v), NominalType(v), VariantType(v), Declaration(v), Assignment(v), Environment(v), Function(v), Action(v), Task(v), If(v), While(v), For(v), Match(v), Try(v), Throw(v), Control(v), Job(v) });
+variants!(StatementKind { ModuleImport(v), ModuleMemberImport(v), ModuleImportGroup(v), ModuleExport(v), NominalType(v), VariantType(v), Declaration(v), IndexedAssignment(v), Assignment(v), Environment(v), Function(v), Action(v), Task(v), If(v), While(v), For(v), Match(v), Try(v), Throw(v), Control(v), Job(v) });
 impl Visit for ListItem {
     fn visit(&self, context: &mut Context<'_>) {
         match self {
@@ -484,6 +484,13 @@ fields!(Declaration {
     value
 });
 fields!(Assignment { target, value });
+fields!(IndexedAssignment {
+    target,
+    index,
+    brackets,
+    operator,
+    value
+});
 fields!(FunctionDefinition {
     documentation,
     name,
