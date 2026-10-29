@@ -1,0 +1,14 @@
+def result() -> Int
+{
+    mut items: List[Int] = [1, 2]
+    items[1] = 8
+    return items[1]
+}
+action readiness() -> Int
+{
+    effects {
+    }
+
+    return result()
+}
+task verify = readiness

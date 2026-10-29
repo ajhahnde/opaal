@@ -1,0 +1,9 @@
+import std::io
+import std::data
+mut items: List[Int] = [1]
+try {
+    items[-1] = data::json_decode(io::read_stdin(3))
+} catch failure {
+    null
+}
+io::println(data::json_decode(io::read_stdin(3)))

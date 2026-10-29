@@ -186,6 +186,28 @@ impl ScopeStack {
         Err(ScopeError::UnknownBinding(name.to_owned()))
     }
 
+    /// Store a list whose original slots and replacement were already type-validated.
+    pub(crate) fn assign_prevalidated_list(
+        &mut self,
+        name: &str,
+        items: Arc<[Value]>,
+    ) -> Result<(), ScopeError> {
+        for frame in self.frames.iter_mut().rev() {
+            if let Some((_, binding)) = frame
+                .bindings
+                .iter_mut()
+                .find(|(candidate, _)| candidate.as_ref() == name)
+            {
+                if binding.mutability == BindingMutability::Immutable {
+                    return Err(ScopeError::ImmutableBinding(name.to_owned()));
+                }
+                binding.value = Value::List(items);
+                return Ok(());
+            }
+        }
+        Err(ScopeError::UnknownBinding(name.to_owned()))
+    }
+
     /// Removes the innermost visible binding named `name` and returns its value.
     ///
     /// Host startup integration uses this to consume temporary configuration

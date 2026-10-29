@@ -2833,6 +2833,10 @@ impl Evaluator<'_, '_> {
                 self.declaration(declaration, scope)?;
                 Ok(Flow::Fallthrough(None))
             }
+            StatementKind::IndexedAssignment(assignment) => {
+                self.indexed_assignment(assignment, scope)?;
+                Ok(Flow::Fallthrough(None))
+            }
             StatementKind::Assignment(assignment) => {
                 self.assignment(assignment, scope)?;
                 Ok(Flow::Fallthrough(None))
@@ -3024,6 +3028,119 @@ impl Evaluator<'_, '_> {
             };
             self.binding_error(error, span)
         })
+    }
+
+    fn indexed_assignment(
+        &mut self,
+        assignment: &opaal_syntax::IndexedAssignment,
+        scope: &mut ScopeStack,
+    ) -> Eval<()> {
+        let root_span = assignment.target.span;
+        self.check_cancel(root_span)?;
+        let name = self.text(assignment.target.name.span()).to_owned();
+        match scope.mutability(&name) {
+            _ if DynamicBinding::lookup(&name).is_some() => {
+                return Err(self.binding_error(ScopeError::ImmutableBinding(name), root_span));
+            }
+            None => return Err(self.binding_error(ScopeError::UnknownBinding(name), root_span)),
+            Some(BindingMutability::Immutable) => {
+                return Err(self.binding_error(ScopeError::ImmutableBinding(name), root_span));
+            }
+            Some(BindingMutability::Mutable) => {}
+        }
+        let original = scope.get(&name).expect("validated binding").clone();
+        let Value::List(items) = &original else {
+            return Err(self.operation(
+                OperationError::UnsupportedOperands {
+                    operator: "indexed assignment",
+                    operands: vec![original.family_name()],
+                },
+                root_span,
+            ));
+        };
+        let expected = match scope.declared_type(&name) {
+            Some(ValueType::List(element)) => Some(crate::module::substitute_type(
+                element,
+                &self.current_type_arguments,
+            )),
+            _ => None,
+        };
+        let index = self.expression(&assignment.index, scope)?;
+        let Value::Int(position) = index else {
+            return Err(self.operation(
+                OperationError::UnsupportedOperands {
+                    operator: "[]",
+                    operands: vec![original.family_name(), index.family_name()],
+                },
+                assignment.index.span(),
+            ));
+        };
+        let position = crate::operation::checked_position(position, items.len())
+            .map_err(|error| self.operation(error, assignment.index.span()))?;
+        let value = self.expression_with_expected(&assignment.value, scope, expected.as_ref())?;
+        if let Some(expected) = expected
+            && !self.validate_operation_value(&expected, &value, assignment.value.span())?
+        {
+            return Err(self.error(
+                RuntimeErrorKind::BindingTypeMismatch {
+                    expected,
+                    actual: value.family_name(),
+                },
+                assignment.value.span(),
+            ));
+        }
+        let mut replacement = Some(value);
+        let mut output = Vec::new();
+        for (slot, item) in items.iter().enumerate() {
+            self.check_cancel(root_span)?;
+            self.charge(root_span)?;
+            self.reserve_list_item(&mut output, items.len(), root_span)?;
+            output.push(if slot == position {
+                replacement.take().expect("one replacement slot")
+            } else {
+                self.copy_indexed_item(item, root_span)?
+            });
+        }
+        let bytes = output
+            .len()
+            .checked_mul(size_of::<Value>())
+            .and_then(|bytes| bytes.checked_add(2 * size_of::<usize>()))
+            .ok_or_else(|| self.error(RuntimeErrorKind::ResourceBudgetExceeded, root_span))?;
+        self.retain_collection_bytes(bytes, root_span)?;
+        let Value::List(output) = Value::list(output) else {
+            unreachable!("list construction")
+        };
+        self.check_cancel(root_span)?;
+        scope
+            .assign_prevalidated_list(&name, output)
+            .map_err(|error| self.binding_error(error, root_span))
+    }
+
+    fn copy_indexed_item(&mut self, value: &Value, span: Span) -> Eval<Value> {
+        let (id, mut bytes) = match value {
+            Value::NominalRecord(record) => (record.id(), size_of::<crate::NominalRecordValue>()),
+            Value::Variant(variant) => (variant.id(), size_of::<crate::VariantValue>()),
+            _ => return Ok(value.clone()),
+        };
+        // Nominal boxes clone their identity storage; fields/payload/type arguments share Arcs.
+        let (namespace, module) = match id.module().origin() {
+            crate::module::ModuleOrigin::Local => (0, 0),
+            crate::module::ModuleOrigin::Standard { namespace, module } => {
+                (namespace.len(), module.len())
+            }
+        };
+        for length in [
+            id.name().len(),
+            id.module().path().as_os_str().as_encoded_bytes().len(),
+            namespace,
+            module,
+        ] {
+            bytes = bytes
+                .checked_add(length)
+                .ok_or_else(|| self.error(RuntimeErrorKind::ResourceBudgetExceeded, span))?;
+        }
+        self.retain_collection_bytes(bytes, span)?;
+        Ok(value.clone())
     }
 
     /// Applies an `export` or `unset` to the environment. `export` encodes its
@@ -6178,6 +6295,10 @@ fn find_callable_in_statement(
         StatementKind::Declaration(declaration) => {
             find_callable_in_expression(&declaration.value, snapshot)
         }
+        StatementKind::IndexedAssignment(assignment) => {
+            find_callable_in_expression(&assignment.index, snapshot)
+                .or_else(|| find_callable_in_expression(&assignment.value, snapshot))
+        }
         StatementKind::Assignment(assignment) => {
             find_callable_in_expression(&assignment.value, snapshot)
         }
@@ -6552,6 +6673,7 @@ fn decode_double_escape(raw: &str) -> String {
 #[cfg(test)]
 mod tests {
     mod callable_classification;
+    mod indexed_list_replacement;
     mod numeric_operations;
     mod random_operations;
     use std::sync::atomic::{AtomicUsize, Ordering};

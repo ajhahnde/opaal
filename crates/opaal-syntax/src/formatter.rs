@@ -205,6 +205,11 @@ impl FormatLayout {
                         }
                     }
                 }
+                StatementKind::IndexedAssignment(assignment) => {
+                    self.no_space_before.insert(assignment.brackets.start());
+                    self.space_before.insert(assignment.operator.start());
+                    self.space_after.insert(assignment.operator.end());
+                }
                 StatementKind::Assignment(assignment) => {
                     if let crate::ExpressionKind::Binary(binary) = assignment.value.kind() {
                         for token in tokens_in(

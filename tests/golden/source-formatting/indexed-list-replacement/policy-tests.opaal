@@ -1,0 +1,11 @@
+def result() -> Int
+{
+    mut items: List[Int] = [1, 2]
+    items[1] = 8
+    return items[1]
+}
+export {test_value}
+def test_value() -> Bool
+{
+    return result() == 8
+}

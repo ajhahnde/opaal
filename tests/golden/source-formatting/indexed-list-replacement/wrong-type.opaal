@@ -1,0 +1,2 @@
+mut items: List[Int] = [1]
+items[0] = "private-rhs"

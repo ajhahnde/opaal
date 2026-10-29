@@ -1089,6 +1089,10 @@ impl<'a> CallFinder<'a> {
             | StatementKind::NominalType(_)
             | StatementKind::VariantType(_) => {}
             StatementKind::Declaration(declaration) => self.expression(&declaration.value),
+            StatementKind::IndexedAssignment(assignment) => {
+                self.expression(&assignment.index);
+                self.expression(&assignment.value);
+            }
             StatementKind::Assignment(assignment) => self.expression(&assignment.value),
             StatementKind::Environment(environment) => {
                 if let opaal_syntax::EnvironmentStatement::Export { value, .. } = environment {

@@ -7,16 +7,16 @@ use crate::{
     Declaration, Delimiter, Diagnostic, DocumentationBlock, EffectRequest, ElseBranch,
     EnvironmentStatement, Expression, ExpressionKind, FileRedirection, ForStatement,
     FunctionDefinition, Identifier, IfStatement, IncompleteInput, IncompleteReason,
-    IndexExpression, IoNumber, JobStatement, Keyword, ListItem, ListPattern, Literal, LiteralKind,
-    MatchArm, MatchStatement, MemberExpression, ModuleAliasImport, ModuleExportStatement,
-    ModuleImportSource, NameReference, NominalRecordExpression, NominalRecordFieldExpression,
-    NominalRecordPattern, NominalTypeDeclaration, NominalTypeField, NumberKind, Operator,
-    OutputMode, Parameter, Pattern, PatternField, PipeOperator, Pipeline, QualifiedName,
-    RecordEntry, RecordKey, Redirection, RedirectionKind, Script, Severity, SourceFile, Span,
-    Stage, StageKind, Statement, StatementKind, StaticEffectArgument, SyntaxClassification,
-    TaskDefinition, Token, TokenKind, TryStatement, TypeConstraint, TypeParameter, TypeReference,
-    UnaryExpression, UnaryOperator, VariantDeclaration, VariantPattern, VariantTypeDeclaration,
-    WhileStatement, Word, WordPart, WordPartKind,
+    IndexExpression, IndexedAssignment, IoNumber, JobStatement, Keyword, ListItem, ListPattern,
+    Literal, LiteralKind, MatchArm, MatchStatement, MemberExpression, ModuleAliasImport,
+    ModuleExportStatement, ModuleImportSource, NameReference, NominalRecordExpression,
+    NominalRecordFieldExpression, NominalRecordPattern, NominalTypeDeclaration, NominalTypeField,
+    NumberKind, Operator, OutputMode, Parameter, Pattern, PatternField, PipeOperator, Pipeline,
+    QualifiedName, RecordEntry, RecordKey, Redirection, RedirectionKind, Script, Severity,
+    SourceFile, Span, Stage, StageKind, Statement, StatementKind, StaticEffectArgument,
+    SyntaxClassification, TaskDefinition, Token, TokenKind, TryStatement, TypeConstraint,
+    TypeParameter, TypeReference, UnaryExpression, UnaryOperator, VariantDeclaration,
+    VariantPattern, VariantTypeDeclaration, WhileStatement, Word, WordPart, WordPartKind,
 };
 
 /// The result of parsing one source file.
@@ -131,6 +131,7 @@ struct Parser<'source, 'control, 'metadata> {
     source: &'source SourceFile,
     tokens: Vec<Token>,
     position: usize,
+    bracket_ends: Vec<usize>,
     continuation_depth: usize,
     control_condition_depth: usize,
     block_header_depth: Option<usize>,
@@ -149,6 +150,7 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
     ) -> Self {
         Self {
             source,
+            bracket_ends: vec![0; tokens.len()],
             tokens,
             position: 0,
             continuation_depth: 0,
@@ -163,6 +165,20 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
 
     fn parse_script(mut self) -> ParseResult<Script> {
         self.check_cancelled()?;
+        // Index target and generic-call lookahead share one linear delimiter census.
+        let mut brackets = Vec::new();
+        for (position, token) in self.tokens.iter().enumerate() {
+            self.check_cancelled()?;
+            match token.kind() {
+                TokenKind::Delimiter(Delimiter::LeftBracket) => brackets.push(position),
+                TokenKind::Delimiter(Delimiter::RightBracket) => {
+                    if let Some(open) = brackets.pop() {
+                        self.bracket_ends[open] = position;
+                    }
+                }
+                _ => {}
+            }
+        }
         let statements = self.parse_statement_list(None)?;
         self.skip_separators();
         if !self.is_end() {
@@ -304,6 +320,9 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
                 Err(self.invalid_here("catch requires a preceding try statement"))
             }
             Some(TokenKind::Identifier) if self.name_is_assignment() => self.parse_assignment(),
+            Some(TokenKind::Identifier) if self.name_is_indexed_assignment() => {
+                self.parse_indexed_assignment()
+            }
             Some(_) => self.parse_job_statement(),
             None => Err(self.incomplete_here(IncompleteReason::Expression)),
         }
@@ -669,6 +688,33 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
         let span = self.span(start.start(), value.span().end());
         Ok(Statement::new(
             StatementKind::Assignment(Assignment { target, value }),
+            span,
+        ))
+    }
+
+    fn parse_indexed_assignment(&mut self) -> ParseResult<Statement> {
+        let target = self.parse_name_reference()?;
+        self.skip_inline();
+        let open = self.expect_delimiter(Delimiter::LeftBracket, "index requires `[` ")?;
+        self.continuation_depth += 1;
+        self.skip_layout();
+        let index = self.parse_expression()?;
+        self.skip_layout();
+        let close = self.expect_delimiter(Delimiter::RightBracket, "index is not closed")?;
+        self.continuation_depth -= 1;
+        self.skip_inline();
+        let operator = self.expect_operator(Operator::Assign, "indexed assignment requires `=`")?;
+        self.skip_layout();
+        let value = self.parse_expression()?;
+        let span = self.span(target.span.start(), value.span().end());
+        Ok(Statement::new(
+            StatementKind::IndexedAssignment(IndexedAssignment {
+                target,
+                index,
+                brackets: self.span(open.span().start(), close.span().end()),
+                operator: operator.span(),
+                value,
+            }),
             span,
         ))
     }
@@ -2598,6 +2644,17 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
             })
     }
 
+    fn name_is_indexed_assignment(&self) -> bool {
+        let Some(open) = self.next_non_inline_position(self.position + 1) else {
+            return false;
+        };
+        let close = self.bracket_ends[open];
+        close > open
+            && self
+                .next_non_inline(close + 1)
+                .is_some_and(|token| token.kind() == TokenKind::Operator(Operator::Assign))
+    }
+
     fn starts_expression_stage(&self) -> bool {
         match self.current_kind() {
             Some(TokenKind::Identifier) => {
@@ -3070,25 +3127,11 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
     }
 
     fn bracket_is_followed_by_call(&self) -> bool {
-        let mut position = self.position;
-        let mut depth = 0usize;
-        while let Some(token) = self.tokens.get(position) {
-            match token.kind() {
-                TokenKind::Delimiter(Delimiter::LeftBracket) => depth += 1,
-                TokenKind::Delimiter(Delimiter::RightBracket) => {
-                    depth = depth.saturating_sub(1);
-                    if depth == 0 {
-                        position += 1;
-                        break;
-                    }
-                }
-                _ => {}
-            }
-            position += 1;
-        }
-        if depth != 0 {
+        let close = self.bracket_ends[self.position];
+        if close <= self.position {
             return false;
         }
+        let mut position = close + 1;
         while let Some(token) = self.tokens.get(position) {
             if matches!(
                 token.kind(),

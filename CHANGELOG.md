@@ -4,21 +4,26 @@ All notable changes to OPAAL are documented here.
 
 ## [Unreleased]
 
+### Added
+
+- Replace one list element with `items[index] = value` on a mutable local binding.
+  Existing aliases keep their values. Indices are nonnegative Int positions;
+  bounds are checked before the replacement expression runs. Retained element
+  types, resource limits and cancellation apply to the new list and final rebind.
+- The four standard print helpers (print, println, eprint, eprintln) accept one
+  `Any` argument and display ordinary data directly, including numbers, Bytes, paths
+  and structured reports. Existing String bytes, LF behavior, effects and
+  partial-transfer evidence are unchanged. Nested values retain their quoted display.
+  Error, Callable and opaque operational values anywhere raise `IO005` without output.
+  Preparation shares evaluation work/scratch budgets, allows depth 128, and refuses output
+  exceeding 1048576 bytes including LF (`IO001`) before transfer. Raw byte writers
+  remain byte-exact.
+
 ### Fixed
 
 - Destructuring heterogeneous lists no longer narrows every binding to the
   first element's type. Declaration and match patterns inspect the complete
   value under the existing evaluation budget and cancellation checks.
-
-### Added
-
-- The four standard print helpers accept one `Any` argument and display ordinary
-  data directly, including numbers, Bytes, paths and structured reports. Existing
-  String bytes, LF behavior, effects and partial-transfer evidence are unchanged.
-  Nested values retain their quoted display. Error, Callable and opaque operational
-  values anywhere raise `IO005` without output. Preparation shares evaluation
-  work/scratch budgets, allows depth 128, and refuses output exceeding 1048576 bytes
-  including LF (`IO001`) before transfer. Raw byte writers remain byte-exact.
 
 ## [1.9.0]
 

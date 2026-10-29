@@ -51,6 +51,15 @@ The downstream metadata/outcome defaults protected by
 `embedding_api_compatibility` remain unchanged. Existing `OperationalAdapter`
 implementations inherit snapshot refusal unless they explicitly implement it.
 
+Indexed list replacement adds `StatementKind::IndexedAssignment(IndexedAssignment)`
+with original `target`, `index`, `brackets`, `operator` and `value` spans.
+Exhaustive statement visitors must handle it, visiting both index and replacement
+expressions and resolving the target once as a binding reference. Existing
+`Assignment { target, value }` construction is unchanged. Exhaustive
+`ModuleTypeError` matches must handle `IndexedAssignmentTargetMismatch` (SIG023)
+and `IndexedAssignmentIndexMismatch` (SIG024); incompatible replacements reuse
+`AssignmentMismatch` (SIG008). These are unpublished source APIs.
+
 Compound assignment keeps the existing `Assignment { target, value }`
 constructor and `StatementKind::Assignment` variant. Parsed `total += amount`
 has a binary `value`: its left operand is the original target reference, its

@@ -1,0 +1,2 @@
+mut items: String = "private-root"
+items[0] = "value"

@@ -808,6 +808,149 @@
       "sha256": "7956bc1d382c5b5ae8ddef6c614ffb268210027b900bafb520e889071d628fb5"
     },
     {
+      "path": "tests/golden/source-formatting/indexed-list-replacement/after.opaal",
+      "role": "positive",
+      "reason": "Indexed replacement grammar, typing, ordering, immutable aliases and tooling contract.",
+      "assertion": "ci/qualify_source_formatting.py"
+    },
+    {
+      "path": "tests/golden/source-formatting/indexed-list-replacement/alternate.opaal",
+      "role": "positive",
+      "reason": "Indexed replacement grammar, typing, ordering, immutable aliases and tooling contract.",
+      "assertion": "ci/qualify_source_formatting.py"
+    },
+    {
+      "path": "tests/golden/source-formatting/indexed-list-replacement/before.opaal",
+      "role": "positive",
+      "reason": "Indexed replacement grammar, typing, ordering, immutable aliases and tooling contract.",
+      "assertion": "ci/qualify_source_formatting.py"
+    },
+    {
+      "path": "tests/golden/source-formatting/indexed-list-replacement/canonical.opaal",
+      "role": "positive",
+      "reason": "Indexed replacement grammar, typing, ordering, immutable aliases and tooling contract.",
+      "assertion": "ci/qualify_source_formatting.py"
+    },
+    {
+      "path": "tests/golden/source-formatting/indexed-list-replacement/captured.opaal",
+      "role": "semantic-negative",
+      "reason": "Indexed replacement grammar, typing, ordering, immutable aliases and tooling contract.",
+      "assertion": "ci/qualify_source_formatting.py",
+      "sha256": "d133af4548cace8dc43fbafc9dab506bd565571b8550c954edf5abb1db892e32"
+    },
+    {
+      "path": "tests/golden/source-formatting/indexed-list-replacement/dynamic-failure.opaal",
+      "role": "runtime-negative",
+      "reason": "Indexed replacement grammar, typing, ordering, immutable aliases and tooling contract.",
+      "assertion": "ci/qualify_source_formatting.py",
+      "sha256": "a20ab38ff168339907b7e3ce6537c049d1562528febf62c1f67b293cf1af63e3"
+    },
+    {
+      "path": "tests/golden/source-formatting/indexed-list-replacement/failure.opaal",
+      "role": "positive",
+      "reason": "Indexed replacement grammar, typing, ordering, immutable aliases and tooling contract.",
+      "assertion": "ci/qualify_source_formatting.py"
+    },
+    {
+      "path": "tests/golden/source-formatting/indexed-list-replacement/immutable.opaal",
+      "role": "semantic-negative",
+      "reason": "Indexed replacement grammar, typing, ordering, immutable aliases and tooling contract.",
+      "assertion": "ci/qualify_source_formatting.py",
+      "sha256": "dbd529be898b84ab2ced7be3f75cf39e635e60e5c821b163891a5a259efeda3e"
+    },
+    {
+      "path": "tests/golden/source-formatting/indexed-list-replacement/incomplete.opaal",
+      "role": "syntax-incomplete",
+      "reason": "Indexed replacement grammar, typing, ordering, immutable aliases and tooling contract.",
+      "assertion": "ci/qualify_source_formatting.py",
+      "sha256": "11df873783593ef64392621468b504b0f6ed132a8137d8c330c34f173aa8dbb9",
+      "format_diagnostic": "SYN002",
+      "format_message": "incomplete input: expression requires another operand"
+    },
+    {
+      "path": "tests/golden/source-formatting/indexed-list-replacement/invalid.opaal",
+      "role": "syntax-invalid",
+      "reason": "Indexed replacement grammar, typing, ordering, immutable aliases and tooling contract.",
+      "assertion": "ci/qualify_source_formatting.py",
+      "sha256": "c27da06c3b5a2780e62c7b7f8a85ef51ef57adf9a86ca2168e83edefde078411",
+      "format_diagnostic": "OP1000",
+      "format_message": "expected a statement boundary"
+    },
+    {
+      "path": "tests/golden/source-formatting/indexed-list-replacement/io-allowed.opaal",
+      "role": "positive",
+      "reason": "Indexed replacement grammar, typing, ordering, immutable aliases and tooling contract.",
+      "assertion": "ci/qualify_source_formatting.py"
+    },
+    {
+      "path": "tests/golden/source-formatting/indexed-list-replacement/io-failure.opaal",
+      "role": "positive",
+      "reason": "Indexed replacement grammar, typing, ordering, immutable aliases and tooling contract.",
+      "assertion": "ci/qualify_source_formatting.py"
+    },
+    {
+      "path": "tests/golden/source-formatting/indexed-list-replacement/io-pure.opaal",
+      "role": "refused",
+      "reason": "Indexed replacement grammar, typing, ordering, immutable aliases and tooling contract.",
+      "assertion": "ci/qualify_source_formatting.py",
+      "sha256": "d3b89e0215412d0e207ec738d6ae80036958e3899673dd9f101b081a464b9730"
+    },
+    {
+      "path": "tests/golden/source-formatting/indexed-list-replacement/noncanonical.opaal",
+      "role": "noncanonical",
+      "reason": "Indexed replacement grammar, typing, ordering, immutable aliases and tooling contract.",
+      "assertion": "ci/qualify_source_formatting.py",
+      "sha256": "ace04d32fbe7b820a07ea175b07aef9b3b804ba27a6df029c9eab14c696c8643",
+      "format_diagnostic": "FMT001",
+      "format_message": "source is not canonically formatted"
+    },
+    {
+      "path": "tests/golden/source-formatting/indexed-list-replacement/output.opaal",
+      "role": "positive",
+      "reason": "Indexed replacement grammar, typing, ordering, immutable aliases and tooling contract.",
+      "assertion": "ci/qualify_source_formatting.py"
+    },
+    {
+      "path": "tests/golden/source-formatting/indexed-list-replacement/policy-negative.opaal",
+      "role": "runtime-negative",
+      "reason": "Indexed replacement grammar, typing, ordering, immutable aliases and tooling contract.",
+      "assertion": "ci/qualify_source_formatting.py",
+      "sha256": "ae62cf0b47371d00ba1401d664494a7397b7c922bc74a043d8c368acb44a15ed"
+    },
+    {
+      "path": "tests/golden/source-formatting/indexed-list-replacement/policy-tests.opaal",
+      "role": "positive",
+      "reason": "Indexed replacement grammar, typing, ordering, immutable aliases and tooling contract.",
+      "assertion": "ci/qualify_source_formatting.py"
+    },
+    {
+      "path": "tests/golden/source-formatting/indexed-list-replacement/project-tasks.opaal",
+      "role": "positive",
+      "reason": "Indexed replacement grammar, typing, ordering, immutable aliases and tooling contract.",
+      "assertion": "ci/qualify_source_formatting.py"
+    },
+    {
+      "path": "tests/golden/source-formatting/indexed-list-replacement/wrong-index.opaal",
+      "role": "semantic-negative",
+      "reason": "Indexed replacement grammar, typing, ordering, immutable aliases and tooling contract.",
+      "assertion": "ci/qualify_source_formatting.py",
+      "sha256": "9490aeeac6d1e8028ae913fb1cb83da39ce97eef68381a0b8c29f92d3f3bc0f9"
+    },
+    {
+      "path": "tests/golden/source-formatting/indexed-list-replacement/wrong-target.opaal",
+      "role": "semantic-negative",
+      "reason": "Indexed replacement grammar, typing, ordering, immutable aliases and tooling contract.",
+      "assertion": "ci/qualify_source_formatting.py",
+      "sha256": "7085e3107a3dee9d4b651f01831369f6e10ca75abc3245f6c3e8fac840f38e3b"
+    },
+    {
+      "path": "tests/golden/source-formatting/indexed-list-replacement/wrong-type.opaal",
+      "role": "semantic-negative",
+      "reason": "Indexed replacement grammar, typing, ordering, immutable aliases and tooling contract.",
+      "assertion": "ci/qualify_source_formatting.py",
+      "sha256": "24c10f8c342b15cc532c309b68ad010bacdbd786f9fae8f66da6d0584967c432"
+    },
+    {
       "path": "tests/golden/source-formatting/invalid.opaal",
       "role": "syntax-invalid",
       "reason": "Exact formatter migration, comment layout or syntax refusal golden.",
@@ -1214,6 +1357,12 @@
       "assertion": "crates/opaal-syntax/tests/opaal_module_manifest.rs"
     },
     {
+      "path": "tests/opaal-foundation/language/grammar/complete/indexed-list-replacement.opaal",
+      "role": "positive",
+      "reason": "Indexed replacement grammar, typing, ordering, immutable aliases and tooling contract.",
+      "assertion": "crates/opaal-syntax/tests/opaal_language_manifest.rs"
+    },
+    {
       "path": "tests/opaal-foundation/language/grammar/complete/leading-trivia.opaal",
       "role": "positive",
       "reason": "complete corpus role; owning manifest expectation: -",
@@ -1247,6 +1396,15 @@
       "format_message": "incomplete input: opening brace requires a closing brace"
     },
     {
+      "path": "tests/opaal-foundation/language/grammar/incomplete/indexed-list-replacement.opaal",
+      "role": "syntax-incomplete",
+      "reason": "Indexed replacement grammar, typing, ordering, immutable aliases and tooling contract.",
+      "assertion": "crates/opaal-syntax/tests/opaal_language_manifest.rs",
+      "sha256": "b2f7d21ce0bb2fe7565cdf73b65dbf81922b704186cce64d9c573c3f2785be2a",
+      "format_diagnostic": "SYN002",
+      "format_message": "incomplete input: expression requires another operand"
+    },
+    {
       "path": "tests/opaal-foundation/language/grammar/incomplete/open-block.opaal",
       "role": "syntax-incomplete",
       "reason": "incomplete corpus role; owning manifest expectation: -",
@@ -1272,6 +1430,15 @@
       "sha256": "c805ff221ec386b74fde6163cac116bf7c897abc4678ff7167a00a96e786e82a",
       "format_diagnostic": "OP1000",
       "format_message": "module name list is not closed"
+    },
+    {
+      "path": "tests/opaal-foundation/language/grammar/invalid/indexed-list-replacement.opaal",
+      "role": "syntax-invalid",
+      "reason": "Indexed replacement grammar, typing, ordering, immutable aliases and tooling contract.",
+      "assertion": "crates/opaal-syntax/tests/opaal_language_manifest.rs",
+      "sha256": "f04e1ae2190f797a86179e2e83ba0f3ad8912caf4ab3be09e80cca160a244457",
+      "format_diagnostic": "OP1000",
+      "format_message": "expected a statement boundary"
     },
     {
       "path": "tests/opaal-foundation/language/grammar/invalid/leading-pipe.opaal",
@@ -2025,6 +2192,9 @@
       "path": "tests/golden/random-values/README.md"
     },
     {
+      "path": "tests/golden/source-formatting/indexed-list-replacement/README.md"
+    },
+    {
       "path": "tests/golden/standard-input-output/README.md"
     },
     {
@@ -2290,8 +2460,8 @@
     },
     {
       "path": "ci/package_source_formatting.py",
-      "sha256": "1b2b11c15a60e43628138c307185ab76aed9c1628b4b91ded2ebcd04ddf14a76",
-      "source_markers": 98,
+      "sha256": "04b33f24422fbe5e61e73a003201b5dca6905bc7aa3287b9ec04e7ff0ef23fbc",
+      "source_markers": 119,
       "constructors_or_assertions": [
         "main",
         "module constants/imports"
@@ -2535,8 +2705,8 @@
     },
     {
       "path": "ci/qualify_source_formatting.py",
-      "sha256": "20e412907bdddd75ccb2309669e95e8b84d5093bc09f57773e7f0a516b24faff",
-      "source_markers": 308,
+      "sha256": "cf5c41d7baf61b8409d4a89d6d44a1bdf21b29d5b993a640d9a460ff97baf985",
+      "source_markers": 340,
       "constructors_or_assertions": [
         "action_declarations",
         "action_position",
@@ -2547,6 +2717,8 @@
         "explicit_member_imports",
         "framed_formatting",
         "grouped_export_prefixes",
+        "indexed_list_replacement",
+        "indexed_range",
         "invoke",
         "list_literal_spread",
         "main",
@@ -2883,8 +3055,8 @@
     },
     {
       "path": "ci/tests/test_source_formatting.py",
-      "sha256": "0299643b85624cb69986fef6b3d92b6aa8976564a1a5f4f804cdf684e9f5683d",
-      "source_markers": 33,
+      "sha256": "f05dc586507f3187df5386569ddf5ed360574a8b851cf0e5f3878d2cddcc9808",
+      "source_markers": 35,
       "constructors_or_assertions": [
         "census",
         "setUp",
@@ -2897,6 +3069,7 @@
         "test_packaging_refuses_an_incomplete_action_fixture_census",
         "test_packaging_refuses_an_incomplete_compound_fixture_census",
         "test_packaging_refuses_an_incomplete_grouped_export_fixture_census",
+        "test_packaging_refuses_an_incomplete_indexed_replacement_fixture_census",
         "test_packaging_refuses_an_incomplete_list_spread_fixture_census",
         "test_packaging_refuses_an_incomplete_member_fixture_census",
         "test_packaging_refuses_an_incomplete_record_shorthand_fixture_census",
@@ -4227,7 +4400,7 @@
     },
     {
       "path": "crates/opaal-runtime/src/eval.rs",
-      "sha256": "a8910e5e2a2b130a07078156b71373e97db09ebe0fc5d928c311d197ec88357e",
+      "sha256": "6cbd2d811ee3ae365d9ed7d24343a3f797403a9b8a82b3fd4dc0debf3347a196",
       "source_markers": 17,
       "constructors_or_assertions": [
         "ambient_process_policy_propagates_into_lazy_transform_closures",
@@ -4316,6 +4489,18 @@
       "assertion": "crates/opaal-runtime/src/eval/tests/callable_classification.rs"
     },
     {
+      "path": "crates/opaal-runtime/src/eval/tests/indexed_list_replacement.rs",
+      "sha256": "9bba9968e837f9098d9d530909fd4c983c2062676429e5e050a9594493d008c8",
+      "source_markers": 5,
+      "constructors_or_assertions": [
+        "callable_occurring_only_in_index_survives_capsule_roundtrip",
+        "replace"
+      ],
+      "role": "mixed-test-buffers",
+      "reason": "Indexed replacement tests exercise complete, invalid and incomplete inputs and resource/cancellation failures.",
+      "assertion": "crates/opaal-runtime/src/eval/tests/indexed_list_replacement.rs"
+    },
+    {
       "path": "crates/opaal-runtime/src/eval/tests/numeric_operations.rs",
       "sha256": "c2a106a32ce80ecd1f5364410243658050c7080ffee31853c6cb73d60eb88004",
       "source_markers": 4,
@@ -4370,7 +4555,7 @@
     },
     {
       "path": "crates/opaal-runtime/src/module.rs",
-      "sha256": "b249df0bb3d271b785b890e2378c56c5450c3feb0f264f299d39032a1d9a1c93",
+      "sha256": "8c840aac324a13053efe2d6f97dfcd171c75523a7d1db82bb484f5d002e7193b",
       "source_markers": 22,
       "constructors_or_assertions": [
         "analyze_interactive_with_control",
@@ -4825,9 +5010,22 @@
       "assertion": "crates/opaal-runtime/tests/functions.rs"
     },
     {
+      "path": "crates/opaal-runtime/tests/indexed_list_replacement.rs",
+      "sha256": "96a0e84cef44746228c01005dc0d511741bfb4964abe453db0a385517f7e7557",
+      "source_markers": 4,
+      "constructors_or_assertions": [
+        "bounds_and_dynamic_failures_leave_the_original_list_unchanged",
+        "generic_dynamic_replacement_validates_concrete_type_before_store",
+        "invalid_targets_and_static_types_use_existing_name_checks_and_frozen_codes"
+      ],
+      "role": "mixed-test-buffers",
+      "reason": "Indexed replacement tests exercise complete, invalid and incomplete inputs and resource/cancellation failures.",
+      "assertion": "crates/opaal-runtime/tests/indexed_list_replacement.rs"
+    },
+    {
       "path": "crates/opaal-runtime/tests/interactive_modules.rs",
-      "sha256": "2561b52a310d67f2bf3f18b08afb17e11e5407999e6614fc24caaac569e9456d",
-      "source_markers": 83,
+      "sha256": "2fed8a68cc56ae2f90da3af1f9176519719bf02527d3066bb60d16ec26c257da",
+      "source_markers": 86,
       "constructors_or_assertions": [
         "a_declaration_cannot_publish_types_from_a_later_local_import",
         "a_partial_first_group_charges_its_retained_cell_once_like_expanded_singles",
@@ -4841,6 +5039,7 @@
         "failed_initialization_does_not_publish_and_prior_statements_survive",
         "failed_member_initializer_retains_only_prior_declarations_and_can_retry",
         "groups_keep_expanded_single_step_charging_and_partial_publication_at_every_budget",
+        "indexed_replacement_retains_cell_types_aliases_and_index_only_callables",
         "local_source_capability_is_explicit_and_initializers_have_no_host",
         "partial_import_groups_retain_first_entry_nominals_callables_and_retry_without_reload",
         "prefix_file_exports_and_inert_direct_exports_survive_retained_cells",
@@ -5578,7 +5777,7 @@
     },
     {
       "path": "crates/opaal-syntax/src/parser.rs",
-      "sha256": "7b04b31e866d0831af766d1f177ea40019c54fa55169145c8113617ea9d529c6",
+      "sha256": "8ad667955376882f64edd0cdbcafcbf264763497564b01a713eacb60be516af7",
       "source_markers": 3,
       "constructors_or_assertions": [
         "cancellation_is_polled_during_shorthand_field_parsing_after_lexing",
@@ -5687,6 +5886,17 @@
       "role": "mixed-test-buffers",
       "reason": "Retain complete, legacy, invalid and incomplete source buffers and their source-position assertions; canonical output is asserted only by formatting owners.",
       "assertion": "crates/opaal-syntax/tests/formatter.rs"
+    },
+    {
+      "path": "crates/opaal-syntax/tests/indexed_list_replacement.rs",
+      "sha256": "81fd7c47f535d2bbfea5f60cfb0e7e1dc1526e951fe99e62b4e3c8eb3ef10ed5",
+      "source_markers": 2,
+      "constructors_or_assertions": [
+        "source"
+      ],
+      "role": "mixed-test-buffers",
+      "reason": "Indexed replacement tests exercise complete, invalid and incomplete inputs and resource/cancellation failures.",
+      "assertion": "crates/opaal-syntax/tests/indexed_list_replacement.rs"
     },
     {
       "path": "crates/opaal-syntax/tests/input_classification.rs",
@@ -5819,7 +6029,7 @@
     },
     {
       "path": "crates/opaal-syntax/tests/property_invariants.rs",
-      "sha256": "44e4b89db46dafc9c741d4a82ce55937adff7ac8c582e0b40f1f57f78eabce0c",
+      "sha256": "7e25f4367e5d2f7fa58859c8b4951511abbf54c9f819a1cd85b89acf14213d8d",
       "source_markers": 1,
       "constructors_or_assertions": [
         "bounded_utf8_sources_preserve_syntax_invariants"
@@ -5871,7 +6081,7 @@
     },
     {
       "path": "crates/opaal-syntax/tests/support/formatting.rs",
-      "sha256": "e8897b115098072b466d4bbdac7f04a8b3ef329056e4a97f2c477602cf9cf85b",
+      "sha256": "cbd8011e8c484a93da57c36e293a8dfdd4b2283d11a072b61469c8d5b05ef9bf",
       "source_markers": 1,
       "constructors_or_assertions": [
         "assert_roundtrip"
@@ -8026,6 +8236,153 @@
       "sha256": "7956bc1d382c5b5ae8ddef6c614ffb268210027b900bafb520e889071d628fb5"
     },
     {
+      "path": "tests/golden/source-formatting/indexed-list-replacement/after.opaal",
+      "targets": [
+        "parser"
+      ],
+      "sha256": "a106a492eb5c78aff2d1cae856643837a6c5d13e755787d42bb94b2799b88f6c"
+    },
+    {
+      "path": "tests/golden/source-formatting/indexed-list-replacement/alternate.opaal",
+      "targets": [
+        "parser"
+      ],
+      "sha256": "2957c459edf9b5c57ebf27f3118a398da27081294638d1064d636421d419355b"
+    },
+    {
+      "path": "tests/golden/source-formatting/indexed-list-replacement/before.opaal",
+      "targets": [
+        "parser"
+      ],
+      "sha256": "4652e3bf579f9c61237d4b2d09f877a66901ca77068c7cee360447a03397ef78"
+    },
+    {
+      "path": "tests/golden/source-formatting/indexed-list-replacement/canonical.opaal",
+      "targets": [
+        "parser"
+      ],
+      "sha256": "1e670f41f806d085ccd6ec42b7bf0b19fa03cafb23494aa8f2253494b7324147"
+    },
+    {
+      "path": "tests/golden/source-formatting/indexed-list-replacement/captured.opaal",
+      "targets": [
+        "parser"
+      ],
+      "sha256": "d133af4548cace8dc43fbafc9dab506bd565571b8550c954edf5abb1db892e32"
+    },
+    {
+      "path": "tests/golden/source-formatting/indexed-list-replacement/dynamic-failure.opaal",
+      "targets": [
+        "parser"
+      ],
+      "sha256": "a20ab38ff168339907b7e3ce6537c049d1562528febf62c1f67b293cf1af63e3"
+    },
+    {
+      "path": "tests/golden/source-formatting/indexed-list-replacement/failure.opaal",
+      "targets": [
+        "parser"
+      ],
+      "sha256": "1ed6fe17fcf8392022ca844e0338ce3688d22d0e3d528fa1509a3d98b724ce09"
+    },
+    {
+      "path": "tests/golden/source-formatting/indexed-list-replacement/immutable.opaal",
+      "targets": [
+        "parser"
+      ],
+      "sha256": "dbd529be898b84ab2ced7be3f75cf39e635e60e5c821b163891a5a259efeda3e"
+    },
+    {
+      "path": "tests/golden/source-formatting/indexed-list-replacement/incomplete.opaal",
+      "targets": [
+        "parser"
+      ],
+      "sha256": "11df873783593ef64392621468b504b0f6ed132a8137d8c330c34f173aa8dbb9"
+    },
+    {
+      "path": "tests/golden/source-formatting/indexed-list-replacement/invalid.opaal",
+      "targets": [
+        "parser"
+      ],
+      "sha256": "c27da06c3b5a2780e62c7b7f8a85ef51ef57adf9a86ca2168e83edefde078411"
+    },
+    {
+      "path": "tests/golden/source-formatting/indexed-list-replacement/io-allowed.opaal",
+      "targets": [
+        "parser"
+      ],
+      "sha256": "806570882c0e05f65c376e7c937825538c4b83894f1a4baa8f24445a801c44bc"
+    },
+    {
+      "path": "tests/golden/source-formatting/indexed-list-replacement/io-failure.opaal",
+      "targets": [
+        "parser"
+      ],
+      "sha256": "f2b152fcc695e83b60c4c2019f00aeed3327b7ee6279fdce62a223c03fa411b6"
+    },
+    {
+      "path": "tests/golden/source-formatting/indexed-list-replacement/io-pure.opaal",
+      "targets": [
+        "parser"
+      ],
+      "sha256": "d3b89e0215412d0e207ec738d6ae80036958e3899673dd9f101b081a464b9730"
+    },
+    {
+      "path": "tests/golden/source-formatting/indexed-list-replacement/noncanonical.opaal",
+      "targets": [
+        "parser"
+      ],
+      "sha256": "ace04d32fbe7b820a07ea175b07aef9b3b804ba27a6df029c9eab14c696c8643"
+    },
+    {
+      "path": "tests/golden/source-formatting/indexed-list-replacement/output.opaal",
+      "targets": [
+        "parser"
+      ],
+      "sha256": "4b887c223c31edd9351fe3f58db4d7893cba8572ebc608362f450773ddab9336"
+    },
+    {
+      "path": "tests/golden/source-formatting/indexed-list-replacement/policy-negative.opaal",
+      "targets": [
+        "parser"
+      ],
+      "sha256": "ae62cf0b47371d00ba1401d664494a7397b7c922bc74a043d8c368acb44a15ed"
+    },
+    {
+      "path": "tests/golden/source-formatting/indexed-list-replacement/policy-tests.opaal",
+      "targets": [
+        "parser"
+      ],
+      "sha256": "83a3001a9fc63b798b71cb0c9476c95047f64749ec581982bf7063ef7072bd7d"
+    },
+    {
+      "path": "tests/golden/source-formatting/indexed-list-replacement/project-tasks.opaal",
+      "targets": [
+        "parser"
+      ],
+      "sha256": "951bed7893c6d86e3a547a6a37315fd418de25ea687f6b6a4a7464894139fece"
+    },
+    {
+      "path": "tests/golden/source-formatting/indexed-list-replacement/wrong-index.opaal",
+      "targets": [
+        "parser"
+      ],
+      "sha256": "9490aeeac6d1e8028ae913fb1cb83da39ce97eef68381a0b8c29f92d3f3bc0f9"
+    },
+    {
+      "path": "tests/golden/source-formatting/indexed-list-replacement/wrong-target.opaal",
+      "targets": [
+        "parser"
+      ],
+      "sha256": "7085e3107a3dee9d4b651f01831369f6e10ca75abc3245f6c3e8fac840f38e3b"
+    },
+    {
+      "path": "tests/golden/source-formatting/indexed-list-replacement/wrong-type.opaal",
+      "targets": [
+        "parser"
+      ],
+      "sha256": "24c10f8c342b15cc532c309b68ad010bacdbd786f9fae8f66da6d0584967c432"
+    },
+    {
       "path": "tests/golden/source-formatting/invalid.opaal",
       "targets": [
         "parser"
@@ -8389,6 +8746,17 @@
       "sha256": "1b1ef51cd3005c05d6f33665ec54c1aff2637c8f9636a323d7a291e6f96df0f6"
     },
     {
+      "path": "tests/opaal-foundation/language/grammar/complete/indexed-list-replacement.opaal",
+      "targets": [
+        "lexer",
+        "parser",
+        "expander",
+        "resources",
+        "secret_sinks"
+      ],
+      "sha256": "158ed78d91649c9f343d397e32c254402442db9bb400d09690ed3e95a0e0652d"
+    },
+    {
       "path": "tests/opaal-foundation/language/grammar/complete/leading-trivia.opaal",
       "targets": [
         "lexer",
@@ -8433,6 +8801,17 @@
       "sha256": "24c7e14cc096f44c4446651e32b890d35bc94f6d391d912cee5e46e5933ca0e0"
     },
     {
+      "path": "tests/opaal-foundation/language/grammar/incomplete/indexed-list-replacement.opaal",
+      "targets": [
+        "lexer",
+        "parser",
+        "expander",
+        "resources",
+        "secret_sinks"
+      ],
+      "sha256": "b2f7d21ce0bb2fe7565cdf73b65dbf81922b704186cce64d9c573c3f2785be2a"
+    },
+    {
       "path": "tests/opaal-foundation/language/grammar/incomplete/open-block.opaal",
       "targets": [
         "lexer",
@@ -8464,6 +8843,17 @@
         "secret_sinks"
       ],
       "sha256": "c805ff221ec386b74fde6163cac116bf7c897abc4678ff7167a00a96e786e82a"
+    },
+    {
+      "path": "tests/opaal-foundation/language/grammar/invalid/indexed-list-replacement.opaal",
+      "targets": [
+        "lexer",
+        "parser",
+        "expander",
+        "resources",
+        "secret_sinks"
+      ],
+      "sha256": "f04e1ae2190f797a86179e2e83ba0f3ad8912caf4ab3be09e80cca160a244457"
     },
     {
       "path": "tests/opaal-foundation/language/grammar/invalid/leading-pipe.opaal",

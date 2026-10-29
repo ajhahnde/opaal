@@ -1,0 +1,6 @@
+def dynamic_value() -> Any
+{
+    return "private-sentinel"
+}
+mut items: List[Int] = [1]
+items[0] = dynamic_value()

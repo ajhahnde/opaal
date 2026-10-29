@@ -64,6 +64,15 @@ ACTION_DECLARATION_FIXTURES = (
 )
 
 
+INDEXED_REPLACEMENT_FIXTURES = (
+    "README.md", "after.opaal", "alternate.opaal", "before.opaal", "canonical.opaal",
+    "captured.opaal", "dynamic-failure.opaal", "failure.opaal", "immutable.opaal",
+    "incomplete.opaal", "invalid.opaal", "io-allowed.opaal", "io-failure.opaal",
+    "io-pure.opaal", "noncanonical.opaal", "output.opaal", "policy-negative.opaal",
+    "policy-tests.opaal", "project-tasks.opaal", "wrong-index.opaal", "wrong-target.opaal",
+    "wrong-type.opaal",
+)
+
 def main() -> None:
     # Every shipped input and qualification assertion belongs to the named head.
     if subprocess.check_output(["git", "status", "--porcelain", "--untracked-files=all"], cwd=ROOT):
@@ -89,6 +98,9 @@ def main() -> None:
     actions = {name.removeprefix("action-declarations/") for name in names if name.startswith("action-declarations/")}
     if actions != set(ACTION_DECLARATION_FIXTURES):
         raise ValueError("action declaration fixture census differs from the committed source")
+    indexed = {name.removeprefix("indexed-list-replacement/") for name in names if name.startswith("indexed-list-replacement/")}
+    if indexed != set(INDEXED_REPLACEMENT_FIXTURES):
+        raise ValueError("indexed replacement fixture census differs from the committed source")
     archive = package_examples(ROOT, names, source, directory=FIXTURES, name="source-formatting")
     print(archive.relative_to(ROOT))
 

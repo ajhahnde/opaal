@@ -353,6 +353,13 @@ impl<'source> SpanChecker<'source> {
                 }
                 self.expression(&declaration.value);
             }
+            StatementKind::IndexedAssignment(assignment) => {
+                self.name_reference(assignment.target);
+                self.span(assignment.brackets);
+                self.span(assignment.operator);
+                self.expression(&assignment.index);
+                self.expression(&assignment.value);
+            }
             StatementKind::Assignment(assignment) => {
                 self.name_reference(assignment.target);
                 self.expression(&assignment.value);
