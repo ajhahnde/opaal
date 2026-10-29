@@ -22,25 +22,25 @@ fn seven_shared_signatures_reexports_help_and_effects_are_nonexecuting() {
         ),
         (
             "print",
-            "(text: String) -> Null",
+            "(text: Any) -> Null",
             "stdout.write",
             CapabilityRequest::stdout_write(),
         ),
         (
             "println",
-            "(text: String) -> Null",
+            "(text: Any) -> Null",
             "stdout.write",
             CapabilityRequest::stdout_write(),
         ),
         (
             "eprint",
-            "(text: String) -> Null",
+            "(text: Any) -> Null",
             "stderr.write",
             CapabilityRequest::stderr_write(),
         ),
         (
             "eprintln",
-            "(text: String) -> Null",
+            "(text: Any) -> Null",
             "stderr.write",
             CapabilityRequest::stderr_write(),
         ),
@@ -100,8 +100,8 @@ fn wrong_types_arity_generics_and_result_types_fail_without_endpoint_access() {
     for body in [
         "io::read_stdin('4')",
         "io::println()",
-        "io::print(1)",
-        "io::eprintln(1)",
+        "io::print(1, 2)",
+        "io::eprintln(1, 2)",
         "io::print[Int]('x')",
         "io::write_stdout('x')",
         "io::write_stderr('x')",
@@ -111,6 +111,9 @@ fn wrong_types_arity_generics_and_result_types_fail_without_endpoint_access() {
         assert!(try_load(body).is_err(), "{body}");
     }
     assert!(try_load("io::read_stdin(-1)").is_ok());
+    load(
+        "io::print(1)\nio::println([true, null])\nio::eprint({jobs: 42})\nio::eprintln(io::read_stdin(0))",
+    );
     let program = load("def wrapper() -> Null { return io::eprint('text') }\nwrapper()");
     assert!(
         program

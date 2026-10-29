@@ -1148,6 +1148,30 @@
       "assertion": "ci/qualify_standard_input_output.py"
     },
     {
+      "path": "tests/golden/standard-input-output/generic-bytes.opaal",
+      "role": "positive",
+      "reason": "Generic standard printing reference; runtime refusal is caught explicitly.",
+      "assertion": "ci/qualify_standard_input_output.py"
+    },
+    {
+      "path": "tests/golden/standard-input-output/generic-refusal.opaal",
+      "role": "positive",
+      "reason": "Generic standard printing reference; runtime refusal is caught explicitly.",
+      "assertion": "ci/qualify_standard_input_output.py"
+    },
+    {
+      "path": "tests/golden/standard-input-output/generic-report.opaal",
+      "role": "positive",
+      "reason": "Generic standard printing reference; runtime refusal is caught explicitly.",
+      "assertion": "ci/qualify_standard_input_output.py"
+    },
+    {
+      "path": "tests/golden/standard-input-output/generic-tasks.opaal",
+      "role": "positive",
+      "reason": "Generic standard printing reference; runtime refusal is caught explicitly.",
+      "assertion": "ci/qualify_standard_input_output.py"
+    },
+    {
       "path": "tests/golden/standard-input-output/source.opaal",
       "role": "positive",
       "reason": "Canonical native processor or CI assessment reference; typed project tasks run only through the explicit project route.",
@@ -2529,10 +2553,11 @@
     },
     {
       "path": "ci/qualify_standard_input_output.py",
-      "sha256": "0592f69fb1dfe678c4e6712e5582f998a114f9fcc899492515ec7a8e3c9f446b",
-      "source_markers": 14,
+      "sha256": "91deba0d7f0f3908a13ccd8700dc9d0e7ee4e4462e8aca4cb8b1b7baa0df72f8",
+      "source_markers": 25,
       "constructors_or_assertions": [
         "assessment",
+        "generic_language_server",
         "main",
         "qualify",
         "references",
@@ -2865,10 +2890,11 @@
     },
     {
       "path": "ci/tests/test_standard_input_output_candidate.py",
-      "sha256": "fa58836fc8fa6a9267c248e59783ec9118edf27f40a0264248fd524e15585fb4",
-      "source_markers": 8,
+      "sha256": "ee3acb887852ee3231683a246edcfca86a7cd259ccf8a6383160fc37db6984f2",
+      "source_markers": 9,
       "constructors_or_assertions": [
         "fd_table",
+        "test_generic_framed_observer_rejects_stale_string_signature",
         "test_linux_worker_pipe_requires_received_endpoint",
         "test_macos_worker_pipe_requires_received_endpoint",
         "test_native_driver_preserves_exit_precedence_and_exclusive_acquisition",
@@ -3708,7 +3734,7 @@
     },
     {
       "path": "crates/opaal-lsp/tests/queries.rs",
-      "sha256": "8a6b76b51b8f458a29673a553e4656183d521c4b16a0c2f96c73df11cb691849",
+      "sha256": "af86f3944b6137817bf76787e51371f6b3e2bf5c0c60fda9fb5e4ba362a463e0",
       "source_markers": 65,
       "constructors_or_assertions": [
         "callback_operation_signatures_show_relations_and_argument_positions",
@@ -5300,10 +5326,11 @@
     },
     {
       "path": "crates/opaal-runtime/tests/stdio_authority.rs",
-      "sha256": "ed99e6ed5cd6231ef4bf1c9febdd5fe4d8a84257ffea45b0fb8a116deb2acc12",
+      "sha256": "7779b35cbceb468fb5f5ea5179bd1347cbd209ce07cac7225d1cfa5a4f1067c3",
       "source_markers": 0,
       "constructors_or_assertions": [
         "a_bound_endpoint_cannot_be_retargeted_to_another_evaluation_or_reused_after_close",
+        "generic_admission_checks_authority_and_binding_before_spending_render_budget",
         "separate_denied_undeclared_unsupported_and_occupied_streams_never_transfer"
       ],
       "role": "mixed-test-buffers",
@@ -5312,10 +5339,11 @@
     },
     {
       "path": "crates/opaal-runtime/tests/stdio_controlled.rs",
-      "sha256": "7e3f147730052d762945f3d9018c2251ae1b4eb48cb3448c2a42d554d73eea32",
-      "source_markers": 1,
+      "sha256": "8662350971e2d392cc72fcf0b3b0d21eba287e9f895ac4665958e71456a554c1",
+      "source_markers": 3,
       "constructors_or_assertions": [
-        "run"
+        "generic_task_prepares_before_journaling_and_keeps_only_metadata",
+        "run_source"
       ],
       "role": "mixed-test-buffers",
       "reason": "I/O contract or native fault assertions retain scripted actions, legacy layout, refused contexts, cancellation and hostile descriptor/protocol inputs.",
@@ -5323,11 +5351,12 @@
     },
     {
       "path": "crates/opaal-runtime/tests/stdio_failure.rs",
-      "sha256": "906897f9c790f5847d2205011b1df4419ebfcad969d0e4ecdee3e5690734ab40",
+      "sha256": "9a48545f0e7293723523494a252db45b5c427805af94ccbd27e4c5451a8f7d5b",
       "source_markers": 0,
       "constructors_or_assertions": [
         "acknowledged_eof_survives_a_later_transport_failure_without_a_partial_value",
         "broken_pipe_zero_write_and_failed_read_have_no_successful_partial_value",
+        "generic_output_keeps_confirmed_prefix_when_the_second_chunk_breaks",
         "impossible_progress_refuses_and_charges_one_uncertain_chunk_then_closes",
         "interrupted_and_nonblocking_attempts_retry_only_pending_bytes_with_fresh_work",
         "role_totals_survive_multiple_calls_eof_and_a_later_failed_transfer"
@@ -5338,10 +5367,11 @@
     },
     {
       "path": "crates/opaal-runtime/tests/stdio_golden.rs",
-      "sha256": "58f5640b578a51abd28b30999ac7f61d86652601f7e871de04ef8cba0a896015",
-      "source_markers": 5,
+      "sha256": "daadfff3e04838ebcc364d0b9ab0a0113960052353fc9b94cae2cf375b26fb61",
+      "source_markers": 8,
       "constructors_or_assertions": [
         "declared_action_runs_and_catching_overflow_does_not_restore_consumed_input",
+        "generic_reference_sources_keep_exact_output_and_catchable_refusal",
         "pure_functions_callbacks_and_undeclared_actions_refuse_before_transfer",
         "undeclared_sibling_or_nested_streams_and_entropy_cannot_borrow_another_effect"
       ],
@@ -5365,7 +5395,7 @@
     },
     {
       "path": "crates/opaal-runtime/tests/stdio_observers.rs",
-      "sha256": "e71a97abd1a092fe09d308d45eeb38d1c789097b292b39e9eb32571d948f3d89",
+      "sha256": "0e427b8c9f8ebdbfd5ee45c9382522853e47f15800f8add9d37714c1472477c3",
       "source_markers": 4,
       "constructors_or_assertions": [
         "seven_shared_signatures_reexports_help_and_effects_are_nonexecuting",
@@ -5377,12 +5407,11 @@
     },
     {
       "path": "crates/opaal-runtime/tests/stdio_values.rs",
-      "sha256": "e8178dfcc0f2a9a7eb70bc19b204ee414c9647166c4fa360f41d1b8fdee4d945",
-      "source_markers": 0,
+      "sha256": "672c43a5f904fcbaf628c833e0f531542804e35377a5da3f993b149e786f2659",
+      "source_markers": 4,
       "constructors_or_assertions": [
-        "raw_reads_observe_empty_exact_cap_first_excess_and_sequential_eof",
-        "text_raw_and_lf_output_keep_exact_bytes_and_distinct_sinks",
-        "wrong_signatures_and_encoded_cap_including_lf_fail_before_transfer"
+        "as_any",
+        "metadata_and_mixed_failures_follow_bounded_display_order"
       ],
       "role": "mixed-test-buffers",
       "reason": "I/O contract or native fault assertions retain scripted actions, legacy layout, refused contexts, cancellation and hostile descriptor/protocol inputs.",
@@ -5452,7 +5481,7 @@
     },
     {
       "path": "crates/opaal-runtime/tests/support/stdio.rs",
-      "sha256": "5938ecfce5702ad3817a021e0186619789092b9470d7f92df5d9f3310f0dabcd",
+      "sha256": "a595d49f0ec54da893656933bcf1e44f22993910892e8dc0792724b30c199818",
       "source_markers": 2,
       "constructors_or_assertions": [
         "load",
@@ -5977,7 +6006,7 @@
     },
     {
       "path": "fuzz/fuzz_targets/stdio_limits.rs",
-      "sha256": "2f7dd67cc4787589df7595a58800349d8c46b64acd51c46b2ca3e15257d58735",
+      "sha256": "5f48842f226e5f8c824db870ef6ea22aca790ee520e567e024b0ebc6448e397a",
       "source_markers": 0,
       "constructors_or_assertions": [],
       "role": "mixed-test-buffers",

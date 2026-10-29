@@ -1,5 +1,7 @@
 //! Bounded standard streams using the same host and consumed bytes as entropy.
 
+use std::borrow::Cow;
+
 use opaal_platform::Platform;
 use opaal_platform::operational::{OperationalError, OperationalErrorKind};
 use opaal_platform::standard_host::{MAX_STREAM_CHUNK_BYTES, StandardStream, TransferError};
@@ -13,59 +15,18 @@ use crate::lifetime::Deadline;
 use super::standard::{HostProgress, StandardState, charge, limit, poll};
 use super::{ModuleError, adapter_error, authorize};
 
-enum IoCall<'a> {
+mod display;
+
+pub(crate) enum IoCall<'a> {
     Read(usize),
     Write {
         stream: StandardStream,
-        bytes: &'a [u8],
+        bytes: Cow<'a, [u8]>,
         lf: bool,
     },
 }
 
-impl<'a> IoCall<'a> {
-    fn parse(name: &str, arguments: &'a [Value], cap: usize) -> Result<Self, ModuleError> {
-        let call = match (name, arguments) {
-            ("read_stdin", [Value::Int(count)]) => {
-                Self::Read(usize::try_from(*count).map_err(|_| domain())?)
-            }
-            ("print" | "println" | "eprint" | "eprintln", [Value::String(text)]) => Self::Write {
-                stream: if name.starts_with('e') {
-                    StandardStream::Stderr
-                } else {
-                    StandardStream::Stdout
-                },
-                bytes: text.as_bytes(),
-                lf: name.ends_with("println"),
-            },
-            ("write_stdout" | "write_stderr", [Value::Bytes(bytes)]) => Self::Write {
-                stream: if name == "write_stdout" {
-                    StandardStream::Stdout
-                } else {
-                    StandardStream::Stderr
-                },
-                bytes,
-                lf: false,
-            },
-            _ => {
-                return Err(ModuleError::invalid(
-                    "OPERATION001",
-                    "I/O arguments do not match the declared signature",
-                ));
-            }
-        };
-        let length = match call {
-            Self::Read(cap) => cap,
-            Self::Write { bytes, lf, .. } => bytes
-                .len()
-                .checked_add(usize::from(lf))
-                .ok_or_else(domain)?,
-        };
-        if length > cap {
-            return Err(domain());
-        }
-        Ok(call)
-    }
-
+impl IoCall<'_> {
     fn request(&self) -> CapabilityRequest {
         match self {
             Self::Read(_) => CapabilityRequest::stdin_read(),
@@ -93,33 +54,97 @@ impl<'a> IoCall<'a> {
 }
 
 impl StandardState {
-    /// Validate types, domains, grants, exact binding and cap+probe before work.
-    pub fn stdio_admission(
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn prepare_stdio<'a>(
+        &mut self,
+        context: &OperationalContext,
+        effects: &EffectSet,
+        platform: &dyn Platform,
+        budget: &mut ResourceBudget,
+        name: &str,
+        arguments: &'a [Value],
+        deadline: Deadline,
+    ) -> Result<IoCall<'a>, ModuleError> {
+        self.progress = HostProgress::default();
+        let cap = self.limits.max_call_bytes;
+        let result = (|| {
+            poll(context, deadline)?;
+            let call = match (name, arguments) {
+                ("read_stdin", [Value::Int(count)]) => {
+                    IoCall::Read(usize::try_from(*count).map_err(|_| domain())?)
+                }
+                ("print" | "println" | "eprint" | "eprintln", [value]) => {
+                    let stream = if name.starts_with('e') {
+                        StandardStream::Stderr
+                    } else {
+                        StandardStream::Stdout
+                    };
+                    let bytes = match value {
+                        Value::String(text) => Cow::Borrowed(text.as_bytes()),
+                        value => {
+                            self.stdio_binding(context, effects, platform, stream)?;
+                            Cow::Owned(display::prepare(
+                                value,
+                                cap.checked_sub(usize::from(name.ends_with("println")))
+                                    .ok_or_else(domain)?,
+                                context,
+                                budget,
+                                deadline,
+                            )?)
+                        }
+                    };
+                    IoCall::Write {
+                        stream,
+                        bytes,
+                        lf: name.ends_with("println"),
+                    }
+                }
+                ("write_stdout" | "write_stderr", [Value::Bytes(bytes)]) => IoCall::Write {
+                    stream: if name == "write_stdout" {
+                        StandardStream::Stdout
+                    } else {
+                        StandardStream::Stderr
+                    },
+                    bytes: Cow::Borrowed(bytes),
+                    lf: false,
+                },
+                _ => {
+                    return Err(ModuleError::invalid(
+                        "OPERATION001",
+                        "I/O arguments do not match the declared signature",
+                    ));
+                }
+            };
+            let length = match &call {
+                IoCall::Read(cap) => *cap,
+                IoCall::Write { bytes, lf, .. } => bytes
+                    .len()
+                    .checked_add(usize::from(*lf))
+                    .ok_or_else(domain)?,
+            };
+            if length > cap {
+                return Err(domain());
+            }
+            Ok(call)
+        })();
+        if matches!(result, Err(ModuleError::Cancelled(_))) {
+            self.close_after_failure();
+        }
+        result
+    }
+
+    /// Validate grants, exact binding and cap+probe for the prepared call.
+    pub(crate) fn stdio_admission(
         &self,
         context: &OperationalContext,
         effects: &EffectSet,
         platform: &dyn Platform,
-        operation: &str,
-        arguments: &[Value],
+        call: &IoCall<'_>,
     ) -> Result<HostProgress, ModuleError> {
         if let Some(reason) = context.poll_cancellation() {
             return Err(ModuleError::Cancelled(reason));
         }
-        let call = IoCall::parse(operation, arguments, self.limits.max_call_bytes)?;
-        authorize(context, effects, &call.request(), platform)?;
-        let host = self
-            .host
-            .as_ref()
-            .filter(|host| host.stream_available(call.stream()))
-            .ok_or(ModuleError::Authority {
-                verdict: AuthorityVerdict::Unsupported,
-            })?;
-        if host.evaluation() != context.authority().evaluation().get() {
-            return Err(ModuleError::invalid(
-                "EXECUTE_STALE",
-                "standard host belongs to another evaluation",
-            ));
-        }
+        self.stdio_binding(context, effects, platform, call.stream())?;
         let requested_bytes = call.requested_bytes();
         if requested_bytes
             > self
@@ -136,6 +161,35 @@ impl StandardState {
         })
     }
 
+    fn stdio_binding(
+        &self,
+        context: &OperationalContext,
+        effects: &EffectSet,
+        platform: &dyn Platform,
+        stream: StandardStream,
+    ) -> Result<(), ModuleError> {
+        let request = match stream {
+            StandardStream::Stdin => CapabilityRequest::stdin_read(),
+            StandardStream::Stdout => CapabilityRequest::stdout_write(),
+            StandardStream::Stderr => CapabilityRequest::stderr_write(),
+        };
+        authorize(context, effects, &request, platform)?;
+        let host = self
+            .host
+            .as_ref()
+            .filter(|host| host.stream_available(stream))
+            .ok_or(ModuleError::Authority {
+                verdict: AuthorityVerdict::Unsupported,
+            })?;
+        if host.evaluation() != context.authority().evaluation().get() {
+            return Err(ModuleError::invalid(
+                "EXECUTE_STALE",
+                "standard host belongs to another evaluation",
+            ));
+        }
+        Ok(())
+    }
+
     pub fn invoke_stdio(
         &mut self,
         context: &OperationalContext,
@@ -146,9 +200,10 @@ impl StandardState {
         arguments: &[Value],
     ) -> Result<Value, ModuleError> {
         let deadline = self.operation_deadline(context);
-        self.invoke_stdio_with_deadline(
+        let call = self.prepare_stdio(
             context, effects, platform, budget, operation, arguments, deadline,
-        )
+        )?;
+        self.invoke_stdio_with_deadline(context, effects, platform, budget, call, deadline)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -158,25 +213,22 @@ impl StandardState {
         effects: &EffectSet,
         platform: &dyn Platform,
         budget: &mut ResourceBudget,
-        operation: &str,
-        arguments: &[Value],
+        call: IoCall<'_>,
         deadline: Deadline,
     ) -> Result<Value, ModuleError> {
         self.progress = HostProgress::default();
         let result = (|| {
-            self.progress =
-                self.stdio_admission(context, effects, platform, operation, arguments)?;
-            let call = IoCall::parse(operation, arguments, self.limits.max_call_bytes)?;
+            self.progress = self.stdio_admission(context, effects, platform, &call)?;
             poll(context, deadline)?;
             charge(budget)?;
-            match call {
+            match &call {
                 IoCall::Read(cap) => {
                     // Admit potential retention before reading; settle only the returned value.
                     let mut reservation = *budget;
-                    if !reservation.charge_collection_bytes(cap) {
+                    if !reservation.charge_collection_bytes(*cap) {
                         return Err(limit());
                     }
-                    let mut output = Vec::with_capacity(cap);
+                    let mut output = Vec::with_capacity(*cap);
                     let mut chunk = [0; MAX_STREAM_CHUNK_BYTES];
                     loop {
                         let length = (cap + 1 - output.len()).min(chunk.len());
@@ -218,14 +270,14 @@ impl StandardState {
                     }
                 }
                 IoCall::Write { stream, bytes, lf } => {
-                    for segment in [bytes, if lf { b"\n" } else { b"" }] {
+                    for segment in [bytes.as_ref(), if *lf { b"\n" } else { b"" }] {
                         let mut offset = 0;
                         while offset < segment.len() {
                             let end = (offset + MAX_STREAM_CHUNK_BYTES).min(segment.len());
                             let chunk = &segment[offset..end];
                             self.admit_chunk(context, budget, deadline, chunk.len())?;
                             let result = self.host.as_mut().expect("admitted host").write(
-                                stream,
+                                *stream,
                                 chunk,
                                 &|| context.cancellation().poll_until(deadline).is_some(),
                             );
@@ -249,9 +301,7 @@ impl StandardState {
         })();
         self.progress.admitted_bytes =
             self.progress.confirmed_bytes + self.progress.uncertain_bytes_upper_bound;
-        if let Ok(call) = IoCall::parse(operation, arguments, self.limits.max_call_bytes) {
-            self.record_progress(call.request().effect());
-        }
+        self.record_progress(call.request().effect());
         if matches!(result, Err(ModuleError::Cancelled(_))) {
             self.close_after_failure();
         }

@@ -27,7 +27,7 @@ impl FiniteFloat {
 
 impl fmt::Debug for FiniteFloat {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(&float_text(self.get()))
+        write_float(formatter, self.get())
     }
 }
 
@@ -1066,15 +1066,32 @@ fn int_float_equal(integer: i64, float: FiniteFloat) -> bool {
     float.fract() == 0.0 && (float as i128) == i128::from(integer)
 }
 
-fn float_text(value: f64) -> String {
-    if value == 0.0 {
-        return "0.0".to_owned();
+fn write_float(formatter: &mut impl fmt::Write, value: f64) -> fmt::Result {
+    // Finite binary64 Display needs at most 327 bytes, including sign and fraction.
+    struct Scratch {
+        bytes: [u8; 512],
+        length: usize,
     }
-    let mut text = value.to_string();
+    impl fmt::Write for Scratch {
+        fn write_str(&mut self, text: &str) -> fmt::Result {
+            let end = self.length + text.len();
+            let target = self.bytes.get_mut(self.length..end).ok_or(fmt::Error)?;
+            target.copy_from_slice(text.as_bytes());
+            self.length = end;
+            Ok(())
+        }
+    }
+    let mut scratch = Scratch {
+        bytes: [0; 512],
+        length: 0,
+    };
+    write!(scratch, "{value}")?;
+    let text = std::str::from_utf8(&scratch.bytes[..scratch.length]).map_err(|_| fmt::Error)?;
+    formatter.write_str(text)?;
     if !text.contains(['.', 'e', 'E']) {
-        text.push_str(".0");
+        formatter.write_str(".0")?;
     }
-    text
+    Ok(())
 }
 
 fn write_optional<T: fmt::Display>(
@@ -1110,7 +1127,7 @@ fn write_type_arguments(
     formatter.write_char(']')
 }
 
-fn write_string_content(formatter: &mut fmt::Formatter<'_>, value: &str) -> fmt::Result {
+pub(crate) fn write_string_content(formatter: &mut impl fmt::Write, value: &str) -> fmt::Result {
     for character in value.chars() {
         match character {
             '"' => formatter.write_str("\\\"")?,
@@ -1128,7 +1145,7 @@ fn write_string_content(formatter: &mut fmt::Formatter<'_>, value: &str) -> fmt:
     Ok(())
 }
 
-fn write_bytes(formatter: &mut fmt::Formatter<'_>, value: &[u8]) -> fmt::Result {
+pub(crate) fn write_bytes(formatter: &mut impl fmt::Write, value: &[u8]) -> fmt::Result {
     for byte in value {
         match byte {
             b'"' => formatter.write_str("\\\"")?,
@@ -1152,8 +1169,8 @@ fn write_path_content(formatter: &mut fmt::Formatter<'_>, value: &OsStr) -> fmt:
     write_string_content(formatter, &value.to_string_lossy())
 }
 
-fn write_utf8_with_invalid_bytes(
-    formatter: &mut fmt::Formatter<'_>,
+pub(crate) fn write_utf8_with_invalid_bytes(
+    formatter: &mut impl fmt::Write,
     mut bytes: &[u8],
 ) -> fmt::Result {
     while !bytes.is_empty() {

@@ -956,17 +956,17 @@ pub fn standard_operation(module: &ModuleId, name: &str) -> Option<OperationDesc
             ),
             "print" | "println" => (
                 "text",
-                ValueType::String,
+                ValueType::Any,
                 ValueType::Null,
                 CapabilityRequest::stdout_write(),
-                "Write exact UTF-8 text to stdout. println appends exactly one LF, even to empty or already LF-terminated text; print adds nothing.",
+                "Write human display to stdout. Strings retain exact UTF-8 bytes; nested data uses the existing quoted display, and Bytes are escaped (use write_stdout for raw bytes). Error, Callable and opaque operational values anywhere raise IO005 before transfer. Display is bounded by shared work/scratch limits, depth 128 and 1048576 bytes including LF (IO001); failures emit no prefix. println appends exactly one LF, even to empty or already LF-terminated text; print adds nothing.",
             ),
             "eprint" | "eprintln" => (
                 "text",
-                ValueType::String,
+                ValueType::Any,
                 ValueType::Null,
                 CapabilityRequest::stderr_write(),
-                "Write exact UTF-8 text to stderr. eprintln appends exactly one LF, even to empty or already LF-terminated text; eprint adds nothing.",
+                "Write human display to stderr. Strings retain exact UTF-8 bytes; nested data uses the existing quoted display, and Bytes are escaped (use write_stderr for raw bytes). Error, Callable and opaque operational values anywhere raise IO005 before transfer. Display is bounded by shared work/scratch limits, depth 128 and 1048576 bytes including LF (IO001); failures emit no prefix. eprintln appends exactly one LF, even to empty or already LF-terminated text; eprint adds nothing.",
             ),
             "write_stdout" => (
                 "bytes",

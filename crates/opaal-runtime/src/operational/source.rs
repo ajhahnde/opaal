@@ -1436,23 +1436,34 @@ impl SourceOperationalHost for ControlledSourceOperations<'_> {
         }
         if matches!(module.as_str(), "random" | "io") {
             self.metadata_only = true;
-            let random = self.random.as_ref().ok_or(ModuleError::Authority {
+            let random = self.random.as_mut().ok_or(ModuleError::Authority {
                 verdict: AuthorityVerdict::Unsupported,
             })?;
-            let admission_fn = if module == "io" {
-                StandardState::stdio_admission
-            } else {
-                StandardState::admission
-            };
-            let admission = admission_fn(
-                random,
-                self.context,
-                self.effects,
-                self.platform,
-                operation,
-                &arguments,
-            )?;
             let deadline = random.operation_deadline(self.context);
+            let prepared = if module == "io" {
+                Some(random.prepare_stdio(
+                    self.context,
+                    self.effects,
+                    self.platform,
+                    budget,
+                    operation,
+                    &arguments,
+                    deadline,
+                )?)
+            } else {
+                None
+            };
+            let admission = if let Some(call) = &prepared {
+                random.stdio_admission(self.context, self.effects, self.platform, call)?
+            } else {
+                random.admission(
+                    self.context,
+                    self.effects,
+                    self.platform,
+                    operation,
+                    &arguments,
+                )?
+            };
             let name = format!("std::{module}::{operation}");
             let module_id = ModuleId::standard("std", module);
             let operation_descriptor = crate::operation::standard_operation(&module_id, operation)
@@ -1480,21 +1491,26 @@ impl SourceOperationalHost for ControlledSourceOperations<'_> {
             };
             return self.effect(request, &name, descriptor, |this| {
                 let random = this.random.as_mut().expect("bound entropy state");
-                let invoke_fn = if module == "io" {
-                    StandardState::invoke_stdio_with_deadline
+                let value = if let Some(call) = prepared {
+                    random.invoke_stdio_with_deadline(
+                        this.context,
+                        this.effects,
+                        this.platform,
+                        budget,
+                        call,
+                        deadline,
+                    )?
                 } else {
-                    StandardState::invoke_with_deadline
+                    random.invoke_with_deadline(
+                        this.context,
+                        this.effects,
+                        this.platform,
+                        budget,
+                        operation,
+                        &arguments,
+                        deadline,
+                    )?
                 };
-                let value = invoke_fn(
-                    random,
-                    this.context,
-                    this.effects,
-                    this.platform,
-                    budget,
-                    operation,
-                    &arguments,
-                    deadline,
-                )?;
                 let result = if module == "io" {
                     SourceEffectResult::StandardStream(random.progress())
                 } else {

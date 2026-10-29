@@ -1,0 +1,6 @@
+import std::io as io
+let count = 42
+let report = {jobs: count, passed: true}
+io::println(count)
+io::println(report)
+io::eprintln("complete")

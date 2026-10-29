@@ -26,7 +26,17 @@ fuzz_target!(|data: &[u8]| {
         2 => ("write_stderr", vec![Value::bytes(payload.to_vec())]),
         n => (
             ["print", "println", "eprint", "eprintln"][usize::from(n - 3)],
-            vec![Value::string(text)],
+            vec![match control[13] % 5 {
+                0 => Value::string(text),
+                1 => Value::bytes(payload.to_vec()),
+                2 => Value::Int(i64::from(control[14]) - 128),
+                3 => Value::list(vec![Value::string(text), Value::Bool(true)]),
+                _ => {
+                    let mut value = Value::Null;
+                    for _ in 0..control[14] { value = Value::list(vec![value]); }
+                    value
+                }
+            }],
         ),
     };
     let mut expected = support::Harness::new(payload);

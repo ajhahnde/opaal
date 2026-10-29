@@ -7,10 +7,13 @@ import hashlib
 import json
 import os
 import platform
+import re
+import select
 import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 if __package__:
@@ -30,6 +33,66 @@ def assessment(report: dict) -> bytes:
                       sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
 
 
+def generic_language_server(binary: Path, work: Path, environment: dict[str, str]) -> None:
+    source = "import std::io as io\nio::println({jobs: 42})\n"
+    uri = (work / "generic-editor.opaal").as_uri()
+    messages = [
+        {"id": 1, "method": "initialize", "params": {"capabilities": {}}},
+        {"method": "initialized", "params": {}},
+        {"method": "textDocument/didOpen", "params": {"textDocument": {
+            "uri": uri, "languageId": "opaal", "version": 1, "text": source}}},
+        {"id": 2, "method": "textDocument/signatureHelp", "params": {
+            "textDocument": {"uri": uri}, "position": {"line": 1, "character": 12}}},
+        {"id": 3, "method": "textDocument/hover", "params": {
+            "textDocument": {"uri": uri}, "position": {"line": 1, "character": 5}}},
+        {"id": 4, "method": "shutdown"},
+        {"method": "exit"},
+    ]
+    responses = {}
+    with subprocess.Popen([binary], cwd=work, env=environment, stdin=subprocess.PIPE,
+                          stdout=subprocess.PIPE, stderr=subprocess.PIPE) as child:
+        output = b""
+        try:
+            for message in messages:
+                body = json.dumps({"jsonrpc": "2.0", **message}).encode()
+                child.stdin.write(f"Content-Length: {len(body)}\r\n\r\n".encode() + body)
+                child.stdin.flush()
+                if "id" not in message:
+                    continue
+                deadline = time.monotonic() + 30
+                while message["id"] not in responses:
+                    headers, separator, remaining = output.partition(b"\r\n\r\n")
+                    if separator:
+                        length = re.fullmatch(rb"Content-Length: (\d+)", headers)
+                        require(length is not None, "invalid generic language server frame")
+                        count = int(length[1])
+                        require(count <= 8 * 1024 * 1024, "oversized generic language server frame")
+                        if len(remaining) >= count:
+                            response = json.loads(remaining[:count])
+                            output = remaining[count:]
+                            if "id" in response:
+                                require(response["id"] not in responses, "duplicate generic language server response")
+                                responses[response["id"]] = response
+                            continue
+                    delay = deadline - time.monotonic()
+                    require(delay > 0 and bool(select.select([child.stdout], [], [], delay)[0]),
+                            "generic language server response timed out")
+                    data = os.read(child.stdout.fileno(), 65536)
+                    require(bool(data), "truncated generic language server frame")
+                    output += data
+            require(child.wait(timeout=30) == 0 and not child.stderr.read(), "generic language server exit differs")
+        finally:
+            if child.poll() is None:
+                child.kill()
+                child.wait(timeout=5)
+    require(set(responses) == {1, 2, 3, 4}, "generic language server response set differs")
+    require(responses[2].get("result", {}).get("signatures", [{}])[0].get("label")
+            == "std::io::println(text: Any) -> Null", "generic framed signature differs")
+    hover = json.dumps(responses[3].get("result"))
+    require("text: Any" in hover and "IO005" in hover and "stdout.write" in hover,
+            "generic framed hover differs")
+
+
 def references(binary: Path, inputs: Path, directory: Path, target: str) -> list[str]:
     """Exercise the same shipped files used by CLI tests and archive qualification."""
     work = directory / "sample"
@@ -44,8 +107,55 @@ def references(binary: Path, inputs: Path, directory: Path, target: str) -> list
         return command([binary, *arguments], sample, environment, stdin=stdin)
     for path in sorted(work.rglob("*.opaal")):
         success(run(work, "format", "--check", path), f"format {path.name}")
-        if path.name != "tasks.opaal":
+        if not path.name.endswith("tasks.opaal"):
             success(run(work, "check", path), f"check {path.name}")
+    for name, payload, stdout, stderr in [
+        ("generic-report", b"", b'42\n{"jobs": 42, "passed": true}\n', b"complete\n"),
+        ("generic-bytes", b"A\xff", "Grüße\0already\n\nA\\xFF\n".encode() + b"A\xff", b""),
+        ("generic-refusal", b"", b"42\n", b"unsupported display value\n"),
+    ]:
+        result = run(work, name + ".opaal", stdin=payload)
+        require(result.returncode == 0 and result.stdout == stdout and result.stderr == stderr,
+                f"generic exact output differs: {name}")
+        formatted = (work / (name + ".opaal")).read_bytes()
+        success(run(work, "format", "--write", name + ".opaal"), "generic format")
+        require(formatted == (work / (name + ".opaal")).read_bytes(), "generic format is not idempotent")
+    for name, stdout, stderr in [
+        ("generic-report", b'42\n{"jobs": 42, "passed": true}\n', b"complete\n"),
+        ("generic-refusal", b"42\n", b"unsupported display value\n"),
+    ]:
+        interactive = run(work, stdin=(work / (name + ".opaal")).read_bytes() + b"exit\n")
+        output = interactive.stdout.replace(b"...> ", b"").replace(b">> ", b"")
+        require(interactive.returncode == 0 and output == stdout and interactive.stderr == stderr,
+                f"interactive generic output/recovery differs: {name}")
+
+    # Reuse the existing harness for this candidate-only task; no release floor is invented.
+    generic = directory / "generic"
+    shutil.copytree(work, generic)
+    shutil.copyfile(generic / "generic-tasks.opaal", generic / "tasks.opaal")
+    base = ("--project", "opaal.toml", "--task", "sample", "--environment", "ci")
+    success(run(generic, "check", *base, "--format", "json"), "generic project check")
+    success(run(generic, "plan", *base, "--expires-in", "900s", "--out", "plan.json"), "generic project plan")
+    require(not list(generic.glob("*.jsonl")), "generic static tools created a journal")
+    plan = json.loads((generic / "plan.json").read_bytes())
+    execute = ("execute", "--plan", "plan.json", "--accept", plan["digest"])
+    missing = run(generic, *execute, "--journal", "missing.jsonl")
+    require(missing.returncode != 0 and not missing.stdout, "generic task without receipt transferred")
+    result = run(generic, *execute, "--journal", "generic.jsonl", "--receipt-out", "generic.receipt.json")
+    expected = b'{"jobs": 42, "passed": true}\n'
+    require(result.returncode == 0 and result.stdout == expected and result.stderr == b"complete\n",
+            "generic accepted task output differs")
+    receipt = json.loads((generic / "generic.receipt.json").read_bytes())
+    require(receipt["primary"]["class"] == "success" and receipt["primary"]["value_digest"] is None
+            and receipt["progress"]["stdout.write"]["confirmed_bytes"] == len(expected)
+            and receipt["progress"]["stderr.write"]["confirmed_bytes"] == 9,
+            "generic receipt outcome/counts differ")
+    success(run(generic, "audit", "--project", "opaal.toml", "--journal", "generic.jsonl", "--out", "generic.audit.json"), "generic audit")
+    for evidence in ["generic.jsonl", "generic.receipt.json", "generic.audit.json"]:
+        require(b'"jobs"' not in (generic / evidence).read_bytes(), "generic payload leaked to evidence")
+    (generic / "tasks.opaal").write_bytes((generic / "tasks.opaal").read_bytes() + b"\n")
+    stale = run(generic, *execute, "--journal", "stale.jsonl", "--receipt-out", "stale.receipt.json")
+    require(stale.returncode != 0 and not stale.stdout, "stale generic task transferred")
     for payload in [b"", "Grüße\n".encode(), b"a" * 4096]:
         result = run(work, "source.opaal", stdin=payload)
         require(result.returncode == 0 and result.stdout == payload and result.stderr == b"processed\n",
@@ -174,7 +284,9 @@ def references(binary: Path, inputs: Path, directory: Path, target: str) -> list
         if name == "acquisition":
             require(not (driver / "ci.run.jsonl").exists() and not (driver / "ci.receipt.json").exists(),
                     "failed acquisition launched a task")
-    return ["canonical source check/format", "exact processor UTF8/empty/cap/Broken Pipe",
+    return ["canonical source check/format", "generic report/Bytes/refusal exact output and format parity",
+            "interactive generic report/refusal/recovery", "generic accepted task, counts/audit, missing receipt and stale refusal",
+            "exact processor UTF8/empty/cap/Broken Pipe",
             "all report policy and invalid input fixtures", "documented CI first use",
             "full bytes plus producer exit 7: zero processor launches",
             "controlled positive/negative/invalid receipts and audit", "exact role counts and exit mapping",
@@ -216,6 +328,7 @@ def qualify(archive: Path | None, fixtures: Path | None, binaries: Path | None, 
         require(success(command([programs / "opaal", "--version"], directory, {"PATH": os.defpath}), "version")
                 == f"opaal {VERSION}\n".encode(), "version differs")
         language_server(programs / "opaal-language-server", directory, {"PATH": os.defpath})
+        generic_language_server(programs / "opaal-language-server", directory, {"PATH": os.defpath})
         assertions = references(programs / "opaal", inputs, directory, target)
         return {"schema_version": 1, "source": source, "committed_source": not dirty,
                 "source_snapshot_sha256": hashlib.sha256(json.dumps(snapshot, sort_keys=True, separators=(",", ":")).encode()).hexdigest(),
@@ -223,7 +336,7 @@ def qualify(archive: Path | None, fixtures: Path | None, binaries: Path | None, 
                 "fixture_archive_sha256": fixture_manifest["sha256"],
                 "binary_sha256": {name: hashlib.sha256((programs / name).read_bytes()).hexdigest() for name in ("opaal", "opaal-language-server")},
                 "fixture_sha256": {name: value for name, value in snapshot.items() if name.startswith(FIXTURES + "/")},
-                "assertions": assertions}
+                "assertions": [*assertions, "framed generic LSP signature and hover"]}
 
 
 def main() -> None:

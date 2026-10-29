@@ -1,0 +1,6 @@
+import std::io as io
+io::print("Grüße\0")
+io::println("already\n")
+let payload = io::read_stdin(2)
+io::println(payload)
+io::write_stdout(payload)

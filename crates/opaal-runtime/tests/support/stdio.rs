@@ -45,6 +45,7 @@ pub struct Script {
     pub calls: Vec<(StandardStream, usize)>,
     pub max_progress: Option<usize>,
     pub errors: VecDeque<TransferError>,
+    pub fail_on_call: Option<usize>,
     pub available: [bool; 3],
     pub closed: usize,
     pub close_fail: bool,
@@ -83,7 +84,11 @@ impl StandardHost for Host {
         if let Some(clock) = &script.advance {
             clock.advance(30_000_000_000);
         }
-        if let Some(error) = script.errors.pop_front() {
+        if script
+            .fail_on_call
+            .is_none_or(|call| call == script.calls.len())
+            && let Some(error) = script.errors.pop_front()
+        {
             return Err(error);
         }
         let count = bytes
@@ -109,7 +114,11 @@ impl StandardHost for Host {
         if let Some(clock) = &script.advance {
             clock.advance(30_000_000_000);
         }
-        if let Some(error) = script.errors.pop_front() {
+        if script
+            .fail_on_call
+            .is_none_or(|call| call == script.calls.len())
+            && let Some(error) = script.errors.pop_front()
+        {
             return Err(error);
         }
         let count = bytes.len().min(script.max_progress.unwrap_or(usize::MAX));

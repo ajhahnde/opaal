@@ -8,13 +8,14 @@ import shutil
 import subprocess
 import sys
 import stat
+import io
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 from pathlib import Path
 
 from ci.tests import test_data_processing_candidate as candidates
 from ci.package_standard_input_output import ROOT, check_copies
-from ci.qualify_standard_input_output import assessment
+from ci.qualify_standard_input_output import assessment, generic_language_server
 from ci.qualify_standard_io_failures import worker_has_pipe
 from ci.qualify_data_processing import QualificationError
 
@@ -26,6 +27,30 @@ class StdioFixtureIdentityTests(candidates.CandidateIdentityTests):
 
 
 class CiReferenceTests(unittest.TestCase):
+    def test_generic_framed_observer_rejects_stale_string_signature(self):
+        for signature, valid in [("Any", True), ("String", False)]:
+            messages = [
+                {"id": 1, "result": {}},
+                {"id": 2, "result": {"signatures": [{"label": f"std::io::println(text: {signature}) -> Null"}]}},
+                {"id": 3, "result": {"contents": "text: Any IO005 stdout.write"}},
+                {"id": 4, "result": None},
+            ]
+            framed = b""
+            for message in messages:
+                body = json.dumps(message).encode()
+                framed += f"Content-Length: {len(body)}\r\n\r\n".encode() + body
+            child = Mock(stdin=io.BytesIO(), stderr=io.BytesIO())
+            child.wait.return_value = child.poll.return_value = 0
+            with patch("ci.qualify_standard_input_output.subprocess.Popen") as process, \
+                 patch("ci.qualify_standard_input_output.select.select", return_value=([child.stdout], [], [])), \
+                 patch("ci.qualify_standard_input_output.os.read", return_value=framed):
+                process.return_value.__enter__.return_value = child
+                if valid:
+                    generic_language_server(Path("/bin/lsp"), Path("/sample"), {})
+                else:
+                    with self.assertRaisesRegex(QualificationError, "framed signature"):
+                        generic_language_server(Path("/bin/lsp"), Path("/sample"), {})
+
     def test_linux_worker_pipe_requires_received_endpoint(self):
         with patch("ci.qualify_standard_io_failures.platform.system", return_value="Linux"), \
              patch("ci.qualify_standard_io_failures.Path") as path:

@@ -346,23 +346,23 @@ fn stdio_signatures_and_effect_hover_use_the_shared_catalog_without_transfer() {
             "stdin.read",
         ),
         (
-            "print('x')",
-            "std::io::print(text: String) -> Null",
+            "print(42)",
+            "std::io::print(text: Any) -> Null",
             "stdout.write",
         ),
         (
-            "println('x')",
-            "std::io::println(text: String) -> Null",
+            "println([42])",
+            "std::io::println(text: Any) -> Null",
             "stdout.write",
         ),
         (
-            "eprint('x')",
-            "std::io::eprint(text: String) -> Null",
+            "eprint(true)",
+            "std::io::eprint(text: Any) -> Null",
             "stderr.write",
         ),
         (
-            "eprintln('x')",
-            "std::io::eprintln(text: String) -> Null",
+            "eprintln({jobs: 42})",
+            "std::io::eprintln(text: Any) -> Null",
             "stderr.write",
         ),
         (
