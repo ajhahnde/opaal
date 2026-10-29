@@ -61,6 +61,14 @@ impl opaal_runtime::resolve::ExecutableProbe for NoExecutables {
 }
 
 fn run(h: Harness, journal: &mut Journal) -> ScriptExecutionOutcome {
+    run_source(
+        h,
+        journal,
+        "import std::io as io\nexport { run }\naction run() -> Null { effects { stdin.read(), stdout.write(), stderr.write(), }  let input = io::read_stdin(4)\nio::write_stdout(input)\nreturn io::eprintln('processed') }\ntask sample = run",
+    )
+}
+
+fn run_source(h: Harness, journal: &mut Journal, source: &str) -> ScriptExecutionOutcome {
     let manifest = parse_project_manifest(
         Path::new("/stdio/opaal.toml"),
         br#"
@@ -78,7 +86,7 @@ tool_lock = "tools.toml"
 "#,
     )
     .unwrap();
-    let source = support::Source("import std::io as io\nexport { run }\naction run() -> Null { effects { stdin.read(), stdout.write(), stderr.write(), }  let input = io::read_stdin(4)\nio::write_stdout(input)\nreturn io::eprintln('processed') }\ntask sample = run".into());
+    let source = support::Source(source.into());
     let project = load_project_program(manifest, &source, &source).unwrap();
     let tools = parse_tool_lock(
         project.manifest(),
@@ -138,6 +146,78 @@ inherit = []
     );
     assert!(operations.finish_standard_host().is_empty());
     outcome
+}
+
+#[test]
+fn generic_task_prepares_before_journaling_and_keeps_only_metadata() {
+    let source = include_str!("../../../tests/golden/standard-input-output/generic-tasks.opaal");
+    for failure in [None, Some(false), Some(true)] {
+        let h = Harness::new(&[]);
+        let script = h.script.clone();
+        let mut journal = Journal {
+            before_fail: failure == Some(false),
+            after_fail: failure == Some(true),
+            ..Journal::default()
+        };
+        let outcome = run_source(h, &mut journal, source);
+        let script = script.lock().unwrap();
+        match failure {
+            None => {
+                assert!(
+                    matches!(outcome.primary(), PrimaryOutcome::Completed(_)),
+                    "{outcome:?}"
+                );
+                assert_eq!(script.stdout, b"{\"jobs\": 42, \"passed\": true}\n");
+                assert_eq!(script.stderr, b"complete\n");
+                assert_eq!(journal.events.len(), 2);
+            }
+            Some(after) => {
+                assert!(
+                    matches!(outcome.primary(), PrimaryOutcome::FatalHostFailure(_)),
+                    "{outcome:?}"
+                );
+                assert_eq!(
+                    script.stdout,
+                    if after {
+                        &b"{\"jobs\": 42, \"passed\": true}\n"[..]
+                    } else {
+                        &b""[..]
+                    }
+                );
+                assert!(script.stderr.is_empty());
+            }
+        }
+        for (event, outcome) in &journal.events {
+            assert!(matches!(
+                event.operation(),
+                SourceOperation::StandardStream { .. }
+            ));
+            assert!(outcome.value_digest().is_none());
+            let Some(SourceEffectResult::StandardStream(progress)) = outcome.result() else {
+                panic!("missing progress")
+            };
+            assert!(progress.confirmed_bytes > 0);
+            assert_eq!(progress.uncertain_bytes_upper_bound, 0);
+        }
+    }
+    let h = Harness::new(&[]);
+    let script = h.script.clone();
+    let mut journal = Journal::default();
+    let unsupported = source
+        .replace(
+            "action report",
+            "def marker() -> Int { return 1 }\naction report",
+        )
+        .replace(
+            "io::println({jobs: 42, passed: true})",
+            "io::println([marker])",
+        );
+    assert!(matches!(
+        run_source(h, &mut journal, &unsupported).primary(),
+        PrimaryOutcome::Error(_)
+    ));
+    assert!(journal.events.is_empty());
+    assert!(script.lock().unwrap().calls.is_empty());
 }
 
 #[test]

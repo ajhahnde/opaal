@@ -67,6 +67,41 @@ fn source_processor_has_exact_payload_and_diagnostics_and_closes_the_binding() {
 }
 
 #[test]
+fn generic_reference_sources_keep_exact_output_and_catchable_refusal() {
+    for (source, input, stdout, stderr) in [
+        (
+            include_str!("../../../tests/golden/standard-input-output/generic-report.opaal"),
+            &b""[..],
+            &b"42\n{\"jobs\": 42, \"passed\": true}\n"[..],
+            &b"complete\n"[..],
+        ),
+        (
+            include_str!("../../../tests/golden/standard-input-output/generic-bytes.opaal"),
+            &b"A\xff"[..],
+            &b"Gr\xc3\xbc\xc3\x9fe\0already\n\nA\\xFF\nA\xff"[..],
+            &b""[..],
+        ),
+        (
+            include_str!("../../../tests/golden/standard-input-output/generic-refusal.opaal"),
+            &b""[..],
+            &b"42\n"[..],
+            &b"unsupported display value\n"[..],
+        ),
+    ] {
+        let h = Harness::new(input);
+        let script = h.script.clone();
+        let outcome = run(source.strip_prefix("import std::io as io\n").unwrap(), h);
+        assert!(
+            matches!(outcome.primary(), PrimaryOutcome::Completed(_)),
+            "{outcome:?}"
+        );
+        let script = script.lock().unwrap();
+        assert_eq!(script.stdout, stdout);
+        assert_eq!(script.stderr, stderr);
+    }
+}
+
+#[test]
 fn pure_functions_callbacks_and_undeclared_actions_refuse_before_transfer() {
     for body in [
         "def pure() -> Null { return io::print('x') }\npure()",

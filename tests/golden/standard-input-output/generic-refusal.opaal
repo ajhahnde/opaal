@@ -1,0 +1,11 @@
+import std::io as io
+def marker() -> Int
+{
+    return 1
+}
+try {
+    io::println([marker])
+} catch error {
+    io::eprintln("unsupported display value")
+}
+io::println(42)

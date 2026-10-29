@@ -7,6 +7,30 @@ use opaal_runtime::Value;
 use support::Harness;
 
 #[test]
+fn generic_output_keeps_confirmed_prefix_when_the_second_chunk_breaks() {
+    let mut h = Harness::new(&[]);
+    {
+        let mut script = h.script.lock().unwrap();
+        script.fail_on_call = Some(2);
+        script
+            .errors
+            .push_back(TransferError::not_started(OperationalError::new(
+                OperationalErrorKind::Io(std::io::ErrorKind::BrokenPipe),
+                "broken pipe",
+            )));
+    }
+    let value = Value::bytes(vec![0xff; 20_000]);
+    assert_eq!(h.invoke("println", &[value]).unwrap_err().code(), "IO003");
+    assert_eq!(h.state.progress().confirmed_bytes, 65536);
+    assert_eq!(h.state.progress().uncertain_bytes_upper_bound, 0);
+    assert_eq!(h.state.role_progress().stdout.confirmed_bytes, 65536);
+    assert_eq!(h.state.consumed_bytes(), 65536);
+    let script = h.script.lock().unwrap();
+    assert_eq!(script.stdout, b"\\xFF".repeat(16384));
+    assert_eq!(script.calls.len(), 2);
+}
+
+#[test]
 fn role_totals_survive_multiple_calls_eof_and_a_later_failed_transfer() {
     let mut h = Harness::new(b"abc");
     h.invoke("read_stdin", &[Value::Int(3)]).unwrap();

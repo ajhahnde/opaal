@@ -7,7 +7,7 @@ use opaal_platform::{
 use opaal_runtime::Value;
 use opaal_runtime::authority::{AuthorityContext, AuthorityVerdict, EffectSet};
 use opaal_runtime::context::OperationalContext;
-use opaal_runtime::eval::CancellationToken;
+use opaal_runtime::eval::{CancellationToken, ResourceBudget};
 use opaal_runtime::operational::ModuleError;
 use opaal_runtime::operational::standard::{StandardLimits, StandardState};
 use support::{Harness, Host};
@@ -84,4 +84,56 @@ fn a_bound_endpoint_cannot_be_retargeted_to_another_evaluation_or_reused_after_c
             verdict: AuthorityVerdict::Unsupported
         })
     ));
+}
+
+#[test]
+fn generic_admission_checks_authority_and_binding_before_spending_render_budget() {
+    for case in 0..4 {
+        let mut h = Harness::new(&[]);
+        let expected = match case {
+            0 => {
+                h.context = OperationalContext::new(
+                    AuthorityContext::empty(h.context.authority().evaluation()),
+                    CancellationToken::never(),
+                    h.clock.clone(),
+                    None,
+                );
+                "OPERATION002"
+            }
+            1 => {
+                h.effects = EffectSet::default();
+                "OPERATION002"
+            }
+            2 => {
+                h.script.lock().unwrap().available[1] = false;
+                "OPERATION002"
+            }
+            _ => {
+                h.state = StandardState::new(
+                    Some(Box::new(Host {
+                        script: h.script.clone(),
+                        evaluation: 72,
+                    })),
+                    StandardLimits::default(),
+                )
+                .unwrap();
+                "EXECUTE_STALE"
+            }
+        };
+        h.budget = ResourceBudget::steps(0).with_collection_bytes(0);
+        assert_eq!(
+            h.invoke("print", &[Value::Int(42)]).unwrap_err().code(),
+            expected
+        );
+        assert_eq!(h.budget.used(), 0);
+        assert_eq!(h.budget.collection_bytes(), 0);
+        assert!(h.script.lock().unwrap().calls.is_empty());
+        // Existing cheap String cap validation still wins over denied admission.
+        assert_eq!(
+            h.invoke("print", &[Value::string("x".repeat(1024 * 1024 + 1))])
+                .unwrap_err()
+                .code(),
+            "IO001"
+        );
+    }
 }

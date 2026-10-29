@@ -4,6 +4,16 @@ All notable changes to OPAAL are documented here.
 
 ## [Unreleased]
 
+### Added
+
+- The four standard print helpers accept one `Any` argument and display ordinary
+  data directly, including numbers, Bytes, paths and structured reports. Existing
+  String bytes, LF behavior, effects and partial-transfer evidence are unchanged.
+  Nested values retain their quoted display. Error, Callable and opaque operational
+  values anywhere raise `IO005` without output. Preparation shares evaluation
+  work/scratch budgets, allows depth 128, and refuses output exceeding 1048576 bytes
+  including LF (`IO001`) before transfer. Raw byte writers remain byte-exact.
+
 ## [1.9.0]
 
 ### Changed

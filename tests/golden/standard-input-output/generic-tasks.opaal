@@ -1,0 +1,12 @@
+import std::io as io
+action report() -> Null
+{
+    effects {
+        stdout.write(),
+        stderr.write(),
+    }
+    io::println({jobs: 42, passed: true})
+    return io::eprintln("complete")
+}
+export { report }
+task sample = report
