@@ -2326,7 +2326,7 @@
     },
     {
       "path": "ci/check_product.py",
-      "sha256": "d32a1bf48140badaeb18fecb534d14feeca528e6c1326e7c0be724c8a858ffa6",
+      "sha256": "1ea9316359001f1d162f2ca71694ddd017c1bc09e55379d24366cac3a8a2ce47",
       "source_markers": 15,
       "constructors_or_assertions": [
         "command_json",
@@ -2448,7 +2448,7 @@
     },
     {
       "path": "ci/package_release.py",
-      "sha256": "b93c2eb640b7dd6c0a5ebf597ed5d6be2ccf914df6885c20d2391174913c3e20",
+      "sha256": "edb8189b472bfe14d2e360c2eef0c7c8e3a57ac371f523e525d7ad9377e12637",
       "source_markers": 2,
       "constructors_or_assertions": [
         "main",
@@ -2745,7 +2745,7 @@
     },
     {
       "path": "ci/qualify_standard_input_output.py",
-      "sha256": "91deba0d7f0f3908a13ccd8700dc9d0e7ee4e4462e8aca4cb8b1b7baa0df72f8",
+      "sha256": "992e1881e1e004f406ad819140b82f32bd655ff0e23eeeedcfe3328bfb3cb0ef",
       "source_markers": 25,
       "constructors_or_assertions": [
         "assessment",

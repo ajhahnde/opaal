@@ -100,7 +100,11 @@ def references(binary: Path, inputs: Path, directory: Path, target: str) -> list
     environment = {"PATH": str(binary.parent) + os.pathsep + os.defpath}
     for sample in [work, work / "ci-job-check"]:
         manifest = sample / "opaal.toml"
-        require('required_opaal = ">=1.9.0,<2.0.0"' in manifest.read_text(), "reference version floor differs")
+        expected_floor = ">=1.10.0,<2.0.0" if sample == work else ">=1.9.0,<2.0.0"
+        require(
+            f'required_opaal = "{expected_floor}"' in manifest.read_text(),
+            "reference version floor differs",
+        )
         lock = "tools-macos.toml" if target == "macos-arm64" else "tools-linux-aarch64.toml" if target == "linux-aarch64" else "tools-linux.toml"
         shutil.copyfile(sample / lock, sample / "tools.toml")
     def run(sample, *arguments, stdin=None):
@@ -129,7 +133,7 @@ def references(binary: Path, inputs: Path, directory: Path, target: str) -> list
         require(interactive.returncode == 0 and output == stdout and interactive.stderr == stderr,
                 f"interactive generic output/recovery differs: {name}")
 
-    # Reuse the existing harness for this candidate-only task; no release floor is invented.
+    # The generic task reuses the fixture project, whose manifest requires this print domain.
     generic = directory / "generic"
     shutil.copytree(work, generic)
     shutil.copyfile(generic / "generic-tasks.opaal", generic / "tasks.opaal")
