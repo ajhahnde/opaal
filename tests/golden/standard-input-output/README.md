@@ -1,15 +1,14 @@
 # Standard input and output
 
-These migrated offline references require OPAAL 1.9.0 or later and below 2.0.0.
-Qualification uses the committed project version requirements unchanged.
-The `generic-*.opaal` references additionally require the unreleased generic
-printing implementation; published 1.9.0 rejects those calls. No first release
-or new project minimum is assigned yet. Candidate qualification temporarily
-substitutes `generic-tasks.opaal` into the existing project harness; the shipped
-String-only project's minimum stays unchanged.
+The standard-I/O sample project requires OPAAL 1.10.0 or later and below 2.0.0.
+Its `generic-*.opaal` references use the new print domain; published 1.9.0
+rejects those calls. String-only output behavior remains unchanged. The nested
+CI job-check project uses existing byte APIs and retains its
+`>=1.9.0,<2.0.0` floor.
 
-Extract the matching Linux x86_64 or macOS arm64 program archive and the
-`standard-input-output` fixture archive into a fresh directory. Follow the
+Extract the matching Linux x86_64, GNU/Linux AArch64, or macOS arm64 program
+archive and the `standard-input-output` fixture archive into a fresh directory.
+Follow the
 [installation guide](https://opaal-lang.org/download/) for checksum verification
 and put that candidate's program directory on PATH. Enter this fixture directory:
 

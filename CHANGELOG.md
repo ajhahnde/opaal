@@ -4,6 +4,8 @@ All notable changes to OPAAL are documented here.
 
 ## [Unreleased]
 
+## [1.10.0]
+
 ### Added
 
 - Replace one list element with `items[index] = value` on a mutable local binding.

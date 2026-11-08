@@ -1,7 +1,8 @@
 # Indexed list replacement
 
-These fixtures describe unreleased source behavior. Published OPAAL 1.9.0 does
-not accept this syntax; a containing release and minimum version are unassigned.
+These fixtures require OPAAL 1.10.0 or later and below 2.0.0. Published OPAAL
+1.9.0 rejects the indexed source through the project manifest before source or
+plan admission.
 
 Use `items[index] = replacement` on one mutable local list binding. The root
 must be an unqualified name, with one bracketed expression. Imported, captured
