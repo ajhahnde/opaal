@@ -12,7 +12,7 @@ opaal-platform = { path = "../crates/opaal-platform" }
 opaal-runtime = { path = "../crates/opaal-runtime" }
 opaal-syntax = { path = "../crates/opaal-syntax" }
 libfuzzer-sys = "0.4"
-serde_json = { version = "=1.0.151", default-features = false, features = ["std"] }
+serde_json = { version = "=1.0.154", default-features = false, features = ["std"] }
 
 [[bin]]
 name = "lexer"
