@@ -1,16 +1,16 @@
 use std::borrow::Cow;
 use std::io::{self, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{self, Receiver};
-use std::sync::{Arc, RwLock};
+use std::sync::mpsc;
+use std::sync::{Arc, Mutex, MutexGuard, RwLock};
 use std::thread;
 use std::time::Duration;
 
 use nu_ansi_term::{Color, Style};
 use opaal_syntax::{ParseOutcome, SourceFile, SourceId, parse_opaal};
 use reedline::{
-    ColumnarMenu, Completer, Emacs, ExternalPrinter, Highlighter, Hinter, History, KeyCode,
-    KeyModifiers, MenuBuilder, Prompt, PromptEditMode, PromptHistorySearch, Reedline,
+    ColumnarMenu, Completer, CompletionResult, Emacs, ExternalOutput, Highlighter, Hinter, History,
+    KeyCode, KeyModifiers, MenuBuilder, Prompt, PromptEditMode, PromptHistorySearch, Reedline,
     ReedlineEvent, ReedlineMenu, SearchQuery, Signal, Span, StyledText, Suggestion,
     ValidationResult, Validator, default_emacs_keybindings,
 };
@@ -27,22 +27,59 @@ use crate::history::{EditorHistory, HistoryError, HistorySelection};
 pub struct ReedlineEditor {
     inner: Reedline,
     completion: Arc<RwLock<CompletionEngine>>,
-    external_printer: ExternalPrinter<String>,
-    idle_ticks: Receiver<()>,
+    notices: ExternalNotices,
     break_signal: Arc<AtomicBool>,
+}
+
+#[derive(Clone, Default)]
+struct ExternalNotices(Arc<Mutex<NoticeState>>);
+
+#[derive(Default)]
+enum NoticeState {
+    #[default]
+    Idle,
+    Queued(String),
+    Drawing,
+    Drawn,
+}
+
+impl ExternalNotices {
+    fn state(&self) -> MutexGuard<'_, NoticeState> {
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    fn mark_drawn(&self) {
+        // Reedline calls this on the next loop iteration, after painting the notice.
+        let mut state = self.state();
+        if matches!(*state, NoticeState::Drawing) {
+            *state = NoticeState::Drawn;
+        }
+    }
+}
+
+impl ExternalOutput for ExternalNotices {
+    fn drain(&mut self) -> io::Result<Vec<String>> {
+        let mut state = self.state();
+        let NoticeState::Queued(line) = &mut *state else {
+            return Ok(Vec::new());
+        };
+        let line = std::mem::take(line);
+        *state = NoticeState::Drawing;
+        Ok(vec![line])
+    }
 }
 
 impl ReedlineEditor {
     #[must_use]
     pub fn new() -> Self {
         let completion = default_completion();
-        let (inner, external_printer, idle_ticks, break_signal) =
-            editor_engine(Arc::clone(&completion));
+        let (inner, notices, break_signal) = editor_engine(Arc::clone(&completion));
         Self {
             inner,
             completion,
-            external_printer,
-            idle_ticks,
+            notices,
             break_signal,
         }
     }
@@ -51,13 +88,11 @@ impl ReedlineEditor {
     pub fn with_history(selection: HistorySelection) -> Result<Self, HistoryError> {
         let history = EditorHistory::open(selection)?;
         let completion = default_completion();
-        let (inner, external_printer, idle_ticks, break_signal) =
-            editor_engine(Arc::clone(&completion));
+        let (inner, notices, break_signal) = editor_engine(Arc::clone(&completion));
         Ok(Self {
             inner: inner.with_history(history.into_backend()),
             completion,
-            external_printer,
-            idle_ticks,
+            notices,
             break_signal,
         })
     }
@@ -73,12 +108,7 @@ fn default_completion() -> Arc<RwLock<CompletionEngine>> {
 
 fn editor_engine(
     completion: Arc<RwLock<CompletionEngine>>,
-) -> (
-    Reedline,
-    ExternalPrinter<String>,
-    Receiver<()>,
-    Arc<AtomicBool>,
-) {
+) -> (Reedline, ExternalNotices, Arc<AtomicBool>) {
     // Bind Tab to the completion menu so the installed completer is reachable.
     let mut keybindings = default_emacs_keybindings();
     keybindings.add_binding(
@@ -89,8 +119,8 @@ fn editor_engine(
             ReedlineEvent::MenuNext,
         ]),
     );
-    let external_printer = ExternalPrinter::default();
-    let (idle_sender, idle_ticks) = mpsc::sync_channel(1);
+    let notices = ExternalNotices::default();
+    let drawn_notices = notices.clone();
     let break_signal = Arc::new(AtomicBool::new(false));
     let inner = Reedline::create()
         .with_cwd(Some(String::new()))
@@ -102,13 +132,11 @@ fn editor_engine(
         )))
         .with_edit_mode(Box::new(Emacs::new(keybindings)))
         .with_hinter(Box::new(ReedlineHinter::new()))
-        .with_external_printer(external_printer.clone())
+        .with_external_printer(notices.clone())
         .with_break_signal(Arc::clone(&break_signal))
         .with_poll_interval(Duration::from_millis(25))
-        .with_idle_callback(Box::new(move || {
-            let _ = idle_sender.try_send(());
-        }));
-    (inner, external_printer, idle_ticks, break_signal)
+        .with_idle_callback(Box::new(move || drawn_notices.mark_drawn()));
+    (inner, notices, break_signal)
 }
 
 const COMPLETION_MENU: &str = "completion_menu";
@@ -148,7 +176,6 @@ impl LineEditor for ReedlineEditor {
         prompt: &EditorPrompt,
         events: &mut dyn EditorEventSource,
     ) -> Result<EditorEvent, EditorError> {
-        while self.idle_ticks.try_recv().is_ok() {}
         self.break_signal.store(false, Ordering::Relaxed);
         let prompt = ReedlinePrompt { prompt };
         let signal = thread::scope(|scope| {
@@ -165,39 +192,26 @@ impl LineEditor for ReedlineEditor {
                     && pending.is_none()
                     && let Some(event) = events.next_external_print()
                 {
-                    if self
-                        .external_printer
-                        .print(event.rendered().to_owned())
-                        .is_err()
-                    {
-                        bridge_error = Some(EditorError::new("external print channel closed"));
-                        self.break_signal.store(true, Ordering::Relaxed);
-                    } else {
-                        pending = Some(event);
-                    }
+                    *self.notices.state() = NoticeState::Queued(event.rendered().to_owned());
+                    pending = Some(event);
                 }
 
-                while self.idle_ticks.try_recv().is_ok() {
-                    if self.external_printer.receiver().is_empty()
-                        && let Some(event) = pending.take()
-                        && let Err(error) = events.acknowledge_external_print(&event)
-                    {
-                        bridge_error = Some(error);
-                        self.break_signal.store(true, Ordering::Relaxed);
-                    }
+                let drawn = matches!(*self.notices.state(), NoticeState::Drawn);
+                if drawn
+                    && let Some(event) = pending.take()
+                    && let Err(error) = events.acknowledge_external_print(&event)
+                {
+                    bridge_error = Some(error);
+                    self.break_signal.store(true, Ordering::Relaxed);
                 }
 
                 match result_receiver.recv_timeout(Duration::from_millis(10)) {
                     Ok(result) => {
-                        if pending.is_some() && self.external_printer.get_line().is_some() {
-                            // Reedline returned before consuming this notice. Leave it
-                            // unacknowledged so the prompt-boundary path renders it once,
-                            // and keep it out of the next editor read.
-                            pending = None;
-                        }
+                        // An undrawn notice stays with the session for the next prompt.
+                        let notice = std::mem::take(&mut *self.notices.state());
                         if bridge_error.is_none()
                             && result.is_ok()
-                            && self.external_printer.receiver().is_empty()
+                            && matches!(notice, NoticeState::Drawing | NoticeState::Drawn)
                             && let Some(event) = pending.take()
                         {
                             events.acknowledge_external_print(&event)?;
@@ -211,9 +225,7 @@ impl LineEditor for ReedlineEditor {
                     }
                     Err(mpsc::RecvTimeoutError::Timeout) => {}
                     Err(mpsc::RecvTimeoutError::Disconnected) => {
-                        if pending.is_some() {
-                            let _ = self.external_printer.get_line();
-                        }
+                        *self.notices.state() = NoticeState::Idle;
                         return Err(EditorError::new("line editor worker stopped"));
                     }
                 }
@@ -270,8 +282,9 @@ struct ReedlineCompleter {
 }
 
 impl Completer for ReedlineCompleter {
-    fn complete(&mut self, line: &str, pos: usize) -> Vec<Suggestion> {
-        self.engine
+    fn complete(&mut self, line: &str, pos: usize) -> CompletionResult {
+        let suggestions = self
+            .engine
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .complete(line, pos)
@@ -286,7 +299,8 @@ impl Completer for ReedlineCompleter {
                     ..Suggestion::default()
                 }
             })
-            .collect()
+            .collect::<Vec<_>>();
+        CompletionResult::fresh(suggestions)
     }
 }
 
@@ -362,7 +376,7 @@ fn highlight_style(kind: HighlightKind) -> Style {
 fn map_signal(signal: Signal) -> Result<EditorEvent, EditorError> {
     match signal {
         Signal::Success(buffer) => Ok(EditorEvent::Submitted(buffer)),
-        Signal::CtrlC => Ok(EditorEvent::Cancelled),
+        Signal::CtrlC(_) => Ok(EditorEvent::Cancelled),
         Signal::CtrlD => Ok(EditorEvent::EndOfInput),
         Signal::HostCommand(command) => Ok(EditorEvent::HostCommand(command)),
         Signal::ExternalBreak(buffer) => Ok(EditorEvent::ExternalBreak(buffer)),
@@ -412,7 +426,10 @@ mod tests {
                 Signal::Success("echo hello".to_owned()),
                 EditorEvent::Submitted("echo hello".to_owned()),
             ),
-            (Signal::CtrlC, EditorEvent::Cancelled),
+            (
+                Signal::CtrlC("discarded input".to_owned()),
+                EditorEvent::Cancelled,
+            ),
             (Signal::CtrlD, EditorEvent::EndOfInput),
             (
                 Signal::HostCommand("host-action".to_owned()),
@@ -430,6 +447,19 @@ mod tests {
                 expected
             );
         }
+    }
+
+    #[test]
+    fn external_notice_is_acknowledgeable_after_the_draw() {
+        let mut notices = ExternalNotices::default();
+        *notices.state() = NoticeState::Queued("completed".to_owned());
+        notices.mark_drawn();
+        assert!(matches!(*notices.state(), NoticeState::Queued(_)));
+        assert_eq!(notices.drain().unwrap(), ["completed"]);
+        assert!(matches!(*notices.state(), NoticeState::Drawing));
+        assert!(notices.drain().unwrap().is_empty());
+        notices.mark_drawn();
+        assert!(matches!(*notices.state(), NoticeState::Drawn));
     }
 
     #[test]
@@ -510,6 +540,7 @@ mod tests {
 
         let suggestions = completer.complete("pw", 2);
         let pwd = suggestions
+            .suggestions()
             .iter()
             .find(|suggestion| suggestion.value == "pwd")
             .expect("standard command should be bridged");

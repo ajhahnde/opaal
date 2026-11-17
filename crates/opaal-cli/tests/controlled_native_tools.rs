@@ -26,6 +26,16 @@ fn lock_native_path(path: &Path) -> String {
     )
 }
 
+fn copy_candidate(destination: &Path) {
+    // Keep the write descriptor in the copier so parallel test launches cannot inherit it.
+    let copied = Command::new("/bin/cp")
+        .args(["-p", env!("CARGO_BIN_EXE_opaal")])
+        .arg(destination.join("opaal"))
+        .status()
+        .expect("launch the candidate copier");
+    assert!(copied.success(), "copy the candidate executable: {copied}");
+}
+
 struct Prepared(PathBuf);
 
 impl Prepared {
@@ -37,7 +47,7 @@ impl Prepared {
             NEXT.fetch_add(1, Ordering::Relaxed)
         ));
         opaal_cli::project::init_repository_project(&destination, environment, tool).unwrap();
-        fs::copy(env!("CARGO_BIN_EXE_opaal"), destination.join("opaal")).unwrap();
+        copy_candidate(&destination);
         Self(destination)
     }
 
@@ -614,7 +624,7 @@ impl Project {
             NEXT.fetch_add(1, Ordering::Relaxed)
         ));
         fs::create_dir(&root).unwrap();
-        fs::copy(env!("CARGO_BIN_EXE_opaal"), root.join("opaal")).unwrap();
+        copy_candidate(&root);
         fs::write(
             root.join("opaal.toml"),
             r#"schema_version = 1

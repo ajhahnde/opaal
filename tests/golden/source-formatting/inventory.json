@@ -3236,7 +3236,7 @@
     },
     {
       "path": "crates/opaal-cli/src/reedline_editor.rs",
-      "sha256": "baacc0cc64ca8cda3e5224623ab62637c51a0602e8ae2c92f0495f2eb892aec5",
+      "sha256": "cc01a5931bac4ae2ef8fbde2ae1a119d1c9fc9f7fe6699fcf490c16d421d86cf",
       "source_markers": 7,
       "constructors_or_assertions": [
         "parser_validation_continues_only_structurally_incomplete_input",
@@ -3328,7 +3328,7 @@
     },
     {
       "path": "crates/opaal-cli/tests/controlled_native_tools.rs",
-      "sha256": "586c7eabfafbf388785665a3bcef2ddbad385c1ea3182c386c7561ebb31f75c2",
+      "sha256": "4e92e39ff7f32f26c89f0c6bfd4bd5bc90d54aa04736433ceacd7542c7b2565e",
       "source_markers": 21,
       "constructors_or_assertions": [
         "acceptance_revalidates_native_project_controls_inputs_and_tool_before_evidence",
