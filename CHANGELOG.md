@@ -4,6 +4,11 @@ All notable changes to OPAAL are documented here.
 
 ## [Unreleased]
 
+### Security
+
+- Update `rustix` to resolve RUSTSEC-2026-0486 and upgrade the terminal editor
+  to remove its unmaintained `chrono` dependency (RUSTSEC-2026-0543).
+
 ## [1.10.0]
 
 ### Added
