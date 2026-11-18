@@ -79,6 +79,43 @@ fn initializer_and_named_call_share_the_exact_step_budget() {
 }
 
 #[test]
+fn value_conditions_charge_only_reached_arms_and_the_selected_value() {
+    let chain = "else if flag && true { false } ".repeat(64);
+    let specimen = |flag| {
+        program(&format!(
+            "export {{ test_one }}\ndef test_one() -> Bool {{ let flag = {flag}; return if flag && true {{ true }} {chain}else {{ true }} }}"
+        ))
+    };
+    let budget_for = |program: &ModuleProgram, steps| {
+        let (module, signature) = program.exported_function("test_one").unwrap();
+        let mut budget = ResourceBudget::steps(steps);
+        let result = invoke_pure_function(
+            program,
+            &module,
+            signature,
+            CancellationToken::never(),
+            &mut budget,
+        );
+        (result, budget.used())
+    };
+    let all = specimen(false);
+    let (result, exact) = budget_for(&all, 1000);
+    assert!(matches!(result, Ok(Completion::Value(Value::Bool(true)))));
+    assert!(matches!(
+        budget_for(&all, exact).0,
+        Ok(Completion::Value(Value::Bool(true)))
+    ));
+    assert!(matches!(
+        budget_for(&all, exact - 1).0.unwrap_err().kind(),
+        RuntimeErrorKind::ResourceBudgetExceeded
+    ));
+    let first = specimen(true);
+    let (result, used) = budget_for(&first, 1000);
+    assert!(matches!(result, Ok(Completion::Value(Value::Bool(true)))));
+    assert_eq!(exact - used, 63);
+}
+
+#[test]
 fn runtime_denial_remains_when_the_static_frontend_is_bypassed() {
     for operation in [
         "env('PRIVATE')",

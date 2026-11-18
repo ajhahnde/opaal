@@ -299,6 +299,7 @@ fn live_permission_denial_precedes_type_depth_and_body() {
             vec![RuntimeArgument {
                 value: Value::String(Arc::from("wrong")),
                 span: ast.name.span(),
+                value_type: None,
             }],
             ast.name.span(),
             None,
@@ -331,6 +332,7 @@ fn live_permission_denial_precedes_type_depth_and_body() {
                 vec![RuntimeArgument {
                     value: Value::Int(7),
                     span: ast.name.span(),
+                    value_type: None,
                 }],
                 ast.name.span(),
                 None,
@@ -452,6 +454,7 @@ fn invoke(
             .map(|value| RuntimeArgument {
                 value,
                 span: c.family.origin_span,
+                value_type: None,
             })
             .collect(),
         c.family.origin_span,
@@ -883,6 +886,7 @@ fn first_use_restore_and_wire() {
         "action candidate() -> Int { effects {}  return 7 }",
         "action candidate() -> Int { effects { clock.wall, }  return 7 }",
         "let candidate = {|| 7}",
+        "let captured: Int = 7\nlet candidate = if false { {|| -> Int 0} } else { {|| -> Int captured} }",
         "def candidate[X](value: X) -> X { return value }",
         "import std::list as list\ndef identity(x: Int) -> Int { x }\ndef candidate() -> List[Int] { list::map[Int, Int]([1], identity) }",
     ] {
@@ -938,6 +942,23 @@ fn first_use_restore_and_wire() {
         let Value::Callable(c) = decoded.scope().get("candidate").unwrap() else {
             panic!()
         };
+        if text.contains("let captured") {
+            let restored = function(c);
+            assert_eq!(
+                restored.family.origin_span,
+                function(original).family.origin_span
+            );
+            assert_eq!(restored.result_type, Some(ValueType::Int));
+            assert!(matches!(
+                invoke(
+                    c,
+                    vec![],
+                    &mut ToggleHost::new(),
+                    &mut ResourceBudget::unlimited()
+                ),
+                Ok(Value::Int(7))
+            ));
+        }
         assert_ne!(state(c), 0);
         assert!(!Arc::ptr_eq(
             &function(c).family,
@@ -1286,6 +1307,7 @@ fn generic_errors_stay_local_to_the_callable_view() {
                     vec![RuntimeArgument {
                         value: Value::Int(7),
                         span: c.family.origin_span,
+                        value_type: None,
                     }],
                     c.family.origin_span,
                     Some(types.clone()),

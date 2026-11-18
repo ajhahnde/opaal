@@ -1,0 +1,5 @@
+import './after.opaal'::{test_choice}
+
+if !test_choice() {
+    throw "unexpected result"
+}

@@ -208,7 +208,7 @@ fn entropy_effect_and_selected_environment_grant_use_only_evaluation_scope() {
         parse_project_manifest(Path::new("/project/opaal.toml"), MANIFEST.as_bytes()).unwrap();
     let source = br#"import std::random as random
 action sample() -> Int { effects { entropy.system(), }  return random::int(0, 4) }
-action ready() -> Int { effects { entropy.system(), }  return sample() }
+action ready() -> Int { effects { entropy.system(), }  return if false { sample() } else { 1 } }
 task release = ready
 "#;
     let sources = MemorySources(BTreeMap::from([(

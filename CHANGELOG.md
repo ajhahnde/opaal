@@ -4,6 +4,13 @@ All notable changes to OPAAL are documented here.
 
 ## [Unreleased]
 
+### Added
+
+- Select a value with `if condition { value } else { fallback }` in bindings,
+  return values, and other expression positions. The checker visits every arm
+  and execution evaluates only the selected value. `else if` chains end with a
+  required `else`.
+
 ### Security
 
 - Update `rustix` to resolve RUSTSEC-2026-0486 and upgrade the terminal editor

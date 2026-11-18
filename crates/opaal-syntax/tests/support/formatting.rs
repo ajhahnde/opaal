@@ -393,7 +393,9 @@ impl Visit for ListItem {
     }
 }
 
-variants!(ExpressionKind { Literal(v), Name(v), Qualified(v), List(v), Record(v), NominalRecord(v), Closure(v), GroupedJob(v), Call(v), Index(v), Member(v), Unary(v), Binary(v) });
+variants!(ExpressionKind { Literal(v), Name(v), Qualified(v), List(v), Record(v), NominalRecord(v), Closure(v), GroupedJob(v), If(v), Call(v), Index(v), Member(v), Unary(v), Binary(v) });
+fields!(IfExpression { arms, fallback });
+fields!(IfExpressionArm { condition, value });
 variants!(Pattern { Wildcard(v), Literal(v), Binding(v), List(v), NominalRecord(v), Variant(v) });
 variants!(ElseBranch { Block(v), If(v) });
 variants!(ControlTransfer { Break, Continue, Return(v) });

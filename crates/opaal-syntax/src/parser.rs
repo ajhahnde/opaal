@@ -6,17 +6,18 @@ use crate::{
     CommandItemKind, CommandStage, ConditionalChain, ConditionalOperator, ControlTransfer,
     Declaration, Delimiter, Diagnostic, DocumentationBlock, EffectRequest, ElseBranch,
     EnvironmentStatement, Expression, ExpressionKind, FileRedirection, ForStatement,
-    FunctionDefinition, Identifier, IfStatement, IncompleteInput, IncompleteReason,
-    IndexExpression, IndexedAssignment, IoNumber, JobStatement, Keyword, ListItem, ListPattern,
-    Literal, LiteralKind, MatchArm, MatchStatement, MemberExpression, ModuleAliasImport,
-    ModuleExportStatement, ModuleImportSource, NameReference, NominalRecordExpression,
-    NominalRecordFieldExpression, NominalRecordPattern, NominalTypeDeclaration, NominalTypeField,
-    NumberKind, Operator, OutputMode, Parameter, Pattern, PatternField, PipeOperator, Pipeline,
-    QualifiedName, RecordEntry, RecordKey, Redirection, RedirectionKind, Script, Severity,
-    SourceFile, Span, Stage, StageKind, Statement, StatementKind, StaticEffectArgument,
-    SyntaxClassification, TaskDefinition, Token, TokenKind, TryStatement, TypeConstraint,
-    TypeParameter, TypeReference, UnaryExpression, UnaryOperator, VariantDeclaration,
-    VariantPattern, VariantTypeDeclaration, WhileStatement, Word, WordPart, WordPartKind,
+    FunctionDefinition, Identifier, IfExpression, IfExpressionArm, IfStatement, IncompleteInput,
+    IncompleteReason, IndexExpression, IndexedAssignment, IoNumber, JobStatement, Keyword,
+    ListItem, ListPattern, Literal, LiteralKind, MatchArm, MatchStatement, MemberExpression,
+    ModuleAliasImport, ModuleExportStatement, ModuleImportSource, NameReference,
+    NominalRecordExpression, NominalRecordFieldExpression, NominalRecordPattern,
+    NominalTypeDeclaration, NominalTypeField, NumberKind, Operator, OutputMode, Parameter, Pattern,
+    PatternField, PipeOperator, Pipeline, QualifiedName, RecordEntry, RecordKey, Redirection,
+    RedirectionKind, Script, Severity, SourceFile, Span, Stage, StageKind, Statement,
+    StatementKind, StaticEffectArgument, SyntaxClassification, TaskDefinition, Token, TokenKind,
+    TryStatement, TypeConstraint, TypeParameter, TypeReference, UnaryExpression, UnaryOperator,
+    VariantDeclaration, VariantPattern, VariantTypeDeclaration, WhileStatement, Word, WordPart,
+    WordPartKind,
 };
 
 /// The result of parsing one source file.
@@ -56,31 +57,41 @@ pub fn parse_opaal_with_control(
     let Some(tokens) = lex_opaal_with_control(source, is_cancelled) else {
         return ControlledParseOutcome::Cancelled;
     };
-    let mut interpolation_spans = Vec::new();
-    parse_tokens(source, tokens, is_cancelled, &mut interpolation_spans)
+    parse_tokens(source, tokens, is_cancelled, None)
 }
 
-pub(crate) fn parse_opaal_with_interpolation_spans(
-    source: &SourceFile,
-) -> (ParseOutcome, Vec<Span>) {
+#[derive(Default)]
+pub(crate) struct FormatSpans {
+    pub(crate) interpolations: Vec<Span>,
+    pub(crate) if_arms: Vec<IfArmSpans>,
+}
+
+pub(crate) struct IfArmSpans {
+    pub(crate) conditional: Span,
+    pub(crate) open: Span,
+    pub(crate) close: Span,
+    pub(crate) next_else: Option<Span>,
+}
+
+pub(crate) fn parse_opaal_for_formatting(source: &SourceFile) -> (ParseOutcome, FormatSpans) {
     let is_cancelled = || false;
     let tokens = lex_opaal_with_control(source, &is_cancelled)
         .expect("the formatting parser never cancels during lexing");
-    let mut interpolation_spans = Vec::new();
-    let outcome = match parse_tokens(source, tokens, &is_cancelled, &mut interpolation_spans) {
+    let mut spans = FormatSpans::default();
+    let outcome = match parse_tokens(source, tokens, &is_cancelled, Some(&mut spans)) {
         ControlledParseOutcome::Parsed(outcome) => outcome,
         ControlledParseOutcome::Cancelled => {
             unreachable!("the formatting parser never cancels")
         }
     };
-    (outcome, interpolation_spans)
+    (outcome, spans)
 }
 
 fn parse_tokens(
     source: &SourceFile,
     tokens: Vec<Token>,
     is_cancelled: &dyn Fn() -> bool,
-    interpolation_spans: &mut Vec<Span>,
+    spans: Option<&mut FormatSpans>,
 ) -> ControlledParseOutcome {
     if is_cancelled() {
         return ControlledParseOutcome::Cancelled;
@@ -99,7 +110,7 @@ fn parse_tokens(
         }
         SyntaxClassification::Complete => {}
     }
-    let parsed = Parser::new(source, tokens, is_cancelled, interpolation_spans).parse_script();
+    let parsed = Parser::new(source, tokens, is_cancelled, spans).parse_script();
     if is_cancelled() {
         return ControlledParseOutcome::Cancelled;
     }
@@ -109,7 +120,7 @@ fn parse_tokens(
             ControlledParseOutcome::Parsed(ParseOutcome::Incomplete(incomplete))
         }
         Err(ParseError::Invalid(diagnostic)) => {
-            ControlledParseOutcome::Parsed(ParseOutcome::Invalid(vec![diagnostic]))
+            ControlledParseOutcome::Parsed(ParseOutcome::Invalid(vec![*diagnostic]))
         }
         Err(ParseError::InvalidMany(diagnostics)) => {
             ControlledParseOutcome::Parsed(ParseOutcome::Invalid(diagnostics))
@@ -120,12 +131,15 @@ fn parse_tokens(
 
 enum ParseError {
     Incomplete(IncompleteInput),
-    Invalid(Diagnostic),
+    Invalid(Box<Diagnostic>),
     InvalidMany(Vec<Diagnostic>),
     Cancelled,
 }
 
 type ParseResult<T> = Result<T, ParseError>;
+
+pub(crate) const MAX_IF_EXPRESSION_DEPTH: usize = 32;
+pub(crate) const IF_EXPRESSION_DEPTH_ERROR: &str = "if expressions can nest at most 32 levels";
 
 struct Parser<'source, 'control, 'metadata> {
     source: &'source SourceFile,
@@ -135,10 +149,12 @@ struct Parser<'source, 'control, 'metadata> {
     continuation_depth: usize,
     control_condition_depth: usize,
     block_header_depth: Option<usize>,
+    if_expression_header_depth: Option<usize>,
     value_chain_depth: usize,
+    if_expression_depth: usize,
     diagnostics: Vec<Diagnostic>,
     is_cancelled: &'control dyn Fn() -> bool,
-    interpolation_spans: &'metadata mut Vec<Span>,
+    format_spans: Option<&'metadata mut FormatSpans>,
 }
 
 impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
@@ -146,7 +162,7 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
         source: &'source SourceFile,
         tokens: Vec<Token>,
         is_cancelled: &'control dyn Fn() -> bool,
-        interpolation_spans: &'metadata mut Vec<Span>,
+        format_spans: Option<&'metadata mut FormatSpans>,
     ) -> Self {
         Self {
             source,
@@ -156,10 +172,12 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
             continuation_depth: 0,
             control_condition_depth: 0,
             block_header_depth: None,
+            if_expression_header_depth: None,
             value_chain_depth: 0,
+            if_expression_depth: 0,
             diagnostics: Vec::new(),
             is_cancelled,
-            interpolation_spans,
+            format_spans,
         }
     }
 
@@ -187,7 +205,7 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
             else {
                 unreachable!("invalid syntax helper always returns one diagnostic")
             };
-            self.diagnostics.push(diagnostic);
+            self.diagnostics.push(*diagnostic);
         }
         if !self.diagnostics.is_empty() {
             return Err(ParseError::InvalidMany(self.diagnostics));
@@ -209,7 +227,7 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
             let statement = match self.parse_statement(closing.is_none(), documentation.take()) {
                 Ok(statement) => statement,
                 Err(ParseError::Invalid(diagnostic)) => {
-                    self.diagnostics.push(diagnostic);
+                    self.diagnostics.push(*diagnostic);
                     self.synchronize(closing);
                     documentation = self.skip_separators_with_documentation();
                     continue;
@@ -239,7 +257,7 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
                 else {
                     unreachable!("invalid syntax helper always returns one diagnostic")
                 };
-                self.diagnostics.push(diagnostic);
+                self.diagnostics.push(*diagnostic);
                 self.synchronize(closing);
                 documentation = self.skip_separators_with_documentation();
                 continue;
@@ -250,7 +268,7 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
                 else {
                     unreachable!("invalid syntax helper always returns one diagnostic")
                 };
-                self.diagnostics.push(diagnostic);
+                self.diagnostics.push(*diagnostic);
                 self.synchronize(closing);
                 documentation = self.skip_separators_with_documentation();
                 continue;
@@ -1055,6 +1073,82 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
         ))
     }
 
+    fn parse_if_expression(&mut self) -> ParseResult<Expression> {
+        if self.if_expression_depth == MAX_IF_EXPRESSION_DEPTH {
+            return Err(self.invalid_here(IF_EXPRESSION_DEPTH_ERROR));
+        }
+        self.if_expression_depth += 1;
+        let result = self.parse_if_expression_arms();
+        self.if_expression_depth -= 1;
+        result
+    }
+
+    fn parse_if_expression_arms(&mut self) -> ParseResult<Expression> {
+        let start = self.current().expect("if keyword is current").span();
+        let mut arms = Vec::new();
+        loop {
+            self.check_cancelled()?;
+            self.take().expect("if keyword is current");
+            self.skip_inline();
+            let previous = self
+                .if_expression_header_depth
+                .replace(self.continuation_depth);
+            let condition = self.parse_control_condition();
+            self.if_expression_header_depth = previous;
+            let condition = condition?;
+            self.skip_inline();
+            let (value, open, close) = self.parse_if_expression_arm()?;
+            arms.push(IfExpressionArm { condition, value });
+            self.skip_layout();
+            if self.is_end() {
+                return Err(self.incomplete_at(IncompleteReason::IfExpressionElse, close));
+            }
+            let next_else = self
+                .expect_keyword(Keyword::Else, IncompleteReason::IfExpressionElse.message())?
+                .span();
+            if let Some(spans) = &mut self.format_spans {
+                spans.if_arms.push(IfArmSpans {
+                    conditional: start,
+                    open,
+                    close,
+                    next_else: Some(next_else),
+                });
+            }
+            self.skip_inline();
+            if !self.at_keyword(Keyword::If) {
+                break;
+            }
+        }
+        let (fallback, open, close) = self.parse_if_expression_arm()?;
+        if let Some(spans) = &mut self.format_spans {
+            spans.if_arms.push(IfArmSpans {
+                conditional: start,
+                open,
+                close,
+                next_else: None,
+            });
+        }
+        Ok(Expression::new(
+            ExpressionKind::If(Box::new(IfExpression { arms, fallback })),
+            self.span(start.start(), close.end()),
+        ))
+    }
+
+    fn parse_if_expression_arm(&mut self) -> ParseResult<(Expression, Span, Span)> {
+        let open = self.expect_delimiter(Delimiter::LeftBrace, "if expression arm requires `{`")?;
+        let previous = self.continuation_depth;
+        self.continuation_depth += 1;
+        let value = self.parse_expression();
+        self.continuation_depth = previous;
+        let value = value?;
+        self.skip_layout();
+        let close = self.expect_delimiter(
+            Delimiter::RightBrace,
+            "if expression arm requires exactly one expression",
+        )?;
+        Ok((value, open.span(), close.span()))
+    }
+
     fn parse_while(&mut self) -> ParseResult<Statement> {
         let start = self.take().expect("while keyword is current").span();
         self.skip_inline();
@@ -1101,7 +1195,7 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
             match self.parse_match_arm() {
                 Ok(arm) => arms.push(arm),
                 Err(ParseError::Invalid(diagnostic)) => {
-                    self.diagnostics.push(diagnostic);
+                    self.diagnostics.push(*diagnostic);
                     self.synchronize(Some(Delimiter::RightBrace));
                     self.skip_separators();
                     continue;
@@ -1118,7 +1212,7 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
                 else {
                     unreachable!("invalid syntax helper always returns one diagnostic")
                 };
-                self.diagnostics.push(diagnostic);
+                self.diagnostics.push(*diagnostic);
                 self.synchronize(Some(Delimiter::RightBrace));
                 self.skip_separators();
                 continue;
@@ -1653,7 +1747,10 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
             return Err(self.invalid_here("pipeline operator cannot begin a stage"));
         }
         if let Some(TokenKind::Keyword(keyword)) = self.current_kind()
-            && !matches!(keyword, Keyword::Null | Keyword::True | Keyword::False)
+            && !matches!(
+                keyword,
+                Keyword::Null | Keyword::True | Keyword::False | Keyword::If
+            )
         {
             return Err(
                 self.invalid_here("reserved words cannot start a command stage without `^`")
@@ -1977,7 +2074,9 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
         let close = self.expect_delimiter(Delimiter::RightBrace, "interpolation is not closed")?;
         self.continuation_depth -= 1;
         let span = self.span(open.span().start(), close.span().end());
-        self.interpolation_spans.push(span);
+        if let Some(spans) = &mut self.format_spans {
+            spans.interpolations.push(span);
+        }
         Ok(WordPart::new(
             WordPartKind::Interpolation(Box::new(expression)),
             span,
@@ -2054,117 +2153,62 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
 
     fn parse_expression(&mut self) -> ParseResult<Expression> {
         self.check_cancelled()?;
-        self.parse_equality()
+        let left = self.parse_unary()?;
+        self.parse_binary_suffix(left, 1)
     }
 
-    fn parse_equality(&mut self) -> ParseResult<Expression> {
-        let left = self.parse_comparison()?;
-        self.skip_inline();
-        let operator = match self.current_kind() {
-            Some(TokenKind::Operator(Operator::Equal)) => BinaryOperator::Equal,
-            Some(TokenKind::Operator(Operator::NotEqual)) => BinaryOperator::NotEqual,
-            _ => return Ok(left),
-        };
-        let token = self.take().expect("equality operator is current");
-        self.skip_layout();
-        let right = self.parse_comparison()?;
-        let expression = self.binary(left, operator, token.span(), right);
-        self.skip_inline();
-        if matches!(
-            self.current_kind(),
-            Some(TokenKind::Operator(Operator::Equal | Operator::NotEqual))
-        ) {
-            return Err(self.invalid_here("equality operators are non-associative"));
-        }
-        Ok(expression)
-    }
-
-    fn parse_comparison(&mut self) -> ParseResult<Expression> {
-        let left = self.parse_range()?;
-        self.skip_inline();
-        let operator = match self.current_kind() {
-            Some(TokenKind::Operator(Operator::Less)) => BinaryOperator::Less,
-            Some(TokenKind::Operator(Operator::LessEqual)) => BinaryOperator::LessEqual,
-            Some(TokenKind::Operator(Operator::Greater)) => BinaryOperator::Greater,
-            Some(TokenKind::Operator(Operator::GreaterEqual)) => BinaryOperator::GreaterEqual,
-            Some(TokenKind::Keyword(Keyword::In)) => BinaryOperator::In,
-            _ => return Ok(left),
-        };
-        let token = self.take().expect("comparison operator is current");
-        self.skip_layout();
-        let right = self.parse_range()?;
-        let expression = self.binary(left, operator, token.span(), right);
-        self.skip_inline();
-        if matches!(
-            self.current_kind(),
-            Some(TokenKind::Operator(
-                Operator::Less | Operator::LessEqual | Operator::Greater | Operator::GreaterEqual
-            )) | Some(TokenKind::Keyword(Keyword::In))
-        ) {
-            return Err(self.invalid_here("comparison operators are non-associative"));
-        }
-        Ok(expression)
-    }
-
-    fn parse_range(&mut self) -> ParseResult<Expression> {
-        let left = self.parse_additive()?;
-        self.skip_inline();
-        let operator = match self.current_kind() {
-            Some(TokenKind::Operator(Operator::Range)) => BinaryOperator::Range,
-            Some(TokenKind::Operator(Operator::RangeInclusive)) => BinaryOperator::RangeInclusive,
-            _ => return Ok(left),
-        };
-        let token = self.take().expect("range operator is current");
-        self.skip_layout();
-        let right = self.parse_additive()?;
-        let expression = self.binary(left, operator, token.span(), right);
-        self.skip_inline();
-        if matches!(
-            self.current_kind(),
-            Some(TokenKind::Operator(
-                Operator::Range | Operator::RangeInclusive
-            ))
-        ) {
-            return Err(self.invalid_here("range operators are non-associative"));
-        }
-        Ok(expression)
-    }
-
-    fn parse_additive(&mut self) -> ParseResult<Expression> {
-        let mut expression = self.parse_multiplicative()?;
+    fn parse_binary_suffix(
+        &mut self,
+        mut left: Expression,
+        minimum: u8,
+    ) -> ParseResult<Expression> {
         loop {
             self.check_cancelled()?;
             self.skip_inline();
-            let operator = match self.current_kind() {
-                Some(TokenKind::Operator(Operator::Plus)) => BinaryOperator::Add,
-                Some(TokenKind::Operator(Operator::Minus)) => BinaryOperator::Subtract,
-                _ => break,
+            let Some((operator, precedence)) = self.binary_operator() else {
+                break;
             };
-            let token = self.take().expect("additive operator is current");
-            self.skip_layout();
-            let right = self.parse_multiplicative()?;
-            expression = self.binary(expression, operator, token.span(), right);
-        }
-        Ok(expression)
-    }
-
-    fn parse_multiplicative(&mut self) -> ParseResult<Expression> {
-        let mut expression = self.parse_unary()?;
-        loop {
-            self.check_cancelled()?;
-            self.skip_inline();
-            let operator = match self.current_kind() {
-                Some(TokenKind::Operator(Operator::Star)) => BinaryOperator::Multiply,
-                Some(TokenKind::Operator(Operator::Slash)) => BinaryOperator::Divide,
-                Some(TokenKind::Operator(Operator::Percent)) => BinaryOperator::Remainder,
-                _ => break,
-            };
-            let token = self.take().expect("multiplicative operator is current");
+            if precedence < minimum {
+                break;
+            }
+            let token = self.take().expect("binary operator is current");
             self.skip_layout();
             let right = self.parse_unary()?;
-            expression = self.binary(expression, operator, token.span(), right);
+            let right = self.parse_binary_suffix(right, precedence + 1)?;
+            left = self.binary(left, operator, token.span(), right);
+            if let Some((_, next_precedence)) = self.binary_operator()
+                && precedence == next_precedence
+            {
+                let message = match precedence {
+                    1 => "equality operators are non-associative",
+                    2 => "comparison operators are non-associative",
+                    3 => "range operators are non-associative",
+                    _ => continue,
+                };
+                return Err(self.invalid_here(message));
+            }
         }
-        Ok(expression)
+        Ok(left)
+    }
+
+    fn binary_operator(&self) -> Option<(BinaryOperator, u8)> {
+        Some(match self.current_kind()? {
+            TokenKind::Operator(Operator::Equal) => (BinaryOperator::Equal, 1),
+            TokenKind::Operator(Operator::NotEqual) => (BinaryOperator::NotEqual, 1),
+            TokenKind::Operator(Operator::Less) => (BinaryOperator::Less, 2),
+            TokenKind::Operator(Operator::LessEqual) => (BinaryOperator::LessEqual, 2),
+            TokenKind::Operator(Operator::Greater) => (BinaryOperator::Greater, 2),
+            TokenKind::Operator(Operator::GreaterEqual) => (BinaryOperator::GreaterEqual, 2),
+            TokenKind::Keyword(Keyword::In) => (BinaryOperator::In, 2),
+            TokenKind::Operator(Operator::Range) => (BinaryOperator::Range, 3),
+            TokenKind::Operator(Operator::RangeInclusive) => (BinaryOperator::RangeInclusive, 3),
+            TokenKind::Operator(Operator::Plus) => (BinaryOperator::Add, 4),
+            TokenKind::Operator(Operator::Minus) => (BinaryOperator::Subtract, 4),
+            TokenKind::Operator(Operator::Star) => (BinaryOperator::Multiply, 5),
+            TokenKind::Operator(Operator::Slash) => (BinaryOperator::Divide, 5),
+            TokenKind::Operator(Operator::Percent) => (BinaryOperator::Remainder, 5),
+            _ => return None,
+        })
     }
 
     fn parse_unary(&mut self) -> ParseResult<Expression> {
@@ -2175,6 +2219,10 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
             Some(TokenKind::Operator(Operator::Minus)) => UnaryOperator::Negative,
             _ => return self.parse_postfix(),
         };
+        self.parse_unary_operator(operator)
+    }
+
+    fn parse_unary_operator(&mut self, operator: UnaryOperator) -> ParseResult<Expression> {
         let token = self.take().expect("unary operator is current");
         self.skip_layout();
         let operand = self.parse_unary()?;
@@ -2190,7 +2238,11 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
 
     fn parse_postfix(&mut self) -> ParseResult<Expression> {
         self.check_cancelled()?;
-        let mut expression = self.parse_primary()?;
+        let expression = self.parse_primary()?;
+        self.parse_postfix_suffixes(expression)
+    }
+
+    fn parse_postfix_suffixes(&mut self, mut expression: Expression) -> ParseResult<Expression> {
         loop {
             self.check_cancelled()?;
             self.skip_inline();
@@ -2397,6 +2449,25 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
             return Err(self.incomplete_here(IncompleteReason::Expression));
         };
         match kind {
+            TokenKind::Keyword(Keyword::If) => self.parse_if_expression(),
+            TokenKind::Delimiter(Delimiter::LeftBracket) => self.parse_list(),
+            TokenKind::Delimiter(Delimiter::LeftBrace) if self.starts_closure() => {
+                self.parse_closure_expression()
+            }
+            TokenKind::Delimiter(Delimiter::LeftBrace) => self.parse_record(),
+            TokenKind::Delimiter(Delimiter::LeftParenthesis) => self.parse_grouped_job(),
+            _ => self.parse_atom(kind),
+        }
+    }
+
+    fn parse_closure_expression(&mut self) -> ParseResult<Expression> {
+        let closure = self.parse_closure()?;
+        let span = closure.span;
+        Ok(Expression::new(ExpressionKind::Closure(closure), span))
+    }
+
+    fn parse_atom(&mut self, kind: TokenKind) -> ParseResult<Expression> {
+        match kind {
             TokenKind::Keyword(Keyword::Null | Keyword::True | Keyword::False)
             | TokenKind::Number(_)
             | TokenKind::SingleQuoted
@@ -2409,14 +2480,6 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
                 let name = self.parse_name_reference()?;
                 Ok(Expression::new(ExpressionKind::Name(name), name.span))
             }
-            TokenKind::Delimiter(Delimiter::LeftBracket) => self.parse_list(),
-            TokenKind::Delimiter(Delimiter::LeftBrace) if self.starts_closure() => {
-                let closure = self.parse_closure()?;
-                let span = closure.span;
-                Ok(Expression::new(ExpressionKind::Closure(closure), span))
-            }
-            TokenKind::Delimiter(Delimiter::LeftBrace) => self.parse_record(),
-            TokenKind::Delimiter(Delimiter::LeftParenthesis) => self.parse_grouped_job(),
             _ => Err(self.invalid_here("expected an expression")),
         }
     }
@@ -2734,7 +2797,7 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
                 TokenKind::Number(_)
                 | TokenKind::SingleQuoted
                 | TokenKind::DoubleQuoteStart
-                | TokenKind::Keyword(Keyword::Null | Keyword::True | Keyword::False)
+                | TokenKind::Keyword(Keyword::Null | Keyword::True | Keyword::False | Keyword::If)
                 | TokenKind::Delimiter(
                     Delimiter::LeftParenthesis | Delimiter::LeftBracket | Delimiter::LeftBrace,
                 )
@@ -2778,7 +2841,14 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
             return false;
         };
         match self.tokens[first].kind() {
-            TokenKind::Delimiter(Delimiter::RightBrace) => true,
+            TokenKind::Delimiter(Delimiter::RightBrace) => {
+                self.if_expression_header_depth != Some(self.continuation_depth)
+                    || self
+                        .next_non_layout_position(first + 1)
+                        .is_some_and(|after| {
+                            self.tokens[after].kind() != TokenKind::Keyword(Keyword::Else)
+                        })
+            }
             TokenKind::Identifier => {
                 self.next_non_layout_position(first + 1)
                     .is_some_and(|position| {
@@ -3214,9 +3284,9 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
     }
 
     fn invalid_at(&self, span: Span, message: &str) -> ParseError {
-        ParseError::Invalid(
+        ParseError::Invalid(Box::new(
             Diagnostic::new(Severity::Error, "OP1000", message).with_primary(span, message),
-        )
+        ))
     }
 }
 

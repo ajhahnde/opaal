@@ -73,6 +73,14 @@ INDEXED_REPLACEMENT_FIXTURES = (
     "wrong-type.opaal",
 )
 
+IF_EXPRESSION_FIXTURES = (
+    "after-driver.opaal", "after.opaal", "before-driver.opaal", "before.opaal",
+    "canonical.opaal", "incomplete.opaal", "invalid.opaal", "noncanonical.opaal",
+    "project-tasks.opaal", "raw-input.opaal", "routes.opaal", "wrong-condition.opaal",
+    "wrong-type.opaal",
+)
+
+
 def main() -> None:
     # Every shipped input and qualification assertion belongs to the named head.
     if subprocess.check_output(["git", "status", "--porcelain", "--untracked-files=all"], cwd=ROOT):
@@ -101,6 +109,9 @@ def main() -> None:
     indexed = {name.removeprefix("indexed-list-replacement/") for name in names if name.startswith("indexed-list-replacement/")}
     if indexed != set(INDEXED_REPLACEMENT_FIXTURES):
         raise ValueError("indexed replacement fixture census differs from the committed source")
+    conditionals = {name.removeprefix("if-expressions/") for name in names if name.startswith("if-expressions/")}
+    if conditionals != set(IF_EXPRESSION_FIXTURES):
+        raise ValueError("if expression fixture census differs from the committed source")
     archive = package_examples(ROOT, names, source, directory=FIXTURES, name="source-formatting")
     print(archive.relative_to(ROOT))
 

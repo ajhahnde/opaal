@@ -1,0 +1,1 @@
+echo "{if flag { name } else { 'fallback' }}" > "{if flag { 'selected' } else { 'other' }}"

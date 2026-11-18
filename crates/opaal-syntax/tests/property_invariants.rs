@@ -175,6 +175,7 @@ fn generated_sources() -> Vec<String> {
         ")".repeat(32),
         "${$(\"{|[]})".repeat(8),
         "é🙂界".repeat(32),
+        "let label = if true { \"é\" } else if false { \"界\" } else { \"🙂\" }".to_owned(),
     ];
 
     for left in FRAGMENTS {
@@ -569,6 +570,13 @@ impl<'source> SpanChecker<'source> {
             }
             ExpressionKind::Closure(closure) => self.closure(closure),
             ExpressionKind::GroupedJob(chain) => self.chain(chain),
+            ExpressionKind::If(branch) => {
+                for arm in &branch.arms {
+                    self.chain(&arm.condition);
+                    self.expression(&arm.value);
+                }
+                self.expression(&branch.fallback);
+            }
             ExpressionKind::Call(call) => {
                 self.expression(&call.callee);
                 for argument in &call.type_arguments {

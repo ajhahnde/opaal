@@ -118,6 +118,11 @@ variant, constructor migration, serialized format or binary promise is added.
 
 ## Documentation example
 
+The value form of `if` adds `ExpressionKind::If` to the source-tree Rust API.
+Exhaustive consumers should visit each arm's `ConditionalChain` and value, then
+the fallback expression. The published toolchain ships CLI and language-server
+binaries. Workspace crates have publication disabled.
+
 ```sh
 target/debug/opaal format --check examples/language-foundation.opaal
 target/debug/opaal check examples/language-foundation.opaal

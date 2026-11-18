@@ -126,9 +126,164 @@ fn checked_names_calls_and_block_values_equal_their_runtime_values() {
 }
 
 #[test]
+fn if_expressions_retain_expected_and_inferred_types() {
+    for (text, expected) in [
+        (
+            "let value = if false { 7 } else if true { 8 } else { 9 }\nvalue",
+            Value::Int(8),
+        ),
+        (
+            "def identity[T](value: T) -> T { return value }\nidentity(if true { ([]) } else { [1] })",
+            Value::list(Vec::new()),
+        ),
+        (
+            "def identity[T](value: T) -> T { return value }\nlet selected = if true { [] } else { [1] }\nidentity(selected)",
+            Value::list(Vec::new()),
+        ),
+        (
+            "def identity[T](value: T) -> T { return value }\nmut selected = if true { [] } else { [1] }\nidentity(selected)",
+            Value::list(Vec::new()),
+        ),
+        (
+            "def identity[T](value: T) -> T { return value }\nlet selected = if true { [] } else { [1] }\nlet alias = selected\nidentity((alias))",
+            Value::list(Vec::new()),
+        ),
+        (
+            "def identity[T](value: T) -> T { return value }\nlet nested = [if true { [] } else { [1] }]\nidentity(nested)",
+            Value::list(vec![Value::list(Vec::new())]),
+        ),
+        (
+            "let other: Any = 'unused'\nlet selected: Int = if true { 1 } else { (other) }\nselected",
+            Value::Int(1),
+        ),
+        (
+            "def identity[T](value: T) -> T { return value }\ndef pick(flag: Bool) -> Any { (if flag { 2 } else { 'two' }) }\npick(false)",
+            Value::string("two"),
+        ),
+        (
+            "def accept(value: List[Int]) -> List[Int] { return value }\naccept(if true { [] } else { [2] })",
+            Value::list(Vec::new()),
+        ),
+        (
+            "let f = {|flag: Bool| -> Any if flag { 'two' } else { 2 }}\nf(true)",
+            Value::string("two"),
+        ),
+        (
+            "mut items: List[Int] = [1]\nitems[0] = if true { 2 } else { 3 }\nitems[0]",
+            Value::Int(2),
+        ),
+        (
+            "type Box[T] = { value: T }\ndef pick(flag: Bool) -> Box[Int] { (if flag { Box {value: 1} } else { Box {value: 2} }) }\npick(false).value",
+            Value::Int(2),
+        ),
+        (
+            "mut selected = if true { 1 } else { 2 }\nselected = 'two'\nselected",
+            Value::string("two"),
+        ),
+        (
+            "let selected = if true { [1] } else { [2] }[0]\nselected",
+            Value::Int(1),
+        ),
+        (
+            "def fail() -> Int { throw 'unexpected' }\nlet value = if true || fail() { 3 } else if fail() { fail() } else { 4 }\nvalue",
+            Value::Int(3),
+        ),
+        (
+            "let selected = if true { {|| 1} } else { {|| 2} }\nselected()",
+            Value::Int(1),
+        ),
+        (
+            "def first() -> Int { return 1 }\ndef other() -> Int { return 2 }\nlet selected = if true { first } else { other }\nselected() + (if false { first } else { other })()",
+            Value::Int(3),
+        ),
+        (
+            "def consume(value: Int) -> Int { return value }\n(consume)(7)",
+            Value::Int(7),
+        ),
+        (
+            "def pick(flag: Bool, x: Any) -> Int { let picked: Int = if flag { 1 } else { x }; return picked }\npick(true, 'unused') + pick(false, 7)",
+            Value::Int(8),
+        ),
+    ] {
+        assert_eq!(checked_value("if expression", text), expected, "{text}");
+    }
+}
+
+#[test]
+fn dynamic_if_arm_defers_to_the_selected_runtime_type_guard() {
+    let text = "def choose[T](first: T, second: T) -> T { return first }\ndef pick(flag: Bool, dynamic: Any) -> Any { let value = choose(if flag { 1 } else { dynamic }, 7); return value }\nmut caught = false\ntry { let unexpected = pick(false, 'wrong') } catch error { caught = true }\ncaught && pick(true, 'unused') == 1 && pick(false, 7) == 7";
+    assert_eq!(
+        checked_value("dynamic conditional argument", text),
+        Value::Bool(true)
+    );
+}
+
+#[test]
+fn legacy_dynamic_calls_and_grouped_values_keep_runtime_checks() {
+    for text in [
+        "mut caught = false\ntry { let value = [1][0]() } catch error { caught = true }\ncaught",
+        "let earlier = 'two'\nmut caught = false\ntry { let value: Int = (earlier) } catch error { caught = true }\ncaught",
+        "def consume(value: Int) -> Int { return value }\nmut caught = false\ntry { (consume)(consume('two')) } catch error { caught = true }\ncaught",
+    ] {
+        assert_eq!(
+            checked_value("legacy dynamic checks", text),
+            Value::Bool(true)
+        );
+    }
+}
+
+#[test]
+fn if_expression_checks_all_known_arms_and_reports_the_original_spans() {
+    for (text, primary, secondary) in [
+        ("let value = if true { 1 } else { 'two' }", "'two'", "1"),
+        ("let value = if true { 'two' } else { 1 }", "1", "'two'"),
+        (
+            "let value: Int = if true { 1 } else { 'two' }",
+            "'two'",
+            "Int",
+        ),
+        ("let value = if true { ([]) } else { 1 }", "1", "([])"),
+        (
+            "def choose(flag: Bool, any: Any) { let value = if flag { any } else if false { 1 } else { 'two' } }",
+            "'two'",
+            "1",
+        ),
+    ] {
+        let source = OneModule {
+            source: text.as_bytes().to_vec(),
+        };
+        let report = ModuleProgramLoader::new(&source, &source).analyze_with_commands(
+            Path::new("/predictable/invalid-if.opaal"),
+            &standard_registry(),
+        );
+        assert!(report.program().is_none(), "{text}");
+        let diagnostic = report
+            .issues()
+            .iter()
+            .flat_map(|issue| issue.error().diagnostics())
+            .find(|diagnostic| diagnostic.code() == "SIG025")
+            .unwrap_or_else(|| panic!("{text}: {:?}", report.issues()));
+        for (label, expected) in diagnostic.labels().iter().zip([primary, secondary]) {
+            let span = label.span();
+            assert_eq!(&text[span.start()..span.end()], expected, "{text}");
+        }
+    }
+}
+
+#[test]
 fn invalid_name_assignment_and_call_forms_fail_static_analysis() {
     for (case, text, expected_code) in [
         ("unknown bare name", "missing\n", "CMD007"),
+        (
+            "unknown qualified call in an unselected arm",
+            "let value = if true { 1 } else { missing::call() }",
+            "MOD009",
+        ),
+        (
+            "unknown constructor in an unselected arm",
+            "enum Choice { Present, Absent }\nlet value = if true { Choice::Present } else { Choice::Unknown }",
+            "MOD009",
+        ),
         (
             "immutable assignment",
             "let value = 1\nvalue = 2\n",

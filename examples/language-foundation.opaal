@@ -14,6 +14,20 @@ def tail[T](items: List[T]) -> Selection[List[T]]
     }
 }
 
+def outcome(passed: Bool) -> String
+{
+    let report = {label: if passed {
+        "pass"
+    } else {
+        "fail"
+    }}
+    return report.label
+}
+
+if outcome(true) != "pass" {
+    throw "unexpected selection"
+}
+
 match tail(["build", "test", "review"]) {
     Selection::Selected(rest) => { value::length(rest) }
     Selection::Empty => { 0 }

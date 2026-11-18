@@ -1,0 +1,23 @@
+export { test_choice }
+
+def choose_label(passed: Bool) -> String
+{
+    if passed {
+        return "pass"
+    }
+    return "fail"
+}
+
+def outcome(passed: Bool) -> String
+{
+    let report = {label: choose_label(passed)}
+    return report.label
+}
+
+def test_choice() -> Bool
+{
+    if outcome(true) == "pass" {
+        return outcome(false) == "fail"
+    }
+    return false
+}

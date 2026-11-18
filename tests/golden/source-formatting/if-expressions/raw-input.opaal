@@ -1,0 +1,4 @@
+let label = if false { "pass" }
+else { "fail" }
+label
+(if false { 1 } else { 2 })

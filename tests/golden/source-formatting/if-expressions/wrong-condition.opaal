@@ -1,0 +1,5 @@
+let result = if 7 {
+    1
+} else {
+    2
+}

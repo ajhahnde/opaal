@@ -716,6 +716,21 @@ fn incomplete_source_keeps_reading_under_the_continuation_prompt() {
 }
 
 #[test]
+fn value_conditional_waits_for_the_fallback_before_submission() {
+    let mut editor = editor(b"let label = if false { 'pass' }\relse { 'fail' }\rlabel\r");
+    let prompt = EditorPrompt::default();
+    assert_eq!(
+        editor.read_line(&prompt).unwrap(),
+        EditorEvent::Submitted("let label = if false { 'pass' }\nelse { 'fail' }".to_owned())
+    );
+    assert!(String::from_utf8_lossy(editor.drawn()).contains("...> "));
+    assert_eq!(
+        editor.read_line(&prompt).unwrap(),
+        EditorEvent::Submitted("label".to_owned())
+    );
+}
+
+#[test]
 fn named_function_signature_body_and_invalid_next_token_submit_once() {
     for input in [
         "def identity(value: String)\r{\rreturn value\r}\r",

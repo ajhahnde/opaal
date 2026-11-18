@@ -66,6 +66,65 @@ fn request(
 }
 
 #[test]
+fn if_expression_conditions_and_arms_have_original_definition_ranges() {
+    let directory = TestDirectory::new();
+    let uri = directory.uri("conditional.opaal");
+    let text = "let decision = true\nlet left = 'pass'\nlet right = 'fail'\nlet label = \"界🙂{if decision { left } else { right }}\"\n";
+    let mut workspace = Workspace::new();
+    workspace.open(uri.clone(), 1, text.into()).unwrap();
+    for encoding in [PositionEncoding::Utf8, PositionEncoding::Utf16] {
+        for name in ["decision", "left", "right"] {
+            let declaration = text.find(name).unwrap();
+            let reference = text.rfind(name).unwrap();
+            let result = request(
+                &workspace,
+                encoding,
+                &RequestControl::new(),
+                "textDocument/definition",
+                positional(&uri, text, reference + 1, encoding),
+            )
+            .unwrap();
+            assert_eq!(
+                result,
+                json!({"uri": uri.as_str(), "range": {
+                    "start": position(text, declaration, encoding),
+                    "end": position(text, declaration + name.len(), encoding),
+                }}),
+                "{name} in {encoding:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn if_expression_depth_limit_is_reported_through_document_analysis() {
+    let directory = TestDirectory::new();
+    let mut workspace = Workspace::new();
+    for depth in [32, 33] {
+        let text = format!(
+            "let selected = {}true{}\n",
+            "if (".repeat(depth),
+            ") { true } else { false }".repeat(depth)
+        );
+        let uri = directory.uri(&format!("conditional-{depth}.opaal"));
+        workspace.open(uri, 1, text).unwrap();
+    }
+    let diagnostics = workspace
+        .diagnostic_snapshot()
+        .analyze_diagnostics(PositionEncoding::Utf16)
+        .unwrap();
+    let documents = diagnostics.documents();
+    assert_eq!(documents.len(), 1, "{documents:?}");
+    assert_eq!(documents[0].uri(), &directory.uri("conditional-33.opaal"));
+    let diagnostic = &documents[0].diagnostics()[0];
+    assert_eq!(diagnostic.code(), Some("OP1000"));
+    assert_eq!(
+        diagnostic.range().start().character(),
+        "let selected = ".len() + 32 * "if (".len()
+    );
+}
+
+#[test]
 fn pure_policy_cases_use_ordinary_diagnostics_hover_definitions_and_signatures() {
     let directory = TestDirectory::new();
     let uri = directory.uri("policy-tests.opaal");
