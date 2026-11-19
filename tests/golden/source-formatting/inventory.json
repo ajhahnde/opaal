@@ -4644,7 +4644,7 @@
     },
     {
       "path": "crates/opaal-runtime/src/module.rs",
-      "sha256": "b7aeb3c7c321b081a20582e3354c4f15d181961cb2c7df4ac64044490876388e",
+      "sha256": "2346e7f65c7c78f4372d80db35f152db9423fe638a1c0e2db55ab7d5c5f27ea9",
       "source_markers": 22,
       "constructors_or_assertions": [
         "analyze_interactive_with_control",
@@ -4703,8 +4703,8 @@
     },
     {
       "path": "crates/opaal-runtime/src/session.rs",
-      "sha256": "f4c71ec69374146a497851cafae675f93bfbf6267e184b0ed513aadefffc5753",
-      "source_markers": 21,
+      "sha256": "4940715b4460702b1fdedf2f18feafd5c13d71bb95b9cd6be5493e578e18fd1f",
+      "source_markers": 23,
       "constructors_or_assertions": [
         "ambient_admits",
         "ambient_process_policy_reaches_argument_expansion_but_never_process_spawn",
@@ -5114,8 +5114,8 @@
     },
     {
       "path": "crates/opaal-runtime/tests/interactive_modules.rs",
-      "sha256": "f2f49ff407a56589f94a13997ee49035c04969d827c8d32d0c62212300090819",
-      "source_markers": 92,
+      "sha256": "d656eefc950025df428639deba5d77fb7e3cc676e8bcc51fc3dcbed14726f7e8",
+      "source_markers": 95,
       "constructors_or_assertions": [
         "a_declaration_cannot_publish_types_from_a_later_local_import",
         "a_partial_first_group_charges_its_retained_cell_once_like_expanded_singles",
@@ -5375,8 +5375,8 @@
     },
     {
       "path": "crates/opaal-runtime/tests/predictable_language.rs",
-      "sha256": "7bf8bade0c057861c5d62b3a127d3347df382e752a1d8a7e34eae1e5792f230d",
-      "source_markers": 18,
+      "sha256": "cab6a745afd6e0e3b61c6a48574bea1bad451a77ae62935c96c51351bbd972bf",
+      "source_markers": 21,
       "constructors_or_assertions": [
         "checked_names_calls_and_block_values_equal_their_runtime_values",
         "checked_value",
@@ -5384,7 +5384,8 @@
         "if_expression_checks_all_known_arms_and_reports_the_original_spans",
         "if_expressions_retain_expected_and_inferred_types",
         "implicit_function_results_are_checked_across_block_forms",
-        "invalid_name_assignment_and_call_forms_fail_static_analysis"
+        "invalid_name_assignment_and_call_forms_fail_static_analysis",
+        "legacy_dynamic_calls_and_grouped_values_keep_runtime_checks"
       ],
       "role": "mixed-test-buffers",
       "reason": "Retain complete, legacy, invalid and incomplete source buffers and their source-position assertions; canonical output is asserted only by formatting owners.",
@@ -5860,7 +5861,7 @@
     },
     {
       "path": "crates/opaal-syntax/src/completion.rs",
-      "sha256": "6038ac7c909ff6ceb0f83dc363356c6ab53541b1aefc49ce6f4040f5c7be84c3",
+      "sha256": "f8affa5939c66aa590ddd69e1a009aa874635ae87515989466313e695a5f90cd",
       "source_markers": 1,
       "constructors_or_assertions": [
         "completion_target"
@@ -5985,7 +5986,7 @@
     },
     {
       "path": "crates/opaal-syntax/tests/if_expressions.rs",
-      "sha256": "1acbcc3c105b3a15f5895e834905dcc81b38875da0fdca7f0720a079a7f09805",
+      "sha256": "237fe1e5793e6a30d6e4c37d4e2cf31bd48b19e13a80e8d175ad37b79912eddb",
       "source_markers": 3,
       "constructors_or_assertions": [
         "distinguishes_missing_else_from_decisive_invalid_tokens",
