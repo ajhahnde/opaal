@@ -17,6 +17,7 @@ pub enum BindingMutability {
 struct Binding {
     mutability: BindingMutability,
     value_type: Option<ValueType>,
+    inferred_type: Option<ValueType>,
     value: Value,
 }
 
@@ -70,6 +71,7 @@ impl ScopeStack {
                             Binding {
                                 mutability: BindingMutability::Immutable,
                                 value_type: binding.value_type.clone(),
+                                inferred_type: binding.inferred_type.clone(),
                                 value: binding.value.clone(),
                             },
                         )
@@ -133,6 +135,7 @@ impl ScopeStack {
             Binding {
                 mutability,
                 value_type,
+                inferred_type: None,
                 value,
             },
         ));
@@ -147,6 +150,29 @@ impl ScopeStack {
     pub(crate) fn declared_type(&self, name: &str) -> Option<&ValueType> {
         self.find(name)
             .and_then(|binding| binding.value_type.as_ref())
+    }
+
+    pub(crate) fn value_type(&self, name: &str) -> Option<&ValueType> {
+        let binding = self.find(name)?;
+        binding
+            .value_type
+            .as_ref()
+            .or(binding.inferred_type.as_ref())
+    }
+
+    pub(crate) fn inferred_type(&self, name: &str) -> Option<&ValueType> {
+        self.find(name)?.inferred_type.as_ref()
+    }
+
+    pub(crate) fn retain_inferred_type(&mut self, name: &str, value_type: ValueType) {
+        let binding = self
+            .frames
+            .iter_mut()
+            .rev()
+            .flat_map(|frame| &mut frame.bindings)
+            .find(|(candidate, _)| candidate.as_ref() == name)
+            .expect("inference follows successful binding or assignment");
+        binding.1.inferred_type = Some(value_type);
     }
 
     pub(crate) fn values(&self) -> impl Iterator<Item = &Value> {
@@ -181,6 +207,7 @@ impl ScopeStack {
                 });
             }
             binding.value = value;
+            binding.inferred_type = None;
             return Ok(());
         }
         Err(ScopeError::UnknownBinding(name.to_owned()))
@@ -202,6 +229,7 @@ impl ScopeStack {
                     return Err(ScopeError::ImmutableBinding(name.to_owned()));
                 }
                 binding.value = Value::List(items);
+                binding.inferred_type = None;
                 return Ok(());
             }
         }
@@ -251,7 +279,11 @@ impl ScopeStack {
             .map(|(name, binding)| CapsuleBinding {
                 name: name.to_owned(),
                 mutability: binding.mutability,
-                value_type: binding.value_type.clone(),
+                value_type: binding.value_type.clone().or_else(|| {
+                    (binding.mutability == BindingMutability::Immutable)
+                        .then(|| binding.inferred_type.clone())
+                        .flatten()
+                }),
                 value: binding.value.clone(),
             })
             .collect()

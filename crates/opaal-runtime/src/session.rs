@@ -628,7 +628,10 @@ impl Session {
             &self.opaal_aliases,
             programs,
             &local_imports,
-            self.interactive_modules.binding_types.as_deref(),
+            (
+                self.interactive_modules.binding_types.as_deref(),
+                Some(crate::module::InteractiveScope::Live(&self.scope)),
+            ),
             &control.for_run(crate::module::AnalysisLimits::OPAAL),
         );
         if cancellation.is_cancelled() {
@@ -4331,6 +4334,56 @@ mod interactive_retention_tests {
             &FakeClock::new(),
             &mut Vec::new(),
         )
+    }
+
+    #[test]
+    fn capsule_restores_conditional_evidence_from_prior_cells() {
+        use crate::capsule::{decode_background_capsule, encode_background_capsule};
+        use crate::eval::{Completion, EvalLimits, apply_callable};
+
+        let mut session = Session::new("/work", Environment::new(), SessionOptions::default());
+        for text in [
+            "let earlier = [1]",
+            "let dynamic: Any = 8",
+            "let selected = if true { 1 } else { dynamic }",
+            "def accept_any(value: Any) -> Any { return value }",
+            "let saved = accept_any(if false { 1 } else { 'two' })",
+            "type Box[T] = { value: T }",
+            "def make() -> Any { return Box { value: if true { [] } else { earlier } } }",
+            "def wrap() -> Any { return Box { value: selected } }",
+            "def read_saved() -> Any { return saved }",
+        ] {
+            submit(&mut session, text).unwrap();
+        }
+        let wire = encode_background_capsule(
+            "next",
+            "",
+            session.cwd(),
+            session.environment(),
+            None,
+            session.scope(),
+            SessionOptions::default(),
+        )
+        .unwrap();
+        let decoded = decode_background_capsule(&wire).unwrap();
+        for name in ["make", "wrap", "read_saved"] {
+            let text = format!("{name}()");
+            let live = submit(&mut session, &text).unwrap().1;
+            let caller = SourceFile::new(SourceId::new(50_000), "caller", text);
+            let restored = apply_callable(
+                decoded.scope().get(name).unwrap(),
+                vec![],
+                &caller,
+                caller.span(0..caller.len()).unwrap(),
+                &mut Environment::new(),
+                &EvalLimits::default(),
+            )
+            .unwrap();
+            assert!(
+                matches!(restored, Completion::Value(ref value) if value == &live),
+                "{name}: {restored:?}"
+            );
+        }
     }
 
     #[test]

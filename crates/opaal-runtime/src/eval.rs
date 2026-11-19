@@ -2387,7 +2387,11 @@ pub(crate) fn apply_callable_with_budget(
     }
     let arguments = arguments
         .into_iter()
-        .map(|value| RuntimeArgument { value, span })
+        .map(|value| RuntimeArgument {
+            value,
+            span,
+            value_type: None,
+        })
         .collect();
     match evaluator.run_call(callable, function, arguments, span, None, None) {
         Ok(value) => Ok(Completion::Value(value)),
@@ -2459,7 +2463,11 @@ pub(crate) fn apply_callable_with_controlled_host_and_budget(
     }
     let arguments = arguments
         .into_iter()
-        .map(|value| RuntimeArgument { value, span })
+        .map(|value| RuntimeArgument {
+            value,
+            span,
+            value_type: None,
+        })
         .collect();
     match evaluator.run_call(callable, function, arguments, span, None, None) {
         Ok(value) => Ok(HostedEvaluationOutcome::Value(value)),
@@ -2999,8 +3007,12 @@ impl Evaluator<'_, '_> {
         }
         let name = self.text(declaration.name.span()).to_owned();
         self.ensure_lexical_name(&name, declaration.name.span())?;
+        let hint = value_type
+            .is_none()
+            .then(|| self.binding_value_type(&declaration.value, &value, scope))
+            .flatten();
         scope
-            .declare_typed(name, mutability, value, value_type)
+            .declare_typed(name.as_str(), mutability, value, value_type)
             .map_err(|error| {
                 let span = if matches!(error, ScopeError::TypeMismatch { .. }) {
                     declaration.value.span()
@@ -3008,7 +3020,11 @@ impl Evaluator<'_, '_> {
                     declaration.name.span()
                 };
                 self.binding_error(error, span)
-            })
+            })?;
+        if let Some(hint) = hint {
+            scope.retain_inferred_type(&name, hint);
+        }
+        Ok(())
     }
 
     fn assignment(&mut self, assignment: &Assignment, scope: &mut ScopeStack) -> Eval<()> {
@@ -3020,6 +3036,7 @@ impl Evaluator<'_, '_> {
             ));
         }
         let value = self.expression(&assignment.value, scope)?;
+        let hint = self.binding_value_type(&assignment.value, &value, scope);
         scope.assign(&name, value).map_err(|error| {
             let span = if matches!(error, ScopeError::TypeMismatch { .. }) {
                 assignment.value.span()
@@ -3027,7 +3044,11 @@ impl Evaluator<'_, '_> {
                 assignment.target.span
             };
             self.binding_error(error, span)
-        })
+        })?;
+        if let Some(hint) = hint {
+            scope.retain_inferred_type(&name, hint);
+        }
+        Ok(())
     }
 
     fn indexed_assignment(
@@ -3893,7 +3914,13 @@ impl Evaluator<'_, '_> {
                 self.nominal_record(record, scope, span, expected)
             }
             ExpressionKind::Closure(closure) => self.make_closure(closure, scope),
-            ExpressionKind::GroupedJob(chain) => self.eval_chain(chain, scope),
+            ExpressionKind::GroupedJob(chain) => {
+                self.eval_chain_with_expected(chain, scope, expected)
+            }
+            ExpressionKind::If(branch) => {
+                let selected = self.select_if_arm(branch, scope)?;
+                self.expression_with_expected(selected, scope, expected)
+            }
             ExpressionKind::Call(call) => self.call(call, scope, span, expected),
             ExpressionKind::Index(index) => {
                 let target = self.expression(&index.target, scope)?;
@@ -3922,6 +3949,74 @@ impl Evaluator<'_, '_> {
                 self.binary(*binary.operator.kind(), &left, &right, span)
             }
         }
+    }
+
+    fn select_if_arm<'a>(
+        &mut self,
+        branch: &'a opaal_syntax::IfExpression,
+        scope: &mut ScopeStack,
+    ) -> Eval<&'a Expression> {
+        for arm in &branch.arms {
+            self.check_cancel(arm.condition.span())?;
+            self.charge(arm.condition.span())?;
+            if self.condition(&arm.condition, scope)? {
+                return Ok(&arm.value);
+            }
+        }
+        Ok(&branch.fallback)
+    }
+
+    fn if_expression_type(&self, mut expression: &Expression) -> Option<ValueType> {
+        while let ExpressionKind::GroupedJob(chain) = expression.kind() {
+            expression = crate::module::single_value_expression(chain)?;
+        }
+        if !matches!(expression.kind(), ExpressionKind::If(_)) {
+            return None;
+        }
+        self.binding_types
+            .expression_type(expression.span())
+            .map(|value_type| {
+                crate::module::substitute_type(value_type, &self.current_type_arguments)
+            })
+    }
+
+    fn binding_value_type(
+        &self,
+        expression: &Expression,
+        value: &Value,
+        scope: &ScopeStack,
+    ) -> Option<ValueType> {
+        crate::module::value_name_span(expression)
+            .and_then(|span| scope.inferred_type(self.text(span)))
+            .cloned()
+            .or_else(|| self.argument_type(expression, value, scope))
+    }
+
+    fn argument_type(
+        &self,
+        expression: &Expression,
+        value: &Value,
+        scope: &ScopeStack,
+    ) -> Option<ValueType> {
+        if let Some(value_type) = self.if_expression_type(expression) {
+            return Some(value_type);
+        }
+        let name = crate::module::value_name_span(expression).map(|span| self.text(span));
+        if matches!(value, Value::List(_)) {
+            let retained = self
+                .binding_types
+                .expression_type(expression.span())
+                .or_else(|| name.and_then(|name| scope.value_type(name)));
+            if let Some(value_type @ ValueType::List(_)) = retained
+                && runtime_value_type(value).is_none()
+            {
+                return Some(crate::module::substitute_type(
+                    value_type,
+                    &self.current_type_arguments,
+                ));
+            }
+        }
+        None
     }
 
     fn qualified_value(
@@ -4050,7 +4145,11 @@ impl Evaluator<'_, '_> {
                 .find(|schema| schema.name() == name)
                 .map(|schema| crate::module::substitute_type(schema.value_type(), &substitutions));
             let value = self.expression_with_expected(&field.value, scope, expected.as_ref())?;
-            if evaluated.insert(name.clone(), value).is_some() {
+            let value_type = self.argument_type(&field.value, &value, scope);
+            if evaluated
+                .insert(name.clone(), (value, value_type))
+                .is_some()
+            {
                 return Err(self.error(
                     RuntimeErrorKind::NominalConstruction {
                         message: format!("nominal record field `{name}` is repeated"),
@@ -4074,7 +4173,7 @@ impl Evaluator<'_, '_> {
         }
         let mut fields = Vec::with_capacity(nominal.fields().len());
         for schema in nominal.fields() {
-            let Some(value) = evaluated.remove(schema.name()) else {
+            let Some((value, value_type)) = evaluated.remove(schema.name()) else {
                 return Err(self.error(
                     RuntimeErrorKind::NominalConstruction {
                         message: format!(
@@ -4085,7 +4184,12 @@ impl Evaluator<'_, '_> {
                     span,
                 ));
             };
-            infer_runtime_substitution(schema.value_type(), &value, &mut substitutions);
+            infer_argument_type(
+                schema.value_type(),
+                &value,
+                value_type.as_ref(),
+                &mut substitutions,
+            );
             fields.push((Arc::from(schema.name()), value));
         }
         let mut type_arguments = Vec::with_capacity(nominal.type_parameters().len());
@@ -4791,6 +4895,13 @@ impl Evaluator<'_, '_> {
         expected: Option<&ValueType>,
     ) -> Eval<(Value, Option<ValueType>)> {
         match expression.kind() {
+            ExpressionKind::If(_) => {
+                let result_type = self
+                    .if_expression_type(expression)
+                    .or_else(|| expected.cloned());
+                let value = self.expression_with_expected(expression, scope, expected)?;
+                Ok((value, result_type))
+            }
             ExpressionKind::Call(call) => {
                 self.charge(expression.span())?;
                 self.call_with_result_type(call, scope, expression.span(), expected)
@@ -4801,17 +4912,25 @@ impl Evaluator<'_, '_> {
                     self.charge(expression.span())?;
                     return self.operation_argument(inner, scope, expected);
                 }
+                if let Some(name) = crate::module::value_name_span(expression)
+                    && let Some(retained) = scope.value_type(self.text(name))
+                {
+                    let retained =
+                        crate::module::substitute_type(retained, &self.current_type_arguments);
+                    return self
+                        .expression_with_expected(expression, scope, expected)
+                        .map(|value| (value, Some(retained)));
+                }
                 // A general job group has no declared concrete result family.
                 self.expression_with_expected(expression, scope, expected)
                     .map(|value| (value, Some(ValueType::Any)))
             }
             ExpressionKind::Name(name) => {
-                let result_type =
-                    scope
-                        .declared_type(self.text(name.name.span()))
-                        .map(|value_type| {
-                            crate::module::substitute_type(value_type, &self.current_type_arguments)
-                        });
+                let result_type = scope
+                    .value_type(self.text(name.name.span()))
+                    .map(|value_type| {
+                        crate::module::substitute_type(value_type, &self.current_type_arguments)
+                    });
                 self.expression_with_expected(expression, scope, expected)
                     .map(|value| (value, result_type))
             }
@@ -5209,16 +5328,19 @@ impl Evaluator<'_, '_> {
             let expected =
                 crate::module::substitute_type(&parameter.value_type, &expected_substitutions);
             let value = self.expression_with_expected(argument, scope, Some(&expected))?;
+            let value_type = self.argument_type(argument, &value, scope);
             if explicit_type_arguments.is_none() {
-                infer_runtime_substitution(
+                infer_argument_type(
                     &parameter.value_type,
                     &value,
+                    value_type.as_ref(),
                     &mut expected_substitutions,
                 );
             }
             arguments.push(RuntimeArgument {
                 value,
                 span: argument.span(),
+                value_type,
             });
         }
         self.run_call_with_result_type(
@@ -5324,7 +5446,8 @@ impl Evaluator<'_, '_> {
         for (argument, expected) in call.arguments.iter().zip(variant.payload()) {
             let expected_value = crate::module::substitute_type(expected, &substitutions);
             let value = self.expression_with_expected(argument, scope, Some(&expected_value))?;
-            infer_runtime_substitution(expected, &value, &mut substitutions);
+            let value_type = self.argument_type(argument, &value, scope);
+            infer_argument_type(expected, &value, value_type.as_ref(), &mut substitutions);
             payload.push(value);
         }
         let mut type_arguments = Vec::with_capacity(nominal.type_parameters().len());
@@ -5484,9 +5607,10 @@ impl Evaluator<'_, '_> {
             }
         } else {
             for (parameter, argument) in function.parameters.iter().zip(arguments) {
-                infer_runtime_substitution(
+                infer_argument_type(
                     &parameter.value_type,
                     &argument.value,
+                    argument.value_type.as_ref(),
                     &mut substitutions,
                 );
             }
@@ -6011,6 +6135,19 @@ fn infer_runtime_substitution(
     }
 }
 
+fn infer_argument_type(
+    expected: &ValueType,
+    value: &Value,
+    value_type: Option<&ValueType>,
+    substitutions: &mut BTreeMap<String, ValueType>,
+) {
+    if let Some(value_type) = value_type {
+        crate::module::unify_type(expected, value_type, substitutions);
+    } else {
+        infer_runtime_substitution(expected, value, substitutions);
+    }
+}
+
 fn infer_runtime_type_value(
     expected: &ValueType,
     actual: &ValueType,
@@ -6043,7 +6180,7 @@ fn infer_runtime_type_value(
     }
 }
 
-fn runtime_value_type(value: &Value) -> Option<ValueType> {
+pub(crate) fn runtime_value_type(value: &Value) -> Option<ValueType> {
     Some(match value {
         Value::Null => ValueType::Null,
         Value::Bool(_) => ValueType::Bool,
@@ -6160,6 +6297,18 @@ pub(crate) fn callable_binding_types(
         .map(|callable| Arc::clone(&callable.binding_types))
 }
 
+pub(crate) fn retained_function_signature(
+    value: &Value,
+) -> Option<(&crate::module::ModuleId, &crate::module::FunctionSignature)> {
+    let Value::Callable(callable) = value else {
+        return None;
+    };
+    let callable = callable.as_any().downcast_ref::<CallableValue>()?;
+    callable
+        .binding_types
+        .owned_function_signature(callable.family.source.id(), callable.family.origin_span)
+}
+
 pub(crate) fn restore_callable(
     snapshot: CallableSnapshot,
     work_remaining: &mut u64,
@@ -6175,9 +6324,12 @@ pub(crate) fn restore_callable(
     };
     let syntax = find_callable_body(&parsed, &snapshot)
         .ok_or_else(|| "callable definition is absent from its source".to_owned())?;
-    let binding_types = snapshot
-        .type_context
-        .restore(&snapshot.source, work_remaining)?;
+    let binding_types = snapshot.type_context.restore(
+        &snapshot.source,
+        &parsed,
+        &snapshot.captured,
+        work_remaining,
+    )?;
     let signature = binding_types.function_signature(snapshot.source.id(), snapshot.origin_span);
     let parameters = syntax
         .parameters
@@ -6490,6 +6642,14 @@ fn find_callable_in_expression(
             .find_map(|field| find_callable_in_expression(&field.value, snapshot)),
         ExpressionKind::Closure(closure) => find_callable_in_closure(closure, snapshot),
         ExpressionKind::GroupedJob(chain) => find_callable_in_chain(chain, snapshot),
+        ExpressionKind::If(branch) => branch
+            .arms
+            .iter()
+            .find_map(|arm| {
+                find_callable_in_chain(&arm.condition, snapshot)
+                    .or_else(|| find_callable_in_expression(&arm.value, snapshot))
+            })
+            .or_else(|| find_callable_in_expression(&branch.fallback, snapshot)),
         ExpressionKind::Call(call) => {
             find_callable_in_expression(&call.callee, snapshot).or_else(|| {
                 call.arguments
@@ -6545,6 +6705,7 @@ struct CallableParameter {
 struct RuntimeArgument {
     value: Value,
     span: Span,
+    value_type: Option<ValueType>,
 }
 
 #[derive(Clone)]

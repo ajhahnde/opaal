@@ -1,0 +1,5 @@
+let result = if true {
+    1
+} else {
+    "fail"
+}

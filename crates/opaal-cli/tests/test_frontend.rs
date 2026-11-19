@@ -167,6 +167,28 @@ fn discarded_pure_expression_and_local_binding_have_identical_admission() {
 }
 
 #[test]
+fn pure_tests_admit_value_initializers_and_check_every_conditional_arm() {
+    let source = "export { test_one }\nlet chosen = if (true) { 1 } else { 2 }\ndef test_one() -> Bool { return chosen == 1 }\n";
+    let (exit, view) = run(source, false, None, TestLimits::default());
+    assert_eq!(exit, 0, "{view}");
+    assert_eq!(view["counts"]["passed"], 1);
+
+    for expression in [
+        "if true { 'safe' } else { env('CANARY') }",
+        "if false { helper() } else { 'safe' }",
+        "if true || helper() == 'unused' { 'safe' } else { 'other' }",
+    ] {
+        let source = format!(
+            "export {{ test_one }}\ndef helper() -> String {{ return env('CANARY') }}\ndef test_one() -> Bool {{ let chosen: String = {expression}; return chosen == 'safe' }}\n"
+        );
+        let (exit, view) = run(&source, false, None, TestLimits::default());
+        assert_eq!(exit, 2, "{expression}: {view}");
+        assert_eq!(view["failure"], "TEST_EFFECT", "{expression}: {view}");
+        assert_eq!(view["counts"]["unrun"], 1);
+    }
+}
+
+#[test]
 fn opaque_calls_refuse_even_when_dynamically_pure() {
     let source = "export { test_one }\ndef invoke(f: Any) -> Bool { return f() }\ndef helper() -> Bool { return true }\ndef test_one() -> Bool { return invoke(helper) }\n";
     let (exit, view) = run(source, false, None, TestLimits::default());

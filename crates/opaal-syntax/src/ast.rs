@@ -669,11 +669,25 @@ pub enum ExpressionKind {
     NominalRecord(NominalRecordExpression),
     Closure(Closure),
     GroupedJob(Box<ConditionalChain>),
+    If(Box<IfExpression>),
     Call(CallExpression),
     Index(IndexExpression),
     Member(MemberExpression),
     Unary(UnaryExpression),
     Binary(BinaryExpression),
+}
+
+/// Ordered value arms and the required fallback of an `if` expression.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct IfExpression {
+    pub arms: Vec<IfExpressionArm>,
+    pub fallback: Expression,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct IfExpressionArm {
+    pub condition: ConditionalChain,
+    pub value: Expression,
 }
 
 /// One list-literal slot, retaining the explicit spread marker separately.

@@ -34,6 +34,34 @@ fn interpolation_spacing_is_canonical() {
 }
 
 #[test]
+fn value_arms_format_with_comments_and_enclosing_delimiters() {
+    assert_eq!(
+        roundtrip("let x = (if true\n{1}\nelse\n{2})"),
+        "let x = (if true {\n    1\n} else {\n    2\n})\n"
+    );
+    assert_eq!(
+        roundtrip("let x=if a{1}\nelse if b{2}else{3}"),
+        "let x = if a {\n    1\n} else if b {\n    2\n} else {\n    3\n}\n"
+    );
+    assert_eq!(
+        roundtrip(
+            "let x = (if a { # first arm\nif b { 1 # leaf\n} else { 2 }\n} # end of first arm\n# fallback\nelse { 3 })"
+        ),
+        "let x = (if a { # first arm\n    if b {\n        1 # leaf\n    } else {\n        2\n    }\n} # end of first arm\n# fallback\nelse {\n    3\n})\n"
+    );
+    assert_eq!(
+        roundtrip(
+            "def label(passed: Bool) {\nlet report = {label: if passed { \"pass\" } else { \"fail\" }}\n}\n"
+        ),
+        "def label(passed: Bool)\n{\n    let report = {label: if passed {\n        \"pass\"\n    } else {\n        \"fail\"\n    }}\n}\n"
+    );
+    assert_eq!(
+        roundtrip("let x = \"value { if true { 1 }\n\nelse { 2 } }\""),
+        "let x = \"value {if true {\n    1\n}\n\nelse {\n    2\n}}\"\n"
+    );
+}
+
+#[test]
 fn incomplete_and_invalid_inputs_keep_their_parse_outcomes() {
     let incomplete = SourceFile::new(SourceId::new(3_001), "incomplete.opaal", "echo \"");
     let FormatOutcome::Incomplete(reason) = format_source_opaal(&incomplete) else {

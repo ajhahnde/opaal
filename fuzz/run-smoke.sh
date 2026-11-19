@@ -63,6 +63,9 @@ for target in lexer parser expander resources data_operations_limits numeric_ope
   if [ "$target" = parser ]; then
     seeds+=("$work/source-formatting")
   fi
+  if [ "$target" = expander ] || [ "$target" = resources ]; then
+    seeds+=("$script_dir/seeds/$target")
+  fi
   if [ "$target" = data_operations_limits ] || [ "$target" = numeric_operations_limits ] || [ "$target" = random_limits ] || [ "$target" = stdio_limits ] || [ "$target" = docker_image_limits ]; then
     seeds=("$script_dir/seeds/$target")
   fi

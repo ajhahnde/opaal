@@ -1,0 +1,29 @@
+def fail() -> Int
+{
+    throw "chosen error"
+}
+
+let result = if false {
+    fail()
+} else if false {
+    2
+} else {
+    3
+}
+if result != 3 {
+    throw "unexpected fallback"
+}
+
+mut caught: Bool = false
+try {
+    let selected = if true {
+        fail()
+    } else {
+        0
+    }
+} catch error {
+    caught = error.category == "user"
+}
+if !caught {
+    throw "expected catchable error"
+}

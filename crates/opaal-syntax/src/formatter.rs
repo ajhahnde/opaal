@@ -1,9 +1,9 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::{
     Block, Delimiter, Diagnostic, ElseBranch, IfStatement, IncompleteInput, Operator, ParseOutcome,
     Script, SourceFile, Statement, StatementKind, Token, TokenKind, lex_opaal,
-    parser::parse_opaal_with_interpolation_spans,
+    parser::{FormatSpans, parse_opaal_for_formatting},
 };
 
 /// The result of formatting one source file through the shared parser.
@@ -17,11 +17,11 @@ pub enum FormatOutcome {
 /// Canonically formats one complete OPAAL source.
 #[must_use]
 pub fn format_source_opaal(source: &SourceFile) -> FormatOutcome {
-    let (outcome, interpolation_spans) = parse_opaal_with_interpolation_spans(source);
+    let (outcome, spans) = parse_opaal_for_formatting(source);
     match outcome {
         ParseOutcome::Complete(script) => {
             let tokens = lex_opaal(source);
-            let layout = FormatLayout::for_script(&script, &tokens, &interpolation_spans);
+            let layout = FormatLayout::for_script(&script, &tokens, &spans);
             FormatOutcome::Complete(format_tokens(source, &tokens, &layout))
         }
         ParseOutcome::Incomplete(incomplete) => FormatOutcome::Incomplete(incomplete),
@@ -49,16 +49,63 @@ struct FormatLayout {
     interpolation_open: BTreeSet<usize>,
     interpolation_close: BTreeSet<usize>,
     suppress_source_newline: BTreeSet<usize>,
+    if_starts: BTreeSet<usize>,
+    if_arm_opens: BTreeMap<usize, usize>,
+    if_arm_closes: BTreeMap<usize, (usize, bool)>,
 }
 
 impl FormatLayout {
-    fn for_script(script: &Script, tokens: &[Token], interpolation_spans: &[crate::Span]) -> Self {
+    fn for_script(script: &Script, tokens: &[Token], spans: &FormatSpans) -> Self {
         let mut layout = Self::default();
-        for span in interpolation_spans {
+        for span in &spans.interpolations {
             layout.interpolation_open.insert(span.start());
             layout.interpolation_close.insert(span.end() - 1);
             layout.no_space_after.insert(span.start() + 1);
             layout.no_space_before.insert(span.end() - 1);
+        }
+        for arm in &spans.if_arms {
+            let conditional = arm.conditional.start();
+            layout.if_starts.insert(conditional);
+            layout.if_arm_opens.insert(arm.open.start(), conditional);
+            layout
+                .if_arm_closes
+                .insert(arm.close.start(), (conditional, arm.next_else.is_none()));
+            layout.space_before.insert(arm.open.start());
+            layout.newline_after.insert(arm.open.end());
+            layout.newline_before.insert(arm.close.start());
+            let before_open =
+                tokens.partition_point(|token| token.span().start() < arm.open.start());
+            if let Some(header_end) = tokens[..before_open].iter().rfind(|token| {
+                !matches!(
+                    token.kind(),
+                    TokenKind::Whitespace
+                        | TokenKind::Newline
+                        | TokenKind::Comment
+                        | TokenKind::DocumentationComment
+                        | TokenKind::LineContinuation
+                )
+            }) {
+                layout.join_plain_newline(tokens_in(
+                    tokens,
+                    header_end.span().end(),
+                    arm.open.start(),
+                ));
+            }
+            if let Some(next_else) = arm.next_else {
+                layout.space_before.insert(next_else.start());
+                layout.join_plain_newline(tokens_in(tokens, arm.close.end(), next_else.start()));
+            }
+        }
+        for &start in &layout.if_starts {
+            let index = tokens.partition_point(|token| token.span().start() < start);
+            if let Some(assign) = tokens[..index]
+                .iter()
+                .rfind(|token| token.kind() != TokenKind::Whitespace)
+                && assign.kind() == TokenKind::Operator(Operator::Assign)
+            {
+                layout.space_before.insert(assign.span().start());
+                layout.space_after.insert(assign.span().end());
+            }
         }
         for token in tokens {
             if token.kind() == TokenKind::Operator(Operator::Spread) {
@@ -67,6 +114,18 @@ impl FormatLayout {
         }
         layout.statements(script.statements(), tokens);
         layout
+    }
+
+    fn join_plain_newline(&mut self, gap: &[Token]) {
+        let mut significant = gap
+            .iter()
+            .filter(|token| token.kind() != TokenKind::Whitespace);
+        if let Some(newline) = significant.next()
+            && newline.kind() == TokenKind::Newline
+            && significant.next().is_none()
+        {
+            self.suppress_source_newline.insert(newline.span().start());
+        }
     }
 
     fn statements(&mut self, statements: &[Statement], tokens: &[Token]) {
@@ -413,6 +472,8 @@ fn format_tokens(source: &SourceFile, tokens: &[Token], layout: &FormatLayout) -
     let mut output = String::new();
     let mut open_delimiters = Vec::new();
     let mut indent = 0usize;
+    let mut line_indent = 0usize;
+    let mut if_indents: BTreeMap<usize, (usize, usize)> = BTreeMap::new();
     let mut at_line_start = true;
     let mut pending_space = false;
     let mut suppress_source_newline = false;
@@ -462,9 +523,13 @@ fn format_tokens(source: &SourceFile, tokens: &[Token], layout: &FormatLayout) -
             }
             kind => {
                 suppress_source_newline = false;
-                if closes_indenting_brace(kind, token.span().start(), layout, &mut open_delimiters)
-                {
+                let start = token.span().start();
+                let if_close = layout.if_arm_closes.get(&start);
+                if closes_indenting_brace(kind, start, layout, &mut open_delimiters) {
                     indent = indent.saturating_sub(1);
+                }
+                if let Some((conditional, _)) = if_close {
+                    indent = if_indents[conditional].0;
                 }
 
                 if layout.newline_before.contains(&token.span().start()) && !at_line_start {
@@ -476,6 +541,12 @@ fn format_tokens(source: &SourceFile, tokens: &[Token], layout: &FormatLayout) -
                     pending_space = false;
                 } else if layout.space_before.contains(&token.span().start()) && !at_line_start {
                     pending_space = true;
+                }
+                if at_line_start {
+                    line_indent = indent;
+                }
+                if layout.if_starts.contains(&start) {
+                    if_indents.insert(start, (line_indent, indent));
                 }
                 write_prefix(&mut output, indent, &mut at_line_start, &mut pending_space);
                 output.push_str(
@@ -493,6 +564,12 @@ fn format_tokens(source: &SourceFile, tokens: &[Token], layout: &FormatLayout) -
                     if open == OpenDelimiter::IndentingBrace {
                         indent += 1;
                     }
+                }
+                if let Some(conditional) = layout.if_arm_opens.get(&start) {
+                    indent = if_indents[conditional].0 + 1;
+                }
+                if let Some((conditional, true)) = if_close {
+                    indent = if_indents.remove(conditional).unwrap().1;
                 }
                 if layout.space_after.contains(&token.span().end()) {
                     pending_space = true;

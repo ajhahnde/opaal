@@ -1241,6 +1241,13 @@ impl<'a> CallFinder<'a> {
             }
             ExpressionKind::Closure(closure) => self.chain(&closure.body),
             ExpressionKind::GroupedJob(chain) => self.chain(chain),
+            ExpressionKind::If(branch) => {
+                for arm in &branch.arms {
+                    self.chain(&arm.condition);
+                    self.expression(&arm.value);
+                }
+                self.expression(&branch.fallback);
+            }
             ExpressionKind::Call(call) => {
                 self.expression(&call.callee);
                 for argument in &call.arguments {

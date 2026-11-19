@@ -258,7 +258,11 @@ impl Evaluator<'_, '_> {
         };
         let arguments = arguments
             .into_iter()
-            .map(|value| RuntimeArgument { value, span })
+            .map(|value| RuntimeArgument {
+                value,
+                span,
+                value_type: None,
+            })
             .collect();
         evaluator.run_call(
             &callback.callable,

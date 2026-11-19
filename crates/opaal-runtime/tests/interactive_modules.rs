@@ -61,6 +61,196 @@ fn session() -> Session {
     Session::new("/work", Environment::new(), SessionOptions::default())
 }
 
+#[test]
+fn interactive_if_expressions_validate_known_arms_before_publication() {
+    let mut session = session();
+    let sources = Sources::default();
+    submit(&mut session, &sources, "let earlier: String = 'two'");
+    submit(&mut session, &sources, "let inferred = 'two'");
+    submit(&mut session, &sources, "let list = [1, 2]");
+    submit(
+        &mut session,
+        &sources,
+        "def earlier_result() -> String { return 'two' }",
+    );
+    submit(
+        &mut session,
+        &sources,
+        "def consume(value: Int) -> Int { return value }",
+    );
+    submit(&mut session, &sources, "let dynamic = {|value| value}");
+    submit(&mut session, &sources, "import std::math as math");
+    sources.put(
+        "/work/values.opaal",
+        "def saved() -> Int { return 2 }\nexport {saved}\n",
+    );
+    submit(&mut session, &sources, "import './values.opaal' as values");
+    for (source, code) in [
+        ("let rejected = if true { 1 } else { 'two' }", "SIG025"),
+        ("let rejected = if true { 1 } else { earlier }", "SIG025"),
+        ("let rejected = if true { 1 } else { (inferred) }", "SIG025"),
+        ("let rejected = if true { 1 } else { list }", "SIG025"),
+        (
+            "let rejected = if true { 1 } else { earlier_result() }",
+            "SIG025",
+        ),
+        ("consume(if true { 1 } else { 'two' })", "SIG025"),
+        ("dynamic(if true { 1 } else { 'two' })", "SIG025"),
+        (
+            "let rejected = if true { 1 } else { math::nonexistent() }",
+            "OPR002",
+        ),
+        (
+            "let rejected = if true { 1 } else { math::nonexistent }",
+            "MOD009",
+        ),
+        (
+            "let rejected = if true { 1 } else { math::abs('two') }",
+            "SIG004",
+        ),
+        (
+            "let rejected = if true { 1 } else { consume('two') }",
+            "SIG004",
+        ),
+        ("let rejected = if true { 1 } else { consume() }", "SIG003"),
+        (
+            "let rejected = if true { 1 } else { missing::call() }",
+            "MOD009",
+        ),
+        (
+            "let rejected = if true { 1 } else { values::missing() }",
+            "MOD009",
+        ),
+        (
+            "let rejected = if true { 1 } else { values::missing }",
+            "MOD009",
+        ),
+        ("let rejected = if true { 1 } else { missing() }", "MOD009"),
+        (
+            "let rejected = if true { 1 } else if missing { 2 } else { 3 }",
+            "MOD009",
+        ),
+    ] {
+        let error = session
+            .submit_with_source_loader(
+                "cell",
+                source,
+                &sources,
+                &sources,
+                &NoExecutables,
+                &FakePlatform::full(),
+                &FakeClock::new(),
+                &mut Vec::new(),
+            )
+            .unwrap_err();
+        assert!(error.render().contains(code), "{}", error.render());
+    }
+    submit(
+        &mut session,
+        &sources,
+        "def accept_any(value: Any) -> Any { return value }",
+    );
+    assert_eq!(
+        submit(
+            &mut session,
+            &sources,
+            "accept_any(if false { 1 } else { 'two' })"
+        ),
+        Value::string("two")
+    );
+    assert_eq!(
+        submit(&mut session, &sources, "(if true { 1 } else { 2 })"),
+        Value::Int(1)
+    );
+    assert_eq!(
+        submit(
+            &mut session,
+            &sources,
+            "(if false { 1 } else { values::saved() })"
+        ),
+        Value::Int(2)
+    );
+}
+
+#[test]
+fn conditional_arms_see_previously_selected_imports() {
+    let mut session = session();
+    let sources = Sources::default();
+    sources.put(
+        "/work/values.opaal",
+        "def consume(value: Any) -> Any { return value }\nexport {consume}\n",
+    );
+    submit(
+        &mut session,
+        &sources,
+        "import std::math::{abs as magnitude_of}",
+    );
+    submit(
+        &mut session,
+        &sources,
+        "import './values.opaal'::{consume as prior_consume}",
+    );
+    assert_eq!(
+        submit(
+            &mut session,
+            &sources,
+            "(if false { 1 } else { magnitude_of(-2) })"
+        ),
+        Value::Int(2)
+    );
+    assert_eq!(
+        submit(
+            &mut session,
+            &sources,
+            "prior_consume(if false { 1 } else { 'two' })"
+        ),
+        Value::string("two")
+    );
+}
+
+#[test]
+fn interactive_empty_conditional_results_keep_type_evidence_across_cells() {
+    let mut session = session();
+    let sources = Sources::default();
+    submit(
+        &mut session,
+        &sources,
+        "def identity[T](value: T) -> T { return value }",
+    );
+    submit(
+        &mut session,
+        &sources,
+        "mut selected = if true { [] } else { [1] }",
+    );
+    submit(&mut session, &sources, "let saved = (selected)");
+    for text in [
+        "identity(selected)",
+        "identity((selected))",
+        "identity(saved)",
+        "identity((saved))",
+    ] {
+        assert_eq!(
+            submit(&mut session, &sources, text),
+            Value::list(Vec::new()),
+            "{text}"
+        );
+    }
+    submit(&mut session, &sources, "selected = 'mutable'");
+    assert_eq!(
+        submit(&mut session, &sources, "identity(selected)"),
+        Value::string("mutable")
+    );
+    submit(
+        &mut session,
+        &sources,
+        "let nested = [if true { [] } else { [1] }]",
+    );
+    assert_eq!(
+        submit(&mut session, &sources, "identity(nested)"),
+        Value::list(vec![Value::list(Vec::new())])
+    );
+}
+
 fn submit(session: &mut Session, sources: &Sources, text: &str) -> Value {
     let (outcome, value) = session
         .submit_with_source_loader(

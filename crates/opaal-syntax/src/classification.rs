@@ -59,6 +59,7 @@ pub enum IncompleteReason {
     Expression,
     TypeReference,
     ConditionalOperand,
+    IfExpressionElse,
 }
 
 impl IncompleteReason {
@@ -80,6 +81,7 @@ impl IncompleteReason {
             Self::Expression => "expression requires another operand",
             Self::TypeReference => "type annotation requires a type",
             Self::ConditionalOperand => "conditional operator requires another pipeline",
+            Self::IfExpressionElse => "if expression requires a final `else` arm",
         }
     }
 }
@@ -121,6 +123,7 @@ pub fn classify_opaal_tokens(
 
     let mut frames = Vec::new();
     let mut previous_significant = None;
+    let mut statement_has_def = false;
     for (index, token) in tokens.iter().enumerate() {
         let kind = token.kind();
         match kind {
@@ -147,11 +150,20 @@ pub fn classify_opaal_tokens(
                 span: token.span(),
             }),
             TokenKind::Delimiter(delimiter) => {
-                if let Some(classification) =
-                    classify_delimiter(tokens, index, delimiter, previous_significant, &mut frames)
-                {
+                if let Some(classification) = classify_delimiter(
+                    tokens,
+                    index,
+                    delimiter,
+                    previous_significant,
+                    statement_has_def,
+                    &mut frames,
+                ) {
                     return Ok(classification);
                 }
+            }
+            TokenKind::Keyword(Keyword::Def) => statement_has_def = true,
+            TokenKind::Newline | TokenKind::Operator(Operator::Semicolon) => {
+                statement_has_def = false;
             }
             _ => {}
         }
@@ -161,6 +173,11 @@ pub fn classify_opaal_tokens(
     }
 
     if let Some(frame) = frames.last().copied() {
+        if frame.kind != FrameKind::DoubleQuote
+            && let Some(recovered) = crate::completion::recover_value_if(tokens)
+        {
+            return Ok(recovered);
+        }
         return Ok(incomplete(frame_reason(frame.kind), frame.span));
     }
 
@@ -178,6 +195,7 @@ fn classify_delimiter(
     index: usize,
     delimiter: Delimiter,
     previous_significant: Option<usize>,
+    statement_has_def: bool,
     frames: &mut Vec<Frame>,
 ) -> Option<SyntaxClassification> {
     let token = &tokens[index];
@@ -203,9 +221,11 @@ fn classify_delimiter(
                         TokenKind::Operator(Operator::Pipe | Operator::Or)
                     )
             });
-            let function = statement_contains_keyword(tokens, index, Keyword::Def);
             frames.push(Frame {
-                kind: FrameKind::Brace { closure, function },
+                kind: FrameKind::Brace {
+                    closure,
+                    function: statement_has_def,
+                },
                 span: token.span(),
             });
         }
@@ -241,19 +261,6 @@ fn pop_where(frames: &mut Vec<Frame>, matches: impl FnOnce(FrameKind) -> bool) -
     } else {
         false
     }
-}
-
-fn statement_contains_keyword(tokens: &[Token], before: usize, keyword: Keyword) -> bool {
-    tokens[..before]
-        .iter()
-        .rev()
-        .take_while(|token| {
-            !matches!(
-                token.kind(),
-                TokenKind::Newline | TokenKind::Operator(Operator::Semicolon)
-            )
-        })
-        .any(|token| token.kind() == TokenKind::Keyword(keyword))
 }
 
 fn can_end_callee(kind: TokenKind) -> bool {

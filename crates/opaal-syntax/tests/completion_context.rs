@@ -3,6 +3,40 @@
 use opaal_syntax::{CompletionContext, PathCompletionStyle, completion_target};
 
 #[test]
+fn incomplete_if_value_arms_offer_expression_completion() {
+    for text in [
+        "let x = if true { par",
+        "let x = if true {\n    par",
+        "let x = if true { 1 }\nelse if false {\n    par",
+        "let x = if true { 1 }\nelse {\n    par",
+        "(if true {\n    par",
+        "let x = {label: if true {\n    par",
+        "let x = if Box {field: true}.field {\n    par",
+        "let x = if Empty {} {\n    par",
+        "let x = if if true { true } else { false } {\n    par",
+        "let x =\nif true {\n    par",
+        "for x in if true {\n    par",
+        "while if true {\n    par",
+        "match if true {\n    par",
+    ] {
+        let target = completion_target(text, text.len()).unwrap();
+        assert_eq!(target.context(), &CompletionContext::Expression, "{text}");
+        assert_eq!(target.prefix(), "par");
+    }
+    for text in [
+        "if true {\npar",
+        "let x = if true { (\npar",
+        "echo if flag {\npar",
+    ] {
+        let target = completion_target(text, text.len()).unwrap();
+        assert!(
+            matches!(target.context(), CompletionContext::Command { .. }),
+            "{text}: {target:?}"
+        );
+    }
+}
+
+#[test]
 fn compound_assignment_rhs_is_an_expression_and_command_words_remain_whole() {
     for operator in ["+=", "-=", "*=", "/=", "%="] {
         let text = format!("total {operator} am");

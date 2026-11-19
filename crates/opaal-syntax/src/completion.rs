@@ -2,7 +2,10 @@
 
 use std::ops::Range;
 
-use crate::{Delimiter, Operator, SourceFile, SourceId, Token, TokenKind, lex_opaal};
+use crate::{
+    Delimiter, Diagnostic, IncompleteInput, IncompleteReason, Keyword, Operator, Severity,
+    SourceFile, SourceId, Span, SyntaxClassification, Token, TokenKind, lex_opaal,
+};
 
 /// The syntax-owned role of one completion replacement.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -93,6 +96,8 @@ pub fn completion_target(source: &str, cursor: usize) -> Option<CompletionTarget
     let stage = current_stage(&prior);
     let context = if import_group && is_path_spelling(&active) {
         path_context(source, &tokens, &active)
+    } else if scan_conditionals(&prior, false).unwrap_or(false) {
+        CompletionContext::Expression
     } else if prior.last().is_some_and(|token| {
         matches!(
             token.kind(),
@@ -125,6 +130,282 @@ pub fn completion_target(source: &str, cursor: usize) -> Option<CompletionTarget
         replacement: active.range,
         prefix: active.text.to_owned(),
     })
+}
+
+#[derive(Default)]
+struct ConditionalCompletionScope {
+    value_arm: bool,
+    expression: bool,
+    value_stage: bool,
+    headers: Vec<ConditionalArm>,
+    arm: Option<ConditionalArm>,
+    closed_arm: Option<(ConditionalArm, Span)>,
+    arm_started: bool,
+}
+
+#[derive(Clone, Copy)]
+struct ConditionalArm {
+    value: bool,
+    allows_else: bool,
+}
+
+/// Recovers value-if diagnostics without descending through unclosed delimiters.
+pub(crate) fn recover_value_if(tokens: &[Token]) -> Option<SyntaxClassification> {
+    if !tokens
+        .iter()
+        .any(|token| token.kind() == TokenKind::Keyword(Keyword::If))
+    {
+        return None;
+    }
+    let tokens: Vec<_> = tokens
+        .iter()
+        .filter(|token| !completion_trivia(token.kind()))
+        .collect();
+    scan_conditionals(&tokens, true).err()
+}
+
+fn scan_conditionals(tokens: &[&Token], recover: bool) -> Result<bool, SyntaxClassification> {
+    if !tokens
+        .iter()
+        .any(|token| token.kind() == TokenKind::Keyword(Keyword::If))
+    {
+        return Ok(false);
+    }
+    let mut scopes = vec![ConditionalCompletionScope::default()];
+    let mut previous = None;
+    let mut value_depth = 0;
+    for (index, token) in tokens.iter().enumerate() {
+        let scope = scopes.last_mut().unwrap();
+        let kind = token.kind();
+        if let Some((arm, _)) = scope.closed_arm
+            && arm.value
+            && kind != TokenKind::Newline
+        {
+            let is_else = kind == TokenKind::Keyword(Keyword::Else);
+            if recover && arm.allows_else != is_else {
+                let message = if is_else {
+                    "if expression has more than one final else arm"
+                } else {
+                    IncompleteReason::IfExpressionElse.message()
+                };
+                return Err(conditional_error(token.span(), message));
+            }
+            if !arm.allows_else {
+                scope.closed_arm = None;
+            }
+        }
+        if scope.arm.is_some_and(|arm| arm.value)
+            && !scope.arm_started
+            && kind != TokenKind::Newline
+        {
+            if recover
+                && (kind == TokenKind::Delimiter(Delimiter::RightBrace)
+                    || matches!(kind, TokenKind::Keyword(keyword)
+                        if !matches!(keyword, Keyword::If | Keyword::Null | Keyword::True | Keyword::False)))
+            {
+                return Err(conditional_error(token.span(), "expected an expression"));
+            }
+            scope.arm_started = true;
+        }
+        match kind {
+            TokenKind::Keyword(Keyword::If) => {
+                if previous == Some(TokenKind::Keyword(Keyword::Else)) {
+                    if let Some(arm) = scope.headers.last_mut() {
+                        arm.allows_else = true;
+                    }
+                } else {
+                    let stage_start = previous.is_none_or(is_command_boundary)
+                        || previous == Some(TokenKind::Delimiter(Delimiter::LeftParenthesis));
+                    let value = scope.expression
+                        || (scope.value_stage && stage_start)
+                        || previous == Some(TokenKind::Keyword(Keyword::If))
+                        || previous.is_some_and(accepts_value_after);
+                    if value || stage_start {
+                        if value {
+                            value_depth += 1;
+                            if recover && value_depth > crate::parser::MAX_IF_EXPRESSION_DEPTH {
+                                return Err(conditional_error(
+                                    token.span(),
+                                    crate::parser::IF_EXPRESSION_DEPTH_ERROR,
+                                ));
+                            }
+                        }
+                        scope.headers.push(ConditionalArm {
+                            value,
+                            allows_else: true,
+                        });
+                    }
+                }
+            }
+            TokenKind::Keyword(Keyword::Else) => {
+                if let Some((arm, _)) = scope.closed_arm.take() {
+                    scope.headers.push(ConditionalArm {
+                        allows_else: false,
+                        ..arm
+                    });
+                }
+            }
+            TokenKind::Delimiter(Delimiter::LeftBrace) => {
+                let mut next = tokens[index + 1..]
+                    .iter()
+                    .copied()
+                    .filter(|token| token.kind() != TokenKind::Newline);
+                let first = next.next();
+                let closure = first.is_some_and(|next| {
+                    token.is_adjacent_to(next)
+                        && matches!(
+                            next.kind(),
+                            TokenKind::Operator(Operator::Pipe | Operator::Or)
+                        )
+                });
+                let empty_nominal = previous == Some(TokenKind::Identifier)
+                    && first.is_some_and(|token| {
+                        token.kind() == TokenKind::Delimiter(Delimiter::RightBrace)
+                    })
+                    && next
+                        .clone()
+                        .next()
+                        .is_some_and(|token| token.kind() != TokenKind::Keyword(Keyword::Else));
+                let nominal = empty_nominal
+                    || (first.is_some_and(|token| token.kind() == TokenKind::Identifier)
+                        && next.next().is_some_and(|colon| {
+                            colon.kind() == TokenKind::Operator(Operator::Colon)
+                                && !next.next().is_some_and(|tail| {
+                                    tail.kind() == TokenKind::Operator(Operator::Colon)
+                                        && colon.is_adjacent_to(tail)
+                                })
+                        }));
+                let arm = if previous == Some(TokenKind::Keyword(Keyword::Else))
+                    || (!closure && !nominal && previous != Some(TokenKind::Keyword(Keyword::If)))
+                {
+                    scope.headers.pop()
+                } else {
+                    None
+                };
+                let value_arm = arm.map_or(scope.value_arm && !closure, |arm| arm.value);
+                scopes.push(ConditionalCompletionScope {
+                    value_arm,
+                    expression: value_arm,
+                    value_stage: closure,
+                    arm,
+                    ..Default::default()
+                });
+            }
+            TokenKind::Delimiter(Delimiter::LeftParenthesis | Delimiter::LeftBracket) => {
+                let expression = kind == TokenKind::Delimiter(Delimiter::LeftBracket)
+                    || matches!(
+                        previous,
+                        Some(
+                            TokenKind::Identifier
+                                | TokenKind::Delimiter(
+                                    Delimiter::RightParenthesis | Delimiter::RightBracket
+                                )
+                        )
+                    );
+                let value_arm = scope.value_arm && expression;
+                scopes.push(ConditionalCompletionScope {
+                    value_arm,
+                    expression,
+                    value_stage: !expression,
+                    ..Default::default()
+                });
+            }
+            TokenKind::InterpolationStart => {
+                let value_arm = scope.value_arm;
+                scopes.push(ConditionalCompletionScope {
+                    value_arm,
+                    expression: true,
+                    ..Default::default()
+                });
+            }
+            TokenKind::Delimiter(
+                Delimiter::RightBrace | Delimiter::RightParenthesis | Delimiter::RightBracket,
+            ) => {
+                if scopes.len() > 1 {
+                    let closed = scopes.pop().unwrap();
+                    if closed.arm.is_some_and(|arm| arm.value && !arm.allows_else) {
+                        value_depth -= 1;
+                    }
+                    scopes.last_mut().unwrap().closed_arm = closed
+                        .arm
+                        .filter(|arm| arm.allows_else || arm.value)
+                        .map(|arm| (arm, token.span()));
+                }
+            }
+            TokenKind::Operator(Operator::Semicolon) => {
+                if recover && scope.arm.is_some_and(|arm| arm.value) {
+                    return Err(conditional_error(
+                        token.span(),
+                        "if expression arm requires exactly one expression",
+                    ));
+                }
+                scope.headers.clear();
+                scope.closed_arm = None;
+            }
+            _ => {}
+        }
+        if kind != TokenKind::Newline || !previous.is_some_and(accepts_continuation) {
+            previous = Some(kind);
+        }
+    }
+    let scope = scopes.last().unwrap();
+    if recover
+        && let Some((arm, span)) = scope.closed_arm
+        && arm.value
+        && arm.allows_else
+    {
+        return Err(SyntaxClassification::Incomplete(IncompleteInput::new(
+            IncompleteReason::IfExpressionElse,
+            span,
+        )));
+    }
+    Ok(scope.value_arm)
+}
+
+fn conditional_error(span: Span, message: &str) -> SyntaxClassification {
+    SyntaxClassification::Invalid(
+        Diagnostic::new(Severity::Error, "OP1000", message).with_primary(span, message),
+    )
+}
+
+fn accepts_continuation(kind: TokenKind) -> bool {
+    accepts_value_after(kind) && !matches!(kind, TokenKind::Keyword(Keyword::Return))
+}
+
+fn accepts_value_after(kind: TokenKind) -> bool {
+    matches!(
+        kind,
+        TokenKind::Keyword(
+            Keyword::Return | Keyword::Throw | Keyword::In | Keyword::While | Keyword::Match
+        ) | TokenKind::Operator(
+            Operator::Assign
+                | Operator::AddAssign
+                | Operator::SubtractAssign
+                | Operator::MultiplyAssign
+                | Operator::DivideAssign
+                | Operator::RemainderAssign
+                | Operator::Colon
+                | Operator::Comma
+                | Operator::Bang
+                | Operator::Plus
+                | Operator::Minus
+                | Operator::Star
+                | Operator::Slash
+                | Operator::Percent
+                | Operator::Equal
+                | Operator::NotEqual
+                | Operator::Less
+                | Operator::LessEqual
+                | Operator::Greater
+                | Operator::GreaterEqual
+                | Operator::Range
+                | Operator::RangeInclusive
+                | Operator::Pipe
+                | Operator::PipeBoth
+                | Operator::And
+                | Operator::Or
+        )
+    )
 }
 
 struct ActiveWord {
@@ -390,17 +671,18 @@ fn decode_double(raw: &str, closed: bool) -> Option<String> {
 fn significant_before(tokens: &[Token], offset: usize) -> Vec<&Token> {
     tokens
         .iter()
-        .filter(|token| {
-            token.span().end() <= offset
-                && !matches!(
-                    token.kind(),
-                    TokenKind::Whitespace
-                        | TokenKind::Comment
-                        | TokenKind::DocumentationComment
-                        | TokenKind::LineContinuation
-                )
-        })
+        .filter(|token| token.span().end() <= offset && !completion_trivia(token.kind()))
         .collect()
+}
+
+fn completion_trivia(kind: TokenKind) -> bool {
+    matches!(
+        kind,
+        TokenKind::Whitespace
+            | TokenKind::Comment
+            | TokenKind::DocumentationComment
+            | TokenKind::LineContinuation
+    )
 }
 
 fn current_stage<'tokens>(tokens: &'tokens [&Token]) -> &'tokens [&'tokens Token] {

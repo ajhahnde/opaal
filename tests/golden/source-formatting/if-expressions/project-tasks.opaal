@@ -1,0 +1,12 @@
+action readiness() -> Int
+{
+    effects {
+    }
+
+    return if true {
+        8
+    } else {
+        5
+    }
+}
+task verify = readiness

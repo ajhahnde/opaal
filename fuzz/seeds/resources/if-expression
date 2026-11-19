@@ -1,0 +1,8 @@
+let values: List[Int] = if true {
+    if false { [1] } else { [] }
+} else if false && true {
+    [2, 3]
+} else {
+    [4]
+}
+values
