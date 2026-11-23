@@ -578,7 +578,8 @@ pub struct WhileStatement {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ForStatement {
-    pub binding: Identifier,
+    pub index: Option<Identifier>,
+    pub binding: Pattern,
     pub iterable: Expression,
     pub body: Block,
 }

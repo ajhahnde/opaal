@@ -21,13 +21,13 @@ if __package__:
     from .check_source_formatting import public_paths, seed_census
     from .package_data_processing import SOURCE, digest
     from .package_release import PLATFORMS, ROOT, VERSION
-    from .package_source_formatting import FIXTURES, MEMBER_IMPORT_FIXTURES, COMPOUND_ASSIGNMENT_FIXTURES, LIST_LITERAL_SPREAD_FIXTURES, RECORD_SHORTHAND_FIXTURES, GROUPED_EXPORT_FIXTURES, ACTION_DECLARATION_FIXTURES, INDEXED_REPLACEMENT_FIXTURES, IF_EXPRESSION_FIXTURES, TYPED_TUPLE_FIXTURES
+    from .package_source_formatting import FIXTURES, MEMBER_IMPORT_FIXTURES, COMPOUND_ASSIGNMENT_FIXTURES, LIST_LITERAL_SPREAD_FIXTURES, RECORD_SHORTHAND_FIXTURES, GROUPED_EXPORT_FIXTURES, ACTION_DECLARATION_FIXTURES, INDEXED_REPLACEMENT_FIXTURES, IF_EXPRESSION_FIXTURES, TYPED_TUPLE_FIXTURES, INDEXED_ITERATION_FIXTURES
     from .qualify_data_processing import require, success, unpack
 else:
     from check_source_formatting import public_paths, seed_census
     from package_data_processing import SOURCE, digest
     from package_release import PLATFORMS, ROOT, VERSION
-    from package_source_formatting import FIXTURES, MEMBER_IMPORT_FIXTURES, COMPOUND_ASSIGNMENT_FIXTURES, LIST_LITERAL_SPREAD_FIXTURES, RECORD_SHORTHAND_FIXTURES, GROUPED_EXPORT_FIXTURES, ACTION_DECLARATION_FIXTURES, INDEXED_REPLACEMENT_FIXTURES, IF_EXPRESSION_FIXTURES, TYPED_TUPLE_FIXTURES
+    from package_source_formatting import FIXTURES, MEMBER_IMPORT_FIXTURES, COMPOUND_ASSIGNMENT_FIXTURES, LIST_LITERAL_SPREAD_FIXTURES, RECORD_SHORTHAND_FIXTURES, GROUPED_EXPORT_FIXTURES, ACTION_DECLARATION_FIXTURES, INDEXED_REPLACEMENT_FIXTURES, IF_EXPRESSION_FIXTURES, TYPED_TUPLE_FIXTURES, INDEXED_ITERATION_FIXTURES
     from qualify_data_processing import require, success, unpack
 
 PAIRS = (("legacy.opaal", "canonical.opaal"), ("legacy-effects.opaal", "effects.opaal"),
@@ -579,6 +579,38 @@ def typed_tuples(run, fixtures: Path) -> dict:
     return {"fixture_cases": sorted(TYPED_TUPLE_FIXTURES), "continuation": True}
 
 
+def indexed_iteration(run, work: Path, fixtures: Path) -> dict:
+    original = fixtures / "indexed-iteration"
+    folder = work / "indexed-iteration"
+    require({path.name for path in original.iterdir()} == set(INDEXED_ITERATION_FIXTURES),
+            "indexed iteration fixture census differs")
+    shutil.copytree(original, folder)
+    driver = "indexed-and-paired.opaal"
+    success(run("check", driver, cwd=folder), "loop source check")
+    require(success(run(driver, cwd=folder), "loop driver") == b"", "loop driver printed output")
+    success(run("format", "--check", driver, "bad-element.opaal", cwd=folder), "canonical loop source")
+    success(run("format", "--write", "noncanonical.opaal", cwd=folder), "format loop headers")
+    require((folder / "noncanonical.opaal").read_bytes() == (folder / driver).read_bytes(),
+            "indexed iteration formatter bytes differ")
+    result = run("check", "--format", "json", "bad-element.opaal", cwd=folder)
+    require(result.returncode == 1 and not result.stderr, "bad loop element check exit differs")
+    diagnostics = json.loads(result.stdout)["diagnostics"]
+    require(len(diagnostics) == 1 and diagnostics[0]["code"] == "SIG017" and
+            diagnostics[0]["primary_message"] == "this pattern cannot match `Int`" and
+            diagnostics[0]["range"] == {"start": 4, "end": 17}, "loop element diagnostic differs")
+    raw = run(stdin=(
+        b"def rows() -> List[(List[Int], String)] { return [([], 'a'), ([], 'b')] }\n"
+        b"def score[T](items: List[T]) -> Int { return 4 }\n"
+        b"mut total = 0\nfor i, (items,\n_) in rows() { total += i + score(items) }\ntotal\n"
+    ), cwd=folder)
+    require(raw.returncode == 0 and not raw.stderr and raw.stdout == b">> >> >> >> ...> >> 9\n>> ",
+            "indexed loop raw continuation differs")
+    raw = run(stdin=b"for i, (i, _) in [] {}\nfor i, item in [] { item = i }\n", cwd=folder)
+    require(raw.returncode == 0 and b"error[MOD010]" in raw.stderr and b"error[BND001]" in raw.stderr,
+            "empty indexed loop binding diagnostics differ")
+    return {"fixture_cases": sorted(INDEXED_ITERATION_FIXTURES), "continuation": True}
+
+
 def list_literal_spread(run, work: Path, fixtures: Path, target: str) -> dict:
     original = fixtures / "list-literal-spread"
     destination = work / "list-literal-spread"
@@ -1012,6 +1044,7 @@ def framed_formatting(binary: Path, work: Path, fixtures: Path, environment: dic
                     "indexed-list-replacement/incomplete.opaal", "indexed-list-replacement/invalid.opaal",
                     "if-expressions/noncanonical.opaal", "if-expressions/canonical.opaal",
                     "if-expressions/incomplete.opaal", "if-expressions/invalid.opaal",
+                    "indexed-iteration/noncanonical.opaal", "indexed-iteration/indexed-and-paired.opaal",
                     "list-literal-spread/noncanonical.opaal", "list-literal-spread/canonical.opaal",
                     "list-literal-spread/incomplete.opaal", "list-literal-spread/invalid.opaal",
                     "record-shorthand/noncanonical.opaal", "record-shorthand/canonical.opaal",
@@ -1031,10 +1064,14 @@ def framed_formatting(binary: Path, work: Path, fixtures: Path, environment: dic
                     if name in ("legacy.opaal", "concise-imports/noncanonical.opaal", "explicit-member-imports/noncanonical.opaal",
                                 "compound-assignment/noncanonical.opaal", "indexed-list-replacement/noncanonical.opaal", "list-literal-spread/noncanonical.opaal",
                                 "if-expressions/noncanonical.opaal",
+                                "indexed-iteration/noncanonical.opaal",
                                 "record-shorthand/noncanonical.opaal", "grouped-export-prefixes/noncanonical.opaal",
                                 "action-declarations/noncanonical.opaal"):
-                        canonical = (fixtures / ("canonical.opaal" if name == "legacy.opaal" else
-                                                  name.replace("noncanonical.opaal", "canonical.opaal"))).read_text()
+                        if name == "indexed-iteration/noncanonical.opaal":
+                            canonical = (fixtures / "indexed-iteration/indexed-and-paired.opaal").read_text()
+                        else:
+                            canonical = (fixtures / ("canonical.opaal" if name == "legacy.opaal" else
+                                                      name.replace("noncanonical.opaal", "canonical.opaal"))).read_text()
                         require(result == [{"range": {"start": {"line": 0, "character": 0},
                                                        "end": {"line": len(text.splitlines()), "character": 0}},
                                             "newText": canonical}], "framed formatter bytes/range differ")
@@ -1043,6 +1080,28 @@ def framed_formatting(binary: Path, work: Path, fixtures: Path, environment: dic
                         require(request("textDocument/formatting", params)["result"] == [], "LSP is not idempotent")
                     else:
                         require(result == [], f"{name}: language server produced an edit")
+                    if name == "indexed-iteration/indexed-and-paired.opaal":
+                        lines = text.splitlines()
+                        for binding, ty, declaration, use in (
+                            ("i", "Int", (2, 4), (3, lines[3].index("i +"))),
+                            ("number", "Int", (2, 8), (3, lines[3].index("number"))),
+                            ("label", "String", (6, 13), (7, lines[7].index("label"))),
+                        ):
+                            params = {"textDocument": {"uri": uri}, "position": {"line": use[0], "character": use[1]}}
+                            definition = request("textDocument/definition", params)["result"]
+                            require(definition == {"uri": uri, "range": {
+                                "start": {"line": declaration[0], "character": declaration[1]},
+                                "end": {"line": declaration[0], "character": declaration[1] + len(binding)},
+                            }}, "loop binding definition differs")
+                            hover = request("textDocument/hover", params)["result"]
+                            require(hover["contents"]["value"] == f"```opaal\nlet {binding}: {ty}\n```",
+                                    "loop binding hover differs")
+                            references = request("textDocument/references",
+                                                 {**params, "context": {"includeDeclaration": False}})["result"]
+                            require({"uri": uri, "range": {
+                                "start": params["position"],
+                                "end": {"line": use[0], "character": use[1] + len(binding)},
+                            }} in references, "loop binding reference differs")
                 uri = (work / "concise-imports/after.opaal").as_uri()
                 text = (fixtures / "concise-imports/after.opaal").read_text()
                 send({"method": "textDocument/didOpen", "params": {"textDocument": {
@@ -1525,6 +1584,7 @@ def qualify(archive: Path | None, fixture_archive: Path | None, binaries: Path |
         indexed_report = indexed_list_replacement(run, root, fixtures, target)
         conditionals_report = if_expressions(run, root, fixtures, target)
         tuples_report = typed_tuples(run, fixtures)
+        loops_report = indexed_iteration(run, root, fixtures)
         spread_report = list_literal_spread(run, root, fixtures, target)
         record_report = record_shorthand(run, root, fixtures, target)
         exports_report = grouped_export_prefixes(run, root, fixtures, target)
@@ -1546,6 +1606,7 @@ def qualify(archive: Path | None, fixture_archive: Path | None, binaries: Path |
                 "compound_assignment": compound_report, "indexed_list_replacement": indexed_report, "list_literal_spread": spread_report, "record_shorthand": record_report, "grouped_export_prefixes": exports_report,
                 "if_expressions": conditionals_report,
                 "typed_tuples": tuples_report,
+                "indexed_iteration": loops_report,
                 "action_declarations": actions_report, "language_server": lsp_report, "bounded_cases": bounded,
                 "assertions": ["exact fixture/source/program identity", "legacy/canonical execution and checking",
                                "exact action/function/comment bytes and idempotence", "read-only check and mode/inode retention",

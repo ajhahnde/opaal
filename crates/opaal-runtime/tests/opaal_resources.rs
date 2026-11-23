@@ -520,6 +520,232 @@ fn cancellation_wins_at_each_polled_schedule_without_becoming_a_budget_error() {
 }
 
 #[test]
+fn new_loop_headers_charge_entries_and_poll_even_with_an_empty_body() {
+    for (header, budget, completes) in [
+        ("for item in 0..10 {}", 4, true),
+        ("for i, item in 0..10 {}", 13, false),
+        ("for i, item in 0..10 {}", 14, true),
+        ("for (_, _) in rows {}", 8, false),
+        ("for (_, _) in rows {}", 9, true),
+    ] {
+        let source = SourceFile::new(SourceId::new(40), "budget.opaal", header);
+        let ParseOutcome::Complete(script) = parse_opaal(&source) else {
+            panic!("loop fixture must parse: {header}");
+        };
+        let mut scope = ScopeStack::new();
+        if header.contains("rows") {
+            scope
+                .declare(
+                    "rows",
+                    BindingMutability::Immutable,
+                    &Value::list(vec![Value::Tuple(Arc::from([
+                        Value::Int(0),
+                        Value::Int(0),
+                    ]))]),
+                )
+                .unwrap();
+        }
+        let result = evaluate_in_environment(
+            &script,
+            &source,
+            &mut scope,
+            &mut Environment::new(),
+            &EvalLimits::new(CancellationToken::never(), ResourceBudget::steps(budget)),
+        );
+        if completes {
+            assert!(
+                matches!(result, Ok(Completion::Value(Value::Null))),
+                "{header}: {result:?}"
+            );
+        } else {
+            assert!(
+                matches!(result, Err(ref error) if matches!(error.kind(), RuntimeErrorKind::ResourceBudgetExceeded)),
+                "{header}: {result:?}"
+            );
+        }
+    }
+
+    let source = SourceFile::new(
+        SourceId::new(41),
+        "cancel.opaal",
+        "for i, item in 0..10000 {}",
+    );
+    let ParseOutcome::Complete(script) = parse_opaal(&source) else {
+        panic!("indexed range must parse");
+    };
+    let polls = Arc::new(AtomicUsize::new(0));
+    let cancel = CancellationToken::from_fn(move || polls.fetch_add(1, Ordering::Relaxed) >= 16);
+    let mut scope = ScopeStack::new();
+    let result = evaluate_in_environment(
+        &script,
+        &source,
+        &mut scope,
+        &mut Environment::new(),
+        &EvalLimits::new(cancel, ResourceBudget::steps(10_000)),
+    );
+    assert!(
+        matches!(result, Ok(Completion::Cancelled(ref cancelled)) if source.slice(cancelled.span()).unwrap() == "0..10000"),
+        "{result:?}"
+    );
+    assert!(scope.get("i").is_none());
+    assert!(scope.get("item").is_none());
+}
+
+#[test]
+fn indexed_loops_meter_validation_of_composite_items() {
+    let items = ["1"; 32].join(", ");
+    let legacy = program(&format!("for item in [[{items}]] {{}}"));
+    let indexed = program(&format!("for i, item in [[{items}]] {{}}"));
+    let completes = |program: &ModuleProgram, steps| {
+        matches!(
+            execute(
+                program,
+                &EvalLimits::pure_opaal(CancellationToken::never(), ResourceBudget::steps(steps)),
+            )
+            .primary(),
+            PrimaryOutcome::Completed(_)
+        )
+    };
+    let legacy_steps = (0..100)
+        .find(|&steps| completes(&legacy, steps))
+        .expect("legacy loop completes within the test budget");
+    assert!(!completes(&indexed, legacy_steps + 32));
+    assert!(completes(&indexed, legacy_steps + 33));
+}
+
+#[test]
+fn rust_built_loop_patterns_apply_the_tuple_depth_limit_before_evaluation() {
+    use opaal_syntax::{MAX_TUPLE_DEPTH, Pattern, Script, Statement, StatementKind};
+
+    let source = SourceFile::new(
+        SourceId::new(43),
+        "embedded-loop.opaal",
+        "for i, (_, _) in [] {}",
+    );
+    let ParseOutcome::Complete(script) = parse_opaal(&source) else {
+        panic!("fixture must parse");
+    };
+    let statement = &script.statements()[0];
+    let StatementKind::For(parsed) = statement.kind() else {
+        panic!("expected a loop");
+    };
+    let Pattern::Tuple(tuple) = &parsed.binding else {
+        panic!("expected a tuple item pattern");
+    };
+    let mut pattern = tuple.elements[0].clone();
+    for depth in 1..=MAX_TUPLE_DEPTH + 1 {
+        let mut wrapper = tuple.clone();
+        wrapper.elements[0] = pattern;
+        pattern = Pattern::Tuple(wrapper);
+        if depth >= MAX_TUPLE_DEPTH {
+            let mut loop_statement = parsed.clone();
+            loop_statement.binding = pattern.clone();
+            let embedded = Script::new(
+                vec![Statement::new(
+                    StatementKind::For(loop_statement),
+                    statement.span(),
+                )],
+                script.span(),
+            );
+            let result = evaluate_in_environment(
+                &embedded,
+                &source,
+                &mut ScopeStack::new(),
+                &mut Environment::new(),
+                &EvalLimits::default(),
+            );
+            if depth == MAX_TUPLE_DEPTH {
+                assert!(
+                    matches!(result, Ok(Completion::Value(Value::Null))),
+                    "{result:?}"
+                );
+            } else {
+                assert!(
+                    matches!(result, Err(ref error) if matches!(error.kind(), RuntimeErrorKind::ResourceBudgetExceeded)),
+                    "{result:?}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn rust_built_loops_reject_literal_patterns_before_iteration() {
+    use opaal_syntax::{Pattern, Script, Statement, StatementKind};
+
+    let source = SourceFile::new(
+        SourceId::new(44),
+        "embedded-loop.opaal",
+        "for i, item in [] {}\nmatch 1 { 1 => {} }",
+    );
+    let ParseOutcome::Complete(script) = parse_opaal(&source) else {
+        panic!("fixture must parse");
+    };
+    let [loop_node, match_node] = script.statements() else {
+        panic!("expected a loop and a match");
+    };
+    let (StatementKind::For(loop_statement), StatementKind::Match(match_statement)) =
+        (loop_node.kind(), match_node.kind())
+    else {
+        panic!("expected a loop and a match");
+    };
+    let mut loop_statement = loop_statement.clone();
+    let pattern = match_statement.arms[0].pattern.clone();
+    assert!(matches!(pattern, Pattern::Literal(_)));
+    loop_statement.binding = pattern;
+    let embedded = Script::new(
+        vec![Statement::new(
+            StatementKind::For(loop_statement),
+            loop_node.span(),
+        )],
+        script.span(),
+    );
+    let error = evaluate_in_environment(
+        &embedded,
+        &source,
+        &mut ScopeStack::new(),
+        &mut Environment::new(),
+        &EvalLimits::default(),
+    )
+    .unwrap_err();
+    assert!(matches!(
+        error.kind(),
+        RuntimeErrorKind::Unsupported {
+            feature: "for loop item pattern"
+        }
+    ));
+}
+
+#[test]
+fn a_failed_dynamic_tuple_binding_never_runs_its_body_or_leaks_names() {
+    let source = SourceFile::new(
+        SourceId::new(42),
+        "pattern.opaal",
+        r#"
+mut total = 0
+for i, (item, (_, _)) in [(5, (1, 2)), (99, false)] { total += i + item }
+"#,
+    );
+    let ParseOutcome::Complete(script) = parse_opaal(&source) else {
+        panic!("dynamic list fixture must parse");
+    };
+    let mut scope = ScopeStack::new();
+    let error = evaluate_in_environment(
+        &script,
+        &source,
+        &mut scope,
+        &mut Environment::new(),
+        &EvalLimits::new(CancellationToken::never(), ResourceBudget::steps(100)),
+    )
+    .unwrap_err();
+    assert!(matches!(error.kind(), RuntimeErrorKind::PatternMismatch));
+    assert_eq!(source.slice(error.span()).unwrap(), "(item, (_, _))");
+    assert_eq!(scope.get("total"), Some(&Value::Int(5)));
+    assert!(scope.get("i").is_none());
+    assert!(scope.get("item").is_none());
+}
+
+#[test]
 fn import_groups_charge_every_entry_and_accept_only_the_exact_analysis_boundaries() {
     for count in [1, 32] {
         let entries = (0..count)

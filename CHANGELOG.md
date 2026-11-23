@@ -6,6 +6,9 @@ All notable changes to OPAAL are documented here.
 
 ### Added
 
+- Iterate with a zero-based Int position using `for index, item in items`.
+  Bind tuple slots directly with `for (number, label) in rows` or combine
+  both forms with `for index, (number, label) in rows`.
 - Add typed tuples and destructuring. Return fixed-size mixed results such as
   `(3, "ready")`, annotate them as `(Int, String)`, and bind their slots with
   `let (count, label) = result`. Tuple patterns also work in function parameters

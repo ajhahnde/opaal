@@ -126,6 +126,155 @@ fn checked_names_calls_and_block_values_equal_their_runtime_values() {
 }
 
 #[test]
+fn indexed_loops_keep_a_snapshot_and_fresh_bindings() {
+    let source = r#"
+mut rows = [(3, ('a', true)), (5, ('b', false)), (7, ('c', true))]
+let i = 100
+let number = 200
+mut seen = []
+for i, (number, (_, include)) in rows {
+    rows = [(1000, ('new', true))]
+    if !include { continue }
+    seen = [...seen, (i, number)]
+}
+let empty: List[(Int, String)] = []
+for (count, label) in empty { throw "empty loop ran" }
+for i, item in 2..2 { throw "empty range ran" }
+for i, item in [9] { seen = [...seen, (i, item)] }
+
+def visit(item: Any) -> Int {
+    for i, (item, _) in item {
+        return i + item
+    }
+    return -1
+}
+let rows_with_bad_tail: Any = [(11, false), 99]
+for (first, _) in rows_with_bad_tail {
+    if first == 11 { break }
+    throw "break did not leave the loop"
+}
+let returned = visit(rows_with_bad_tail)
+(i, number, returned, seen)
+"#;
+    let pair = |index, item| Value::Tuple(Arc::from([Value::Int(index), Value::Int(item)]));
+    let expected = Value::Tuple(Arc::from([
+        Value::Int(100),
+        Value::Int(200),
+        Value::Int(11),
+        Value::list(vec![pair(0, 3), pair(2, 7), pair(0, 9)]),
+    ]));
+    let value = checked_value("indexed snapshot, scope, and transfers", source);
+    assert_eq!(value, expected);
+}
+
+#[test]
+fn indexed_ranges_use_positions_and_can_include_the_largest_int() {
+    let source = r#"
+mut indices = []
+mut items = []
+for i, item in 9223372036854775806..=9223372036854775807 {
+    indices = [...indices, i]
+    items = [...items, item]
+}
+(indices, items)
+"#;
+    let value = checked_value("range ending at Int::MAX", source);
+    assert_eq!(
+        value,
+        Value::Tuple(Arc::from([
+            Value::list(vec![Value::Int(0), Value::Int(1)]),
+            Value::list(vec![Value::Int(i64::MAX - 1), Value::Int(i64::MAX)]),
+        ]))
+    );
+}
+
+#[test]
+fn loop_bindings_use_current_values_and_resolve_generic_shapes_at_runtime() {
+    let source = r#"
+def identity[T](value: T) -> T { return value }
+mut before = if true { [] } else { [1] }
+let previous = identity(before)
+before = "changed"
+
+mut rows = [1]
+rows = [("ready", 7)]
+let snapshot = rows
+mut total = 0
+for i, (label, count) in [...snapshot] {
+    if label == "ready" { total += i + count }
+}
+rows = ["changed"]
+for i, item in rows {
+    if item == "changed" { total += i + 1 }
+}
+
+def first[T](rows: List[(Int, T)]) -> Int {
+    for (_, (left, _)) in rows { return left }
+    return 0
+}
+let nested = first([(0, (10, 20))])
+let dynamic: List[Any] = [1, 2]
+try {
+    for (left, right) in dynamic { throw "mismatched body ran" }
+} catch mismatch {
+    if mismatch.message != "value does not match the pattern" { throw mismatch }
+}
+total + nested
+"#;
+    assert_eq!(checked_value("loop type evidence", source), Value::Int(18));
+}
+
+#[test]
+fn loop_checking_rejects_known_shapes_and_duplicate_or_mutable_bindings() {
+    let registry = standard_registry();
+    let root = Path::new("/predictable/main.opaal");
+    for (case, text, code) in [
+        (
+            "typed empty list",
+            "let rows: List[Int] = []\nfor (a, b) in rows {}\n",
+            "SIG017",
+        ),
+        (
+            "wrong arity in callable",
+            "def visit(rows: List[(Int, Int)]) { for i, (a, b, c) in rows {} }\n",
+            "SIG017",
+        ),
+        (
+            "nested wrong shape",
+            "for (a, (b, c)) in [(1, false)] {}\n",
+            "SIG017",
+        ),
+        ("tuple iterable", "for i, item in (1, 2) {}\n", "SIG026"),
+        (
+            "index also bound by pattern",
+            "for i, (i, _) in [(1, 2)] {}\n",
+            "MOD010",
+        ),
+        (
+            "immutable item",
+            "for i, item in [1] { item = i }\n",
+            "BND001",
+        ),
+    ] {
+        let source = OneModule {
+            source: text.as_bytes().to_vec(),
+        };
+        let report =
+            ModuleProgramLoader::new(&source, &source).analyze_with_commands(root, &registry);
+        assert!(report.program().is_none(), "{case} must fail checking");
+        assert!(
+            report
+                .issues()
+                .iter()
+                .flat_map(|issue| issue.error().diagnostics())
+                .any(|diagnostic| diagnostic.code() == code),
+            "{case}: {:?}",
+            report.issues()
+        );
+    }
+}
+
+#[test]
 fn if_expressions_retain_expected_and_inferred_types() {
     for (text, expected) in [
         (

@@ -4,9 +4,95 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use opaal_syntax::{
     BinaryOperator, CommandItemKind, ControlledParseOutcome, Expression, ExpressionKind,
-    ParseOutcome, SourceFile, SourceId, StageKind, StatementKind, parse_opaal,
+    ParseOutcome, Pattern, SourceFile, SourceId, StageKind, StatementKind, parse_opaal,
     parse_opaal_with_control,
 };
+
+#[test]
+fn loop_headers_distinguish_an_index_from_tuple_slots() {
+    let text = "for item in rows { item }\nfor index, (item, (_, label)) in rows {}\nfor (left, right) in rows {}\n";
+    let script = complete(text);
+    let loops = script
+        .statements()
+        .iter()
+        .map(|statement| {
+            let StatementKind::For(statement) = statement.kind() else {
+                panic!("expected loop");
+            };
+            statement
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(loops[0].index, None);
+    assert!(
+        matches!(loops[0].binding, Pattern::Binding(item) if source_text(text, item.span()) == "item")
+    );
+    assert_eq!(source_text(text, loops[1].index.unwrap().span()), "index");
+    let Pattern::Tuple(tuple) = &loops[1].binding else {
+        panic!("expected tuple item");
+    };
+    assert_eq!(source_text(text, tuple.span), "(item, (_, label))");
+    assert!(
+        matches!(&tuple.elements[1], Pattern::Tuple(nested) if matches!(nested.elements[0], Pattern::Wildcard(_)))
+    );
+    assert_eq!(loops[2].index, None);
+    assert!(matches!(loops[2].binding, Pattern::Tuple(_)));
+
+    for text in [
+        "for (left), item in rows {}",
+        "for (left, right), item in rows {}",
+        "for index, [left, right] in rows {}",
+        "for (1, item) in rows {}",
+        "for (Some(item), _) in rows {}",
+        "for (left, ...rest) in rows {}",
+    ] {
+        let source = SourceFile::new(SourceId::new(800), "loops.opaal", text);
+        assert!(
+            matches!(parse_opaal(&source), ParseOutcome::Invalid(_)),
+            "{text}"
+        );
+    }
+    for text in ["for index,", "for index, (item,", "for (item, _) in rows {"] {
+        let source = SourceFile::new(SourceId::new(801), "loops.opaal", text);
+        assert!(
+            matches!(parse_opaal(&source), ParseOutcome::Incomplete(_)),
+            "{text}"
+        );
+    }
+}
+
+#[test]
+fn loop_tuple_depth_is_bounded_even_with_space_before_each_comma() {
+    std::thread::Builder::new()
+        .stack_size(2 * 1024 * 1024)
+        .spawn(|| {
+            for (depth, accepted) in [(32, true), (33, false), (10_000, false)] {
+                let text = format!(
+                    "for i, {}_{} in [] {{}}",
+                    "(_ , ".repeat(depth),
+                    ")".repeat(depth)
+                );
+                let source = SourceFile::new(SourceId::new(802), "loop-depth.opaal", text);
+                if accepted {
+                    assert!(matches!(parse_opaal(&source), ParseOutcome::Complete(_)));
+                    assert!(matches!(
+                        opaal_syntax::format_source_opaal(&source),
+                        opaal_syntax::FormatOutcome::Complete(_)
+                    ));
+                } else {
+                    let ParseOutcome::Invalid(diagnostics) = parse_opaal(&source) else {
+                        panic!("loop pattern should exceed the depth limit");
+                    };
+                    assert_eq!(
+                        diagnostics[0].message(),
+                        "a path containing a tuple can nest at most 32 levels"
+                    );
+                }
+            }
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
 
 #[test]
 fn controlled_parsing_cancels_without_exposing_a_partial_parse_outcome() {

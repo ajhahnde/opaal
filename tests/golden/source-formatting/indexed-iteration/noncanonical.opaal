@@ -1,0 +1,27 @@
+let rows = [(40, "a"), (50, "b")]
+mut positions = 0
+for i ,(number ,_,) in rows {
+    positions += i + number
+}
+mut entries = 0
+for (number ,label,) in rows {
+    if label == "b" {
+        entries += number
+    }
+}
+if positions != 91 || entries != 50 {
+    throw "unexpected loop result"
+}
+
+mut legacy_total = 0
+for row in rows {
+    let (number, _) = row
+    legacy_total += number
+}
+mut range_total = 0
+for index, number in 40..=41 {
+    range_total += index + number
+}
+if legacy_total != 90 || range_total != 82 {
+    throw "unexpected loop result"
+}

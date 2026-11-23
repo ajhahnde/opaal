@@ -132,6 +132,15 @@ handle `Value::Tuple` and `ValueType::Tuple` as ordered slots with distinct
 value and type identities. `ValueType::Unknown` and `ValueType::EmptyList`
 carry inferred slot evidence. An explicit `Any` remains distinct.
 
+`ForStatement` carries an optional `index` identifier and a `binding` pattern.
+Build the existing one-name header with `index: None` and
+`Pattern::Binding(identifier)`. For tuple items, visit each tuple slot as a
+pattern and preserve its spans. A tuple item contains only nested tuples, names,
+and wildcards. Walk the iterable before introducing the loop bindings, then
+visit the body with both bindings in the same scope. Visitors of
+`RuntimeErrorKind` and `ModuleTypeError` should handle `LoopIndexOverflow` and
+`NotIterable`, respectively.
+
 Use `opaal_syntax::check_tuple_depth` to check a Rust-built syntax tree before
 passing it to a recursive visitor. Pass borrowed values to `apply_callable`,
 `ScopeStack::declare`, `ScopeStack::assign`, `OperationDescriptor::execute_value`
@@ -155,6 +164,14 @@ Runtime paths with tuples allow 32 composite levels. Rust ingress also limits
 recursive value and metadata paths to 64 edges and caps visited edges at the
 default evaluation step limit. Capsule and terminal formats apply their own
 limits during decode and rendering.
+
+Loops evaluate the iterable once. Indexed loops accept lists and ascending
+ranges and count from zero, regardless of the first item or range start.
+Tuple item patterns unpack the original list element and require matching
+tuple arities. Each entry into an indexed or tuple-binding loop consumes an
+evaluation step, even when its body is empty. Index and item bindings are
+immutable and scoped to that iteration. See the language example below for
+both forms.
 
 ```sh
 target/debug/opaal format --check examples/language-foundation.opaal

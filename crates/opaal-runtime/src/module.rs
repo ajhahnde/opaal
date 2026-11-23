@@ -1547,6 +1547,7 @@ struct ModuleNames {
     references: Vec<ModuleNameReference>,
     reference_indices: HashMap<Span, usize>,
     visible: Vec<ModuleVisibleBinding>,
+    reassigned: BTreeSet<usize>,
 }
 
 impl ModuleNames {
@@ -1811,7 +1812,7 @@ impl ModuleNameRegistry {
             if control.is_cancelled() {
                 return Ok(registry);
             }
-            let (references, visible, mut reference_errors) = ReferenceResolver::new(
+            let (references, visible, reassigned, mut reference_errors) = ReferenceResolver::new(
                 entry,
                 &registry,
                 aliases,
@@ -1826,6 +1827,7 @@ impl ModuleNameRegistry {
                 .expect("every registered source has a name table");
             names.set_references(references);
             names.visible = visible;
+            names.reassigned = reassigned;
         }
 
         if errors.is_empty() {
@@ -3980,10 +3982,10 @@ impl RuntimeTypeContext {
         let mut types: Option<RuntimeBindingTypes> = None;
         let mut aliases = ModuleAliasRegistry::default();
         let mut untyped_mutable = BTreeSet::new();
-        let restore_capture_types = !self.cells.is_empty()
-            && !SyntaxMetrics::for_script(defining_script)
-                .if_spans
-                .is_empty();
+        let restore_capture_types = !self.cells.is_empty() && {
+            let metrics = SyntaxMetrics::for_script(defining_script);
+            !metrics.if_spans.is_empty() || !metrics.loop_spans.is_empty()
+        };
         let control = AnalysisControl::never().for_run(
             AnalysisLimits::OPAAL.with_limit(AnalysisLimitKind::WorkUnits, *work_remaining),
         );
@@ -5246,7 +5248,7 @@ impl RuntimeBindingTypes {
             return Err(error.diagnostic());
         }
         // Earlier cells contribute imports and schemas. Their live scopes are gone.
-        let expression_types = if !entry.if_spans.is_empty()
+        let expression_types = if (!entry.if_spans.is_empty() || !metrics.loop_spans.is_empty())
             && !matches!(outer_scope, Some(InteractiveScope::Historical))
         {
             let mut resolver = ReferenceResolver::new(&entry, &names, &aliases, false, control);
@@ -5260,12 +5262,29 @@ impl RuntimeBindingTypes {
             if let Some(error) = resolver.conditional_error {
                 return Err(error);
             }
+            if let Some(error) = resolver.errors.iter().find(|error| {
+                let primary = match error {
+                    ModuleNameError::ReservedBinding {
+                        declaration_span, ..
+                    } => *declaration_span,
+                    ModuleNameError::DuplicateBinding { duplicate_span, .. } => *duplicate_span,
+                    ModuleNameError::ImmutableAssignment {
+                        assignment_span, ..
+                    }
+                    | ModuleNameError::CapturedAssignment {
+                        assignment_span, ..
+                    } => *assignment_span,
+                    _ => return false,
+                };
+                span_in_regions(primary, &metrics.loop_spans)
+            }) {
+                return Err(error.diagnostic());
+            }
             let references = resolver.references;
-            names
-                .by_module
-                .entry(entry.module().clone())
-                .or_default()
-                .set_references(references);
+            let reassigned = resolver.reassigned;
+            let module_names = names.by_module.entry(entry.module().clone()).or_default();
+            module_names.set_references(references);
+            module_names.reassigned = reassigned;
             declarations
                 .by_module
                 .insert(entry.module().clone(), types.clone());
@@ -5276,13 +5295,8 @@ impl RuntimeBindingTypes {
             let evidence = validator.validate();
             if let Some(error) = evidence.errors.iter().find(|error| {
                 let primary = error.primary_span();
-                let index = entry
-                    .if_spans
-                    .partition_point(|span| span.end() < primary.end());
-                entry
-                    .if_spans
-                    .get(index)
-                    .is_some_and(|span| span.start() <= primary.start())
+                span_in_regions(primary, &entry.if_spans)
+                    || span_in_regions(primary, &metrics.loop_spans)
             }) {
                 return Err(error.diagnostic());
             }
@@ -5544,7 +5558,14 @@ fn permits_nullable_http_argument(
     }
 }
 
-fn pattern_span(pattern: &Pattern) -> Span {
+fn span_in_regions(primary: Span, regions: &[Span]) -> bool {
+    let index = regions.partition_point(|span| span.end() < primary.end());
+    regions
+        .get(index)
+        .is_some_and(|span| span.start() <= primary.start())
+}
+
+pub(crate) fn pattern_span(pattern: &Pattern) -> Span {
     match pattern {
         Pattern::Binding(identifier) => identifier.span(),
         Pattern::Wildcard(span) => *span,
@@ -5556,41 +5577,41 @@ fn pattern_span(pattern: &Pattern) -> Span {
     }
 }
 
-fn top_level_declared_identifiers(statement: &Statement) -> Vec<Identifier> {
-    fn collect_pattern(pattern: &Pattern, identifiers: &mut Vec<Identifier>) {
-        match pattern {
-            Pattern::Binding(identifier) => identifiers.push(*identifier),
-            Pattern::Tuple(pattern) => {
-                for element in &pattern.elements {
-                    collect_pattern(element, identifiers);
-                }
+fn collect_pattern_identifiers(pattern: &Pattern, identifiers: &mut Vec<Identifier>) {
+    match pattern {
+        Pattern::Binding(identifier) => identifiers.push(*identifier),
+        Pattern::Tuple(pattern) => {
+            for element in &pattern.elements {
+                collect_pattern_identifiers(element, identifiers);
             }
-            Pattern::List(pattern) => {
-                for element in &pattern.elements {
-                    collect_pattern(element, identifiers);
-                }
-                if let Some(rest) = pattern.rest {
-                    identifiers.push(rest);
-                }
-            }
-            Pattern::NominalRecord(pattern) => {
-                for field in &pattern.fields {
-                    collect_pattern(&field.pattern, identifiers);
-                }
-            }
-            Pattern::Variant(pattern) => {
-                for payload in &pattern.payload {
-                    collect_pattern(payload, identifiers);
-                }
-            }
-            Pattern::Wildcard(_) | Pattern::Literal(_) => {}
         }
+        Pattern::List(pattern) => {
+            for element in &pattern.elements {
+                collect_pattern_identifiers(element, identifiers);
+            }
+            if let Some(rest) = pattern.rest {
+                identifiers.push(rest);
+            }
+        }
+        Pattern::NominalRecord(pattern) => {
+            for field in &pattern.fields {
+                collect_pattern_identifiers(&field.pattern, identifiers);
+            }
+        }
+        Pattern::Variant(pattern) => {
+            for payload in &pattern.payload {
+                collect_pattern_identifiers(payload, identifiers);
+            }
+        }
+        Pattern::Wildcard(_) | Pattern::Literal(_) => {}
     }
+}
 
+fn top_level_declared_identifiers(statement: &Statement) -> Vec<Identifier> {
     let mut identifiers = Vec::new();
     match statement.kind() {
         StatementKind::Declaration(declaration) => {
-            collect_pattern(&declaration.pattern, &mut identifiers);
+            collect_pattern_identifiers(&declaration.pattern, &mut identifiers);
         }
         StatementKind::Function(function) => identifiers.push(function.name),
         StatementKind::Action(action) => identifiers.push(action.name),
@@ -6484,6 +6505,9 @@ struct SignatureValidator<'a> {
     names: &'a ModuleNameRegistry,
     types: &'a ModuleTypeRegistry,
     inferred_bindings: RefCell<BTreeMap<(ModuleId, usize), ValueType>>,
+    unstable_inferred_bindings: RefCell<BTreeSet<usize>>,
+    reads_unstable_type: Cell<bool>,
+    checking_loop_iterable: Cell<bool>,
     callback_bindings: RefCell<BTreeMap<(ModuleId, usize), crate::operation::CallbackShape>>,
     operation_types: RefCell<BTreeMap<usize, Vec<ValueType>>>,
     expression_types: RefCell<ExpressionTypes>,
@@ -6510,6 +6534,9 @@ impl<'a> SignatureValidator<'a> {
             names,
             types,
             inferred_bindings: RefCell::new(BTreeMap::new()),
+            unstable_inferred_bindings: RefCell::new(BTreeSet::new()),
+            reads_unstable_type: Cell::new(false),
+            checking_loop_iterable: Cell::new(false),
             callback_bindings: RefCell::new(BTreeMap::new()),
             operation_types: RefCell::new(BTreeMap::new()),
             expression_types: RefCell::new(BTreeMap::new()),
@@ -6638,15 +6665,16 @@ impl<'a> SignatureValidator<'a> {
                 self.function_statements(&statement.body.statements, signature, false)
             }
             StatementKind::For(statement) => {
-                self.expression(&statement.iterable)?;
+                self.for_bindings(statement)?;
                 self.function_statements(&statement.body.statements, signature, false)
             }
             StatementKind::Match(statement) => {
-                let subject_type = self.expression(&statement.value)?;
+                let (subject_type, unstable) =
+                    self.observe_inference(|| self.expression(&statement.value))?;
                 self.validate_match(statement, subject_type.as_ref())?;
                 for arm in &statement.arms {
                     if let Some(subject_type) = &subject_type {
-                        self.infer_pattern_bindings(&arm.pattern, subject_type);
+                        self.record_pattern_inference(&arm.pattern, subject_type, unstable);
                     }
                     if let Pattern::Literal(literal) = &arm.pattern {
                         self.literal(literal)?;
@@ -6848,14 +6876,16 @@ impl<'a> SignatureValidator<'a> {
                         .annotation(self.entry.module(), annotation.span)
                         .map(ResolvedTypeAnnotation::value_type)
                 });
-                let actual = self.expression_with_expected_at(
-                    &declaration.value,
-                    expected,
-                    declaration
-                        .type_annotation
-                        .as_ref()
-                        .map_or(declaration.name.span(), |annotation| annotation.span),
-                )?;
+                let (actual, unstable) = self.observe_inference(|| {
+                    self.expression_with_expected_at(
+                        &declaration.value,
+                        expected,
+                        declaration
+                            .type_annotation
+                            .as_ref()
+                            .map_or(declaration.name.span(), |annotation| annotation.span),
+                    )
+                })?;
                 self.retain_composite_argument_type(&declaration.value, actual.as_ref());
                 if !declaration.mutable
                     && matches!(declaration.pattern, Pattern::Binding(_))
@@ -6891,7 +6921,7 @@ impl<'a> SignatureValidator<'a> {
                             });
                     }
                     self.validate_pattern(&declaration.pattern, &actual);
-                    self.infer_pattern_bindings(&declaration.pattern, &actual);
+                    self.record_pattern_inference(&declaration.pattern, &actual, unstable);
                 }
                 Ok(())
             }
@@ -6920,15 +6950,16 @@ impl<'a> SignatureValidator<'a> {
                 self.statements(&statement.body.statements)
             }
             StatementKind::For(statement) => {
-                self.expression(&statement.iterable)?;
+                self.for_bindings(statement)?;
                 self.statements(&statement.body.statements)
             }
             StatementKind::Match(statement) => {
-                let subject_type = self.expression(&statement.value)?;
+                let (subject_type, unstable) =
+                    self.observe_inference(|| self.expression(&statement.value))?;
                 self.validate_match(statement, subject_type.as_ref())?;
                 for arm in &statement.arms {
                     if let Some(subject_type) = &subject_type {
-                        self.infer_pattern_bindings(&arm.pattern, subject_type);
+                        self.record_pattern_inference(&arm.pattern, subject_type, unstable);
                     }
                     if let Pattern::Literal(literal) = &arm.pattern {
                         self.literal(literal)?;
@@ -7719,17 +7750,33 @@ impl<'a> SignatureValidator<'a> {
     }
 
     fn declaration_type(&self, module: &ModuleId, declaration_span: Span) -> Option<ValueType> {
-        if let Some(value_type) = self
+        let declared = self.types.binding_type(module, declaration_span);
+        if self.checking_loop_iterable.get() && declared.is_some() {
+            return declared.cloned();
+        }
+        let offset = declaration_span.start();
+        if let Some(inferred) = self
             .inferred_bindings
             .borrow()
-            .get(&(module.clone(), declaration_span.start()))
+            .get(&(module.clone(), offset))
         {
-            return Some(value_type.clone());
+            let unstable = self.unstable_inferred_bindings.borrow().contains(&offset)
+                || self
+                    .names
+                    .by_module
+                    .get(module)
+                    .is_some_and(|names| names.reassigned.contains(&offset));
+            if unstable {
+                self.reads_unstable_type.set(true);
+            }
+            if !unstable || !self.checking_loop_iterable.get() {
+                return Some(inferred.clone());
+            }
         }
         if self.types.function(module, declaration_span).is_some() {
             return Some(ValueType::Function);
         }
-        self.types.binding_type(module, declaration_span).cloned()
+        declared.cloned()
     }
 
     fn qualified_value_type(
@@ -8004,6 +8051,85 @@ impl<'a> SignatureValidator<'a> {
                 .map(|parameter| substitutions[parameter.name()].clone())
                 .collect(),
         }))
+    }
+
+    fn for_bindings(
+        &self,
+        statement: &opaal_syntax::ForStatement,
+    ) -> Result<(), Box<ModuleTypeError>> {
+        if statement.index.is_none() && matches!(statement.binding, Pattern::Binding(_)) {
+            return self.expression(&statement.iterable).map(|_| ());
+        }
+        let previous = self.checking_loop_iterable.replace(true);
+        let iterable = self.expression(&statement.iterable).map(|value_type| {
+            value_type.or_else(|| match self.value_reference(&statement.iterable) {
+                Some(reference) => self.reference_type(reference.target()),
+                None => self.outer_value_type(&statement.iterable),
+            })
+        });
+        self.checking_loop_iterable.set(previous);
+        let iterable = iterable?;
+        if let Some(index) = statement.index {
+            self.inferred_bindings.borrow_mut().insert(
+                (self.entry.module().clone(), index.span().start()),
+                ValueType::Int,
+            );
+        }
+        self.retain_composite_argument_type(&statement.iterable, iterable.as_ref());
+        let element = match iterable {
+            Some(ValueType::List(element)) => *element,
+            Some(ValueType::Range) => ValueType::Int,
+            None
+            | Some(
+                ValueType::Any
+                | ValueType::Unknown
+                | ValueType::EmptyList
+                | ValueType::TypeParameter(_),
+            ) => ValueType::Any,
+            Some(actual) => {
+                self.errors.borrow_mut().push(ModuleTypeError::NotIterable {
+                    module: self.entry.module().clone(),
+                    span: statement.iterable.span(),
+                    actual,
+                });
+                return Ok(());
+            }
+        };
+        // The call determines the shape of any generic slots in the element.
+        let unresolved = self
+            .type_parameter_scopes
+            .borrow()
+            .iter()
+            .flat_map(|scope| scope.keys().map(|name| (name.clone(), ValueType::Unknown)))
+            .collect();
+        let shape = substitute_type(&element, &unresolved);
+        if self.validate_pattern(&statement.binding, &shape) {
+            self.infer_pattern_bindings(&statement.binding, &element);
+        }
+        Ok(())
+    }
+
+    fn observe_inference(
+        &self,
+        check: impl FnOnce() -> Result<Option<ValueType>, Box<ModuleTypeError>>,
+    ) -> Result<(Option<ValueType>, bool), Box<ModuleTypeError>> {
+        let previous = self.reads_unstable_type.replace(false);
+        let value_type = check();
+        let unstable = self.reads_unstable_type.replace(previous);
+        value_type.map(|value_type| (value_type, unstable))
+    }
+
+    fn record_pattern_inference(&self, pattern: &Pattern, value_type: &ValueType, unstable: bool) {
+        self.infer_pattern_bindings(pattern, value_type);
+        if unstable {
+            let mut identifiers = Vec::new();
+            collect_pattern_identifiers(pattern, &mut identifiers);
+            self.unstable_inferred_bindings.borrow_mut().extend(
+                identifiers
+                    .iter()
+                    .map(|identifier| identifier.span().start()),
+            );
+        }
     }
 
     fn infer_pattern_bindings(&self, pattern: &Pattern, value_type: &ValueType) {
@@ -9738,6 +9864,7 @@ struct ReferenceResolver<'a> {
     callable_depth: usize,
     references: Vec<ModuleNameReference>,
     visible: Vec<ModuleVisibleBinding>,
+    reassigned: BTreeSet<usize>,
     errors: Vec<ModuleNameError>,
     control: &'a AnalysisControl,
     outer_scope: Option<&'a crate::ScopeStack>,
@@ -9819,6 +9946,7 @@ impl<'a> ReferenceResolver<'a> {
             callable_depth: 0,
             references: Vec::new(),
             visible,
+            reassigned: BTreeSet::new(),
             errors: Vec::new(),
             control,
             outer_scope: None,
@@ -9831,11 +9959,12 @@ impl<'a> ReferenceResolver<'a> {
     ) -> (
         Vec<ModuleNameReference>,
         Vec<ModuleVisibleBinding>,
+        BTreeSet<usize>,
         Vec<ModuleNameError>,
     ) {
         self.statements(self.entry.script().statements())
             .expect("accumulating name traversal does not fail fast");
-        (self.references, self.visible, self.errors)
+        (self.references, self.visible, self.reassigned, self.errors)
     }
 
     fn selected_import_target(
@@ -10004,7 +10133,11 @@ impl<'a> ReferenceResolver<'a> {
                 self.expression(&statement.iterable)?;
                 self.push_scope(statement.body.span);
                 let result = (|| {
-                    self.declare(statement.binding.span(), statement.body.span.start(), false)?;
+                    let visible_from = statement.body.span.start();
+                    if let Some(index) = statement.index {
+                        self.declare(index.span(), visible_from, false)?;
+                    }
+                    self.pattern(&statement.binding, visible_from, false)?;
                     self.statements(&statement.body.statements)
                 })();
                 self.pop_scope();
@@ -10452,7 +10585,12 @@ impl<'a> ReferenceResolver<'a> {
                 assignment_span: reference_span,
                 declaration_span: Some(*declaration_span),
             }),
-            ModuleReferenceTarget::Local { .. } => None,
+            ModuleReferenceTarget::Local {
+                declaration_span, ..
+            } => {
+                self.reassigned.insert(declaration_span.start());
+                None
+            }
         };
         if let Some(failure) = failure {
             self.errors.push(failure);
@@ -13643,6 +13781,7 @@ struct SyntaxMetrics {
     nodes: u64,
     type_depth: u64,
     if_spans: Vec<Span>,
+    loop_spans: Vec<Span>,
 }
 
 impl SyntaxMetrics {
@@ -13651,6 +13790,7 @@ impl SyntaxMetrics {
             nodes: 1,
             type_depth: 0,
             if_spans: Vec::new(),
+            loop_spans: Vec::new(),
         };
         metrics.statements(script.statements());
         metrics
@@ -13753,9 +13893,22 @@ impl SyntaxMetrics {
                 self.chain(&statement.condition);
                 self.block(&statement.body);
             }
-            StatementKind::For(statement) => {
-                self.expression(&statement.iterable);
-                self.block(&statement.body);
+            StatementKind::For(loop_statement) => {
+                if loop_statement.index.is_some()
+                    || !matches!(loop_statement.binding, Pattern::Binding(_))
+                {
+                    self.pattern(&loop_statement.binding);
+                    let span = statement.span();
+                    if self
+                        .loop_spans
+                        .last()
+                        .is_none_or(|outer| outer.end() < span.end())
+                    {
+                        self.loop_spans.push(span);
+                    }
+                }
+                self.expression(&loop_statement.iterable);
+                self.block(&loop_statement.body);
             }
             StatementKind::Match(statement) => {
                 self.expression(&statement.value);
@@ -14550,6 +14703,11 @@ pub enum ModuleTypeError {
         span: Span,
         actual: ValueType,
     },
+    NotIterable {
+        module: ModuleId,
+        span: Span,
+        actual: ValueType,
+    },
     IndexedAssignmentTargetMismatch {
         module: ModuleId,
         span: Span,
@@ -14653,6 +14811,7 @@ impl ModuleTypeError {
             | Self::SpreadValueMismatch { module, .. }
             | Self::SpreadElementMismatch { module, .. }
             | Self::ThrowMismatch { module, .. }
+            | Self::NotIterable { module, .. }
             | Self::IndexedAssignmentTargetMismatch { module, .. }
             | Self::IndexedAssignmentIndexMismatch { module, .. }
             | Self::AssignmentMismatch { module, .. }
@@ -14694,7 +14853,8 @@ impl ModuleTypeError {
             Self::ListSpreadValueMismatch { span, .. }
             | Self::SpreadValueMismatch { span, .. }
             | Self::SpreadElementMismatch { span, .. }
-            | Self::ThrowMismatch { span, .. } => *span,
+            | Self::ThrowMismatch { span, .. }
+            | Self::NotIterable { span, .. } => *span,
             Self::IndexedAssignmentTargetMismatch { span, .. }
             | Self::IndexedAssignmentIndexMismatch { span, .. } => *span,
             Self::AssignmentMismatch {
@@ -14905,6 +15065,12 @@ impl ModuleTypeError {
                 Diagnostic::new(Severity::Error, "SIG007", self.to_string()).with_primary(
                     *span,
                     format!("this value is `{actual}`; throw requires `String` or `Error`"),
+                )
+            }
+            Self::NotIterable { span, actual, .. } => {
+                Diagnostic::new(Severity::Error, "SIG026", self.to_string()).with_primary(
+                    *span,
+                    format!("this value is `{actual}`; iteration requires `List` or `Range`"),
                 )
             }
             Self::IndexedAssignmentTargetMismatch {
@@ -15218,6 +15384,11 @@ impl fmt::Display for ModuleTypeError {
             Self::ThrowMismatch { module, actual, .. } => write!(
                 formatter,
                 "module `{}` throws `{actual}`; expected `String` or `Error`",
+                module.path().display()
+            ),
+            Self::NotIterable { module, actual, .. } => write!(
+                formatter,
+                "module `{}` iterates `{actual}`; expected `List` or `Range`",
                 module.path().display()
             ),
             Self::IndexedAssignmentTargetMismatch { module, actual, .. } => write!(

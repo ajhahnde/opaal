@@ -193,6 +193,9 @@ impl<'a> Walk<'a> {
             StatementKind::For(statement) => {
                 self.block(&statement.body);
                 self.push(Node::Expression(&statement.iterable));
+                if !matches!(statement.binding, Pattern::Binding(_)) {
+                    self.push(Node::Pattern(&statement.binding));
+                }
             }
             StatementKind::Match(statement) => {
                 for arm in statement.arms.iter().rev() {

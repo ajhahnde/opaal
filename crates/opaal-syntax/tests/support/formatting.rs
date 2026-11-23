@@ -577,6 +577,7 @@ fields!(IfStatement {
 });
 fields!(WhileStatement { condition, body });
 fields!(ForStatement {
+    index,
     binding,
     iterable,
     body

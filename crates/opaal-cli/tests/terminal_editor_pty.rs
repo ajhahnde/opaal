@@ -716,6 +716,29 @@ fn incomplete_source_draws_the_continuation_prompt() {
 }
 
 #[test]
+fn indexed_loop_patterns_continue_and_cancel_as_one_submission() {
+    let mut pty = Pty::spawn(FIXTURE);
+    pty.wait_for(">> ");
+    pty.send(b"for i, (item,\r");
+    pty.wait_for("...> ");
+    pty.send(b"_) in rows {}\r");
+    pty.wait_for("submitted: for i, (item,\r\n_) in rows {}");
+    pty.await_prompt_after("submitted: for i, (item,");
+
+    let mark = pty.mark();
+    pty.send(b"for i, (unused,\r");
+    pty.wait_for_from(mark, "...> ");
+    let mark = pty.mark();
+    pty.send(b"\x03");
+    pty.await_prompt(mark);
+    assert!(
+        !pty.rendered_from(mark)
+            .contains("submitted: for i, (unused,")
+    );
+    exit_cleanly(&mut pty);
+}
+
+#[test]
 fn named_declaration_continues_through_separate_body_and_can_be_cancelled() {
     let mut pty = Pty::spawn(FIXTURE);
     pty.wait_for(">> ");
