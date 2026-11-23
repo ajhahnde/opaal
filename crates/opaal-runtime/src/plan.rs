@@ -1847,6 +1847,67 @@ mod tests {
         }
     }
 
+    #[test]
+    fn escaped_grouped_comma_head_keeps_registry_identity_through_formatting() {
+        use opaal_syntax::{
+            ExpressionKind, FormatOutcome, ParseOutcome, format_source_opaal, parse_opaal,
+        };
+
+        let mut registry = CommandRegistry::new();
+        assert!(registry.register(crate::command::CommandSignature::new(
+            "inspect,", [Carrier::Empty], Carrier::Value,
+        ).with_arguments(crate::command::CommandArgumentSchema::positional(1, Some(1)))));
+        let raw = SourceFile::new(
+            SourceId::new(1),
+            "registry.opaal",
+            "( inspect\\, argument )\n",
+        );
+        let FormatOutcome::Complete(formatted) = format_source_opaal(&raw) else {
+            panic!("the escaped command must format");
+        };
+        let formatted = SourceFile::new(SourceId::new(2), "formatted.opaal", formatted);
+        let tuple = SourceFile::new(SourceId::new(3), "tuple.opaal", "(inspect, argument)\n");
+        for source in [&raw, &formatted, &tuple] {
+            let ParseOutcome::Complete(script) = parse_opaal(source) else {
+                panic!("valid source: {}", source.text());
+            };
+            let StatementKind::Job(job) = script.statements()[0].kind() else {
+                panic!("expected a job");
+            };
+            let StageKind::Expression(expression) =
+                job.chain.or_terms()[0].and_terms()[0].stages()[0].kind()
+            else {
+                panic!("expected a parenthesized expression");
+            };
+            if source.id() == tuple.id() {
+                assert!(matches!(expression.kind(), ExpressionKind::Tuple(_)));
+                continue;
+            }
+            let ExpressionKind::GroupedJob(chain) = expression.kind() else {
+                panic!("expected a grouped command");
+            };
+            let plan = plan_pipeline(
+                &chain.or_terms()[0].and_terms()[0],
+                "/",
+                source,
+                &mut ScopeStack::new(),
+                &Environment::new(),
+                &registry,
+                &NoExecutables,
+            )
+            .unwrap();
+            let stage = &plan.stages()[0];
+            assert!(
+                matches!(stage.resolution(), PlannedResolution::Internal { source_name, canonical_name }
+                if source_name == "inspect," && canonical_name == "inspect,")
+            );
+            assert_eq!(
+                stage.arguments()[0].as_word().unwrap().value(),
+                OsStr::new("argument")
+            );
+        }
+    }
+
     #[derive(Default)]
     struct RecordingExecutable {
         observed: Mutex<Vec<PathBuf>>,

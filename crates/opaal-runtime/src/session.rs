@@ -72,7 +72,8 @@ use crate::plan::{
     SessionOptions, internal_stdout_route, plan_pipeline_with_options_and_binding_types, preflight,
 };
 use crate::presentation::{
-    OutputDestination, TerminalPresentation, render_table, select_terminal_presentation,
+    OutputDestination, TerminalPresentation, render_value, select_terminal_presentation,
+    try_render_table,
 };
 use crate::resolve::ExecutableProbe;
 use crate::script::declare_qualified_alias_values;
@@ -966,7 +967,7 @@ impl Session {
                                 .and_then(|exports| exports.get(&name))
                         {
                             pending_scope
-                                .declare(
+                                .declare_admitted(
                                     selection.name.clone(),
                                     crate::BindingMutability::Immutable,
                                     value.clone(),
@@ -2558,7 +2559,7 @@ fn execute_job_table_pipeline(
     execute_internal_suffix_with_policy(
         plan,
         1,
-        InternalPayload::ValueStream(ValueStream::from_values(rows)),
+        InternalPayload::ValueStream(ValueStream::from_admitted_values(rows)),
         vec![status],
         state,
         registry,
@@ -3570,6 +3571,19 @@ fn render_payload(
     span: opaal_syntax::Span,
     sink: &mut dyn Write,
 ) -> Result<(), Interrupt> {
+    let render_error = |error: io::Error| {
+        if error
+            .get_ref()
+            .is_some_and(|cause| cause.is::<crate::ValueAdmissionError>())
+        {
+            Interrupt::Runtime(RuntimeError::new(
+                RuntimeErrorKind::ResourceBudgetExceeded,
+                span,
+            ))
+        } else {
+            Interrupt::Output(error)
+        }
+    };
     match output {
         InternalPayload::Empty => Ok(()),
         InternalPayload::Value(value) => write_value(
@@ -3577,7 +3591,7 @@ fn render_payload(
             presentation.expect("a Value carrier has terminal-presentation proof"),
             sink,
         )
-        .map_err(Interrupt::Output),
+        .map_err(render_error),
         InternalPayload::ValueStream(mut values) => {
             let presentation =
                 presentation.expect("a ValueStream carrier has terminal-presentation proof");
@@ -3601,22 +3615,22 @@ fn render_payload(
                     }
                     StreamPull::Item(value) => {
                         write_record_table(&mut records, presentation, sink)
-                            .map_err(Interrupt::Output)?;
-                        write_value(&value, presentation, sink).map_err(Interrupt::Output)?;
+                            .map_err(render_error)?;
+                        write_value(&value, presentation, sink).map_err(render_error)?;
                     }
                     StreamPull::End => {
                         write_record_table(&mut records, presentation, sink)
-                            .map_err(Interrupt::Output)?;
+                            .map_err(render_error)?;
                         return Ok(());
                     }
                     StreamPull::Failed(error) => {
                         write_record_table(&mut records, presentation, sink)
-                            .map_err(Interrupt::Output)?;
+                            .map_err(render_error)?;
                         return Err(Interrupt::Runtime(error));
                     }
                     StreamPull::Cancelled(reason) => {
                         write_record_table(&mut records, presentation, sink)
-                            .map_err(Interrupt::Output)?;
+                            .map_err(render_error)?;
                         return Err(Interrupt::Runtime(RuntimeError::new(
                             RuntimeErrorKind::StreamCancelled { reason },
                             span,
@@ -3713,7 +3727,11 @@ fn write_record_table(
         return Ok(());
     }
     let table = Table::from_records(std::mem::take(records));
-    writeln!(sink, "{}", render_table(&table, presentation.columns()))
+    writeln!(
+        sink,
+        "{}",
+        try_render_table(&table, presentation.columns())?
+    )
 }
 
 fn write_value(
@@ -3722,8 +3740,10 @@ fn write_value(
     sink: &mut dyn Write,
 ) -> io::Result<()> {
     match value {
-        Value::Table(table) => writeln!(sink, "{}", render_table(table, presentation.columns())),
-        _ => writeln!(sink, "{value}"),
+        Value::Table(table) => {
+            writeln!(sink, "{}", try_render_table(table, presentation.columns())?)
+        }
+        _ => writeln!(sink, "{}", render_value(value)?),
     }
 }
 
@@ -3800,6 +3820,45 @@ pub(crate) fn render_runtime_diagnostic(
 #[cfg(test)]
 mod mixed_output_cleanup_tests {
     use super::*;
+    use crate::command::Carrier;
+
+    #[test]
+    fn terminal_refuses_over_depth_tuples_and_table_rows_before_writing() {
+        let source = SourceFile::new(SourceId::new(1), "terminal.opaal", "");
+        let span = source.span(0..0).unwrap();
+        let presentation = select_terminal_presentation(
+            Carrier::Value,
+            OutputDestination::InteractiveTerminal { columns: 80 },
+        )
+        .unwrap();
+        let mut value = Value::Tuple(Arc::from([Value::Int(1), Value::Int(2)]));
+        for _ in 0..31 {
+            value = Value::list(vec![value]);
+        }
+        let mut sink = Vec::new();
+        assert!(
+            render_payload(
+                InternalPayload::Value(value.clone()),
+                presentation.as_ref(),
+                span,
+                &mut sink
+            )
+            .is_ok()
+        );
+        assert!(!sink.is_empty());
+        let record = Value::Record(Record::new(vec![("value".to_owned(), value.clone())]).unwrap());
+        for payload in [
+            InternalPayload::Value(Value::list(vec![value])),
+            InternalPayload::ValueStream(ValueStream::once_admitted(record)),
+        ] {
+            sink.clear();
+            assert!(matches!(
+                render_payload(payload, presentation.as_ref(), span, &mut sink),
+                Err(Interrupt::Runtime(error)) if matches!(error.kind(), RuntimeErrorKind::ResourceBudgetExceeded)
+            ));
+            assert!(sink.is_empty());
+        }
+    }
 
     #[test]
     fn fatal_output_failure_retains_cleanup_failure_and_original_output_error() {
@@ -4372,7 +4431,7 @@ mod interactive_retention_tests {
             let caller = SourceFile::new(SourceId::new(50_000), "caller", text);
             let restored = apply_callable(
                 decoded.scope().get(name).unwrap(),
-                vec![],
+                &[],
                 &caller,
                 caller.span(0..caller.len()).unwrap(),
                 &mut Environment::new(),
@@ -4455,7 +4514,7 @@ mod interactive_retention_tests {
         let caller = SourceFile::new(SourceId::new(500), "caller", "process()");
         let value = apply_callable(
             decoded.scope().get("process").unwrap(),
-            vec![],
+            &[],
             &caller,
             caller.span(0..9).unwrap(),
             &mut Environment::new(),
@@ -4528,7 +4587,7 @@ mod interactive_retention_tests {
         let caller = SourceFile::new(SourceId::new(50_000), "caller", "get(checked)");
         let value = crate::eval::apply_callable(
             &Value::Callable(restored),
-            vec![session.scope().get("checked").unwrap().clone()],
+            &[session.scope().get("checked").unwrap().clone()],
             &caller,
             caller.span(0..caller.len()).unwrap(),
             &mut Environment::new(),
@@ -4585,7 +4644,7 @@ mod interactive_retention_tests {
         let caller = SourceFile::new(SourceId::new(50_000), "caller", "get(wrapped)");
         let value = crate::eval::apply_callable(
             decoded.scope().get("get").unwrap(),
-            vec![decoded.scope().get("wrapped").unwrap().clone()],
+            &[decoded.scope().get("wrapped").unwrap().clone()],
             &caller,
             caller.span(0..caller.len()).unwrap(),
             &mut Environment::new(),

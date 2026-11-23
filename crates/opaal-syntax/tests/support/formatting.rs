@@ -6,6 +6,7 @@ pub fn semantic_signature(source: &SourceFile, script: &Script) -> Vec<String> {
     let mut context = Context {
         source,
         values: Vec::new(),
+        omitted_commas: Default::default(),
     };
     script.statements().visit(&mut context);
     context.values
@@ -39,6 +40,12 @@ pub fn assert_roundtrip(source: &SourceFile) -> String {
 
 fn normalized_tokens(file: &SourceFile, script: &Script) -> Vec<(TokenKind, String)> {
     let tokens = lex_opaal(file);
+    let mut context = Context {
+        source: file,
+        values: Vec::new(),
+        omitted_commas: Default::default(),
+    };
+    script.statements().visit(&mut context);
     let mut insertions = std::collections::BTreeSet::new();
     let mut list_ends = Vec::new();
     for statement in script.statements() {
@@ -81,6 +88,9 @@ fn normalized_tokens(file: &SourceFile, script: &Script) -> Vec<(TokenKind, Stri
         .iter()
         .filter(|token| !matches!(token.kind(), TokenKind::Whitespace | TokenKind::Newline))
     {
+        if context.omitted_commas.contains(&token.span().start()) {
+            continue;
+        }
         normalized.push((token.kind(), token.text(file).unwrap().to_owned()));
         if insertions.contains(&token.span().end()) {
             normalized.push((TokenKind::Operator(Operator::Comma), ",".to_owned()));
@@ -92,6 +102,7 @@ fn normalized_tokens(file: &SourceFile, script: &Script) -> Vec<(TokenKind, Stri
 struct Context<'a> {
     source: &'a SourceFile,
     values: Vec<String>,
+    omitted_commas: std::collections::BTreeSet<usize>,
 }
 
 impl Context<'_> {
@@ -393,10 +404,10 @@ impl Visit for ListItem {
     }
 }
 
-variants!(ExpressionKind { Literal(v), Name(v), Qualified(v), List(v), Record(v), NominalRecord(v), Closure(v), GroupedJob(v), If(v), Call(v), Index(v), Member(v), Unary(v), Binary(v) });
+variants!(ExpressionKind { Literal(v), Name(v), Qualified(v), List(v), Tuple(v), Record(v), NominalRecord(v), Closure(v), GroupedJob(v), If(v), Call(v), Index(v), Member(v), Unary(v), Binary(v) });
 fields!(IfExpression { arms, fallback });
 fields!(IfExpressionArm { condition, value });
-variants!(Pattern { Wildcard(v), Literal(v), Binding(v), List(v), NominalRecord(v), Variant(v) });
+variants!(Pattern { Wildcard(v), Literal(v), Binding(v), List(v), Tuple(v), NominalRecord(v), Variant(v) });
 variants!(ElseBranch { Block(v), If(v) });
 variants!(ControlTransfer { Break, Continue, Return(v) });
 variants!(StaticEffectArgument { Literal(v), Qualified(v) });
@@ -532,11 +543,32 @@ fields!(Parameter {
     type_annotation,
     span
 });
-fields!(TypeReference {
-    name,
-    arguments,
-    span
-});
+fields!(TypeReference { kind, span });
+impl Visit for TypeReferenceKind {
+    fn visit(&self, context: &mut Context<'_>) {
+        match self {
+            Self::Named { name, arguments } => {
+                context.tag("Named");
+                name.visit(context);
+                arguments.visit(context);
+            }
+            Self::Tuple(tuple) => {
+                context.tag("Tuple");
+                tuple.visit(context);
+            }
+        }
+    }
+}
+impl<T: Visit> Visit for TupleSyntax<T> {
+    fn visit(&self, context: &mut Context<'_>) {
+        if self.commas.len() == self.elements.len()
+            && let Some(comma) = self.commas.last()
+        {
+            context.omitted_commas.insert(comma.start());
+        }
+        self.elements.visit(context);
+    }
+}
 fields!(Block { statements, span });
 fields!(IfStatement {
     condition,

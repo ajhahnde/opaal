@@ -1,0 +1,1 @@
+let (one, two, three) = (1, "ready")

@@ -15,7 +15,7 @@ use crate::lifetime::Deadline;
 use super::standard::{HostProgress, StandardState, charge, limit, poll};
 use super::{ModuleError, adapter_error, authorize};
 
-mod display;
+pub(crate) mod display;
 
 pub(crate) enum IoCall<'a> {
     Read(usize),

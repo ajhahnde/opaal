@@ -123,14 +123,14 @@ fn status_values_drive_chains_and_conditions_without_losing_identity() {
         .declare(
             "failed",
             BindingMutability::Immutable,
-            Value::from(failed.clone()),
+            &Value::from(failed.clone()),
         )
         .unwrap();
     scope
         .declare(
             "succeeded",
             BindingMutability::Immutable,
-            Value::from(succeeded.clone()),
+            &Value::from(succeeded.clone()),
         )
         .unwrap();
 

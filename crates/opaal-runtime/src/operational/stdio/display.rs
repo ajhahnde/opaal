@@ -22,28 +22,41 @@ pub(super) fn prepare(
     budget: &mut ResourceBudget,
     deadline: Deadline,
 ) -> Result<Vec<u8>, ModuleError> {
+    let mut output = Vec::new();
+    render(value, cap, budget, &|| poll(context, deadline), &mut output)?;
+    Ok(output)
+}
+
+pub(crate) fn render(
+    value: &Value,
+    cap: usize,
+    budget: &mut ResourceBudget,
+    poll: &dyn Fn() -> Result<(), ModuleError>,
+    output: &mut Vec<u8>,
+) -> Result<(), ModuleError> {
+    output.clear();
     let mut display = Display {
-        output: Vec::new(),
+        output,
         cap,
-        context,
+        poll,
         budget,
-        deadline,
         input_bytes: 0,
+        tuple_path: false,
         error: None,
     };
     if display.value(value, false, 1).is_err() {
         return Err(display.error.expect("bounded writer records its failure"));
     }
-    Ok(display.output)
+    poll()
 }
 
 struct Display<'a> {
-    output: Vec<u8>,
+    output: &'a mut Vec<u8>,
     cap: usize,
-    context: &'a OperationalContext,
+    poll: &'a dyn Fn() -> Result<(), ModuleError>,
     budget: &'a mut ResourceBudget,
-    deadline: Deadline,
     input_bytes: usize,
+    tuple_path: bool,
     error: Option<ModuleError>,
 }
 
@@ -56,7 +69,7 @@ impl Display<'_> {
     }
 
     fn step(&mut self) -> fmt::Result {
-        let result = poll(self.context, self.deadline).and_then(|()| charge(self.budget));
+        let result = (self.poll)().and_then(|()| charge(self.budget));
         self.checked(result)
     }
 
@@ -73,7 +86,7 @@ impl Display<'_> {
             let blocks =
                 (self.input_bytes + length).div_ceil(BLOCK) - self.input_bytes.div_ceil(BLOCK);
             // Also poll within a previously charged block at each new source slice.
-            let result = poll(self.context, self.deadline);
+            let result = (self.poll)();
             self.checked(result)?;
             for _ in 0..blocks {
                 self.step()?;
@@ -123,11 +136,40 @@ impl Display<'_> {
 
     fn value_type(&mut self, value: &ValueType, depth: usize) -> fmt::Result {
         self.node(depth)?;
+        let tuple = matches!(value, ValueType::Tuple(_));
+        let construct = tuple
+            || matches!(value, ValueType::List(_))
+            || matches!(value, ValueType::Nominal { arguments, .. } if !arguments.is_empty());
+        let inherited = self.tuple_path;
+        self.tuple_path |= tuple;
+        let result = if self.tuple_path && construct && depth > opaal_syntax::MAX_TUPLE_DEPTH {
+            self.checked(Err(limit()))
+        } else {
+            self.render_type(value, depth)
+        };
+        self.tuple_path = inherited;
+        result
+    }
+
+    fn render_type(&mut self, value: &ValueType, depth: usize) -> fmt::Result {
         match value {
             ValueType::List(element) => {
                 self.write_str("List[")?;
                 self.value_type(element, depth + 1)?;
                 self.write_char(']')
+            }
+            ValueType::Tuple(elements) => {
+                if elements.len() < 2 {
+                    return self.checked(Err(limit()));
+                }
+                self.write_char('(')?;
+                for (index, element) in elements.iter().enumerate() {
+                    if index != 0 {
+                        self.write_str(", ")?;
+                    }
+                    self.value_type(element, depth + 1)?;
+                }
+                self.write_char(')')
             }
             ValueType::Nominal { id, arguments } => {
                 self.text(id.name(), false)?;
@@ -136,6 +178,8 @@ impl Display<'_> {
             ValueType::TypeParameter(name) => self.text(name, false),
             // These cases have fixed, scalar spellings in the shared type formatter.
             ValueType::Any
+            | ValueType::Unknown
+            | ValueType::EmptyList
             | ValueType::Null
             | ValueType::Bool
             | ValueType::Int
@@ -238,6 +282,28 @@ impl Display<'_> {
 
     fn value(&mut self, value: &Value, debug: bool, depth: usize) -> fmt::Result {
         self.node(depth)?;
+        let tuple = matches!(value, Value::Tuple(_));
+        let construct = tuple
+            || matches!(
+                value,
+                Value::List(_)
+                    | Value::Record(_)
+                    | Value::NominalRecord(_)
+                    | Value::Variant(_)
+                    | Value::Table(_)
+            );
+        let inherited = self.tuple_path;
+        self.tuple_path |= tuple;
+        let result = if self.tuple_path && construct && depth > opaal_syntax::MAX_TUPLE_DEPTH {
+            self.checked(Err(limit()))
+        } else {
+            self.render_value(value, debug, depth)
+        };
+        self.tuple_path = inherited;
+        result
+    }
+
+    fn render_value(&mut self, value: &Value, debug: bool, depth: usize) -> fmt::Result {
         match value {
             Value::Error(_) | Value::Callable(_) => self.checked(Err(ModuleError::invalid(
                 "IO005",
@@ -293,6 +359,14 @@ impl Display<'_> {
                 self.values(values, depth + 1)?;
                 self.write_char(']')
             }
+            Value::Tuple(values) => {
+                if values.len() < 2 {
+                    return self.checked(Err(limit()));
+                }
+                self.write_char('(')?;
+                self.values(values, depth + 1)?;
+                self.write_char(')')
+            }
             Value::Record(record) => {
                 self.write_char('{')?;
                 for (index, (key, value)) in record.entries().iter().enumerate() {
@@ -330,6 +404,12 @@ impl Display<'_> {
                 self.write_char('}')
             }
             Value::Variant(variant) => {
+                if is_opaque_operational_nominal(variant.id()) {
+                    return self.checked(Err(ModuleError::invalid(
+                        "IO005",
+                        "value is not supported for standard printing",
+                    )));
+                }
                 self.text(variant.id().name(), false)?;
                 self.types(variant.type_arguments(), depth + 1)?;
                 self.write_str("::")?;
@@ -458,7 +538,7 @@ mod tests {
             let mut budget = ResourceBudget::opaal();
             assert_eq!(
                 prepare(
-                    &Value::list(vec![value]),
+                    &Value::list(vec![Value::Tuple(Arc::from([Value::Int(3), value]))]),
                     1024,
                     &context,
                     &mut budget,

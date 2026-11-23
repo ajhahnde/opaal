@@ -67,6 +67,16 @@ fn value_of(text: &str) -> OsString {
         .to_os_string()
 }
 
+#[test]
+fn a_tuple_cannot_become_a_native_argument() {
+    for text in ["show {(1, 'canary')}", "show \"{(1, 'canary')}\""] {
+        assert!(matches!(
+            expand(text),
+            Err(RuntimeErrorKind::WordValueNotWordEligible { actual: "tuple" })
+        ));
+    }
+}
+
 fn os(text: &str) -> OsString {
     OsString::from(text)
 }
@@ -100,33 +110,37 @@ fn double_quotes_decode_escapes_and_join_adjacent_parts() {
 fn scalar_interpolation_encodes_each_family_canonically() {
     let mut scope = ScopeStack::new();
     scope
-        .declare("name", BindingMutability::Immutable, Value::string("OPAAL"))
+        .declare(
+            "name",
+            BindingMutability::Immutable,
+            &Value::string("OPAAL"),
+        )
         .unwrap();
     scope
-        .declare("count", BindingMutability::Immutable, Value::Int(-7))
+        .declare("count", BindingMutability::Immutable, &Value::Int(-7))
         .unwrap();
     scope
         .declare(
             "ratio",
             BindingMutability::Immutable,
-            Value::Float(opaal_runtime::FiniteFloat::new(1.5).unwrap()),
+            &Value::Float(opaal_runtime::FiniteFloat::new(1.5).unwrap()),
         )
         .unwrap();
     scope
-        .declare("flag", BindingMutability::Immutable, Value::Bool(true))
+        .declare("flag", BindingMutability::Immutable, &Value::Bool(true))
         .unwrap();
     scope
         .declare(
             "wait",
             BindingMutability::Immutable,
-            Value::Duration(Duration::from_nanos(500)),
+            &Value::Duration(Duration::from_nanos(500)),
         )
         .unwrap();
     scope
         .declare(
             "room",
             BindingMutability::Immutable,
-            Value::ByteSize(ByteSize::new(1024)),
+            &Value::ByteSize(ByteSize::new(1024)),
         )
         .unwrap();
 
@@ -171,7 +185,7 @@ fn path_interpolation_preserves_native_units() {
         .declare(
             "p",
             BindingMutability::Immutable,
-            Value::Path(opaal_runtime::NativePath::new("/etc/hosts")),
+            &Value::Path(opaal_runtime::NativePath::new("/etc/hosts")),
         )
         .unwrap();
     assert_eq!(
@@ -187,11 +201,11 @@ fn ineligible_interpolated_values_are_word_errors() {
         .declare(
             "items",
             BindingMutability::Immutable,
-            Value::list(vec![Value::Int(1)]),
+            &Value::list(vec![Value::Int(1)]),
         )
         .unwrap();
     scope
-        .declare("nothing", BindingMutability::Immutable, Value::Null)
+        .declare("nothing", BindingMutability::Immutable, &Value::Null)
         .unwrap();
 
     assert_eq!(
@@ -222,7 +236,7 @@ fn provenance_records_each_contributing_part() {
     // `pre{count}post` has three contributing parts once `count` is bound.
     let mut scope = ScopeStack::new();
     scope
-        .declare("count", BindingMutability::Immutable, Value::Int(2))
+        .declare("count", BindingMutability::Immutable, &Value::Int(2))
         .unwrap();
     let file = source("show pre{count}post");
     let stage = command(&file);

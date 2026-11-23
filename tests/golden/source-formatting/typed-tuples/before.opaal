@@ -1,0 +1,9 @@
+def summarize(label: String, count: Int) -> List[Any]
+{
+    return [count + 1, label]
+}
+
+let [count, label] = summarize("ready", 2)
+if count != 3 || label != "ready" {
+    throw "unexpected summary"
+}

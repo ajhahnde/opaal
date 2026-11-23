@@ -21,13 +21,13 @@ if __package__:
     from .check_source_formatting import public_paths, seed_census
     from .package_data_processing import SOURCE, digest
     from .package_release import PLATFORMS, ROOT, VERSION
-    from .package_source_formatting import FIXTURES, MEMBER_IMPORT_FIXTURES, COMPOUND_ASSIGNMENT_FIXTURES, LIST_LITERAL_SPREAD_FIXTURES, RECORD_SHORTHAND_FIXTURES, GROUPED_EXPORT_FIXTURES, ACTION_DECLARATION_FIXTURES, INDEXED_REPLACEMENT_FIXTURES, IF_EXPRESSION_FIXTURES
+    from .package_source_formatting import FIXTURES, MEMBER_IMPORT_FIXTURES, COMPOUND_ASSIGNMENT_FIXTURES, LIST_LITERAL_SPREAD_FIXTURES, RECORD_SHORTHAND_FIXTURES, GROUPED_EXPORT_FIXTURES, ACTION_DECLARATION_FIXTURES, INDEXED_REPLACEMENT_FIXTURES, IF_EXPRESSION_FIXTURES, TYPED_TUPLE_FIXTURES
     from .qualify_data_processing import require, success, unpack
 else:
     from check_source_formatting import public_paths, seed_census
     from package_data_processing import SOURCE, digest
     from package_release import PLATFORMS, ROOT, VERSION
-    from package_source_formatting import FIXTURES, MEMBER_IMPORT_FIXTURES, COMPOUND_ASSIGNMENT_FIXTURES, LIST_LITERAL_SPREAD_FIXTURES, RECORD_SHORTHAND_FIXTURES, GROUPED_EXPORT_FIXTURES, ACTION_DECLARATION_FIXTURES, INDEXED_REPLACEMENT_FIXTURES, IF_EXPRESSION_FIXTURES
+    from package_source_formatting import FIXTURES, MEMBER_IMPORT_FIXTURES, COMPOUND_ASSIGNMENT_FIXTURES, LIST_LITERAL_SPREAD_FIXTURES, RECORD_SHORTHAND_FIXTURES, GROUPED_EXPORT_FIXTURES, ACTION_DECLARATION_FIXTURES, INDEXED_REPLACEMENT_FIXTURES, IF_EXPRESSION_FIXTURES, TYPED_TUPLE_FIXTURES
     from qualify_data_processing import require, success, unpack
 
 PAIRS = (("legacy.opaal", "canonical.opaal"), ("legacy-effects.opaal", "effects.opaal"),
@@ -557,6 +557,26 @@ def if_expressions(run, work: Path, fixtures: Path, target: str) -> dict:
     report = project_workflow(lambda *args: run(*args, cwd=project), project, fixtures, target,
                               value_conditionals=True)
     return {"fixture_cases": sorted(IF_EXPRESSION_FIXTURES), "pure_cases": cases, "project": report}
+
+
+def typed_tuples(run, fixtures: Path) -> dict:
+    folder = fixtures / "typed-tuples"
+    require({path.name for path in folder.iterdir()} == set(TYPED_TUPLE_FIXTURES),
+            "typed tuple fixture census differs")
+    for name in ("before.opaal", "after.opaal", "command-commas.opaal"):
+        success(run("check", name, cwd=folder), "typed tuple source check")
+    success(run("format", "--check", *TYPED_TUPLE_FIXTURES, cwd=folder), "typed tuple canonical bytes")
+    for name in ("before.opaal", "after.opaal"):
+        require(success(run(name, cwd=folder), "typed tuple driver") == b"", "typed tuple driver printed output")
+    for name, code, detail in (("wrong-pattern.opaal", b"error[SIG017]", b"(Int, String)"),
+                               ("wrong-result.opaal", b"error[SIG005]", b"(String, String)")):
+        result = run("check", name, cwd=folder)
+        require(result.returncode == 1 and not result.stdout and code in result.stderr and detail in result.stderr,
+                "typed tuple diagnostic differs")
+    raw = run(stdin=b'let (count, label) = (3,\n    "ready")\nlabel\n', cwd=folder)
+    require(raw.returncode == 0 and not raw.stderr and raw.stdout == b">> ...> >> ready\n>> ",
+            "typed tuple raw continuation differs")
+    return {"fixture_cases": sorted(TYPED_TUPLE_FIXTURES), "continuation": True}
 
 
 def list_literal_spread(run, work: Path, fixtures: Path, target: str) -> dict:
@@ -1504,6 +1524,7 @@ def qualify(archive: Path | None, fixture_archive: Path | None, binaries: Path |
         compound_report = compound_assignment(run, root, fixtures, target)
         indexed_report = indexed_list_replacement(run, root, fixtures, target)
         conditionals_report = if_expressions(run, root, fixtures, target)
+        tuples_report = typed_tuples(run, fixtures)
         spread_report = list_literal_spread(run, root, fixtures, target)
         record_report = record_shorthand(run, root, fixtures, target)
         exports_report = grouped_export_prefixes(run, root, fixtures, target)
@@ -1524,6 +1545,7 @@ def qualify(archive: Path | None, fixture_archive: Path | None, binaries: Path |
                 "project": project_report, "concise_imports": imports_report, "explicit_member_imports": members_report,
                 "compound_assignment": compound_report, "indexed_list_replacement": indexed_report, "list_literal_spread": spread_report, "record_shorthand": record_report, "grouped_export_prefixes": exports_report,
                 "if_expressions": conditionals_report,
+                "typed_tuples": tuples_report,
                 "action_declarations": actions_report, "language_server": lsp_report, "bounded_cases": bounded,
                 "assertions": ["exact fixture/source/program identity", "legacy/canonical execution and checking",
                                "exact action/function/comment bytes and idempotence", "read-only check and mode/inode retention",

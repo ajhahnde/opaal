@@ -40,6 +40,7 @@ enum OpenDelimiter {
 #[derive(Default)]
 struct FormatLayout {
     comma_after: BTreeSet<usize>,
+    omitted_commas: BTreeSet<usize>,
     newline_before: BTreeSet<usize>,
     newline_after: BTreeSet<usize>,
     space_before: BTreeSet<usize>,
@@ -57,6 +58,13 @@ struct FormatLayout {
 impl FormatLayout {
     fn for_script(script: &Script, tokens: &[Token], spans: &FormatSpans) -> Self {
         let mut layout = Self::default();
+        for comma in &spans.tuple_commas {
+            layout.no_space_before.insert(comma.start());
+            layout.space_after.insert(comma.end());
+        }
+        layout
+            .omitted_commas
+            .extend(spans.tuple_trailing_commas.iter().map(|span| span.start()));
         for span in &spans.interpolations {
             layout.interpolation_open.insert(span.start());
             layout.interpolation_close.insert(span.end() - 1);
@@ -524,6 +532,10 @@ fn format_tokens(source: &SourceFile, tokens: &[Token], layout: &FormatLayout) -
             kind => {
                 suppress_source_newline = false;
                 let start = token.span().start();
+                if layout.omitted_commas.contains(&start) {
+                    pending_space = false;
+                    continue;
+                }
                 let if_close = layout.if_arm_closes.get(&start);
                 if closes_indenting_brace(kind, start, layout, &mut open_delimiters) {
                     indent = indent.saturating_sub(1);

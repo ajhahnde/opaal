@@ -1,0 +1,6 @@
+let dynamic: Any = 0
+let result = if true {
+    (dynamic, 1)
+} else {
+    (2, "wrong")
+}

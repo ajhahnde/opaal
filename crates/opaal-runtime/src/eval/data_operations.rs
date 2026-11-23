@@ -986,7 +986,7 @@ mod tests {
                 .declare(
                     "input",
                     crate::BindingMutability::Immutable,
-                    Value::bytes(b"a=7".to_vec()),
+                    &Value::bytes(b"a=7".to_vec()),
                 )
                 .unwrap();
             let result = evaluate_with_host(

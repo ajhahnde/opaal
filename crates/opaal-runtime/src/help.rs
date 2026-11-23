@@ -718,7 +718,7 @@ mod tests {
             .declare(
                 "target",
                 BindingMutability::Immutable,
-                Value::Callable(Arc::new(InspectedCallable(inspected(
+                &Value::Callable(Arc::new(InspectedCallable(inspected(
                     &target_source,
                     "target",
                 )))),
@@ -728,7 +728,7 @@ mod tests {
             .declare(
                 "other",
                 BindingMutability::Immutable,
-                Value::Callable(Arc::new(InspectedCallable(inspected(
+                &Value::Callable(Arc::new(InspectedCallable(inspected(
                     &other_source,
                     "other",
                 )))),
@@ -738,7 +738,7 @@ mod tests {
             .declare(
                 "closure",
                 BindingMutability::Immutable,
-                Value::Callable(Arc::new(OpaqueCallable)),
+                &Value::Callable(Arc::new(OpaqueCallable)),
             )
             .unwrap();
 
@@ -757,7 +757,7 @@ mod tests {
 
         scope.push();
         scope
-            .declare("target", BindingMutability::Immutable, Value::Int(7))
+            .declare("target", BindingMutability::Immutable, &Value::Int(7))
             .unwrap();
         let shadowed = HelpCatalog::snapshot(&CommandRegistry::new(), &scope);
         assert!(shadowed.query(Some("target")).is_empty());

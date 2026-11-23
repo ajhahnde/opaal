@@ -3,8 +3,8 @@ use std::error::Error;
 use std::fmt;
 use std::sync::Arc;
 
-use crate::Value;
 use crate::module::ValueType;
+use crate::{AdmittedValue, Value, ValueAdmissionError};
 
 /// Whether a lexical binding cell may be reassigned.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -94,7 +94,17 @@ impl ScopeStack {
         Ok(())
     }
 
+    /// Validates an embedding-supplied value before storing a snapshot.
     pub fn declare(
+        &mut self,
+        name: impl Into<String>,
+        mutability: BindingMutability,
+        value: &Value,
+    ) -> Result<(), ScopeError> {
+        self.declare_admitted(name, mutability, AdmittedValue::new(value)?.into_value())
+    }
+
+    pub(crate) fn declare_admitted(
         &mut self,
         name: impl Into<String>,
         mutability: BindingMutability,
@@ -181,12 +191,39 @@ impl ScopeStack {
             .flat_map(|frame| frame.bindings.iter().map(|(_, binding)| &binding.value))
     }
 
+    pub(crate) fn shape_frames(
+        &self,
+    ) -> impl Iterator<Item = impl Iterator<Item = crate::eval::shape::Node<'_>>> {
+        self.frames.iter().map(|frame| {
+            frame.bindings.iter().flat_map(|(_, binding)| {
+                [
+                    Some(crate::eval::shape::Node::Value(&binding.value)),
+                    binding
+                        .value_type
+                        .as_ref()
+                        .map(crate::eval::shape::Node::Type),
+                    binding
+                        .inferred_type
+                        .as_ref()
+                        .map(crate::eval::shape::Node::Type),
+                ]
+                .into_iter()
+                .flatten()
+            })
+        })
+    }
+
     #[must_use]
     pub fn mutability(&self, name: &str) -> Option<BindingMutability> {
         self.find(name).map(|binding| binding.mutability)
     }
 
-    pub fn assign(&mut self, name: &str, value: Value) -> Result<(), ScopeError> {
+    /// Validates an embedding-supplied value before replacing the binding.
+    pub fn assign(&mut self, name: &str, value: &Value) -> Result<(), ScopeError> {
+        self.assign_admitted(name, AdmittedValue::new(value)?.into_value())
+    }
+
+    pub(crate) fn assign_admitted(&mut self, name: &str, value: Value) -> Result<(), ScopeError> {
         for frame in self.frames.iter_mut().rev() {
             let Some((_, binding)) = frame
                 .bindings
@@ -328,7 +365,7 @@ impl ScopeStack {
                 && base_binding.mutability == updated_binding.mutability
                 && base_binding.value_type == updated_binding.value_type
             {
-                self.assign(&name, updated_binding.value.clone())?;
+                self.assign_admitted(&name, updated_binding.value.clone())?;
                 continue;
             }
             self.remove(&name);
@@ -372,6 +409,13 @@ pub enum ScopeError {
         actual: &'static str,
     },
     CannotPopRoot,
+    ValueAdmission(ValueAdmissionError),
+}
+
+impl From<ValueAdmissionError> for ScopeError {
+    fn from(error: ValueAdmissionError) -> Self {
+        Self::ValueAdmission(error)
+    }
 }
 
 impl fmt::Display for ScopeError {
@@ -391,6 +435,7 @@ impl fmt::Display for ScopeError {
                 write!(formatter, "binding expects {expected}, found {actual}")
             }
             Self::CannotPopRoot => formatter.write_str("cannot leave the root scope"),
+            Self::ValueAdmission(error) => error.fmt(formatter),
         }
     }
 }
@@ -405,11 +450,11 @@ mod tests {
     fn removal_consumes_the_innermost_visible_binding() {
         let mut scope = ScopeStack::new();
         scope
-            .declare("setting", BindingMutability::Mutable, Value::Int(1))
+            .declare("setting", BindingMutability::Mutable, &Value::Int(1))
             .unwrap();
         scope.push();
         scope
-            .declare("setting", BindingMutability::Immutable, Value::Int(2))
+            .declare("setting", BindingMutability::Immutable, &Value::Int(2))
             .unwrap();
 
         assert_eq!(scope.remove("setting"), Some(Value::Int(2)));

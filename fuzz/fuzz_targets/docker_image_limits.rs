@@ -39,7 +39,7 @@ fn evaluate(input: &[u8], limits: EvalLimits) -> Option<Value> {
         .declare(
             "input",
             BindingMutability::Immutable,
-            Value::bytes(input.to_vec()),
+            &Value::bytes(input.to_vec()),
         )
         .unwrap();
     let mut session = Session::with_scope(

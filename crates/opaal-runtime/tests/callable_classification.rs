@@ -41,7 +41,7 @@ fn raw_default_types_preserve_syntactic_effect_refusal_on_every_call() {
         for _ in 0..8 {
             let result = apply_callable(
                 &value,
-                Vec::new(),
+                &[],
                 &caller,
                 caller.span(0..11).unwrap(),
                 &mut Environment::new(),
@@ -70,7 +70,7 @@ fn retained_callables_keep_defining_bytes_when_source_identity_is_reused() {
         let apply = |value| {
             apply_callable(
                 value,
-                Vec::new(),
+                &[],
                 &caller,
                 caller.span(0..11).unwrap(),
                 &mut Environment::new(),
@@ -97,7 +97,7 @@ fn warmed_errors_retain_defining_source_and_call_frames() {
     let invoke = || {
         apply_callable(
             &value,
-            Vec::new(),
+            &[],
             &caller,
             caller.span(0..11).unwrap(),
             &mut Environment::new(),

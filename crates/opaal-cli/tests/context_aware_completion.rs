@@ -42,11 +42,11 @@ fn command_heads_order_runtime_sources_and_deduplicate_first_wins() {
         .declare(
             "alpine",
             BindingMutability::Immutable,
-            Value::Callable(Arc::new(NamedFunction)),
+            &Value::Callable(Arc::new(NamedFunction)),
         )
         .expect("unique function");
     scope
-        .declare("amber", BindingMutability::Immutable, Value::Null)
+        .declare("amber", BindingMutability::Immutable, &Value::Null)
         .expect("unique value");
     let catalog = CompletionCatalog::from_runtime(&registry, &scope)
         .with_external_commands(["alpha", "awk", "zsh"]);
@@ -88,10 +88,10 @@ fn name_completion_uses_visible_scope_and_replaces_the_interpolation_name() {
     let registry = CommandRegistry::new();
     let mut scope = ScopeStack::new();
     scope
-        .declare("name", BindingMutability::Immutable, Value::Null)
+        .declare("name", BindingMutability::Immutable, &Value::Null)
         .expect("unique binding");
     scope
-        .declare("native", BindingMutability::Immutable, Value::Null)
+        .declare("native", BindingMutability::Immutable, &Value::Null)
         .expect("unique binding");
     let engine = CompletionEngine::new(CompletionCatalog::from_runtime(&registry, &scope));
     let source = "^echo {na}";
@@ -123,7 +123,7 @@ fn name_completion_uses_visible_scope_and_replaces_the_interpolation_name() {
 fn removed_dollar_syntax_has_no_compatibility_completion() {
     let mut scope = ScopeStack::new();
     scope
-        .declare("name", BindingMutability::Immutable, Value::Null)
+        .declare("name", BindingMutability::Immutable, &Value::Null)
         .expect("unique binding");
     let engine = CompletionEngine::new(CompletionCatalog::from_runtime(
         &CommandRegistry::new(),
@@ -175,7 +175,7 @@ fn expression_completion_uses_intrinsics_and_respects_lexical_shadowing() {
 
     let mut value_shadow = ScopeStack::new();
     value_shadow
-        .declare("float", BindingMutability::Immutable, Value::Null)
+        .declare("float", BindingMutability::Immutable, &Value::Null)
         .expect("unique shadow");
     let value = CompletionEngine::new(CompletionCatalog::from_runtime(&registry, &value_shadow))
         .complete(source, cursor);
@@ -189,7 +189,7 @@ fn expression_completion_uses_intrinsics_and_respects_lexical_shadowing() {
         .declare(
             "float",
             BindingMutability::Immutable,
-            Value::Callable(Arc::new(NamedFunction)),
+            &Value::Callable(Arc::new(NamedFunction)),
         )
         .expect("unique function shadow");
     let function =
@@ -450,7 +450,7 @@ fn interpolated_names_and_path_tails_complete_without_evaluation() {
     let registry = CommandRegistry::new();
     let mut scope = ScopeStack::new();
     scope
-        .declare("native", BindingMutability::Immutable, Value::Null)
+        .declare("native", BindingMutability::Immutable, &Value::Null)
         .unwrap();
     let catalog = CompletionCatalog::from_runtime(&registry, &scope).with_paths([
         "first",
@@ -492,7 +492,7 @@ fn record_shorthand_completion_replaces_only_the_value_name() {
     let registry = CommandRegistry::new();
     let mut scope = ScopeStack::new();
     scope
-        .declare("name", BindingMutability::Immutable, Value::string("api"))
+        .declare("name", BindingMutability::Immutable, &Value::string("api"))
         .unwrap();
     let engine = CompletionEngine::new(CompletionCatalog::from_runtime(&registry, &scope));
     for text in ["let fields = {na}", "let item = Item {\nna"] {
@@ -508,7 +508,7 @@ fn list_spread_completion_replaces_only_the_operand_name() {
     let registry = CommandRegistry::new();
     let mut scope = ScopeStack::new();
     scope
-        .declare("items", BindingMutability::Immutable, Value::list(vec![]))
+        .declare("items", BindingMutability::Immutable, &Value::list(vec![]))
         .unwrap();
     let engine = CompletionEngine::new(CompletionCatalog::from_runtime(&registry, &scope));
     for text in ["[...it]", "let values = [\n...it"] {

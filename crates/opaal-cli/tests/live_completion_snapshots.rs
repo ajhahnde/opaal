@@ -73,7 +73,7 @@ fn a_live_snapshot_combines_scope_path_executables_and_cwd_paths() {
     environment.set("PATH", bin.as_os_str());
     let mut scope = ScopeStack::new();
     scope
-        .declare("later", BindingMutability::Immutable, Value::Int(1))
+        .declare("later", BindingMutability::Immutable, &Value::Int(1))
         .unwrap();
     let catalog = live_completion_catalog(
         &standard_registry(),

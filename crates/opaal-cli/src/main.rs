@@ -1111,7 +1111,9 @@ impl InteractiveEvaluator for OpaalEvaluator {
                 if matches!(outcome, SubmitOutcome::Continued)
                     && !matches!(value, Value::Null | Value::Status(_))
                 {
-                    writeln!(output, "{value}").map_err(SubmitError::Output)?;
+                    let text = opaal_runtime::presentation::render_value(&value)
+                        .map_err(SubmitError::Output)?;
+                    writeln!(output, "{text}").map_err(SubmitError::Output)?;
                 }
                 Ok(outcome)
             });

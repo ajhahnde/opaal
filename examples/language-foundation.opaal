@@ -28,6 +28,16 @@ if outcome(true) != "pass" {
     throw "unexpected selection"
 }
 
+def summary(passed: Bool) -> (Int, String)
+{
+    return (3, outcome(passed))
+}
+
+let (count, label) = summary(true)
+if count != 3 || label != "pass" {
+    throw "unexpected summary"
+}
+
 match tail(["build", "test", "review"]) {
     Selection::Selected(rest) => { value::length(rest) }
     Selection::Empty => { 0 }

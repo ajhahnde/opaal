@@ -54,7 +54,7 @@ fn expand_in(text: &str, scope: &mut ScopeStack) -> Result<Vec<ExpandedWord>, Ru
 
 fn bind(scope: &mut ScopeStack, name: &str, value: Value) {
     scope
-        .declare(name, BindingMutability::Immutable, value)
+        .declare(name, BindingMutability::Immutable, &value)
         .unwrap();
 }
 

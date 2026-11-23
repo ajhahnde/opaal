@@ -25,6 +25,81 @@ fn controlled_parsing_cancels_without_exposing_a_partial_parse_outcome() {
 }
 
 #[test]
+fn tuple_paths_count_wrappers_on_both_sides_on_a_two_mib_stack() {
+    std::thread::Builder::new()
+        .stack_size(2 * 1024 * 1024)
+        .spawn(|| {
+            for (outside, inside) in [
+                (31, 0),
+                (0, 31),
+                (14, 17),
+                (32, 0),
+                (0, 32),
+                (14, 18),
+                (10_000, 0),
+                (0, 10_000),
+            ] {
+                for (open, close, leaf) in [("[", "]", "[]"), ("{field: ", "}", "{}")] {
+                    let value = format!(
+                        "{}({}{leaf}{}, 2){}",
+                        open.repeat(outside),
+                        open.repeat(inside),
+                        close.repeat(inside),
+                        close.repeat(outside),
+                    );
+                    let source = SourceFile::new(SourceId::new(1), "tuples.opaal", value);
+                    match parse_opaal(&source) {
+                        ParseOutcome::Complete(_) => assert_eq!(outside + inside, 31),
+                        ParseOutcome::Invalid(diagnostics) => {
+                            assert!(outside + inside > 31);
+                            assert_eq!(
+                                diagnostics[0].message(),
+                                "a path containing a tuple can nest at most 32 levels"
+                            );
+                        }
+                        ParseOutcome::Incomplete(input) => {
+                            panic!("unexpected incomplete input: {input:?}")
+                        }
+                    }
+                }
+            }
+            for value in [
+                format!("{}(1, 2)", "!".repeat(10_000)),
+                format!("(1, {}1)", "!".repeat(10_000)),
+                format!("(1, 2){}", "[0]".repeat(10_000)),
+                format!("(1, 2){}", " + 1".repeat(10_000)),
+                format!("(0{}, 2)", " + 1".repeat(10_000)),
+            ] {
+                let source = SourceFile::new(SourceId::new(1), "tuple-chains.opaal", value);
+                let ParseOutcome::Invalid(diagnostics) = parse_opaal(&source) else {
+                    panic!("the tuple path exceeds the construct limit");
+                };
+                assert_eq!(
+                    diagnostics[0].message(),
+                    "a path containing a tuple can nest at most 32 levels"
+                );
+            }
+            for (inside, accepted) in [(17, true), (18, false)] {
+                let value = format!(
+                    "{}({}0{}, 2){}",
+                    "[{field: ".repeat(7),
+                    "[".repeat(inside),
+                    "]".repeat(inside),
+                    "}]".repeat(7),
+                );
+                let source = SourceFile::new(SourceId::new(1), "mixed-tuple-depth.opaal", value);
+                assert_eq!(
+                    matches!(parse_opaal(&source), ParseOutcome::Complete(_)),
+                    accepted
+                );
+            }
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
+#[test]
 fn structured_error_statements_retain_blocks_bindings_and_operands() {
     let text = "try { throw \"boom\" } catch error { throw error }\n";
     let script = complete(text);
@@ -330,4 +405,50 @@ fn list_literal_spreads_keep_marker_operand_and_precedence_spans() {
             "{text}"
         );
     }
+}
+#[test]
+fn tuple_group_commit_preserves_command_heads_and_reports_bad_slots() {
+    use opaal_syntax::{
+        ExpressionKind, ParseOutcome, SourceFile, SourceId, StatementKind, parse_opaal,
+    };
+
+    let parse = |text: &str| parse_opaal(&SourceFile::new(SourceId::new(987), "tuples", text));
+    for (text, tuple) in [
+        ("(a, b)", true),
+        ("(a,\"b\")", true),
+        ("(a + 1 , b)", true),
+        ("(a,)", false),
+        ("(a , b)", false),
+        (r"(a\, b)", false),
+        (r"(a\,b)", false),
+        ("(which ,)", false),
+        ("(echo {item}, b)", false),
+        ("(Row {item: 1}, b)", true),
+        ("(^printf \"%s\" ,)", false),
+    ] {
+        let ParseOutcome::Complete(script) = parse(&format!("let value = {text}")) else {
+            panic!("expected complete source for {text}");
+        };
+        let StatementKind::Declaration(declaration) = script.statements()[0].kind() else {
+            panic!("expected declaration");
+        };
+        assert_eq!(
+            matches!(declaration.value.kind(), ExpressionKind::Tuple(_)),
+            tuple,
+            "{text}"
+        );
+    }
+    for text in ["(a, b c)", "(1,)", "(1,,2)", "(1,...item)"] {
+        assert!(
+            matches!(
+                parse(&format!("let value = {text}")),
+                ParseOutcome::Invalid(_)
+            ),
+            "{text}"
+        );
+    }
+    assert!(matches!(
+        parse("let value = (a,\n"),
+        ParseOutcome::Incomplete(_)
+    ));
 }

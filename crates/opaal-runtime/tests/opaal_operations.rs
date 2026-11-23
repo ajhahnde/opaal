@@ -1,5 +1,7 @@
 #![forbid(unsafe_code)]
 
+use opaal_runtime::AdmittedValue;
+use opaal_runtime::stream::AdmittedStreamError;
 use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -135,13 +137,13 @@ fn operation_identity_overloads_help_and_budgeted_stream_share_one_descriptor() 
         OperationInputType::ValueStream(_)
     ));
     assert_eq!(
-        direct.execute_value(Value::list(vec![Value::Int(1), Value::Int(2)])),
+        direct.execute_value(&Value::list(vec![Value::Int(1), Value::Int(2)])),
         Ok(Value::Int(2))
     );
-    assert!(direct.execute_value(Value::Int(2)).is_err());
+    assert!(direct.execute_value(&Value::Int(2)).is_err());
     assert!(
         direct
-            .execute_value_with_types(Value::list(vec![Value::Int(1)]), &[ValueType::String],)
+            .execute_value_with_types(&Value::list(vec![Value::Int(1)]), &[ValueType::String],)
             .is_err()
     );
 
@@ -180,8 +182,10 @@ fn operation_identity_overloads_help_and_budgeted_stream_share_one_descriptor() 
     assert_eq!(candidates[0].operation().id(), direct.id());
 
     let outcome = direct.execute_value_stream(
-        ValueStream::from_values(vec![Value::Int(1), Value::Int(2)])
-            .with_contract(ValueType::Int, StreamCardinality::Exact(2)),
+        ValueStream::from_values(&[Value::Int(1), Value::Int(2)])
+            .unwrap()
+            .with_contract(&ValueType::Int, StreamCardinality::Exact(2))
+            .unwrap(),
         2,
     );
     match outcome.primary() {
@@ -191,8 +195,10 @@ fn operation_identity_overloads_help_and_budgeted_stream_share_one_descriptor() 
     assert_eq!(outcome.delivered_items(), 2);
 
     let outcome = direct.execute_value_stream(
-        ValueStream::from_values(Vec::new())
-            .with_contract(ValueType::Int, StreamCardinality::Exact(0)),
+        ValueStream::from_values(&[])
+            .unwrap()
+            .with_contract(&ValueType::Int, StreamCardinality::Exact(0))
+            .unwrap(),
         0,
     );
     assert!(matches!(
@@ -202,7 +208,10 @@ fn operation_identity_overloads_help_and_budgeted_stream_share_one_descriptor() 
     assert_eq!(outcome.delivered_items(), 0);
 
     let outcome = direct.execute_value_stream(
-        ValueStream::once(Value::Int(1)).with_contract(ValueType::Int, StreamCardinality::Exact(1)),
+        ValueStream::once(&Value::Int(1))
+            .unwrap()
+            .with_contract(&ValueType::Int, StreamCardinality::Exact(1))
+            .unwrap(),
         0,
     );
     assert!(matches!(
@@ -211,8 +220,10 @@ fn operation_identity_overloads_help_and_budgeted_stream_share_one_descriptor() 
     ));
     assert_eq!(outcome.delivered_items(), 0);
     let outcome = direct.execute_value_stream(
-        ValueStream::from_values(vec![Value::Int(1), Value::Int(2), Value::Int(3)])
-            .with_contract(ValueType::Int, StreamCardinality::Exact(3)),
+        ValueStream::from_values(&[Value::Int(1), Value::Int(2), Value::Int(3)])
+            .unwrap()
+            .with_contract(&ValueType::Int, StreamCardinality::Exact(3))
+            .unwrap(),
         2,
     );
     match outcome.primary() {
@@ -223,13 +234,15 @@ fn operation_identity_overloads_help_and_budgeted_stream_share_one_descriptor() 
 
     let cleanup_calls = Arc::new(AtomicUsize::new(0));
     let outcome = direct.execute_value_stream(
-        ValueStream::from_values(vec![Value::Int(1)]).with_cleanup({
-            let cleanup_calls = Arc::clone(&cleanup_calls);
-            move || {
-                cleanup_calls.fetch_add(1, Ordering::SeqCst);
-                Err(StreamCleanupFailure::new("close failed"))
-            }
-        }),
+        ValueStream::from_values(&[Value::Int(1)])
+            .unwrap()
+            .with_cleanup({
+                let cleanup_calls = Arc::clone(&cleanup_calls);
+                move || {
+                    cleanup_calls.fetch_add(1, Ordering::SeqCst);
+                    Err(StreamCleanupFailure::new("close failed"))
+                }
+            }),
         1,
     );
     assert!(matches!(
@@ -250,11 +263,12 @@ fn operation_identity_overloads_help_and_budgeted_stream_share_one_descriptor() 
                 } else {
                     emitted = true;
                     cancelled.store(true, Ordering::SeqCst);
-                    Some(Ok(Value::Int(1)))
+                    Some(Ok(AdmittedValue::new(&Value::Int(1)).unwrap()))
                 }
             }
         })
-        .with_contract(ValueType::Int, StreamCardinality::Unknown)
+        .with_contract(&ValueType::Int, StreamCardinality::Unknown)
+        .unwrap()
         .with_cancellation(opaal_runtime::eval::CancellationToken::from_fn({
             let cancelled = Arc::clone(&cancelled);
             move || cancelled.load(Ordering::SeqCst)
@@ -279,17 +293,19 @@ fn operation_identity_overloads_help_and_budgeted_stream_share_one_descriptor() 
         ValueStream::from_fn(move || {
             producer_step += 1;
             match producer_step {
-                1 => Some(Ok(Value::Int(1))),
-                2 => Some(Err(RuntimeError::new(
+                1 => Some(Ok(AdmittedValue::new(&Value::Int(1)).unwrap())),
+                2 => Some(Err(AdmittedStreamError::new(&RuntimeError::new(
                     RuntimeErrorKind::Unsupported {
                         feature: "producer",
                     },
                     producer_span,
-                ))),
+                ))
+                .unwrap())),
                 _ => panic!("a terminal producer failure must not be advanced again"),
             }
         })
-        .with_contract(ValueType::Int, StreamCardinality::Unknown)
+        .with_contract(&ValueType::Int, StreamCardinality::Unknown)
+        .unwrap()
         .with_cleanup(|| Err(StreamCleanupFailure::new("failure cleanup"))),
         8,
     );
@@ -305,8 +321,10 @@ fn operation_identity_overloads_help_and_budgeted_stream_share_one_descriptor() 
     );
 
     let outcome = direct.execute_value_stream(
-        ValueStream::from_values(vec![Value::Int(1), Value::string("wrong")])
-            .with_contract(ValueType::Int, StreamCardinality::Exact(2)),
+        ValueStream::from_values(&[Value::Int(1), Value::string("wrong")])
+            .unwrap()
+            .with_contract(&ValueType::Int, StreamCardinality::Exact(2))
+            .unwrap(),
         8,
     );
     assert!(matches!(

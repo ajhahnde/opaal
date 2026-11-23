@@ -1,6 +1,6 @@
 //! Private typed transport for re-executed job supervisors.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::error::Error;
 use std::ffi::{OsStr, OsString};
 use std::fmt;
@@ -14,7 +14,7 @@ use opaal_syntax::{SourceFile, SourceId};
 use crate::builtin::SessionState;
 use crate::eval::{
     CallFrame, CallableSnapshot, ErrorCategory, ErrorLabel, FrameCallee, RuntimeErrorSnapshot,
-    callable_binding_types, restore_callable, restore_runtime_error, snapshot_callable,
+    callable_binding_types, restore_callable, restore_runtime_error, shape, snapshot_callable,
     snapshot_runtime_error,
 };
 use crate::module::{
@@ -31,7 +31,7 @@ use crate::{
 
 const MAGIC: &[u8; 8] = b"OPAALCAP";
 const COMPLETION_MAGIC: &[u8; 8] = b"OPAALEND";
-const VERSION: u16 = 4;
+const VERSION: u16 = 5;
 const MAX_CAPSULE_DEPTH: usize = 64;
 const MAX_CAPSULE_ITEMS: usize = 1_000_000;
 pub const MAX_CAPSULE_BYTES: usize = 16 * 1024 * 1024;
@@ -176,6 +176,7 @@ pub fn encode_background_capsule(
     scope: &ScopeStack,
     options: SessionOptions,
 ) -> Result<Vec<u8>, CapsuleError> {
+    check_scope_shapes(&[scope])?;
     let mut callables = CallableTable::default();
     callables.collect_scope(scope)?;
     validate_nominal_scopes(&[scope], &callables.types, &callables.snapshots)?;
@@ -255,16 +256,9 @@ pub fn decode_background_capsule(bytes: &[u8]) -> Result<BackgroundCapsule, Caps
             usize::try_from(wire.u64()?)
                 .map_err(|_| CapsuleError::new("capture limit exceeds this platform"))?,
         );
-    let callable_count = wire.collection_len()?;
-    let mut callables = Vec::with_capacity(callable_count);
-    for _ in 0..callable_count {
-        let snapshot = decode_callable(&mut wire, &callables)?;
-        let callable = restore_callable(snapshot, &mut wire.analysis_work_remaining)
-            .map_err(CapsuleError::new)?;
-        callables.push(callable);
-    }
-    let scope = decode_scope(&mut wire, &callables)?;
-    validate_decoded_nominals(&[&scope], &callables)?;
+    let callables = decode_callables(&mut wire)?;
+    let scope = decode_scope(&mut wire, &callables.0)?;
+    validate_decoded_scopes(&mut wire, &[&scope], &callables.0)?;
     if wire.remaining() != 0 {
         return Err(CapsuleError::new("execution capsule has trailing bytes"));
     }
@@ -284,6 +278,7 @@ pub fn decode_background_capsule(bytes: &[u8]) -> Result<BackgroundCapsule, Caps
 pub fn encode_supervisor_completion(
     completion: &SupervisorCompletion,
 ) -> Result<Vec<u8>, CapsuleError> {
+    check_scope_shapes(&[&completion.base_scope, &completion.updated_scope])?;
     let mut callables = CallableTable::default();
     callables.collect_scope(&completion.base_scope)?;
     callables.collect_scope(&completion.updated_scope)?;
@@ -331,18 +326,10 @@ pub fn decode_supervisor_completion(bytes: &[u8]) -> Result<SupervisorCompletion
         .bool()?
         .then(|| decode_status(&mut wire, 0))
         .transpose()?;
-    let callable_count = wire.collection_len()?;
-    let mut callables = Vec::with_capacity(callable_count);
-    for _ in 0..callable_count {
-        let snapshot = decode_callable(&mut wire, &callables)?;
-        callables.push(
-            restore_callable(snapshot, &mut wire.analysis_work_remaining)
-                .map_err(CapsuleError::new)?,
-        );
-    }
-    let base_scope = decode_scope(&mut wire, &callables)?;
-    let updated_scope = decode_scope(&mut wire, &callables)?;
-    validate_decoded_nominals(&[&base_scope, &updated_scope], &callables)?;
+    let callables = decode_callables(&mut wire)?;
+    let base_scope = decode_scope(&mut wire, &callables.0)?;
+    let updated_scope = decode_scope(&mut wire, &callables.0)?;
+    validate_decoded_scopes(&mut wire, &[&base_scope, &updated_scope], &callables.0)?;
     let base_state = decode_session_state(&mut wire)?;
     let updated_state = decode_session_state(&mut wire)?;
     if wire.remaining() != 0 {
@@ -451,7 +438,7 @@ impl CallableTable {
             .filter(|items| *items <= MAX_CAPSULE_ITEMS)
             .ok_or_else(|| CapsuleError::new("execution capsule has too many values"))?;
         match value {
-            Value::List(values) => {
+            Value::List(values) | Value::Tuple(values) => {
                 for value in values.iter() {
                     self.collect_value(value, depth + 1)?;
                 }
@@ -513,10 +500,15 @@ impl CallableTable {
     }
 }
 
-fn validate_decoded_nominals(
+fn validate_decoded_scopes(
+    decoder: &mut Decoder<'_>,
     scopes: &[&ScopeStack],
     callables: &[Arc<dyn crate::Callable>],
 ) -> Result<(), CapsuleError> {
+    decoder.check_shapes(
+        || scopes.iter().flat_map(|scope| shape::scope(scope)),
+        "scope",
+    )?;
     let types = callables
         .iter()
         .filter_map(callable_binding_types)
@@ -526,6 +518,15 @@ fn validate_decoded_nominals(
         .filter_map(snapshot_callable)
         .collect::<Vec<_>>();
     validate_nominal_scopes(scopes, &types, &snapshots)
+}
+
+fn check_scope_shapes(scopes: &[&ScopeStack]) -> Result<(), CapsuleError> {
+    shape::check(
+        || scopes.iter().flat_map(|scope| shape::scope(scope)),
+        |_| Ok::<(), ()>(()),
+    )
+    .map(|_| ())
+    .map_err(|_| CapsuleError::new("execution capsule tuple shape exceeds its limits"))
 }
 
 fn validate_nominal_scopes(
@@ -552,6 +553,11 @@ fn validate_nominal_scopes(
                 ));
             }
             ValueType::List(element) => concrete_type(element, types, remaining, depth + 1)?,
+            ValueType::Tuple(elements) => {
+                for element in elements {
+                    concrete_type(element, types, remaining, depth + 1)?;
+                }
+            }
             ValueType::Nominal { id, arguments } => {
                 *remaining = remaining.checked_sub(types.len()).ok_or_else(|| {
                     CapsuleError::new("nominal validation exceeds its work limit")
@@ -691,7 +697,7 @@ fn validate_nominal_scopes(
             }
         }
         match value {
-            Value::List(values) => {
+            Value::List(values) | Value::Tuple(values) => {
                 for child in values.iter() {
                     value_child(child, types, remaining, depth)?;
                 }
@@ -776,6 +782,51 @@ fn encode_callable(
     }
     encode_type_context(encoder, &snapshot.type_context)?;
     Ok(())
+}
+
+struct DecodedCallables(Vec<Arc<dyn crate::Callable>>);
+
+impl Drop for DecodedCallables {
+    fn drop(&mut self) {
+        // Each entry can reference only earlier entries. Keep those alive while dropping it.
+        while self.0.pop().is_some() {}
+    }
+}
+
+fn decode_callables(decoder: &mut Decoder<'_>) -> Result<DecodedCallables, CapsuleError> {
+    let count = decoder.collection_len()?;
+    let mut callables = DecodedCallables(Vec::with_capacity(count));
+    for _ in 0..count {
+        let snapshot = decode_callable(decoder, &callables.0)?;
+        let has_tuple = decoder.check_shapes(
+            || {
+                std::iter::once(shape::Node::Frame(Box::new(shape::scope(
+                    &snapshot.captured,
+                ))))
+                .chain(
+                    snapshot
+                        .parameters
+                        .iter()
+                        .map(|(_, ty)| shape::Node::Type(ty)),
+                )
+                .chain(snapshot.result_type.iter().map(shape::Node::Type))
+                .chain(
+                    snapshot
+                        .captured_type_arguments
+                        .values()
+                        .map(shape::Node::Type),
+                )
+            },
+            "callable",
+        )?;
+        let callable = restore_callable(snapshot, &mut decoder.analysis_work_remaining)
+            .map_err(CapsuleError::new)?;
+        decoder
+            .callable_shapes
+            .insert(Arc::as_ptr(&callable).cast::<()>(), has_tuple);
+        callables.0.push(callable);
+    }
+    Ok(callables)
 }
 
 fn decode_callable(
@@ -1093,6 +1144,13 @@ fn decode_scope(
             .then(|| decode_value_type(decoder, 0))
             .transpose()?;
         let value = decode_value(decoder, callables, 0)?;
+        decoder.check_shapes(
+            || {
+                std::iter::once(shape::Node::Value(&value))
+                    .chain(value_type.iter().map(shape::Node::Type))
+            },
+            "binding",
+        )?;
         bindings.push(CapsuleBinding {
             name,
             mutability,
@@ -1176,8 +1234,14 @@ fn encode_value_at(
             encoder.u8(8);
             encoder.u64(value.bytes());
         }
-        Value::List(values) => {
-            encoder.u8(9);
+        Value::List(values) | Value::Tuple(values) => {
+            let tuple = matches!(value, Value::Tuple(_));
+            if tuple && values.len() < 2 {
+                return Err(CapsuleError::new(
+                    "capsule tuple requires at least two slots",
+                ));
+            }
+            encoder.u8(if tuple { 18 } else { 9 });
             encoder.usize(values.len())?;
             for value in values.iter() {
                 encode_value_at(encoder, value, callable_ids, depth + 1)?;
@@ -1268,13 +1332,22 @@ fn decode_value(
         6 => Value::Path(NativePath::new(decoder.native()?)),
         7 => Value::Duration(Duration::from_nanos(decoder.i128()?)),
         8 => Value::ByteSize(ByteSize::new(decoder.u64()?)),
-        9 => {
+        tag @ (9 | 18) => {
             let count = decoder.collection_len()?;
+            if tag == 18 && count < 2 {
+                return Err(CapsuleError::new(
+                    "capsule tuple requires at least two slots",
+                ));
+            }
             let mut values = Vec::with_capacity(count);
             for _ in 0..count {
                 values.push(decode_value(decoder, callables, depth + 1)?);
             }
-            Value::list(values)
+            if tag == 18 {
+                Value::Tuple(Arc::from(values))
+            } else {
+                Value::list(values)
+            }
         }
         10 => {
             let count = decoder.collection_len()?;
@@ -1675,6 +1748,8 @@ fn encode_value_type_at(
     }
     let tag = match value_type {
         ValueType::Any => 0,
+        ValueType::Unknown => 21,
+        ValueType::EmptyList => 22,
         ValueType::Null => 1,
         ValueType::Bool => 2,
         ValueType::Int => 3,
@@ -1687,6 +1762,19 @@ fn encode_value_type_at(
         ValueType::List(element) => {
             encoder.u8(10);
             return encode_value_type_at(encoder, element, depth + 1);
+        }
+        ValueType::Tuple(elements) => {
+            if elements.len() < 2 {
+                return Err(CapsuleError::new(
+                    "capsule tuple type requires at least two slots",
+                ));
+            }
+            encoder.u8(20);
+            encoder.usize(elements.len())?;
+            for element in elements {
+                encode_value_type_at(encoder, element, depth + 1)?;
+            }
+            return Ok(());
         }
         ValueType::Record => 11,
         ValueType::Table => 12,
@@ -1752,6 +1840,21 @@ fn decode_value_type(decoder: &mut Decoder<'_>, depth: usize) -> Result<ValueTyp
                 arguments,
             }
         }
+        20 => {
+            let count = decoder.collection_len()?;
+            if count < 2 {
+                return Err(CapsuleError::new(
+                    "capsule tuple type requires at least two slots",
+                ));
+            }
+            let mut elements = Vec::with_capacity(count);
+            for _ in 0..count {
+                elements.push(decode_value_type(decoder, depth + 1)?);
+            }
+            ValueType::Tuple(elements)
+        }
+        21 => ValueType::Unknown,
+        22 => ValueType::EmptyList,
         tag => return Err(CapsuleError::new(format!("unknown capsule type tag {tag}"))),
     })
 }
@@ -1832,16 +1935,42 @@ struct Decoder<'a> {
     offset: usize,
     items_remaining: usize,
     analysis_work_remaining: u64,
+    callable_shapes: HashMap<*const (), bool>,
 }
 
 impl<'a> Decoder<'a> {
-    const fn new(bytes: &'a [u8]) -> Self {
+    fn new(bytes: &'a [u8]) -> Self {
         Self {
             bytes,
             offset: 0,
             items_remaining: MAX_CAPSULE_ITEMS,
             analysis_work_remaining: 5_000_000,
+            callable_shapes: HashMap::new(),
         }
+    }
+
+    fn check_shapes<'scope, I: Iterator<Item = shape::Node<'scope>> + 'scope>(
+        &mut self,
+        roots: impl Fn() -> I,
+        subject: &str,
+    ) -> Result<bool, CapsuleError> {
+        // The wire bounds local values and the callable table owns prior captures during decode.
+        let remaining = &mut self.analysis_work_remaining;
+        shape::check_with_callable_shapes(
+            roots,
+            |has_tuple| {
+                if has_tuple {
+                    *remaining = remaining.checked_sub(1).ok_or(())?;
+                }
+                Ok::<(), ()>(())
+            },
+            Some(&self.callable_shapes),
+        )
+        .map_err(|_| {
+            CapsuleError::new(format!(
+                "execution capsule {subject} shape exceeds its limits"
+            ))
+        })
     }
 
     fn remaining(&self) -> usize {
@@ -1951,6 +2080,172 @@ mod tests {
     }
 
     #[test]
+    fn worker_scope_refuses_over_depth_values_and_types_before_binding() {
+        std::thread::Builder::new()
+            .stack_size(2 * 1024 * 1024)
+            .spawn(|| {
+                for depth in [31, 32] {
+                    for typed in [false, true] {
+                        let mut value = Value::Tuple(Arc::from([Value::Int(1), Value::Int(2)]));
+                        let mut value_type = ValueType::Tuple(vec![ValueType::Int, ValueType::Int]);
+                        for _ in 0..depth {
+                            value = Value::list(vec![value]);
+                            value_type = ValueType::List(Box::new(value_type));
+                        }
+                        if typed {
+                            value = Value::list(vec![]);
+                        }
+                        let mut payload = Encoder::default();
+                        payload.usize(1).unwrap();
+                        payload.string("value").unwrap();
+                        payload.u8(0);
+                        payload.bool(typed);
+                        if typed {
+                            encode_value_type(&mut payload, &value_type).unwrap();
+                        }
+                        encode_value(&mut payload, &value, &BTreeMap::new()).unwrap();
+                        let result = decode_scope(&mut Decoder::new(&payload.bytes), &[]);
+                        if depth == 32 {
+                            assert!(result.unwrap_err().to_string().contains("binding shape"));
+                        } else {
+                            assert!(result.is_ok());
+                        }
+                    }
+                }
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    #[test]
+    fn capsule_capture_and_completion_preserve_legacy_and_bound_tuple_links() {
+        use crate::eval::{EvalLimits, evaluate_in_environment_owned_with_binding_types};
+        use crate::module::ModuleAliasRegistry;
+        use opaal_syntax::{ParseOutcome, parse_opaal};
+
+        std::thread::Builder::new()
+            .stack_size(2 * 1024 * 1024)
+            .spawn(|| {
+                for (seed, count) in [("0", 34), ("(1, 2)", 31)] {
+                    let mut text = format!("let seed = {seed}\nlet saved_1 = {{|| seed}}\n");
+                    for index in 2..=count {
+                        text.push_str(&format!(
+                            "let saved_{index} = {{|| saved_{}()}}\n",
+                            index - 1
+                        ));
+                    }
+                    let source = Arc::new(SourceFile::new(SourceId::new(94), "captures", text));
+                    let ParseOutcome::Complete(script) = parse_opaal(&source) else {
+                        panic!("capture fixture must parse");
+                    };
+                    let types = RuntimeBindingTypes::analyze_repl_source(
+                        &source,
+                        &script,
+                        &ModuleAliasRegistry::default(),
+                    )
+                    .unwrap();
+                    let mut bindings = ScopeStack::new();
+                    evaluate_in_environment_owned_with_binding_types(
+                        &script,
+                        source,
+                        &mut bindings,
+                        &mut Environment::new(),
+                        &EvalLimits::default(),
+                        Arc::new(types),
+                    )
+                    .unwrap();
+                    let head = bindings.remove(&format!("saved_{count}")).unwrap();
+                    let mut scope = ScopeStack::new();
+                    scope
+                        .declare_admitted("head", BindingMutability::Immutable, head.clone())
+                        .unwrap();
+                    let state = SessionState::new("/work", Environment::new());
+                    let encode = |scope: &ScopeStack| {
+                        encode_background_capsule(
+                            "next",
+                            "",
+                            state.cwd(),
+                            state.environment(),
+                            None,
+                            scope,
+                            options(),
+                        )
+                    };
+                    let complete = |scope: ScopeStack| {
+                        encode_supervisor_completion(&supervisor_completion(
+                            SupervisorOutcome::Continued,
+                            None,
+                            ScopeStack::new(),
+                            scope,
+                            state.clone(),
+                            state.clone(),
+                        ))
+                    };
+                    let capture = encode(&scope).unwrap();
+                    let completion = complete(scope.clone()).unwrap();
+                    assert!(decode_background_capsule(&capture).is_ok());
+                    assert!(decode_supervisor_completion(&completion).is_ok());
+
+                    scope.remove("head");
+                    scope
+                        .declare_admitted(
+                            "head",
+                            BindingMutability::Immutable,
+                            Value::list(vec![head]),
+                        )
+                        .unwrap();
+                    if seed == "0" {
+                        assert!(decode_background_capsule(&encode(&scope).unwrap()).is_ok());
+                        assert!(decode_supervisor_completion(&complete(scope).unwrap()).is_ok());
+                    } else {
+                        assert!(
+                            encode(&scope)
+                                .unwrap_err()
+                                .to_string()
+                                .contains("tuple shape")
+                        );
+                        assert!(
+                            complete(scope)
+                                .unwrap_err()
+                                .to_string()
+                                .contains("tuple shape")
+                        );
+
+                        // Add a list wrapper around the final binding's five-byte callable reference.
+                        let wrap = |mut wire: Vec<u8>, trailing: usize| {
+                            let callable = wire.len() - trailing - 5;
+                            wire.splice(callable..callable, [9, 1, 0, 0, 0]);
+                            let payload_len = (wire.len() - 18) as u64;
+                            wire[10..18].copy_from_slice(&payload_len.to_le_bytes());
+                            wire
+                        };
+                        assert!(
+                            decode_background_capsule(&wrap(capture, 0))
+                                .err()
+                                .unwrap()
+                                .to_string()
+                                .contains("binding shape")
+                        );
+                        let mut states = Encoder::default();
+                        encode_session_state(&mut states, &state).unwrap();
+                        encode_session_state(&mut states, &state).unwrap();
+                        assert!(
+                            decode_supervisor_completion(&wrap(completion, states.bytes.len()))
+                                .err()
+                                .unwrap()
+                                .to_string()
+                                .contains("binding shape")
+                        );
+                    }
+                }
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    #[test]
     fn reconstructed_callbacks_keep_operation_aliases_and_callable_kind() {
         use crate::eval::{
             Completion, EvalLimits, evaluate_in_environment_owned_with_binding_types,
@@ -1958,7 +2253,7 @@ mod tests {
         use crate::module::{ModuleAliasRegistry, RuntimeBindingTypes};
         use opaal_syntax::{ParseOutcome, parse_opaal};
 
-        let apply = |callable: &Value, arguments| {
+        let apply = |callable: &Value, arguments: &[Value]| {
             let caller = SourceFile::new(SourceId::new(93), "next.opaal", "process()");
             crate::eval::apply_callable(
                 callable,
@@ -2006,7 +2301,7 @@ mod tests {
             "import std::math::{abs as magnitude_of}\ndef process() -> Int { return magnitude_of(-7) }",
         );
         assert!(matches!(
-            apply(decoded.scope().get("process").unwrap(), vec![]).unwrap(),
+            apply(decoded.scope().get("process").unwrap(), &[]).unwrap(),
             Completion::Value(Value::Int(7))
         ));
 
@@ -2015,7 +2310,7 @@ mod tests {
         );
         let process = decoded.scope().get("process").unwrap();
         assert!(matches!(
-            apply(process, vec![Value::list(vec![Value::Int(2), Value::Int(1)])]).unwrap(),
+            apply(process, &[Value::list(vec![Value::Int(2), Value::Int(1)])]).unwrap(),
             Completion::Value(value) if value == Value::list(vec![Value::Int(5), Value::Int(4)])
         ));
 
@@ -2023,7 +2318,7 @@ mod tests {
             "import std::list as list\ndef identity[X: Equal](x: Any) -> Any { x }\ndef make[X: Equal]() -> Closure { {|x| identity[X](x)} }\nlet callback = make[Int]()\ndef process() -> List[Int] { list::map[Int, Int]([1], callback) }",
         );
         assert!(matches!(
-            apply(decoded.scope().get("process").unwrap(), vec![]).unwrap(),
+            apply(decoded.scope().get("process").unwrap(), &[]).unwrap(),
             Completion::Value(value) if value == Value::list(vec![Value::Int(1)])
         ));
 
@@ -2037,7 +2332,7 @@ mod tests {
             );
             let decoded = round_trip(&text);
             let process = decoded.scope().get("process").unwrap();
-            assert!(apply(process, vec![]).is_err(), "{definition}");
+            assert!(apply(process, &[]).is_err(), "{definition}");
         }
     }
 
@@ -2057,7 +2352,7 @@ mod tests {
             )]);
             let mut scope = ScopeStack::new();
             scope
-                .declare("nested", BindingMutability::Immutable, nested)
+                .declare("nested", BindingMutability::Immutable, &nested)
                 .unwrap();
             let error = encode_background_capsule(
                 "next",
@@ -2160,7 +2455,7 @@ mod tests {
             let caller = SourceFile::new(SourceId::new(50_000), "next", "process(item)");
             let value = crate::eval::apply_callable(
                 decoded.scope().get("process").unwrap(),
-                vec![decoded.scope().get("item").unwrap().clone()],
+                &[decoded.scope().get("item").unwrap().clone()],
                 &caller,
                 caller.span(0..caller.len()).unwrap(),
                 &mut Environment::new(),
@@ -2171,7 +2466,7 @@ mod tests {
             assert_eq!(decoded.scope().get("item"), session.scope().get("item"));
             let unpacked = crate::eval::apply_callable(
                 decoded.scope().get("unpack").unwrap(),
-                vec![decoded.scope().get("item").unwrap().clone()],
+                &[decoded.scope().get("item").unwrap().clone()],
                 &caller,
                 caller.span(0..caller.len()).unwrap(),
                 &mut Environment::new(),
@@ -2216,7 +2511,7 @@ mod tests {
                     .declare(
                         "malformed",
                         BindingMutability::Immutable,
-                        Value::NominalRecord(Box::new(NominalRecordValue::new(
+                        &Value::NominalRecord(Box::new(NominalRecordValue::new(
                             item.id().clone(),
                             item.type_arguments().to_vec(),
                             fields,
@@ -2240,7 +2535,7 @@ mod tests {
                 .declare(
                     "unresolved",
                     BindingMutability::Immutable,
-                    Value::NominalRecord(Box::new(NominalRecordValue::new(
+                    &Value::NominalRecord(Box::new(NominalRecordValue::new(
                         item.id().clone(),
                         vec![ValueType::TypeParameter("T".to_owned())],
                         item.fields().to_vec(),
@@ -2337,6 +2632,16 @@ mod tests {
                 Some(ValueType::List(Box::new(ValueType::Any))),
             )
             .expect("valid binding");
+        let pair = Value::Tuple(Arc::from([Value::Int(3), Value::string("ready")]));
+        let pair_type = ValueType::Tuple(vec![ValueType::Int, ValueType::String]);
+        scope
+            .declare_typed(
+                "pair",
+                BindingMutability::Immutable,
+                pair.clone(),
+                Some(pair_type.clone()),
+            )
+            .expect("valid tuple binding");
         let environment = Environment::from_snapshot(vec![(
             OsString::from_vec(vec![b'N', 0x82]),
             OsString::from_vec(vec![b'a', 0x80]),
@@ -2362,6 +2667,8 @@ mod tests {
         assert_eq!(decoded.environment(), &environment);
         assert_eq!(decoded.current_status(), Some(&current_status));
         assert_eq!(decoded.options(), options());
+        assert_eq!(decoded.scope().get("pair"), Some(&pair));
+        assert_eq!(decoded.scope().declared_type("pair"), Some(&pair_type));
         assert_eq!(
             decoded.scope().mutability("items"),
             Some(BindingMutability::Mutable)
@@ -2457,15 +2764,15 @@ mod tests {
             )
             .expect("base binding");
         base_scope
-            .declare("removed", BindingMutability::Immutable, Value::Bool(true))
+            .declare("removed", BindingMutability::Immutable, &Value::Bool(true))
             .expect("removed binding");
         let mut updated_scope = base_scope.clone();
         updated_scope
-            .assign("changed", Value::Int(2))
+            .assign("changed", &Value::Int(2))
             .expect("updated binding");
         updated_scope.remove("removed");
         updated_scope
-            .declare("added", BindingMutability::Immutable, Value::string("new"))
+            .declare("added", BindingMutability::Immutable, &Value::string("new"))
             .expect("added binding");
 
         let mut base_state = SessionState::new(
@@ -2499,7 +2806,7 @@ mod tests {
         let mut target_scope = base_scope;
         target_scope.push();
         target_scope
-            .declare("unrelated", BindingMutability::Immutable, Value::Int(99))
+            .declare("unrelated", BindingMutability::Immutable, &Value::Int(99))
             .expect("unrelated binding");
         let mut target_state = base_state;
         target_state

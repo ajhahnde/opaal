@@ -33,6 +33,7 @@ use opaal_syntax::{
 mod data_operations;
 mod list_operations;
 mod record_operations;
+pub(crate) mod shape;
 mod string_operations;
 
 use crate::glob::{DEFAULT_GLOB_ENTRY_LIMIT, GlobPattern};
@@ -1550,11 +1551,18 @@ impl ResourceBudget {
 
     /// Charges one step, returning `false` when the budget is exhausted.
     pub(crate) fn charge(&mut self) -> bool {
+        self.charge_steps(1)
+    }
+
+    fn charge_steps(&mut self, steps: u64) -> bool {
         if let Some(limit) = self.step_limit {
             if self.used_steps >= limit {
-                return false;
+                return steps == 0;
             }
-            self.used_steps += 1;
+            let requested = self.used_steps.saturating_add(steps);
+            let accepted = steps <= limit - self.used_steps;
+            self.used_steps = requested.min(limit);
+            return accepted;
         }
         true
     }
@@ -2071,6 +2079,21 @@ pub fn evaluate_in_environment(
     env: &mut Environment,
     limits: &EvalLimits,
 ) -> Result<Completion, RuntimeError> {
+    match opaal_syntax::check_tuple_depth(script, &|| limits.cancel.is_cancelled()) {
+        Ok(()) => {}
+        Err(opaal_syntax::TupleDepthError::Cancelled) => {
+            return Ok(Completion::Cancelled(Cancellation::new(
+                limits.cancel.reason(),
+                script.span(),
+            )));
+        }
+        Err(opaal_syntax::TupleDepthError::Exceeded(span)) => {
+            return Err(RuntimeError::new(
+                RuntimeErrorKind::ResourceBudgetExceeded,
+                span,
+            ));
+        }
+    }
     evaluate_in_environment_owned(script, Arc::new(source.clone()), scope, env, limits)
 }
 
@@ -2198,6 +2221,14 @@ pub(crate) fn evaluate_with_host_and_budget(
         budget,
         host,
     };
+    match evaluator.admit_shape(|| shape::scope(scope), script.span()) {
+        Ok(()) => {}
+        Err(Abort::Cancelled(cancellation)) => {
+            return Ok(HostedEvaluationOutcome::Cancelled(cancellation));
+        }
+        Err(Abort::Error(error)) => return Err(HostedEvaluationFailure::Runtime(error)),
+        Err(_) => unreachable!("shape admission only produces runtime errors or cancellation"),
+    }
     let mut last = Value::Null;
     for statement in script.statements() {
         let flow = match evaluator.statement(statement, scope) {
@@ -2279,7 +2310,7 @@ pub(crate) fn evaluate_closure_argument_with_binding_types(
         policy: limits.policy,
     };
     let mut budget = limits.budget;
-    let evaluator = Evaluator {
+    let mut evaluator = Evaluator {
         source: Arc::new(source.clone()),
         binding_types,
         current_result_type: None,
@@ -2304,10 +2335,9 @@ pub(crate) fn evaluate_closure_argument_with_binding_types(
 
 /// Applies a runtime callable to already-evaluated argument values.
 ///
-/// This is the closure-invocation seam the structured closure commands (`each`,
-/// `where`) drive: it takes a callable [`Value`] and a vector of argument values
-/// rather than a call-expression AST, so a stream transformer can apply a closure
-/// per item without synthesizing syntax. `span` attributes the synthetic call site
+/// The caller retains the arguments while the runtime checks their shape.
+/// Only admitted values are cloned into the call frame.
+/// `span` attributes the synthetic call site
 /// — the driving command's span — to a cancellation and to an arity or
 /// not-callable diagnostic; errors raised inside the body keep their own body
 /// spans. `env` is shared so a closure observes and mutates the same environment,
@@ -2319,6 +2349,26 @@ pub(crate) fn evaluate_closure_argument_with_binding_types(
 /// arity mismatch is a [`RuntimeError`] at `span`.
 pub fn apply_callable(
     callable: &Value,
+    arguments: &[Value],
+    source: &SourceFile,
+    span: Span,
+    env: &mut Environment,
+    limits: &EvalLimits,
+) -> Result<Completion, RuntimeError> {
+    let mut budget = limits.budget;
+    apply_callable_with_budget(
+        callable,
+        arguments.into(),
+        source,
+        span,
+        env,
+        limits,
+        &mut budget,
+    )
+}
+
+pub(crate) fn apply_admitted_callable(
+    callable: &Value,
     arguments: Vec<Value>,
     source: &SourceFile,
     span: Span,
@@ -2326,19 +2376,28 @@ pub fn apply_callable(
     limits: &EvalLimits,
 ) -> Result<Completion, RuntimeError> {
     let mut budget = limits.budget;
-    apply_callable_with_budget(callable, arguments, source, span, env, limits, &mut budget)
+    apply_callable_with_budget(
+        callable,
+        arguments.into(),
+        source,
+        span,
+        env,
+        limits,
+        &mut budget,
+    )
 }
 
 pub(crate) fn apply_callable_with_budget(
     callable: &Value,
-    arguments: Vec<Value>,
+    arguments: std::borrow::Cow<'_, [Value]>,
     source: &SourceFile,
     span: Span,
     env: &mut Environment,
     limits: &EvalLimits,
     budget: &mut ResourceBudget,
 ) -> Result<Completion, RuntimeError> {
-    let Value::Callable(callable) = callable else {
+    let callable_value = callable;
+    let Value::Callable(callable) = callable_value else {
         return Err(RuntimeError::new(
             RuntimeErrorKind::NotCallable {
                 actual: callable.family_name(),
@@ -2346,10 +2405,15 @@ pub(crate) fn apply_callable_with_budget(
             span,
         ));
     };
-    let function = callable
-        .as_any()
-        .downcast_ref::<CallableValue>()
-        .expect("every runtime callable is a CallableValue");
+    let Some(function) = (callable.as_ref() as &dyn std::any::Any).downcast_ref::<CallableValue>()
+    else {
+        return Err(RuntimeError::new(
+            RuntimeErrorKind::NotCallable {
+                actual: "opaque callable",
+            },
+            span,
+        ));
+    };
     if arguments.len() != function.parameters.len() {
         return Err(RuntimeError::new(
             RuntimeErrorKind::ArityMismatch {
@@ -2374,8 +2438,18 @@ pub(crate) fn apply_callable_with_budget(
         budget,
         host: &mut host,
     };
-    // Cancellation is polled before entering the body, matching an ordinary call.
-    if let Err(abort) = evaluator.check_cancel(span) {
+    let admitted = evaluator.check_cancel(span).and_then(|()| {
+        if matches!(arguments, std::borrow::Cow::Borrowed(_)) {
+            evaluator.admit_rust_shape(
+                std::iter::once(shape::Node::Value(callable_value))
+                    .chain(arguments.iter().map(shape::Node::Value)),
+                span,
+            )
+        } else {
+            evaluator.admit_shape(|| arguments.iter().map(shape::Node::Value), span)
+        }
+    });
+    if let Err(abort) = admitted {
         return match abort {
             Abort::Cancelled(cancellation) => Ok(Completion::Cancelled(cancellation)),
             Abort::Error(error) => Err(error),
@@ -2386,6 +2460,7 @@ pub(crate) fn apply_callable_with_budget(
         };
     }
     let arguments = arguments
+        .into_owned()
         .into_iter()
         .map(|value| RuntimeArgument {
             value,
@@ -2423,10 +2498,14 @@ pub(crate) fn apply_callable_with_controlled_host_and_budget(
             span,
         )));
     };
-    let function = callable
-        .as_any()
-        .downcast_ref::<CallableValue>()
-        .expect("every runtime callable is a CallableValue");
+    let Some(function) = (callable.as_ref() as &dyn Any).downcast_ref::<CallableValue>() else {
+        return Err(HostedEvaluationFailure::Runtime(RuntimeError::new(
+            RuntimeErrorKind::NotCallable {
+                actual: "opaque callable",
+            },
+            span,
+        )));
+    };
     if arguments.len() != function.parameters.len() {
         return Err(HostedEvaluationFailure::Runtime(RuntimeError::new(
             RuntimeErrorKind::ArityMismatch {
@@ -2451,7 +2530,10 @@ pub(crate) fn apply_callable_with_controlled_host_and_budget(
         budget,
         host: &mut host,
     };
-    if let Err(abort) = evaluator.check_cancel(span) {
+    let admitted = evaluator
+        .check_cancel(span)
+        .and_then(|()| evaluator.admit_shape(|| arguments.iter().map(shape::Node::Value), span));
+    if let Err(abort) = admitted {
         return match abort {
             Abort::Cancelled(cancellation) => Ok(HostedEvaluationOutcome::Cancelled(cancellation)),
             Abort::Refused(refusal) => Ok(HostedEvaluationOutcome::Refused(refusal)),
@@ -2805,6 +2887,67 @@ pub(crate) fn decode_json_controlled(
 }
 
 impl Evaluator<'_, '_> {
+    fn admit_shape<'a, I: Iterator<Item = shape::Node<'a>> + 'a>(
+        &mut self,
+        roots: impl Fn() -> I,
+        span: Span,
+    ) -> Eval<()> {
+        let result = shape::check(roots, |metered| self.shape_step(u64::from(metered), span));
+        self.shape_result(result, span)
+    }
+
+    fn admit_rust_shape<'a>(
+        &mut self,
+        roots: impl Iterator<Item = shape::Node<'a>> + 'a,
+        span: Span,
+    ) -> Eval<()> {
+        let mut uncharged = 0_u64;
+        let result = shape::check_rust(roots, |seen_tuple| {
+            uncharged += 1;
+            if seen_tuple {
+                self.shape_step(std::mem::take(&mut uncharged), span)?;
+            } else if uncharged.is_multiple_of(256) {
+                self.check_cancel(span)?;
+            }
+            Ok(())
+        });
+        self.shape_result(result, span)
+    }
+
+    fn shape_step(&mut self, steps: u64, span: Span) -> Eval<()> {
+        self.check_cancel(span)?;
+        if steps != 0 && !self.budget.charge_steps(steps) {
+            return Err(self.error(RuntimeErrorKind::ResourceBudgetExceeded, span));
+        }
+        Ok(())
+    }
+
+    fn shape_result(&self, result: Result<bool, shape::ShapeError<Abort>>, span: Span) -> Eval<()> {
+        match result {
+            Ok(true) => self.check_cancel(span),
+            Ok(false) => Ok(()),
+            Err(shape::ShapeError::Limit) => {
+                Err(self.error(RuntimeErrorKind::ResourceBudgetExceeded, span))
+            }
+            Err(shape::ShapeError::Interrupted(abort)) => Err(abort),
+        }
+    }
+
+    fn admit_value(&mut self, value: &Value, span: Span) -> Eval<()> {
+        match value {
+            Value::List(_)
+            | Value::Tuple(_)
+            | Value::Record(_)
+            | Value::NominalRecord(_)
+            | Value::Variant(_)
+            | Value::Table(_)
+            | Value::Callable(_) => {
+                self.admit_shape(|| std::iter::once(shape::Node::Value(value)), span)
+            }
+            _ => Ok(()),
+        }
+    }
+
     /// Aborts with a cancellation when the token trips at a boundary.
     fn check_cancel(&self, span: Span) -> Eval<()> {
         if self.cancel.is_cancelled() {
@@ -2988,7 +3131,7 @@ impl Evaluator<'_, '_> {
             ));
         }
         if !matches!(declaration.pattern, Pattern::Binding(_)) {
-            let checkpoint = scope.clone();
+            let mut staged = scope.clone();
             let pattern_type = match value_type.as_ref() {
                 Some(value_type) => Some(value_type.clone()),
                 None => self.complete_value_type(&value, declaration.value.span())?,
@@ -2996,13 +3139,13 @@ impl Evaluator<'_, '_> {
             if !self.pattern_matches(
                 &declaration.pattern,
                 &value,
-                scope,
+                &mut staged,
                 mutability,
                 pattern_type.as_ref(),
             )? {
-                *scope = checkpoint;
                 return Err(self.error(RuntimeErrorKind::PatternMismatch, declaration.name.span()));
             }
+            *scope = staged;
             return Ok(());
         }
         let name = self.text(declaration.name.span()).to_owned();
@@ -3037,7 +3180,7 @@ impl Evaluator<'_, '_> {
         }
         let value = self.expression(&assignment.value, scope)?;
         let hint = self.binding_value_type(&assignment.value, &value, scope);
-        scope.assign(&name, value).map_err(|error| {
+        scope.assign_admitted(&name, value).map_err(|error| {
             let span = if matches!(error, ScopeError::TypeMismatch { .. }) {
                 assignment.value.span()
             } else {
@@ -3128,10 +3271,11 @@ impl Evaluator<'_, '_> {
             .and_then(|bytes| bytes.checked_add(2 * size_of::<usize>()))
             .ok_or_else(|| self.error(RuntimeErrorKind::ResourceBudgetExceeded, root_span))?;
         self.retain_collection_bytes(bytes, root_span)?;
-        let Value::List(output) = Value::list(output) else {
+        let output = Value::list(output);
+        self.admit_value(&output, root_span)?;
+        let Value::List(output) = output else {
             unreachable!("list construction")
         };
-        self.check_cancel(root_span)?;
         scope
             .assign_prevalidated_list(&name, output)
             .map_err(|error| self.binding_error(error, root_span))
@@ -3321,7 +3465,7 @@ impl Evaluator<'_, '_> {
                 scope.push();
                 let outcome = (|| {
                     scope
-                        .declare(
+                        .declare_admitted(
                             name,
                             BindingMutability::Immutable,
                             Value::Error(Arc::new(error)),
@@ -3412,6 +3556,28 @@ impl Evaluator<'_, '_> {
                     .map_err(|error| {
                         self.error(RuntimeErrorKind::Scope(error), identifier.span())
                     })?;
+                Ok(true)
+            }
+            Pattern::Tuple(pattern) => {
+                let Value::Tuple(values) = subject else {
+                    return Ok(false);
+                };
+                if values.len() != pattern.elements.len() {
+                    return Ok(false);
+                }
+                let types = match expected_type {
+                    Some(ValueType::Tuple(types)) => types.as_slice(),
+                    _ => &[],
+                };
+                for (index, (element, value)) in
+                    pattern.elements.iter().zip(values.iter()).enumerate()
+                {
+                    self.charge(pattern.span)?;
+                    if !self.pattern_matches(element, value, scope, mutability, types.get(index))? {
+                        return Ok(false);
+                    }
+                }
+                self.check_cancel(pattern.span)?;
                 Ok(true)
             }
             Pattern::List(pattern) => {
@@ -3575,7 +3741,7 @@ impl Evaluator<'_, '_> {
         scope.push();
         let outcome = (|| {
             scope
-                .declare(name, BindingMutability::Immutable, value)
+                .declare_admitted(name, BindingMutability::Immutable, value)
                 .map_err(|error| self.error(RuntimeErrorKind::Scope(error), body.span))?;
             self.statements(&body.statements, scope)
         })();
@@ -3783,8 +3949,9 @@ impl Evaluator<'_, '_> {
                     );
                 }
                 value = operation
-                    .execute_value(value)
+                    .execute_admitted_value(&value, &[])
                     .map_err(|error| self.operation(error, stage.span()))?;
+                self.admit_value(&value, stage.span())?;
             }
             return Ok(value);
         }
@@ -3888,6 +4055,9 @@ impl Evaluator<'_, '_> {
                     self.qualified_value(name, span, expected)
                 }
             }
+            ExpressionKind::Tuple(tuple) => self
+                .tuple_literal(&tuple.elements, scope, expected, span, false)
+                .map(|(value, _)| value),
             ExpressionKind::List(elements) => self
                 .list_literal(elements, scope, expected, span, false)
                 .map(|(value, _)| value),
@@ -3901,14 +4071,16 @@ impl Evaluator<'_, '_> {
                     let value = self.expression(&entry.value, scope)?;
                     pairs.push((key, value));
                 }
-                Record::new(pairs).map(Value::from).map_err(|error| {
+                let value = Record::new(pairs).map(Value::from).map_err(|error| {
                     self.error(
                         RuntimeErrorKind::DuplicateRecordKey {
                             key: error.key().to_owned(),
                         },
                         span,
                     )
-                })
+                })?;
+                self.admit_value(&value, span)?;
+                Ok(value)
             }
             ExpressionKind::NominalRecord(record) => {
                 self.nominal_record(record, scope, span, expected)
@@ -4002,13 +4174,14 @@ impl Evaluator<'_, '_> {
             return Some(value_type);
         }
         let name = crate::module::value_name_span(expression).map(|span| self.text(span));
-        if matches!(value, Value::List(_)) {
+        if matches!(value, Value::List(_) | Value::Tuple(_)) {
             let retained = self
                 .binding_types
                 .expression_type(expression.span())
                 .or_else(|| name.and_then(|name| scope.value_type(name)));
-            if let Some(value_type @ ValueType::List(_)) = retained
-                && runtime_value_type(value).is_none()
+            if let Some(value_type @ (ValueType::List(_) | ValueType::Tuple(_))) = retained
+                && (matches!(value_type, ValueType::Tuple(_))
+                    || runtime_value_type(value).is_none())
             {
                 return Some(crate::module::substitute_type(
                     value_type,
@@ -4020,7 +4193,7 @@ impl Evaluator<'_, '_> {
     }
 
     fn qualified_value(
-        &self,
+        &mut self,
         name: &opaal_syntax::QualifiedName,
         span: Span,
         expected: Option<&ValueType>,
@@ -4070,12 +4243,14 @@ impl Evaluator<'_, '_> {
                     ));
                 };
                 self.validate_runtime_nominal_constraints(nominal, &type_arguments, span)?;
-                return Ok(Value::Variant(Box::new(VariantValue::new(
+                let value = Value::Variant(Box::new(VariantValue::new(
                     nominal.id().clone(),
                     type_arguments,
                     constructor.to_owned(),
                     Vec::new(),
-                ))));
+                )));
+                self.admit_value(&value, span)?;
+                return Ok(value);
             }
         }
         // opaal-foundation-boundary(carrier-refusal): Unresolved OPAAL qualified names are not runtime values.
@@ -4223,11 +4398,13 @@ impl Evaluator<'_, '_> {
             }
         }
         self.validate_runtime_nominal_constraints(&nominal, &type_arguments, span)?;
-        Ok(Value::NominalRecord(Box::new(NominalRecordValue::new(
+        let value = Value::NominalRecord(Box::new(NominalRecordValue::new(
             nominal.id().clone(),
             type_arguments,
             fields,
-        ))))
+        )));
+        self.admit_value(&value, span)?;
+        Ok(value)
     }
 
     fn validate_runtime_nominal_constraints(
@@ -4646,7 +4823,7 @@ impl Evaluator<'_, '_> {
     }
 
     fn function_definition(
-        &self,
+        &mut self,
         definition: &FunctionDefinition,
         scope: &mut ScopeStack,
     ) -> Eval<()> {
@@ -4688,12 +4865,13 @@ impl Evaluator<'_, '_> {
             captured_type_arguments: self.current_type_arguments.clone(),
         };
         let value = Value::Callable(Arc::new(callable));
+        self.admit_value(&value, definition.name.span())?;
         scope
-            .declare(name.as_ref(), BindingMutability::Immutable, value)
+            .declare_admitted(name.as_ref(), BindingMutability::Immutable, value)
             .map_err(|error| self.error(RuntimeErrorKind::Scope(error), definition.name.span()))
     }
 
-    fn make_closure(&self, closure: &Closure, scope: &ScopeStack) -> Eval<Value> {
+    fn make_closure(&mut self, closure: &Closure, scope: &ScopeStack) -> Eval<Value> {
         let parameters = self.parameters(&closure.parameters, None)?;
         let callable = CallableValue {
             name: None,
@@ -4716,7 +4894,9 @@ impl Evaluator<'_, '_> {
             inspection: None,
             captured_type_arguments: self.current_type_arguments.clone(),
         };
-        Ok(Value::Callable(Arc::new(callable)))
+        let value = Value::Callable(Arc::new(callable));
+        self.admit_value(&value, closure.span)?;
+        Ok(value)
     }
 
     /// Collects parameter names, rejecting a repeated name at creation time.
@@ -4769,6 +4949,73 @@ impl Evaluator<'_, '_> {
     ) -> Eval<Value> {
         self.call_with_result_type(call, scope, span, expected_result)
             .map(|(value, _)| value)
+    }
+
+    fn tuple_literal(
+        &mut self,
+        elements: &[Expression],
+        scope: &mut ScopeStack,
+        expected: Option<&ValueType>,
+        span: Span,
+        infer: bool,
+    ) -> Eval<(Value, Option<ValueType>)> {
+        let arity = elements.len();
+        if arity < 2 || !self.budget.charge_collection_items(arity) {
+            return Err(self.error(RuntimeErrorKind::ResourceBudgetExceeded, span));
+        }
+        let bytes = arity
+            .checked_mul(2 * size_of::<Value>() + usize::from(infer) * size_of::<ValueType>())
+            .and_then(|bytes| bytes.checked_add(2 * size_of::<usize>()))
+            .ok_or_else(|| self.error(RuntimeErrorKind::ResourceBudgetExceeded, span))?;
+        self.retain_collection_bytes(bytes, span)?;
+        let mut values = Vec::new();
+        values
+            .try_reserve_exact(arity)
+            .map_err(|_| self.error(RuntimeErrorKind::ResourceBudgetExceeded, span))?;
+        let mut types = Vec::new();
+        if infer {
+            types
+                .try_reserve_exact(arity)
+                .map_err(|_| self.error(RuntimeErrorKind::ResourceBudgetExceeded, span))?;
+        }
+        let expected = match expected {
+            Some(ValueType::Tuple(types)) if types.len() == arity => types.as_slice(),
+            _ => &[],
+        };
+        let tuple_nodes = 1 + u64::from(infer);
+        let mut remaining = DEFAULT_OPAAL_EVALUATION_STEPS - tuple_nodes;
+        self.shape_step(tuple_nodes, span)?;
+        for (index, slot) in elements.iter().enumerate() {
+            let expected = expected.get(index);
+            let (value, declared) = if infer {
+                self.operation_argument(slot, scope, expected)?
+            } else {
+                (self.expression_with_expected(slot, scope, expected)?, None)
+            };
+            let result =
+                shape::check_tuple_slot(shape::Node::Value(&value), &mut remaining, || {
+                    self.shape_step(1, slot.span())
+                });
+            self.shape_result(result, slot.span())?;
+            if infer {
+                let ty = match declared {
+                    Some(ty) => ty,
+                    None => self
+                        .complete_value_type(&value, slot.span())?
+                        .unwrap_or_else(|| unproven_tuple_slot(&value)),
+                };
+                let result =
+                    shape::check_tuple_slot(shape::Node::Type(&ty), &mut remaining, || {
+                        self.shape_step(1, slot.span())
+                    });
+                self.shape_result(result, slot.span())?;
+                types.push(ty);
+            }
+            values.push(value);
+        }
+        let value = Value::Tuple(Arc::from(values));
+        let value_type = infer.then_some(ValueType::Tuple(types));
+        Ok((value, value_type))
     }
 
     fn list_literal(
@@ -4885,7 +5132,15 @@ impl Evaluator<'_, '_> {
         } else {
             Some(ValueType::Any)
         };
-        Ok((Value::list(values), result_type))
+        let value = Value::list(values);
+        self.admit_shape(
+            || {
+                std::iter::once(shape::Node::Value(&value))
+                    .chain(result_type.as_ref().map(shape::Node::Type))
+            },
+            span,
+        )?;
+        Ok((value, result_type))
     }
 
     fn operation_argument(
@@ -4933,6 +5188,10 @@ impl Evaluator<'_, '_> {
                     });
                 self.expression_with_expected(expression, scope, expected)
                     .map(|value| (value, result_type))
+            }
+            ExpressionKind::Tuple(tuple) => {
+                self.charge(expression.span())?;
+                self.tuple_literal(&tuple.elements, scope, expected, expression.span(), true)
             }
             ExpressionKind::List(elements) => {
                 self.charge(expression.span())?;
@@ -5068,9 +5327,9 @@ impl Evaluator<'_, '_> {
                         span,
                     )));
                 };
-                return result
-                    .map(|value| (value, ValueType::Any))
-                    .map_err(|error| self.operational_abort(error, span));
+                let value = result.map_err(|error| self.operational_abort(error, span))?;
+                self.admit_value(&value, span)?;
+                return Ok((value, ValueType::Any));
             }
             if let Some(operation) = self
                 .binding_types
@@ -5194,16 +5453,15 @@ impl Evaluator<'_, '_> {
                 let result_type = overload.map_or(ValueType::Any, |overload| {
                     crate::module::substitute_type(overload.result(), &substitutions)
                 });
-                return self
-                    .execute_operation(&operation, arguments, &type_arguments, span)
-                    .map(|value| {
-                        let result_type = if operation.implementation().is_math() {
-                            runtime_value_type(&value).expect("numeric result")
-                        } else {
-                            result_type
-                        };
-                        (value, result_type)
-                    });
+                self.admit_shape(|| type_arguments.iter().map(shape::Node::Type), span)?;
+                let value = self.execute_operation(&operation, arguments, &type_arguments, span)?;
+                self.admit_value(&value, span)?;
+                let result_type = if operation.implementation().is_math() {
+                    runtime_value_type(&value).expect("numeric result")
+                } else {
+                    result_type
+                };
+                return Ok((value, result_type));
             }
         }
 
@@ -5281,10 +5539,14 @@ impl Evaluator<'_, '_> {
                 call.callee.span(),
             ));
         };
-        let function = callable
-            .as_any()
-            .downcast_ref::<CallableValue>()
-            .expect("every runtime callable is a CallableValue");
+        let Some(function) = (callable.as_ref() as &dyn Any).downcast_ref::<CallableValue>() else {
+            return Err(self.error(
+                RuntimeErrorKind::NotCallable {
+                    actual: "opaque callable",
+                },
+                call.callee.span(),
+            ));
+        };
 
         if call.arguments.len() != function.parameters.len() {
             return Err(self.error(
@@ -5480,12 +5742,14 @@ impl Evaluator<'_, '_> {
             }
         }
         self.validate_runtime_nominal_constraints(&nominal, &type_arguments, span)?;
-        Ok(Some(Value::Variant(Box::new(VariantValue::new(
+        let value = Value::Variant(Box::new(VariantValue::new(
             nominal.id().clone(),
             type_arguments,
             constructor,
             payload,
-        )))))
+        )));
+        self.admit_value(&value, span)?;
+        Ok(Some(value))
     }
 
     fn glob(&mut self, value: &Value, span: Span) -> Eval<Value> {
@@ -5752,7 +6016,7 @@ impl Evaluator<'_, '_> {
         call_scope.push();
         if let Some(name) = &function.name {
             call_scope
-                .declare(
+                .declare_admitted(
                     name.as_ref(),
                     BindingMutability::Immutable,
                     Value::Callable(Arc::clone(callable)),
@@ -5829,6 +6093,7 @@ impl Evaluator<'_, '_> {
                 .map(|result_type| crate::module::substitute_type(result_type, &substitutions));
             self.run_body_in_defining_source(function, result_type.as_ref(), &mut call_scope)
                 .and_then(|value| {
+                    self.admit_value(&value, function.family.origin_span)?;
                     if self.budgeted_callback
                         && let Some(expected) = expected_result
                         && !self.validate_operation_value(
@@ -6100,8 +6365,15 @@ fn infer_runtime_substitution(
 ) {
     match (expected, value) {
         (ValueType::TypeParameter(name), value) => {
-            if let Some(actual) = runtime_value_type(value) {
+            if let Some(actual) = runtime_value_type(value)
+                && !actual.has_incomplete_tuple_evidence()
+            {
                 substitutions.entry(name.clone()).or_insert(actual);
+            }
+        }
+        (ValueType::Tuple(expected), Value::Tuple(values)) if expected.len() == values.len() => {
+            for (expected, value) in expected.iter().zip(values.iter()) {
+                infer_runtime_substitution(expected, value, substitutions);
             }
         }
         (ValueType::List(expected), Value::List(values)) => {
@@ -6141,10 +6413,57 @@ fn infer_argument_type(
     value_type: Option<&ValueType>,
     substitutions: &mut BTreeMap<String, ValueType>,
 ) {
-    if let Some(value_type) = value_type {
-        crate::module::unify_type(expected, value_type, substitutions);
-    } else {
-        infer_runtime_substitution(expected, value, substitutions);
+    match (expected, value, value_type) {
+        (_, _, None | Some(ValueType::Unknown)) => {
+            infer_runtime_substitution(expected, value, substitutions);
+        }
+        (ValueType::Tuple(expected), Value::Tuple(values), Some(ValueType::Tuple(types)))
+            if expected.len() == values.len() && expected.len() == types.len() =>
+        {
+            for ((expected, value), ty) in expected.iter().zip(values.iter()).zip(types) {
+                infer_argument_type(expected, value, Some(ty), substitutions);
+            }
+        }
+        (ValueType::List(expected), Value::List(items), Some(ValueType::List(ty)))
+            if ty.has_incomplete_tuple_evidence() =>
+        {
+            for item in items.iter() {
+                infer_argument_type(expected, item, Some(ty), substitutions);
+            }
+        }
+        (ValueType::TypeParameter(_), value, Some(ty)) if ty.has_incomplete_tuple_evidence() => {
+            if let Some(ty) = complete_tuple_evidence(ty, value) {
+                crate::module::unify_type(expected, &ty, substitutions);
+            }
+        }
+        (_, _, Some(ty)) => {
+            crate::module::unify_type(expected, ty, substitutions);
+        }
+    }
+}
+
+fn complete_tuple_evidence(evidence: &ValueType, value: &Value) -> Option<ValueType> {
+    if !evidence.has_incomplete_tuple_evidence() {
+        return Some(evidence.clone());
+    }
+    match (evidence, value) {
+        (ValueType::Unknown, value) => {
+            runtime_value_type(value).filter(|ty| !ty.has_incomplete_tuple_evidence())
+        }
+        (ValueType::Tuple(types), Value::Tuple(items)) if types.len() == items.len() => types
+            .iter()
+            .zip(items.iter())
+            .map(|(ty, item)| complete_tuple_evidence(ty, item))
+            .collect::<Option<_>>()
+            .map(ValueType::Tuple),
+        (ValueType::List(ty), Value::List(items)) => {
+            let (first, rest) = items.split_first()?;
+            let ty_for_first = complete_tuple_evidence(ty, first)?;
+            rest.iter()
+                .all(|item| complete_tuple_evidence(ty, item).as_ref() == Some(&ty_for_first))
+                .then(|| ValueType::List(Box::new(ty_for_first)))
+        }
+        _ => None,
     }
 }
 
@@ -6158,6 +6477,13 @@ fn infer_runtime_type_value(
             substitutions
                 .entry(name.clone())
                 .or_insert_with(|| actual.clone());
+        }
+        (ValueType::Tuple(expected), ValueType::Tuple(actual))
+            if expected.len() == actual.len() =>
+        {
+            for (expected, actual) in expected.iter().zip(actual) {
+                infer_runtime_type_value(expected, actual, substitutions);
+            }
         }
         (ValueType::List(expected), ValueType::List(actual)) => {
             infer_runtime_type_value(expected, actual, substitutions);
@@ -6180,6 +6506,13 @@ fn infer_runtime_type_value(
     }
 }
 
+pub(crate) fn unproven_tuple_slot(value: &Value) -> ValueType {
+    match value {
+        Value::List(items) if items.is_empty() => ValueType::EmptyList,
+        _ => ValueType::Unknown,
+    }
+}
+
 pub(crate) fn runtime_value_type(value: &Value) -> Option<ValueType> {
     Some(match value {
         Value::Null => ValueType::Null,
@@ -6191,6 +6524,14 @@ pub(crate) fn runtime_value_type(value: &Value) -> Option<ValueType> {
         Value::Path(_) => ValueType::Path,
         Value::Duration(_) => ValueType::Duration,
         Value::ByteSize(_) => ValueType::ByteSize,
+        Value::Tuple(values) => ValueType::Tuple(
+            values
+                .iter()
+                .map(|value| {
+                    runtime_value_type(value).unwrap_or_else(|| unproven_tuple_slot(value))
+                })
+                .collect(),
+        ),
         Value::List(values) => ValueType::List(Box::new(runtime_value_type(values.first()?)?)),
         Value::Record(_) => ValueType::Record,
         Value::Table(_) => ValueType::Table,
@@ -6250,7 +6591,7 @@ pub(crate) struct CallableSnapshot {
 }
 
 pub(crate) fn snapshot_callable(callable: &Arc<dyn Callable>) -> Option<CallableSnapshot> {
-    let callable = callable.as_any().downcast_ref::<CallableValue>()?;
+    let callable = (callable.as_ref() as &dyn std::any::Any).downcast_ref::<CallableValue>()?;
     Some(CallableSnapshot {
         name: callable.name.as_deref().map(str::to_owned),
         parameters: callable
@@ -6277,8 +6618,7 @@ pub(crate) fn callable_contains_nominal_identity(
     callable: &Arc<dyn Callable>,
     matches: fn(&crate::module::NominalTypeId) -> bool,
 ) -> bool {
-    callable
-        .as_any()
+    (callable.as_ref() as &dyn std::any::Any)
         .downcast_ref::<CallableValue>()
         .is_some_and(|callable| {
             callable
@@ -6291,8 +6631,7 @@ pub(crate) fn callable_contains_nominal_identity(
 pub(crate) fn callable_binding_types(
     callable: &Arc<dyn Callable>,
 ) -> Option<Arc<RuntimeBindingTypes>> {
-    callable
-        .as_any()
+    (callable.as_ref() as &dyn std::any::Any)
         .downcast_ref::<CallableValue>()
         .map(|callable| Arc::clone(&callable.binding_types))
 }
@@ -6303,7 +6642,7 @@ pub(crate) fn retained_function_signature(
     let Value::Callable(callable) = value else {
         return None;
     };
-    let callable = callable.as_any().downcast_ref::<CallableValue>()?;
+    let callable = (callable.as_ref() as &dyn std::any::Any).downcast_ref::<CallableValue>()?;
     callable
         .binding_types
         .owned_function_signature(callable.family.source.id(), callable.family.origin_span)
@@ -6626,6 +6965,10 @@ fn find_callable_in_expression(
             _ => None,
         },
         ExpressionKind::Name(_) | ExpressionKind::Qualified(_) => None,
+        ExpressionKind::Tuple(tuple) => tuple
+            .elements
+            .iter()
+            .find_map(|element| find_callable_in_expression(element, snapshot)),
         ExpressionKind::List(elements) => elements
             .iter()
             .find_map(|element| find_callable_in_expression(element.expression(), snapshot)),
@@ -7085,7 +7428,7 @@ mod tests {
         let mut environment = Environment::from_snapshot([("OPAAL_POLICY_SECRET", "not-readable")]);
         let error = apply_callable(
             &callable,
-            vec![Value::Null],
+            &[Value::Null],
             &source,
             script.span(),
             &mut environment,
@@ -7116,7 +7459,7 @@ mod tests {
             .expect("closure construction is effect free");
         let error = apply_callable(
             &callable,
-            vec![Value::Null],
+            &[Value::Null],
             &source,
             script.span(),
             &mut Environment::new(),

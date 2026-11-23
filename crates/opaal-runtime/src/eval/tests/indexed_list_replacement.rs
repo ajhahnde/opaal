@@ -52,7 +52,7 @@ fn scope(length: usize) -> ScopeStack {
         )
         .unwrap();
     scope
-        .declare("saved", BindingMutability::Immutable, value)
+        .declare("saved", BindingMutability::Immutable, &value)
         .unwrap();
     scope
 }
@@ -63,7 +63,7 @@ fn exact_copy_type_depth_budgets_and_first_excess_never_publish() {
         let base = scope(length);
         let mut success = base.clone();
         success
-            .declare("replacement", BindingMutability::Immutable, ints(&[8, 9]))
+            .declare("replacement", BindingMutability::Immutable, &ints(&[8, 9]))
             .unwrap();
         let mut budget = ResourceBudget::steps(u64::MAX);
         assert!(
@@ -90,7 +90,7 @@ fn exact_copy_type_depth_budgets_and_first_excess_never_publish() {
         ] {
             let mut original = base.clone();
             original
-                .declare("replacement", BindingMutability::Immutable, ints(&[8, 9]))
+                .declare("replacement", BindingMutability::Immutable, &ints(&[8, 9]))
                 .unwrap();
             let before = original.clone();
             assert!(
@@ -100,7 +100,7 @@ fn exact_copy_type_depth_budgets_and_first_excess_never_publish() {
         }
         let mut exact = base.clone();
         exact
-            .declare("replacement", BindingMutability::Immutable, ints(&[8, 9]))
+            .declare("replacement", BindingMutability::Immutable, &ints(&[8, 9]))
             .unwrap();
         assert!(
             replace(
@@ -123,7 +123,7 @@ fn exact_copy_type_depth_budgets_and_first_excess_never_publish() {
 #[test]
 fn every_copy_and_type_validation_cancellation_preserves_target_metadata_and_alias() {
     let mut base = scope(5);
-    base.declare("replacement", BindingMutability::Immutable, ints(&[8, 9]))
+    base.declare("replacement", BindingMutability::Immutable, &ints(&[8, 9]))
         .unwrap();
     let polls = Arc::new(AtomicUsize::new(0));
     let seen = polls.clone();
@@ -190,7 +190,7 @@ fn root_and_bounds_failures_suppress_later_expressions_and_payloads() {
         ),
     ] {
         let mut scope = ScopeStack::new();
-        scope.declare("items", mutability, root).unwrap();
+        scope.declare("items", mutability, &root).unwrap();
         let before = scope.clone();
         let Err(Abort::Error(error)) = replace(
             text,
@@ -253,7 +253,7 @@ fn callable_occurring_only_in_index_survives_capsule_roundtrip() {
         .expression(&call.callee, &mut scope)
         .unwrap_or_else(|_| panic!("closure"));
     scope
-        .declare("position", BindingMutability::Immutable, callable)
+        .declare("position", BindingMutability::Immutable, &callable)
         .unwrap();
     let wire = crate::capsule::encode_background_capsule(
         "index-callable.opaal",
@@ -270,7 +270,7 @@ fn callable_occurring_only_in_index_survives_capsule_roundtrip() {
     assert!(matches!(
         apply_callable(
             restored,
-            vec![],
+            &[],
             &source,
             assignment.index.span(),
             &mut Environment::new(),
@@ -303,9 +303,9 @@ fn boxed_nominal_slots_charge_identity_storage_and_share_nested_payloads() {
     )));
     let mut base = ScopeStack::new();
     let original = Value::list(vec![Value::Int(0), record, variant]);
-    base.declare("items", BindingMutability::Mutable, original.clone())
+    base.declare("items", BindingMutability::Mutable, &original)
         .unwrap();
-    base.declare("saved", BindingMutability::Immutable, original)
+    base.declare("saved", BindingMutability::Immutable, &original)
         .unwrap();
     let bytes = (6 * size_of::<Value>()
         + 2 * size_of::<usize>()

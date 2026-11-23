@@ -181,6 +181,7 @@ fn opaque_values_are_refused_without_calling_any_formatter() {
         for value in [
             value.clone(),
             Value::list(vec![value.clone()]),
+            Value::Tuple(Arc::from([Value::string("tuple-canary"), value.clone()])),
             Record::new(vec![("x".into(), value.clone())])
                 .unwrap()
                 .into(),

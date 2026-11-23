@@ -149,7 +149,7 @@ impl CallbackShape {
                 .iter()
                 .any(|parameter| parameter.name() == name),
             ValueType::List(element) => self.contains_own_generic(element),
-            ValueType::Nominal { arguments, .. } => arguments
+            ValueType::Nominal { arguments, .. } | ValueType::Tuple(arguments) => arguments
                 .iter()
                 .any(|argument| self.contains_own_generic(argument)),
             _ => false,
@@ -563,14 +563,27 @@ impl OperationDescriptor {
     }
 
     /// Calls the value overload without mapping or carrier conversion.
-    pub fn execute_value(&self, value: Value) -> Result<Value, OperationError> {
+    pub fn execute_value(&self, value: &Value) -> Result<Value, OperationError> {
         self.execute_value_with_types(value, &[])
     }
 
     /// Calls the value overload with an exact explicit generic instantiation.
     pub fn execute_value_with_types(
         &self,
-        value: Value,
+        value: &Value,
+        type_arguments: &[ValueType],
+    ) -> Result<Value, OperationError> {
+        use crate::eval::shape::Node;
+        crate::check_rust_shape(
+            std::iter::once(Node::Value(value)).chain(type_arguments.iter().map(Node::Type)),
+        )
+        .map_err(OperationError::ValueAdmission)?;
+        self.execute_admitted_value(value, type_arguments)
+    }
+
+    pub(crate) fn execute_admitted_value(
+        &self,
+        value: &Value,
         type_arguments: &[ValueType],
     ) -> Result<Value, OperationError> {
         if !type_arguments.is_empty() && type_arguments.len() != self.type_parameters.len() {
@@ -588,7 +601,7 @@ impl OperationDescriptor {
             .collect();
         let Some(overload) = self.overloads.iter().find(|overload| {
             matches!(&overload.input, OperationInputType::Value(expected)
-                if substitute_type(expected, &substitutions).accepts(&value))
+                if substitute_type(expected, &substitutions).accepts(value))
         }) else {
             return Err(OperationError::NoMatchingOverload {
                 operation: self.id.qualified_name(),
@@ -680,6 +693,13 @@ fn call_types_compatible(expected: &ValueType, actual: &ValueType) -> bool {
         | (_, ValueType::Any | ValueType::TypeParameter(_)) => true,
         (ValueType::List(expected), ValueType::List(actual)) => {
             call_types_compatible(expected, actual)
+        }
+        (ValueType::Tuple(expected), ValueType::Tuple(actual)) => {
+            expected.len() == actual.len()
+                && expected
+                    .iter()
+                    .zip(actual)
+                    .all(|(expected, actual)| call_types_compatible(expected, actual))
         }
         _ => expected.accepts_type(actual),
     }
@@ -856,7 +876,7 @@ fn validate_type_parameters(
             Err(OperationDescriptorError::UnknownTypeParameter { name: name.clone() })
         }
         ValueType::List(element) => validate_type_parameters(element, declared),
-        ValueType::Nominal { arguments, .. } => {
+        ValueType::Nominal { arguments, .. } | ValueType::Tuple(arguments) => {
             for argument in arguments {
                 validate_type_parameters(argument, declared)?;
             }
@@ -871,6 +891,13 @@ fn types_overlap(left: &ValueType, right: &ValueType) -> bool {
         (ValueType::Any | ValueType::TypeParameter(_), _)
         | (_, ValueType::Any | ValueType::TypeParameter(_)) => true,
         (ValueType::List(left), ValueType::List(right)) => types_overlap(left, right),
+        (ValueType::Tuple(left), ValueType::Tuple(right)) => {
+            left.len() == right.len()
+                && left
+                    .iter()
+                    .zip(right)
+                    .all(|(left, right)| types_overlap(left, right))
+        }
         (
             ValueType::Nominal {
                 id: left_id,
@@ -1630,6 +1657,8 @@ pub(crate) fn numeric_operation(
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub enum OperationError {
+    /// A Rust-supplied value or type exceeded the admission bounds.
+    ValueAdmission(crate::ValueAdmissionError),
     /// A well-typed argument violates the operation's value contract.
     InvalidArgument { operation: String, message: String },
     /// An operator received operand families it is not defined for.
@@ -1670,6 +1699,7 @@ pub enum OperationError {
 impl fmt::Display for OperationError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::ValueAdmission(error) => error.fmt(formatter),
             Self::InvalidArgument { operation, message } => {
                 write!(formatter, "{operation}: {message}")
             }

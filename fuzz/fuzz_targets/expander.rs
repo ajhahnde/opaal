@@ -76,7 +76,7 @@ fn seeded_scope() -> ScopeStack {
         ),
     ] {
         scope
-            .declare(name, BindingMutability::Immutable, value)
+            .declare(name, BindingMutability::Immutable, &value)
             .expect("the fixed expansion seed bindings are unique");
     }
     scope

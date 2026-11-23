@@ -86,7 +86,7 @@ pub fn float(value: f64) -> Value {
 pub fn session_run(body: &str, input: Value) -> Result<Value, SubmitError> {
     let mut scope = ScopeStack::new();
     scope
-        .declare("input", BindingMutability::Immutable, input)
+        .declare("input", BindingMutability::Immutable, &input)
         .unwrap();
     let mut session = Session::with_scope(
         scope,

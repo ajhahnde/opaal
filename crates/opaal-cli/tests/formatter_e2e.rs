@@ -206,6 +206,17 @@ fn raw_stdin_continues_declarations_and_retains_values_after_diagnostics() {
 }
 
 #[test]
+fn raw_stdin_echoes_tuple_free_closures_and_continues() {
+    let output = raw_session("{|| 1}\n[{|| 2}]\n(3, \"ready\")\n");
+    assert!(output.status.success(), "{output:?}");
+    assert!(output.stderr.is_empty(), "{output:?}");
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.starts_with(">> <closure at "), "{stdout:?}");
+    assert!(stdout.contains("\n>> [<closure at "), "{stdout:?}");
+    assert!(stdout.ends_with("\n>> (3, \"ready\")\n>> "), "{stdout:?}");
+}
+
+#[test]
 fn formatting_never_loads_imports_or_runs_external_source() {
     let temp = TempDir::new("no-evaluation");
     let marker = temp.0.join("must-not-exist");

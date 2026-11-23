@@ -334,7 +334,7 @@ pub(crate) fn contains_nominal_identity(
     matches: fn(&NominalTypeId) -> bool,
 ) -> bool {
     match value {
-        Value::List(values) => values
+        Value::List(values) | Value::Tuple(values) => values
             .iter()
             .any(|value| contains_nominal_identity(value, matches)),
         Value::Record(record) => record

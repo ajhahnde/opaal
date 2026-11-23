@@ -80,6 +80,11 @@ IF_EXPRESSION_FIXTURES = (
     "wrong-type.opaal",
 )
 
+TYPED_TUPLE_FIXTURES = (
+    "after.opaal", "before.opaal", "command-commas.opaal", "summary.opaal",
+    "wrong-pattern.opaal", "wrong-result.opaal",
+)
+
 
 def main() -> None:
     # Every shipped input and qualification assertion belongs to the named head.
@@ -112,6 +117,9 @@ def main() -> None:
     conditionals = {name.removeprefix("if-expressions/") for name in names if name.startswith("if-expressions/")}
     if conditionals != set(IF_EXPRESSION_FIXTURES):
         raise ValueError("if expression fixture census differs from the committed source")
+    tuples = {name.removeprefix("typed-tuples/") for name in names if name.startswith("typed-tuples/")}
+    if tuples != set(TYPED_TUPLE_FIXTURES):
+        raise ValueError("typed tuple fixture census differs from the committed source")
     archive = package_examples(ROOT, names, source, directory=FIXTURES, name="source-formatting")
     print(archive.relative_to(ROOT))
 

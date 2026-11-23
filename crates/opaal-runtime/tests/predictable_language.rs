@@ -248,6 +248,16 @@ fn if_expression_checks_all_known_arms_and_reports_the_original_spans() {
             "'two'",
             "1",
         ),
+        (
+            "let loose: Any = 3\nlet result = if false { (loose, 1) } else if false { (37, 1) } else { (\"wrong\", 1) }",
+            "\"wrong\"",
+            "37",
+        ),
+        (
+            "let loose: Any = 3\nlet result = if false { ((loose, 1), 2) } else if false { ((37, 1), 2) } else { ((\"wrong\", 1), 2) }",
+            "\"wrong\"",
+            "37",
+        ),
     ] {
         let source = OneModule {
             source: text.as_bytes().to_vec(),
@@ -266,6 +276,12 @@ fn if_expression_checks_all_known_arms_and_reports_the_original_spans() {
         for (label, expected) in diagnostic.labels().iter().zip([primary, secondary]) {
             let span = label.span();
             assert_eq!(&text[span.start()..span.end()], expected, "{text}");
+        }
+        if secondary == "37" {
+            assert_eq!(
+                diagnostic.message(),
+                "if expression arm supplies `String`, expected `Int`"
+            );
         }
     }
 }

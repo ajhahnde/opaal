@@ -808,7 +808,7 @@ impl Error for InvalidStatus {}
 /// the same allocation. The concrete implementation is owned by the evaluator, so
 /// the value model stays free of any syntax dependency and stores the callable
 /// behind this object-safe trait.
-pub trait Callable: fmt::Debug + Send + Sync {
+pub trait Callable: Any + fmt::Debug + Send + Sync {
     /// Returns the stable family name, `"function"` or `"closure"`.
     fn family(&self) -> &'static str;
     /// Writes the deterministic human display form.
@@ -834,6 +834,7 @@ pub enum Value {
     Duration(Duration),
     ByteSize(ByteSize),
     List(Arc<[Self]>),
+    Tuple(Arc<[Self]>),
     Record(Record),
     NominalRecord(Box<NominalRecordValue>),
     Variant(Box<VariantValue>),
@@ -842,6 +843,57 @@ pub enum Value {
     Status(Status),
     Error(Arc<crate::eval::RuntimeError>),
     Callable(Arc<dyn Callable>),
+}
+
+/// A Rust-supplied value that has passed bounded admission.
+#[derive(Clone, Debug)]
+pub struct AdmittedValue(Value);
+
+impl AdmittedValue {
+    /// Checks while the caller still owns the input, then takes a snapshot.
+    pub fn new(value: &Value) -> Result<Self, ValueAdmissionError> {
+        if matches!(
+            value,
+            Value::List(_)
+                | Value::Tuple(_)
+                | Value::Record(_)
+                | Value::NominalRecord(_)
+                | Value::Variant(_)
+                | Value::Table(_)
+                | Value::Status(_)
+                | Value::Error(_)
+                | Value::Callable(_)
+        ) {
+            check_rust_shape(std::iter::once(crate::eval::shape::Node::Value(value)))?;
+        }
+        Ok(Self(value.clone()))
+    }
+
+    /// Returns the checked value to the caller.
+    #[must_use]
+    pub fn into_value(self) -> Value {
+        self.0
+    }
+}
+
+/// A Rust-supplied value or type exceeds the supported shape.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ValueAdmissionError;
+
+impl fmt::Display for ValueAdmissionError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("value or type exceeds the resource budget")
+    }
+}
+
+impl Error for ValueAdmissionError {}
+
+pub(crate) fn check_rust_shape<'a>(
+    roots: impl Iterator<Item = crate::eval::shape::Node<'a>> + 'a,
+) -> Result<(), ValueAdmissionError> {
+    crate::eval::shape::check_rust(roots, |_| Ok::<_, std::convert::Infallible>(()))
+        .map(|_| ())
+        .map_err(|_| ValueAdmissionError)
 }
 
 impl Value {
@@ -882,6 +934,7 @@ impl Value {
             Self::Duration(_) => "duration",
             Self::ByteSize(_) => "byte size",
             Self::List(_) => "list",
+            Self::Tuple(_) => "tuple",
             Self::Record(_) => "record",
             Self::NominalRecord(_) => "nominal record",
             Self::Variant(_) => "variant",
@@ -909,7 +962,9 @@ impl PartialEq for Value {
             (Self::Path(left), Self::Path(right)) => left == right,
             (Self::Duration(left), Self::Duration(right)) => left == right,
             (Self::ByteSize(left), Self::ByteSize(right)) => left == right,
-            (Self::List(left), Self::List(right)) => left == right,
+            (Self::List(left), Self::List(right)) | (Self::Tuple(left), Self::Tuple(right)) => {
+                left == right
+            }
             (Self::Record(left), Self::Record(right)) => left == right,
             (Self::NominalRecord(left), Self::NominalRecord(right)) => left == right,
             (Self::Variant(left), Self::Variant(right)) => left == right,
@@ -941,15 +996,20 @@ impl fmt::Debug for Value {
             Self::Path(value) => value.fmt(formatter),
             Self::Duration(value) => value.fmt(formatter),
             Self::ByteSize(value) => value.fmt(formatter),
-            Self::List(values) => {
-                formatter.write_char('[')?;
+            Self::List(values) | Self::Tuple(values) => {
+                let (open, close) = if matches!(self, Self::Tuple(_)) {
+                    ('(', ')')
+                } else {
+                    ('[', ']')
+                };
+                formatter.write_char(open)?;
                 for (index, value) in values.iter().enumerate() {
                     if index != 0 {
                         formatter.write_str(", ")?;
                     }
                     write!(formatter, "{value:?}")?;
                 }
-                formatter.write_char(']')
+                formatter.write_char(close)
             }
             Self::Record(value) => value.fmt(formatter),
             Self::NominalRecord(value) => value.fmt(formatter),
@@ -981,6 +1041,7 @@ impl fmt::Display for Value {
             Self::Duration(value) => value.fmt(formatter),
             Self::ByteSize(value) => value.fmt(formatter),
             Self::List(_)
+            | Self::Tuple(_)
             | Self::Record(_)
             | Self::NominalRecord(_)
             | Self::Variant(_)

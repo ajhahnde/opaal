@@ -33,9 +33,9 @@ use std::fmt;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::Value;
-use crate::eval::{CancelReason, CancellationToken, RuntimeError};
+use crate::eval::{CancelReason, CancellationToken, RuntimeError, RuntimeErrorKind, shape::Node};
 use crate::module::ValueType;
+use crate::{AdmittedValue, Value, ValueAdmissionError, check_rust_shape};
 
 static NEXT_STREAM_OWNER: AtomicU64 = AtomicU64::new(1);
 
@@ -88,8 +88,15 @@ pub struct StreamSchema {
 
 impl StreamSchema {
     /// Builds one stream schema with a fresh runtime-only owner.
-    #[must_use]
-    pub fn new(element_type: ValueType, cardinality: StreamCardinality) -> Self {
+    pub fn new(
+        element_type: &ValueType,
+        cardinality: StreamCardinality,
+    ) -> Result<Self, ValueAdmissionError> {
+        check_rust_shape(std::iter::once(Node::Type(element_type)))?;
+        Ok(Self::new_admitted(element_type.clone(), cardinality))
+    }
+
+    fn new_admitted(element_type: ValueType, cardinality: StreamCardinality) -> Self {
         Self {
             element_type,
             cardinality,
@@ -177,15 +184,35 @@ pub const DEFAULT_CAPACITY: usize = 1024;
 /// The arms are mutually exclusive terminal or intermediate states; `End` and
 /// `Failed` are distinct so exhaustion is never confused with a producer error.
 #[derive(Debug)]
-pub enum StreamPull {
+pub enum StreamPull<T = Value, E = RuntimeError> {
     /// The next value in the stream.
-    Item(Value),
+    Item(T),
     /// The source is exhausted; further pulls stay `End`.
     End,
     /// The producer raised a runtime error carrying its own span.
-    Failed(RuntimeError),
+    Failed(E),
     /// The carried cancellation token tripped before the source was advanced.
     Cancelled(CancelReason),
+}
+
+/// A producer failure whose causes and type metadata have passed admission.
+#[derive(Debug)]
+pub struct AdmittedStreamError(RuntimeError);
+
+impl AdmittedStreamError {
+    pub fn new(error: &RuntimeError) -> Result<Self, ValueAdmissionError> {
+        check_rust_shape(std::iter::once(Node::Error(error)))?;
+        Ok(Self(error.clone()))
+    }
+
+    /// Reports a refused value or error without taking ownership of it.
+    #[must_use]
+    pub fn resource_limit(span: opaal_syntax::Span) -> Self {
+        Self(RuntimeError::new(
+            RuntimeErrorKind::ResourceBudgetExceeded,
+            span,
+        ))
+    }
 }
 
 /// The outcome of pulling one chunk from a [`ByteStream`].
@@ -320,7 +347,7 @@ pub struct BoundedQueue {
 /// A [`BoundedQueue::try_push`] refused because the queue is at capacity; it
 /// returns the rejected value so a producer can retry it after a `pop`.
 #[derive(Clone, Debug)]
-pub struct QueueFull(pub Value);
+pub struct QueueFull(pub AdmittedValue);
 
 impl BoundedQueue {
     /// A queue with [`DEFAULT_CAPACITY`].
@@ -367,11 +394,11 @@ impl BoundedQueue {
 
     /// Offers `value` to the back of the queue, refusing it when the queue is
     /// full and handing it back through [`QueueFull`].
-    pub fn try_push(&mut self, value: Value) -> Result<(), QueueFull> {
+    pub fn try_push(&mut self, value: AdmittedValue) -> Result<(), QueueFull> {
         if self.items.len() >= self.capacity {
             return Err(QueueFull(value));
         }
-        self.items.push_back(value);
+        self.items.push_back(value.into_value());
         Ok(())
     }
 
@@ -395,8 +422,6 @@ enum Source {
     Values { values: Vec<Value>, cursor: usize },
     /// A drained staging queue.
     Queue(BoundedQueue),
-    /// A lazy producer advanced once per pull; `None` is exhaustion.
-    Producer(Box<dyn FnMut() -> Option<Result<Value, RuntimeError>>>),
     /// A lazy transformer that preserves every first-class stream terminal
     /// state instead of folding cancellation into an error.
     Puller(Box<dyn FnMut() -> StreamPull>),
@@ -419,11 +444,6 @@ impl Source {
             },
             Self::Queue(queue) => match queue.pop() {
                 Some(value) => StreamPull::Item(value),
-                None => StreamPull::End,
-            },
-            Self::Producer(producer) => match producer() {
-                Some(Ok(value)) => StreamPull::Item(value),
-                Some(Err(error)) => StreamPull::Failed(error),
                 None => StreamPull::End,
             },
             Self::Puller(puller) => puller(),
@@ -451,14 +471,21 @@ struct ValueStreamState {
 
 impl ValueStream {
     /// A stream of exactly one value.
-    #[must_use]
-    pub fn once(value: Value) -> Self {
+    pub fn once(value: &Value) -> Result<Self, ValueAdmissionError> {
+        Ok(Self::once_admitted(AdmittedValue::new(value)?.into_value()))
+    }
+
+    pub(crate) fn once_admitted(value: Value) -> Self {
         Self::with_source(Source::Once(Some(value)), StreamCardinality::Exact(1))
     }
 
     /// A stream that drains an eager backing sequence in order.
-    #[must_use]
-    pub fn from_values(values: Vec<Value>) -> Self {
+    pub fn from_values(values: &[Value]) -> Result<Self, ValueAdmissionError> {
+        check_rust_shape(values.iter().map(Node::Value))?;
+        Ok(Self::from_admitted_values(values.to_vec()))
+    }
+
+    pub(crate) fn from_admitted_values(values: Vec<Value>) -> Self {
         let cardinality = StreamCardinality::Exact(values.len());
         Self::with_source(Source::Values { values, cursor: 0 }, cardinality)
     }
@@ -473,22 +500,33 @@ impl ValueStream {
     /// A stream advanced by a lazy producer, once per pull. `None` is exhaustion.
     #[must_use]
     pub fn from_fn(
-        producer: impl FnMut() -> Option<Result<Value, RuntimeError>> + 'static,
+        mut producer: impl FnMut() -> Option<Result<AdmittedValue, AdmittedStreamError>> + 'static,
     ) -> Self {
-        Self::with_source(
-            Source::Producer(Box::new(producer)),
-            StreamCardinality::Unknown,
-        )
+        Self::from_pull_fn(move || match producer() {
+            Some(Ok(value)) => StreamPull::Item(value),
+            Some(Err(error)) => StreamPull::Failed(error),
+            None => StreamPull::End,
+        })
     }
 
     /// A stream advanced by a lazy producer that returns the complete
     /// [`StreamPull`] state.
     ///
-    /// This is the adapter for internal pipeline transformers whose upstream can
-    /// end, fail, or cancel independently. The stream's own cancellation token
-    /// is still polled before the producer is advanced.
+    /// Validate each item or error while the producer retains the raw input.
+    /// The stream polls cancellation before advancing the producer.
     #[must_use]
-    pub fn from_pull_fn(producer: impl FnMut() -> StreamPull + 'static) -> Self {
+    pub fn from_pull_fn(
+        mut producer: impl FnMut() -> StreamPull<AdmittedValue, AdmittedStreamError> + 'static,
+    ) -> Self {
+        Self::from_admitted_pull_fn(move || match producer() {
+            StreamPull::Item(value) => StreamPull::Item(value.into_value()),
+            StreamPull::Failed(error) => StreamPull::Failed(error.0),
+            StreamPull::End => StreamPull::End,
+            StreamPull::Cancelled(reason) => StreamPull::Cancelled(reason),
+        })
+    }
+
+    pub(crate) fn from_admitted_pull_fn(producer: impl FnMut() -> StreamPull + 'static) -> Self {
         Self::with_source(
             Source::Puller(Box::new(producer)),
             StreamCardinality::Unknown,
@@ -500,7 +538,7 @@ impl ValueStream {
             source,
             state: Box::new(ValueStreamState {
                 cancel: CancellationToken::never(),
-                schema: StreamSchema::new(ValueType::Any, cardinality),
+                schema: StreamSchema::new_admitted(ValueType::Any, cardinality),
                 checked_items: 0,
                 terminal: false,
                 cleanup: None,
@@ -510,15 +548,15 @@ impl ValueStream {
     }
 
     /// Declares the element type and cardinality enforced by checked consumers.
-    #[must_use]
     pub fn with_contract(
         mut self,
-        element_type: ValueType,
+        element_type: &ValueType,
         cardinality: StreamCardinality,
-    ) -> Self {
-        self.state.schema.element_type = element_type;
+    ) -> Result<Self, ValueAdmissionError> {
+        check_rust_shape(std::iter::once(Node::Type(element_type)))?;
+        self.state.schema.element_type = element_type.clone();
         self.state.schema.cardinality = cardinality;
-        self
+        Ok(self)
     }
 
     /// Attaches the owned-resource cleanup action run at most once.

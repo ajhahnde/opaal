@@ -123,6 +123,39 @@ Exhaustive consumers should visit each arm's `ConditionalChain` and value, then
 the fallback expression. The published toolchain ships CLI and language-server
 binaries. Workspace crates have publication disabled.
 
+Tuple literals and patterns add `ExpressionKind::Tuple` and `Pattern::Tuple`.
+Both carry `TupleSyntax`, which exposes the elements and exact delimiter and
+separator spans. Construct named annotations with `TypeReferenceKind::Named`
+using a `QualifiedName` and the type arguments. Match
+`TypeReferenceKind::Tuple` to visit each tuple type slot. Runtime consumers
+handle `Value::Tuple` and `ValueType::Tuple` as ordered slots with distinct
+value and type identities. `ValueType::Unknown` and `ValueType::EmptyList`
+carry inferred slot evidence. An explicit `Any` remains distinct.
+
+Use `opaal_syntax::check_tuple_depth` to check a Rust-built syntax tree before
+passing it to a recursive visitor. Pass borrowed values to `apply_callable`,
+`ScopeStack::declare`, `ScopeStack::assign`, `OperationDescriptor::execute_value`
+and `execute_value_with_types`. A session takes an already-populated
+`ScopeStack`. These entry points check Rust input before cloning it.
+
+Construct eager `ValueStream`s and stream schemas from borrowed input and handle
+their result. Lazy value producers, queues, and closure transformers take
+`AdmittedValue` created from a borrowed value. Producer failures use
+`AdmittedStreamError`. The producer retains responsibility for releasing any
+rejected graph and anything captured in opaque host state. Raw Rust traits such
+as `Value` equality and formatting still require caller-bounded inputs.
+
+`Callable` now requires `Any`. Use owned state or `'static` references in a
+custom implementation so it can be stored as a runtime callable.
+`execute_internal_suffix` accepts `InternalPayload<AdmittedValue>`. For a
+single-value head result, first call `AdmittedValue::new(&value)?`, then pass
+it as `InternalPayload::Value`.
+
+Runtime paths with tuples allow 32 composite levels. Rust ingress also limits
+recursive value and metadata paths to 64 edges and caps visited edges at the
+default evaluation step limit. Capsule and terminal formats apply their own
+limits during decode and rendering.
+
 ```sh
 target/debug/opaal format --check examples/language-foundation.opaal
 target/debug/opaal check examples/language-foundation.opaal

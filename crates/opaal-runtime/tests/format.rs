@@ -16,11 +16,13 @@
 //! whole-document budget — only a bound on one unterminated line. Its splitting
 //! rule is the same implementation `lines` uses, so the two cannot drift.
 
+use opaal_runtime::AdmittedValue;
 use opaal_runtime::eval::{CancelReason, CancellationToken, RuntimeError, RuntimeErrorKind};
 use opaal_runtime::format::{
     FromJsonStep, FromTextStep, JsonMode, ToJsonStep, ToTextStep, from_json, from_text, to_json,
     to_text,
 };
+use opaal_runtime::stream::AdmittedStreamError;
 use opaal_runtime::stream::ValueStream;
 use opaal_runtime::{Record, Table, Value};
 use opaal_syntax::{SourceFile, SourceId};
@@ -62,7 +64,7 @@ fn parse_one(text: &str) -> Value {
 
 /// Serializes one value and returns the emitted UTF-8 chunk.
 fn render_one(value: Value) -> String {
-    let mut writer = to_json(ValueStream::once(value));
+    let mut writer = to_json(ValueStream::once(&value).unwrap());
     let chunk = match writer.pull() {
         ToJsonStep::Chunk(bytes) => bytes,
         other => panic!("expected a chunk, got {other:?}"),
@@ -249,11 +251,25 @@ fn json_output_renders_every_encodable_family_and_refuses_the_rest() {
         Value::from(opaal_runtime::Range::new(0, 3, false)),
     ] {
         let family = value.family_name();
-        let mut writer = to_json(ValueStream::once(value));
+        let mut writer = to_json(ValueStream::once(&value).unwrap());
         assert!(
             matches!(writer.pull(), ToJsonStep::NotEncodable { actual } if actual == family),
             "{family} must not be encodable"
         );
+    }
+    let tuple = Value::Tuple(std::sync::Arc::from([
+        Value::Int(3),
+        Value::string("tuple-canary"),
+    ]));
+    for value in [tuple.clone(), Value::list(vec![tuple])] {
+        let family = value.family_name();
+        assert!(opaal_runtime::data::json_encode(&value).is_err());
+        let mut writer = to_json(ValueStream::once(&value).unwrap());
+        assert!(matches!(
+            writer.pull(),
+            ToJsonStep::NotEncodable { actual } if actual == family
+        ));
+        assert!(matches!(writer.pull(), ToJsonStep::End));
     }
 }
 
@@ -284,7 +300,7 @@ fn json_output_is_lazy_and_emits_one_chunk_per_value() {
     let mut counter = 0_i64;
     let source = ValueStream::from_fn(move || {
         counter += 1;
-        Some(Ok(Value::Int(counter)))
+        Some(Ok(AdmittedValue::new(&Value::Int(counter)).unwrap()))
     });
 
     let mut writer = to_json(source);
@@ -305,7 +321,7 @@ fn both_directions_pass_upstream_failure_and_cancellation_through() {
             None
         } else {
             produced = true;
-            Some(Err(boom.clone()))
+            Some(Err(AdmittedStreamError::new(&boom).unwrap()))
         }
     }));
     match failing.pull() {
@@ -316,8 +332,11 @@ fn both_directions_pass_upstream_failure_and_cancellation_through() {
     // An already-tripped token stops the upstream stream at its next pull, so the
     // pending value is never serialized.
     let token = CancellationToken::from_fn(|| true);
-    let mut cancelled =
-        to_json(ValueStream::from_values(vec![Value::Int(1)]).with_cancellation(token));
+    let mut cancelled = to_json(
+        ValueStream::from_values(&[Value::Int(1)])
+            .unwrap()
+            .with_cancellation(token),
+    );
     assert!(matches!(
         cancelled.pull(),
         ToJsonStep::Cancelled(CancelReason::Requested)
@@ -414,11 +433,10 @@ fn the_text_format_decodes_strictly_and_reports_a_malformed_offset() {
 
 #[test]
 fn text_output_writes_one_terminated_line_per_value() {
-    let mut writer = to_text(ValueStream::from_values(vec![
-        Value::string("first"),
-        Value::Int(2),
-        Value::Bool(true),
-    ]));
+    let mut writer = to_text(
+        ValueStream::from_values(&[Value::string("first"), Value::Int(2), Value::Bool(true)])
+            .unwrap(),
+    );
     assert!(matches!(writer.pull(), ToTextStep::Chunk(ref bytes) if bytes == b"first\n"));
     assert!(matches!(writer.pull(), ToTextStep::Chunk(ref bytes) if bytes == b"2\n"));
     assert!(matches!(writer.pull(), ToTextStep::Chunk(ref bytes) if bytes == b"true\n"));
@@ -426,7 +444,7 @@ fn text_output_writes_one_terminated_line_per_value() {
 
     // A string containing a newline is written through unchanged: `to text` is a
     // line-oriented writer, not an escaping serializer.
-    let mut embedded = to_text(ValueStream::once(Value::string("a\nb")));
+    let mut embedded = to_text(ValueStream::once(&Value::string("a\nb")).unwrap());
     assert!(matches!(embedded.pull(), ToTextStep::Chunk(ref bytes) if bytes == b"a\nb\n"));
 }
 
@@ -443,7 +461,7 @@ fn text_output_accepts_exactly_the_families_that_are_word_eligible() {
         Value::from(opaal_runtime::ByteSize::new(4)),
     ] {
         let family = value.family_name();
-        let mut writer = to_text(ValueStream::once(value));
+        let mut writer = to_text(ValueStream::once(&value).unwrap());
         assert!(
             matches!(writer.pull(), ToTextStep::Chunk(_)),
             "{family} must be writable as a line"
@@ -458,7 +476,7 @@ fn text_output_accepts_exactly_the_families_that_are_word_eligible() {
         Value::Bytes(std::sync::Arc::from(b"raw".as_slice())),
     ] {
         let family = value.family_name();
-        let mut writer = to_text(ValueStream::once(value));
+        let mut writer = to_text(ValueStream::once(&value).unwrap());
         assert!(
             matches!(writer.pull(), ToTextStep::NotEncodable { actual } if actual == family),
             "{family} must not be writable as a line"
@@ -478,7 +496,7 @@ fn text_output_passes_upstream_failure_and_cancellation_through() {
             None
         } else {
             produced = true;
-            Some(Err(boom.clone()))
+            Some(Err(AdmittedStreamError::new(&boom).unwrap()))
         }
     }));
     match failing.pull() {
@@ -487,8 +505,11 @@ fn text_output_passes_upstream_failure_and_cancellation_through() {
     }
 
     let token = CancellationToken::from_fn(|| true);
-    let mut cancelled =
-        to_text(ValueStream::from_values(vec![Value::string("later")]).with_cancellation(token));
+    let mut cancelled = to_text(
+        ValueStream::from_values(&[Value::string("later")])
+            .unwrap()
+            .with_cancellation(token),
+    );
     assert!(matches!(
         cancelled.pull(),
         ToTextStep::Cancelled(CancelReason::Requested)

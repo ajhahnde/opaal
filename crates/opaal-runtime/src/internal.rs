@@ -17,7 +17,8 @@ use opaal_syntax::SourceFile;
 
 use crate::builtin::{BuiltinOutcome, BuiltinOutput, SessionState, execute_builtin};
 use crate::closure::{
-    EachStep, OwnedClosureContext, UpdateStep, WhereStep, each_owned, update_owned, where_owned,
+    EachStep, OwnedClosureContext, UpdateStep, WhereStep, each_owned_admitted,
+    update_owned_admitted, where_owned_admitted,
 };
 use crate::command::{Carrier, CommandRegistry};
 use crate::convert::{Codec, DecodeStep, EncodeStep, decode, encode};
@@ -38,7 +39,7 @@ use crate::structured::{
     DrainOutcome, GetStep, LineStep, SelectStep, SortOutcome, collect, first, get, last, length,
     lines, select, sort,
 };
-use crate::{Duration, Status, Value};
+use crate::{AdmittedValue, Duration, Status, Value};
 
 /// The documented item ceiling for commands that must drain a complete value
 /// stream (`last`, `collect`, `length`, and `sort`).
@@ -51,18 +52,18 @@ pub const DEFAULT_FORMAT_LIMIT: usize = 8 * 1024 * 1024;
 pub const DEFAULT_FILE_CHUNK_SIZE: usize = 64 * 1024;
 
 /// One owned payload moving across an internal pipeline edge.
-pub enum InternalPayload {
+pub enum InternalPayload<T = Value> {
     /// No payload.
     Empty,
     /// Exactly one structured value.
-    Value(Value),
+    Value(T),
     /// A lazy ordered sequence of structured values.
     ValueStream(ValueStream),
     /// A lazy ordered sequence of byte-preserving chunks.
     ByteStream(ByteStream),
 }
 
-impl InternalPayload {
+impl<T> InternalPayload<T> {
     /// The carrier represented by this payload.
     #[must_use]
     pub const fn carrier(&self) -> Carrier {
@@ -146,7 +147,7 @@ pub(crate) fn execute_internal_pipeline_with_policy(
 pub fn execute_internal_suffix(
     plan: &ExecutionPlan,
     start: usize,
-    payload: InternalPayload,
+    payload: InternalPayload<AdmittedValue>,
     statuses: Vec<Status>,
     state: &mut SessionState,
     registry: &CommandRegistry,
@@ -154,6 +155,12 @@ pub fn execute_internal_suffix(
     platform: &dyn Platform,
     source: &SourceFile,
 ) -> Result<InternalPipelineOutcome, RuntimeError> {
+    let payload = match payload {
+        InternalPayload::Empty => InternalPayload::Empty,
+        InternalPayload::Value(value) => InternalPayload::Value(value.into_value()),
+        InternalPayload::ValueStream(stream) => InternalPayload::ValueStream(stream),
+        InternalPayload::ByteStream(stream) => InternalPayload::ByteStream(stream),
+    };
     execute_internal_suffix_with_policy(
         plan,
         start,
@@ -320,13 +327,13 @@ fn execute_each(
 ) -> Result<StageOutcome, RuntimeError> {
     expect_arity(stage, "each", 1, Some(1))?;
     let closure = typed_value("each", &stage.arguments()[0])?.clone();
-    let mut mapper = each_owned(
+    let mut mapper = each_owned_admitted(
         expect_stream(stage, input)?,
         closure,
         stage.span(),
         context.clone(),
     );
-    let stream = ValueStream::from_pull_fn(move || match mapper.pull() {
+    let stream = ValueStream::from_admitted_pull_fn(move || match mapper.pull() {
         EachStep::Item(value) => StreamPull::Item(value),
         EachStep::End => StreamPull::End,
         EachStep::Failed(error) => StreamPull::Failed(error),
@@ -342,14 +349,14 @@ fn execute_where(
 ) -> Result<StageOutcome, RuntimeError> {
     expect_arity(stage, "where", 1, Some(1))?;
     let closure = typed_value("where", &stage.arguments()[0])?.clone();
-    let mut filter = where_owned(
+    let mut filter = where_owned_admitted(
         expect_stream(stage, input)?,
         closure,
         stage.span(),
         context.clone(),
     );
     let span = stage.span();
-    let stream = ValueStream::from_pull_fn(move || match filter.pull() {
+    let stream = ValueStream::from_admitted_pull_fn(move || match filter.pull() {
         WhereStep::Item(value) => StreamPull::Item(value),
         WhereStep::End => StreamPull::End,
         WhereStep::PredicateNotBool { actual } => StreamPull::Failed(RuntimeError::new(
@@ -399,7 +406,7 @@ fn execute_update(
             })?
         }
     };
-    let mut updater = update_owned(
+    let mut updater = update_owned_admitted(
         expect_stream(stage, input)?,
         key,
         replacement,
@@ -407,7 +414,7 @@ fn execute_update(
         context.clone(),
     );
     let span = stage.span();
-    let stream = ValueStream::from_pull_fn(move || match updater.pull() {
+    let stream = ValueStream::from_admitted_pull_fn(move || match updater.pull() {
         UpdateStep::Record(value) => StreamPull::Item(value),
         UpdateStep::End => StreamPull::End,
         UpdateStep::MissingKey { key } => StreamPull::Failed(RuntimeError::new(
@@ -442,7 +449,7 @@ fn execute_decode(
     let source = Rc::clone(&bridge);
     let mut decoder = decode(codec, move || source.borrow_mut().next_chunk());
     let span = stage.span();
-    let stream = ValueStream::from_pull_fn(move || {
+    let stream = ValueStream::from_admitted_pull_fn(move || {
         let step = decoder.pull();
         if let Some(terminal) = bridge.borrow_mut().take_terminal() {
             return terminal.into_value_pull();
@@ -529,7 +536,7 @@ fn execute_from_json(
         DEFAULT_FORMAT_LIMIT,
     );
     let span = stage.span();
-    let stream = ValueStream::from_pull_fn(move || {
+    let stream = ValueStream::from_admitted_pull_fn(move || {
         let step = parser.pull();
         if let Some(terminal) = bridge.borrow_mut().take_terminal() {
             return terminal.into_value_pull();
@@ -573,7 +580,7 @@ fn execute_from_text(
         DEFAULT_FORMAT_LIMIT,
     );
     let span = stage.span();
-    let stream = ValueStream::from_pull_fn(move || {
+    let stream = ValueStream::from_admitted_pull_fn(move || {
         let step = parser.pull();
         if let Some(terminal) = bridge.borrow_mut().take_terminal() {
             return terminal.into_value_pull();
@@ -719,7 +726,7 @@ fn execute_session_builtin(
                 BuiltinOutput::Empty => InternalPayload::Empty,
                 BuiltinOutput::Value(value) => InternalPayload::Value(value.clone()),
                 BuiltinOutput::ValueStream(values) => {
-                    InternalPayload::ValueStream(ValueStream::from_values(values.clone()))
+                    InternalPayload::ValueStream(ValueStream::from_admitted_values(values.clone()))
                 }
                 BuiltinOutput::ForwardInput(_) => input,
             };
@@ -739,9 +746,9 @@ fn execute_first(
     expect_arity(stage, "first", 0, Some(1))?;
     let count = optional_count(stage, "first", 1)?;
     let values = drain("first", stage, first(expect_stream(stage, input)?, count))?;
-    completed(InternalPayload::ValueStream(ValueStream::from_values(
-        values,
-    )))
+    completed(InternalPayload::ValueStream(
+        ValueStream::from_admitted_values(values),
+    ))
 }
 
 fn execute_last(
@@ -759,9 +766,9 @@ fn execute_last(
             DEFAULT_MATERIALIZATION_LIMIT,
         ),
     )?;
-    completed(InternalPayload::ValueStream(ValueStream::from_values(
-        values,
-    )))
+    completed(InternalPayload::ValueStream(
+        ValueStream::from_admitted_values(values),
+    ))
 }
 
 fn execute_collect(
@@ -797,7 +804,7 @@ fn execute_lines(
     expect_arity(stage, "lines", 0, Some(0))?;
     let mut splitter = lines(expect_stream(stage, input)?);
     let span = stage.span();
-    let stream = ValueStream::from_pull_fn(move || match splitter.pull() {
+    let stream = ValueStream::from_admitted_pull_fn(move || match splitter.pull() {
         LineStep::Line(value) => StreamPull::Item(value),
         LineStep::End => StreamPull::End,
         LineStep::NotText { actual } => StreamPull::Failed(RuntimeError::new(
@@ -821,7 +828,7 @@ fn execute_select(
     let columns = utf8_words(stage, "select")?;
     let mut projection = select(expect_stream(stage, input)?, columns);
     let span = stage.span();
-    let stream = ValueStream::from_pull_fn(move || match projection.pull() {
+    let stream = ValueStream::from_admitted_pull_fn(move || match projection.pull() {
         SelectStep::Record(value) => StreamPull::Item(value),
         SelectStep::End => StreamPull::End,
         SelectStep::MissingColumn { column } => StreamPull::Failed(RuntimeError::new(
@@ -852,7 +859,7 @@ fn execute_get(stage: &PlannedStage, input: InternalPayload) -> Result<StageOutc
         .expect("arity guarantees one key");
     let mut projection = get(expect_stream(stage, input)?, key);
     let span = stage.span();
-    let stream = ValueStream::from_pull_fn(move || match projection.pull() {
+    let stream = ValueStream::from_admitted_pull_fn(move || match projection.pull() {
         GetStep::Value(value) => StreamPull::Item(value),
         GetStep::End => StreamPull::End,
         GetStep::MissingKey { key } => StreamPull::Failed(RuntimeError::new(
@@ -923,9 +930,9 @@ fn execute_sort(
             ));
         }
     };
-    completed(InternalPayload::ValueStream(ValueStream::from_values(
-        values,
-    )))
+    completed(InternalPayload::ValueStream(
+        ValueStream::from_admitted_values(values),
+    ))
 }
 
 fn execute_ls(
@@ -955,7 +962,7 @@ fn execute_ls(
         .map_err(|error| RuntimeError::new(RuntimeErrorKind::DirectoryRead(error), stage.span()))?;
     let mut listing = list(move || entries.next_entry());
     let span = stage.span();
-    let stream = ValueStream::from_pull_fn(move || match listing.pull() {
+    let stream = ValueStream::from_admitted_pull_fn(move || match listing.pull() {
         ListStep::Entry(value) => StreamPull::Item(value),
         ListStep::End => StreamPull::End,
         ListStep::Failed(error) => StreamPull::Failed(RuntimeError::new(
@@ -1063,7 +1070,7 @@ fn expect_values(
     input: InternalPayload,
 ) -> Result<ValueStream, RuntimeError> {
     match input {
-        InternalPayload::Value(value) => Ok(ValueStream::once(value)),
+        InternalPayload::Value(value) => Ok(ValueStream::once_admitted(value)),
         InternalPayload::ValueStream(stream) => Ok(stream),
         other => Err(RuntimeError::new(
             RuntimeErrorKind::BuiltinInputCarrier {
