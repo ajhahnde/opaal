@@ -58,7 +58,7 @@ struct FormatLayout {
 impl FormatLayout {
     fn for_script(script: &Script, tokens: &[Token], spans: &FormatSpans) -> Self {
         let mut layout = Self::default();
-        for comma in &spans.tuple_commas {
+        for comma in &spans.spaced_commas {
             layout.no_space_before.insert(comma.start());
             layout.space_after.insert(comma.end());
         }

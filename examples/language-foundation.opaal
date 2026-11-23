@@ -38,6 +38,21 @@ if count != 3 || label != "pass" {
     throw "unexpected summary"
 }
 
+let rows = [(40, "build"), (50, "test")]
+mut indexed_total = 0
+for index, (number, _) in rows {
+    indexed_total += index + number
+}
+mut test_total = 0
+for (number, name) in rows {
+    if name == "test" {
+        test_total += number
+    }
+}
+if indexed_total != 91 || test_total != 50 {
+    throw "unexpected loop result"
+}
+
 match tail(["build", "test", "review"]) {
     Selection::Selected(rest) => { value::length(rest) }
     Selection::Empty => { 0 }

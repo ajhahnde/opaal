@@ -468,7 +468,10 @@ impl<'source> SpanChecker<'source> {
                 self.block(&statement.body);
             }
             StatementKind::For(statement) => {
-                self.identifier(statement.binding);
+                if let Some(index) = statement.index {
+                    self.identifier(index);
+                }
+                self.pattern(&statement.binding);
                 self.expression(&statement.iterable);
                 self.block(&statement.body);
             }

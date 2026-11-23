@@ -206,6 +206,27 @@ fn successful_json_checks_are_one_document_and_never_execute_or_discover_tools()
 }
 
 #[test]
+fn known_bad_loop_element_points_to_the_tuple_pattern() {
+    let temp = TempDir::new();
+    let fixture = temp.source("bad-element.opaal", "for (left, right) in [1, 2] {}\n");
+    let output = cli([
+        OsStr::new("check"),
+        OsStr::new("--format"),
+        OsStr::new("json"),
+        fixture.as_os_str(),
+    ]);
+    let value = json_output(&output, "invalid");
+    let diagnostics = value["diagnostics"].as_array().unwrap();
+    assert_eq!(diagnostics.len(), 1);
+    assert_eq!(diagnostics[0]["code"], "SIG017");
+    assert_eq!(diagnostics[0]["range"], json!({"start": 4, "end": 17}));
+    assert_eq!(
+        diagnostics[0]["primary_message"],
+        "this pattern cannot match `Int`"
+    );
+}
+
+#[test]
 fn source_format_options_preserve_usage_and_native_path_operands() {
     let temp = TempDir::new();
     let source = temp.source("main.opaal", "let ready = true\nready\n");

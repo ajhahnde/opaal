@@ -56,6 +56,16 @@ fn tuple_formatting_preserves_group_dispatch_and_comments() {
 }
 
 #[test]
+fn indexed_and_tuple_loop_headers_format_with_canonical_commas() {
+    assert_eq!(
+        roundtrip(
+            "for i ,(item , _,) in rows {\n\ti + item\n}\nfor (first , # keep\nsecond,) in rows {}\n"
+        ),
+        "for i, (item, _) in rows {\n    i + item\n}\nfor (first, # keep\nsecond) in rows {}\n",
+    );
+}
+
+#[test]
 fn value_arms_format_with_comments_and_enclosing_delimiters() {
     assert_eq!(
         roundtrip("let x = (if true\n{1}\nelse\n{2})"),

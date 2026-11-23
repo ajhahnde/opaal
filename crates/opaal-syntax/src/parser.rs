@@ -65,7 +65,7 @@ pub fn parse_opaal_with_control(
 pub(crate) struct FormatSpans {
     pub(crate) interpolations: Vec<Span>,
     pub(crate) if_arms: Vec<IfArmSpans>,
-    pub(crate) tuple_commas: Vec<Span>,
+    pub(crate) spaced_commas: Vec<Span>,
     pub(crate) tuple_trailing_commas: Vec<Span>,
 }
 
@@ -158,8 +158,10 @@ struct Parser<'source, 'control, 'metadata> {
     control_condition_depth: usize,
     block_header_depth: Option<usize>,
     if_expression_header_depth: Option<usize>,
+    loop_header_depth: Option<usize>,
     value_chain_depth: usize,
     if_expression_depth: usize,
+    loop_pattern_depth: usize,
     diagnostics: Vec<Diagnostic>,
     is_cancelled: &'control dyn Fn() -> bool,
     format_spans: Option<&'metadata mut FormatSpans>,
@@ -185,8 +187,10 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
             control_condition_depth: 0,
             block_header_depth: None,
             if_expression_header_depth: None,
+            loop_header_depth: None,
             value_chain_depth: 0,
             if_expression_depth: 0,
+            loop_pattern_depth: 0,
             diagnostics: Vec::new(),
             is_cancelled,
             format_spans,
@@ -1347,22 +1351,65 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
     fn parse_for(&mut self) -> ParseResult<Statement> {
         let start = self.take().expect("for keyword is current").span();
         self.skip_inline();
-        let binding = self.parse_identifier()?;
+        let (index, binding) = if self.at_delimiter(Some(Delimiter::LeftParenthesis)) {
+            (None, self.parse_loop_pattern()?)
+        } else {
+            let first = self.parse_identifier()?;
+            self.skip_inline();
+            if let Some(comma) = self.take_operator(Operator::Comma) {
+                if let Some(spans) = &mut self.format_spans {
+                    spans.spaced_commas.push(comma.span());
+                }
+                self.skip_layout();
+                let item = if self.at_delimiter(Some(Delimiter::LeftParenthesis)) {
+                    self.parse_loop_pattern()?
+                } else {
+                    Pattern::Binding(self.parse_identifier()?)
+                };
+                (Some(first), item)
+            } else {
+                (None, Pattern::Binding(first))
+            }
+        };
         self.skip_inline();
         self.expect_keyword(Keyword::In, "for binding requires `in`")?;
         self.skip_layout();
-        let iterable = self.parse_block_header_expression()?;
+        let previous = self.loop_header_depth;
+        self.loop_header_depth = (index.is_some() || matches!(binding, Pattern::Tuple(_)))
+            .then_some(self.continuation_depth);
+        let iterable = self.parse_block_header_expression();
+        self.loop_header_depth = previous;
+        let iterable = iterable?;
         self.skip_inline();
         let body = self.parse_block()?;
         let span = self.span(start.start(), body.span.end());
         Ok(Statement::new(
             StatementKind::For(ForStatement {
+                index,
                 binding,
                 iterable,
                 body,
             }),
             span,
         ))
+    }
+
+    fn parse_loop_pattern(&mut self) -> ParseResult<Pattern> {
+        if self.at_delimiter(Some(Delimiter::LeftParenthesis)) {
+            if self.loop_pattern_depth == MAX_TUPLE_DEPTH {
+                return Err(self.invalid_here(TUPLE_DEPTH_ERROR));
+            }
+            self.loop_pattern_depth += 1;
+            let pattern = self.parse_tuple(Self::parse_loop_pattern);
+            self.loop_pattern_depth -= 1;
+            return pattern.map(Pattern::Tuple);
+        }
+        let name = self.parse_identifier()?;
+        Ok(if self.source.slice(name.span()).ok() == Some("_") {
+            Pattern::Wildcard(name.span())
+        } else {
+            Pattern::Binding(name)
+        })
     }
 
     fn parse_match(&mut self) -> ParseResult<Statement> {
@@ -3024,7 +3071,7 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
         let close = self.expect_delimiter(Delimiter::RightParenthesis, "tuple is not closed")?;
         self.completed_tuples += 1;
         if let Some(spans) = &mut self.format_spans {
-            spans.tuple_commas.extend_from_slice(&commas);
+            spans.spaced_commas.extend_from_slice(&commas);
             spans.tuple_trailing_commas.extend(trailing_comma);
         }
         Ok(TupleSyntax {
@@ -3224,6 +3271,19 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
         };
         match self.tokens[first].kind() {
             TokenKind::Delimiter(Delimiter::RightBrace) => {
+                // An empty brace at the end of a new loop header is its body.
+                if self.loop_header_depth == Some(self.continuation_depth)
+                    && self.next_non_inline(first + 1).is_none_or(|after| {
+                        matches!(
+                            after.kind(),
+                            TokenKind::Newline
+                                | TokenKind::Delimiter(Delimiter::RightBrace)
+                                | TokenKind::Operator(Operator::Semicolon)
+                        )
+                    })
+                {
+                    return false;
+                }
                 self.if_expression_header_depth != Some(self.continuation_depth)
                     || self
                         .next_non_layout_position(first + 1)

@@ -85,6 +85,10 @@ TYPED_TUPLE_FIXTURES = (
     "wrong-pattern.opaal", "wrong-result.opaal",
 )
 
+INDEXED_ITERATION_FIXTURES = (
+    "bad-element.opaal", "indexed-and-paired.opaal", "noncanonical.opaal",
+)
+
 
 def main() -> None:
     # Every shipped input and qualification assertion belongs to the named head.
@@ -120,6 +124,9 @@ def main() -> None:
     tuples = {name.removeprefix("typed-tuples/") for name in names if name.startswith("typed-tuples/")}
     if tuples != set(TYPED_TUPLE_FIXTURES):
         raise ValueError("typed tuple fixture census differs from the committed source")
+    loops = {name.removeprefix("indexed-iteration/") for name in names if name.startswith("indexed-iteration/")}
+    if loops != set(INDEXED_ITERATION_FIXTURES):
+        raise ValueError("indexed iteration fixture census differs from the committed source")
     archive = package_examples(ROOT, names, source, directory=FIXTURES, name="source-formatting")
     print(archive.relative_to(ROOT))
 

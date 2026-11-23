@@ -2000,6 +2000,61 @@ fn tuple_pattern_bindings_have_independent_hover_types_and_utf16_locations() {
 }
 
 #[test]
+fn loop_hover_and_definition_follow_each_binding_in_both_encodings() {
+    let directory = TestDirectory::new();
+    let uri = directory.uri("indexed-loop.opaal");
+    let text = "let rows = [(7, 'ready')]\nfor index, (item, label) in rows {\n    let pair = ('界🙂', index, item, label)\n}\n";
+    let mut workspace = Workspace::new();
+    workspace.open(uri.clone(), 1, text.into()).unwrap();
+    for encoding in [PositionEncoding::Utf8, PositionEncoding::Utf16] {
+        for (name, ty) in [("index", "Int"), ("item", "Int"), ("label", "String")] {
+            let declaration = text.find(name).unwrap();
+            let reference = text.rfind(name).unwrap();
+            let query = |method| {
+                request(
+                    &workspace,
+                    encoding,
+                    &RequestControl::new(),
+                    method,
+                    positional(&uri, text, reference, encoding),
+                )
+                .unwrap()
+            };
+            let hover = query("textDocument/hover");
+            assert_eq!(
+                hover["contents"]["value"],
+                format!("```opaal\nlet {name}: {ty}\n```")
+            );
+            let usages = request(
+                &workspace, encoding, &RequestControl::new(), "textDocument/references",
+                json!({"textDocument": {"uri": uri.as_str()}, "position": position(text, reference, encoding),
+                       "context": {"includeDeclaration": false}}),
+            ).unwrap();
+            assert_eq!(
+                usages,
+                json!([{
+                    "uri": uri.as_str(),
+                    "range": {
+                        "start": position(text, reference, encoding),
+                        "end": position(text, reference + name.len(), encoding)
+                    }
+                }])
+            );
+            assert_eq!(
+                query("textDocument/definition"),
+                json!({
+                    "uri": uri.as_str(),
+                    "range": {
+                        "start": position(text, declaration, encoding),
+                        "end": position(text, declaration + name.len(), encoding)
+                    }
+                })
+            );
+        }
+    }
+}
+
+#[test]
 fn tuple_hover_preserves_unknown_any_and_empty_slot_evidence() {
     let directory = TestDirectory::new();
     let uri = directory.uri("tuple-evidence.opaal");

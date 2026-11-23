@@ -6,6 +6,7 @@
 //! process execution with the established structured diagnostics.
 
 use std::any::Any;
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::ffi::{OsStr, OsString};
@@ -393,13 +394,15 @@ pub enum RuntimeErrorKind {
     ConditionalOperandNotBoolOrStatus { actual: &'static str },
     /// A `for` iterable that is neither a `List` nor a `Range`.
     NotIterable { actual: &'static str },
+    /// An indexed loop position outside the Int range.
+    LoopIndexOverflow,
     /// `break` or `continue` used outside any loop.
     ControlOutsideLoop { control: ControlKind },
     /// `return` used outside any function.
     ReturnOutsideFunction,
     /// A `match` whose scrutinee matched no arm.
     NoMatchingArm,
-    /// A declaration or parameter destructuring pattern that did not match.
+    /// A declaration, parameter, or loop destructuring pattern that did not match.
     PatternMismatch,
     /// A nominal constructor did not match its declared record or variant schema.
     NominalConstruction { message: String },
@@ -675,6 +678,7 @@ impl RuntimeErrorKind {
             | Self::LogicOperandNotBool { .. }
             | Self::ConditionalOperandNotBoolOrStatus { .. }
             | Self::NotIterable { .. }
+            | Self::LoopIndexOverflow
             | Self::PatternMismatch
             | Self::NominalConstruction { .. }
             | Self::GenericInstantiation { .. }
@@ -810,6 +814,7 @@ impl fmt::Display for RuntimeErrorKind {
             Self::NotIterable { actual } => {
                 write!(formatter, "cannot iterate a {actual}")
             }
+            Self::LoopIndexOverflow => formatter.write_str("loop index is out of range for Int"),
             Self::ControlOutsideLoop { control } => {
                 write!(formatter, "`{}` used outside a loop", control.keyword())
             }
@@ -3142,6 +3147,7 @@ impl Evaluator<'_, '_> {
                 &mut staged,
                 mutability,
                 pattern_type.as_ref(),
+                false,
             )? {
                 return Err(self.error(RuntimeErrorKind::PatternMismatch, declaration.name.span()));
             }
@@ -3388,43 +3394,101 @@ impl Evaluator<'_, '_> {
     }
 
     fn for_statement(&mut self, statement: &ForStatement, scope: &mut ScopeStack) -> Eval<Flow> {
-        let name = self.text(statement.binding.span()).to_owned();
-        self.ensure_lexical_name(&name, statement.binding.span())?;
+        let binding_span = crate::module::pattern_span(&statement.binding);
+        if matches!(statement.binding, Pattern::Wildcard(_))
+            || !loop_pattern_is_supported(&statement.binding)
+        {
+            return Err(self.unsupported("for loop item pattern", binding_span));
+        }
+        if let Pattern::Binding(binding) = statement.binding {
+            self.ensure_lexical_name(self.text(binding.span()), binding.span())?;
+        }
+        if let Some(index) = statement.index {
+            self.ensure_lexical_name(self.text(index.span()), index.span())?;
+        }
         let iterable = self.expression(&statement.iterable, scope)?;
         let boundary = statement.iterable.span();
-        match iterable {
+        let legacy = statement.index.is_none() && matches!(statement.binding, Pattern::Binding(_));
+        let mut element_type = None;
+        if !legacy && matches!(iterable, Value::List(_)) {
+            let iterable_type = crate::module::value_name_span(&statement.iterable)
+                .and_then(|span| scope.value_type(self.text(span)))
+                .or_else(|| self.binding_types.expression_type(boundary));
+            if let Some(ValueType::List(element)) = iterable_type {
+                element_type = Some(crate::module::substitute_type(
+                    element,
+                    &self.current_type_arguments,
+                ));
+            }
+        }
+        let mut list_items;
+        let mut range_items;
+        let items: &mut dyn Iterator<Item = Cow<'_, Value>> = match &iterable {
             Value::List(items) => {
-                for item in items.iter() {
-                    self.check_cancel(boundary)?;
-                    match self.iteration(&name, item.clone(), &statement.body, scope)? {
-                        Flow::Break(_) => break,
-                        Flow::Continue(_) | Flow::Fallthrough(_) => {}
-                        transfer @ Flow::Return(..) => return Ok(transfer),
-                    }
-                }
+                list_items = items.iter().map(Cow::Borrowed);
+                &mut list_items
             }
             Value::Range(range) => {
-                let mut current = range.start();
-                while range.contains(current) {
-                    self.check_cancel(boundary)?;
-                    match self.iteration(&name, Value::Int(current), &statement.body, scope)? {
-                        Flow::Break(_) => break,
-                        Flow::Continue(_) | Flow::Fallthrough(_) => {}
-                        transfer @ Flow::Return(..) => return Ok(transfer),
-                    }
-                    match current.checked_add(1) {
-                        Some(next) => current = next,
-                        None => break,
-                    }
-                }
+                let start = range.start();
+                let end = if range.includes_end() {
+                    Some(range.end())
+                } else {
+                    range.end().checked_sub(1)
+                };
+                range_items = end
+                    .into_iter()
+                    .flat_map(move |end| start..=end)
+                    .map(|item| Cow::Owned(Value::Int(item)));
+                &mut range_items
             }
             other => {
                 return Err(self.error(
                     RuntimeErrorKind::NotIterable {
                         actual: other.family_name(),
                     },
-                    statement.iterable.span(),
+                    boundary,
                 ));
+            }
+        };
+        let mut position = 0_u64;
+        for item in items {
+            self.check_cancel(boundary)?;
+            if !legacy {
+                self.charge(boundary)?;
+            }
+            scope.push();
+            let outcome = (|| {
+                if let Some(index) = statement.index {
+                    let index_value =
+                        loop_index(position).map_err(|error| self.error(error, index.span()))?;
+                    scope
+                        .declare_admitted(
+                            self.text(index.span()),
+                            BindingMutability::Immutable,
+                            Value::Int(index_value),
+                        )
+                        .map_err(|error| {
+                            self.error(RuntimeErrorKind::Scope(error), index.span())
+                        })?;
+                    position += 1;
+                }
+                if !self.pattern_matches(
+                    &statement.binding,
+                    &item,
+                    scope,
+                    BindingMutability::Immutable,
+                    element_type.as_ref(),
+                    true,
+                )? {
+                    return Err(self.error(RuntimeErrorKind::PatternMismatch, binding_span));
+                }
+                self.statements(&statement.body.statements, scope)
+            })();
+            scope.pop().expect("iteration pushes exactly one frame");
+            match outcome? {
+                Flow::Break(_) => break,
+                Flow::Continue(_) | Flow::Fallthrough(_) => {}
+                transfer @ Flow::Return(..) => return Ok(transfer),
             }
         }
         Ok(Flow::Fallthrough(None))
@@ -3520,6 +3584,7 @@ impl Evaluator<'_, '_> {
             scope,
             BindingMutability::Immutable,
             subject_type.as_ref(),
+            false,
         )? {
             return Ok(None);
         }
@@ -3541,6 +3606,7 @@ impl Evaluator<'_, '_> {
         scope: &mut ScopeStack,
         mutability: BindingMutability,
         expected_type: Option<&ValueType>,
+        meter_type_checks: bool,
     ) -> Eval<bool> {
         match pattern {
             Pattern::Wildcard(_) => Ok(true),
@@ -3549,13 +3615,20 @@ impl Evaluator<'_, '_> {
                 Ok(&expected == subject)
             }
             Pattern::Binding(identifier) => {
-                let name = self.text(identifier.span());
-                self.ensure_lexical_name(name, identifier.span())?;
+                let span = identifier.span();
+                self.ensure_lexical_name(self.text(span), span)?;
+                // A loop binds the item even when an inferred type no longer describes it.
+                let expected_type = if meter_type_checks
+                    && let Some(expected) = expected_type
+                    && !self.validate_operation_value(expected, subject, span)?
+                {
+                    None
+                } else {
+                    expected_type.cloned()
+                };
                 scope
-                    .declare_typed(name, mutability, subject.clone(), expected_type.cloned())
-                    .map_err(|error| {
-                        self.error(RuntimeErrorKind::Scope(error), identifier.span())
-                    })?;
+                    .declare_typed(self.text(span), mutability, subject.clone(), expected_type)
+                    .map_err(|error| self.error(RuntimeErrorKind::Scope(error), span))?;
                 Ok(true)
             }
             Pattern::Tuple(pattern) => {
@@ -3573,7 +3646,14 @@ impl Evaluator<'_, '_> {
                     pattern.elements.iter().zip(values.iter()).enumerate()
                 {
                     self.charge(pattern.span)?;
-                    if !self.pattern_matches(element, value, scope, mutability, types.get(index))? {
+                    if !self.pattern_matches(
+                        element,
+                        value,
+                        scope,
+                        mutability,
+                        types.get(index),
+                        meter_type_checks,
+                    )? {
                         return Ok(false);
                     }
                 }
@@ -3594,7 +3674,14 @@ impl Evaluator<'_, '_> {
                         Some(ValueType::List(element)) => Some(element.as_ref()),
                         _ => None,
                     };
-                    if !self.pattern_matches(element, value, scope, mutability, element_type)? {
+                    if !self.pattern_matches(
+                        element,
+                        value,
+                        scope,
+                        mutability,
+                        element_type,
+                        meter_type_checks,
+                    )? {
                         return Ok(false);
                     }
                 }
@@ -3666,6 +3753,7 @@ impl Evaluator<'_, '_> {
                         scope,
                         mutability,
                         expected.as_ref(),
+                        meter_type_checks,
                     )? {
                         return Ok(false);
                     }
@@ -3721,6 +3809,7 @@ impl Evaluator<'_, '_> {
                         scope,
                         mutability,
                         expected.as_ref(),
+                        meter_type_checks,
                     )? {
                         return Ok(false);
                     }
@@ -3728,25 +3817,6 @@ impl Evaluator<'_, '_> {
                 Ok(true)
             }
         }
-    }
-
-    /// Runs one loop iteration in a fresh frame holding the immutable loop value.
-    fn iteration(
-        &mut self,
-        name: &str,
-        value: Value,
-        body: &Block,
-        scope: &mut ScopeStack,
-    ) -> Eval<Flow> {
-        scope.push();
-        let outcome = (|| {
-            scope
-                .declare_admitted(name, BindingMutability::Immutable, value)
-                .map_err(|error| self.error(RuntimeErrorKind::Scope(error), body.span))?;
-            self.statements(&body.statements, scope)
-        })();
-        scope.pop().expect("iteration pushes exactly one frame");
-        outcome
     }
 
     fn block(&mut self, block: &Block, scope: &mut ScopeStack) -> Eval<Flow> {
@@ -6065,6 +6135,7 @@ impl Evaluator<'_, '_> {
                         &mut call_scope,
                         BindingMutability::Mutable,
                         Some(&expected),
+                        false,
                     )?
                 } else {
                     call_scope
@@ -7141,6 +7212,23 @@ impl Callable for CallableValue {
     }
 }
 
+fn loop_pattern_is_supported(pattern: &Pattern) -> bool {
+    match pattern {
+        Pattern::Binding(_) | Pattern::Wildcard(_) => true,
+        Pattern::Tuple(tuple) => {
+            tuple.elements.len() >= 2 && tuple.elements.iter().all(loop_pattern_is_supported)
+        }
+        Pattern::Literal(_)
+        | Pattern::List(_)
+        | Pattern::NominalRecord(_)
+        | Pattern::Variant(_) => false,
+    }
+}
+
+fn loop_index(position: u64) -> Result<i64, RuntimeErrorKind> {
+    i64::try_from(position).map_err(|_| RuntimeErrorKind::LoopIndexOverflow)
+}
+
 fn strip_base<'text>(raw: &'text str, lower: &str, upper: &str) -> Option<&'text str> {
     raw.strip_prefix(lower).or_else(|| raw.strip_prefix(upper))
 }
@@ -7186,6 +7274,16 @@ mod tests {
     use opaal_syntax::{ParseOutcome, SourceId, parse_opaal};
 
     use super::*;
+
+    #[test]
+    fn indexed_loop_checks_the_first_out_of_range_position() {
+        let last = i64::MAX as u64;
+        assert_eq!(loop_index(last), Ok(i64::MAX));
+        assert_eq!(
+            loop_index(last + 1),
+            Err(RuntimeErrorKind::LoopIndexOverflow)
+        );
+    }
 
     struct DirectoryHost {
         environment: Environment,
