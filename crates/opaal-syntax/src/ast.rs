@@ -528,8 +528,26 @@ impl fmt::Debug for Parameter {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TypeReference {
-    pub name: Identifier,
-    pub arguments: Vec<Self>,
+    pub kind: TypeReferenceKind,
+    pub span: Span,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum TypeReferenceKind {
+    Named {
+        name: QualifiedName,
+        arguments: Vec<TypeReference>,
+    },
+    Tuple(Box<TupleSyntax<TypeReference>>),
+}
+
+/// A tuple retains its slots, delimiters, and optional trailing separator.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TupleSyntax<T> {
+    pub elements: Vec<T>,
+    pub open: Span,
+    pub commas: Vec<Span>,
+    pub close: Span,
     pub span: Span,
 }
 
@@ -594,6 +612,7 @@ pub enum Pattern {
     Literal(Literal),
     Binding(Identifier),
     List(ListPattern),
+    Tuple(TupleSyntax<Pattern>),
     NominalRecord(NominalRecordPattern),
     Variant(VariantPattern),
 }
@@ -665,6 +684,7 @@ pub enum ExpressionKind {
     Name(NameReference),
     Qualified(QualifiedName),
     List(Vec<ListItem>),
+    Tuple(TupleSyntax<Expression>),
     Record(Vec<RecordEntry>),
     NominalRecord(NominalRecordExpression),
     Closure(Closure),

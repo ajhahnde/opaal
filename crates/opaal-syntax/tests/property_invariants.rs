@@ -253,9 +253,26 @@ impl<'source> SpanChecker<'source> {
 
     fn type_reference(&self, reference: &TypeReference) {
         self.span(reference.span);
-        self.identifier(reference.name);
-        for argument in &reference.arguments {
-            self.type_reference(argument);
+        match &reference.kind {
+            TypeReferenceKind::Named { name, arguments } => {
+                self.qualified_name(name);
+                for argument in arguments {
+                    self.type_reference(argument);
+                }
+            }
+            TypeReferenceKind::Tuple(tuple) => self.tuple(tuple, Self::type_reference),
+        }
+    }
+
+    fn tuple<T>(&self, tuple: &TupleSyntax<T>, check: fn(&Self, &T)) {
+        self.span(tuple.span);
+        self.span(tuple.open);
+        self.span(tuple.close);
+        for comma in &tuple.commas {
+            self.span(*comma);
+        }
+        for element in &tuple.elements {
+            check(self, element);
         }
     }
 
@@ -511,6 +528,7 @@ impl<'source> SpanChecker<'source> {
             Pattern::Wildcard(span) => self.span(*span),
             Pattern::Literal(literal) => self.literal(literal),
             Pattern::Binding(identifier) => self.identifier(*identifier),
+            Pattern::Tuple(tuple) => self.tuple(tuple, Self::pattern),
             Pattern::List(pattern) => {
                 self.span(pattern.span);
                 for element in &pattern.elements {
@@ -545,6 +563,7 @@ impl<'source> SpanChecker<'source> {
             ExpressionKind::Literal(literal) => self.literal(literal),
             ExpressionKind::Name(reference) => self.name_reference(*reference),
             ExpressionKind::Qualified(name) => self.qualified_name(name),
+            ExpressionKind::Tuple(tuple) => self.tuple(tuple, Self::expression),
             ExpressionKind::List(items) => {
                 for item in items {
                     if let opaal_syntax::ListItem::Spread { marker, .. } = item {

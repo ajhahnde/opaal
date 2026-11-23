@@ -112,10 +112,7 @@ impl Evaluator<'_, '_> {
     ) -> Eval<Value> {
         if descriptor.implementation() == StandardOperation::Length {
             return descriptor
-                .execute_value_with_types(
-                    arguments.into_iter().next().expect("arity checked"),
-                    type_arguments,
-                )
+                .execute_admitted_value(arguments.first().expect("arity checked"), type_arguments)
                 .map_err(|error| self.operation(error, span));
         }
         // Released codecs keep their original dynamic validation and accounting.

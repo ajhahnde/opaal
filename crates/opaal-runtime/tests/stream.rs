@@ -8,6 +8,8 @@
 //! cancellation token trips. The whole layer is span-independent and host-free:
 //! no process, terminal, or clock participates.
 
+use opaal_runtime::AdmittedValue;
+use opaal_runtime::stream::AdmittedStreamError;
 use std::cell::Cell;
 use std::rc::Rc;
 
@@ -30,7 +32,7 @@ fn expect_item(stream: &mut ValueStream) -> Value {
 
 #[test]
 fn once_yields_one_item_then_end() {
-    let mut stream = ValueStream::once(Value::Int(7));
+    let mut stream = ValueStream::once(&Value::Int(7)).unwrap();
     assert_eq!(expect_item(&mut stream), Value::Int(7));
     assert!(matches!(stream.pull(), StreamPull::End));
     // Exhaustion is stable: a pull past the end stays `End`.
@@ -39,7 +41,8 @@ fn once_yields_one_item_then_end() {
 
 #[test]
 fn from_values_drains_in_order_then_end() {
-    let mut stream = ValueStream::from_values(vec![Value::Int(1), Value::Int(2), Value::Int(3)]);
+    let mut stream =
+        ValueStream::from_values(&[Value::Int(1), Value::Int(2), Value::Int(3)]).unwrap();
     assert_eq!(expect_item(&mut stream), Value::Int(1));
     assert_eq!(expect_item(&mut stream), Value::Int(2));
     assert_eq!(expect_item(&mut stream), Value::Int(3));
@@ -57,7 +60,7 @@ fn from_fn_is_advanced_only_as_pulled() {
         move || {
             let n = calls.get();
             calls.set(n + 1);
-            Some(Ok(Value::Int(n)))
+            Some(Ok(AdmittedValue::new(&Value::Int(n)).unwrap()))
         }
     });
 
@@ -80,14 +83,17 @@ fn from_fn_can_fail_mid_stream() {
             let n = calls.get();
             calls.set(n + 1);
             if n == 0 {
-                Some(Ok(Value::Int(0)))
+                Some(Ok(AdmittedValue::new(&Value::Int(0)).unwrap()))
             } else {
-                Some(Err(opaal_runtime::eval::RuntimeError::new(
-                    opaal_runtime::eval::RuntimeErrorKind::Unsupported {
-                        feature: "producer",
-                    },
-                    span,
-                )))
+                Some(Err(AdmittedStreamError::new(
+                    &opaal_runtime::eval::RuntimeError::new(
+                        opaal_runtime::eval::RuntimeErrorKind::Unsupported {
+                            feature: "producer",
+                        },
+                        span,
+                    ),
+                )
+                .unwrap()))
             }
         }
     });
@@ -115,7 +121,7 @@ fn from_pull_fn_preserves_a_first_class_cancellation_state() {
     let mut stream = ValueStream::from_pull_fn(move || {
         step += 1;
         match step {
-            1 => StreamPull::Item(Value::Int(7)),
+            1 => StreamPull::Item(AdmittedValue::new(&Value::Int(7)).unwrap()),
             2 => StreamPull::Cancelled(CancelReason::Timeout),
             _ => StreamPull::End,
         }
@@ -176,7 +182,7 @@ fn cancellation_stops_the_stream_without_advancing_the_source() {
         let calls = Rc::clone(&calls);
         move || {
             calls.set(calls.get() + 1);
-            Some(Ok(Value::Int(9)))
+            Some(Ok(AdmittedValue::new(&Value::Int(9)).unwrap()))
         }
     })
     .with_cancellation(CancellationToken::from_fn(|| true));
@@ -194,7 +200,8 @@ fn cancellation_stops_the_stream_without_advancing_the_source() {
 
 #[test]
 fn collect_bounded_collects_within_limit() {
-    let mut stream = ValueStream::from_values(vec![Value::Int(1), Value::Int(2), Value::Int(3)]);
+    let mut stream =
+        ValueStream::from_values(&[Value::Int(1), Value::Int(2), Value::Int(3)]).unwrap();
     match stream.collect_bounded(10) {
         CollectOutcome::Collected(values) => {
             assert_eq!(values, vec![Value::Int(1), Value::Int(2), Value::Int(3)]);
@@ -213,7 +220,7 @@ fn collect_bounded_caps_an_unbounded_producer() {
         move || {
             let n = counter.get();
             counter.set(n + 1);
-            Some(Ok(Value::Int(n)))
+            Some(Ok(AdmittedValue::new(&Value::Int(n)).unwrap()))
         }
     });
     match stream.collect_bounded(5) {
@@ -229,16 +236,26 @@ fn bounded_queue_refuses_push_when_full_and_frees_a_slot_on_pop() {
     // consumer `pop` frees exactly one slot.
     let mut queue = BoundedQueue::with_capacity(2);
     assert_eq!(queue.capacity(), 2);
-    assert!(queue.try_push(Value::Int(1)).is_ok());
-    assert!(queue.try_push(Value::Int(2)).is_ok());
-    match queue.try_push(Value::Int(3)) {
-        Err(QueueFull(value)) => assert_eq!(value, Value::Int(3)),
+    assert!(
+        queue
+            .try_push(AdmittedValue::new(&Value::Int(1)).unwrap())
+            .is_ok()
+    );
+    assert!(
+        queue
+            .try_push(AdmittedValue::new(&Value::Int(2)).unwrap())
+            .is_ok()
+    );
+    match queue.try_push(AdmittedValue::new(&Value::Int(3)).unwrap()) {
+        Err(QueueFull(value)) => assert_eq!(value.into_value(), Value::Int(3)),
         Ok(()) => panic!("a full queue must refuse the push"),
     }
     assert_eq!(queue.len(), 2);
     assert_eq!(queue.pop(), Some(Value::Int(1)));
     assert!(
-        queue.try_push(Value::Int(3)).is_ok(),
+        queue
+            .try_push(AdmittedValue::new(&Value::Int(3)).unwrap())
+            .is_ok(),
         "a pop frees a slot for one more push"
     );
     assert_eq!(queue.len(), 2);
@@ -253,11 +270,11 @@ fn a_backpressured_producer_retries_without_reordering_or_exceeding_capacity() {
     let mut maximum_staged = 0;
 
     while next < 6 {
-        match queue.try_push(Value::Int(next)) {
+        match queue.try_push(AdmittedValue::new(&Value::Int(next)).unwrap()) {
             Ok(()) => next += 1,
             Err(QueueFull(value)) => {
                 assert_eq!(
-                    value,
+                    value.into_value(),
                     Value::Int(next),
                     "the refused value is returned for an exact retry"
                 );
@@ -284,8 +301,12 @@ fn a_backpressured_producer_retries_without_reordering_or_exceeding_capacity() {
 #[test]
 fn from_queue_drains_the_queue_in_fifo_order() {
     let mut queue = BoundedQueue::with_capacity(4);
-    queue.try_push(Value::Int(10)).unwrap();
-    queue.try_push(Value::Int(20)).unwrap();
+    queue
+        .try_push(AdmittedValue::new(&Value::Int(10)).unwrap())
+        .unwrap();
+    queue
+        .try_push(AdmittedValue::new(&Value::Int(20)).unwrap())
+        .unwrap();
     let mut stream = ValueStream::from_queue(queue);
     assert_eq!(expect_item(&mut stream), Value::Int(10));
     assert_eq!(expect_item(&mut stream), Value::Int(20));
@@ -301,13 +322,14 @@ fn checked_streams_enforce_type_cardinality_and_sticky_terminals() {
             let call = calls.get();
             calls.set(call + 1);
             match call {
-                0 => Some(Ok(Value::Int(1))),
-                1 => Some(Ok(Value::string("wrong"))),
-                _ => Some(Ok(Value::Int(3))),
+                0 => Some(Ok(AdmittedValue::new(&Value::Int(1)).unwrap())),
+                1 => Some(Ok(AdmittedValue::new(&Value::string("wrong")).unwrap())),
+                _ => Some(Ok(AdmittedValue::new(&Value::Int(3)).unwrap())),
             }
         }
     })
-    .with_contract(ValueType::Int, StreamCardinality::Exact(3));
+    .with_contract(&ValueType::Int, StreamCardinality::Exact(3))
+    .unwrap();
 
     assert_eq!(stream.schema().element_type(), &ValueType::Int);
     assert_eq!(stream.schema().cardinality(), StreamCardinality::Exact(3));
@@ -328,8 +350,10 @@ fn checked_streams_enforce_type_cardinality_and_sticky_terminals() {
 
 #[test]
 fn exact_and_upper_bound_cardinalities_fail_at_the_first_wrong_boundary() {
-    let mut short = ValueStream::from_values(vec![Value::Int(1)])
-        .with_contract(ValueType::Int, StreamCardinality::Exact(2));
+    let mut short = ValueStream::from_values(&[Value::Int(1)])
+        .unwrap()
+        .with_contract(&ValueType::Int, StreamCardinality::Exact(2))
+        .unwrap();
     assert!(matches!(short.pull_checked(), CheckedStreamPull::Item(_)));
     assert!(matches!(
         short.pull_checked(),
@@ -340,8 +364,10 @@ fn exact_and_upper_bound_cardinalities_fail_at_the_first_wrong_boundary() {
     ));
     assert!(matches!(short.pull_checked(), CheckedStreamPull::End));
 
-    let mut long = ValueStream::from_values(vec![Value::Int(1), Value::Int(2)])
-        .with_contract(ValueType::Int, StreamCardinality::AtMost(1));
+    let mut long = ValueStream::from_values(&[Value::Int(1), Value::Int(2)])
+        .unwrap()
+        .with_contract(&ValueType::Int, StreamCardinality::AtMost(1))
+        .unwrap();
     assert!(matches!(long.pull_checked(), CheckedStreamPull::Item(_)));
     assert!(matches!(
         long.pull_checked(),
@@ -357,7 +383,7 @@ fn exact_and_upper_bound_cardinalities_fail_at_the_first_wrong_boundary() {
 fn stream_cleanup_runs_once_across_explicit_close_and_drop() {
     let cleanups = Rc::new(Cell::new(0));
     {
-        let mut stream = ValueStream::once(Value::Int(1)).with_cleanup({
+        let mut stream = ValueStream::once(&Value::Int(1)).unwrap().with_cleanup({
             let cleanups = Rc::clone(&cleanups);
             move || {
                 cleanups.set(cleanups.get() + 1);
@@ -381,10 +407,10 @@ fn bounded_queue_schedule_matrix_preserves_order_and_capacity() {
             while next < item_count || !queue.is_empty() {
                 let prefer_push = !(tick * 17 + capacity + item_count as usize).is_multiple_of(5);
                 if prefer_push && next < item_count {
-                    match queue.try_push(Value::Int(next)) {
+                    match queue.try_push(AdmittedValue::new(&Value::Int(next)).unwrap()) {
                         Ok(()) => next += 1,
                         Err(QueueFull(value)) => {
-                            assert_eq!(value, Value::Int(next));
+                            assert_eq!(value.into_value(), Value::Int(next));
                             consumed.push(queue.pop().expect("a full queue has an item"));
                         }
                     }

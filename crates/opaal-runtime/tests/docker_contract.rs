@@ -28,7 +28,7 @@ impl ExecutableProbe for NoExecutables {
 fn session(input: Value) -> Session {
     let mut scope = ScopeStack::new();
     scope
-        .declare("input", BindingMutability::Immutable, input)
+        .declare("input", BindingMutability::Immutable, &input)
         .unwrap();
     Session::with_scope(
         scope,

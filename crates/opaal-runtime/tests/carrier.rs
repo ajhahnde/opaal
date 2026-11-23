@@ -125,7 +125,7 @@ fn passthrough_output_becomes_unknown_only_when_its_input_is_unknown() {
 
 #[test]
 fn typed_stream_planning_rejects_mismatch_and_duplicate_consumption() {
-    let schema = StreamSchema::new(ValueType::Int, StreamCardinality::AtMost(4));
+    let schema = StreamSchema::new(&ValueType::Int, StreamCardinality::AtMost(4)).unwrap();
     let owner = schema.owner();
     let mut planner = StreamConsumptionPlanner::default();
     planner
@@ -140,7 +140,7 @@ fn typed_stream_planning_rejects_mismatch_and_duplicate_consumption() {
         })
     );
 
-    let strings = StreamSchema::new(ValueType::String, StreamCardinality::Unknown);
+    let strings = StreamSchema::new(&ValueType::String, StreamCardinality::Unknown).unwrap();
     assert_eq!(
         planner.claim("words", &strings, "sum", &ValueType::Int),
         Err(StreamPlanningFault::ElementTypeMismatch {

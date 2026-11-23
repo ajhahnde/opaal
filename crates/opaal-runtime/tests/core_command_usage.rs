@@ -7,12 +7,12 @@ use opaal_platform::FakePlatform;
 use opaal_runtime::builtin::{SessionState, standard_registry};
 use opaal_runtime::eval::RuntimeErrorKind;
 use opaal_runtime::internal::{
-    InternalPayload, InternalPipelineOutcome, execute_internal_pipeline,
+    InternalPayload, InternalPipelineOutcome, execute_internal_pipeline, execute_internal_suffix,
 };
-use opaal_runtime::plan::{ExecutionPlan, plan_pipeline};
+use opaal_runtime::plan::{ExecutionPlan, plan_pipeline, preflight};
 use opaal_runtime::resolve::ExecutableProbe;
 use opaal_runtime::stream::StreamPull;
-use opaal_runtime::{Environment, ScopeStack};
+use opaal_runtime::{AdmittedValue, Duration, Environment, ScopeStack, Status, Value};
 use opaal_syntax::{ParseOutcome, SourceFile, SourceId, StatementKind, parse_opaal};
 
 struct NoExecutables;
@@ -95,5 +95,34 @@ fn from_optional_json_mode_reaches_the_internal_parser() {
                 RuntimeErrorKind::StructuredCommand { command: "from", message }
                     if message.contains("malformed JSON")
             )
+    ));
+}
+
+#[test]
+fn internal_suffix_accepts_an_admitted_head_value() {
+    let (source, plan) = plan("help\n");
+    preflight(&plan).unwrap();
+    let value = Value::Tuple([Value::Int(7), Value::string("ready")].into());
+    let payload = InternalPayload::Value(AdmittedValue::new(&value).unwrap());
+    let status = Status::exit(0, Duration::ZERO).unwrap();
+    let outcome = execute_internal_suffix(
+        &plan,
+        1,
+        payload,
+        vec![status.clone()],
+        &mut SessionState::new(Path::new("/core-command-usage"), Environment::new()),
+        &standard_registry(),
+        &NoExecutables,
+        &FakePlatform::full(),
+        &source,
+    )
+    .unwrap();
+    assert!(matches!(
+        outcome,
+        InternalPipelineOutcome::Completed {
+            payload: InternalPayload::Value(output),
+            status: completed,
+            ..
+        } if output == value && completed == status
     ));
 }

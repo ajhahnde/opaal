@@ -1,0 +1,6 @@
+import './summary.opaal' as summary
+
+let (count, label) = summary::summarize("ready", 2)
+if count != 3 || label != "ready" {
+    throw "unexpected summary"
+}

@@ -162,7 +162,7 @@ impl InteractiveEvaluator for SnapshotEvaluator {
     ) -> Result<EvaluationControl, InteractiveEvaluationError> {
         assert_eq!(source, "define");
         self.scope
-            .declare("later", BindingMutability::Immutable, Value::Int(1))
+            .declare("later", BindingMutability::Immutable, &Value::Int(1))
             .expect("the scripted binding is new");
         Ok(EvaluationControl::Continue)
     }

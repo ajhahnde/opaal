@@ -1,0 +1,2 @@
+let command = (^printf "%s" ,)
+let query = (which ,)

@@ -123,7 +123,7 @@ pub fn invoke_pure_function(
     })?;
     apply_callable_with_budget(
         &selected,
-        Vec::new(),
+        Vec::new().into(),
         source,
         signature.declaration_span(),
         &mut Environment::new(),
@@ -419,7 +419,7 @@ fn execute_module_program_with_standard_host(
         let mut scope = ScopeStack::new();
         if &module == program.graph().root() {
             scope
-                .declare(
+                .declare_admitted(
                     "args",
                     BindingMutability::Immutable,
                     Value::list(
@@ -896,7 +896,7 @@ pub(crate) fn declare_qualified_alias_values(
     if let Some(exports) = instances.get(target) {
         for (name, value) in exports {
             scope
-                .declare(
+                .declare_admitted(
                     format!("{prefix}::{name}"),
                     BindingMutability::Immutable,
                     value.clone(),
@@ -942,7 +942,7 @@ pub(crate) fn declare_selected_values(
             && let Some(value) = instances.get(owner).and_then(|exports| exports.get(name))
         {
             scope
-                .declare(
+                .declare_admitted(
                     selection.name.clone(),
                     BindingMutability::Immutable,
                     value.clone(),

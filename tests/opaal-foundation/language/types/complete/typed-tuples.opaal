@@ -1,0 +1,44 @@
+import './support/summary.opaal' as summary
+
+def accept[T]((_, label): (Int, T), fallback: T) -> T
+{
+    if label != fallback {
+        throw "unexpected generic argument"
+    }
+    return label
+}
+
+let (count, label) = summary::summarize("ready", 2)
+if count != 3 || label != "ready" {
+    throw "unexpected summary"
+}
+
+let dynamic: Any = label
+let result = accept((count, dynamic), "ready")
+let collected: (List[Int], String) = ([], result)
+let (items, final_label) = collected
+if items != [] || final_label != "ready" {
+    throw "unexpected typed empty list"
+}
+
+if (count, label) != (3, "ready") || (count, label) == [3, "ready"] {
+    throw "unexpected tuple equality"
+}
+
+let joined = if true {
+    ([], "ready")
+} else {
+    ([1], "other")
+}
+let (joined_items, joined_label) = joined
+let typed_items: List[Int] = joined_items
+if typed_items != [] || joined_label != "ready" {
+    throw "unexpected conditional tuple join"
+}
+
+match (count, [label]) {
+    (number, [text]) if number == 3 => {
+        if text != "ready" { throw "unexpected match binding" }
+    }
+    _ => { throw "unexpected match arm" }
+}

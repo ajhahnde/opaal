@@ -11,6 +11,8 @@
 //! reach — exhaustion, a materialization bound, a producer failure, or a
 //! cancellation — is a first-class `DrainOutcome` arm.
 
+use opaal_runtime::AdmittedValue;
+use opaal_runtime::stream::AdmittedStreamError;
 use std::cell::Cell;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -26,7 +28,7 @@ use opaal_runtime::{Record, Value};
 
 /// A stream of the given integer values.
 fn ints(values: &[i64]) -> ValueStream {
-    ValueStream::from_values(values.iter().copied().map(Value::Int).collect())
+    ValueStream::from_values(&values.iter().copied().map(Value::Int).collect::<Vec<_>>()).unwrap()
 }
 
 #[test]
@@ -39,7 +41,7 @@ fn first_takes_the_leading_items_without_overdraining() {
         move || {
             let n = pulls.get();
             pulls.set(n + 1);
-            Some(Ok(Value::Int(n)))
+            Some(Ok(AdmittedValue::new(&Value::Int(n)).unwrap()))
         }
     });
     match first(stream, 3) {
@@ -76,7 +78,7 @@ fn first_stops_an_unbounded_source_when_cancellation_arrives_mid_drain() {
         move || {
             let value = pulls.get();
             pulls.set(value + 1);
-            Some(Ok(Value::Int(value)))
+            Some(Ok(AdmittedValue::new(&Value::Int(value)).unwrap()))
         }
     });
     let polls = Arc::new(AtomicUsize::new(0));
@@ -171,15 +173,18 @@ fn collect_propagates_a_producer_failure() {
     let stream = ValueStream::from_fn(move || {
         pulls += 1;
         match pulls {
-            1 => Some(Ok(Value::Int(1))),
-            2 => Some(Err(opaal_runtime::eval::RuntimeError::new(
-                opaal_runtime::eval::RuntimeErrorKind::ExecutionUnsupported,
-                {
-                    let file =
-                        opaal_syntax::SourceFile::new(opaal_syntax::SourceId::new(1), "t", "x");
-                    file.span(0..1).unwrap()
-                },
-            ))),
+            1 => Some(Ok(AdmittedValue::new(&Value::Int(1)).unwrap())),
+            2 => Some(Err(AdmittedStreamError::new(
+                &opaal_runtime::eval::RuntimeError::new(
+                    opaal_runtime::eval::RuntimeErrorKind::ExecutionUnsupported,
+                    {
+                        let file =
+                            opaal_syntax::SourceFile::new(opaal_syntax::SourceId::new(1), "t", "x");
+                        file.span(0..1).unwrap()
+                    },
+                ),
+            )
+            .unwrap())),
             _ => None,
         }
     });
@@ -190,7 +195,7 @@ fn collect_propagates_a_producer_failure() {
 
 /// A stream whose items are the given text chunks as `String` values.
 fn text(chunks: &[&str]) -> ValueStream {
-    ValueStream::from_values(chunks.iter().map(|c| Value::string(*c)).collect())
+    ValueStream::from_values(&chunks.iter().map(|c| Value::string(*c)).collect::<Vec<_>>()).unwrap()
 }
 
 /// Pulls the splitter to exhaustion, asserting no non-`Line`/`End` step, and
@@ -253,7 +258,7 @@ fn lines_joins_a_line_split_across_chunks() {
 #[test]
 fn lines_yields_no_lines_for_an_empty_stream() {
     assert_eq!(
-        drain_lines(lines(ValueStream::from_values(vec![]))),
+        drain_lines(lines(ValueStream::from_values(&[]).unwrap())),
         Vec::<String>::new()
     );
 }
@@ -267,7 +272,7 @@ fn lines_is_infinite_safe_when_bounded_downstream() {
         let pulls = Rc::clone(&pulls);
         move || {
             pulls.set(pulls.get() + 1);
-            Some(Ok(Value::string("line\n")))
+            Some(Ok(AdmittedValue::new(&Value::string("line\n")).unwrap()))
         }
     });
     let mut splitter = lines(source);
@@ -282,7 +287,7 @@ fn lines_is_infinite_safe_when_bounded_downstream() {
 
 #[test]
 fn lines_reports_a_non_text_item() {
-    let mut splitter = lines(ValueStream::from_values(vec![Value::Int(1)]));
+    let mut splitter = lines(ValueStream::from_values(&[Value::Int(1)]).unwrap());
     assert!(matches!(
         splitter.pull(),
         LineStep::NotText { actual: "int" }
@@ -305,7 +310,7 @@ fn lines_passes_an_upstream_failure_through() {
             None
         } else {
             produced = true;
-            Some(Err(boom.clone()))
+            Some(Err(AdmittedStreamError::new(&boom).unwrap()))
         }
     });
     match lines(source).pull() {
@@ -317,7 +322,9 @@ fn lines_passes_an_upstream_failure_through() {
 #[test]
 fn lines_passes_an_upstream_cancellation_through() {
     let token = CancellationToken::from_fn(|| true);
-    let source = ValueStream::from_values(vec![Value::string("later\n")]).with_cancellation(token);
+    let source = ValueStream::from_values(&[Value::string("later\n")])
+        .unwrap()
+        .with_cancellation(token);
     assert!(matches!(
         lines(source).pull(),
         LineStep::Cancelled(CancelReason::Requested)
@@ -337,7 +344,7 @@ fn record(pairs: &[(&str, Value)]) -> Value {
 
 /// A stream of the given values.
 fn values(items: Vec<Value>) -> ValueStream {
-    ValueStream::from_values(items)
+    ValueStream::from_values(&items).unwrap()
 }
 
 /// Pulls a select transformer to exhaustion, returning the narrowed records.
@@ -474,7 +481,7 @@ fn get_passes_upstream_cancellation_through() {
 // --- `sort`: materializing order over the ordering contract --------------------
 
 fn strings(items: &[&str]) -> ValueStream {
-    ValueStream::from_values(items.iter().map(|s| Value::string(*s)).collect())
+    ValueStream::from_values(&items.iter().map(|s| Value::string(*s)).collect::<Vec<_>>()).unwrap()
 }
 
 #[test]
@@ -579,7 +586,7 @@ fn sort_reports_limit_exceeded_on_an_oversized_stream() {
 
 #[test]
 fn sort_of_an_empty_stream_is_empty() {
-    match sort(ValueStream::from_values(vec![]), None, 1000) {
+    match sort(ValueStream::from_values(&[]).unwrap(), None, 1000) {
         SortOutcome::Sorted(items) => assert!(items.is_empty()),
         other => panic!("expected an empty sorted list, got {other:?}"),
     }

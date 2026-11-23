@@ -23,8 +23,8 @@ use opaal_syntax::{
     ControlTransfer, ControlledParseOutcome, Diagnostic, ElseBranch, Expression, ExpressionKind,
     Identifier, ListItem, LiteralKind, MatchArm, ParseOutcome, Pattern, Pipeline, RecordKey,
     RedirectionKind, Script, Severity, SourceFile, SourceId, Span, StageKind, Statement,
-    StatementKind, TypeConstraint, TypeReference, UnaryOperator, Word, WordPart, WordPartKind,
-    parse_opaal_with_control, render_diagnostic_sources,
+    StatementKind, TypeConstraint, TypeReference, TypeReferenceKind, UnaryOperator, Word, WordPart,
+    WordPartKind, parse_opaal_with_control, render_diagnostic_sources,
 };
 use sha2::{Digest, Sha256};
 
@@ -1840,6 +1840,10 @@ impl ModuleNameRegistry {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ValueType {
     Any,
+    /// An inferred tuple slot without static type evidence.
+    Unknown,
+    /// An inferred empty list slot with no element type.
+    EmptyList,
     Null,
     Bool,
     Int,
@@ -1850,6 +1854,7 @@ pub enum ValueType {
     Duration,
     ByteSize,
     List(Box<Self>),
+    Tuple(Vec<Self>),
     Record,
     Table,
     Range,
@@ -1865,6 +1870,17 @@ pub enum ValueType {
 }
 
 impl ValueType {
+    pub(crate) fn has_incomplete_tuple_evidence(&self) -> bool {
+        match self {
+            Self::Unknown | Self::EmptyList => true,
+            Self::List(element) => element.has_incomplete_tuple_evidence(),
+            Self::Nominal { arguments, .. } | Self::Tuple(arguments) => {
+                arguments.iter().any(Self::has_incomplete_tuple_evidence)
+            }
+            _ => false,
+        }
+    }
+
     /// Whether one runtime value belongs to this exact resolved value family.
     ///
     /// `Any` accepts every value and `List[T]` recursively checks every element.
@@ -1872,7 +1888,8 @@ impl ValueType {
     #[must_use]
     pub fn accepts(&self, value: &Value) -> bool {
         match (self, value) {
-            (Self::Any, _) => true,
+            (Self::Any | Self::Unknown, _) => true,
+            (Self::EmptyList, Value::List(values)) => values.is_empty(),
             (Self::Null, Value::Null) => true,
             (Self::Bool, Value::Bool(_)) => true,
             (Self::Int, Value::Int(_)) => true,
@@ -1884,6 +1901,14 @@ impl ValueType {
             (Self::ByteSize, Value::ByteSize(_)) => true,
             (Self::List(element_type), Value::List(values)) => {
                 values.iter().all(|value| element_type.accepts(value))
+            }
+            (Self::Tuple(types), Value::Tuple(values)) => {
+                types.len() >= 2
+                    && types.len() == values.len()
+                    && types
+                        .iter()
+                        .zip(values.iter())
+                        .all(|(ty, value)| ty.accepts(value))
             }
             (Self::Record, Value::Record(_)) => true,
             (Self::Table, Value::Table(_)) => true,
@@ -1905,8 +1930,15 @@ impl ValueType {
 
     pub(crate) fn accepts_type(&self, actual: &Self) -> bool {
         match (self, actual) {
-            (Self::Any, _) => true,
+            (Self::Any | Self::Unknown, _) | (_, Self::Unknown) => true,
+            (Self::List(_), Self::EmptyList) => true,
             (Self::List(expected), Self::List(actual)) => expected.accepts_type(actual),
+            (Self::Tuple(expected), Self::Tuple(actual)) => {
+                expected.len() == actual.len()
+                    && expected.iter().zip(actual).all(|(expected, actual)| {
+                        actual == &Self::Any || expected.accepts_type(actual)
+                    })
+            }
             _ => self == actual,
         }
     }
@@ -1925,6 +1957,8 @@ impl fmt::Display for ValueType {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Any => formatter.write_str("Any"),
+            Self::Unknown => formatter.write_str("unknown"),
+            Self::EmptyList => formatter.write_str("empty list"),
             Self::Null => formatter.write_str("Null"),
             Self::Bool => formatter.write_str("Bool"),
             Self::Int => formatter.write_str("Int"),
@@ -1935,6 +1969,16 @@ impl fmt::Display for ValueType {
             Self::Duration => formatter.write_str("Duration"),
             Self::ByteSize => formatter.write_str("ByteSize"),
             Self::List(element) => write!(formatter, "List[{element}]"),
+            Self::Tuple(elements) => {
+                formatter.write_str("(")?;
+                for (index, element) in elements.iter().enumerate() {
+                    if index != 0 {
+                        formatter.write_str(", ")?;
+                    }
+                    element.fmt(formatter)?;
+                }
+                formatter.write_str(")")
+            }
             Self::Record => formatter.write_str("Record"),
             Self::Table => formatter.write_str("Table"),
             Self::Range => formatter.write_str("Range"),
@@ -1973,6 +2017,12 @@ pub(crate) fn substitute_type(
         ValueType::List(element) => {
             ValueType::List(Box::new(substitute_type(element, substitutions)))
         }
+        ValueType::Tuple(elements) => ValueType::Tuple(
+            elements
+                .iter()
+                .map(|element| substitute_type(element, substitutions))
+                .collect(),
+        ),
         ValueType::Nominal { id, arguments } => ValueType::Nominal {
             id: id.clone(),
             arguments: arguments
@@ -1993,7 +2043,7 @@ pub(crate) fn has_unbound_type_parameters(
     match value_type {
         ValueType::TypeParameter(name) => !substitutions.contains_key(name),
         ValueType::List(element) => has_unbound_type_parameters(element, substitutions),
-        ValueType::Nominal { arguments, .. } => arguments
+        ValueType::Nominal { arguments, .. } | ValueType::Tuple(arguments) => arguments
             .iter()
             .any(|argument| has_unbound_type_parameters(argument, substitutions)),
         _ => false,
@@ -2047,7 +2097,10 @@ pub(crate) fn unify_type(
     substitutions: &mut BTreeMap<String, ValueType>,
 ) -> bool {
     match (expected, actual) {
-        (ValueType::TypeParameter(_), ValueType::Any) => true,
+        (_, ValueType::Unknown)
+        | (ValueType::TypeParameter(_), ValueType::Any | ValueType::EmptyList)
+        | (ValueType::List(_), ValueType::EmptyList) => true,
+        (ValueType::TypeParameter(_), actual) if actual.has_incomplete_tuple_evidence() => true,
         (ValueType::TypeParameter(name), actual) => match substitutions.get(name) {
             Some(previous) => previous == actual,
             None => {
@@ -2057,6 +2110,13 @@ pub(crate) fn unify_type(
         },
         (ValueType::List(expected), ValueType::List(actual)) => {
             unify_type(expected, actual, substitutions)
+        }
+        (ValueType::Tuple(expected), ValueType::Tuple(actual)) => {
+            expected.len() == actual.len()
+                && expected
+                    .iter()
+                    .zip(actual)
+                    .all(|(expected, actual)| unify_type(expected, actual, substitutions))
         }
         (
             ValueType::Nominal {
@@ -2075,6 +2135,112 @@ pub(crate) fn unify_type(
         }
         (ValueType::Any, _) | (_, ValueType::Any) => true,
         _ => expected == actual,
+    }
+}
+
+struct TupleArmWitness {
+    span: Span,
+    kind: TupleArmWitnessKind,
+}
+
+enum TupleArmWitnessKind {
+    Tuple(Vec<TupleArmWitness>),
+    Slot(ValueType),
+}
+
+impl TupleArmWitness {
+    fn new(value_type: &ValueType, expression: Option<&Expression>, span: Span) -> Self {
+        let span = expression.map_or(span, Expression::span);
+        let kind = match value_type {
+            ValueType::Tuple(slots) => TupleArmWitnessKind::Tuple(
+                slots
+                    .iter()
+                    .enumerate()
+                    .map(|(index, slot)| Self::new(slot, tuple_arm_slot(expression, index), span))
+                    .collect(),
+            ),
+            other => TupleArmWitnessKind::Slot(other.clone()),
+        };
+        Self { span, kind }
+    }
+
+    fn value_type(&self) -> ValueType {
+        match &self.kind {
+            TupleArmWitnessKind::Tuple(slots) => {
+                ValueType::Tuple(slots.iter().map(Self::value_type).collect())
+            }
+            TupleArmWitnessKind::Slot(slot) => slot.clone(),
+        }
+    }
+
+    fn merge(
+        &mut self,
+        mut joined: Option<&mut ValueType>,
+        next: &ValueType,
+        expression: Option<&Expression>,
+        span: Span,
+    ) -> Result<(), TupleArmConflict> {
+        use TupleArmWitnessKind::{Slot, Tuple};
+
+        let span = expression.map_or(span, Expression::span);
+        if matches!(next, ValueType::Any | ValueType::Unknown) {
+            if let Some(joined) = joined
+                && *joined != ValueType::Unknown
+            {
+                *joined = next.clone();
+            }
+            return Ok(());
+        }
+        match (&mut self.kind, next) {
+            (Slot(ValueType::Any | ValueType::Unknown), _) => {
+                *self = Self::new(next, expression, span);
+            }
+            (Slot(witness @ ValueType::EmptyList), ValueType::List(_)) => {
+                *witness = next.clone();
+                self.span = span;
+                if let Some(joined @ ValueType::EmptyList) = joined {
+                    *joined = next.clone();
+                }
+            }
+            (Slot(ValueType::List(_)), ValueType::EmptyList) => {}
+            (Tuple(witness), ValueType::Tuple(next)) if witness.len() == next.len() => {
+                for (index, (witness, next)) in witness.iter_mut().zip(next).enumerate() {
+                    let joined = joined.as_deref_mut().and_then(|joined| match joined {
+                        ValueType::Tuple(joined) => Some(&mut joined[index]),
+                        _ => None,
+                    });
+                    witness.merge(joined, next, tuple_arm_slot(expression, index), span)?;
+                }
+            }
+            (Slot(witness), next) if witness == next => {}
+            _ => {
+                return Err(TupleArmConflict {
+                    span,
+                    related_span: self.span,
+                    expected: self.value_type().to_string(),
+                    actual: next.to_string(),
+                });
+            }
+        }
+        Ok(())
+    }
+}
+
+struct TupleArmConflict {
+    span: Span,
+    related_span: Span,
+    expected: String,
+    actual: String,
+}
+
+fn tuple_arm_slot(expression: Option<&Expression>, index: usize) -> Option<&Expression> {
+    let mut expression = expression?;
+    while let ExpressionKind::GroupedJob(chain) = expression.kind() {
+        expression = single_value_expression(chain)?;
+    }
+    match expression.kind() {
+        ExpressionKind::Tuple(tuple) => tuple.elements.get(index),
+        _ => None,
     }
 }
 
@@ -3204,6 +3370,11 @@ impl<'a> CallableReadCollector<'a> {
                     is_callee: false,
                 })
             }
+            ExpressionKind::Tuple(tuple) => {
+                for element in &tuple.elements {
+                    self.expression(element);
+                }
+            }
             ExpressionKind::List(elements) => elements
                 .iter()
                 .for_each(|element| self.expression(element.expression())),
@@ -4001,6 +4172,7 @@ impl RuntimeBindingTypes {
                 }
                 match value_type {
                     ValueType::List(element) => pending.push(element),
+                    ValueType::Tuple(types) => pending.extend(types),
                     ValueType::Nominal { id, arguments } => {
                         if id.module().origin() == &ModuleOrigin::Local
                             && id.module().path() != Path::new("<interactive>")
@@ -4179,6 +4351,7 @@ impl RuntimeBindingTypes {
         while let Some(value_type) = pending.pop() {
             match value_type {
                 ValueType::List(element) => pending.push(element),
+                ValueType::Tuple(types) => pending.extend(types),
                 ValueType::Nominal { id, arguments } => {
                     pending.extend(arguments);
                     if required.insert(id.as_ref().clone())
@@ -4464,6 +4637,9 @@ impl RuntimeBindingTypes {
                 | ValueType::Function
                 | ValueType::Closure
                 | ValueType::TypeParameter(_) => false,
+                ValueType::Tuple(types) => types
+                    .iter()
+                    .all(|ty| self.type_satisfies_constraint_inner(ty, constraint, visiting)),
                 ValueType::List(element) => {
                     self.type_satisfies_constraint_inner(element, constraint, visiting)
                 }
@@ -4574,6 +4750,27 @@ impl RuntimeBindingTypes {
         control: &AnalysisControl,
     ) -> Result<Self, Diagnostic> {
         let (inherited, outer_scope) = prior;
+        if let Some(scope) = outer_scope.and_then(InteractiveScope::scope) {
+            let admitted = crate::eval::shape::check(
+                || crate::eval::shape::scope(scope),
+                |metered| {
+                    if control.is_cancelled()
+                        || metered && !control.charge(AnalysisLimitKind::WorkUnits, 1)
+                    {
+                        return Err(());
+                    }
+                    Ok(())
+                },
+            );
+            if admitted.is_err() {
+                return Err(Diagnostic::new(
+                    Severity::Error,
+                    "RUN001",
+                    "interactive value shape exceeds analysis limits",
+                )
+                .with_primary(script.span(), "analysis did not complete"));
+            }
+        }
         let metrics = SyntaxMetrics::for_script(script);
         if !control.charge(AnalysisLimitKind::SourceBytes, source.text().len() as u64)
             || !control.charge(AnalysisLimitKind::AstNodes, metrics.nodes)
@@ -5143,6 +5340,7 @@ pub struct ModuleTypeRegistry {
     by_module: BTreeMap<ModuleId, ModuleTypes>,
     operation_types: BTreeMap<ModuleId, BTreeMap<usize, Vec<ValueType>>>,
     expression_types: BTreeMap<ModuleId, ExpressionTypes>,
+    inferred_bindings: BTreeMap<(ModuleId, usize), ValueType>,
 }
 
 impl ModuleTypeRegistry {
@@ -5239,6 +5437,17 @@ impl ModuleTypeRegistry {
             .map(|binding| &binding.value_type)
     }
 
+    pub(crate) fn observed_binding_type(
+        &self,
+        module: &ModuleId,
+        declaration: Span,
+    ) -> Option<&ValueType> {
+        self.binding_type(module, declaration).or_else(|| {
+            self.inferred_bindings
+                .get(&(module.clone(), declaration.start()))
+        })
+    }
+
     fn analyze(
         sources: &ModuleSourceRegistry,
         aliases: &ModuleAliasRegistry,
@@ -5274,6 +5483,9 @@ impl ModuleTypeRegistry {
                 SignatureValidator::new(entry, sources, aliases, names, &registry, control);
             let evidence = validator.validate();
             errors.extend(evidence.errors);
+            registry
+                .inferred_bindings
+                .extend(evidence.inferred_bindings);
             registry
                 .operation_types
                 .insert(entry.module().clone(), evidence.operations);
@@ -5337,6 +5549,7 @@ fn pattern_span(pattern: &Pattern) -> Span {
         Pattern::Binding(identifier) => identifier.span(),
         Pattern::Wildcard(span) => *span,
         Pattern::Literal(literal) => literal.span(),
+        Pattern::Tuple(pattern) => pattern.span,
         Pattern::List(pattern) => pattern.span,
         Pattern::NominalRecord(pattern) => pattern.span,
         Pattern::Variant(pattern) => pattern.span,
@@ -5347,6 +5560,11 @@ fn top_level_declared_identifiers(statement: &Statement) -> Vec<Identifier> {
     fn collect_pattern(pattern: &Pattern, identifiers: &mut Vec<Identifier>) {
         match pattern {
             Pattern::Binding(identifier) => identifiers.push(*identifier),
+            Pattern::Tuple(pattern) => {
+                for element in &pattern.elements {
+                    collect_pattern(element, identifiers);
+                }
+            }
             Pattern::List(pattern) => {
                 for element in &pattern.elements {
                     collect_pattern(element, identifiers);
@@ -5747,6 +5965,12 @@ impl<'a> TypeCollector<'a> {
                 self.record_nominal_reference(name, true);
                 Ok(())
             }
+            ExpressionKind::Tuple(tuple) => {
+                for element in &tuple.elements {
+                    self.expression(element)?;
+                }
+                Ok(())
+            }
             ExpressionKind::List(elements) => {
                 for element in elements {
                     self.expression(element.expression())?;
@@ -5825,6 +6049,20 @@ impl<'a> TypeCollector<'a> {
                 value_type: value_type.clone(),
             }),
             Pattern::Wildcard(_) | Pattern::Literal(_) => {}
+            Pattern::Tuple(pattern) => {
+                let types = match value_type {
+                    ValueType::Tuple(types) if types.len() == pattern.elements.len() => {
+                        types.as_slice()
+                    }
+                    _ => &[],
+                };
+                for (index, element) in pattern.elements.iter().enumerate() {
+                    self.collect_pattern_bindings(
+                        element,
+                        types.get(index).unwrap_or(&ValueType::Any),
+                    );
+                }
+            }
             Pattern::List(pattern) => {
                 let element_type = match value_type {
                     ValueType::List(element) => element.as_ref().clone(),
@@ -5902,6 +6140,11 @@ impl<'a> TypeCollector<'a> {
 
     fn collect_nominal_pattern_references(&mut self, pattern: &Pattern) {
         match pattern {
+            Pattern::Tuple(pattern) => {
+                for element in &pattern.elements {
+                    self.collect_nominal_pattern_references(element);
+                }
+            }
             Pattern::List(pattern) => {
                 for element in &pattern.elements {
                     self.collect_nominal_pattern_references(element);
@@ -6091,16 +6334,27 @@ impl<'a> TypeCollector<'a> {
         if self.control.is_cancelled() {
             return Ok(ValueType::Any);
         }
-        let qualified = self
-            .text(reference.span)
-            .split('[')
-            .next()
-            .expect("a type reference begins with its name");
-        let segments = qualified.split("::").map(str::trim).collect::<Vec<_>>();
+        let (name, arguments) = match &reference.kind {
+            TypeReferenceKind::Named { name, arguments } => (name, arguments),
+            TypeReferenceKind::Tuple(tuple) => {
+                return Ok(ValueType::Tuple(
+                    tuple
+                        .elements
+                        .iter()
+                        .map(|slot| self.resolve_type(slot))
+                        .collect(),
+                ));
+            }
+        };
+        let segments = name
+            .segments
+            .iter()
+            .map(|segment| self.text(segment.span()))
+            .collect::<Vec<_>>();
         let name = segments
             .last()
             .copied()
-            .expect("a type reference has one name segment");
+            .expect("a type reference has a name");
         if segments.len() == 1
             && let Some(parameter) = self
                 .type_parameter_scopes
@@ -6108,12 +6362,12 @@ impl<'a> TypeCollector<'a> {
                 .rev()
                 .find_map(|scope| scope.get(name))
         {
-            if !reference.arguments.is_empty() {
+            if !arguments.is_empty() {
                 return Err(Box::new(ModuleTypeError::InvalidTypeArity {
                     module: self.entry.module().clone(),
                     name: name.to_owned(),
                     expected: 0,
-                    actual: reference.arguments.len(),
+                    actual: arguments.len(),
                     span: reference.span,
                 }));
             }
@@ -6139,43 +6393,42 @@ impl<'a> TypeCollector<'a> {
                 .flatten()
         });
         let value_type = if segments.len() == 1 && name == "List" {
-            if reference.arguments.len() != 1 {
+            if arguments.len() != 1 {
                 return Err(Box::new(ModuleTypeError::InvalidTypeArity {
                     module: self.entry.module().clone(),
                     name: name.to_owned(),
                     expected: 1,
-                    actual: reference.arguments.len(),
+                    actual: arguments.len(),
                     span: reference.span,
                 }));
             }
-            ValueType::List(Box::new(self.resolve_type_value(&reference.arguments[0])?))
+            ValueType::List(Box::new(self.resolve_type_value(&arguments[0])?))
         } else if let Some(nominal) = nominal {
             let expected = nominal.type_parameters().len();
             let id = nominal.id().clone();
-            if reference.arguments.len() != expected {
+            if arguments.len() != expected {
                 return Err(Box::new(ModuleTypeError::InvalidTypeArity {
                     module: self.entry.module().clone(),
                     name: name.to_owned(),
                     expected,
-                    actual: reference.arguments.len(),
+                    actual: arguments.len(),
                     span: reference.span,
                 }));
             }
             ValueType::Nominal {
                 id: Box::new(id),
-                arguments: reference
-                    .arguments
+                arguments: arguments
                     .iter()
                     .map(|argument| self.resolve_type_value(argument))
                     .collect::<Result<_, _>>()?,
             }
         } else {
-            if !reference.arguments.is_empty() {
+            if !arguments.is_empty() {
                 return Err(Box::new(ModuleTypeError::InvalidTypeArity {
                     module: self.entry.module().clone(),
                     name: name.to_owned(),
                     expected: 0,
-                    actual: reference.arguments.len(),
+                    actual: arguments.len(),
                     span: reference.span,
                 }));
             }
@@ -6221,6 +6474,7 @@ struct SignatureEvidence {
     errors: Vec<ModuleTypeError>,
     operations: BTreeMap<usize, Vec<ValueType>>,
     expression_types: ExpressionTypes,
+    inferred_bindings: BTreeMap<(ModuleId, usize), ValueType>,
 }
 
 struct SignatureValidator<'a> {
@@ -6274,6 +6528,7 @@ impl<'a> SignatureValidator<'a> {
             errors: self.errors.into_inner(),
             operations: self.operation_types.into_inner(),
             expression_types: self.expression_types.into_inner(),
+            inferred_bindings: self.inferred_bindings.into_inner(),
         }
     }
 
@@ -6356,16 +6611,23 @@ impl<'a> SignatureValidator<'a> {
             StatementKind::Task(_) => Ok(()),
             StatementKind::Control(ControlTransfer::Return(value)) => {
                 let (span, actual) = match value {
-                    Some(expression) => (
-                        expression.span(),
-                        self.expression_with_expected_at(
+                    Some(expression) => {
+                        let actual = self.expression_with_expected_at(
                             expression,
                             Some(signature.result()),
                             signature
                                 .result_annotation_span()
                                 .unwrap_or(signature.declaration_span()),
-                        )?,
-                    ),
+                        )?;
+                        (
+                            tuple_mismatch_span(
+                                expression,
+                                Some(signature.result()),
+                                actual.as_ref(),
+                            ),
+                            actual,
+                        )
+                    }
                     None => (statement.span(), Some(ValueType::Null)),
                 };
                 self.check_result(signature, span, actual)
@@ -6461,7 +6723,9 @@ impl<'a> SignatureValidator<'a> {
                             .result_annotation_span()
                             .unwrap_or(signature.declaration_span()),
                     )?;
-                    return self.check_result(signature, expression.span(), actual);
+                    let span =
+                        tuple_mismatch_span(expression, Some(signature.result()), actual.as_ref());
+                    return self.check_result(signature, span, actual);
                 }
                 let Some((span, actual)) =
                     self.chain_value_with_expected(&job.chain, Some(signature.result()))?
@@ -6592,7 +6856,7 @@ impl<'a> SignatureValidator<'a> {
                         .as_ref()
                         .map_or(declaration.name.span(), |annotation| annotation.span),
                 )?;
-                self.retain_list_argument_type(&declaration.value, actual.as_ref());
+                self.retain_composite_argument_type(&declaration.value, actual.as_ref());
                 if !declaration.mutable
                     && matches!(declaration.pattern, Pattern::Binding(_))
                     && let Some(shape) = self.callback_shape(&declaration.value)
@@ -6612,7 +6876,11 @@ impl<'a> SignatureValidator<'a> {
                             .push(ModuleTypeError::BindingMismatch {
                                 module: self.entry.module().clone(),
                                 name: self.text(declaration.name.span()).to_owned(),
-                                value_span: declaration.value.span(),
+                                value_span: tuple_mismatch_span(
+                                    &declaration.value,
+                                    Some(expected),
+                                    Some(&actual),
+                                ),
                                 expected: expected.clone(),
                                 actual: actual.clone(),
                                 annotation_span: declaration
@@ -7092,6 +7360,9 @@ impl<'a> SignatureValidator<'a> {
                 None => self.outer_value_type(expression),
             }),
             ExpressionKind::Qualified(name) => Ok(self.qualified_value_type(name, expected)),
+            ExpressionKind::Tuple(tuple) => {
+                self.tuple_literal_type(&tuple.elements, expected, expected_span, false)
+            }
             ExpressionKind::List(elements) => self.list_literal_type(elements, expected, false),
             ExpressionKind::Record(entries) => {
                 for entry in entries {
@@ -7226,6 +7497,7 @@ impl<'a> SignatureValidator<'a> {
         let expected = expected
             .filter(|value_type| !has_unbound_type_parameters(value_type, &BTreeMap::new()));
         let mut witness: Option<(Option<ValueType>, Span)> = None;
+        let mut tuple_evidence = None;
         let mut dynamic = false;
         let mut unknown = false;
         let mut mismatched = false;
@@ -7259,6 +7531,37 @@ impl<'a> SignatureValidator<'a> {
                 }
                 _ => {}
             }
+            if expected.is_none()
+                && let Some(actual @ ValueType::Tuple(_)) = actual.as_ref()
+                && matches!(witness, None | Some((Some(ValueType::Tuple(_)), _)))
+            {
+                let (known, joined) = tuple_evidence.get_or_insert_with(|| {
+                    (
+                        TupleArmWitness::new(actual, Some(value), value.span()),
+                        actual.clone(),
+                    )
+                });
+                match known.merge(Some(joined), actual, Some(value), value.span()) {
+                    Ok(()) if witness.is_none() => {
+                        witness = Some((Some(actual.clone()), value.span()));
+                    }
+                    Err(conflict) if !mismatched => {
+                        self.errors
+                            .borrow_mut()
+                            .push(ModuleTypeError::IfArmMismatch {
+                                module: self.entry.module().clone(),
+                                span: conflict.span,
+                                related_span: conflict.related_span,
+                                expected: conflict.expected,
+                                actual: conflict.actual,
+                                contextual: false,
+                            });
+                        mismatched = true;
+                    }
+                    _ => {}
+                }
+                continue;
+            }
             let incompatible = if let Some(expected) = expected {
                 let fits = match actual.as_ref() {
                     Some(actual) => expected.accepts_type(actual),
@@ -7286,7 +7589,7 @@ impl<'a> SignatureValidator<'a> {
                         .borrow_mut()
                         .push(ModuleTypeError::IfArmMismatch {
                             module: self.entry.module().clone(),
-                            span: value.span(),
+                            span: tuple_mismatch_span(value, other, actual.as_ref()),
                             related_span,
                             expected: describe(other),
                             actual: describe(actual.as_ref()),
@@ -7304,6 +7607,8 @@ impl<'a> SignatureValidator<'a> {
             None
         } else if dynamic {
             Some(ValueType::Any)
+        } else if let Some((_, joined)) = tuple_evidence {
+            Some(joined)
         } else {
             witness.and_then(|(known, _)| known)
         };
@@ -7347,8 +7652,22 @@ impl<'a> SignatureValidator<'a> {
         {
             return None;
         }
-        let Value::List(items) = value else {
-            return crate::eval::runtime_value_type(value);
+        let items = match value {
+            Value::List(items) => items,
+            Value::Tuple(items) => {
+                let mut types = Vec::with_capacity(items.len());
+                for item in items.iter() {
+                    if !self.control.charge(AnalysisLimitKind::WorkUnits, 1) {
+                        return None;
+                    }
+                    types.push(
+                        self.observed_value_type(item, depth + 1)
+                            .unwrap_or_else(|| crate::eval::unproven_tuple_slot(item)),
+                    );
+                }
+                return Some(ValueType::Tuple(types));
+            }
+            _ => return crate::eval::runtime_value_type(value),
         };
         let (first, rest) = items.split_first()?;
         let element = self.observed_value_type(first, depth + 1)?;
@@ -7372,8 +7691,8 @@ impl<'a> SignatureValidator<'a> {
         }
     }
 
-    fn retain_list_argument_type(&self, argument: &Expression, actual: Option<&ValueType>) {
-        if let Some(actual @ ValueType::List(_)) = actual {
+    fn retain_composite_argument_type(&self, argument: &Expression, actual: Option<&ValueType>) {
+        if let Some(actual @ (ValueType::List(_) | ValueType::Tuple(_))) = actual {
             let span = argument.span();
             self.expression_types
                 .borrow_mut()
@@ -7566,7 +7885,7 @@ impl<'a> SignatureValidator<'a> {
                 expected.map_or(field.span, |field| field.span()),
             )?;
             if !nominal.type_parameters().is_empty() {
-                self.retain_list_argument_type(&field.value, actual.as_ref());
+                self.retain_composite_argument_type(&field.value, actual.as_ref());
             }
             if expected.is_some() {
                 supplied.insert(field_name.to_owned());
@@ -7695,6 +8014,20 @@ impl<'a> SignatureValidator<'a> {
                     value_type.clone(),
                 );
             }
+            Pattern::Tuple(pattern) => {
+                let types = match value_type {
+                    ValueType::Tuple(types) if types.len() == pattern.elements.len() => {
+                        types.as_slice()
+                    }
+                    _ => &[],
+                };
+                for (index, element) in pattern.elements.iter().enumerate() {
+                    self.infer_pattern_bindings(
+                        element,
+                        types.get(index).unwrap_or(&ValueType::Any),
+                    );
+                }
+            }
             Pattern::List(pattern) => {
                 let element = match value_type {
                     ValueType::List(element) => element.as_ref().clone(),
@@ -7794,7 +8127,7 @@ impl<'a> SignatureValidator<'a> {
     }
 
     fn pattern_accepts_type(&self, pattern: &Pattern, value_type: &ValueType) -> bool {
-        if value_type == &ValueType::Any {
+        if matches!(value_type, ValueType::Any | ValueType::Unknown) {
             return true;
         }
         match pattern {
@@ -7809,7 +8142,21 @@ impl<'a> SignatureValidator<'a> {
                 };
                 value_type.accepts_type(&literal_type)
             }
+            Pattern::Tuple(pattern) => {
+                let ValueType::Tuple(types) = value_type else {
+                    return false;
+                };
+                types.len() == pattern.elements.len()
+                    && pattern
+                        .elements
+                        .iter()
+                        .zip(types)
+                        .all(|(pattern, ty)| self.pattern_accepts_type(pattern, ty))
+            }
             Pattern::List(pattern) => {
+                if value_type == &ValueType::EmptyList {
+                    return pattern.elements.is_empty();
+                }
                 let ValueType::List(element) = value_type else {
                     return false;
                 };
@@ -8222,7 +8569,7 @@ impl<'a> SignatureValidator<'a> {
             let actual =
                 self.expression_with_expected_at(argument, expected.as_ref(), expected_span)?;
             if !signature.type_parameters().is_empty() {
-                self.retain_list_argument_type(argument, actual.as_ref());
+                self.retain_composite_argument_type(argument, actual.as_ref());
             }
             if call.type_arguments.is_empty()
                 && let (Some(actual), Some(parameter)) =
@@ -8296,7 +8643,11 @@ impl<'a> SignatureValidator<'a> {
                         module: self.entry.module().clone(),
                         name: signature.name().to_owned(),
                         parameter: parameter.name().to_owned(),
-                        argument_span: argument.span(),
+                        argument_span: tuple_mismatch_span(
+                            argument,
+                            Some(&expected),
+                            Some(&actual),
+                        ),
                         expected,
                         actual,
                         parameter_span: parameter
@@ -8413,7 +8764,7 @@ impl<'a> SignatureValidator<'a> {
                 .map(|payload| substitute_type(payload, &substitutions));
             let actual = self.expression_with_expected(argument, expected.as_ref())?;
             if !nominal.type_parameters().is_empty() {
-                self.retain_list_argument_type(argument, actual.as_ref());
+                self.retain_composite_argument_type(argument, actual.as_ref());
             }
             if call.type_arguments.is_empty()
                 && let (Some(actual), Some(payload)) =
@@ -8455,7 +8806,7 @@ impl<'a> SignatureValidator<'a> {
                         module: self.entry.module().clone(),
                         name: format!("{type_name}::{constructor}"),
                         parameter: "payload".to_owned(),
-                        argument_span: argument.span(),
+                        argument_span: tuple_mismatch_span(argument, Some(&expected), Some(actual)),
                         expected,
                         actual: actual.clone(),
                         parameter_span: variant.span(),
@@ -8881,6 +9232,9 @@ impl<'a> SignatureValidator<'a> {
                     return Ok(Some(declared.clone()));
                 }
             }
+            ExpressionKind::Tuple(tuple) => {
+                return self.tuple_literal_type(&tuple.elements, expected, expression.span(), true);
+            }
             ExpressionKind::List(elements) => {
                 return self.list_literal_type(elements, expected, true);
             }
@@ -8901,6 +9255,48 @@ impl<'a> SignatureValidator<'a> {
             _ => {}
         }
         self.expression_with_expected(expression, expected)
+    }
+
+    fn tuple_literal_type(
+        &self,
+        elements: &[Expression],
+        expected: Option<&ValueType>,
+        expected_span: Span,
+        operation_argument: bool,
+    ) -> Result<Option<ValueType>, Box<ModuleTypeError>> {
+        let expected = match expected {
+            Some(ValueType::Tuple(types)) if types.len() == elements.len() => types.as_slice(),
+            _ => &[],
+        };
+        let mut types = Vec::with_capacity(elements.len());
+        for (index, element) in elements.iter().enumerate() {
+            if self.control.is_cancelled() {
+                return Ok(None);
+            }
+            let expected = expected.get(index);
+            let actual = if operation_argument {
+                self.operation_argument_type(element, expected)?
+            } else if let Some(declared) = self
+                .value_reference(element)
+                .and_then(|reference| self.declared_reference_type(reference.target()))
+            {
+                Some(declared.clone())
+            } else {
+                self.expression_with_expected_at(element, expected, expected_span)?
+            };
+            types.push(actual.unwrap_or_else(|| {
+                if direct_empty_list(element) {
+                    expected
+                        .filter(|ty| matches!(ty, ValueType::List(_)))
+                        .filter(|ty| !has_unbound_type_parameters(ty, &BTreeMap::new()))
+                        .cloned()
+                        .unwrap_or(ValueType::EmptyList)
+                } else {
+                    ValueType::Unknown
+                }
+            }));
+        }
+        Ok(Some(ValueType::Tuple(types)))
     }
 
     fn list_literal_type(
@@ -9144,6 +9540,9 @@ impl<'a> SignatureValidator<'a> {
                 ValueType::TypeParameter(name) => {
                     self.type_parameter_satisfies_constraint(name, constraint)
                 }
+                ValueType::Tuple(types) => types
+                    .iter()
+                    .all(|ty| self.type_satisfies_constraint_inner(ty, constraint, visiting)),
                 ValueType::List(element) => {
                     self.type_satisfies_constraint_inner(element, constraint, visiting)
                 }
@@ -9695,6 +10094,12 @@ impl<'a> ReferenceResolver<'a> {
             Pattern::Binding(identifier) => self.declare(identifier.span(), visible_from, mutable),
             Pattern::Literal(literal) => self.literal(literal),
             Pattern::Wildcard(_) => Ok(()),
+            Pattern::Tuple(pattern) => {
+                for element in &pattern.elements {
+                    self.pattern(element, visible_from, mutable)?;
+                }
+                Ok(())
+            }
             Pattern::List(pattern) => {
                 for element in &pattern.elements {
                     self.pattern(element, visible_from, mutable)?;
@@ -9773,6 +10178,12 @@ impl<'a> ReferenceResolver<'a> {
             ExpressionKind::Literal(literal) => self.literal(literal),
             ExpressionKind::Name(reference) => self.variable(reference.name.span(), reference.span),
             ExpressionKind::Qualified(name) => self.qualified(name),
+            ExpressionKind::Tuple(tuple) => {
+                for element in &tuple.elements {
+                    self.expression(element)?;
+                }
+                Ok(())
+            }
             ExpressionKind::List(elements) => {
                 for element in elements {
                     self.expression(element.expression())?;
@@ -10851,6 +11262,11 @@ impl<'a> StaticEffectAnalyzer<'a> {
                 }
             }
             ExpressionKind::Qualified(_) => {}
+            ExpressionKind::Tuple(tuple) => {
+                for element in &tuple.elements {
+                    self.expression(element);
+                }
+            }
             ExpressionKind::List(items) => {
                 for item in items {
                     self.expression(item.expression());
@@ -11678,6 +12094,11 @@ impl<'a> StaticPipelineAnalyzer<'a> {
         match expression.kind() {
             ExpressionKind::Literal(literal) => self.literal(literal),
             ExpressionKind::Name(_) | ExpressionKind::Qualified(_) => {}
+            ExpressionKind::Tuple(tuple) => {
+                for element in &tuple.elements {
+                    self.expression(element);
+                }
+            }
             ExpressionKind::List(elements) => {
                 for element in elements {
                     self.expression(element.expression());
@@ -13386,7 +13807,11 @@ impl SyntaxMetrics {
     fn type_reference(&mut self, reference: &TypeReference, depth: u64) {
         self.nodes += 1;
         self.type_depth = self.type_depth.max(depth);
-        for argument in &reference.arguments {
+        let arguments = match &reference.kind {
+            TypeReferenceKind::Named { arguments, .. } => arguments,
+            TypeReferenceKind::Tuple(tuple) => &tuple.elements,
+        };
+        for argument in arguments {
             self.type_reference(argument, depth.saturating_add(1));
         }
     }
@@ -13394,6 +13819,11 @@ impl SyntaxMetrics {
     fn pattern(&mut self, pattern: &Pattern) {
         self.nodes += 1;
         match pattern {
+            Pattern::Tuple(pattern) => {
+                for element in &pattern.elements {
+                    self.pattern(element);
+                }
+            }
             Pattern::List(pattern) => {
                 for element in &pattern.elements {
                     self.pattern(element);
@@ -13421,6 +13851,18 @@ impl SyntaxMetrics {
                     self.word_parts(parts);
                 }
                 1
+            }
+            ExpressionKind::Tuple(tuple) => {
+                let depth = 1_u64.saturating_add(
+                    tuple
+                        .elements
+                        .iter()
+                        .map(|element| self.expression(element))
+                        .max()
+                        .unwrap_or(1),
+                );
+                self.type_depth = self.type_depth.max(depth);
+                depth
             }
             ExpressionKind::List(elements) => {
                 let depth = 1_u64.saturating_add(
@@ -13912,6 +14354,35 @@ fn empty_list_literal(expression: &Expression, control: &AnalysisControl) -> boo
         }),
         _ => false,
     }
+}
+
+fn tuple_mismatch_span(
+    mut expression: &Expression,
+    expected: Option<&ValueType>,
+    actual: Option<&ValueType>,
+) -> Span {
+    let whole = expression.span();
+    while let ExpressionKind::GroupedJob(chain) = expression.kind() {
+        let Some(inner) = single_value_expression(chain) else {
+            return whole;
+        };
+        expression = inner;
+    }
+    if let (
+        ExpressionKind::Tuple(tuple),
+        Some(ValueType::Tuple(expected)),
+        Some(ValueType::Tuple(actual)),
+    ) = (expression.kind(), expected, actual)
+        && expected.len() == actual.len()
+        && let Some(((expected, actual), slot)) = expected
+            .iter()
+            .zip(actual)
+            .zip(&tuple.elements)
+            .find(|((expected, actual), _)| !expected.accepts_type(actual))
+    {
+        return tuple_mismatch_span(slot, Some(expected), Some(actual));
+    }
+    whole
 }
 
 fn direct_empty_list(mut expression: &Expression) -> bool {

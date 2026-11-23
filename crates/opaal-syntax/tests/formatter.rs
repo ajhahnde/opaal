@@ -34,6 +34,28 @@ fn interpolation_spacing_is_canonical() {
 }
 
 #[test]
+fn tuple_formatting_preserves_group_dispatch_and_comments() {
+    assert_eq!(
+        roundtrip("let (number ,label,) = (3 ,\"ready\",)\n"),
+        "let (number, label) = (3, \"ready\")\n"
+    );
+    assert_eq!(
+        roundtrip("let pair: (Int,List[String],) = (3, # label\n[],)"),
+        "let pair: (Int, List[String]) = (3, # label\n[])\n"
+    );
+    for group in [
+        r"(a\, b)",
+        r"(a\,b)",
+        "(a , b)",
+        "(a,)",
+        "(^printf \"%s\" ,)",
+    ] {
+        let text = format!("let result = {group}\n");
+        assert_eq!(roundtrip(&text), text);
+    }
+}
+
+#[test]
 fn value_arms_format_with_comments_and_enclosing_delimiters() {
     assert_eq!(
         roundtrip("let x = (if true\n{1}\nelse\n{2})"),

@@ -151,7 +151,7 @@ fn pure_list_rest_then_explicit_spread_preserves_every_argument_exactly() {
             .declare(
                 "args",
                 BindingMutability::Immutable,
-                Value::list(arguments.iter().cloned().map(Value::string).collect()),
+                &Value::list(arguments.iter().cloned().map(Value::string).collect()),
             )
             .unwrap();
         let tail = evaluate(&parsed, &source, &mut scope).unwrap();
@@ -163,7 +163,7 @@ fn pure_list_rest_then_explicit_spread_preserves_every_argument_exactly() {
 
         let mut spread_scope = ScopeStack::new();
         spread_scope
-            .declare("forwarded", BindingMutability::Immutable, tail)
+            .declare("forwarded", BindingMutability::Immutable, &tail)
             .unwrap();
         let words = expand_submission("builder ...{forwarded}", &mut spread_scope).unwrap();
         assert_eq!(
@@ -183,7 +183,7 @@ fn explicit_spread_never_flattens_a_nested_list() {
         .declare(
             "forwarded",
             BindingMutability::Immutable,
-            Value::list(vec![Value::list(vec![Value::string("nested")])]),
+            &Value::list(vec![Value::list(vec![Value::string("nested")])]),
         )
         .unwrap();
     assert_eq!(

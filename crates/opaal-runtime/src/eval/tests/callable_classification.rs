@@ -7,6 +7,7 @@ struct ToggleHost {
     environment: Environment,
     allowed: Cell<bool>,
     events: RefCell<Vec<&'static str>>,
+    action_outcome: Option<SourceActionOutcome>,
 }
 impl ToggleHost {
     fn new() -> Self {
@@ -14,6 +15,7 @@ impl ToggleHost {
             environment: Environment::new(),
             allowed: Cell::new(false),
             events: RefCell::new(Vec::new()),
+            action_outcome: None,
         }
     }
 }
@@ -38,9 +40,10 @@ impl EvaluationHost for ToggleHost {
     fn action_end(
         &mut self,
         _: &ActionId,
-        _: SourceActionOutcome,
+        outcome: SourceActionOutcome,
     ) -> Option<Result<(), OperationalModuleError>> {
         self.events.borrow_mut().push("end");
+        self.action_outcome = Some(outcome);
         Some(Ok(()))
     }
     fn read_directory(&mut self, _: &Path) -> Result<Box<dyn DirectoryStream>, RuntimeErrorKind> {
@@ -91,7 +94,7 @@ fn constructed(
     };
     let mut host = ToggleHost::new();
     let mut budget = ResourceBudget::unlimited();
-    let evaluator = Evaluator {
+    let mut evaluator = Evaluator {
         source: retained,
         binding_types: Arc::new(types),
         current_result_type: None,
@@ -126,7 +129,7 @@ fn direct_capsule_wire_and_restored_permission_are_preserved() {
             .declare(
                 "candidate",
                 BindingMutability::Immutable,
-                Value::Callable(Arc::clone(&callable)),
+                &Value::Callable(Arc::clone(&callable)),
             )
             .unwrap();
         let wire = crate::capsule::encode_background_capsule(
@@ -151,7 +154,7 @@ fn direct_capsule_wire_and_restored_permission_are_preserved() {
         );
         let result = apply_callable(
             value,
-            vec![],
+            &[],
             &c.family.source,
             c.family.origin_span,
             &mut Environment::new(),
@@ -256,7 +259,7 @@ fn closures_and_repeated_calls_keep_fact_and_parse_count() {
         for _ in 0..7 {
             let result = apply_callable(
                 &value,
-                vec![],
+                &[],
                 &source,
                 script.span(),
                 &mut Environment::new(),
@@ -392,7 +395,7 @@ fn reconstructed_direct_actions_recompute_fact_and_reject_bad_signatures() {
         let caller = SourceFile::new(SourceId::new(5), "caller.opaal", "candidate()");
         let result = apply_callable(
             &Value::Callable(restored),
-            vec![],
+            &[],
             &caller,
             caller.span(0..9).unwrap(),
             &mut Environment::new(),
@@ -462,6 +465,72 @@ fn invoke(
         None,
     )
 }
+
+#[test]
+fn action_refuses_a_control_carrier_nested_in_its_tuple_result() {
+    use crate::module::{
+        ModuleCanonicalizer, ModulePathError, ModuleProgramLoader, ModuleSourceError,
+        ModuleSourceLoader,
+    };
+
+    struct Source;
+    impl ModuleCanonicalizer for Source {
+        fn canonicalize(&self, path: &Path) -> Result<std::path::PathBuf, ModulePathError> {
+            Ok(path.to_path_buf())
+        }
+    }
+    impl ModuleSourceLoader for Source {
+        fn load(&self, _: &ModuleId) -> Result<Vec<u8>, ModuleSourceError> {
+            Ok(
+                b"action candidate(value: Any) -> (Int, Any) { effects {} return (3, value) }"
+                    .to_vec(),
+            )
+        }
+    }
+    let program = ModuleProgramLoader::new(&Source, &Source)
+        .load(Path::new("/fixture/tuple-action.opaal"))
+        .unwrap();
+    let module = program.graph().root();
+    let source = Arc::new(program.sources().source(module).unwrap().clone());
+    let mut scope = ScopeStack::new();
+    let mut host = ToggleHost::new();
+    host.allowed.set(true);
+    assert!(matches!(
+        evaluate_with_host(
+            program.sources().script(module).unwrap(),
+            source,
+            &mut scope,
+            &EvalLimits::default(),
+            Arc::new(program.runtime_binding_types()),
+            &mut host,
+        ),
+        Ok(HostedEvaluationOutcome::Value(Value::Null))
+    ));
+    let Some(Value::Callable(callable)) = scope.get("candidate") else {
+        panic!("action was not defined");
+    };
+    let opaque = Value::NominalRecord(Box::new(crate::NominalRecordValue::new(
+        crate::module::NominalTypeId::project("tools", "ToolIdentity"),
+        Vec::new(),
+        vec![(Arc::from("_id"), Value::string("nested-control-canary"))],
+    )));
+    let result = invoke(
+        callable,
+        vec![Value::list(vec![opaque])],
+        &mut host,
+        &mut ResourceBudget::opaal(),
+    );
+    assert!(matches!(result, Err(Abort::Error(error)) if matches!(
+        error.kind(),
+        RuntimeErrorKind::Unsupported { feature: "control-only value escaping an action" }
+    )));
+    let action = host.action_outcome.as_ref().unwrap().outcome();
+    assert_eq!(action.class(), "error");
+    assert_eq!(action.code(), "ACTION_ERROR");
+    assert_eq!(action.value_digest(), None);
+    assert!(!action.message().contains("nested-control-canary"));
+}
+
 fn map(callable: &Arc<dyn Callable>, items: Vec<Value>) -> Eval<Value> {
     let c = function(callable);
     let mut host = ToggleHost::new();
@@ -549,7 +618,7 @@ fn first_use_pre_guard_paths_stay_cold() {
     assert!(
         apply_callable(
             &Value::Callable(Arc::clone(&c)),
-            vec![],
+            &[],
             &f.family.source,
             f.family.origin_span,
             &mut Environment::new(),
@@ -564,7 +633,7 @@ fn first_use_pre_guard_paths_stay_cold() {
     assert!(matches!(
         apply_callable(
             &Value::Callable(Arc::clone(&c)),
-            vec![Value::Int(7)],
+            &[Value::Int(7)],
             &f.family.source,
             f.family.origin_span,
             &mut Environment::new(),
@@ -578,7 +647,7 @@ fn first_use_pre_guard_paths_stay_cold() {
         .declare(
             "candidate",
             BindingMutability::Immutable,
-            Value::Callable(Arc::clone(&c)),
+            &Value::Callable(Arc::clone(&c)),
         )
         .unwrap();
     let caller = SourceFile::new(SourceId::new(52), "arguments.opaal", "candidate(missing)");
@@ -599,6 +668,47 @@ fn first_use_pre_guard_paths_stay_cold() {
     assert!(map(&bad, vec![]).is_err());
     assert_eq!(count(), 0);
     assert_eq!(state(&bad), 0);
+}
+
+#[test]
+fn runtime_only_tuple_inference_uses_unknown_slot_values_and_preserves_any_and_empty_lists() {
+    let parameter = |name: &str| ValueType::TypeParameter(name.to_owned());
+    let expected = ValueType::Tuple(vec![
+        parameter("Unknown"),
+        parameter("Dynamic"),
+        ValueType::List(Box::new(parameter("Empty"))),
+        ValueType::List(Box::new(parameter("Typed"))),
+    ]);
+    let value = Value::Tuple(Arc::from([
+        Value::Int(7),
+        Value::Bool(true),
+        Value::list(vec![]),
+        Value::list(vec![]),
+    ]));
+    let evidence = ValueType::Tuple(vec![
+        ValueType::Unknown,
+        ValueType::Any,
+        ValueType::EmptyList,
+        ValueType::List(Box::new(ValueType::String)),
+    ]);
+    let mut substitutions = BTreeMap::new();
+    assert!(crate::module::unify_type(
+        &expected,
+        &evidence,
+        &mut substitutions
+    ));
+    assert_eq!(
+        substitutions,
+        BTreeMap::from([("Typed".to_owned(), ValueType::String)])
+    );
+    infer_argument_type(&expected, &value, Some(&evidence), &mut substitutions);
+    assert_eq!(
+        substitutions,
+        BTreeMap::from([
+            ("Unknown".to_owned(), ValueType::Int),
+            ("Typed".to_owned(), ValueType::String),
+        ])
+    );
 }
 
 #[test]
@@ -1011,7 +1121,7 @@ fn first_use_cancel_and_exact_limits() {
             );
             let result = apply_callable(
                 &Value::Callable(Arc::clone(c)),
-                vec![Value::Int(7)],
+                &[Value::Int(7)],
                 &caller,
                 span,
                 &mut Environment::new(),
@@ -1035,7 +1145,7 @@ fn first_use_cancel_and_exact_limits() {
                     let limits = EvalLimits::default();
                     let result = apply_callable_with_budget(
                         &Value::Callable(Arc::clone(c)),
-                        vec![value.clone()],
+                        vec![value.clone()].into(),
                         &caller,
                         span,
                         &mut Environment::new(),
@@ -1235,7 +1345,7 @@ fn family_lifetime_and_observers() {
         .declare(
             "candidate",
             BindingMutability::Immutable,
-            Value::Callable(Arc::clone(&c)),
+            &Value::Callable(Arc::clone(&c)),
         )
         .unwrap();
     let wire = crate::capsule::encode_background_capsule(

@@ -12,6 +12,8 @@
 //! closure), a closure runtime error, and (for `where`) a non-boolean predicate —
 //! is a first-class step.
 
+use opaal_runtime::AdmittedValue;
+use opaal_runtime::stream::AdmittedStreamError;
 use std::cell::Cell;
 use std::rc::Rc;
 
@@ -41,7 +43,7 @@ fn command_span(file: &SourceFile) -> Span {
 }
 
 fn ints(values: &[i64]) -> ValueStream {
-    ValueStream::from_values(values.iter().copied().map(Value::Int).collect())
+    ValueStream::from_values(&values.iter().copied().map(Value::Int).collect::<Vec<_>>()).unwrap()
 }
 
 // --- `each` -------------------------------------------------------------------
@@ -53,7 +55,7 @@ fn each_maps_every_item() {
     let mut env = Environment::new();
     let mut mapper = each(
         ints(&[1, 2, 3]),
-        closure,
+        AdmittedValue::new(&closure).unwrap(),
         &file,
         command_span(&file),
         &mut env,
@@ -76,12 +78,12 @@ fn each_is_lazy_over_an_unbounded_source() {
         move || {
             let n = pulls.get();
             pulls.set(n + 1);
-            Some(Ok(Value::Int(n)))
+            Some(Ok(AdmittedValue::new(&Value::Int(n)).unwrap()))
         }
     });
     let mut mapper = each(
         source,
-        closure,
+        AdmittedValue::new(&closure).unwrap(),
         &file,
         command_span(&file),
         &mut env,
@@ -100,7 +102,7 @@ fn each_surfaces_a_closure_runtime_error() {
     let mut env = Environment::new();
     let mut mapper = each(
         ints(&[1]),
-        closure,
+        AdmittedValue::new(&closure).unwrap(),
         &file,
         command_span(&file),
         &mut env,
@@ -123,7 +125,7 @@ fn each_reports_a_non_callable_closure() {
     let mut env = Environment::new();
     let mut mapper = each(
         ints(&[1]),
-        Value::Int(7),
+        AdmittedValue::new(&Value::Int(7)).unwrap(),
         &file,
         command_span(&file),
         &mut env,
@@ -148,7 +150,7 @@ fn each_respects_the_resource_budget() {
     let mut env = Environment::new();
     let mut mapper = each(
         ints(&[1]),
-        closure,
+        AdmittedValue::new(&closure).unwrap(),
         &file,
         command_span(&file),
         &mut env,
@@ -182,12 +184,12 @@ fn each_passes_an_upstream_failure_through() {
             None
         } else {
             produced = true;
-            Some(Err(boom.clone()))
+            Some(Err(AdmittedStreamError::new(&boom).unwrap()))
         }
     });
     match each(
         source,
-        closure,
+        AdmittedValue::new(&closure).unwrap(),
         &file,
         command_span(&file),
         &mut env,
@@ -209,7 +211,7 @@ fn each_passes_an_upstream_cancellation_through() {
     assert!(matches!(
         each(
             source,
-            closure,
+            AdmittedValue::new(&closure).unwrap(),
             &file,
             command_span(&file),
             &mut env,
@@ -232,7 +234,7 @@ fn each_reports_a_cancelled_closure() {
     assert!(matches!(
         each(
             ints(&[1]),
-            closure,
+            AdmittedValue::new(&closure).unwrap(),
             &file,
             command_span(&file),
             &mut env,
@@ -252,7 +254,7 @@ fn where_keeps_only_matching_items() {
     let mut env = Environment::new();
     let mut filter = r#where(
         ints(&[1, 2, 3, 4]),
-        closure,
+        AdmittedValue::new(&closure).unwrap(),
         &file,
         command_span(&file),
         &mut env,
@@ -270,7 +272,7 @@ fn where_can_filter_everything_out() {
     let mut env = Environment::new();
     let mut filter = r#where(
         ints(&[1, 2, 3]),
-        closure,
+        AdmittedValue::new(&closure).unwrap(),
         &file,
         command_span(&file),
         &mut env,
@@ -286,7 +288,7 @@ fn where_reports_a_non_boolean_predicate() {
     let mut env = Environment::new();
     let mut filter = r#where(
         ints(&[1]),
-        closure,
+        AdmittedValue::new(&closure).unwrap(),
         &file,
         command_span(&file),
         &mut env,
@@ -307,7 +309,7 @@ fn where_surfaces_a_closure_runtime_error() {
     let mut env = Environment::new();
     match r#where(
         ints(&[1]),
-        closure,
+        AdmittedValue::new(&closure).unwrap(),
         &file,
         command_span(&file),
         &mut env,
@@ -329,7 +331,7 @@ fn where_passes_an_upstream_cancellation_through() {
     assert!(matches!(
         r#where(
             source,
-            closure,
+            AdmittedValue::new(&closure).unwrap(),
             &file,
             command_span(&file),
             &mut env,
@@ -361,14 +363,15 @@ fn update_replaces_a_field_with_a_static_value_preserving_order() {
     let file = plain_file();
     let limits = EvalLimits::default();
     let mut env = Environment::new();
-    let stream = ValueStream::from_values(vec![record(&[
+    let stream = ValueStream::from_values(&[record(&[
         ("name", Value::string("a")),
         ("size", Value::Int(1)),
-    ])]);
+    ])])
+    .unwrap();
     let mut updater = update(
         stream,
         "size".to_owned(),
-        Value::Int(99),
+        AdmittedValue::new(&Value::Int(99)).unwrap(),
         &file,
         command_span(&file),
         &mut env,
@@ -389,11 +392,11 @@ fn update_applies_a_closure_to_the_current_value() {
     let (file, closure) = built("{|x| x * 10}");
     let limits = EvalLimits::default();
     let mut env = Environment::new();
-    let stream = ValueStream::from_values(vec![record(&[("size", Value::Int(2))])]);
+    let stream = ValueStream::from_values(&[record(&[("size", Value::Int(2))])]).unwrap();
     let mut updater = update(
         stream,
         "size".to_owned(),
-        closure,
+        AdmittedValue::new(&closure).unwrap(),
         &file,
         command_span(&file),
         &mut env,
@@ -413,11 +416,11 @@ fn update_reports_a_missing_key() {
     let file = plain_file();
     let limits = EvalLimits::default();
     let mut env = Environment::new();
-    let stream = ValueStream::from_values(vec![record(&[("name", Value::string("a"))])]);
+    let stream = ValueStream::from_values(&[record(&[("name", Value::string("a"))])]).unwrap();
     let mut updater = update(
         stream,
         "size".to_owned(),
-        Value::Int(0),
+        AdmittedValue::new(&Value::Int(0)).unwrap(),
         &file,
         command_span(&file),
         &mut env,
@@ -435,11 +438,11 @@ fn update_reports_a_non_record_item() {
     let file = plain_file();
     let limits = EvalLimits::default();
     let mut env = Environment::new();
-    let stream = ValueStream::from_values(vec![Value::Int(5)]);
+    let stream = ValueStream::from_values(&[Value::Int(5)]).unwrap();
     let mut updater = update(
         stream,
         "size".to_owned(),
-        Value::Int(0),
+        AdmittedValue::new(&Value::Int(0)).unwrap(),
         &file,
         command_span(&file),
         &mut env,
@@ -456,11 +459,11 @@ fn update_surfaces_a_closure_runtime_error() {
     let (file, closure) = built("{|x| missing}");
     let limits = EvalLimits::default();
     let mut env = Environment::new();
-    let stream = ValueStream::from_values(vec![record(&[("size", Value::Int(2))])]);
+    let stream = ValueStream::from_values(&[record(&[("size", Value::Int(2))])]).unwrap();
     match update(
         stream,
         "size".to_owned(),
-        closure,
+        AdmittedValue::new(&closure).unwrap(),
         &file,
         command_span(&file),
         &mut env,
@@ -478,13 +481,14 @@ fn update_passes_an_upstream_cancellation_through() {
     let file = plain_file();
     let limits = EvalLimits::default();
     let mut env = Environment::new();
-    let stream = ValueStream::from_values(vec![record(&[("size", Value::Int(1))])])
+    let stream = ValueStream::from_values(&[record(&[("size", Value::Int(1))])])
+        .unwrap()
         .with_cancellation(CancellationToken::from_fn(|| true));
     assert!(matches!(
         update(
             stream,
             "size".to_owned(),
-            Value::Int(0),
+            AdmittedValue::new(&Value::Int(0)).unwrap(),
             &file,
             command_span(&file),
             &mut env,

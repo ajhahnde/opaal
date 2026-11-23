@@ -2631,6 +2631,9 @@ pub fn validate_input_text(value_type: &ValueType, value: &str) -> Result<(), &'
         | ValueType::ByteSize => Err("value has invalid canonical text"),
         ValueType::Any
         | ValueType::List(_)
+        | ValueType::Tuple(_)
+        | ValueType::Unknown
+        | ValueType::EmptyList
         | ValueType::Record
         | ValueType::Table
         | ValueType::Range

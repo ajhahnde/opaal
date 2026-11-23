@@ -174,7 +174,7 @@ fn non_list_operands_fail_at_the_operand_and_do_not_publish_the_binding() {
     };
     let mut scope = ScopeStack::new();
     scope
-        .declare("bad", BindingMutability::Immutable, Value::Int(7))
+        .declare("bad", BindingMutability::Immutable, &Value::Int(7))
         .unwrap();
     let error = evaluate(&script, &source, &mut scope).unwrap_err();
     assert_eq!(
@@ -212,7 +212,7 @@ fn nested_values_keep_arc_identity_and_native_values_are_not_encoded() {
         .declare(
             "input",
             BindingMutability::Immutable,
-            Value::list(vec![shared, path.clone()]),
+            &Value::list(vec![shared, path.clone()]),
         )
         .unwrap();
     let result = pure("[...input]", &mut scope);
@@ -235,7 +235,7 @@ fn output_items_and_both_allocations_have_exact_budget_boundaries() {
         let run = |items, bytes| {
             let mut scope = ScopeStack::new();
             scope
-                .declare("input", BindingMutability::Immutable, input.clone())
+                .declare("input", BindingMutability::Immutable, &input)
                 .unwrap();
             let result = evaluate_with_limits(
                 &script,
@@ -282,7 +282,7 @@ fn huge_spread_consumes_work_and_can_cancel_during_the_copy() {
             .declare(
                 "input",
                 BindingMutability::Immutable,
-                Value::list(vec![Value::Int(1); 100_000]),
+                &Value::list(vec![Value::Int(1); 100_000]),
             )
             .unwrap();
         let error = evaluate_with_limits(
@@ -305,7 +305,7 @@ fn huge_spread_consumes_work_and_can_cancel_during_the_copy() {
         .declare(
             "input",
             BindingMutability::Immutable,
-            Value::list(vec![Value::Int(1); 100_000]),
+            &Value::list(vec![Value::Int(1); 100_000]),
         )
         .unwrap();
     let error = evaluate_with_limits(

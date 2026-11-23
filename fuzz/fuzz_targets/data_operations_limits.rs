@@ -49,7 +49,7 @@ fn execute(source: &Source, input: &[u8], limits: EvalLimits) -> PrimaryOutcome<
         .declare(
             "input",
             BindingMutability::Immutable,
-            Value::bytes(input.to_vec()),
+            &Value::bytes(input.to_vec()),
         )
         .unwrap();
     let mut session = Session::with_scope(

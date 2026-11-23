@@ -239,6 +239,82 @@ fn pure_task_views_compare_the_receipts_metadata_projection_and_allow_discarded_
 }
 
 #[test]
+fn accepted_task_keeps_scalar_evidence_and_omits_tuple_digests() {
+    for (result_type, value, expected) in [
+        (
+            "Int",
+            "count",
+            json!(opaal_runtime::workflow::digest_bytes(b"3")),
+        ),
+        ("(Int, String)", "(count, label)", Value::Null),
+    ] {
+        let project = Project::new();
+        fs::write(
+            project.0.join("saved-tasks.opaal"),
+            format!(
+                "action saved(expected_id: String, expected_platform: String, expected_revision: String) -> {result_type} {{\n    effects {{}}\n    let (count, label) = (3, \"ready\")\n    return {value}\n}}\ntask saved = saved\n",
+            ),
+        )
+        .unwrap();
+        let digest = project.plan("abc123");
+        let run = project.run(&digest, b"", false);
+        assert!(run.status.success(), "{run:?}");
+        assert!(run.stdout.is_empty());
+        let audit = project.read("audit.json");
+        assert_eq!(audit["primary"]["value_digest"], expected);
+        let journal = fs::read_to_string(project.0.join("run.jsonl")).unwrap();
+        let end = journal
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).unwrap())
+            .find(|record| record["kind"] == "action-end")
+            .expect("journal retains the action outcome");
+        assert_eq!(end["payload"]["outcome"]["value_digest"], expected, "{end}");
+    }
+}
+
+#[test]
+fn typed_tuple_task_input_refuses_name_value_binding() {
+    let project = Project::new();
+    fs::write(
+        project.0.join("saved-tasks.opaal"),
+        "action saved(expected_id: String, expected_platform: String, expected_revision: (Int, String)) -> Int {\n    effects {}\n    return 3\n}\ntask saved = saved\n",
+    )
+    .unwrap();
+    let plan = project.command(
+        &[
+            "plan",
+            "--project",
+            "opaal.toml",
+            "--task",
+            "saved",
+            "--environment",
+            "offline",
+            "--input",
+            "expected_id=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "--input",
+            "expected_platform=linux/amd64",
+            "--input",
+            "expected_revision=(3, ready)",
+            "--expires-in",
+            "900s",
+            "--out",
+            "plan.json",
+            "--format",
+            "digest",
+        ],
+        b"",
+    );
+    assert!(!plan.status.success());
+    assert!(plan.stdout.is_empty());
+    let stderr = String::from_utf8(plan.stderr).unwrap();
+    assert!(
+        stderr.contains("no exact name=value representation"),
+        "{stderr}"
+    );
+    assert!(!project.0.join("plan.json").exists());
+}
+
+#[test]
 fn occupied_alias_and_symlink_evidence_paths_refuse_before_stdin_or_effects() {
     for occupied in ["run.jsonl", "receipt.json", "audit.json"] {
         for mode in ["file", "hardlink", "symlink", "directory"] {

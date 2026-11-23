@@ -922,7 +922,7 @@ impl SemanticQueries<'_> {
         let value_type = self
             .program
             .types()
-            .binding_type(definition.module(), definition.span())
+            .observed_binding_type(definition.module(), definition.span())
             .cloned()
             .unwrap_or(ValueType::Any);
         (
@@ -1219,6 +1219,11 @@ impl<'a> CallFinder<'a> {
                         .is_none_or(|best| name.span.len() < best.span.len())
                 {
                     self.best_qualified = Some(name);
+                }
+            }
+            ExpressionKind::Tuple(tuple) => {
+                for element in &tuple.elements {
+                    self.expression(element);
                 }
             }
             ExpressionKind::List(items) => {

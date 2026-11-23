@@ -6,10 +6,20 @@ All notable changes to OPAAL are documented here.
 
 ### Added
 
+- Add typed tuples and destructuring. Return fixed-size mixed results such as
+  `(3, "ready")`, annotate them as `(Int, String)`, and bind their slots with
+  `let (count, label) = result`. Tuple patterns also work in function parameters
+  and match arms.
 - Select a value with `if condition { value } else { fallback }` in bindings,
   return values, and other expression positions. The checker visits every arm
   and execution evaluates only the selected value. `else if` chains end with a
   required `else`.
+
+### Changed
+
+- In grouped jobs, an adjacent comma after a bare command name starts a
+  tuple when another slot follows. Embedders can preserve a registered
+  comma-bearing command head with an escape such as `(name\, argument)`.
 
 ### Security
 

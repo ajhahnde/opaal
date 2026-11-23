@@ -10,7 +10,8 @@ use std::fmt::Write as _;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::command::Carrier;
-use crate::{Table, Value};
+use crate::eval::shape::{self, Node};
+use crate::{Table, Value, ValueAdmissionError};
 
 const COLUMN_SEPARATOR: &str = " | ";
 const DIVIDER_SEPARATOR: &str = "-+-";
@@ -134,32 +135,43 @@ pub fn select_terminal_presentation(
 ///
 /// The returned text has no trailing newline. Width zero returns an empty
 /// string. When the width cannot hold the table's minimum frame, a clipped
-/// marker is returned instead of overflowing.
+/// marker is returned instead of overflowing. Unsupported data yields no text.
 #[must_use]
 pub fn render_table(table: &Table, terminal_columns: usize) -> String {
+    try_render_table(table, terminal_columns).unwrap_or_default()
+}
+
+pub(crate) fn try_render_table(table: &Table, terminal_columns: usize) -> std::io::Result<String> {
     if terminal_columns == 0 {
-        return String::new();
+        return Ok(String::new());
     }
     if table.columns().is_empty() {
-        return truncate_to_width(EMPTY_TABLE_MARKER, terminal_columns);
+        return Ok(truncate_to_width(EMPTY_TABLE_MARKER, terminal_columns));
     }
 
     let separator_width = COLUMN_SEPARATOR.len() * (table.columns().len() - 1);
     let minimum_width = table.columns().len() + separator_width;
     if terminal_columns < minimum_width {
-        return truncate_to_width(TABLE_MARKER, terminal_columns);
+        return Ok(truncate_to_width(TABLE_MARKER, terminal_columns));
     }
+    let tuple = check_shape(&Value::Table(table.clone()))?;
 
     let headers: Vec<String> = table
         .columns()
         .iter()
         .map(|column| escape_controls(column))
         .collect();
+    let mut budget = crate::eval::ResourceBudget::opaal();
+    let mut buffer = Vec::new();
     let rows: Vec<Vec<Cell>> = table
         .rows()
         .iter()
-        .map(|row| row.iter().map(cell).collect())
-        .collect();
+        .map(|row| {
+            row.iter()
+                .map(|value| cell(value, tuple, &mut budget, &mut buffer))
+                .collect()
+        })
+        .collect::<std::io::Result<_>>()?;
 
     let mut natural_widths: Vec<usize> = headers
         .iter()
@@ -188,20 +200,73 @@ pub fn render_table(table: &Table, terminal_columns: usize) -> String {
     ));
     lines.push(render_divider(&widths));
     lines.extend(rows.iter().map(|row| render_cells(row, &widths)));
-    lines.join("\n")
+    Ok(lines.join("\n"))
 }
 
-fn cell(value: &Value) -> Cell {
+/// Prepares a value for human output. Tuple-bearing data uses bounded rendering.
+pub fn render_value(value: &Value) -> std::io::Result<String> {
+    if !check_shape(value)? {
+        return Ok(value.to_string());
+    }
+    let mut buffer = Vec::new();
+    display_value(
+        value,
+        &mut crate::eval::ResourceBudget::opaal(),
+        &mut buffer,
+    )?;
+    Ok(String::from_utf8(buffer).expect("the display writer emits UTF-8"))
+}
+
+fn check_shape(value: &Value) -> std::io::Result<bool> {
+    shape::check(
+        || std::iter::once(Node::Value(value)),
+        |_| Ok::<_, std::convert::Infallible>(()),
+    )
+    .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidData, ValueAdmissionError))
+}
+
+fn display_value(
+    value: &Value,
+    budget: &mut crate::eval::ResourceBudget,
+    buffer: &mut Vec<u8>,
+) -> std::io::Result<()> {
+    crate::operational::stdio::display::render(
+        value,
+        crate::operational::standard::MAX_CALL_BYTES,
+        budget,
+        &|| Ok(()),
+        buffer,
+    )
+    .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))
+}
+
+fn cell(
+    value: &Value,
+    tuple: bool,
+    budget: &mut crate::eval::ResourceBudget,
+    buffer: &mut Vec<u8>,
+) -> std::io::Result<Cell> {
     let alignment = match value {
         Value::Int(_) | Value::Float(_) | Value::Duration(_) | Value::ByteSize(_) => {
             Alignment::Right
         }
         _ => Alignment::Left,
     };
-    Cell {
-        text: escape_controls(&value.to_string()),
-        alignment,
-    }
+    let text = if tuple {
+        display_value(value, budget, buffer)?;
+        let text =
+            escape_controls(std::str::from_utf8(buffer).expect("the display writer emits UTF-8"));
+        if !budget.charge_collection_bytes(text.len()) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "table display limit exceeded",
+            ));
+        }
+        text
+    } else {
+        escape_controls(&value.to_string())
+    };
+    Ok(Cell { text, alignment })
 }
 
 fn allocate_widths(natural: &[usize], content_budget: usize) -> Vec<usize> {

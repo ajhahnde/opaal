@@ -1,5 +1,6 @@
 use crate::classification::classify_opaal_tokens;
 use crate::lexer::lex_opaal_with_control;
+use crate::tuple_depth::{MAX_TUPLE_DEPTH, TupleDepthError, check_tuple_depth};
 use crate::{
     ActionDefinition, AndChain, AndOperator, Assignment, AstNode, BinaryExpression, BinaryOperator,
     Block, CallExpression, CapabilityName, Closure, CommandHead, CommandHeadKind, CommandItem,
@@ -15,9 +16,9 @@ use crate::{
     PatternField, PipeOperator, Pipeline, QualifiedName, RecordEntry, RecordKey, Redirection,
     RedirectionKind, Script, Severity, SourceFile, Span, Stage, StageKind, Statement,
     StatementKind, StaticEffectArgument, SyntaxClassification, TaskDefinition, Token, TokenKind,
-    TryStatement, TypeConstraint, TypeParameter, TypeReference, UnaryExpression, UnaryOperator,
-    VariantDeclaration, VariantPattern, VariantTypeDeclaration, WhileStatement, Word, WordPart,
-    WordPartKind,
+    TryStatement, TupleSyntax, TypeConstraint, TypeParameter, TypeReference, TypeReferenceKind,
+    UnaryExpression, UnaryOperator, VariantDeclaration, VariantPattern, VariantTypeDeclaration,
+    WhileStatement, Word, WordPart, WordPartKind,
 };
 
 /// The result of parsing one source file.
@@ -64,6 +65,8 @@ pub fn parse_opaal_with_control(
 pub(crate) struct FormatSpans {
     pub(crate) interpolations: Vec<Span>,
     pub(crate) if_arms: Vec<IfArmSpans>,
+    pub(crate) tuple_commas: Vec<Span>,
+    pub(crate) tuple_trailing_commas: Vec<Span>,
 }
 
 pub(crate) struct IfArmSpans {
@@ -140,12 +143,17 @@ type ParseResult<T> = Result<T, ParseError>;
 
 pub(crate) const MAX_IF_EXPRESSION_DEPTH: usize = 32;
 pub(crate) const IF_EXPRESSION_DEPTH_ERROR: &str = "if expressions can nest at most 32 levels";
+const TUPLE_DEPTH_ERROR: &str = "a path containing a tuple can nest at most 32 levels";
 
 struct Parser<'source, 'control, 'metadata> {
     source: &'source SourceFile,
     tokens: Vec<Token>,
     position: usize,
     bracket_ends: Vec<usize>,
+    group_commas: Vec<Option<usize>>,
+    group_has_chain: Vec<bool>,
+    tuple_groups: usize,
+    completed_tuples: usize,
     continuation_depth: usize,
     control_condition_depth: usize,
     block_header_depth: Option<usize>,
@@ -167,6 +175,10 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
         Self {
             source,
             bracket_ends: vec![0; tokens.len()],
+            group_commas: vec![None; tokens.len()],
+            group_has_chain: vec![false; tokens.len()],
+            tuple_groups: 0,
+            completed_tuples: 0,
             tokens,
             position: 0,
             continuation_depth: 0,
@@ -182,20 +194,10 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
     }
 
     fn parse_script(mut self) -> ParseResult<Script> {
-        self.check_cancelled()?;
-        // Index target and generic-call lookahead share one linear delimiter census.
-        let mut brackets = Vec::new();
-        for (position, token) in self.tokens.iter().enumerate() {
-            self.check_cancelled()?;
-            match token.kind() {
-                TokenKind::Delimiter(Delimiter::LeftBracket) => brackets.push(position),
-                TokenKind::Delimiter(Delimiter::RightBracket) => {
-                    if let Some(open) = brackets.pop() {
-                        self.bracket_ends[open] = position;
-                    }
-                }
-                _ => {}
-            }
+        self.index_delimiters()?;
+        let has_tuple_candidate = self.group_commas.iter().any(Option::is_some);
+        if has_tuple_candidate {
+            self.preflight_tuple_depth()?;
         }
         let statements = self.parse_statement_list(None)?;
         self.skip_separators();
@@ -210,12 +212,192 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
         if !self.diagnostics.is_empty() {
             return Err(ParseError::InvalidMany(self.diagnostics));
         }
-        Ok(Script::new(
+        let script = Script::new(
             statements,
             self.source
                 .span(0..self.source.len())
                 .expect("the complete source range is valid"),
-        ))
+        );
+        if has_tuple_candidate {
+            match check_tuple_depth(&script, self.is_cancelled) {
+                Ok(()) => {}
+                Err(TupleDepthError::Cancelled) => return Err(ParseError::Cancelled),
+                Err(TupleDepthError::Exceeded(span)) => {
+                    return Err(self.invalid_at(span, TUPLE_DEPTH_ERROR));
+                }
+            }
+        }
+        Ok(script)
+    }
+
+    fn index_delimiters(&mut self) -> ParseResult<()> {
+        // Index, generic-call, and tuple lookahead share one delimiter census.
+        let mut delimiters = Vec::new();
+        for (position, token) in self.tokens.iter().enumerate() {
+            self.check_cancelled()?;
+            match token.kind() {
+                TokenKind::Delimiter(
+                    Delimiter::LeftParenthesis | Delimiter::LeftBracket | Delimiter::LeftBrace,
+                )
+                | TokenKind::DoubleQuoteStart
+                | TokenKind::InterpolationStart => {
+                    delimiters.push((position, false));
+                }
+                TokenKind::Delimiter(
+                    Delimiter::RightParenthesis | Delimiter::RightBracket | Delimiter::RightBrace,
+                )
+                | TokenKind::DoubleQuoteEnd => {
+                    if let Some((open, _)) = delimiters.pop()
+                        && token.kind() == TokenKind::Delimiter(Delimiter::RightBracket)
+                    {
+                        self.bracket_ends[open] = position;
+                    }
+                }
+                TokenKind::Operator(Operator::Comma) => {
+                    if let Some(&(open, chain)) = delimiters.last()
+                        && self.tokens[open].kind()
+                            == TokenKind::Delimiter(Delimiter::LeftParenthesis)
+                        && self.group_commas[open].is_none()
+                    {
+                        self.group_commas[open] = Some(position);
+                        self.group_has_chain[open] = chain;
+                    }
+                }
+                TokenKind::Operator(
+                    Operator::Pipe | Operator::PipeBoth | Operator::Or | Operator::And,
+                ) => {
+                    if let Some((_, chain)) = delimiters.last_mut() {
+                        *chain = true;
+                    }
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
+    fn preflight_tuple_depth(&mut self) -> ParseResult<()> {
+        #[derive(Clone, Copy, Default)]
+        struct Frame {
+            depth: usize,
+            tuple: bool,
+            excess: Option<Span>,
+            receiver: bool,
+        }
+        let mut frames = Vec::<Frame>::new();
+        let mut previous = None;
+        for position in 0..self.tokens.len() {
+            self.check_cancelled()?;
+            let token = self.tokens[position];
+            match token.kind() {
+                TokenKind::Delimiter(
+                    Delimiter::LeftParenthesis | Delimiter::LeftBracket | Delimiter::LeftBrace,
+                )
+                | TokenKind::DoubleQuoteStart
+                | TokenKind::InterpolationStart => {
+                    let mut frame = frames.last().copied().unwrap_or_default();
+                    let receiver = matches!(
+                        previous,
+                        Some(
+                            TokenKind::Identifier
+                                | TokenKind::Number(_)
+                                | TokenKind::SingleQuoted
+                                | TokenKind::DoubleQuoteEnd
+                                | TokenKind::Keyword(
+                                    Keyword::Null | Keyword::True | Keyword::False
+                                )
+                                | TokenKind::Delimiter(
+                                    Delimiter::RightParenthesis
+                                        | Delimiter::RightBracket
+                                        | Delimiter::RightBrace
+                                )
+                        )
+                    );
+                    self.position = position;
+                    let closure = self.starts_closure();
+                    let record = token.kind() == TokenKind::Delimiter(Delimiter::LeftBrace)
+                        && self.is_record_opener(position, previous);
+                    let parentheses =
+                        token.kind() == TokenKind::Delimiter(Delimiter::LeftParenthesis);
+                    if parentheses
+                        && !receiver
+                        && !self.group_has_chain[position]
+                        && let Some(comma) = self.group_commas[position]
+                        && let Some(first) = self.next_non_layout_position(position + 1)
+                    {
+                        self.position = first;
+                        frame.tuple |= self.starts_tuple_head(comma);
+                    }
+                    // A first receiver delimiter can be a parameter or assignment header.
+                    // Leave that ambiguous level for the AST check.
+                    let brackets = token.kind() == TokenKind::Delimiter(Delimiter::LeftBracket)
+                        && !self.followed_by_delimiter(position, Delimiter::RightBracket);
+                    if closure
+                        || record && !self.followed_by_delimiter(position, Delimiter::RightBrace)
+                        || (parentheses || brackets)
+                            && (!receiver || frame.receiver || frame.depth != 0)
+                    {
+                        frame.depth += 1;
+                        if frame.depth > MAX_TUPLE_DEPTH {
+                            frame.excess.get_or_insert(token.span());
+                        }
+                    }
+                    frame.receiver |= receiver && (parentheses || brackets);
+                    if frame.tuple
+                        && let Some(span) = frame.excess
+                    {
+                        return Err(self.invalid_at(span, TUPLE_DEPTH_ERROR));
+                    }
+                    frames.push(frame);
+                }
+                TokenKind::Delimiter(
+                    Delimiter::RightParenthesis | Delimiter::RightBracket | Delimiter::RightBrace,
+                )
+                | TokenKind::DoubleQuoteEnd => {
+                    frames.pop();
+                }
+                TokenKind::Whitespace
+                | TokenKind::Comment
+                | TokenKind::DocumentationComment
+                | TokenKind::LineContinuation => continue,
+                _ => {}
+            }
+            previous = Some(token.kind());
+        }
+        self.position = 0;
+        Ok(())
+    }
+
+    fn is_record_opener(&self, position: usize, previous: Option<TokenKind>) -> bool {
+        if matches!(
+            previous,
+            Some(
+                TokenKind::Operator(Operator::Assign | Operator::Colon | Operator::Comma)
+                    | TokenKind::Delimiter(Delimiter::LeftParenthesis | Delimiter::LeftBracket)
+                    | TokenKind::Keyword(Keyword::Return | Keyword::Throw)
+                    | TokenKind::InterpolationStart
+            )
+        ) {
+            return true;
+        }
+        let Some(first) = self.next_non_layout_position(position + 1) else {
+            return false;
+        };
+        self.tokens[first].kind() == TokenKind::Identifier
+            && self
+                .next_non_layout_position(first + 1)
+                .is_some_and(|colon| {
+                    self.tokens[colon].kind() == TokenKind::Operator(Operator::Colon)
+                        && self.tokens.get(colon + 1).is_none_or(|next| {
+                            next.kind() != TokenKind::Operator(Operator::Colon)
+                                || !self.tokens[colon].is_adjacent_to(next)
+                        })
+                })
+    }
+
+    fn followed_by_delimiter(&self, position: usize, delimiter: Delimiter) -> bool {
+        self.next_non_layout_position(position + 1)
+            .is_some_and(|next| self.tokens[next].kind() == TokenKind::Delimiter(delimiter))
     }
 
     fn parse_statement_list(&mut self, closing: Option<Delimiter>) -> ParseResult<Vec<Statement>> {
@@ -1336,6 +1518,9 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
                 Ok(Pattern::Binding(name.segments[0]))
             }
             Some(TokenKind::Delimiter(Delimiter::LeftBracket)) => self.parse_list_pattern(),
+            Some(TokenKind::Delimiter(Delimiter::LeftParenthesis)) => {
+                self.parse_tuple(Self::parse_pattern).map(Pattern::Tuple)
+            }
             Some(TokenKind::Keyword(Keyword::Null | Keyword::True | Keyword::False))
             | Some(TokenKind::Number(_))
             | Some(TokenKind::SingleQuoted)
@@ -1532,15 +1717,18 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
         if self.is_end() {
             return Err(self.incomplete_here(IncompleteReason::TypeReference));
         }
-        let qualified = self.parse_qualified_name()?;
-        let name = *qualified
-            .segments
-            .last()
-            .expect("a qualified type name has at least one segment");
-        let start = qualified.span;
+        if self.at_delimiter(Some(Delimiter::LeftParenthesis)) {
+            let tuple = self.parse_tuple(Self::parse_type_reference)?;
+            return Ok(TypeReference {
+                span: tuple.span,
+                kind: TypeReferenceKind::Tuple(Box::new(tuple)),
+            });
+        }
+        let name = self.parse_qualified_name()?;
+        let start = name.span;
         self.skip_inline();
         let mut arguments = Vec::new();
-        let mut end = name.span().end();
+        let mut end = name.span.end();
         if self.take_delimiter(Delimiter::LeftBracket).is_some() {
             self.skip_layout();
             loop {
@@ -1559,8 +1747,7 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
             end = close.span().end();
         }
         Ok(TypeReference {
-            name,
-            arguments,
+            kind: TypeReferenceKind::Named { name, arguments },
             span: self.span(start.start(), end),
         })
     }
@@ -1596,6 +1783,7 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
             Pattern::Literal(literal) => literal.span(),
             Pattern::Binding(identifier) => identifier.span(),
             Pattern::List(pattern) => pattern.span,
+            Pattern::Tuple(pattern) => pattern.span,
             Pattern::NominalRecord(pattern) => pattern.span,
             Pattern::Variant(pattern) => pattern.span,
         }
@@ -1604,6 +1792,10 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
     fn pattern_primary_binding(&self, pattern: &Pattern) -> Option<Identifier> {
         match pattern {
             Pattern::Binding(identifier) => Some(*identifier),
+            Pattern::Tuple(pattern) => pattern
+                .elements
+                .iter()
+                .find_map(|pattern| self.pattern_primary_binding(pattern)),
             Pattern::List(pattern) => pattern
                 .elements
                 .iter()
@@ -1624,6 +1816,10 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
     fn parse_conditional_chain(&mut self) -> ParseResult<ConditionalChain> {
         self.check_cancelled()?;
         let first = self.parse_and_chain()?;
+        self.parse_conditional_suffix(first)
+    }
+
+    fn parse_conditional_suffix(&mut self, first: AndChain) -> ParseResult<ConditionalChain> {
         let start = first.span();
         let mut end = first.span().end();
         let mut terms = vec![first];
@@ -1678,6 +1874,10 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
     fn parse_and_chain(&mut self) -> ParseResult<AndChain> {
         self.check_cancelled()?;
         let first = self.parse_pipeline()?;
+        self.parse_and_suffix(first)
+    }
+
+    fn parse_and_suffix(&mut self, first: Pipeline) -> ParseResult<AndChain> {
         let start = first.span();
         let mut end = first.span().end();
         let mut terms = vec![first];
@@ -1709,6 +1909,10 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
     fn parse_pipeline(&mut self) -> ParseResult<Pipeline> {
         self.check_cancelled()?;
         let first = self.parse_stage()?;
+        self.parse_pipeline_suffix(first)
+    }
+
+    fn parse_pipeline_suffix(&mut self, first: Stage) -> ParseResult<Pipeline> {
         let start = first.span();
         let mut end = first.span().end();
         let mut stages = vec![first];
@@ -2153,15 +2357,18 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
 
     fn parse_expression(&mut self) -> ParseResult<Expression> {
         self.check_cancelled()?;
+        let before = self.completed_tuples;
         let left = self.parse_unary()?;
-        self.parse_binary_suffix(left, 1)
+        self.parse_binary_suffix(left, 1, before)
     }
 
     fn parse_binary_suffix(
         &mut self,
         mut left: Expression,
         minimum: u8,
+        before: usize,
     ) -> ParseResult<Expression> {
+        let mut wraps = 0;
         loop {
             self.check_cancelled()?;
             self.skip_inline();
@@ -2172,9 +2379,11 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
                 break;
             }
             let token = self.take().expect("binary operator is current");
+            self.check_tuple_chain(before, &mut wraps, token.span())?;
             self.skip_layout();
+            let before_right = self.completed_tuples;
             let right = self.parse_unary()?;
-            let right = self.parse_binary_suffix(right, precedence + 1)?;
+            let right = self.parse_binary_suffix(right, precedence + 1, before_right)?;
             left = self.binary(left, operator, token.span(), right);
             if let Some((_, next_precedence)) = self.binary_operator()
                 && precedence == next_precedence
@@ -2213,39 +2422,77 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
 
     fn parse_unary(&mut self) -> ParseResult<Expression> {
         self.check_cancelled()?;
-        let operator = match self.current_kind() {
-            Some(TokenKind::Operator(Operator::Bang)) => UnaryOperator::Not,
-            Some(TokenKind::Operator(Operator::Plus)) => UnaryOperator::Positive,
-            Some(TokenKind::Operator(Operator::Minus)) => UnaryOperator::Negative,
-            _ => return self.parse_postfix(),
-        };
-        self.parse_unary_operator(operator)
+        if self.unary_operator().is_none() {
+            return self.parse_postfix();
+        }
+        self.parse_unary_prefix()
     }
 
-    fn parse_unary_operator(&mut self, operator: UnaryOperator) -> ParseResult<Expression> {
-        let token = self.take().expect("unary operator is current");
-        self.skip_layout();
-        let operand = self.parse_unary()?;
-        let span = self.span(token.span().start(), operand.span().end());
-        Ok(Expression::new(
-            ExpressionKind::Unary(UnaryExpression {
-                operator: AstNode::new(operator, token.span()),
-                operand: Box::new(operand),
-            }),
-            span,
-        ))
+    fn unary_operator(&self) -> Option<UnaryOperator> {
+        match self.current_kind() {
+            Some(TokenKind::Operator(Operator::Bang)) => Some(UnaryOperator::Not),
+            Some(TokenKind::Operator(Operator::Plus)) => Some(UnaryOperator::Positive),
+            Some(TokenKind::Operator(Operator::Minus)) => Some(UnaryOperator::Negative),
+            _ => None,
+        }
+    }
+
+    fn parse_unary_prefix(&mut self) -> ParseResult<Expression> {
+        let mut operators = Vec::new();
+        while let Some(operator) = self.unary_operator() {
+            self.check_cancelled()?;
+            let token = self.take().expect("unary operator is current");
+            if self.tuple_groups != 0 && operators.len() == MAX_TUPLE_DEPTH {
+                return Err(self.invalid_at(token.span(), TUPLE_DEPTH_ERROR));
+            }
+            operators.push(AstNode::new(operator, token.span()));
+            self.skip_layout();
+        }
+        let before = self.completed_tuples;
+        let mut operand = self.parse_postfix()?;
+        if self.completed_tuples > before
+            && let Some(excess) = operators.get(MAX_TUPLE_DEPTH)
+        {
+            return Err(self.invalid_at(excess.span(), TUPLE_DEPTH_ERROR));
+        }
+        for operator in operators.into_iter().rev() {
+            let span = self.span(operator.span().start(), operand.span().end());
+            operand = Expression::new(
+                ExpressionKind::Unary(UnaryExpression {
+                    operator,
+                    operand: Box::new(operand),
+                }),
+                span,
+            );
+        }
+        Ok(operand)
     }
 
     fn parse_postfix(&mut self) -> ParseResult<Expression> {
         self.check_cancelled()?;
+        let before = self.completed_tuples;
         let expression = self.parse_primary()?;
-        self.parse_postfix_suffixes(expression)
+        self.parse_postfix_suffixes(expression, before)
     }
 
-    fn parse_postfix_suffixes(&mut self, mut expression: Expression) -> ParseResult<Expression> {
+    fn parse_postfix_suffixes(
+        &mut self,
+        mut expression: Expression,
+        before: usize,
+    ) -> ParseResult<Expression> {
+        let mut wraps = 0;
         loop {
             self.check_cancelled()?;
             self.skip_inline();
+            if let Some(token) = self.current().copied()
+                && matches!(
+                    token.kind(),
+                    TokenKind::Delimiter(Delimiter::LeftParenthesis | Delimiter::LeftBracket)
+                        | TokenKind::Operator(Operator::Dot)
+                )
+            {
+                self.check_tuple_chain(before, &mut wraps, token.span())?;
+            }
             match self.current_kind() {
                 Some(TokenKind::Operator(Operator::Colon))
                     if matches!(
@@ -2442,6 +2689,16 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
         Ok(expression)
     }
 
+    fn check_tuple_chain(&self, before: usize, wraps: &mut usize, span: Span) -> ParseResult<()> {
+        if self.tuple_groups != 0 || self.completed_tuples > before {
+            *wraps += 1;
+            if *wraps > MAX_TUPLE_DEPTH {
+                return Err(self.invalid_at(span, TUPLE_DEPTH_ERROR));
+            }
+        }
+        Ok(())
+    }
+
     fn parse_primary(&mut self) -> ParseResult<Expression> {
         self.check_cancelled()?;
         self.skip_inline();
@@ -2629,8 +2886,24 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
     }
 
     fn parse_grouped_job(&mut self) -> ParseResult<Expression> {
+        let comma = self.group_commas[self.position];
+        let has_chain = self.group_has_chain[self.position];
         let open = self.take().expect("group opener is current");
         self.continuation_depth += 1;
+        self.skip_layout();
+        let in_tuple = !has_chain && comma.is_some_and(|comma| self.starts_tuple_head(comma));
+        self.tuple_groups += usize::from(in_tuple);
+        let result = self.parse_group_contents(open, comma);
+        self.tuple_groups -= usize::from(in_tuple);
+        self.continuation_depth -= 1;
+        result
+    }
+
+    fn parse_group_contents(
+        &mut self,
+        open: Token,
+        comma: Option<usize>,
+    ) -> ParseResult<Expression> {
         self.skip_layout();
         if self.current_kind() == Some(TokenKind::Identifier)
             && self.name_is_assignment()
@@ -2639,19 +2912,128 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
         {
             return Err(self.invalid_at(token.span(), "compound assignment requires a statement"));
         }
-        let chain = self.parse_conditional_chain()?;
+        let chain = if let Some(comma) = comma
+            && self.starts_tuple_head(comma)
+        {
+            let first = self.parse_expression()?;
+            self.skip_layout();
+            if self.position == comma {
+                let tuple = self.parse_tuple_tail(open, first, Self::parse_expression)?;
+                let span = tuple.span;
+                return Ok(Expression::new(ExpressionKind::Tuple(tuple), span));
+            }
+            let span = first.span();
+            let pipeline =
+                self.parse_pipeline_suffix(Stage::new(StageKind::Expression(first), span))?;
+            let and = self.parse_and_suffix(pipeline)?;
+            self.parse_conditional_suffix(and)?
+        } else {
+            self.parse_conditional_chain()?
+        };
         self.skip_layout();
         if self.current_kind() == Some(TokenKind::Operator(Operator::Background)) {
             return Err(self.invalid_here("backgrounding is forbidden inside a grouped job"));
         }
         let close =
             self.expect_delimiter(Delimiter::RightParenthesis, "grouped job is not closed")?;
-        self.continuation_depth -= 1;
         let span = self.span(open.span().start(), close.span().end());
         Ok(Expression::new(
             ExpressionKind::GroupedJob(Box::new(chain)),
             span,
         ))
+    }
+
+    fn starts_tuple_head(&self, comma: usize) -> bool {
+        if self.starts_expression_stage() {
+            return true;
+        }
+        let Some(head) = self.current().copied() else {
+            return false;
+        };
+        if head.kind() != TokenKind::Identifier {
+            return false;
+        }
+        let Some(next) = self.next_non_layout_position(self.position + 1) else {
+            return false;
+        };
+        if next == comma {
+            return head.is_adjacent_to(&self.tokens[comma])
+                && self
+                    .next_non_layout_position(comma + 1)
+                    .is_none_or(|after| {
+                        self.tokens[after].kind()
+                            != TokenKind::Delimiter(Delimiter::RightParenthesis)
+                    });
+        }
+        // A shorthand field is also an existing command interpolation.
+        self.tokens[next].kind() == TokenKind::Delimiter(Delimiter::LeftBrace)
+            && self
+                .next_non_layout_position(next + 1)
+                .is_some_and(|field| {
+                    self.tokens[field].kind() == TokenKind::Identifier
+                        && self
+                            .next_non_layout_position(field + 1)
+                            .is_some_and(|colon| {
+                                let token = &self.tokens[colon];
+                                token.kind() == TokenKind::Operator(Operator::Colon)
+                                    && !self.tokens.get(colon + 1).is_some_and(|second| {
+                                        second.kind() == TokenKind::Operator(Operator::Colon)
+                                            && token.is_adjacent_to(second)
+                                    })
+                            })
+                })
+    }
+
+    fn parse_tuple<T>(
+        &mut self,
+        parse_element: fn(&mut Self) -> ParseResult<T>,
+    ) -> ParseResult<TupleSyntax<T>> {
+        let open = self.take().expect("tuple opener is current");
+        self.skip_layout();
+        let first = parse_element(self)?;
+        self.skip_layout();
+        self.parse_tuple_tail(open, first, parse_element)
+    }
+
+    fn parse_tuple_tail<T>(
+        &mut self,
+        open: Token,
+        first: T,
+        parse_element: fn(&mut Self) -> ParseResult<T>,
+    ) -> ParseResult<TupleSyntax<T>> {
+        let first_comma =
+            self.expect_operator(Operator::Comma, "tuple requires at least two slots")?;
+        let mut commas = vec![first_comma.span()];
+        let mut elements = vec![first];
+        let mut trailing_comma = None;
+        loop {
+            self.check_cancelled()?;
+            self.skip_layout();
+            elements.push(parse_element(self)?);
+            self.skip_layout();
+            let Some(comma) = self.take_operator(Operator::Comma) else {
+                break;
+            };
+            commas.push(comma.span());
+            self.skip_layout();
+            if self.at_delimiter(Some(Delimiter::RightParenthesis)) {
+                trailing_comma = Some(comma.span());
+                break;
+            }
+        }
+        let close = self.expect_delimiter(Delimiter::RightParenthesis, "tuple is not closed")?;
+        self.completed_tuples += 1;
+        if let Some(spans) = &mut self.format_spans {
+            spans.tuple_commas.extend_from_slice(&commas);
+            spans.tuple_trailing_commas.extend(trailing_comma);
+        }
+        Ok(TupleSyntax {
+            elements,
+            open: open.span(),
+            commas,
+            close: close.span(),
+            span: self.span(open.span().start(), close.span().end()),
+        })
     }
 
     fn binary(

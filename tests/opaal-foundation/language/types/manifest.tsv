@@ -8,6 +8,7 @@ complete	complete/cross-module-main.opaal	-
 complete	complete/reexport-main.opaal	-
 complete	complete/expected-generic-results.opaal	-
 complete	complete/destructured-exports.opaal	-
+complete	complete/typed-tuples.opaal	-
 invalid	invalid/ambiguous-generic.opaal	SIG010
 invalid	invalid/closure-result-mismatch.opaal	SIG005
 invalid	invalid/conflicting-inference.opaal	SIG004
@@ -33,6 +34,9 @@ invalid	invalid/unreachable-match.opaal	SIG018
 invalid	invalid/ambiguous-variant.opaal	SIG010
 invalid	invalid/declaration-annotation-mismatch.opaal	SIG019
 invalid	invalid/destructured-alias-conflict.opaal	MOD011
+invalid	invalid/tuple-pattern-arity.opaal	SIG017
+invalid	invalid/tuple-result-slot.opaal	SIG005
+invalid	invalid/tuple-conditional-slot.opaal	SIG025
 runtime-invalid	invalid/destructuring-mismatch.opaal	value does not match the pattern
 runtime-invalid	invalid/destructured-homogeneous-assignment.opaal	binding expects Int, found string
 runtime-invalid	invalid/destructured-homogeneous-rest-assignment.opaal	binding expects List[Int], found list

@@ -25,9 +25,12 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use crate::eval::{CancelReason, Completion, EvalLimits, RuntimeError, apply_callable};
+use crate::eval::{
+    CancelReason, Completion, EvalLimits, RuntimeError, RuntimeErrorKind, apply_admitted_callable,
+    apply_callable, shape,
+};
 use crate::stream::{StreamPull, ValueStream};
-use crate::{Environment, Record, Value};
+use crate::{AdmittedValue, Environment, Record, Value};
 use opaal_syntax::{SourceFile, Span};
 
 /// Owned evaluator context shared by lazy closure-driven pipeline stages.
@@ -67,7 +70,7 @@ impl OwnedClosureContext {
         arguments: Vec<Value>,
         span: Span,
     ) -> Result<Completion, RuntimeError> {
-        apply_callable(
+        apply_admitted_callable(
             callable,
             arguments,
             &self.source,
@@ -112,7 +115,7 @@ pub struct EachStream<'a> {
 /// through [`apply_callable`].
 pub fn each<'a>(
     input: ValueStream,
-    closure: Value,
+    closure: AdmittedValue,
     source: &'a SourceFile,
     span: Span,
     env: &'a mut Environment,
@@ -120,7 +123,7 @@ pub fn each<'a>(
 ) -> EachStream<'a> {
     EachStream {
         input,
-        closure,
+        closure: closure.into_value(),
         source,
         span,
         env,
@@ -140,7 +143,7 @@ impl EachStream<'_> {
         match self.input.pull() {
             StreamPull::Item(value) => match apply_callable(
                 &self.closure,
-                vec![value],
+                &[value],
                 self.source,
                 self.span,
                 self.env,
@@ -184,6 +187,15 @@ pub struct OwnedEachStream {
 /// Build an owned lazy `each` transformer.
 #[must_use]
 pub fn each_owned(
+    input: ValueStream,
+    closure: AdmittedValue,
+    span: Span,
+    context: OwnedClosureContext,
+) -> OwnedEachStream {
+    each_owned_admitted(input, closure.into_value(), span, context)
+}
+
+pub(crate) fn each_owned_admitted(
     input: ValueStream,
     closure: Value,
     span: Span,
@@ -276,7 +288,7 @@ pub struct WhereStream<'a> {
 /// stays bounded behind a bounded downstream.
 pub fn r#where<'a>(
     input: ValueStream,
-    closure: Value,
+    closure: AdmittedValue,
     source: &'a SourceFile,
     span: Span,
     env: &'a mut Environment,
@@ -284,7 +296,7 @@ pub fn r#where<'a>(
 ) -> WhereStream<'a> {
     WhereStream {
         input,
-        closure,
+        closure: closure.into_value(),
         source,
         span,
         env,
@@ -306,7 +318,7 @@ impl WhereStream<'_> {
             match self.input.pull() {
                 StreamPull::Item(value) => match apply_callable(
                     &self.closure,
-                    vec![value.clone()],
+                    std::slice::from_ref(&value),
                     self.source,
                     self.span,
                     self.env,
@@ -358,6 +370,15 @@ pub struct OwnedWhereStream {
 /// Build an owned lazy `where` transformer.
 #[must_use]
 pub fn where_owned(
+    input: ValueStream,
+    closure: AdmittedValue,
+    span: Span,
+    context: OwnedClosureContext,
+) -> OwnedWhereStream {
+    where_owned_admitted(input, closure.into_value(), span, context)
+}
+
+pub(crate) fn where_owned_admitted(
     input: ValueStream,
     closure: Value,
     span: Span,
@@ -449,6 +470,29 @@ pub enum UpdateStep {
     Cancelled(CancelReason),
 }
 
+fn admit_updated_record(value: Value, span: Span, limits: &EvalLimits) -> UpdateStep {
+    let cancel = limits.cancellation_token();
+    let limit = || {
+        UpdateStep::Failed(RuntimeError::new(
+            RuntimeErrorKind::ResourceBudgetExceeded,
+            span,
+        ))
+    };
+    match shape::check(
+        || std::iter::once(shape::Node::Value(&value)),
+        |_| {
+            if cancel.is_cancelled() {
+                return Err(cancel.reason());
+            }
+            Ok(())
+        },
+    ) {
+        Ok(_) => UpdateStep::Record(value),
+        Err(shape::ShapeError::Limit) => limit(),
+        Err(shape::ShapeError::Interrupted(reason)) => UpdateStep::Cancelled(reason),
+    }
+}
+
 /// A pull-driven `update` transformer produced by [`update`].
 pub struct UpdateStream<'a> {
     input: ValueStream,
@@ -472,7 +516,7 @@ pub struct UpdateStream<'a> {
 pub fn update<'a>(
     input: ValueStream,
     key: String,
-    replacement: Value,
+    replacement: AdmittedValue,
     source: &'a SourceFile,
     span: Span,
     env: &'a mut Environment,
@@ -481,7 +525,7 @@ pub fn update<'a>(
     UpdateStream {
         input,
         key,
-        replacement,
+        replacement: replacement.into_value(),
         source,
         span,
         env,
@@ -510,7 +554,7 @@ impl UpdateStream<'_> {
                 let replacement = match &self.replacement {
                     Value::Callable(_) => match apply_callable(
                         &self.replacement,
-                        vec![current],
+                        &[current],
                         self.source,
                         self.span,
                         self.env,
@@ -539,8 +583,11 @@ impl UpdateStream<'_> {
                         }
                     })
                     .collect();
-                let updated = Record::new(entries).expect("keys are unchanged and unique");
-                UpdateStep::Record(Value::Record(updated))
+                let updated =
+                    Value::Record(Record::new(entries).expect("keys are unchanged and unique"));
+                let step = admit_updated_record(updated, self.span, self.limits);
+                self.done = !matches!(step, UpdateStep::Record(_));
+                step
             }
             StreamPull::Item(other) => {
                 self.done = true;
@@ -577,6 +624,16 @@ pub struct OwnedUpdateStream {
 /// Build an owned lazy `update` transformer.
 #[must_use]
 pub fn update_owned(
+    input: ValueStream,
+    key: String,
+    replacement: AdmittedValue,
+    span: Span,
+    context: OwnedClosureContext,
+) -> OwnedUpdateStream {
+    update_owned_admitted(input, key, replacement.into_value(), span, context)
+}
+
+pub(crate) fn update_owned_admitted(
     input: ValueStream,
     key: String,
     replacement: Value,
@@ -638,8 +695,11 @@ impl OwnedUpdateStream {
                         }
                     })
                     .collect();
-                let updated = Record::new(entries).expect("keys are unchanged and unique");
-                UpdateStep::Record(Value::Record(updated))
+                let updated =
+                    Value::Record(Record::new(entries).expect("keys are unchanged and unique"));
+                let step = admit_updated_record(updated, self.span, &self.context.limits);
+                self.done = !matches!(step, UpdateStep::Record(_));
+                step
             }
             StreamPull::Item(other) => {
                 self.done = true;

@@ -58,14 +58,16 @@ impl Evaluator<'_, '_> {
                 } else {
                     self.complete_value_type(value, span)?
                 };
-                if let Some(actual) = actual
-                    && !unify_type(expected, &actual, &mut types)
-                {
-                    return Err(self.invalid_callback(
-                        descriptor,
-                        format!("type evidence `{actual}` conflicts with `{expected}`"),
-                        span,
-                    ));
+                if let Some(actual) = actual {
+                    if actual.has_incomplete_tuple_evidence() {
+                        super::infer_argument_type(expected, value, Some(&actual), &mut types);
+                    } else if !unify_type(expected, &actual, &mut types) {
+                        return Err(self.invalid_callback(
+                            descriptor,
+                            format!("type evidence `{actual}` conflicts with `{expected}`"),
+                            span,
+                        ));
+                    }
                 }
             }
         }
@@ -94,7 +96,30 @@ impl Evaluator<'_, '_> {
     ) -> Eval<Option<ValueType>> {
         self.check_cancel(span)?;
         self.charge(span)?;
-        if let Value::List(values) = value {
+        if let Value::Tuple(values) = value {
+            let bytes = values
+                .len()
+                .saturating_mul(std::mem::size_of::<ValueType>());
+            self.retain_collection_bytes(bytes, span)?;
+            if !self.budget.enter_call() {
+                return Err(self.error(RuntimeErrorKind::ResourceBudgetExceeded, span));
+            }
+            let result = (|| {
+                let mut elements = Vec::new();
+                elements
+                    .try_reserve_exact(values.len())
+                    .map_err(|_| self.error(RuntimeErrorKind::ResourceBudgetExceeded, span))?;
+                for value in values.iter() {
+                    elements.push(
+                        self.complete_value_type(value, span)?
+                            .unwrap_or_else(|| super::unproven_tuple_slot(value)),
+                    );
+                }
+                Ok(Some(ValueType::Tuple(elements)))
+            })();
+            self.budget.leave_call();
+            result
+        } else if let Value::List(values) = value {
             if !self.budget.enter_call() {
                 return Err(self.error(RuntimeErrorKind::ResourceBudgetExceeded, span));
             }
@@ -144,7 +169,9 @@ impl Evaluator<'_, '_> {
                 span,
             ));
         };
-        let Some(function) = callable.as_any().downcast_ref::<CallableValue>() else {
+        let Some(function) =
+            (callable.as_ref() as &dyn std::any::Any).downcast_ref::<CallableValue>()
+        else {
             return Err(self.invalid_callback(
                 descriptor,
                 "callback has no language binding metadata".to_owned(),
@@ -274,32 +301,48 @@ impl Evaluator<'_, '_> {
         )
     }
 
-    /// Validate nested List types with bounded work and recursion before invocation/retention.
+    /// Validate nested collection types with bounded work before invocation or retention.
     pub(super) fn validate_operation_value(
         &mut self,
         expected: &ValueType,
         value: &Value,
         span: Span,
     ) -> Eval<bool> {
-        if let (ValueType::List(element), Value::List(values)) = (expected, value) {
-            if !self.budget.enter_call() {
-                return Err(self.error(RuntimeErrorKind::ResourceBudgetExceeded, span));
+        if let (ValueType::Tuple(types), Value::Tuple(values)) = (expected, value) {
+            if types.len() < 2 || types.len() != values.len() {
+                return Ok(false);
             }
-            let result = (|| {
-                for value in values.iter() {
-                    self.check_cancel(span)?;
-                    self.charge(span)?;
-                    if !self.validate_operation_value(element, value, span)? {
-                        return Ok(false);
-                    }
-                }
-                Ok(true)
-            })();
-            self.budget.leave_call();
-            result
+            self.validate_operation_slots(types.iter().zip(values.iter()), span)
+        } else if let (ValueType::List(element), Value::List(values)) = (expected, value) {
+            self.validate_operation_slots(
+                std::iter::repeat(element.as_ref()).zip(values.iter()),
+                span,
+            )
         } else {
             Ok(expected.accepts(value))
         }
+    }
+
+    fn validate_operation_slots<'a>(
+        &mut self,
+        slots: impl Iterator<Item = (&'a ValueType, &'a Value)>,
+        span: Span,
+    ) -> Eval<bool> {
+        if !self.budget.enter_call() {
+            return Err(self.error(RuntimeErrorKind::ResourceBudgetExceeded, span));
+        }
+        let result = (|| {
+            for (expected, value) in slots {
+                self.check_cancel(span)?;
+                self.charge(span)?;
+                if !self.validate_operation_value(expected, value, span)? {
+                    return Ok(false);
+                }
+            }
+            Ok(true)
+        })();
+        self.budget.leave_call();
+        result
     }
 
     pub(super) fn list_operation(

@@ -1,0 +1,6 @@
+export {summarize}
+
+def summarize[T](label: T, count: Int) -> (Int, T)
+{
+    return (count + 1, label)
+}

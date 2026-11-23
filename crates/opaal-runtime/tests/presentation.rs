@@ -3,8 +3,10 @@
 //! Presentation consumes an already-materialized table. It is deliberately
 //! separate from `Value::Display`, format serialization, and terminal I/O.
 
-use opaal_runtime::presentation::render_table;
-use opaal_runtime::{ByteSize, Duration, FiniteFloat, Record, Table, Value};
+use std::{any::Any, fmt, sync::Arc};
+
+use opaal_runtime::presentation::{render_table, render_value};
+use opaal_runtime::{ByteSize, Callable, Duration, FiniteFloat, Record, Table, Value};
 use unicode_width::UnicodeWidthStr;
 
 fn table(columns: &[&str], rows: Vec<Vec<Value>>) -> Table {
@@ -162,4 +164,71 @@ fn rendering_is_read_only_and_has_no_trailing_newline() {
     assert_eq!(input, before);
     assert_eq!(rendered, "x\n-\n1");
     assert!(!rendered.ends_with('\n'));
+}
+
+#[test]
+fn tuple_presentation_renders_data_and_refuses_nested_embedding_callbacks() {
+    struct Callback;
+    impl fmt::Debug for Callback {
+        fn fmt(&self, _: &mut fmt::Formatter<'_>) -> fmt::Result {
+            panic!("embedding formatter was invoked")
+        }
+    }
+    impl Callable for Callback {
+        fn family(&self) -> &'static str {
+            panic!("embedding family was queried")
+        }
+        fn display(&self, _: &mut fmt::Formatter<'_>) -> fmt::Result {
+            panic!("embedding display was invoked")
+        }
+        fn as_any(&self) -> &dyn Any {
+            panic!("embedding identity was queried")
+        }
+    }
+
+    let pair = Value::Tuple(Arc::from([Value::Int(3), Value::string("ready")]));
+    assert_eq!(render_value(&pair).unwrap(), "(3, \"ready\")");
+    let opaque = Value::Tuple(Arc::from([pair, Value::Callable(Arc::new(Callback))]));
+    assert!(render_value(&opaque).is_err());
+    assert!(render_value(&Value::list(vec![opaque.clone()])).is_err());
+    assert!(
+        render_table(
+            &table(
+                &["callback", "pair"],
+                vec![vec![
+                    Value::Callable(Arc::new(Callback)),
+                    Value::Tuple(Arc::from([Value::Int(3), Value::Int(4)])),
+                ]],
+            ),
+            80,
+        )
+        .is_empty()
+    );
+    assert!(render_table(&table(&["pair"], vec![vec![opaque]]), 80).is_empty());
+}
+
+#[test]
+fn tuple_free_presentation_keeps_custom_callable_display() {
+    #[derive(Debug)]
+    struct Callback(String);
+    impl Callable for Callback {
+        fn family(&self) -> &'static str {
+            "closure"
+        }
+
+        fn display(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            formatter.write_str(&self.0)
+        }
+
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+    }
+
+    let value = Value::Callable(Arc::new(Callback(String::from("<callback>"))));
+    assert_eq!(render_value(&value).unwrap(), "<callback>");
+    assert_eq!(
+        render_table(&table(&["value"], vec![vec![value]]), 80),
+        "value     \n----------\n<callback>"
+    );
 }

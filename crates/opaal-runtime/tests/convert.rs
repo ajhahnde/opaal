@@ -17,6 +17,7 @@
 use opaal_runtime::Value;
 use opaal_runtime::convert::{Codec, DecodeStep, EncodeStep, decode, encode};
 use opaal_runtime::eval::{CancelReason, CancellationToken, RuntimeError, RuntimeErrorKind};
+use opaal_runtime::stream::AdmittedStreamError;
 use opaal_runtime::stream::ValueStream;
 use opaal_syntax::{SourceFile, SourceId};
 
@@ -118,7 +119,7 @@ fn decode_bytes_yields_one_bytes_value_per_chunk() {
 
 #[test]
 fn encode_utf8_serializes_string_values_to_byte_chunks() {
-    let input = ValueStream::from_values(vec![Value::string("hi"), Value::string(" there")]);
+    let input = ValueStream::from_values(&[Value::string("hi"), Value::string(" there")]).unwrap();
     let mut encoder = encode(Codec::Utf8 { lossy: false }, input);
     assert_eq!(encode_chunk(&mut encoder), b"hi".to_vec());
     assert_eq!(encode_chunk(&mut encoder), b" there".to_vec());
@@ -127,7 +128,7 @@ fn encode_utf8_serializes_string_values_to_byte_chunks() {
 
 #[test]
 fn encode_utf8_refuses_a_non_text_value() {
-    let input = ValueStream::from_values(vec![Value::Int(7)]);
+    let input = ValueStream::from_values(&[Value::Int(7)]).unwrap();
     let mut encoder = encode(Codec::Utf8 { lossy: false }, input);
     assert!(matches!(
         encoder.pull(),
@@ -137,12 +138,12 @@ fn encode_utf8_refuses_a_non_text_value() {
 
 #[test]
 fn encode_bytes_serializes_bytes_values_and_refuses_text() {
-    let input = ValueStream::from_values(vec![Value::bytes(vec![0xDE, 0xAD])]);
+    let input = ValueStream::from_values(&[Value::bytes(vec![0xDE, 0xAD])]).unwrap();
     let mut encoder = encode(Codec::Bytes, input);
     assert_eq!(encode_chunk(&mut encoder), vec![0xDE, 0xAD]);
     assert!(matches!(encoder.pull(), EncodeStep::End));
 
-    let text = ValueStream::from_values(vec![Value::string("no")]);
+    let text = ValueStream::from_values(&[Value::string("no")]).unwrap();
     let mut encoder = encode(Codec::Bytes, text);
     assert!(matches!(
         encoder.pull(),
@@ -162,7 +163,7 @@ fn encode_passes_an_upstream_producer_failure_through() {
             None
         } else {
             produced = true;
-            Some(Err(boom.clone()))
+            Some(Err(AdmittedStreamError::new(&boom).unwrap()))
         }
     });
     let mut encoder = encode(Codec::Utf8 { lossy: false }, input);
@@ -177,7 +178,9 @@ fn encode_passes_an_upstream_cancellation_through() {
     // An already-tripped token stops the upstream stream at its next pull, so the
     // pending value is never encoded.
     let token = CancellationToken::from_fn(|| true);
-    let input = ValueStream::from_values(vec![Value::string("later")]).with_cancellation(token);
+    let input = ValueStream::from_values(&[Value::string("later")])
+        .unwrap()
+        .with_cancellation(token);
     let mut encoder = encode(Codec::Utf8 { lossy: false }, input);
     assert!(matches!(
         encoder.pull(),

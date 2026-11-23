@@ -459,7 +459,10 @@ fn structured_stream(items: usize) -> Result<(), String> {
         } else {
             let value = next;
             next += 1;
-            Some(Ok(OpaalValue::Int(value)))
+            Some(Ok(opaal_runtime::AdmittedValue::new(&OpaalValue::Int(
+                value,
+            ))
+            .unwrap()))
         }
     });
     let mut count = 0_usize;

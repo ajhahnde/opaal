@@ -1954,6 +1954,84 @@ fn list_spread_operands_keep_original_symbols_and_utf16_locations() {
 }
 
 #[test]
+fn tuple_pattern_bindings_have_independent_hover_types_and_utf16_locations() {
+    let directory = TestDirectory::new();
+    let uri = directory.uri("tuples.opaal");
+    let text = "let (count, label) = (3, '界🙂')\nlet report = ('界🙂', count, label)\n";
+    let mut workspace = Workspace::new();
+    workspace.open(uri.clone(), 1, text.into()).unwrap();
+    for encoding in [PositionEncoding::Utf8, PositionEncoding::Utf16] {
+        for (binding, ty, character) in [("count", "Int", 5), ("label", "String", 12)] {
+            let offset = text.rfind(binding).unwrap();
+            let query = |method| {
+                request(
+                    &workspace,
+                    encoding,
+                    &RequestControl::new(),
+                    method,
+                    positional(&uri, text, offset, encoding),
+                )
+                .unwrap()
+            };
+            let hover = query("textDocument/hover");
+            assert!(
+                hover["contents"]["value"].as_str().unwrap().contains(ty),
+                "{hover}"
+            );
+            assert_eq!(
+                query("textDocument/definition"),
+                json!({
+                    "uri": uri.as_str(),
+                    "range": {"start": {"line": 0, "character": character},
+                              "end": {"line": 0, "character": character + binding.len()}}
+                }),
+            );
+            let references = request(
+                &workspace, encoding, &RequestControl::new(), "textDocument/references",
+                json!({"textDocument": {"uri": uri.as_str()}, "position": position(text, offset, encoding),
+                       "context": {"includeDeclaration": false}}),
+            ).unwrap();
+            assert_eq!(
+                references[0]["range"]["start"],
+                position(text, offset, encoding)
+            );
+        }
+    }
+}
+
+#[test]
+fn tuple_hover_preserves_unknown_any_and_empty_slot_evidence() {
+    let directory = TestDirectory::new();
+    let uri = directory.uri("tuple-evidence.opaal");
+    let text = "let dynamic: Any = 7\nlet (unproven, declared, empty, typed) = ([1, 'mixed'], dynamic, [], [1])\nlet observed = (unproven, declared, empty, typed)\n";
+    let mut workspace = Workspace::new();
+    workspace.open(uri.clone(), 1, text.into()).unwrap();
+    let encoding = PositionEncoding::Utf16;
+    for (name, expected) in [
+        ("unproven", "unknown"),
+        ("declared", "Any"),
+        ("empty", "empty list"),
+        ("typed", "List[Int]"),
+    ] {
+        let hover = request(
+            &workspace,
+            encoding,
+            &RequestControl::new(),
+            "textDocument/hover",
+            positional(&uri, text, text.rfind(name).unwrap(), encoding),
+        )
+        .unwrap();
+        assert!(
+            hover["contents"]["value"]
+                .as_str()
+                .unwrap()
+                .contains(expected),
+            "{name}: {hover}"
+        );
+    }
+}
+
+#[test]
 fn prefix_selectors_have_no_singular_target_and_concrete_uses_keep_identity() {
     for encoding in [PositionEncoding::Utf8, PositionEncoding::Utf16] {
         let directory = TestDirectory::new();

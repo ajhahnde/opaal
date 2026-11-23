@@ -91,10 +91,13 @@ fn opaal_module_forms_have_one_exact_ast_shape() {
     assert_eq!(text(&nominal, declaration.name.span()), "Item");
     assert_eq!(declaration.fields.len(), 1);
     assert_eq!(text(&nominal, declaration.fields[0].name.span()), "value");
-    assert_eq!(
-        text(&nominal, declaration.fields[0].value_type.name.span()),
-        "Int"
-    );
+    let opaal_syntax::TypeReferenceKind::Named { name, arguments } =
+        &declaration.fields[0].value_type.kind
+    else {
+        panic!("the nominal field has a named type");
+    };
+    assert_eq!(text(&nominal, name.span), "Int");
+    assert!(arguments.is_empty());
 }
 
 #[test]

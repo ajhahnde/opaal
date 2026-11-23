@@ -4,13 +4,16 @@ use std::cell::Cell;
 use std::collections::BTreeMap;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use opaal_platform::FakePlatform;
-use opaal_runtime::Environment;
 use opaal_runtime::builtin::standard_registry;
-use opaal_runtime::eval::{CancelReason, CancellationToken, EvalLimits, FakeClock, ResourceBudget};
+use opaal_runtime::eval::{
+    CancelReason, CancellationToken, Completion, EvalLimits, FakeClock, ResourceBudget,
+    RuntimeErrorKind, apply_callable, evaluate_in_environment,
+};
 use opaal_runtime::module::{
     AnalysisControl, AnalysisLimitKind, AnalysisLimits, ModuleAnalysisOutcome, ModuleCanonicalizer,
     ModuleId, ModulePathError, ModuleProgram, ModuleProgramLoader, ModuleSourceError,
@@ -20,6 +23,9 @@ use opaal_runtime::outcome::PrimaryOutcome;
 use opaal_runtime::plan::SessionOptions;
 use opaal_runtime::resolve::ExecutableProbe;
 use opaal_runtime::script::execute_module_program_outcome_with_limits;
+use opaal_runtime::stream::{AdmittedStreamError, StreamPull, ValueStream};
+use opaal_runtime::{AdmittedValue, BindingMutability, Environment, ScopeError, ScopeStack, Value};
+use opaal_syntax::{ParseOutcome, SourceFile, SourceId, parse_opaal};
 
 #[derive(Default)]
 struct Sources {
@@ -743,6 +749,142 @@ fn list_literal_spread_analysis_charges_source_nodes_depth_and_work_exactly() {
             }
         }
     }
+}
+
+#[test]
+fn runtime_wrapping_counts_tuple_depth_independently_of_source_depth() {
+    std::thread::Builder::new()
+        .stack_size(2 * 1024 * 1024)
+        .spawn(|| {
+            for (wrapped, succeeds) in [(31, true), (32, false)] {
+                let source = format!(
+                    "mut value: Any = (1, 2)\nfor _ in 0..{wrapped} {{ value = [value] }}\n",
+                );
+                let limits =
+                    EvalLimits::pure_opaal(CancellationToken::never(), ResourceBudget::opaal());
+                let program = program(&source);
+                let outcome = execute(&program, &limits);
+                assert_eq!(
+                    matches!(outcome.primary(), PrimaryOutcome::Completed(_)),
+                    succeeds,
+                    "{outcome:?}"
+                );
+                if !succeeds {
+                    let PrimaryOutcome::Error(error) = outcome.primary() else {
+                        unreachable!()
+                    };
+                    assert!(error.render().contains("resource budget"), "{error:?}");
+                }
+            }
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
+#[test]
+fn tuple_slot_depth_refuses_before_the_next_slot_runs() {
+    let mut source = String::from(
+        "def later() -> Int { throw \"later slot ran\" }\nmut value: Any = (1, 2)\n\
+         for _ in 0..31 { value = [value] }\n",
+    );
+    source.push_str("let result = (value, later())\n");
+    let outcome = execute(&program(&source), &EvalLimits::default());
+    assert!(
+        matches!(outcome.primary(), PrimaryOutcome::Error(error)
+            if error.render().contains("resource budget") && !error.render().contains("later slot ran")),
+        "{outcome:?}"
+    );
+}
+
+#[test]
+fn tuple_free_shared_values_keep_their_source_budget() {
+    let source = "mut value: Any = 0\nfor _ in 0..24 { value = [value, value] }\n";
+    let outcome = execute(&program(source), &EvalLimits::default());
+    assert!(
+        matches!(outcome.primary(), PrimaryOutcome::Completed(_)),
+        "{outcome:?}"
+    );
+}
+
+#[test]
+fn rust_ingress_rejects_before_taking_ownership_on_a_small_stack() {
+    std::thread::Builder::new()
+        .stack_size(2 * 1024 * 1024)
+        .spawn(|| {
+            let source = SourceFile::new(
+                SourceId::new(1),
+                "embedding.opaal",
+                "def consume(item: Any) -> Int { return 7 }",
+            );
+            let ParseOutcome::Complete(script) = parse_opaal(&source) else {
+                panic!("expected a complete callable definition");
+            };
+            let span = script.span();
+            let mut scope = ScopeStack::new();
+            let limits = EvalLimits::default();
+            evaluate_in_environment(
+                &script, &source, &mut scope, &mut Environment::new(), &limits,
+            ).unwrap();
+            scope.declare("seed", BindingMutability::Mutable, &Value::Int(1)).unwrap();
+            let mut legacy = Value::Null;
+            for _ in 0..64 {
+                legacy = Value::list(vec![legacy]);
+            }
+            let admitted = AdmittedValue::new(&legacy).unwrap();
+            assert!(AdmittedValue::new(&Value::list(vec![legacy])).is_err());
+            // The admitted copy releases the last reference on this stack.
+            drop(admitted);
+            let mut schema = opaal_runtime::module::ValueType::Int;
+            for _ in 0..64 {
+                schema = opaal_runtime::module::ValueType::List(Box::new(schema));
+            }
+            use opaal_runtime::stream::{StreamCardinality, StreamSchema};
+            assert!(StreamSchema::new(&schema, StreamCardinality::Unknown).is_ok());
+            let too_deep = opaal_runtime::module::ValueType::List(Box::new(schema));
+            assert!(StreamSchema::new(&too_deep, StreamCardinality::Unknown).is_err());
+            let apply = |scope: &ScopeStack, value: &Value, limits: &EvalLimits| {
+                apply_callable(
+                    scope.get("consume").unwrap(),
+                    std::slice::from_ref(value),
+                    &source,
+                    span,
+                    &mut Environment::new(),
+                    limits,
+                )
+            };
+            let mut producer_values = vec![Value::Tuple(Arc::from([Value::Int(1), Value::Int(2)]))];
+            for _ in 0..10_000 {
+                producer_values.push(Value::list(vec![producer_values.last().unwrap().clone()]));
+            }
+            assert!(matches!(apply(&scope, &producer_values[31], &limits), Ok(Completion::Value(Value::Int(7)))));
+            for value in [&producer_values[32], producer_values.last().unwrap()] {
+                assert!(matches!(apply(&scope, value, &limits), Err(error) if matches!(error.kind(), RuntimeErrorKind::ResourceBudgetExceeded)));
+                assert!(matches!(scope.assign("seed", value), Err(ScopeError::ValueAdmission(_))));
+                assert!(ValueStream::once(value).is_err());
+            }
+            assert_eq!(scope.get("seed"), Some(&Value::Int(1)));
+            let cancelled = EvalLimits::pure_opaal(CancellationToken::from_fn(|| true), ResourceBudget::opaal());
+            assert!(matches!(apply(&scope, producer_values.last().unwrap(), &cancelled), Ok(Completion::Cancelled(_))));
+
+            let producer_values = Rc::new(producer_values);
+            let mut stream = ValueStream::from_pull_fn({
+                let producer_values = Rc::clone(&producer_values);
+                move || match AdmittedValue::new(producer_values.last().unwrap()) {
+                    Ok(value) => StreamPull::Item(value),
+                    Err(_) => StreamPull::Failed(AdmittedStreamError::resource_limit(span)),
+                }
+            });
+            assert!(matches!(stream.pull(), StreamPull::Failed(error) if matches!(error.kind(), RuntimeErrorKind::ResourceBudgetExceeded)));
+            assert!(matches!(stream.pull(), StreamPull::End));
+            drop(stream);
+            let mut producer_values = Rc::try_unwrap(producer_values).ok().unwrap();
+            // The producer owns the raw graph and can release it from the root down.
+            while producer_values.pop().is_some() {}
+        })
+        .unwrap()
+        .join()
+        .unwrap();
 }
 
 #[test]

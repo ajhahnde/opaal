@@ -16,7 +16,7 @@ fn fixture(name: &str, source: &str) -> PathBuf {
 
 #[test]
 fn opaal_planning_is_always_a_host_free_refusal() {
-    let source = fixture("refusal", "let value = 1\n");
+    let source = fixture("refusal", "let value = (1, 'ready')\n");
     let output = Command::new(env!("CARGO_BIN_EXE_opaal"))
         .args(["plan", source.to_str().unwrap()])
         .output()
