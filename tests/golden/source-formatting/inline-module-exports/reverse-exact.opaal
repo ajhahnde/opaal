@@ -1,0 +1,2 @@
+export { value }
+export let ["界🙂", value] = ["界🙂", "bound"]

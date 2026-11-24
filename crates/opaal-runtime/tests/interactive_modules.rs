@@ -1198,6 +1198,59 @@ fn prefix_file_exports_and_inert_direct_exports_survive_retained_cells() {
 }
 
 #[test]
+fn inline_patterns_export_nested_binders_and_keep_mutation_in_the_owner() {
+    let policy = concat!(
+        "type Pair = { value: Int }\n",
+        "export let (Pair {value: field}, [head, _, ...tail]) = (Pair {value: 7}, [1, 2, 3])\n",
+        "export mut (left, right) = (2, 3)\n",
+        "right = 4\n",
+    );
+    let grouped = format!(
+        "{}export {{ field, head, tail, left, right }}\n",
+        policy.replace("export ", "")
+    );
+    for source in [policy, &grouped] {
+        let sources = Sources::default();
+        sources.put("/work/policy.opaal", source);
+        let mut session = session();
+        submit(
+            &mut session,
+            &sources,
+            "import {'./policy.opaal' as api, './policy.opaal'::{field, head, tail, left, right}}",
+        );
+        assert_eq!(
+            submit(&mut session, &sources, "field + head + left + right"),
+            Value::Int(14)
+        );
+        assert_eq!(
+            submit(&mut session, &sources, "tail"),
+            Value::list(vec![Value::Int(3)])
+        );
+        assert_eq!(
+            *sources.reads.borrow(),
+            [PathBuf::from("/work/policy.opaal")]
+        );
+        for text in ["right = 8", "api::right = 8"] {
+            assert!(
+                session
+                    .submit_with_source_loader(
+                        "cell",
+                        text,
+                        &sources,
+                        &sources,
+                        &NoExecutables,
+                        &FakePlatform::full(),
+                        &FakeClock::new(),
+                        &mut Vec::new()
+                    )
+                    .is_err()
+            );
+        }
+        assert_eq!(submit(&mut session, &sources, "api::right"), Value::Int(4));
+    }
+}
+
+#[test]
 fn indexed_replacement_retains_cell_types_aliases_and_index_only_callables() {
     let sources = Sources::default();
     let mut session = session();

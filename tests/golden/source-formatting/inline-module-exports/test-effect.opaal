@@ -1,0 +1,5 @@
+export def test_effect() -> Bool
+{
+    let value = env("INLINE_EXPORT_PURITY_CANARY")
+    return true
+}

@@ -1,0 +1,2 @@
+import './policy.opaal'::{ready}
+task verify = ready

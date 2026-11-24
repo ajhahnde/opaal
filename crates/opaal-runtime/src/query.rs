@@ -604,7 +604,7 @@ impl SemanticQueries<'_> {
         }
         for entry in self.program.sources().entries() {
             for export in self.program.names().exports(entry.module()) {
-                if !export.is_prefix()
+                if export.is_exact_selector()
                     && export.target_module() == definition.module()
                     && export.declaration_span() == definition.span()
                 {

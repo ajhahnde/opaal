@@ -1,0 +1,2 @@
+import std::math::{abs as value}
+export let value = 1

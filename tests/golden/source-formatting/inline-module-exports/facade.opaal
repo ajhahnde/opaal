@@ -1,0 +1,2 @@
+import './policy.opaal'::{total as score, Report, Choice}
+export { score, Report, Choice }

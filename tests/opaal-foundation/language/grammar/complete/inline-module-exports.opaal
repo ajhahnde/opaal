@@ -1,0 +1,15 @@
+export let [first, _, ...rest] = [1, 2, 3]
+export mut counter = 0
+export type Item = { value: Int }
+export enum Choice { Yes(Int), No }
+export def total() -> Int
+{
+    return first + counter
+}
+export action ready() -> Int
+{
+    effects {
+    }
+
+    return total()
+}

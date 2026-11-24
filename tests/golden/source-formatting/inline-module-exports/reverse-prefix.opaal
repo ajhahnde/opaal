@@ -1,0 +1,2 @@
+export { detail_* }
+export let [detail_z, detail_a] = [2, 3]

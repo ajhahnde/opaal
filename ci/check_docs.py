@@ -120,14 +120,15 @@ def check_examples(root: Path, binary: Path) -> list[str]:
             valid = False
         if not valid:
             errors.append(f"job-check: {' '.join(command)} JSON example failed")
-    example = root / "examples/language-foundation.opaal"
-    for args in (("format", "--check", str(example)), ("check", str(example)),
-                 (str(example),)):
-        result = subprocess.run([str(binary), *args], cwd=root, capture_output=True, text=True, timeout=30)
-        if result.returncode:
-            detail = (result.stderr or result.stdout).strip().splitlines()
-            errors.append(f"{example.relative_to(root)}: {' '.join(args)} failed: "
-                          f"{detail[0] if detail else result.returncode}")
+    for name in ("examples/language-foundation.opaal", "examples/module-exports/main.opaal"):
+        example = root / name
+        for args in (("format", "--check", str(example)), ("check", str(example)),
+                     (str(example),)):
+            result = subprocess.run([str(binary), *args], cwd=root, capture_output=True, text=True, timeout=30)
+            if result.returncode:
+                detail = (result.stderr or result.stdout).strip().splitlines()
+                errors.append(f"{name}: {' '.join(args)} failed: "
+                              f"{detail[0] if detail else result.returncode}")
     for name in ("image-check", "repository-check"):
         policy_tests = root / "examples" / name / "policy-tests.opaal"
         for args in (("check", str(policy_tests)), ("format", "--check", str(policy_tests)),

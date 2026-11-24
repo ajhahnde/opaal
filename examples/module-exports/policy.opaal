@@ -1,0 +1,11 @@
+export let [minimum, maximum] = [2, 5]
+let adjustment = 1
+
+## Check a value against the configured range.
+export def accepts(value: Int) -> Bool
+{
+    if value < minimum + adjustment {
+        return false
+    }
+    return value <= maximum
+}

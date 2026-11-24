@@ -6,6 +6,10 @@ All notable changes to OPAAL are documented here.
 
 ### Added
 
+- Mark module-level declarations public where they are defined with
+  `export def`, `export let`, `export mut`, `export action`, `export type`
+  and `export enum`. Inline destructuring exports every bound name. Use a
+  grouped export list to select individual bindings or support older tools.
 - Iterate with a zero-based Int position using `for index, item in items`.
   Bind tuple slots directly with `for (number, label) in rows` or combine
   both forms with `for index, (number, label) in rows`.

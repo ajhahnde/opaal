@@ -1,0 +1,4 @@
+import './policy.opaal'::{accepts, maximum}
+if !accepts(maximum) {
+    throw "maximum should be accepted"
+}

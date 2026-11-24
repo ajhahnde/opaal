@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import copy
 import json
 import os
@@ -22,12 +23,14 @@ if __package__:
     from .package_data_processing import SOURCE, digest
     from .package_release import PLATFORMS, ROOT, VERSION
     from .package_source_formatting import FIXTURES, MEMBER_IMPORT_FIXTURES, COMPOUND_ASSIGNMENT_FIXTURES, LIST_LITERAL_SPREAD_FIXTURES, RECORD_SHORTHAND_FIXTURES, GROUPED_EXPORT_FIXTURES, ACTION_DECLARATION_FIXTURES, INDEXED_REPLACEMENT_FIXTURES, IF_EXPRESSION_FIXTURES, TYPED_TUPLE_FIXTURES, INDEXED_ITERATION_FIXTURES
+    from .package_source_formatting import INLINE_EXPORT_FIXTURES
     from .qualify_data_processing import require, success, unpack
 else:
     from check_source_formatting import public_paths, seed_census
     from package_data_processing import SOURCE, digest
     from package_release import PLATFORMS, ROOT, VERSION
     from package_source_formatting import FIXTURES, MEMBER_IMPORT_FIXTURES, COMPOUND_ASSIGNMENT_FIXTURES, LIST_LITERAL_SPREAD_FIXTURES, RECORD_SHORTHAND_FIXTURES, GROUPED_EXPORT_FIXTURES, ACTION_DECLARATION_FIXTURES, INDEXED_REPLACEMENT_FIXTURES, IF_EXPRESSION_FIXTURES, TYPED_TUPLE_FIXTURES, INDEXED_ITERATION_FIXTURES
+    from package_source_formatting import INLINE_EXPORT_FIXTURES
     from qualify_data_processing import require, success, unpack
 
 PAIRS = (("legacy.opaal", "canonical.opaal"), ("legacy-effects.opaal", "effects.opaal"),
@@ -967,6 +970,264 @@ def action_declarations(run, binary: Path, root: Path, fixtures: Path, target: s
                            "empty/binary/exact-cap/first-excess and Broken Pipe transfers with exact receipts and audit"]}
 
 
+def inline_export_projects(run, work: Path, fixtures: Path, target: str) -> dict:
+    source = fixtures / "inline-module-exports"
+    lock = {"macos-arm64": "tools-macos.toml", "linux-aarch64": "tools-linux-aarch64.toml",
+            "linux-x86_64": "tools-linux.toml"}[target]
+    base = ("--project", "opaal.toml", "--task", "verify", "--environment", "ci")
+    trials = {}
+    outcomes = []
+    for label, initial in (("grouped", "grouped-policy.opaal"), ("inline", "policy.opaal"),
+                           ("stale", "policy.opaal")):
+        folder = work / ("inline-export-project-" + label)
+        shutil.copytree(fixtures / "project", folder)
+        shutil.copyfile(folder / lock, folder / "tools.toml")
+        shutil.copyfile(source / "project-tasks.opaal", folder / "tasks.opaal")
+        policy = folder / "policy.opaal"
+        original_action = str(policy) + "::ready"
+
+        def invoke(*args):
+            return run(*args, cwd=folder)
+
+        for index, spelling in enumerate((initial, "grouped-policy.opaal") if label == "stale" else (initial,)):
+            shutil.copyfile(source / spelling, policy)
+            inspected = json.loads(success(invoke("task", "inspect", "--project", "opaal.toml",
+                                                    "verify", "--format", "json"), "inline task inspect"))
+            task, = inspected["tasks"]
+            require(task["action"] == original_action and task["result"] == "Int"
+                    and task["effects"] == task["parameters"] == [], "inline task identity/signature differs")
+            success(invoke("check", *base), "inline task check")
+            plan_name = f"accepted-{index}.plan.json"
+            accepted = success(invoke("plan", *base, "--expires-in", "900s", "--out", plan_name,
+                                      "--format", "digest"), "inline task plan").decode().strip()
+            plan = json.loads((folder / plan_name).read_bytes())
+            success(invoke("plan", "inspect", plan_name), "inline plan inspect")
+            expected_sources = {
+                str(path): ("sha256:" + digest(path.read_bytes()), path.stat().st_size)
+                for path in (policy, folder / "tasks.opaal")
+            }
+            require({row["module"]: (row["digest"], row["size"]) for row in plan["sources"]} == expected_sources
+                    and {row["id"]: (row["digest"], row["size"]) for row in plan["observations"]
+                         if row["kind"] == "source"} == expected_sources, "inline task source closure differs")
+            action, = plan["actions"]
+            node = task["contract_digest"] + "#000000"
+            require(plan["digest"] == accepted and plan["task"]["action_id"] == action["action_id"] == original_action
+                    and plan["task"]["contract_digest"] == action["contract_digest"] == task["contract_digest"]
+                    and action["id"] == node and action["dependencies"] == action["requests"] ==
+                    plan["tools"] == plan["secrets"] == plan["authority"]["requests"] == [],
+                    "inline plan action, identity or authority differs")
+            result = {"plan": accepted, "node": node, "policy": expected_sources[str(policy)][0]}
+            trials[label + ("-fresh" if index else "")] = result
+            journal = f"accepted-{index}.run.jsonl"
+            if label == "stale" and index == 0:
+                shutil.copyfile(source / "grouped-policy.opaal", policy)
+                refused = invoke("execute", "--plan", plan_name, "--accept", accepted, "--journal", journal)
+                require(refused.returncode == 1 and not refused.stdout and b"EXECUTE_STALE" in refused.stderr
+                        and not (folder / journal).exists(), "inline spelling edit accepted a stale plan")
+                result["failure"] = "EXECUTE_STALE"
+                continue
+
+            success(invoke("execute", "--plan", plan_name, "--accept", accepted, "--journal", journal),
+                    "inline accepted task")
+            success(invoke("audit", "--project", "opaal.toml", "--journal", journal,
+                           "--out", "accepted.audit.json"), "inline task audit")
+            success(invoke("audit", "inspect", "accepted.audit.json"), "inline audit inspect")
+            audit = json.loads((folder / "accepted.audit.json").read_bytes())
+            primary, events = audit["primary"], audit["events"]
+            require(audit["completeness"] == "complete" and audit["cleanup"] == []
+                    and audit["plan_digest"] == audit["accepted_plan_digest"] == accepted
+                    and primary["class"] == "success" and primary["partial"] is False
+                    and primary["value_digest"] == "sha256:" + digest(b"14")
+                    and [event["kind"] for event in events] == ["action-start", "action-end", "terminal"],
+                    "inline task result or events differ")
+            require(events[0]["payload"] == {"action_node_id": node, "action_id": original_action,
+                                              "contract_digest": task["contract_digest"]}
+                    and events[1]["payload"]["action_node_id"] == node, "inline audit action identity differs")
+            result["value_digest"] = primary["value_digest"]
+            result["events"] = [event["kind"] for event in events]
+            outcomes.append((task["id"], task["result"], primary, events[1]["payload"]["outcome"]))
+    require(all(outcome == outcomes[0] for outcome in outcomes), "grouped and inline task outcomes differ")
+    require(all(trials["stale"][key] != trials["stale-fresh"][key] for key in ("plan", "node", "policy")),
+            "inline spelling edit did not change source-bound identities")
+    return trials
+
+
+def inline_module_exports(run, work: Path, fixtures: Path, target: str) -> dict:
+    original = fixtures / "inline-module-exports"
+    require({path.name for path in original.iterdir()} == set(INLINE_EXPORT_FIXTURES),
+            "inline export fixture census differs")
+    destination = work / "inline-module-exports"
+    tests = (("check-policy.opaal", "test_total", 0, None), ("test-signature.opaal", "test_bad", 2, "TEST_SIGNATURE"),
+             ("test-effect.opaal", "test_effect", 2, "TEST_EFFECT"))
+    inventories = {}
+    for spelling in ("inline", "grouped"):
+        folder = destination / spelling
+        shutil.copytree(original, folder)
+        if spelling == "grouped":
+            shutil.copyfile(folder / "grouped-policy.opaal", folder / "policy.opaal")
+        for args in (("format", "--check", "main.opaal", "facade.opaal", "policy.opaal"), ("check", "main.opaal"),
+                     ("main.opaal",)):
+            require(success(run(*args, cwd=folder), "inline module workflow") == b"", "unexpected module output")
+        for name, case, code, failure in tests:
+            path = folder / name
+            if spelling == "grouped":
+                path.write_bytes(f"export {{ {case} }}\n".encode() + path.read_bytes().replace(b"export ", b"", 1))
+            module = {"encoding": "base64url-nopad", "platform": "unix",
+                      "value": base64.urlsafe_b64encode(os.fsencode(path)).decode().rstrip("=")}
+            for list_only in (True, False):
+                result = run("test", *(("--list",) if list_only else ()), name, "--format", "json", cwd=folder)
+                expected_exit = 0 if list_only and failure == "TEST_EFFECT" else code
+                expected_failure = None if expected_exit == 0 else failure
+                require(result.returncode == expected_exit and not result.stderr
+                        and b"INLINE_EXPORT_PURITY_CANARY" not in result.stdout,
+                        f"{spelling} {name} test status/redaction differs")
+                view = json.loads(result.stdout)
+                discovered, = view["cases"]
+                require(view["failure"] == expected_failure and view["counts"]["discovered"] == 1
+                        and discovered["callable_id"] == {"module": module, "name": case}
+                        and view["counts"]["passed"] == int(not list_only and failure is None),
+                        f"{spelling} {name} test inventory or outcome differs")
+                inventories[f"{spelling}/{name}/{'list' if list_only else 'run'}"] = {
+                    "name": case, "state": discovered["state"], "exit": expected_exit, "failure": expected_failure}
+        prompt = run(cwd=folder, stdin=b"import './policy.opaal' as policy\nimport './policy.opaal'::{total}\n"
+                     b"help total\npolicy::total()\nexport def local_total() -> Int\n{\n"
+                     b"    return 5\n}\nlocal_total()\n")
+        expected_location = b":9:12" if spelling == "inline" else b":10:5"
+        require(prompt.returncode == 0 and not prompt.stderr and b"signature: def total() -> Int" in prompt.stdout
+                and os.fsencode(folder / "policy.opaal") + expected_location in prompt.stdout
+                and b"Calculate the report total." in prompt.stdout
+                and re.findall(rb">> (14|5)\n", prompt.stdout) == [b"14", b"5"], "inline prompt help or values differ")
+
+    folder = destination / "inline"
+    require(success(run("check", "failed-init.opaal", cwd=folder), "passive initializer check") == b"",
+            "passive initializer check produced output")
+    failed = run(cwd=folder, stdin=b"let retained = 7\nimport './failed-init.opaal'::{good}\nretained\ngood\n")
+    require(failed.returncode == 0 and b">> 7\n" in failed.stdout and failed.stderr.count(b"error[RUN001]") == 2
+            and b"value does not match the pattern" in failed.stderr and b"unknown bare name" in failed.stderr,
+            "failed inline initializer published a binding or lost prior state")
+    refused = run("plan", "main.opaal", cwd=folder)
+    require(refused.returncode == 1 and b"PLAN004" in refused.stderr, "source-only plan refusal differs")
+
+    errors = {}
+    for name, code, locations in (
+        ("duplicate-exact", "MOD006", [(b"value", b"value")]),
+        ("reverse-exact", "MOD006", [(b"value", b"value")]),
+        ("duplicate-prefix", "MOD006", [(b"detail_*", b"detail_a"), (b"detail_*", b"detail_z")]),
+        ("reverse-prefix", "MOD006", [(b"detail_z", b"detail_*"), (b"detail_a", b"detail_*")]),
+        ("alias-conflict", "MOD011", [(b"model", b"model")]),
+        ("member-conflict", "MOD011", [(b"value", b"value")]),
+        ("private", "MOD014", [(b"hidden", b"hidden")]),
+        ("invalid", "OP1000", []), ("incomplete", "SYN002", []),
+    ):
+        path = folder / (name + ".opaal")
+        source = path.read_bytes()
+        machine = run("check", "--format", "json", path, cwd=folder)
+        human = run("check", path, cwd=folder)
+        report = json.loads(machine.stdout)
+        diagnostics = report["diagnostics"]
+        require(report["outcome"] == "invalid" and machine.returncode == human.returncode == 1
+                and not machine.stderr and not human.stdout and f"error[{code}]".encode() in human.stderr
+                and [row["code"] for row in diagnostics] == [code] * max(1, len(locations)),
+                f"{name} diagnostics differ")
+        for diagnostic, (primary, related) in zip(diagnostics, locations):
+            first = source.index(primary) if code == "MOD011" else source.rindex(primary)
+            owner = folder / "policy.opaal" if code == "MOD014" else path
+            related_source = owner.read_bytes()
+            second = related_source.rindex(related) if code == "MOD011" else related_source.index(related)
+            location, = diagnostic["related"]
+            require(diagnostic["source"] == str(path)
+                    and diagnostic["range"] == {"start": first, "end": first + len(primary)}
+                    and location["source"] == str(owner)
+                    and location["range"] == {"start": second, "end": second + len(related)}
+                    and location["message"].encode() in human.stderr,
+                    f"{name} diagnostic ranges or order differ")
+        errors[name] = [{"code": row["code"], "range": row["range"],
+                         "related": [location["range"] for location in row["related"]]} for row in diagnostics]
+        if name in ("invalid", "incomplete"):
+            require(run("format", "--write", path, cwd=folder).returncode == 1 and path.read_bytes() == source,
+                    f"{name} inline format wrote source")
+    pending = run(cwd=folder, stdin=(original / "incomplete.opaal").read_bytes())
+    require(pending.returncode == 0 and b"...>" in pending.stdout and b"SYN002" in pending.stderr,
+            "inline declaration EOF outcome differs")
+    invalid = run(cwd=folder, stdin=b"export let unpublished = 99; export let [_, 1] = [2, 1]\nunpublished\n")
+    require(invalid.returncode == 0 and b"99\n" not in invalid.stdout and b"OP1000" in invalid.stderr
+            and b"unknown bare name" in invalid.stderr, "invalid inline submission published its parsed prefix")
+    for _ in range(2):
+        success(run("format", "--write", "noncanonical.opaal", cwd=folder), "inline format write")
+        require((folder / "noncanonical.opaal").read_bytes() == (original / "policy.opaal").read_bytes(),
+                "inline format differs from canonical bytes")
+    large = folder / "large.opaal"
+    large.write_text("".join(f"export let public_{i:04} = {i}\n" for i in range(1024)) + "export { public_* }\n")
+    repeated = run("check", "--format", "json", large, cwd=folder)
+    require(repeated.returncode == 1 and not repeated.stderr
+            and [row["code"] for row in json.loads(repeated.stdout)["diagnostics"]] == ["MOD006"] * 1024,
+            "1024 inline declarations did not report their overlapping prefix")
+    return {"fixtures": list(INLINE_EXPORT_FIXTURES), "diagnostics": errors, "tests": inventories,
+            "prompt_values": [14, 5], "failed_initializer_retained": 7, "bounded_duplicates": 1024,
+            "project": inline_export_projects(run, work, fixtures, target)}
+
+
+def inline_export_queries(send, receive, request, folder: Path, encoding: str) -> None:
+    def opened(name):
+        path = folder / name
+        uri = path.as_uri()
+        text = path.read_text()
+        send({"method": "textDocument/didOpen", "params": {"textDocument": {
+            "uri": uri, "languageId": "opaal", "version": 1, "text": text}}})
+        diagnostics = receive((uri, 1))["params"]["diagnostics"]
+        return uri, text.splitlines(), diagnostics
+
+    def span(line, text, name):
+        def units(prefix):
+            return len(prefix.encode("utf-8")) if encoding == "utf-8" else len(prefix.encode("utf-16-le")) // 2
+        start = text[line].index(name)
+        return {"start": {"line": line, "character": units(text[line][:start])},
+                "end": {"line": line, "character": units(text[line][:start + len(name)])}}
+
+    uri, text, diagnostics = opened("reverse-exact.opaal")
+    diagnostic, = diagnostics
+    require(diagnostic["code"] == "MOD006" and diagnostic["range"] == span(1, text, "value")
+            and [row["location"] for row in diagnostic["relatedInformation"]] ==
+            [{"uri": uri, "range": span(0, text, "value")}],
+            f"{encoding} inline MOD006 ranges differ")
+    policy, policy_lines, diagnostics = opened("policy.opaal")
+    require(not diagnostics, "inline policy has LSP diagnostics")
+    main, lines, diagnostics = opened("main.opaal")
+    require(not diagnostics, "inline importer has LSP diagnostics")
+
+    def at(uri, line, character):
+        return {"textDocument": {"uri": uri}, "position": {"line": line, "character": character}}
+
+    binder = at(policy, 8, 11)
+    declaration = {"uri": policy, "range": {"start": binder["position"],
+                                           "end": {"line": 8, "character": 16}}}
+    require(request("textDocument/definition", binder)["result"] == declaration,
+            "inline function definition differs")
+    hover = request("textDocument/hover", binder)["result"]["contents"]["value"]
+    require("def total() -> Int" in hover and "Calculate the report total." in hover,
+            "inline function hover differs")
+    action = next(index for index, value in enumerate(policy_lines) if value.startswith("export action ready"))
+    action_hover = request("textDocument/hover", at(policy, action, policy_lines[action].index("ready")))["result"]
+    require("action ready() -> Int" in action_hover["contents"]["value"], "inline action hover differs")
+    require(request("textDocument/definition", at(policy, 8, 0))["result"] is None
+            and request("textDocument/hover", at(policy, 3, 24))["result"] is None,
+            "inline modifier or ignored slot became a query target")
+    without, with_declaration = [
+        request("textDocument/references", {**binder, "context": {"includeDeclaration": include}})["result"]
+        for include in (False, True)
+    ]
+    require(declaration not in without and with_declaration.count(declaration) == 1
+            and [location for location in with_declaration if location != declaration] == without
+            and any(location["uri"] == (folder / "facade.opaal").as_uri() for location in without),
+            "inline function references lost origin or repeated the declaration")
+    line = next(index for index, value in enumerate(lines) if "policy::detail_value" in value)
+    completion = request("textDocument/completion", at(main, line, lines[line].index("detail_value")))["result"]
+    labels = {item["label"] for item in completion}
+    require(labels == {f"policy::{name}" for name in (
+        "Choice", "Report", "detail_value", "left", "ready", "retries", "right", "threshold", "total"
+    )}, f"inline completion public names differ: {sorted(labels)}")
+
+
 def framed_formatting(binary: Path, work: Path, fixtures: Path, environment: dict) -> list[str]:
     observations = []
     for encoding in ("utf-8", "utf-16"):
@@ -1013,6 +1274,10 @@ def framed_formatting(binary: Path, work: Path, fixtures: Path, environment: dic
                                 seen.add(message["id"])
                                 require(message["id"] == identity, "unexpected language server response")
                                 return message
+                            if message.get("method") == "textDocument/publishDiagnostics":
+                                params = message["params"]
+                                if (params["uri"], params.get("version")) == identity:
+                                    return message
                             continue
                     delay = deadline - time.monotonic()
                     require(delay > 0 and bool(select.select([child.stdout], [], [], max(0, delay))[0]),
@@ -1028,10 +1293,15 @@ def framed_formatting(binary: Path, work: Path, fixtures: Path, environment: dic
                 return receive(serial)
 
             try:
-                initialized = request("initialize", {"capabilities": {"general": {"positionEncodings": [encoding]}}})
+                initialized = request("initialize", {"capabilities": {
+                    "general": {"positionEncodings": [encoding]},
+                    "textDocument": {"publishDiagnostics": {"relatedInformation": True}},
+                }})
                 require(initialized["result"]["capabilities"]["positionEncoding"] == encoding,
                         "language server encoding differs")
                 send({"method": "initialized", "params": {}})
+                inline_export_queries(send, receive, request, work / "inline-module-exports/inline", encoding)
+                observations.append(f"{encoding}: inline exports and original diagnostic/declaration ranges")
                 documents = [(name, (fixtures / name).read_text()) for name in
                              ("legacy.opaal", "canonical.opaal", "invalid.opaal", "incomplete.opaal")]
                 documents.extend((name, (fixtures / name).read_text()) for name in (
@@ -1257,7 +1527,7 @@ def framed_formatting(binary: Path, work: Path, fixtures: Path, environment: dic
                         edits[0]["range"]["end"] == {"line": 7, "character": 9 if encoding == "utf-8" else 5},
                         "Unicode formatting position/bytes differ")
                 # Queue behind bounded diagnostic work so cancel/change reach pending snapshots.
-                large = ("# 界🙂\n" * 16000) + (fixtures / "legacy.opaal").read_text()
+                large = ("# 界🙂\n" * 16000) + "export let value = 7\n" + (fixtures / "legacy.opaal").read_text()
                 serial += 1
                 send({"method": "textDocument/didChange", "params": {
                          "textDocument": {"uri": uri, "version": 2}, "contentChanges": [{"text": large}]}},
@@ -1432,7 +1702,7 @@ def terminal_continuation(binary: Path, work: Path, environment: dict) -> None:
         read_until(rb">> ")
         os.write(descriptor, b"retained\r")
         read_until(rb"(?:^|\n)5\r?\n.*>> ")
-        os.write(descriptor, b"def cancelled()\r")
+        os.write(descriptor, b"export def cancelled()\r")
         read_until(rb"\.\.\.> ")
         os.write(descriptor, b"\x03")
         read_until(rb">> ")
@@ -1588,6 +1858,7 @@ def qualify(archive: Path | None, fixture_archive: Path | None, binaries: Path |
         spread_report = list_literal_spread(run, root, fixtures, target)
         record_report = record_shorthand(run, root, fixtures, target)
         exports_report = grouped_export_prefixes(run, root, fixtures, target)
+        inline_report = inline_module_exports(run, root, fixtures, target)
         actions_report = action_declarations(run, binary, root, fixtures, target)
         lsp_report = framed_formatting(installed / "opaal-language-server", root, fixtures, environment)
         terminal_continuation(binary, root, environment)
@@ -1607,6 +1878,7 @@ def qualify(archive: Path | None, fixture_archive: Path | None, binaries: Path |
                 "if_expressions": conditionals_report,
                 "typed_tuples": tuples_report,
                 "indexed_iteration": loops_report,
+                "inline_module_exports": inline_report,
                 "action_declarations": actions_report, "language_server": lsp_report, "bounded_cases": bounded,
                 "assertions": ["exact fixture/source/program identity", "legacy/canonical execution and checking",
                                "exact action/function/comment bytes and idempotence", "read-only check and mode/inode retention",

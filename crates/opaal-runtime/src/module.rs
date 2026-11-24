@@ -828,9 +828,16 @@ struct ModuleAliases {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ExportOrigin {
+    Exact,
+    Prefix,
+    Inline,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct ExpandedExport {
     span: Span,
-    is_prefix: bool,
+    origin: ExportOrigin,
 }
 
 fn expand_exports(
@@ -840,13 +847,17 @@ fn expand_exports(
     control: &AnalysisControl,
 ) -> (BTreeMap<String, ExpandedExport>, Vec<ModuleNameError>) {
     let mut declarations = BTreeSet::new();
+    let mut inline_declarations = Vec::new();
     let mut selected = BTreeMap::<String, ExpandedExport>::new();
     let mut errors = Vec::new();
     for statement in script.statements() {
         if control.is_cancelled() {
             return (selected, errors);
         }
-        for identifier in top_level_declared_identifiers(statement) {
+        let Some(identifiers) = declared_identifiers(statement, Some(control)) else {
+            return (selected, errors);
+        };
+        for identifier in &identifiers {
             let name = source.slice(identifier.span()).unwrap();
             if !control.charge(
                 AnalysisLimitKind::WorkUnits,
@@ -856,21 +867,36 @@ fn expand_exports(
             }
             declarations.insert(name);
         }
+        if script.inline_export_span(statement).is_some() {
+            inline_declarations.push((statement.span().start(), identifiers));
+        }
     }
+    let mut inline_declarations = inline_declarations.into_iter().peekable();
     for statement in script.statements() {
-        let StatementKind::ModuleExport(export) = statement.kind() else {
-            continue;
+        let grouped = match statement.kind() {
+            StatementKind::ModuleExport(export) => export.names.as_slice(),
+            _ => &[],
         };
-        for selector in &export.names {
+        let inline = inline_declarations
+            .next_if(|(start, _)| *start == statement.span().start())
+            .into_iter()
+            .flat_map(|(_, names)| names)
+            .map(|name| (name, ExportOrigin::Inline, name.span()));
+        let grouped = grouped.iter().map(|selector| {
+            let (identifier, origin) = match selector {
+                opaal_syntax::ModuleExportSelector::Name(name) => (*name, ExportOrigin::Exact),
+                opaal_syntax::ModuleExportSelector::Prefix { prefix, .. } => {
+                    (*prefix, ExportOrigin::Prefix)
+                }
+            };
+            (identifier, origin, selector.span())
+        });
+        for (identifier, origin, span) in inline.chain(grouped) {
             if control.is_cancelled() {
                 return (selected, errors);
             }
-            let (identifier, is_prefix) = match selector {
-                opaal_syntax::ModuleExportSelector::Name(name) => (*name, false),
-                opaal_syntax::ModuleExportSelector::Prefix { prefix, .. } => (*prefix, true),
-            };
             let spelling = source.slice(identifier.span()).unwrap();
-            let span = selector.span();
+            let is_prefix = origin == ExportOrigin::Prefix;
             let mut matched = false;
             // Ordered traversal bounds prefix comparisons and avoids scanning unrelated names.
             if !control.charge(
@@ -916,7 +942,7 @@ fn expand_exports(
                         duplicate_span: span,
                     });
                 } else {
-                    selected.insert(name.to_owned(), ExpandedExport { span, is_prefix });
+                    selected.insert(name.to_owned(), ExpandedExport { span, origin });
                 }
                 if !is_prefix {
                     break;
@@ -1060,8 +1086,10 @@ impl ModuleAliasRegistry {
                 return Some((owner, member));
             }
             let table = self.by_module.get(owner)?;
-            table.exported_names.get(member)?;
-            if let Some(selection) = table.selections.get(member) {
+            let export = table.exported_names.get(member)?;
+            if export.origin == ExportOrigin::Exact
+                && let Some(selection) = table.selections.get(member)
+            {
                 owner = &selection.target;
                 member = &selection.member;
             } else {
@@ -1338,7 +1366,7 @@ impl ModuleAliasRegistry {
         for entry in sources.entries() {
             let table = registry.by_module.get_mut(entry.module()).unwrap();
             for (name, selection) in &table.exported_names {
-                if selection.is_prefix {
+                if selection.origin != ExportOrigin::Exact {
                     continue;
                 }
                 let Some(alias) = table.aliases.get(name) else {
@@ -1419,7 +1447,9 @@ impl ModuleAliasRegistry {
                 .exported_names
                 .clone();
             for (name, selection) in exported {
-                if let Some(alias) = registry.alias(entry.module(), &name).cloned() {
+                if selection.origin == ExportOrigin::Exact
+                    && let Some(alias) = registry.alias(entry.module(), &name).cloned()
+                {
                     registry
                         .by_module
                         .get_mut(entry.module())
@@ -1450,7 +1480,7 @@ pub struct ModuleExport {
     target_module: ModuleId,
     declaration_span: Span,
     export_span: Span,
-    is_prefix: bool,
+    origin: ExportOrigin,
 }
 
 impl ModuleExport {
@@ -1474,10 +1504,14 @@ impl ModuleExport {
     /// Whether this export was generated by a prefix selector.
     #[must_use]
     pub const fn is_prefix(&self) -> bool {
-        self.is_prefix
+        matches!(self.origin, ExportOrigin::Prefix)
     }
 
-    /// The originating exact-name or prefix selector range.
+    pub(crate) const fn is_exact_selector(&self) -> bool {
+        matches!(self.origin, ExportOrigin::Exact)
+    }
+
+    /// The originating selector or inline declaration name range.
     #[must_use]
     pub const fn export_span(&self) -> Span {
         self.export_span
@@ -1774,7 +1808,7 @@ impl ModuleNameRegistry {
                         name: name.clone(),
                         declaration_span,
                         export_span: selection.span,
-                        is_prefix: selection.is_prefix,
+                        origin: selection.origin,
                     },
                 );
             }
@@ -1801,6 +1835,7 @@ impl ModuleNameRegistry {
                     .unwrap()
                     .exports
                     .get_mut(&name)
+                    && export.is_exact_selector()
                 {
                     export.target_module = owner;
                     export.declaration_span = declaration_span;
@@ -5116,7 +5151,7 @@ impl RuntimeBindingTypes {
                             name,
                             declaration_span,
                             export_span: selection.span,
-                            is_prefix: selection.is_prefix,
+                            origin: selection.origin,
                         },
                     );
                 }
@@ -5131,7 +5166,7 @@ impl RuntimeBindingTypes {
                             name.clone(),
                             ExpandedExport {
                                 span: export.export_span(),
-                                is_prefix: export.is_prefix(),
+                                origin: export.origin,
                             },
                         )
                     }));
@@ -5577,41 +5612,65 @@ pub(crate) fn pattern_span(pattern: &Pattern) -> Span {
     }
 }
 
-fn collect_pattern_identifiers(pattern: &Pattern, identifiers: &mut Vec<Identifier>) {
+fn collect_pattern_identifiers(
+    pattern: &Pattern,
+    identifiers: &mut Vec<Identifier>,
+    control: Option<&AnalysisControl>,
+) -> bool {
+    if control.is_some_and(AnalysisControl::is_cancelled) {
+        return false;
+    }
     match pattern {
         Pattern::Binding(identifier) => identifiers.push(*identifier),
         Pattern::Tuple(pattern) => {
-            for element in &pattern.elements {
-                collect_pattern_identifiers(element, identifiers);
-            }
+            return pattern
+                .elements
+                .iter()
+                .all(|element| collect_pattern_identifiers(element, identifiers, control));
         }
         Pattern::List(pattern) => {
-            for element in &pattern.elements {
-                collect_pattern_identifiers(element, identifiers);
+            if !pattern
+                .elements
+                .iter()
+                .all(|element| collect_pattern_identifiers(element, identifiers, control))
+            {
+                return false;
             }
             if let Some(rest) = pattern.rest {
                 identifiers.push(rest);
             }
         }
         Pattern::NominalRecord(pattern) => {
-            for field in &pattern.fields {
-                collect_pattern_identifiers(&field.pattern, identifiers);
-            }
+            return pattern
+                .fields
+                .iter()
+                .all(|field| collect_pattern_identifiers(&field.pattern, identifiers, control));
         }
         Pattern::Variant(pattern) => {
-            for payload in &pattern.payload {
-                collect_pattern_identifiers(payload, identifiers);
-            }
+            return pattern
+                .payload
+                .iter()
+                .all(|payload| collect_pattern_identifiers(payload, identifiers, control));
         }
         Pattern::Wildcard(_) | Pattern::Literal(_) => {}
     }
+    true
 }
 
 fn top_level_declared_identifiers(statement: &Statement) -> Vec<Identifier> {
+    declared_identifiers(statement, None).expect("identifier collection without control completes")
+}
+
+fn declared_identifiers(
+    statement: &Statement,
+    control: Option<&AnalysisControl>,
+) -> Option<Vec<Identifier>> {
     let mut identifiers = Vec::new();
     match statement.kind() {
         StatementKind::Declaration(declaration) => {
-            collect_pattern_identifiers(&declaration.pattern, &mut identifiers);
+            if !collect_pattern_identifiers(&declaration.pattern, &mut identifiers, control) {
+                return None;
+            }
         }
         StatementKind::Function(function) => identifiers.push(function.name),
         StatementKind::Action(action) => identifiers.push(action.name),
@@ -5619,7 +5678,7 @@ fn top_level_declared_identifiers(statement: &Statement) -> Vec<Identifier> {
         StatementKind::VariantType(declaration) => identifiers.push(declaration.name),
         _ => {}
     }
-    identifiers
+    Some(identifiers)
 }
 
 struct TypeCollector<'a> {
@@ -8123,7 +8182,7 @@ impl<'a> SignatureValidator<'a> {
         self.infer_pattern_bindings(pattern, value_type);
         if unstable {
             let mut identifiers = Vec::new();
-            collect_pattern_identifiers(pattern, &mut identifiers);
+            collect_pattern_identifiers(pattern, &mut identifiers, None);
             self.unstable_inferred_bindings.borrow_mut().extend(
                 identifiers
                     .iter()

@@ -4353,7 +4353,7 @@ mod ambient_process_policy_tests {
         assert_eq!(
             submit_ambient(
                 &mut session,
-                "let path = 'child'\ncd {path}\nexport SAMPLE = 'value'\n",
+                "export let path = 'child'\ncd {path}\nif true { export SAMPLE = 'value' }\n",
                 &probe,
                 &platform,
             )
@@ -4446,7 +4446,7 @@ mod interactive_retention_tests {
     }
 
     #[test]
-    fn selected_local_callbacks_restore_with_their_original_source_context() {
+    fn capsule_restores_inline_exported_callbacks_with_their_original_source_context() {
         use crate::capsule::{decode_background_capsule, encode_background_capsule};
         use crate::eval::{Completion, EvalLimits, apply_callable};
         use crate::module::{
@@ -4465,7 +4465,7 @@ mod interactive_retention_tests {
         impl ModuleSourceLoader for Modules {
             fn load(&self, module: &crate::module::ModuleId) -> Result<Vec<u8>, ModuleSourceError> {
                 assert_eq!(module.path(), Path::new("/work/model.opaal"));
-                Ok(b"let code = -7\ndef identity(value: Int) -> Int {return value}\nexport {code, identity}\n".to_vec())
+                Ok(b"export { code }\nlet code = -7\nexport def identity(value: Int) -> Int {return value}\n".to_vec())
             }
         }
         let sources = Modules;

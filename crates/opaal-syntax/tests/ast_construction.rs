@@ -81,6 +81,7 @@ fn nodes_and_word_parts_retain_exact_source_spans() {
         span(&source, 18..38),
     );
     let script = Script::new(vec![declaration, command], span(&source, 0..39));
+    assert!(script.inline_export_span(&script.statements()[0]).is_none());
 
     assert_eq!(source.slice(script.span()).unwrap(), &source.text()[0..39]);
     let StatementKind::Declaration(declaration) = script.statements()[0].kind() else {

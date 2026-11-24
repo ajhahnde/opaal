@@ -89,6 +89,15 @@ INDEXED_ITERATION_FIXTURES = (
     "bad-element.opaal", "indexed-and-paired.opaal", "noncanonical.opaal",
 )
 
+INLINE_EXPORT_FIXTURES = (
+    "alias-conflict.opaal", "check-policy.opaal", "duplicate-exact.opaal",
+    "duplicate-prefix.opaal", "facade.opaal", "failed-init.opaal",
+    "grouped-policy.opaal", "incomplete.opaal", "invalid.opaal", "main.opaal",
+    "member-conflict.opaal", "noncanonical.opaal", "policy.opaal", "private.opaal",
+    "project-tasks.opaal", "reverse-exact.opaal", "reverse-prefix.opaal",
+    "test-effect.opaal", "test-signature.opaal",
+)
+
 
 def main() -> None:
     # Every shipped input and qualification assertion belongs to the named head.
@@ -127,6 +136,9 @@ def main() -> None:
     loops = {name.removeprefix("indexed-iteration/") for name in names if name.startswith("indexed-iteration/")}
     if loops != set(INDEXED_ITERATION_FIXTURES):
         raise ValueError("indexed iteration fixture census differs from the committed source")
+    inline = {name.removeprefix("inline-module-exports/") for name in names if name.startswith("inline-module-exports/")}
+    if inline != set(INLINE_EXPORT_FIXTURES):
+        raise ValueError("inline export fixture census differs from the committed source")
     archive = package_examples(ROOT, names, source, directory=FIXTURES, name="source-formatting")
     print(archive.relative_to(ROOT))
 
