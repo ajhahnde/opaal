@@ -1,0 +1,2 @@
+import std::math as model
+export let model = 1

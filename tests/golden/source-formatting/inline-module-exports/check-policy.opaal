@@ -1,0 +1,5 @@
+import './policy.opaal'::{total}
+export def test_total() -> Bool
+{
+    return total() == 14
+}

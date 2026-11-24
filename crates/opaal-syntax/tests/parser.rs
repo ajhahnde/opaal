@@ -9,6 +9,68 @@ use opaal_syntax::{
 };
 
 #[test]
+fn inline_exports_keep_declaration_shapes_spans_and_recovery() {
+    let text = concat!(
+        "export let [first, _, ...rest] = [1, 2, 3]\n",
+        "export mut count = 1\n",
+        "export type Item = { value: Int }\n",
+        "export enum Choice { Yes(Int), No }\n",
+        "## Original documentation.\nexport def total() -> Int { return first }\n",
+        "export action ready() -> Int { effects {} return total() }\n",
+        "export { total }\n",
+        "export NAME = 'value'\n",
+        "if true { export NAME = 'value' }\n",
+    );
+    let script = complete(text);
+    let plain = complete(&text.replacen("export ", "       ", 6));
+    assert_eq!(script.statements(), plain.statements());
+    for (index, statement) in script.statements().iter().enumerate() {
+        let modifier = script.inline_export_span(statement);
+        assert_eq!(
+            modifier.map(|span| source_text(text, span)),
+            (index < 6).then_some("export")
+        );
+    }
+    assert_eq!(script.clone(), script);
+    let StatementKind::Function(function) = script.statements()[4].kind() else {
+        panic!("expected ordinary function");
+    };
+    assert_eq!(source_text(text, function.name.span()), "total");
+
+    for text in [
+        "if true { export let value = 1 }",
+        "export export let value = 1",
+        "export import std::math",
+        "export task run = ready",
+        "export\nlet value = 1",
+        "export let [_, 1] = [0, 1]",
+        "export let value 1",
+        "export NAME 'value'",
+    ] {
+        let source = SourceFile::new(SourceId::new(802), "export.opaal", text);
+        assert!(
+            matches!(parse_opaal(&source), ParseOutcome::Invalid(errors) if errors[0].code() == "OP1000"),
+            "{text}"
+        );
+    }
+    for text in [
+        "export",
+        "export def item() -> Int",
+        "export let name =",
+        "export mut",
+        "export enum Item {",
+        "export action ready() -> Int {",
+        "export type Item =",
+    ] {
+        let source = SourceFile::new(SourceId::new(803), "export.opaal", text);
+        assert!(
+            matches!(parse_opaal(&source), ParseOutcome::Incomplete(_)),
+            "{text}"
+        );
+    }
+}
+
+#[test]
 fn loop_headers_distinguish_an_index_from_tuple_slots() {
     let text = "for item in rows { item }\nfor index, (item, (_, label)) in rows {}\nfor (left, right) in rows {}\n";
     let script = complete(text);

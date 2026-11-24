@@ -182,7 +182,32 @@ target/debug/opaal examples/language-foundation.opaal
 Pure non-interactive evaluation does not print its final value. Examples must not depend on authority that
 the pure foundation does not grant.
 
-## Export prefixes
+## Module exports
+
+Place `export` before a module-level `def`, `let`, `mut`, `action`, `type`,
+or `enum` to expose that declaration. An inline binding pattern exports
+every name it binds in pattern order, including a named rest binding. Use
+`export { name }` to select individual names, explicitly re-export an
+import, or keep source compatible with older OPAAL versions.
+
+Run the [module exports example](examples/module-exports/main.opaal):
+
+```sh
+target/debug/opaal check examples/module-exports/main.opaal
+target/debug/opaal examples/module-exports/main.opaal
+```
+
+An inline declaration retains its original identity for imports, hover,
+definition, and references. Both inline and grouped spellings are preserved
+by the formatter. In a direct prompt cell, an inline declaration adds its
+ordinary bindings to the session. An imported file exposes its declared API.
+`export NAME = value` still assigns an environment variable.
+
+Rust callers can use `Script::inline_export_span(statement)` to obtain the
+modifier range. Statement kinds, declaration spans, and constructors are
+unchanged.
+
+### Export prefixes
 
 Use `export { test_*, Item }` to mix exact names with source-local prefixes.
 One trailing `*` selects every top-level declaration whose name starts with the
@@ -192,8 +217,10 @@ and enum members are excluded. `check*` also matches `check` itself. Spaces/tabs
 may precede the star; formatting binds it to the prefix. A newline, comment or
 continuation cannot split the pair. Bare stars, globs and prefix imports are invalid.
 
-Each prefix must match (`MOD005`); selecting a name twice is `MOD006`, with the
-second selector primary and the first secondary. Exact imported names can still
+Each prefix must match (`MOD005`). Selecting a name twice is `MOD006`, including
+overlap with an inline declaration. The later selection is the primary range
+and the first is secondary. Inline selections point to the original binder.
+Exact imported names can still
 be explicitly re-exported. Adding a matching declaration deliberately grows the
 public API and invalidates existing source-bound project plans. File imports
 resolve concrete original identities. Direct interactive exports remain inert
@@ -203,7 +230,7 @@ The unpublished Rust syntax API changes `ModuleExportStatement.names` to
 `Vec<ModuleExportSelector>`. Wrap existing identifiers in `Name(identifier)`;
 `Prefix { prefix, marker }` retains both tokens, and `.span()` covers the selector.
 Visitors must handle both variants. `ModuleExport::is_prefix()` distinguishes
-generated selections; `export_span()` returns the originating selector range.
+generated selections. `export_span()` returns the originating selector or binder range.
 Prefix tokens have no singular hover/definition target, and concrete reference
 searches omit them. Exhaustive `ModuleNameError` matches must handle
 `UnmatchedExportPrefix`. There is no serialized/binary AST compatibility promise.
@@ -211,7 +238,8 @@ searches omit them. Exhaustive `ModuleNameError` matches must handle
 ## Pure policy tests
 
 Export ordinary non-generic zero-argument Bool functions whose names start with
-`test_`, explicitly or with `export { test_* }`. List their signatures without initialization, or run them sequentially
+`test_` using `export def` or a grouped selector such as `export { test_* }`.
+List their signatures without initialization, or run them sequentially
 in fresh module contexts:
 
 ```sh

@@ -38,6 +38,18 @@
       "assertion": "ci/check_docs.py"
     },
     {
+      "path": "examples/module-exports/main.opaal",
+      "role": "positive",
+      "reason": "Canonical inline module export or grouped comparison source.",
+      "assertion": "ci/check_docs.py"
+    },
+    {
+      "path": "examples/module-exports/policy.opaal",
+      "role": "positive",
+      "reason": "Canonical inline module export or grouped comparison source.",
+      "assertion": "ci/check_docs.py"
+    },
+    {
       "path": "examples/numeric-report/caught.opaal",
       "role": "positive",
       "reason": "Numeric workflow example; domain/type refusals remain negative; no effect executes during format.",
@@ -1065,6 +1077,139 @@
       "sha256": "24c10f8c342b15cc532c309b68ad010bacdbd786f9fae8f66da6d0584967c432"
     },
     {
+      "path": "tests/golden/source-formatting/inline-module-exports/alias-conflict.opaal",
+      "role": "semantic-negative",
+      "reason": "Verify module admission diagnostics and original ranges.",
+      "assertion": "ci/qualify_source_formatting.py",
+      "sha256": "2dff6b67497724f7b5ad4e2cc4d2ddf946cb8bdd4e7c093957e3b47f36b4b2cf"
+    },
+    {
+      "path": "tests/golden/source-formatting/inline-module-exports/check-policy.opaal",
+      "role": "positive",
+      "reason": "Canonical inline module export or grouped comparison source.",
+      "assertion": "ci/qualify_source_formatting.py"
+    },
+    {
+      "path": "tests/golden/source-formatting/inline-module-exports/duplicate-exact.opaal",
+      "role": "semantic-negative",
+      "reason": "Verify module admission diagnostics and original ranges.",
+      "assertion": "ci/qualify_source_formatting.py",
+      "sha256": "4d8ddd97d6db70913e7f3dae8ed58985a73e633ee01691619d0b40c4dbb5a402"
+    },
+    {
+      "path": "tests/golden/source-formatting/inline-module-exports/duplicate-prefix.opaal",
+      "role": "semantic-negative",
+      "reason": "Verify module admission diagnostics and original ranges.",
+      "assertion": "ci/qualify_source_formatting.py",
+      "sha256": "82f00f5314addeb963706b5e343616e6a0ea58b1ea5793ee0159c3c3937ffadf"
+    },
+    {
+      "path": "tests/golden/source-formatting/inline-module-exports/facade.opaal",
+      "role": "positive",
+      "reason": "Canonical inline module export or grouped comparison source.",
+      "assertion": "ci/qualify_source_formatting.py"
+    },
+    {
+      "path": "tests/golden/source-formatting/inline-module-exports/failed-init.opaal",
+      "role": "runtime-negative",
+      "reason": "A failed pattern publishes none of the new import's exports.",
+      "assertion": "ci/qualify_source_formatting.py",
+      "sha256": "69f68595984a66a4a33f58c35e64bfab2cc83de4331194340e1e6a8f85d92233"
+    },
+    {
+      "path": "tests/golden/source-formatting/inline-module-exports/grouped-policy.opaal",
+      "role": "positive",
+      "reason": "Canonical inline module export or grouped comparison source.",
+      "assertion": "ci/qualify_source_formatting.py"
+    },
+    {
+      "path": "tests/golden/source-formatting/inline-module-exports/incomplete.opaal",
+      "role": "syntax-incomplete",
+      "reason": "Preserve bytes and continue an unfinished inline declaration.",
+      "assertion": "ci/qualify_source_formatting.py",
+      "sha256": "42e67609ad98e6808cfd6c3281b7b9e0d1bbd868e49775f52198cd8d8727d744",
+      "format_diagnostic": "SYN002",
+      "format_message": "incomplete input: expression requires another operand"
+    },
+    {
+      "path": "tests/golden/source-formatting/inline-module-exports/invalid.opaal",
+      "role": "syntax-invalid",
+      "reason": "Reject invalid scope or export target without rewriting the file.",
+      "assertion": "ci/qualify_source_formatting.py",
+      "sha256": "4b0c6667e22442c4212aee21043c2da2ca5cbe34b1fad038a50b3779a8811b4b",
+      "format_diagnostic": "OP1000",
+      "format_message": "module exports are allowed only at module top level"
+    },
+    {
+      "path": "tests/golden/source-formatting/inline-module-exports/main.opaal",
+      "role": "positive",
+      "reason": "Canonical inline module export or grouped comparison source.",
+      "assertion": "ci/qualify_source_formatting.py"
+    },
+    {
+      "path": "tests/golden/source-formatting/inline-module-exports/member-conflict.opaal",
+      "role": "semantic-negative",
+      "reason": "Verify module admission diagnostics and original ranges.",
+      "assertion": "ci/qualify_source_formatting.py",
+      "sha256": "5063cd45f27a206ae9ea231939cd810119503fb9b6f90e3dc92cfce7c59ee704"
+    },
+    {
+      "path": "tests/golden/source-formatting/inline-module-exports/noncanonical.opaal",
+      "role": "noncanonical",
+      "reason": "Normalize whitespace around the modifier and keep source form and documentation.",
+      "assertion": "ci/qualify_source_formatting.py",
+      "sha256": "81c829a18bbd1e54edc0cb77440de4fe9034c1bcf399eb954c9be227e0ca1037",
+      "format_diagnostic": "FMT001",
+      "format_message": "source is not canonically formatted"
+    },
+    {
+      "path": "tests/golden/source-formatting/inline-module-exports/policy.opaal",
+      "role": "positive",
+      "reason": "Canonical inline module export or grouped comparison source.",
+      "assertion": "ci/qualify_source_formatting.py"
+    },
+    {
+      "path": "tests/golden/source-formatting/inline-module-exports/private.opaal",
+      "role": "semantic-negative",
+      "reason": "Verify module admission diagnostics and original ranges.",
+      "assertion": "ci/qualify_source_formatting.py",
+      "sha256": "99fb30f626e321480cb37be7e25fa81bd2095ea2efdb414697f42fd852d30d7b"
+    },
+    {
+      "path": "tests/golden/source-formatting/inline-module-exports/project-tasks.opaal",
+      "role": "positive",
+      "reason": "Canonical inline module export or grouped comparison source.",
+      "assertion": "ci/qualify_source_formatting.py"
+    },
+    {
+      "path": "tests/golden/source-formatting/inline-module-exports/reverse-exact.opaal",
+      "role": "semantic-negative",
+      "reason": "Verify module admission diagnostics and original ranges.",
+      "assertion": "ci/qualify_source_formatting.py",
+      "sha256": "17119abf44882ff9fd9b14f7a347a375c2d3e5adbb626452229fcb79001e9927"
+    },
+    {
+      "path": "tests/golden/source-formatting/inline-module-exports/reverse-prefix.opaal",
+      "role": "semantic-negative",
+      "reason": "Verify module admission diagnostics and original ranges.",
+      "assertion": "ci/qualify_source_formatting.py",
+      "sha256": "1341d1f6f2036a0f617bb51e02363a1fd143c2d98c4031bf89034c0b83b28b1d"
+    },
+    {
+      "path": "tests/golden/source-formatting/inline-module-exports/test-effect.opaal",
+      "role": "refused",
+      "reason": "Verify pure test signature or effect admission independently of export spelling.",
+      "assertion": "ci/qualify_source_formatting.py",
+      "sha256": "cb5b903861727f14412ba79925f5de6023f1c492ec6bc1ad3fd38be1c51d6e8b"
+    },
+    {
+      "path": "tests/golden/source-formatting/inline-module-exports/test-signature.opaal",
+      "role": "refused",
+      "reason": "Verify pure test signature or effect admission independently of export spelling.",
+      "assertion": "ci/qualify_source_formatting.py",
+      "sha256": "06c1353719e289472d588e0fed5848157ca70dab95ffe85371a9ac39575686b6"
+    },
+    {
       "path": "tests/golden/source-formatting/invalid.opaal",
       "role": "syntax-invalid",
       "reason": "Exact formatter migration, comment layout or syntax refusal golden.",
@@ -1515,6 +1660,12 @@
       "assertion": "crates/opaal-syntax/tests/opaal_language_manifest.rs"
     },
     {
+      "path": "tests/opaal-foundation/language/grammar/complete/inline-module-exports.opaal",
+      "role": "positive",
+      "reason": "Canonical inline module export or grouped comparison source.",
+      "assertion": "crates/opaal-syntax/tests/opaal_language_manifest.rs"
+    },
+    {
       "path": "tests/opaal-foundation/language/grammar/complete/leading-trivia.opaal",
       "role": "positive",
       "reason": "complete corpus role; owning manifest expectation: -",
@@ -1557,6 +1708,15 @@
       "format_message": "incomplete input: expression requires another operand"
     },
     {
+      "path": "tests/opaal-foundation/language/grammar/incomplete/inline-module-exports.opaal",
+      "role": "syntax-incomplete",
+      "reason": "Preserve bytes and continue an unfinished inline declaration.",
+      "assertion": "crates/opaal-syntax/tests/opaal_language_manifest.rs",
+      "sha256": "30ba440fc57fe4e30288810531692d9b950893c3efdec3d6ba885b1404842789",
+      "format_diagnostic": "SYN002",
+      "format_message": "incomplete input: expression requires another operand"
+    },
+    {
       "path": "tests/opaal-foundation/language/grammar/incomplete/open-block.opaal",
       "role": "syntax-incomplete",
       "reason": "incomplete corpus role; owning manifest expectation: -",
@@ -1591,6 +1751,15 @@
       "sha256": "f04e1ae2190f797a86179e2e83ba0f3ad8912caf4ab3be09e80cca160a244457",
       "format_diagnostic": "OP1000",
       "format_message": "expected a statement boundary"
+    },
+    {
+      "path": "tests/opaal-foundation/language/grammar/invalid/inline-module-exports.opaal",
+      "role": "syntax-invalid",
+      "reason": "Reject invalid scope or export target without rewriting the file.",
+      "assertion": "crates/opaal-syntax/tests/opaal_language_manifest.rs",
+      "sha256": "88fc4cc55caab5bc48b13f9013329a98d047cc55da0f35173cc2e854186f2b7c",
+      "format_diagnostic": "OP1000",
+      "format_message": "expected an identifier"
     },
     {
       "path": "tests/opaal-foundation/language/grammar/invalid/leading-pipe.opaal",
@@ -2488,8 +2657,8 @@
     },
     {
       "path": "ci/check_docs.py",
-      "sha256": "7553b19e88ef8d08bca9290efe2a1fd3735dff5dda8d600281b7beaa7941ed72",
-      "source_markers": 10,
+      "sha256": "f1b4b66f932256037f6519f80ecfb01390547a8401ad84fe11399cfa20bd3099",
+      "source_markers": 11,
       "constructors_or_assertions": [
         "check_examples",
         "check_guides",
@@ -2639,8 +2808,8 @@
     },
     {
       "path": "ci/package_source_formatting.py",
-      "sha256": "688290705d84eb77f9e446c09a5cd4c5b780e248ff07d4e50343a25457f687fa",
-      "source_markers": 141,
+      "sha256": "b7412f6c061ed4b510de7d0b6207cdca683179cc9179c45b13311129b03ea7d6",
+      "source_markers": 160,
       "constructors_or_assertions": [
         "main",
         "module constants/imports"
@@ -2884,11 +3053,12 @@
     },
     {
       "path": "ci/qualify_source_formatting.py",
-      "sha256": "a264a7785bfa7682fb2cde37290addce3d5312744371b3577894bc89558f131f",
-      "source_markers": 388,
+      "sha256": "4ea59f41db0b2aae9631c0bc755a9f9a4a1e6523e0cade55d2803b999a312ac0",
+      "source_markers": 436,
       "constructors_or_assertions": [
         "action_declarations",
         "action_position",
+        "at",
         "audit",
         "compound_assignment",
         "concise_imports",
@@ -2900,11 +3070,15 @@
         "indexed_iteration",
         "indexed_list_replacement",
         "indexed_range",
+        "inline_export_projects",
+        "inline_export_queries",
+        "inline_module_exports",
         "invoke",
         "list_literal_spread",
         "main",
         "module constants/imports",
         "normalized_artifact",
+        "opened",
         "plan",
         "project_workflow",
         "qualify",
@@ -2915,6 +3089,7 @@
         "request",
         "run",
         "send",
+        "span",
         "terminal_continuation",
         "tests",
         "typed_tuples",
@@ -3355,7 +3530,7 @@
     },
     {
       "path": "crates/opaal-cli/src/main.rs",
-      "sha256": "7d3c02ccabaefa31a7bb420fe26b0511788d5b6ae43f621fa881c98f0f9fe537",
+      "sha256": "82e0f81755a025c8114961697466b518ea0c389a0836e6271c91c56e01ad23d6",
       "source_markers": 5,
       "constructors_or_assertions": [
         "module constants/imports",
@@ -4036,12 +4211,13 @@
     },
     {
       "path": "crates/opaal-cli/tests/test_frontend.rs",
-      "sha256": "0ab3d4c09990f3dec4b37c2256999597034b3e4d5c7c172bd814a85b31a0d978",
-      "source_markers": 21,
+      "sha256": "efc44559455ae17eb40cf26e200fcce152fbaa9150d9edc33cb4f1d03a73901e",
+      "source_markers": 22,
       "constructors_or_assertions": [
         "cooperative_cancellation_never_passes_or_leaks_partial_source",
         "empty_unknown_and_nonselected_invalid_inventory_refuse",
         "exact_case_suite_and_view_ceilings_refuse_first_excess",
+        "listing_does_not_initialize_and_running_does",
         "module_and_imported_alias_cases_use_canonical_identity_and_fresh_scopes",
         "native_test_command_refuses_an_unwritable_result_sink",
         "prefix_inventory_preserves_full_signatures_and_selected_purity_boundaries",
@@ -4747,7 +4923,7 @@
     },
     {
       "path": "crates/opaal-runtime/src/module.rs",
-      "sha256": "6273cb187ab471ff4c5edffd6f443479552c08842240c8b6746352bb93afeb23",
+      "sha256": "8e8c3520c89da6fca1a997a5bc4dd672836d3c98f42b456917b0ac4d67b1dfa6",
       "source_markers": 22,
       "constructors_or_assertions": [
         "analyze_interactive_with_control",
@@ -4807,8 +4983,8 @@
     },
     {
       "path": "crates/opaal-runtime/src/session.rs",
-      "sha256": "6d5510459c50569055dcdedf9a0dee808f8106b90ab71ec3e2f9fffb32639918",
-      "source_markers": 25,
+      "sha256": "26258fefe66ce8560eebc95831141270e2beadb1e80b969868a940221f8ed456",
+      "source_markers": 26,
       "constructors_or_assertions": [
         "ambient_admits",
         "ambient_process_policy_reaches_argument_expansion_but_never_process_spawn",
@@ -5219,8 +5395,8 @@
     },
     {
       "path": "crates/opaal-runtime/tests/interactive_modules.rs",
-      "sha256": "d656eefc950025df428639deba5d77fb7e3cc676e8bcc51fc3dcbed14726f7e8",
-      "source_markers": 95,
+      "sha256": "1f0d785b090d91393b890a1cc5159f53bbb9dbdb24a20d500bf652ff7aa9df5a",
+      "source_markers": 99,
       "constructors_or_assertions": [
         "a_declaration_cannot_publish_types_from_a_later_local_import",
         "a_partial_first_group_charges_its_retained_cell_once_like_expanded_singles",
@@ -5236,6 +5412,7 @@
         "failed_member_initializer_retains_only_prior_declarations_and_can_retry",
         "groups_keep_expanded_single_step_charging_and_partial_publication_at_every_budget",
         "indexed_replacement_retains_cell_types_aliases_and_index_only_callables",
+        "inline_patterns_export_nested_binders_and_keep_mutation_in_the_owner",
         "interactive_if_expressions_validate_known_arms_before_publication",
         "local_source_capability_is_explicit_and_initializers_have_no_host",
         "partial_import_groups_retain_first_entry_nominals_callables_and_retry_without_reload",
@@ -5394,12 +5571,12 @@
     },
     {
       "path": "crates/opaal-runtime/tests/opaal_resources.rs",
-      "sha256": "34cf9e86de1e1eba18c69c49e527147d796460ca6bec55464c8d8fca4a75115b",
-      "source_markers": 65,
+      "sha256": "844c0590d14727cbafee08009bb76854d4b45fdc52f8aff4fab53441db909130",
+      "source_markers": 71,
       "constructors_or_assertions": [
         "a_failed_dynamic_tuple_binding_never_runs_its_body_or_leaks_names",
         "analysis_source",
-        "cancellation_at_every_prefix_analysis_poll_never_accepts_partial_exports",
+        "cancellation_at_every_export_expansion_poll_never_accepts_partial_exports",
         "collection_and_call_depth_limits_refuse_the_first_excess",
         "compound_assignment_charges_its_lowered_read_and_binary_at_exact_analysis_limits",
         "diagnostic_budget_refuses_instead_of_publishing_a_truncated_report",
@@ -5407,6 +5584,7 @@
         "grouping_preserves_dependency_initialization_order_instead_of_imposing_lexical_order",
         "import_groups_charge_every_entry_and_accept_only_the_exact_analysis_boundaries",
         "inferred_nested_list_depth_is_measured_without_an_annotation",
+        "inline_exports_keep_the_exact_grouped_initializer_step_budget",
         "list_literal_spread_analysis_charges_source_nodes_depth_and_work_exactly",
         "member_selectors_charge_exact_analysis_and_retained_binding_boundaries",
         "new_loop_headers_charge_entries_and_poll_even_with_an_empty_body",
@@ -5991,7 +6169,7 @@
     },
     {
       "path": "crates/opaal-syntax/src/parser.rs",
-      "sha256": "cd69e2e829043fa274194205a5301b1f4bb9606017075551e6fa052bba23cc24",
+      "sha256": "821fa3ca0573cc54989c166c1410aae432dfe0baa04903bfc43d4b4308ae9927",
       "source_markers": 3,
       "constructors_or_assertions": [
         "cancellation_is_polled_during_shorthand_field_parsing_after_lexing",
@@ -6021,7 +6199,7 @@
     },
     {
       "path": "crates/opaal-syntax/tests/ast_construction.rs",
-      "sha256": "55955fcf861054444edb92adb2e00056eb155963e7a76fba9e933ddeeb04a638",
+      "sha256": "93fd6d35dba52f27c4eb28c53369826c09a4cddb303ff0d275b115238322c105",
       "source_markers": 8,
       "constructors_or_assertions": [
         "command_items_and_redirections_remain_in_source_order",
@@ -6077,8 +6255,8 @@
     },
     {
       "path": "crates/opaal-syntax/tests/formatter.rs",
-      "sha256": "39d9d57e7428a602c8b1bb77ff2a1676b1dabeaf365ddcecfd140dd0e9568f69",
-      "source_markers": 69,
+      "sha256": "e0f385415189040ac546f891fba4ce3f7ff19eee449e3122bda0f368d3c9f6a1",
+      "source_markers": 71,
       "constructors_or_assertions": [
         "action_layout_preserves_punctuation_inside_command_words",
         "canonical_goldens_and_bounded_large_sources_roundtrip",
@@ -6089,6 +6267,7 @@
         "horizontal_trivia_and_block_indentation_are_canonical",
         "import_groups_are_multiline_and_insert_only_the_missing_final_comma_before_comments",
         "incomplete_and_invalid_inputs_keep_their_parse_outcomes",
+        "inline_export_format_preserves_docs_and_continuation",
         "interpolation_spacing_is_canonical",
         "list_literal_spreads_preserve_comments_tokens_and_one_level_spelling",
         "list_spread_spacing_keeps_existing_command_and_pattern_grammars",
@@ -6238,14 +6417,15 @@
     },
     {
       "path": "crates/opaal-syntax/tests/parser.rs",
-      "sha256": "0c0f25c8b02d53a64cba4ba28c15219c9b8689810e20005aad8b298b0e17944b",
-      "source_markers": 35,
+      "sha256": "50cbd7a027d2a17c9b620bc983be08f4f0e395e0b483b0c3f93ff497b879d0c1",
+      "source_markers": 43,
       "constructors_or_assertions": [
         "bare_name_conditions_stop_before_control_flow_blocks",
         "catch_without_try_is_rejected_at_its_reserved_keyword",
         "complete",
         "controlled_parsing_cancels_without_exposing_a_partial_parse_outcome",
         "independent_statement_errors_are_reported_without_cascades",
+        "inline_exports_keep_declaration_shapes_spans_and_recovery",
         "list_literal_spreads_keep_marker_operand_and_precedence_spans",
         "loop_headers_distinguish_an_index_from_tuple_slots",
         "loop_tuple_depth_is_bounded_even_with_space_before_each_comma",
@@ -8748,6 +8928,139 @@
       "sha256": "24c10f8c342b15cc532c309b68ad010bacdbd786f9fae8f66da6d0584967c432"
     },
     {
+      "path": "tests/golden/source-formatting/inline-module-exports/alias-conflict.opaal",
+      "targets": [
+        "parser"
+      ],
+      "sha256": "2dff6b67497724f7b5ad4e2cc4d2ddf946cb8bdd4e7c093957e3b47f36b4b2cf"
+    },
+    {
+      "path": "tests/golden/source-formatting/inline-module-exports/check-policy.opaal",
+      "targets": [
+        "parser"
+      ],
+      "sha256": "8ce3d2e5ad32914321d432490d9ba51c7a337770627431e42a0505b14ae2b365"
+    },
+    {
+      "path": "tests/golden/source-formatting/inline-module-exports/duplicate-exact.opaal",
+      "targets": [
+        "parser"
+      ],
+      "sha256": "4d8ddd97d6db70913e7f3dae8ed58985a73e633ee01691619d0b40c4dbb5a402"
+    },
+    {
+      "path": "tests/golden/source-formatting/inline-module-exports/duplicate-prefix.opaal",
+      "targets": [
+        "parser"
+      ],
+      "sha256": "82f00f5314addeb963706b5e343616e6a0ea58b1ea5793ee0159c3c3937ffadf"
+    },
+    {
+      "path": "tests/golden/source-formatting/inline-module-exports/facade.opaal",
+      "targets": [
+        "parser"
+      ],
+      "sha256": "aa4136deb271730a0597902b2bc034981e2fbc60aa0103890fedf11ae5057036"
+    },
+    {
+      "path": "tests/golden/source-formatting/inline-module-exports/failed-init.opaal",
+      "targets": [
+        "parser"
+      ],
+      "sha256": "69f68595984a66a4a33f58c35e64bfab2cc83de4331194340e1e6a8f85d92233"
+    },
+    {
+      "path": "tests/golden/source-formatting/inline-module-exports/grouped-policy.opaal",
+      "targets": [
+        "parser"
+      ],
+      "sha256": "2823aca0d11c61e265e44b8fef910529b633f24633c173ca1e7d03a3da6375c7"
+    },
+    {
+      "path": "tests/golden/source-formatting/inline-module-exports/incomplete.opaal",
+      "targets": [
+        "parser"
+      ],
+      "sha256": "42e67609ad98e6808cfd6c3281b7b9e0d1bbd868e49775f52198cd8d8727d744"
+    },
+    {
+      "path": "tests/golden/source-formatting/inline-module-exports/invalid.opaal",
+      "targets": [
+        "parser"
+      ],
+      "sha256": "4b0c6667e22442c4212aee21043c2da2ca5cbe34b1fad038a50b3779a8811b4b"
+    },
+    {
+      "path": "tests/golden/source-formatting/inline-module-exports/main.opaal",
+      "targets": [
+        "parser"
+      ],
+      "sha256": "cad41e05d757283a3058f2d4648fef1f0c3dc5668f04bdfeacff03f837e52b3d"
+    },
+    {
+      "path": "tests/golden/source-formatting/inline-module-exports/member-conflict.opaal",
+      "targets": [
+        "parser"
+      ],
+      "sha256": "5063cd45f27a206ae9ea231939cd810119503fb9b6f90e3dc92cfce7c59ee704"
+    },
+    {
+      "path": "tests/golden/source-formatting/inline-module-exports/noncanonical.opaal",
+      "targets": [
+        "parser"
+      ],
+      "sha256": "81c829a18bbd1e54edc0cb77440de4fe9034c1bcf399eb954c9be227e0ca1037"
+    },
+    {
+      "path": "tests/golden/source-formatting/inline-module-exports/policy.opaal",
+      "targets": [
+        "parser"
+      ],
+      "sha256": "97e497d834812d765dc7dd474551e5cc14f37e97e4b9c559b18585c3944313e7"
+    },
+    {
+      "path": "tests/golden/source-formatting/inline-module-exports/private.opaal",
+      "targets": [
+        "parser"
+      ],
+      "sha256": "99fb30f626e321480cb37be7e25fa81bd2095ea2efdb414697f42fd852d30d7b"
+    },
+    {
+      "path": "tests/golden/source-formatting/inline-module-exports/project-tasks.opaal",
+      "targets": [
+        "parser"
+      ],
+      "sha256": "6a54c79fa38faf2c97250f3eaacf19c482f51495bcf5f18ffbe8cb9966471bb7"
+    },
+    {
+      "path": "tests/golden/source-formatting/inline-module-exports/reverse-exact.opaal",
+      "targets": [
+        "parser"
+      ],
+      "sha256": "17119abf44882ff9fd9b14f7a347a375c2d3e5adbb626452229fcb79001e9927"
+    },
+    {
+      "path": "tests/golden/source-formatting/inline-module-exports/reverse-prefix.opaal",
+      "targets": [
+        "parser"
+      ],
+      "sha256": "1341d1f6f2036a0f617bb51e02363a1fd143c2d98c4031bf89034c0b83b28b1d"
+    },
+    {
+      "path": "tests/golden/source-formatting/inline-module-exports/test-effect.opaal",
+      "targets": [
+        "parser"
+      ],
+      "sha256": "cb5b903861727f14412ba79925f5de6023f1c492ec6bc1ad3fd38be1c51d6e8b"
+    },
+    {
+      "path": "tests/golden/source-formatting/inline-module-exports/test-signature.opaal",
+      "targets": [
+        "parser"
+      ],
+      "sha256": "06c1353719e289472d588e0fed5848157ca70dab95ffe85371a9ac39575686b6"
+    },
+    {
       "path": "tests/golden/source-formatting/invalid.opaal",
       "targets": [
         "parser"
@@ -9164,6 +9477,17 @@
       "sha256": "158ed78d91649c9f343d397e32c254402442db9bb400d09690ed3e95a0e0652d"
     },
     {
+      "path": "tests/opaal-foundation/language/grammar/complete/inline-module-exports.opaal",
+      "targets": [
+        "lexer",
+        "parser",
+        "expander",
+        "resources",
+        "secret_sinks"
+      ],
+      "sha256": "25500878343ba131be3553291796acf3148776e96947600c7566b664bab95aea"
+    },
+    {
       "path": "tests/opaal-foundation/language/grammar/complete/leading-trivia.opaal",
       "targets": [
         "lexer",
@@ -9219,6 +9543,17 @@
       "sha256": "b2f7d21ce0bb2fe7565cdf73b65dbf81922b704186cce64d9c573c3f2785be2a"
     },
     {
+      "path": "tests/opaal-foundation/language/grammar/incomplete/inline-module-exports.opaal",
+      "targets": [
+        "lexer",
+        "parser",
+        "expander",
+        "resources",
+        "secret_sinks"
+      ],
+      "sha256": "30ba440fc57fe4e30288810531692d9b950893c3efdec3d6ba885b1404842789"
+    },
+    {
       "path": "tests/opaal-foundation/language/grammar/incomplete/open-block.opaal",
       "targets": [
         "lexer",
@@ -9261,6 +9596,17 @@
         "secret_sinks"
       ],
       "sha256": "f04e1ae2190f797a86179e2e83ba0f3ad8912caf4ab3be09e80cca160a244457"
+    },
+    {
+      "path": "tests/opaal-foundation/language/grammar/invalid/inline-module-exports.opaal",
+      "targets": [
+        "lexer",
+        "parser",
+        "expander",
+        "resources",
+        "secret_sinks"
+      ],
+      "sha256": "88fc4cc55caab5bc48b13f9013329a98d047cc55da0f35173cc2e854186f2b7c"
     },
     {
       "path": "tests/opaal-foundation/language/grammar/invalid/leading-pipe.opaal",

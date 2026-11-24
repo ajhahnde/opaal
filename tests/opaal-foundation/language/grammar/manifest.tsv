@@ -17,3 +17,6 @@ module	invalid	invalid/contained-action.opaal	OP1000
 module	complete	complete/indexed-list-replacement.opaal	-
 module	invalid	invalid/indexed-list-replacement.opaal	OP1000
 module	incomplete	incomplete/indexed-list-replacement.opaal	-
+module	complete	complete/inline-module-exports.opaal	-
+module	incomplete	incomplete/inline-module-exports.opaal	-
+module	invalid	invalid/inline-module-exports.opaal	OP1000

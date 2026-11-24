@@ -376,6 +376,29 @@ fn one_runtime_step_budget_crosses_statement_and_module_boundaries() {
 }
 
 #[test]
+fn inline_exports_keep_the_exact_grouped_initializer_step_budget() {
+    let root = "import './support.opaal' as support\nimport './support.opaal'::{first, second}\nfirst + second + support::first\n";
+    let mut costs = Vec::new();
+    for policy in [
+        "def initialize() -> List[Int] { return [1, 2] }\nlet [first, second] = initialize()\nexport { first, second }\n",
+        "def initialize() -> List[Int] { return [1, 2] }\nexport let [first, second] = initialize()\n",
+    ] {
+        let sources = resource_sources(root).contains("/project/support.opaal", policy);
+        let program = loader(&sources)
+            .load(Path::new("/project/main.opaal"))
+            .unwrap();
+        let cost = (0..100).find(|steps| {
+            let outcome = execute(&program, &EvalLimits::pure_opaal(
+                CancellationToken::never(), ResourceBudget::steps(*steps),
+            ));
+            matches!(outcome.primary(), PrimaryOutcome::Completed(completion) if completion.value() == &Value::Int(4))
+        }).expect("the policy and both imports complete within the search ceiling");
+        costs.push(cost);
+    }
+    assert_eq!(costs[0], costs[1]);
+}
+
+#[test]
 fn collection_and_call_depth_limits_refuse_the_first_excess() {
     let collection_program = program(concat!("", "let marker = 1\n", "[1, 2, 3]\n",));
     assert!(matches!(
@@ -1118,14 +1141,28 @@ fn prefix_expansion_is_bounded_at_exact_work_and_diagnostic_limits() {
     let declarations = (0..1024)
         .map(|index| format!("let check_{index:04} = {index}\n"))
         .collect::<String>();
-    for selectors in ["check_*", "check_*, check*", "absent_*, missing_*"] {
-        let text = format!("export {{{selectors}}}\n{declarations}");
+    for (text, valid) in [
+        (format!("export {{check_*}}\n{declarations}"), true),
+        (format!("export {{check_*, check*}}\n{declarations}"), false),
+        (
+            format!("export {{absent_*, missing_*}}\n{declarations}"),
+            false,
+        ),
+        (declarations.replace("let ", "export let "), true),
+        (
+            format!(
+                "{}export {{check_*}}\n",
+                declarations.replace("let ", "export let ")
+            ),
+            false,
+        ),
+    ] {
         let sources = resource_sources(&text);
         let report = loader(&sources).analyze_with_limits(
             Path::new("/project/main.opaal"),
             AnalysisLimits::unlimited(),
         );
-        assert_eq!(report.program().is_some(), selectors == "check_*");
+        assert_eq!(report.program().is_some(), valid);
         for kind in [AnalysisLimitKind::WorkUnits, AnalysisLimitKind::Diagnostics] {
             let used = report.usage().get(kind);
             if used == 0 {
@@ -1166,32 +1203,37 @@ fn prefix_expansion_is_bounded_at_exact_work_and_diagnostic_limits() {
 }
 
 #[test]
-fn cancellation_at_every_prefix_analysis_poll_never_accepts_partial_exports() {
-    let sources =
-        resource_sources("export {check_*}\nlet check_a = 1\nlet check_b = 2\nlet check_c = 3\n");
-    let polls = Arc::new(AtomicUsize::new(0));
-    let observed = polls.clone();
-    let counting = AnalysisControl::cooperative(move || {
-        observed.fetch_add(1, Ordering::SeqCst);
-        false
-    });
-    assert!(matches!(loader(&sources).analyze_with_limits_controlled(
+fn cancellation_at_every_export_expansion_poll_never_accepts_partial_exports() {
+    for source in [
+        "export {check_*}\nlet check_a = 1\nlet check_b = 2\nlet check_c = 3\n",
+        "export let [check_a, _, check_b, ...rest] = [1, 2, 3, 4]\nexport let check_c = 3\n",
+    ] {
+        let sources = resource_sources(source);
+        let polls = Arc::new(AtomicUsize::new(0));
+        let observed = polls.clone();
+        let counting = AnalysisControl::cooperative(move || {
+            observed.fetch_add(1, Ordering::SeqCst);
+            false
+        });
+        assert!(matches!(loader(&sources).analyze_with_limits_controlled(
         Path::new("/project/main.opaal"), &counting, AnalysisLimits::unlimited()),
         ModuleAnalysisOutcome::Complete(report) if report.program().is_some()));
-    for stop in 0..polls.load(Ordering::SeqCst) {
-        let observed = Arc::new(AtomicUsize::new(0));
-        let control =
-            AnalysisControl::cooperative(move || observed.fetch_add(1, Ordering::SeqCst) >= stop);
-        assert!(
-            matches!(
-                loader(&sources).analyze_with_limits_controlled(
-                    Path::new("/project/main.opaal"),
-                    &control,
-                    AnalysisLimits::unlimited()
+        for stop in 0..polls.load(Ordering::SeqCst) {
+            let observed = Arc::new(AtomicUsize::new(0));
+            let control = AnalysisControl::cooperative(move || {
+                observed.fetch_add(1, Ordering::SeqCst) >= stop
+            });
+            assert!(
+                matches!(
+                    loader(&sources).analyze_with_limits_controlled(
+                        Path::new("/project/main.opaal"),
+                        &control,
+                        AnalysisLimits::unlimited()
+                    ),
+                    ModuleAnalysisOutcome::Cancelled
                 ),
-                ModuleAnalysisOutcome::Cancelled
-            ),
-            "poll {stop} accepted a partial program"
-        );
+                "poll {stop} accepted a partial program"
+            );
+        }
     }
 }

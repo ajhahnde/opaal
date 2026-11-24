@@ -163,6 +163,7 @@ struct Parser<'source, 'control, 'metadata> {
     if_expression_depth: usize,
     loop_pattern_depth: usize,
     diagnostics: Vec<Diagnostic>,
+    inline_exports: Vec<(usize, Span)>,
     is_cancelled: &'control dyn Fn() -> bool,
     format_spans: Option<&'metadata mut FormatSpans>,
 }
@@ -192,6 +193,7 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
             if_expression_depth: 0,
             loop_pattern_depth: 0,
             diagnostics: Vec::new(),
+            inline_exports: Vec::new(),
             is_cancelled,
             format_spans,
         }
@@ -231,7 +233,7 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
                 }
             }
         }
-        Ok(script)
+        Ok(script.with_inline_exports(self.inline_exports))
     }
 
     fn index_delimiters(&mut self) -> ParseResult<()> {
@@ -493,7 +495,9 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
             }
             Some(TokenKind::Keyword(Keyword::Let)) => self.parse_declaration(false),
             Some(TokenKind::Keyword(Keyword::Mut)) => self.parse_declaration(true),
-            Some(TokenKind::Keyword(Keyword::Export)) => self.parse_export(top_level),
+            Some(TokenKind::Keyword(Keyword::Export)) => {
+                self.parse_export(top_level, documentation)
+            }
             Some(TokenKind::Keyword(Keyword::Unset)) => self.parse_unset(),
             Some(TokenKind::Keyword(Keyword::Def)) => self.parse_function(documentation),
             Some(TokenKind::Keyword(Keyword::Action)) => {
@@ -923,9 +927,34 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
         ))
     }
 
-    fn parse_export(&mut self, top_level: bool) -> ParseResult<Statement> {
+    fn parse_export(
+        &mut self,
+        top_level: bool,
+        documentation: Option<DocumentationBlock>,
+    ) -> ParseResult<Statement> {
         let start = self.take().expect("export keyword is current").span();
         self.skip_inline();
+        if matches!(
+            self.current_kind(),
+            Some(TokenKind::Keyword(
+                Keyword::Def
+                    | Keyword::Let
+                    | Keyword::Mut
+                    | Keyword::Action
+                    | Keyword::Type
+                    | Keyword::Enum
+            ))
+        ) {
+            if !top_level {
+                return Err(
+                    self.invalid_here("module exports are allowed only at module top level")
+                );
+            }
+            let declaration = self.parse_statement(top_level, documentation)?;
+            self.inline_exports
+                .push((declaration.span().start(), start));
+            return Ok(declaration);
+        }
         if self.at_delimiter(Some(Delimiter::LeftBrace)) {
             if !top_level {
                 return Err(

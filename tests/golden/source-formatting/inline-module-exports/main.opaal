@@ -1,0 +1,15 @@
+import './policy.opaal' as policy
+import './policy.opaal'::{threshold, left, right}
+import './facade.opaal'::{score, Report, Choice}
+let report: Report = policy::Report { total: score() }
+let answer: Choice = policy::Choice::Yes(report.total)
+if report.total != 14 {
+    throw "wrong report total"
+}
+let detail = policy::detail_value
+if detail != 4 {
+    throw "wrong detail value"
+}
+if threshold != 7 || policy::retries != 2 || left != 2 || right != 3 {
+    throw "wrong public binding"
+}

@@ -36,12 +36,35 @@ impl<T> AstNode<T> {
 pub struct Script {
     statements: Vec<Statement>,
     span: Span,
+    inline_exports: Vec<(usize, Span)>,
 }
 
 impl Script {
     #[must_use]
     pub const fn new(statements: Vec<Statement>, span: Span) -> Self {
-        Self { statements, span }
+        Self {
+            statements,
+            span,
+            inline_exports: Vec::new(),
+        }
+    }
+
+    pub(crate) fn with_inline_exports(mut self, inline_exports: Vec<(usize, Span)>) -> Self {
+        self.inline_exports = inline_exports;
+        self
+    }
+
+    /// Returns the `export` keyword range for a marked top-level declaration.
+    #[must_use]
+    pub fn inline_export_span(&self, statement: &Statement) -> Option<Span> {
+        if statement.span().source_id() != self.span.source_id() {
+            return None;
+        }
+        let index = self
+            .inline_exports
+            .binary_search_by_key(&statement.span().start(), |&(start, _)| start)
+            .ok()?;
+        Some(self.inline_exports[index].1)
     }
 
     #[must_use]

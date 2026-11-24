@@ -1,0 +1,24 @@
+export let threshold = 7
+export mut retries = 1
+retries = 2
+export let [left, right, _] = [2, 3, 9]
+export type Report = { total: Int }
+export enum Choice { Yes(Int), No }
+
+## Calculate the report total.
+export    def total() -> Int
+{
+    return threshold + retries + left + right
+}
+
+export	action ready() -> Int
+{
+    effects {
+    }
+
+    return total()
+}
+
+let hidden = 99
+let detail_value = 4
+export { detail_* }

@@ -6,6 +6,16 @@ use opaal_syntax::{FormatOutcome, SourceFile, SourceId, format_source_opaal};
 mod formatting;
 
 #[test]
+fn inline_export_format_preserves_docs_and_continuation() {
+    assert_eq!(
+        roundtrip(
+            "## Original docs.\nexport   def item() -> Int { return 5 } # keep\nexport    \\\n let value = item()\n"
+        ),
+        "## Original docs.\nexport def item() -> Int\n{\n    return 5\n} # keep\nexport \\\nlet value = item()\n"
+    );
+}
+
+#[test]
 fn horizontal_trivia_and_block_indentation_are_canonical() {
     let source = SourceFile::new(
         SourceId::new(3_000),

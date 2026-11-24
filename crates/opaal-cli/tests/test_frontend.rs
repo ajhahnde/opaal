@@ -93,15 +93,18 @@ fn ordinary_false_error_catch_and_rethrow_aggregate_without_payloads() {
 
 #[test]
 fn listing_does_not_initialize_and_running_does() {
-    let source =
-        "export { test_one }\nthrow 'initializer-canary'\ndef test_one() -> Bool { return true }\n";
-    let (exit, view) = run(source, true, None, TestLimits::default());
-    assert_eq!(exit, 0, "{view}");
-    assert_eq!(view["cases"][0]["state"], "listed");
-    assert_eq!(view["counts"]["passed"], 0);
-    let (exit, view) = run(source, false, None, TestLimits::default());
-    assert_eq!(exit, 1, "{view}");
-    assert!(!view.to_string().contains("initializer-canary"));
+    for source in [
+        "export { test_one }\nthrow 'initializer-canary'\ndef test_one() -> Bool { return true }\n",
+        "throw 'initializer-canary'\nexport def test_one() -> Bool { return true }\n",
+    ] {
+        let (exit, view) = run(source, true, None, TestLimits::default());
+        assert_eq!(exit, 0, "{view}");
+        assert_eq!(view["cases"][0]["state"], "listed");
+        assert_eq!(view["counts"]["passed"], 0);
+        let (exit, view) = run(source, false, None, TestLimits::default());
+        assert_eq!(exit, 1, "{view}");
+        assert!(!view.to_string().contains("initializer-canary"));
+    }
 }
 
 #[test]

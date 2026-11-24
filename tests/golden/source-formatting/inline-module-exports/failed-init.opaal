@@ -1,0 +1,6 @@
+export let good = 7
+def mismatch() -> List[Int]
+{
+    return [1]
+}
+export let [left, right] = mismatch()
