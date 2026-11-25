@@ -5,6 +5,7 @@
 
 [advisories]
 version = 2
+unmaintained = "all"
 # No ignores — an entry here must carry a comment justifying the exception.
 ignore = []
 
