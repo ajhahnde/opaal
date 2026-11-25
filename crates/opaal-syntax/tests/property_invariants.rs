@@ -176,6 +176,7 @@ fn generated_sources() -> Vec<String> {
         "${$(\"{|[]})".repeat(8),
         "é🙂界".repeat(32),
         "let label = if true { \"é\" } else if false { \"界\" } else { \"🙂\" }".to_owned(),
+        "let label = \"é界🙂\"[bounds::first:bounds::last][0]".to_owned(),
     ];
 
     for left in FRAGMENTS {
@@ -631,6 +632,14 @@ impl<'source> SpanChecker<'source> {
             ExpressionKind::Index(index) => {
                 self.expression(&index.target);
                 self.expression(&index.index);
+            }
+            ExpressionKind::Slice(slice) => {
+                for span in [slice.open, slice.separator, slice.close] {
+                    self.span(span);
+                }
+                for operand in slice.operands() {
+                    self.expression(operand);
+                }
             }
             ExpressionKind::Member(member) => {
                 self.expression(&member.target);

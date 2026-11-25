@@ -1,0 +1,6 @@
+let counts: List[Int] = [10, 20]
+try {
+    let window = counts[1:3]
+} catch error {
+    throw error
+}

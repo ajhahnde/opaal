@@ -1,0 +1,8 @@
+import std::value as value
+
+let rows: List[Int] = [10, 20, 30]
+let first = 1
+let selected = rows[first:value::length(rows)]
+if selected != [20, 30] {
+    throw "qualified endpoint returned an unexpected window"
+}

@@ -67,6 +67,27 @@ impl FormatLayout {
             layout.space_before.insert(keyword.start());
             layout.space_after.insert(keyword.end());
         }
+        for &(open, separator, close) in &spans.slice_brackets {
+            layout
+                .no_space_before
+                .extend([open.start(), separator.start(), close.start()]);
+            layout.no_space_after.extend([open.end(), separator.end()]);
+            let after_separator =
+                tokens.partition_point(|token| token.span().start() < separator.end());
+            if let Some(comment) = tokens[after_separator..]
+                .iter()
+                .find(|token| token.kind() != TokenKind::Whitespace)
+                .filter(|token| {
+                    matches!(
+                        token.kind(),
+                        TokenKind::Comment | TokenKind::DocumentationComment
+                    )
+                })
+            {
+                // `#` needs whitespace to start a comment after `:`.
+                layout.space_before.insert(comment.span().start());
+            }
+        }
         layout
             .omitted_commas
             .extend(spans.tuple_trailing_commas.iter().map(|span| span.start()));

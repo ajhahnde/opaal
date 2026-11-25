@@ -113,7 +113,7 @@ pub fn classify_opaal_tokens(
     tokens: &[Token],
 ) -> Result<SyntaxClassification, SpanError> {
     let structural = classify_opaal_structure(source, tokens)?;
-    Ok(crate::parser::classify_comprehensions(
+    Ok(crate::parser::classify_bracket_expressions(
         source, tokens, structural,
     ))
 }

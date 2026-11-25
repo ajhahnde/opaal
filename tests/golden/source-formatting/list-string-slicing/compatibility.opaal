@@ -1,0 +1,20 @@
+def id[T](value: T) -> T
+{
+    return value
+}
+mut rows = id[List[Int]]([10, 20])
+let old = rows[if ^true a:b:c && true {
+    1
+} else {
+    0
+}]
+rows[if ^true a:b:c && true {
+    1
+} else {
+    0
+}] = 20
+let selected = rows[if ^true a:b:c && true {
+    1
+} else {
+    0
+}:2]

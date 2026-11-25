@@ -411,7 +411,7 @@ impl Visit for ListItem {
     }
 }
 
-variants!(ExpressionKind { Literal(v), Name(v), Qualified(v), List(v), ListComprehension(v), Tuple(v), Record(v), NominalRecord(v), Closure(v), GroupedJob(v), If(v), Call(v), Index(v), Member(v), Unary(v), Binary(v) });
+variants!(ExpressionKind { Literal(v), Name(v), Qualified(v), List(v), ListComprehension(v), Tuple(v), Record(v), NominalRecord(v), Closure(v), GroupedJob(v), If(v), Call(v), Index(v), Slice(v), Member(v), Unary(v), Binary(v) });
 fields!(ListComprehension {
     open,
     projection,
@@ -649,6 +649,14 @@ fields!(CallExpression {
     arguments
 });
 fields!(IndexExpression { target, index });
+fields!(SliceExpression {
+    target,
+    open,
+    start,
+    separator,
+    end,
+    close
+});
 fields!(MemberExpression { target, member });
 fields!(UnaryExpression { operator, operand });
 fields!(BinaryExpression {

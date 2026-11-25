@@ -1,0 +1,11 @@
+import std::list as list
+
+def counts() -> List[Int]
+{
+    return [10, 20, 30]
+}
+let empty: List[Int] = ([])[0:0]
+let incremented = list::map(counts()[3:3], {|count| count + 1})
+if empty != [] || incremented != [] {
+    throw "expected a typed empty window"
+}
