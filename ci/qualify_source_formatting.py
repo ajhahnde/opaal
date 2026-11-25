@@ -23,14 +23,14 @@ if __package__:
     from .package_data_processing import SOURCE, digest
     from .package_release import PLATFORMS, ROOT, VERSION
     from .package_source_formatting import FIXTURES, MEMBER_IMPORT_FIXTURES, COMPOUND_ASSIGNMENT_FIXTURES, LIST_LITERAL_SPREAD_FIXTURES, RECORD_SHORTHAND_FIXTURES, GROUPED_EXPORT_FIXTURES, ACTION_DECLARATION_FIXTURES, INDEXED_REPLACEMENT_FIXTURES, IF_EXPRESSION_FIXTURES, TYPED_TUPLE_FIXTURES, INDEXED_ITERATION_FIXTURES
-    from .package_source_formatting import INLINE_EXPORT_FIXTURES
+    from .package_source_formatting import INLINE_EXPORT_FIXTURES, LIST_COMPREHENSION_FIXTURES
     from .qualify_data_processing import require, success, unpack
 else:
     from check_source_formatting import public_paths, seed_census
     from package_data_processing import SOURCE, digest
     from package_release import PLATFORMS, ROOT, VERSION
     from package_source_formatting import FIXTURES, MEMBER_IMPORT_FIXTURES, COMPOUND_ASSIGNMENT_FIXTURES, LIST_LITERAL_SPREAD_FIXTURES, RECORD_SHORTHAND_FIXTURES, GROUPED_EXPORT_FIXTURES, ACTION_DECLARATION_FIXTURES, INDEXED_REPLACEMENT_FIXTURES, IF_EXPRESSION_FIXTURES, TYPED_TUPLE_FIXTURES, INDEXED_ITERATION_FIXTURES
-    from package_source_formatting import INLINE_EXPORT_FIXTURES
+    from package_source_formatting import INLINE_EXPORT_FIXTURES, LIST_COMPREHENSION_FIXTURES
     from qualify_data_processing import require, success, unpack
 
 PAIRS = (("legacy.opaal", "canonical.opaal"), ("legacy-effects.opaal", "effects.opaal"),
@@ -612,6 +612,135 @@ def indexed_iteration(run, work: Path, fixtures: Path) -> dict:
     require(raw.returncode == 0 and b"error[MOD010]" in raw.stderr and b"error[BND001]" in raw.stderr,
             "empty indexed loop binding diagnostics differ")
     return {"fixture_cases": sorted(INDEXED_ITERATION_FIXTURES), "continuation": True}
+
+
+def list_comprehensions(run, work: Path, fixtures: Path, target: str) -> dict:
+    original = fixtures / "list-comprehensions"
+    require({path.name for path in original.iterdir()} == set(LIST_COMPREHENSION_FIXTURES),
+            "list comprehension fixture census differs")
+    lock = {"linux-aarch64": "tools-linux-aarch64.toml", "macos-arm64": "tools-macos.toml"
+            }.get(target, "tools-linux.toml")
+    outcome_digests = {}
+    for spelling in ("loop", "comprehension"):
+        folder = work / ("report-" + spelling)
+        shutil.copytree(original, folder)
+        for name in ("opaal.toml", "authority.toml", lock):
+            shutil.copyfile(fixtures / "project" / name, folder / ("tools.toml" if name == lock else name))
+        policy = folder / "policy.opaal"
+        tasks = folder / "tasks.opaal"
+        if spelling == "loop":
+            original_policy = policy.read_bytes()
+            start = original_policy.index(b"export def report(")
+            end = original_policy.index(b"\nexport def summarize(", start)
+            policy.write_bytes(original_policy[:start] + (folder / "loop-report.opaal").read_bytes() + original_policy[end:])
+
+        def invoke(*arguments, **options):
+            return run(*arguments, cwd=folder, **options)
+
+        for args in (("format", "--check", "policy.opaal", "report.opaal", "negative.opaal", "bad-input.opaal"),
+                     ("check", "report.opaal"), ("report.opaal",), ("check", "negative.opaal")):
+            require(success(invoke(*args), f"{spelling} report") == b"", f"{spelling} report wrote output")
+        for args, code, message in (
+            (("negative.opaal",), b"RUN001", b"negative finding count"),
+            (("check", "bad-input.opaal"), b"SIG004", b"List[Int]"),
+        ):
+            result = invoke(*args)
+            require(result.returncode == 1 and not result.stdout and code in result.stderr and message in result.stderr,
+                    f"{spelling} report diagnostic differs")
+        inspect = json.loads(success(invoke("task", "inspect", "--project", "opaal.toml", "report",
+                                            "--format", "json"), "inspect report"))
+        identity = f"{policy}::verify"
+        inspection, = inspect["tasks"]
+        require(inspection["id"] == "formatting_example::report" and inspection["action"] == identity
+                and inspection["result"] == "Int" and inspection["parameters"] == inspection["effects"] == [],
+                "report inspection action or effects differ")
+        options = ("--project", "opaal.toml", "--task", "report", "--environment", "ci")
+        require(success(invoke("check", *options), "check pure report") == b"", "report check wrote output")
+
+        def plan(label):
+            path = f"{label}.plan.json"
+            receipt = success(invoke("plan", *options, "--expires-in", "900s", "--out", path,
+                                     "--format", "digest"), "plan pure report").decode().strip()
+            sealed = json.loads((folder / path).read_bytes())
+            require(receipt == sealed["digest"], "report plan receipt differs")
+            expected_sources = {str(path): ("sha256:" + digest(path.read_bytes()), path.stat().st_size)
+                                for path in (policy, tasks)}
+            require({row["module"]: (row["digest"], row["size"]) for row in sealed["sources"]} == expected_sources,
+                    "report plan source census or digest differs")
+            action, = sealed["actions"]
+            require(sealed["task"]["action_id"] == action["action_id"] == identity
+                    and action["contract_digest"] == sealed["task"]["contract_digest"]
+                    and action["id"] == action["contract_digest"] + "#000000"
+                    and action["dependencies"] == action["requests"] == sealed["authority"]["requests"] == [],
+                    "report action node or requests differ")
+            success(invoke("plan", "inspect", path), "inspect sealed report plan")
+            return sealed
+
+        def execute_report(label, sealed, journal):
+            return invoke("execute", "--plan", f"{label}.plan.json", "--accept", sealed["digest"],
+                          "--journal", journal)
+
+        def audit(label, sealed):
+            journal = f"{label}.run.jsonl"
+            success(execute_report(label, sealed, journal), "execute accepted report")
+            path = f"{label}.audit.json"
+            success(invoke("audit", "--project", "opaal.toml", "--journal", journal, "--out", path),
+                    "audit accepted report")
+            success(invoke("audit", "inspect", path), "inspect report audit")
+            report = json.loads((folder / path).read_bytes())
+            value_digest = "sha256:" + digest(b"2")
+            require(report["plan_digest"] == report["accepted_plan_digest"] == sealed["digest"]
+                    and report["completeness"] == "complete" and report["cleanup"] == []
+                    and report["primary"]["class"] == "success" and report["primary"]["partial"] is False
+                    and report["primary"]["value_digest"] == value_digest
+                    and [event["kind"] for event in report["events"]] == ["action-start", "action-end", "terminal"],
+                    "report result digest or audit events differ")
+            start, end, _ = report["events"]
+            action, = sealed["actions"]
+            require(start["payload"]["contract_digest"] == action["contract_digest"]
+                    and start["payload"]["action_node_id"] == end["payload"]["action_node_id"] == action["id"],
+                    "report audit action provenance differs")
+            return value_digest
+
+        sealed = plan("report")
+        require(sealed["task"]["contract_digest"] == inspection["contract_digest"]
+                and not list(folder.glob("*.run.jsonl")), "inert report commands created a journal or changed identity")
+        initial = audit("report", sealed)
+        policy.write_bytes(policy.read_bytes() + b"\n# changed after acceptance\n")
+        stale = execute_report("report", sealed, "stale.run.jsonl")
+        require(stale.returncode == 1 and b"EXECUTE_STALE" in stale.stderr and not (folder / "stale.run.jsonl").exists(),
+                "stale comprehension plan reached journal creation")
+        fresh = plan("fresh")
+        require(fresh["digest"] != sealed["digest"] and
+                fresh["task"]["contract_digest"] != sealed["task"]["contract_digest"],
+                "changed report source retained the old plan or contract digest")
+        outcome_digests[spelling] = [initial, audit("fresh", fresh)]
+
+    for args in (("check", "typing-and-scope.opaal"), ("typing-and-scope.opaal",)):
+        require(success(invoke(*args), "comprehension type and scope evidence") == b"", "typing fixture wrote output")
+    require(success(invoke("order.opaal"), "comprehension traversal order") ==
+            b"source\n0\n2\nproject 1\n0\n1\nproject 3\n", "source, filter or projection order differs")
+    effect = invoke("test", "skipped-effect.opaal", "--format", "json")
+    require(effect.returncode == 2 and not effect.stderr and b"skipped projection" not in effect.stdout
+            and json.loads(effect.stdout)["failure"] == "TEST_EFFECT",
+            "pure checking admitted or executed a skipped projection effect")
+    bad_filter = invoke("check", "--format", "json", "bad-filter.opaal")
+    diagnostics = json.loads(bad_filter.stdout)["diagnostics"]
+    require(bad_filter.returncode == 1 and not bad_filter.stderr and len(diagnostics) == 1
+            and diagnostics[0]["code"] == "SIG029" and diagnostics[0]["range"] == {"start": 35, "end": 36},
+            "bad comprehension filter diagnostic differs")
+    raw = invoke(stdin=b"[(i, n * 2)\n for i, n in 2..=4\n if n > 2]\n"
+                       b"let empty = [n * 2 for n in 1..1]\n"
+                       b"def keep[T](rows: List[T]) -> List[T] { return rows }\nkeep((empty))\n")
+    require(raw.returncode == 0 and not raw.stderr and raw.stdout ==
+            b">> ...> ...> [(1, 6), (2, 8)]\n>> >> >> []\n>> ", "comprehension prompt results differ")
+    incomplete = invoke(stdin=b"[n for n in [] if true\n")
+    require(incomplete.returncode == 0 and b"...> " in incomplete.stdout and b"SYN002" in incomplete.stderr,
+            "comprehension prompt EOF differs")
+    return {"fixture_cases": sorted(LIST_COMPREHENSION_FIXTURES),
+            "report": {"positions": [1, 3], "rows": 2}, "failure_codes": ["RUN001", "SIG004", "SIG029"],
+            "continuation": True, "stale_refused_before_journal": True, "result_digests": outcome_digests,
+            "typing_and_scope": True}
 
 
 def list_literal_spread(run, work: Path, fixtures: Path, target: str) -> dict:
@@ -1228,6 +1357,70 @@ def inline_export_queries(send, receive, request, folder: Path, encoding: str) -
     )}, f"inline completion public names differ: {sorted(labels)}")
 
 
+def comprehension_queries(send, receive, request, work: Path, fixtures: Path, encoding: str) -> None:
+    uri = (work / "comprehension-query.opaal").as_uri()
+    lines = [
+        "let item: List[Int] = [1, 2]",
+        "let rows = [('界🙂', i, item) for i, item in item if (item > 0 && i >= 0)]",
+        "let later = item",
+        "let nested = [[item for item in [item]] for item in item]",
+    ]
+    text = "\n".join(lines) + "\n"
+    document = {"uri": uri}
+    send({"method": "textDocument/didOpen", "params": {"textDocument": {
+        **document, "languageId": "opaal", "version": 1, "text": text}}})
+    require(receive((uri, 1))["params"]["diagnostics"] == [], "comprehension source did not check")
+
+    def position(line, column):
+        prefix = lines[line][:column]
+        character = len(prefix.encode("utf-8")) if encoding == "utf-8" else len(prefix.encode("utf-16-le")) // 2
+        return {"line": line, "character": character}
+
+    def location(line, column, length):
+        return {"uri": uri, "range": {"start": position(line, column), "end": position(line, column + length)}}
+
+    def query(method, line, column, **options):
+        return request("textDocument/" + method, {"textDocument": document,
+                                                   "position": position(line, column), **options})["result"]
+
+    projection, header, iterable, guard = [match.start() for match in re.finditer(r"\bitem\b", lines[1])]
+    binder = location(1, header, 4)
+    outer = location(0, lines[0].index("item"), 4)
+    for line, column, destination, value_type in (
+        (1, projection, binder, "Int"), (1, guard, binder, "Int"), (1, header, binder, "Int"),
+        (1, iterable, outer, "List[Int]"), (2, lines[2].index("item"), outer, "List[Int]"),
+    ):
+        require(query("definition", line, column) == destination, "comprehension name resolved to wrong declaration")
+        require(query("hover", line, column)["contents"]["value"] == f"```opaal\nlet item: {value_type}\n```",
+                "comprehension scope hover differs")
+    for include in (False, True):
+        references = query("references", 1, projection, context={"includeDeclaration": include})
+        expected = [location(1, projection, 4), location(1, guard, 4)] + ([binder] if include else [])
+        require(len(references) == len(expected) and all(site in references for site in expected),
+                "comprehension references duplicate a declaration or cross its scope gap")
+    for line, column, visible in ((1, projection, True), (1, guard, True),
+                                  (1, iterable, False), (2, lines[2].index("item"), False)):
+        labels = {item["label"] for item in query("completion", line, column + 1)}
+        require("item" in labels and ("i" in labels) == visible, "clause completion crossed a scope boundary")
+    inner, inner_header, inner_iterable, outer_header, outer_iterable = [
+        match.start() for match in re.finditer(r"\bitem\b", lines[3])]
+    for column, definition in ((inner, location(3, inner_header, 4)),
+                               (inner_iterable, location(3, outer_header, 4)), (outer_iterable, outer)):
+        require(query("definition", 3, column) == definition, "nested comprehension shadowing differs")
+    send({"method": "textDocument/didChange", "params": {
+        "textDocument": {**document, "version": 2},
+        "contentChanges": [{"text": (fixtures / "list-comprehensions/bad-filter.opaal").read_text()}]}})
+    diagnostics = receive((uri, 2))["params"]["diagnostics"]
+    require([item["code"] for item in diagnostics] == ["SIG029"], "framed filter diagnostic differs")
+    send({"method": "textDocument/didChange", "params": {
+        "textDocument": {**document, "version": 3}, "contentChanges": [{"text": "let rows = [n for n in [] if true"}]}})
+    require([item["code"] for item in receive((uri, 3))["params"]["diagnostics"]] == ["SYN002"],
+            "framed incomplete comprehension diagnostic differs")
+    send({"method": "textDocument/didChange", "params": {
+        "textDocument": {**document, "version": 2}, "contentChanges": [{"text": text}]}})
+    require(query("definition", 0, 4) is None, "stale comprehension edit restored invalid bindings")
+
+
 def framed_formatting(binary: Path, work: Path, fixtures: Path, environment: dict) -> list[str]:
     observations = []
     for encoding in ("utf-8", "utf-16"):
@@ -1302,6 +1495,8 @@ def framed_formatting(binary: Path, work: Path, fixtures: Path, environment: dic
                 send({"method": "initialized", "params": {}})
                 inline_export_queries(send, receive, request, work / "inline-module-exports/inline", encoding)
                 observations.append(f"{encoding}: inline exports and original diagnostic/declaration ranges")
+                comprehension_queries(send, receive, request, work, fixtures, encoding)
+                observations.append(f"{encoding}: comprehension original binders, clause completion, diagnostics and stale edit")
                 documents = [(name, (fixtures / name).read_text()) for name in
                              ("legacy.opaal", "canonical.opaal", "invalid.opaal", "incomplete.opaal")]
                 documents.extend((name, (fixtures / name).read_text()) for name in (
@@ -1607,6 +1802,12 @@ def terminal_continuation(binary: Path, work: Path, environment: dict) -> None:
         for expression, value in ((b"identity('ready')", b"ready"), (b"five()", b"5")):
             os.write(descriptor, expression + b"\r")
             read_until(rb"(?:^|\n)" + value + rb"\r?\n.*>> ")
+        for line in (b"[(i, n * 2)", b" for i, n in 2..=4"):
+            os.write(descriptor, line + b"\r")
+            read_until(rb"\.\.\.> ")
+            require(b"error[" not in captured, "terminal submitted an open comprehension")
+        os.write(descriptor, b" if n > 2]\r")
+        read_until(rb"(?:^|\n)\[\(1, 6\), \(2, 8\)\]\r?\n.*>> ")
         for line in (b"import {", b"std::math,"):
             os.write(descriptor, line + b"\r")
             read_until(rb"\.\.\.> ")
@@ -1855,6 +2056,7 @@ def qualify(archive: Path | None, fixture_archive: Path | None, binaries: Path |
         conditionals_report = if_expressions(run, root, fixtures, target)
         tuples_report = typed_tuples(run, fixtures)
         loops_report = indexed_iteration(run, root, fixtures)
+        comprehensions_report = list_comprehensions(run, root, fixtures, target)
         spread_report = list_literal_spread(run, root, fixtures, target)
         record_report = record_shorthand(run, root, fixtures, target)
         exports_report = grouped_export_prefixes(run, root, fixtures, target)
@@ -1878,6 +2080,7 @@ def qualify(archive: Path | None, fixture_archive: Path | None, binaries: Path |
                 "if_expressions": conditionals_report,
                 "typed_tuples": tuples_report,
                 "indexed_iteration": loops_report,
+                "list_comprehensions": comprehensions_report,
                 "inline_module_exports": inline_report,
                 "action_declarations": actions_report, "language_server": lsp_report, "bounded_cases": bounded,
                 "assertions": ["exact fixture/source/program identity", "legacy/canonical execution and checking",

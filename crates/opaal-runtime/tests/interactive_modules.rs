@@ -1251,6 +1251,50 @@ fn inline_patterns_export_nested_binders_and_keep_mutation_in_the_owner() {
 }
 
 #[test]
+fn comprehensions_keep_types_and_bindings_across_prompt_cells() {
+    let sources = Sources::default();
+    let mut session = session();
+    submit(
+        &mut session,
+        &sources,
+        "def keep[T](rows: List[T]) -> List[T] { return rows }",
+    );
+    submit(&mut session, &sources, "let item: List[Int] = [1, 2, 3]");
+    submit(
+        &mut session,
+        &sources,
+        "let rows = [item * 2 for item in item if false]",
+    );
+    assert_eq!(
+        submit(&mut session, &sources, "keep((rows))"),
+        Value::list(vec![])
+    );
+    for (text, expected) in [
+        ("let invalid = [item for item in [] if 1]", "SIG029"),
+        ("let invalid = keep([[] for n in []])", "SIG010"),
+        ("let invalid = [missing for n in [] if false]", "MOD009"),
+    ] {
+        let error = session
+            .submit_with_source_loader(
+                "comprehension-cell",
+                text,
+                &sources,
+                &sources,
+                &NoExecutables,
+                &FakePlatform::full(),
+                &FakeClock::new(),
+                &mut Vec::new(),
+            )
+            .unwrap_err();
+        assert!(format!("{error:?}").contains(expected), "{text}: {error:?}");
+    }
+    assert_eq!(
+        submit(&mut session, &sources, "item"),
+        Value::list(vec![Value::Int(1), Value::Int(2), Value::Int(3)])
+    );
+}
+
+#[test]
 fn indexed_replacement_retains_cell_types_aliases_and_index_only_callables() {
     let sources = Sources::default();
     let mut session = session();

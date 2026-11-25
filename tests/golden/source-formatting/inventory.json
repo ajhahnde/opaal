@@ -1255,6 +1255,70 @@
       "sha256": "8e3fa6692963e44f17d78a04eee95147f291a6c9ae02ec336e4469080bdaecac"
     },
     {
+      "path": "tests/golden/source-formatting/list-comprehensions/bad-filter.opaal",
+      "role": "semantic-negative",
+      "reason": "Reject a known non-Bool filter even for an empty source.",
+      "assertion": "ci/qualify_source_formatting.py",
+      "sha256": "9f580b57555d03a5a22d33f9c500820802c521ef6a1b0b28a22e7c66a6e59d72"
+    },
+    {
+      "path": "tests/golden/source-formatting/list-comprehensions/bad-input.opaal",
+      "role": "semantic-negative",
+      "reason": "Preserve the report call's argument diagnostic.",
+      "assertion": "ci/qualify_source_formatting.py",
+      "sha256": "a8cf8b7e0fc5977c2ce7d06042bf860f43639d48a21aec9804acd2bb69419294"
+    },
+    {
+      "path": "tests/golden/source-formatting/list-comprehensions/loop-report.opaal",
+      "role": "positive",
+      "reason": "Canonical indexed-loop declaration used to substitute the report baseline.",
+      "assertion": "ci/qualify_source_formatting.py"
+    },
+    {
+      "path": "tests/golden/source-formatting/list-comprehensions/negative.opaal",
+      "role": "runtime-negative",
+      "reason": "Propagate the first rejected count through the report call.",
+      "assertion": "ci/qualify_source_formatting.py",
+      "sha256": "3830f2616397768079d4f2527ec4af42967a0cf15395a923e27f77b6a6a1b2f3"
+    },
+    {
+      "path": "tests/golden/source-formatting/list-comprehensions/order.opaal",
+      "role": "positive",
+      "reason": "Record one source evaluation, all filters and only selected projections in order.",
+      "assertion": "ci/qualify_source_formatting.py"
+    },
+    {
+      "path": "tests/golden/source-formatting/list-comprehensions/policy.opaal",
+      "role": "positive",
+      "reason": "Export the saved report, summary and pure verification action.",
+      "assertion": "ci/qualify_source_formatting.py"
+    },
+    {
+      "path": "tests/golden/source-formatting/list-comprehensions/report.opaal",
+      "role": "positive",
+      "reason": "Compare ordered output positions and empty report summaries.",
+      "assertion": "ci/qualify_source_formatting.py"
+    },
+    {
+      "path": "tests/golden/source-formatting/list-comprehensions/skipped-effect.opaal",
+      "role": "refused",
+      "reason": "Reject a skipped projection's effect from a named pure test.",
+      "assertion": "ci/qualify_source_formatting.py",
+      "sha256": "21ac2169c10efc1b311ce956fbbf73c5a287a80427743bcee4e6c5487a95f073"
+    },
+    {
+      "path": "tests/golden/source-formatting/list-comprehensions/tasks.opaal",
+      "role": "positive",
+      "reason": "Bind the pure report action in the accepted project workflow.",
+      "assertion": "ci/qualify_source_formatting.py"
+    },
+    {
+      "path": "tests/golden/source-formatting/list-comprehensions/typing-and-scope.opaal",
+      "role": "positive",
+      "reason": "Exercise typed empties, grouping and binder shadowing.",
+      "assertion": "ci/qualify_source_formatting.py"
+    },
+    {
       "path": "tests/golden/source-formatting/list-literal-spread/after.opaal",
       "role": "positive",
       "reason": "Explicit list-literal expansion; exact values, failures, ordering, authority and shared observers.",
@@ -2558,7 +2622,13 @@
       "path": "tests/opaal-foundation/workflow/README.md"
     }
   ],
-  "fences": [],
+  "fences": [
+    {
+      "path": "DEVELOPMENT.md",
+      "ordinal": 0,
+      "sha256": "d9b13789c6911b693c26e52293035a521d9d62141b3337812a8be1cd8174ffa4"
+    }
+  ],
   "embedded_owners": [
     {
       "path": "benchmarks/report_phases.rs",
@@ -2808,8 +2878,8 @@
     },
     {
       "path": "ci/package_source_formatting.py",
-      "sha256": "b7412f6c061ed4b510de7d0b6207cdca683179cc9179c45b13311129b03ea7d6",
-      "source_markers": 160,
+      "sha256": "4142671b991ad4c596493555e881025df0d23fbd628b7043f9a68692514b9363",
+      "source_markers": 170,
       "constructors_or_assertions": [
         "main",
         "module constants/imports"
@@ -3053,16 +3123,18 @@
     },
     {
       "path": "ci/qualify_source_formatting.py",
-      "sha256": "4ea59f41db0b2aae9631c0bc755a9f9a4a1e6523e0cade55d2803b999a312ac0",
-      "source_markers": 436,
+      "sha256": "c02bfc1de4237df4ba94b2051859b0e5a399469b872e995f327076f9776d305e",
+      "source_markers": 466,
       "constructors_or_assertions": [
         "action_declarations",
         "action_position",
         "at",
         "audit",
         "compound_assignment",
+        "comprehension_queries",
         "concise_imports",
         "execute",
+        "execute_report",
         "explicit_member_imports",
         "framed_formatting",
         "grouped_export_prefixes",
@@ -3074,14 +3146,18 @@
         "inline_export_queries",
         "inline_module_exports",
         "invoke",
+        "list_comprehensions",
         "list_literal_spread",
+        "location",
         "main",
         "module constants/imports",
         "normalized_artifact",
         "opened",
         "plan",
+        "position",
         "project_workflow",
         "qualify",
+        "query",
         "read_until",
         "receive",
         "record_position",
@@ -4038,7 +4114,7 @@
     },
     {
       "path": "crates/opaal-cli/tests/project_frontend.rs",
-      "sha256": "4794e6291bd92330f379d87be0c15d74ff8e9b833c55a079fe2bb40dd97d5f33",
+      "sha256": "44449b5b089d222c66812fdb83b2fd0fac16a842de46af4e6f929f4d73357a57",
       "source_markers": 40,
       "constructors_or_assertions": [
         "accepted_execution_revalidates_probes_refuses_unused_secret_and_audits",
@@ -4767,7 +4843,7 @@
     },
     {
       "path": "crates/opaal-runtime/src/eval.rs",
-      "sha256": "361f97866ea8f00b654aa29546b4be770eeb24c7cf4577a80c50d4d6f03edabd",
+      "sha256": "b118a43c5f2334e4d0db23cd264799005cc2643812cd9fd960f10eacf1d74f22",
       "source_markers": 17,
       "constructors_or_assertions": [
         "ambient_process_policy_propagates_into_lazy_transform_closures",
@@ -4923,7 +4999,7 @@
     },
     {
       "path": "crates/opaal-runtime/src/module.rs",
-      "sha256": "8e8c3520c89da6fca1a997a5bc4dd672836d3c98f42b456917b0ac4d67b1dfa6",
+      "sha256": "00c361b1ee3bdab5b1a857ebc24d6b66659bdd3b64349d9adbc460b70e597236",
       "source_markers": 22,
       "constructors_or_assertions": [
         "analyze_interactive_with_control",
@@ -5395,7 +5471,7 @@
     },
     {
       "path": "crates/opaal-runtime/tests/interactive_modules.rs",
-      "sha256": "1f0d785b090d91393b890a1cc5159f53bbb9dbdb24a20d500bf652ff7aa9df5a",
+      "sha256": "f8077b1ebdebdf723013ddfa5ec66b2485a70cbb07f573e0e931c55066b15d63",
       "source_markers": 99,
       "constructors_or_assertions": [
         "a_declaration_cannot_publish_types_from_a_later_local_import",
@@ -5571,15 +5647,18 @@
     },
     {
       "path": "crates/opaal-runtime/tests/opaal_resources.rs",
-      "sha256": "844c0590d14727cbafee08009bb76854d4b45fdc52f8aff4fab53441db909130",
-      "source_markers": 71,
+      "sha256": "85610da30c3233d927aa70c14e61f0ed15ac0111f2b676d2cfa7eee0b9a44083",
+      "source_markers": 78,
       "constructors_or_assertions": [
         "a_failed_dynamic_tuple_binding_never_runs_its_body_or_leaks_names",
         "analysis_source",
         "cancellation_at_every_export_expansion_poll_never_accepts_partial_exports",
         "collection_and_call_depth_limits_refuse_the_first_excess",
         "compound_assignment_charges_its_lowered_read_and_binary_at_exact_analysis_limits",
+        "comprehension_cancellation_keeps_each_boundary_and_unwinds_bindings",
+        "comprehension_depth_is_checked_at_rust_and_analysis_entry_points",
         "diagnostic_budget_refuses_instead_of_publishing_a_truncated_report",
+        "dynamic_comprehension_operands_fail_at_their_own_boundaries",
         "every_analysis_counter_accepts_the_exact_boundary_and_refuses_first_excess",
         "grouping_preserves_dependency_initialization_order_instead_of_imposing_lexical_order",
         "import_groups_charge_every_entry_and_accept_only_the_exact_analysis_boundaries",
@@ -5664,18 +5743,26 @@
     },
     {
       "path": "crates/opaal-runtime/tests/predictable_language.rs",
-      "sha256": "67e9833bcce8aff3af7312b7e996ad6da935f9a40117eb4208db9706d0f20178",
-      "source_markers": 24,
+      "sha256": "3c6bce5017c3c6e1b382311fe9c79c706761b7b099f1235b803bf93c821f2132",
+      "source_markers": 37,
       "constructors_or_assertions": [
+        "check_preserves_legacy_deep_list_arms_after_command_for_words",
         "checked_names_calls_and_block_values_equal_their_runtime_values",
         "checked_value",
         "command_spread_evaluates_against_the_session_environment",
+        "comprehension_static_diagnostics_include_skipped_operands",
+        "dynamic",
         "if_expression_checks_all_known_arms_and_reports_the_original_spans",
         "if_expressions_retain_expected_and_inferred_types",
         "implicit_function_results_are_checked_across_block_forms",
+        "inferred_comprehension_arguments_do_not_repeat_generic_analysis",
+        "int_predicate",
         "invalid_name_assignment_and_call_forms_fail_static_analysis",
         "legacy_dynamic_calls_and_grouped_values_keep_runtime_checks",
         "loop_checking_rejects_known_shapes_and_duplicate_or_mutable_bindings",
+        "predicate",
+        "project",
+        "source",
         "visit"
       ],
       "role": "mixed-test-buffers",
@@ -6158,7 +6245,7 @@
     },
     {
       "path": "crates/opaal-syntax/src/completion.rs",
-      "sha256": "f8affa5939c66aa590ddd69e1a009aa874635ae87515989466313e695a5f90cd",
+      "sha256": "95014a1a63c387f24943fd6fc2974581656c08b85c94b9b95a3e3063bc072b6b",
       "source_markers": 1,
       "constructors_or_assertions": [
         "completion_target"
@@ -6169,7 +6256,7 @@
     },
     {
       "path": "crates/opaal-syntax/src/parser.rs",
-      "sha256": "101e1f53bf5e3250307c80c09843ce463d9599d43763e780283982e1ef4bf098",
+      "sha256": "35881afeec8b49e30d0d64f84f6dd2401325343f67878e0c1f2bbc711896d70a",
       "source_markers": 3,
       "constructors_or_assertions": [
         "cancellation_is_polled_during_shorthand_field_parsing_after_lexing",
@@ -6318,6 +6405,17 @@
       "assertion": "crates/opaal-syntax/tests/input_classification.rs"
     },
     {
+      "path": "crates/opaal-syntax/tests/list_comprehensions.rs",
+      "sha256": "a1445ef66c2dda6d6c0daec082c57206319a4aa5497f45c853dc2d90daf2562d",
+      "source_markers": 2,
+      "constructors_or_assertions": [
+        "source"
+      ],
+      "role": "mixed-test-buffers",
+      "reason": "Check complete, invalid and incomplete comprehension grammar, original spans, formatting and bounded nesting.",
+      "assertion": "crates/opaal-syntax/tests/list_comprehensions.rs"
+    },
+    {
       "path": "crates/opaal-syntax/tests/lossless_lexer.rs",
       "sha256": "1dbb676be0457dc7329aeacb7c541f239b9852cb61cc6b7120fb0d6f32416340",
       "source_markers": 13,
@@ -6441,7 +6539,7 @@
     },
     {
       "path": "crates/opaal-syntax/tests/property_invariants.rs",
-      "sha256": "256d1b74c4a5a5c6d1903fdbde00c51fd9a60c26940b71d7daad0331574ef070",
+      "sha256": "ca86fdd5fb6315ad089730194caea10e92b951c05f9547a91c02a695c5f7e3ec",
       "source_markers": 1,
       "constructors_or_assertions": [
         "bounded_utf8_sources_preserve_syntax_invariants"
@@ -6493,7 +6591,7 @@
     },
     {
       "path": "crates/opaal-syntax/tests/support/formatting.rs",
-      "sha256": "03219ce56d2c45696a85c75e1c47a00917a5b329af1d868a700b77da78dcc867",
+      "sha256": "35955979322f8961833c8622e0f4f9a737de2f8e4214ba2eacba93e8bdf45b5d",
       "source_markers": 1,
       "constructors_or_assertions": [
         "assert_roundtrip"
@@ -9094,6 +9192,76 @@
         "parser"
       ],
       "sha256": "8e3fa6692963e44f17d78a04eee95147f291a6c9ae02ec336e4469080bdaecac"
+    },
+    {
+      "path": "tests/golden/source-formatting/list-comprehensions/bad-filter.opaal",
+      "targets": [
+        "parser"
+      ],
+      "sha256": "9f580b57555d03a5a22d33f9c500820802c521ef6a1b0b28a22e7c66a6e59d72"
+    },
+    {
+      "path": "tests/golden/source-formatting/list-comprehensions/bad-input.opaal",
+      "targets": [
+        "parser"
+      ],
+      "sha256": "a8cf8b7e0fc5977c2ce7d06042bf860f43639d48a21aec9804acd2bb69419294"
+    },
+    {
+      "path": "tests/golden/source-formatting/list-comprehensions/loop-report.opaal",
+      "targets": [
+        "parser"
+      ],
+      "sha256": "34d3933a0bbb6121e7ad01e60de7b8f3186f906a6d418ee4c95bd82278e860c1"
+    },
+    {
+      "path": "tests/golden/source-formatting/list-comprehensions/negative.opaal",
+      "targets": [
+        "parser"
+      ],
+      "sha256": "3830f2616397768079d4f2527ec4af42967a0cf15395a923e27f77b6a6a1b2f3"
+    },
+    {
+      "path": "tests/golden/source-formatting/list-comprehensions/order.opaal",
+      "targets": [
+        "parser"
+      ],
+      "sha256": "232cf3a654c06244206b3713db1b9d90f9d64e4aff4e4f077cc8c56aa808104d"
+    },
+    {
+      "path": "tests/golden/source-formatting/list-comprehensions/policy.opaal",
+      "targets": [
+        "parser"
+      ],
+      "sha256": "719fa15d496f8a6e0e9789b92b7317ec79704e5bd7b826d274e0fca44d17dea9"
+    },
+    {
+      "path": "tests/golden/source-formatting/list-comprehensions/report.opaal",
+      "targets": [
+        "parser"
+      ],
+      "sha256": "1821ca284c53cf839a63c24cc8d948850fa5e9d968a518de98b96c4c55ce2bfb"
+    },
+    {
+      "path": "tests/golden/source-formatting/list-comprehensions/skipped-effect.opaal",
+      "targets": [
+        "parser"
+      ],
+      "sha256": "21ac2169c10efc1b311ce956fbbf73c5a287a80427743bcee4e6c5487a95f073"
+    },
+    {
+      "path": "tests/golden/source-formatting/list-comprehensions/tasks.opaal",
+      "targets": [
+        "parser"
+      ],
+      "sha256": "40f88d187136bcbf1bea21108f01a6b5936c81a79d8b1822f391225ebcd6c83c"
+    },
+    {
+      "path": "tests/golden/source-formatting/list-comprehensions/typing-and-scope.opaal",
+      "targets": [
+        "parser"
+      ],
+      "sha256": "426f2b11d9af82c168a4e188ef202fe742e6d6786df9b8f0f1e910e2a95039ca"
     },
     {
       "path": "tests/golden/source-formatting/list-literal-spread/after.opaal",

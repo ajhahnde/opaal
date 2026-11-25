@@ -1,0 +1,3 @@
+import './policy.opaal' as policy
+
+policy::report("invalid")

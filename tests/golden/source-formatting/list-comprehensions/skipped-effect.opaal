@@ -1,0 +1,13 @@
+import std::io
+
+def emit() -> Int
+{
+    io::println("skipped projection")
+    return 7
+}
+
+export def test_skipped_projection() -> Bool
+{
+    let rows = [emit() for n in [] if false]
+    return rows == []
+}

@@ -6,6 +6,10 @@ All notable changes to OPAAL are documented here.
 
 ### Added
 
+- Build eager lists with `[expression for item in items if condition]`.
+  Generate from a List or Range, optionally bind original positions and
+  tuple slots, and filter using a Bool expression. Empty results retain
+  available element types.
 - Mark module-level declarations public where they are defined with
   `export def`, `export let`, `export mut`, `export action`, `export type`
   and `export enum`. Inline destructuring exports every bound name. Use a

@@ -1,0 +1,10 @@
+export def report(counts: List[Int]) -> List[Record]
+{
+    mut rows: List[Record] = []
+    for index, count in counts {
+        if present(count) {
+            rows = [...rows, {index: index, findings: count}]
+        }
+    }
+    return rows
+}

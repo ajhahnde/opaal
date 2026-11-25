@@ -1,0 +1,14 @@
+def keep_type[T](rows: List[T]) -> List[T]
+{
+    return rows
+}
+
+let item: List[Int] = [1, 2, 3]
+let rows = [(i, item) for i, item in item if (item > 1 && item < 3)]
+let empty = [n * 2 for n in 1..1]
+let filtered = [n for n in 1..=2 if false]
+let nested: List[List[Int]] = [[] for n in [1]]
+let explicit = keep_type[List[Int]]([[] for n in []])
+if rows != [(1, 2)] || item != [1, 2, 3] || keep_type((empty)) != [] || keep_type(filtered) != [] || keep_type(nested) != [[]] || explicit != [] {
+    throw "unexpected comprehension evidence"
+}

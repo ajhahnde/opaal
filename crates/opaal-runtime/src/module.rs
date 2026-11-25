@@ -710,6 +710,7 @@ pub struct RegisteredModuleSource {
     source: SourceFile,
     script: Script,
     if_spans: Vec<Span>,
+    comprehension_spans: Vec<Span>,
 }
 
 impl RegisteredModuleSource {
@@ -731,13 +732,9 @@ impl RegisteredModuleSource {
         &self.script
     }
 
-    fn intersects_if(&self, span: Span) -> bool {
-        let index = self
-            .if_spans
-            .partition_point(|branch| branch.end() <= span.start());
-        self.if_spans
-            .get(index)
-            .is_some_and(|branch| branch.start() < span.end())
+    fn intersects_value_expression(&self, span: Span) -> bool {
+        intersects_regions(span, &self.if_spans)
+            || intersects_regions(span, &self.comprehension_spans)
     }
 }
 
@@ -1601,6 +1598,7 @@ pub(crate) struct ModuleVisibleBinding {
     name: String,
     target: ModuleReferenceTarget,
     scope_span: Span,
+    alternate_span: Option<Span>,
     visible_from: usize,
     depth: usize,
 }
@@ -1669,8 +1667,8 @@ impl ModuleNameRegistry {
         };
         let mut selected = BTreeMap::<&str, &ModuleVisibleBinding>::new();
         for binding in &names.visible {
-            if binding.scope_span.start() <= cursor
-                && cursor <= binding.scope_span.end()
+            let contains = |span: Span| span.start() <= cursor && cursor <= span.end();
+            if (contains(binding.scope_span) || binding.alternate_span.is_some_and(contains))
                 && binding.visible_from <= cursor
             {
                 let replace = selected.get(binding.name()).is_none_or(|current| {
@@ -1908,12 +1906,17 @@ pub enum ValueType {
 
 impl ValueType {
     pub(crate) fn has_incomplete_tuple_evidence(&self) -> bool {
+        self.has_incomplete_evidence(false)
+    }
+
+    fn has_incomplete_evidence(&self, include_dynamic: bool) -> bool {
         match self {
             Self::Unknown | Self::EmptyList => true,
-            Self::List(element) => element.has_incomplete_tuple_evidence(),
-            Self::Nominal { arguments, .. } | Self::Tuple(arguments) => {
-                arguments.iter().any(Self::has_incomplete_tuple_evidence)
-            }
+            Self::Any => include_dynamic,
+            Self::List(element) => element.has_incomplete_evidence(include_dynamic),
+            Self::Nominal { arguments, .. } | Self::Tuple(arguments) => arguments
+                .iter()
+                .any(|argument| argument.has_incomplete_evidence(include_dynamic)),
             _ => false,
         }
     }
@@ -2091,6 +2094,32 @@ pub(crate) fn single_value_expression(chain: &ConditionalChain) -> Option<&Expre
     match single_stage(chain)?.kind() {
         StageKind::Expression(expression) => Some(expression),
         _ => None,
+    }
+}
+
+fn has_contextual_comprehension(expression: &Expression) -> bool {
+    // A later witness can give a dynamic projection a concrete element guard.
+    match expression.kind() {
+        ExpressionKind::ListComprehension(_) => true,
+        ExpressionKind::GroupedJob(chain) => {
+            single_value_expression(chain).is_some_and(has_contextual_comprehension)
+        }
+        ExpressionKind::If(branch) => {
+            has_contextual_comprehension(&branch.fallback)
+                || branch
+                    .arms
+                    .iter()
+                    .any(|arm| has_contextual_comprehension(&arm.value))
+        }
+        ExpressionKind::List(items) => items
+            .iter()
+            .any(|item| has_contextual_comprehension(item.expression())),
+        ExpressionKind::Tuple(tuple) => tuple.elements.iter().any(has_contextual_comprehension),
+        ExpressionKind::NominalRecord(record) => record
+            .fields
+            .iter()
+            .any(|field| has_contextual_comprehension(&field.value)),
+        _ => false,
     }
 }
 
@@ -3415,6 +3444,11 @@ impl<'a> CallableReadCollector<'a> {
             ExpressionKind::List(elements) => elements
                 .iter()
                 .for_each(|element| self.expression(element.expression())),
+            ExpressionKind::ListComprehension(comprehension) => {
+                for operand in comprehension.operands() {
+                    self.expression(operand);
+                }
+            }
             ExpressionKind::Record(entries) => {
                 for entry in entries {
                     if let RecordKey::DoubleQuoted(part) = &entry.key {
@@ -4019,7 +4053,9 @@ impl RuntimeTypeContext {
         let mut untyped_mutable = BTreeSet::new();
         let restore_capture_types = !self.cells.is_empty() && {
             let metrics = SyntaxMetrics::for_script(defining_script);
-            !metrics.if_spans.is_empty() || !metrics.loop_spans.is_empty()
+            !metrics.if_spans.is_empty()
+                || !metrics.loop_spans.is_empty()
+                || !metrics.comprehension_spans.is_empty()
         };
         let control = AnalysisControl::never().for_run(
             AnalysisLimits::OPAAL.with_limit(AnalysisLimitKind::WorkUnits, *work_remaining),
@@ -4831,6 +4867,7 @@ impl RuntimeBindingTypes {
             source: source.clone(),
             script: script.clone(),
             if_spans: metrics.if_spans,
+            comprehension_spans: metrics.comprehension_spans,
         };
         let mut aliases = inherited_aliases.clone();
         for program in programs {
@@ -5063,6 +5100,7 @@ impl RuntimeBindingTypes {
                     source: standard_source,
                     script: standard_script,
                     if_spans: Vec::new(),
+                    comprehension_spans: Vec::new(),
                 };
                 let mut standard_aliases = ModuleAliases::default();
                 for import in standard_entry
@@ -5283,7 +5321,9 @@ impl RuntimeBindingTypes {
             return Err(error.diagnostic());
         }
         // Earlier cells contribute imports and schemas. Their live scopes are gone.
-        let expression_types = if (!entry.if_spans.is_empty() || !metrics.loop_spans.is_empty())
+        let expression_types = if (!entry.if_spans.is_empty()
+            || !metrics.loop_spans.is_empty()
+            || !entry.comprehension_spans.is_empty())
             && !matches!(outer_scope, Some(InteractiveScope::Historical))
         {
             let mut resolver = ReferenceResolver::new(&entry, &names, &aliases, false, control);
@@ -5312,6 +5352,7 @@ impl RuntimeBindingTypes {
                     _ => return false,
                 };
                 span_in_regions(primary, &metrics.loop_spans)
+                    || span_in_regions(primary, &entry.comprehension_spans)
             }) {
                 return Err(error.diagnostic());
             }
@@ -5332,6 +5373,7 @@ impl RuntimeBindingTypes {
                 let primary = error.primary_span();
                 span_in_regions(primary, &entry.if_spans)
                     || span_in_regions(primary, &metrics.loop_spans)
+                    || intersects_regions(primary, &entry.comprehension_spans)
             }) {
                 return Err(error.diagnostic());
             }
@@ -5598,6 +5640,13 @@ fn span_in_regions(primary: Span, regions: &[Span]) -> bool {
     regions
         .get(index)
         .is_some_and(|span| span.start() <= primary.start())
+}
+
+fn intersects_regions(span: Span, regions: &[Span]) -> bool {
+    let index = regions.partition_point(|region| region.end() <= span.start());
+    regions
+        .get(index)
+        .is_some_and(|region| region.start() < span.end())
 }
 
 pub(crate) fn pattern_span(pattern: &Pattern) -> Span {
@@ -6054,6 +6103,12 @@ impl<'a> TypeCollector<'a> {
             ExpressionKind::List(elements) => {
                 for element in elements {
                     self.expression(element.expression())?;
+                }
+                Ok(())
+            }
+            ExpressionKind::ListComprehension(comprehension) => {
+                for operand in comprehension.operands() {
+                    self.expression(operand)?;
                 }
                 Ok(())
             }
@@ -6571,6 +6626,7 @@ struct SignatureValidator<'a> {
     operation_types: RefCell<BTreeMap<usize, Vec<ValueType>>>,
     expression_types: RefCell<ExpressionTypes>,
     in_if_expression: Cell<bool>,
+    in_comprehension: Cell<bool>,
     type_parameter_scopes: RefCell<Vec<BTreeMap<String, Vec<TypeConstraint>>>>,
     errors: RefCell<Vec<ModuleTypeError>>,
     control: &'a AnalysisControl,
@@ -6600,6 +6656,7 @@ impl<'a> SignatureValidator<'a> {
             operation_types: RefCell::new(BTreeMap::new()),
             expression_types: RefCell::new(BTreeMap::new()),
             in_if_expression: Cell::new(false),
+            in_comprehension: Cell::new(false),
             type_parameter_scopes: RefCell::new(Vec::new()),
             errors: RefCell::new(Vec::new()),
             control,
@@ -7210,26 +7267,31 @@ impl<'a> SignatureValidator<'a> {
                 {
                     continue;
                 }
-                for stage in pipeline.stages() {
-                    match stage.kind() {
-                        StageKind::Expression(expression) => {
-                            self.expression(expression)?;
-                        }
-                        StageKind::Command(command) => {
-                            self.word(command.head.word())?;
-                            for item in &command.items {
-                                match item.kind() {
-                                    CommandItemKind::Word(word) => self.word(word)?,
-                                    CommandItemKind::Closure(closure) => {
-                                        self.chain(&closure.body)?;
-                                    }
-                                    CommandItemKind::Redirection(redirection) => {
-                                        self.redirection(redirection.kind())?;
-                                    }
-                                    CommandItemKind::Spread(expression) => {
-                                        self.validate_spread(expression, item.span())?;
-                                    }
-                                }
+                self.validate_pipeline_operands(pipeline)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_pipeline_operands(&self, pipeline: &Pipeline) -> Result<(), Box<ModuleTypeError>> {
+        for stage in pipeline.stages() {
+            match stage.kind() {
+                StageKind::Expression(expression) => {
+                    self.expression(expression)?;
+                }
+                StageKind::Command(command) => {
+                    self.word(command.head.word())?;
+                    for item in &command.items {
+                        match item.kind() {
+                            CommandItemKind::Word(word) => self.word(word)?,
+                            CommandItemKind::Closure(closure) => {
+                                self.chain(&closure.body)?;
+                            }
+                            CommandItemKind::Redirection(redirection) => {
+                                self.redirection(redirection.kind())?;
+                            }
+                            CommandItemKind::Spread(expression) => {
+                                self.validate_spread(expression, item.span())?;
                             }
                         }
                     }
@@ -7454,6 +7516,17 @@ impl<'a> SignatureValidator<'a> {
                 self.tuple_literal_type(&tuple.elements, expected, expected_span, false)
             }
             ExpressionKind::List(elements) => self.list_literal_type(elements, expected, false),
+            ExpressionKind::ListComprehension(comprehension) => {
+                let previous = self.in_comprehension.replace(true);
+                let result = self.comprehension_type(
+                    comprehension,
+                    expression.span(),
+                    expected,
+                    expected_span,
+                );
+                self.in_comprehension.set(previous);
+                result
+            }
             ExpressionKind::Record(entries) => {
                 for entry in entries {
                     if let RecordKey::DoubleQuoted(part) = &entry.key {
@@ -7511,16 +7584,21 @@ impl<'a> SignatureValidator<'a> {
                 if let Some(expression) = single_value_expression(chain) {
                     return self.expression_with_expected_at(expression, expected, expected_span);
                 }
-                if !self.entry.if_spans.is_empty() {
+                if !self.entry.if_spans.is_empty() || !self.entry.comprehension_spans.is_empty() {
                     let value_type = match self.value_reference(expression) {
                         Some(reference) => self.reference_type(reference.target()),
                         None => self.outer_value_type(expression),
                     };
                     if let Some(value_type) = value_type
-                        && (self.in_if_expression.get() || matches!(value_type, ValueType::List(_)))
+                        && (self.in_if_expression.get()
+                            || self.in_comprehension.get()
+                            || matches!(value_type, ValueType::List(_)))
                     {
                         return Ok(Some(value_type));
                     }
+                }
+                if self.in_comprehension.get() {
+                    return self.comprehension_group_type(chain, expected);
                 }
                 self.chain(chain)?;
                 Ok(None)
@@ -7575,6 +7653,131 @@ impl<'a> SignatureValidator<'a> {
                 Ok(self.binary_type(*binary.operator.kind(), left, right))
             }
         }
+    }
+
+    fn comprehension_group_type(
+        &self,
+        chain: &ConditionalChain,
+        expected: Option<&ValueType>,
+    ) -> Result<Option<ValueType>, Box<ModuleTypeError>> {
+        let single = chain.or_terms().len() == 1 && chain.or_terms()[0].and_terms().len() == 1;
+        let expected = single.then_some(expected).flatten();
+        let mut joined = None;
+        let mut uniform = true;
+        for pipeline in chain.or_terms().iter().flat_map(|term| term.and_terms()) {
+            let ty = if pipeline.stages().iter().enumerate().any(|(index, stage)| {
+                matches!(stage.kind(), StageKind::Command(_))
+                    && (index == 0
+                        || self
+                            .aliases
+                            .pipeline_operation(
+                                self.entry.module(),
+                                self.entry.source(),
+                                stage,
+                                self.names,
+                            )
+                            .is_none())
+            }) {
+                self.validate_pipeline_operands(pipeline)?;
+                match pipeline.stages() {
+                    [stage]
+                        if let Some(reference) =
+                            self.names.reference(self.entry.module(), stage.span()) =>
+                    {
+                        self.reference_type(reference.target())
+                    }
+                    _ => Some(ValueType::Status),
+                }
+            } else {
+                self.pipeline_value_with_expected(pipeline, expected)?
+                    .map(|(_, ty)| ty)
+            };
+            uniform &= ty.is_some()
+                && joined
+                    .as_ref()
+                    .is_none_or(|known| Some(known) == ty.as_ref());
+            joined = ty;
+        }
+        Ok(if uniform { joined } else { None })
+    }
+
+    fn comprehension_type(
+        &self,
+        comprehension: &opaal_syntax::ListComprehension,
+        span: Span,
+        expected: Option<&ValueType>,
+        expected_span: Span,
+    ) -> Result<Option<ValueType>, Box<ModuleTypeError>> {
+        self.iteration_bindings(
+            comprehension.index,
+            &comprehension.binding,
+            &comprehension.iterable,
+            ValueType::Unknown,
+        )?;
+        if let Some((_, filter)) = &comprehension.filter
+            && let Some(actual) = self.operation_argument_type(filter, Some(&ValueType::Bool))?
+            && !matches!(
+                actual,
+                ValueType::Bool | ValueType::Any | ValueType::Unknown | ValueType::TypeParameter(_)
+            )
+        {
+            self.errors
+                .borrow_mut()
+                .push(ModuleTypeError::ComprehensionFilterMismatch {
+                    module: self.entry.module().clone(),
+                    span: filter.span(),
+                    actual,
+                });
+        }
+        let element = match expected {
+            Some(ValueType::List(element))
+                if !has_unbound_type_parameters(
+                    element,
+                    &self
+                        .type_parameter_scopes
+                        .borrow()
+                        .iter()
+                        .flat_map(|scope| scope.keys().map(|name| (name.clone(), ValueType::Any)))
+                        .collect(),
+                ) =>
+            {
+                Some(element.as_ref())
+            }
+            _ => None,
+        };
+        let projection = &comprehension.projection;
+        let actual = self.operation_argument_type(projection, element)?;
+        let actual = actual.or_else(|| {
+            empty_list_literal(projection, self.control).then_some(ValueType::EmptyList)
+        });
+        if let (Some(expected), Some(actual)) = (element, actual.as_ref())
+            && !matches!(
+                actual,
+                ValueType::Any | ValueType::Unknown | ValueType::TypeParameter(_)
+            )
+            && !expected.accepts_type(actual)
+        {
+            self.errors
+                .borrow_mut()
+                .push(ModuleTypeError::ComprehensionProjectionMismatch {
+                    module: self.entry.module().clone(),
+                    span: tuple_mismatch_span(projection, Some(expected), Some(actual)),
+                    expected: expected.clone(),
+                    actual: actual.clone(),
+                    expected_span,
+                });
+        }
+        let result = element
+            .cloned()
+            .or(actual)
+            .filter(|ty| !matches!(ty, ValueType::Unknown | ValueType::EmptyList))
+            .map(|ty| ValueType::List(Box::new(ty)));
+        if let Some(result) = &result {
+            self.expression_types
+                .borrow_mut()
+                .insert((span.start(), span.end()), result.clone());
+        }
+        Ok(result)
     }
 
     fn if_expression(
@@ -7790,6 +7993,24 @@ impl<'a> SignatureValidator<'a> {
         }
     }
 
+    fn needs_argument_context(
+        &self,
+        argument: &Expression,
+        actual: Option<&ValueType>,
+        parameter: &ValueType,
+        substitutions: &BTreeMap<String, ValueType>,
+        prior_errors: usize,
+    ) -> bool {
+        self.errors.borrow().len() == prior_errors
+            && intersects_regions(argument.span(), &self.entry.comprehension_spans)
+            && has_unbound_type_parameters(parameter, substitutions)
+            && actual.is_none_or(|actual| {
+                actual.has_incomplete_tuple_evidence()
+                    || (actual.has_incomplete_evidence(true)
+                        && has_contextual_comprehension(argument))
+            })
+    }
+
     fn reference_type(&self, target: &ModuleReferenceTarget) -> Option<ValueType> {
         match target {
             ModuleReferenceTarget::DynamicStatus => Some(ValueType::Any),
@@ -7867,7 +8088,9 @@ impl<'a> SignatureValidator<'a> {
                 .map(|variant| (nominal, variant))
         });
         let Some((nominal, variant)) = variant else {
-            if self.in_if_expression.get() && self.operation_for_qualified(name).is_none() {
+            if (self.in_if_expression.get() || self.in_comprehension.get())
+                && self.operation_for_qualified(name).is_none()
+            {
                 self.errors
                     .borrow_mut()
                     .push(ModuleTypeError::UnknownQualifiedReference {
@@ -8119,23 +8342,38 @@ impl<'a> SignatureValidator<'a> {
         if statement.index.is_none() && matches!(statement.binding, Pattern::Binding(_)) {
             return self.expression(&statement.iterable).map(|_| ());
         }
+        self.iteration_bindings(
+            statement.index,
+            &statement.binding,
+            &statement.iterable,
+            ValueType::Any,
+        )
+    }
+
+    fn iteration_bindings(
+        &self,
+        index: Option<opaal_syntax::Identifier>,
+        binding: &Pattern,
+        iterable: &Expression,
+        unresolved_element: ValueType,
+    ) -> Result<(), Box<ModuleTypeError>> {
         let previous = self.checking_loop_iterable.replace(true);
-        let iterable = self.expression(&statement.iterable).map(|value_type| {
-            value_type.or_else(|| match self.value_reference(&statement.iterable) {
+        let evidence = self.expression(iterable).map(|value_type| {
+            value_type.or_else(|| match self.value_reference(iterable) {
                 Some(reference) => self.reference_type(reference.target()),
-                None => self.outer_value_type(&statement.iterable),
+                None => self.outer_value_type(iterable),
             })
         });
         self.checking_loop_iterable.set(previous);
-        let iterable = iterable?;
-        if let Some(index) = statement.index {
+        let evidence = evidence?;
+        if let Some(index) = index {
             self.inferred_bindings.borrow_mut().insert(
                 (self.entry.module().clone(), index.span().start()),
                 ValueType::Int,
             );
         }
-        self.retain_composite_argument_type(&statement.iterable, iterable.as_ref());
-        let element = match iterable {
+        self.retain_composite_argument_type(iterable, evidence.as_ref());
+        let element = match evidence {
             Some(ValueType::List(element)) => *element,
             Some(ValueType::Range) => ValueType::Int,
             None
@@ -8144,11 +8382,11 @@ impl<'a> SignatureValidator<'a> {
                 | ValueType::Unknown
                 | ValueType::EmptyList
                 | ValueType::TypeParameter(_),
-            ) => ValueType::Any,
+            ) => unresolved_element,
             Some(actual) => {
                 self.errors.borrow_mut().push(ModuleTypeError::NotIterable {
                     module: self.entry.module().clone(),
-                    span: statement.iterable.span(),
+                    span: iterable.span(),
                     actual,
                 });
                 return Ok(());
@@ -8162,8 +8400,8 @@ impl<'a> SignatureValidator<'a> {
             .flat_map(|scope| scope.keys().map(|name| (name.clone(), ValueType::Unknown)))
             .collect();
         let shape = substitute_type(&element, &unresolved);
-        if self.validate_pattern(&statement.binding, &shape) {
-            self.infer_pattern_bindings(&statement.binding, &element);
+        if self.validate_pattern(binding, &shape) {
+            self.infer_pattern_bindings(binding, &element);
         }
         Ok(())
     }
@@ -8206,11 +8444,13 @@ impl<'a> SignatureValidator<'a> {
                     }
                     _ => &[],
                 };
+                let unresolved = if value_type == &ValueType::Unknown {
+                    &ValueType::Unknown
+                } else {
+                    &ValueType::Any
+                };
                 for (index, element) in pattern.elements.iter().enumerate() {
-                    self.infer_pattern_bindings(
-                        element,
-                        types.get(index).unwrap_or(&ValueType::Any),
-                    );
+                    self.infer_pattern_bindings(element, types.get(index).unwrap_or(unresolved));
                 }
             }
             Pattern::List(pattern) => {
@@ -8678,21 +8918,22 @@ impl<'a> SignatureValidator<'a> {
         let Some((signature_module, signature)) = resolved else {
             let check_call = reference.is_some()
                 || matches!(call.callee.kind(), ExpressionKind::Qualified(_))
-                || self.in_if_expression.get();
+                || self.in_if_expression.get()
+                || self.in_comprehension.get();
             let actual = if simple_callee && check_call {
                 self.expression(&call.callee)?
             } else {
                 None
             };
             for argument in &call.arguments {
-                if check_call || self.entry.intersects_if(argument.span()) {
+                if check_call || self.entry.intersects_value_expression(argument.span()) {
                     self.expression(argument)?;
                 }
             }
             if let Some(actual) = actual
                 && !matches!(
                     actual,
-                    ValueType::Any | ValueType::Closure | ValueType::Function
+                    ValueType::Any | ValueType::Unknown | ValueType::Closure | ValueType::Function
                 )
             {
                 self.errors.borrow_mut().push(ModuleTypeError::NonCallable {
@@ -8742,6 +8983,7 @@ impl<'a> SignatureValidator<'a> {
             }
         }
         let mut argument_types = Vec::with_capacity(call.arguments.len());
+        let mut deferred_comprehensions = Vec::new();
         for (index, argument) in call.arguments.iter().enumerate() {
             let parameter = signature.parameters().get(index);
             let expected =
@@ -8751,8 +8993,20 @@ impl<'a> SignatureValidator<'a> {
                     .annotation_span()
                     .unwrap_or(parameter.declaration_span())
             });
+            let prior_errors = self.errors.borrow().len();
             let actual =
                 self.expression_with_expected_at(argument, expected.as_ref(), expected_span)?;
+            if parameter.is_some_and(|parameter| {
+                self.needs_argument_context(
+                    argument,
+                    actual.as_ref(),
+                    parameter.value_type(),
+                    &substitutions,
+                    prior_errors,
+                )
+            }) {
+                deferred_comprehensions.push((index, expected_span));
+            }
             if !signature.type_parameters().is_empty() {
                 self.retain_composite_argument_type(argument, actual.as_ref());
             }
@@ -8804,6 +9058,15 @@ impl<'a> SignatureValidator<'a> {
                     return Ok(Some(ValueType::Any));
                 }
             }
+        }
+        for (index, expected_span) in deferred_comprehensions {
+            let argument = &call.arguments[index];
+            let expected =
+                substitute_type(signature.parameters()[index].value_type(), &substitutions);
+            let actual =
+                self.expression_with_expected_at(argument, Some(&expected), expected_span)?;
+            self.retain_composite_argument_type(argument, actual.as_ref());
+            argument_types[index] = actual;
         }
         let mut invalid = false;
         for ((argument, actual), parameter) in call
@@ -9216,14 +9479,27 @@ impl<'a> SignatureValidator<'a> {
         }
         let mut actuals = Vec::new();
         let mut callbacks = Vec::new();
-        for (argument, parameter) in call.arguments.iter().zip(overload.parameters()) {
+        let mut deferred_comprehensions = Vec::new();
+        for (index, (argument, parameter)) in
+            call.arguments.iter().zip(overload.parameters()).enumerate()
+        {
             let OperationInputType::Value(input) = parameter.input() else {
                 unreachable!("value call parameters have value carriers")
             };
             let expected = substitute_type(input, &substitutions);
             let expected =
                 (!has_unbound_type_parameters(input, &substitutions)).then_some(&expected);
+            let prior_errors = self.errors.borrow().len();
             let actual = self.operation_argument_type(argument, expected)?;
+            if self.needs_argument_context(
+                argument,
+                actual.as_ref(),
+                input,
+                &substitutions,
+                prior_errors,
+            ) {
+                deferred_comprehensions.push((index, input));
+            }
             if let Some(relation) = parameter.callback() {
                 let shape = self.callback_shape(argument);
                 if let Some(shape) = &shape {
@@ -9276,6 +9552,11 @@ impl<'a> SignatureValidator<'a> {
                     });
                 return Ok(Some(ValueType::Any));
             }
+        }
+        for (index, input) in deferred_comprehensions {
+            let expected = substitute_type(input, &substitutions);
+            actuals[index] =
+                self.operation_argument_type(&call.arguments[index], Some(&expected))?;
         }
         for (span, relation, shape) in callbacks {
             if let Some(shape) = shape {
@@ -9433,6 +9714,13 @@ impl<'a> SignatureValidator<'a> {
                 });
             }
             ExpressionKind::GroupedJob(chain) => {
+                if self.in_comprehension.get()
+                    && let Some(declared) = self
+                        .value_reference(expression)
+                        .and_then(|reference| self.declared_reference_type(reference.target()))
+                {
+                    return Ok(Some(declared.clone()));
+                }
                 if let Some(inner) = single_value_expression(chain) {
                     return self.operation_argument_type(inner, expected);
                 }
@@ -9933,6 +10221,7 @@ struct ReferenceResolver<'a> {
 struct ReferenceScope {
     bindings: BTreeMap<String, Option<ReferenceBinding>>,
     span: Span,
+    alternate_span: Option<Span>,
 }
 
 #[derive(Clone)]
@@ -9964,11 +10253,13 @@ impl<'a> ReferenceResolver<'a> {
                 }),
             )]),
             span: source_span,
+            alternate_span: None,
         });
         visible.push(ModuleVisibleBinding {
             name: DynamicBinding::CurrentStatus.name().to_owned(),
             target: dynamic_target,
             scope_span: source_span,
+            alternate_span: None,
             visible_from: source_span.start(),
             depth: 0,
         });
@@ -9984,11 +10275,13 @@ impl<'a> ReferenceResolver<'a> {
                     }),
                 )]),
                 span: source_span,
+                alternate_span: None,
             });
             visible.push(ModuleVisibleBinding {
                 name: "args".to_owned(),
                 target,
                 scope_span: source_span,
+                alternate_span: None,
                 visible_from: source_span.start(),
                 depth: scopes.len().saturating_sub(1),
             });
@@ -9996,6 +10289,7 @@ impl<'a> ReferenceResolver<'a> {
         scopes.push(ReferenceScope {
             bindings: BTreeMap::new(),
             span: source_span,
+            alternate_span: None,
         });
         Self {
             entry,
@@ -10125,6 +10419,7 @@ impl<'a> ReferenceResolver<'a> {
                             name: local,
                             target,
                             scope_span: self.entry.script().span(),
+                            alternate_span: None,
                             visible_from: statement.span().end(),
                             depth: self.scopes.len() - 1,
                         });
@@ -10381,6 +10676,32 @@ impl<'a> ReferenceResolver<'a> {
                     self.expression(element.expression())?;
                 }
                 Ok(())
+            }
+            ExpressionKind::ListComprehension(comprehension) => {
+                let prior_errors = self.errors.len();
+                self.expression(&comprehension.iterable)?;
+                let visible = comprehension.projection.span();
+                self.push_scope(visible);
+                self.scopes.last_mut().unwrap().alternate_span =
+                    comprehension.filter.as_ref().map(|(_, guard)| guard.span());
+                let result = (|| {
+                    if let Some(index) = comprehension.index {
+                        self.declare(index.span(), visible.start(), false)?;
+                    }
+                    self.pattern(&comprehension.binding, visible.start(), false)?;
+                    if let Some((_, guard)) = &comprehension.filter {
+                        self.expression(guard)?;
+                    }
+                    self.expression(&comprehension.projection)
+                })();
+                self.pop_scope();
+                if self.outer_scope.is_some() && self.conditional_error.is_none() {
+                    self.conditional_error = self
+                        .errors
+                        .get(prior_errors)
+                        .map(ModuleNameError::diagnostic);
+                }
+                result
             }
             ExpressionKind::Record(entries) => {
                 for entry in entries {
@@ -10726,6 +11047,7 @@ impl<'a> ReferenceResolver<'a> {
             name,
             target,
             scope_span: scope.span,
+            alternate_span: scope.alternate_span,
             visible_from,
             depth,
         });
@@ -10735,6 +11057,7 @@ impl<'a> ReferenceResolver<'a> {
         self.scopes.push(ReferenceScope {
             bindings: BTreeMap::new(),
             span,
+            alternate_span: None,
         });
     }
 
@@ -10822,6 +11145,7 @@ impl ModuleSourceRegistry {
         source: SourceFile,
         script: Script,
         if_spans: Vec<Span>,
+        comprehension_spans: Vec<Span>,
     ) {
         debug_assert!(!self.by_module.contains_key(&module));
         debug_assert!(!self.by_source.contains_key(&source.id()));
@@ -10833,6 +11157,7 @@ impl ModuleSourceRegistry {
             source,
             script,
             if_spans,
+            comprehension_spans,
         });
     }
 }
@@ -11467,6 +11792,11 @@ impl<'a> StaticEffectAnalyzer<'a> {
             ExpressionKind::List(items) => {
                 for item in items {
                     self.expression(item.expression());
+                }
+            }
+            ExpressionKind::ListComprehension(comprehension) => {
+                for operand in comprehension.operands() {
+                    self.expression(operand);
                 }
             }
             ExpressionKind::Record(entries) => {
@@ -12299,6 +12629,11 @@ impl<'a> StaticPipelineAnalyzer<'a> {
             ExpressionKind::List(elements) => {
                 for element in elements {
                     self.expression(element.expression());
+                }
+            }
+            ExpressionKind::ListComprehension(comprehension) => {
+                for operand in comprehension.operands() {
+                    self.expression(operand);
                 }
             }
             ExpressionKind::Record(entries) => {
@@ -13576,6 +13911,7 @@ impl<'a> ModuleProgramLoader<'a> {
             source.clone(),
             script.clone(),
             metrics.if_spans,
+            metrics.comprehension_spans,
         );
         retained.push(ModuleAnalysisSource {
             module: module.clone(),
@@ -13841,6 +14177,7 @@ struct SyntaxMetrics {
     type_depth: u64,
     if_spans: Vec<Span>,
     loop_spans: Vec<Span>,
+    comprehension_spans: Vec<Span>,
 }
 
 impl SyntaxMetrics {
@@ -13850,6 +14187,7 @@ impl SyntaxMetrics {
             type_depth: 0,
             if_spans: Vec::new(),
             loop_spans: Vec::new(),
+            comprehension_spans: Vec::new(),
         };
         metrics.statements(script.statements());
         metrics
@@ -14089,6 +14427,24 @@ impl SyntaxMetrics {
                 );
                 self.type_depth = self.type_depth.max(depth);
                 depth
+            }
+            ExpressionKind::ListComprehension(comprehension) => {
+                let span = expression.span();
+                if self
+                    .comprehension_spans
+                    .last()
+                    .is_none_or(|outer| outer.end() < span.end())
+                {
+                    self.comprehension_spans.push(span);
+                }
+                self.pattern(&comprehension.binding);
+                for operand in [&comprehension.projection, &comprehension.iterable] {
+                    self.expression(operand);
+                }
+                if let Some((_, filter)) = &comprehension.filter {
+                    self.expression(filter);
+                }
+                1
             }
             ExpressionKind::Record(entries) => {
                 for entry in entries {
@@ -14762,6 +15118,18 @@ pub enum ModuleTypeError {
         span: Span,
         actual: ValueType,
     },
+    ComprehensionFilterMismatch {
+        module: ModuleId,
+        span: Span,
+        actual: ValueType,
+    },
+    ComprehensionProjectionMismatch {
+        module: ModuleId,
+        span: Span,
+        expected: ValueType,
+        actual: ValueType,
+        expected_span: Span,
+    },
     NotIterable {
         module: ModuleId,
         span: Span,
@@ -14871,6 +15239,8 @@ impl ModuleTypeError {
             | Self::SpreadElementMismatch { module, .. }
             | Self::ThrowMismatch { module, .. }
             | Self::NotIterable { module, .. }
+            | Self::ComprehensionFilterMismatch { module, .. }
+            | Self::ComprehensionProjectionMismatch { module, .. }
             | Self::IndexedAssignmentTargetMismatch { module, .. }
             | Self::IndexedAssignmentIndexMismatch { module, .. }
             | Self::AssignmentMismatch { module, .. }
@@ -14913,7 +15283,9 @@ impl ModuleTypeError {
             | Self::SpreadValueMismatch { span, .. }
             | Self::SpreadElementMismatch { span, .. }
             | Self::ThrowMismatch { span, .. }
-            | Self::NotIterable { span, .. } => *span,
+            | Self::NotIterable { span, .. }
+            | Self::ComprehensionFilterMismatch { span, .. }
+            | Self::ComprehensionProjectionMismatch { span, .. } => *span,
             Self::IndexedAssignmentTargetMismatch { span, .. }
             | Self::IndexedAssignmentIndexMismatch { span, .. } => *span,
             Self::AssignmentMismatch {
@@ -15126,6 +15498,22 @@ impl ModuleTypeError {
                     format!("this value is `{actual}`; throw requires `String` or `Error`"),
                 )
             }
+            Self::ComprehensionFilterMismatch { span, actual, .. } => {
+                Diagnostic::new(Severity::Error, "SIG029", self.to_string())
+                    .with_primary(*span, format!("this filter is `{actual}`, expected `Bool`"))
+            }
+            Self::ComprehensionProjectionMismatch {
+                span,
+                expected,
+                actual,
+                expected_span,
+                ..
+            } => Diagnostic::new(Severity::Error, "SIG030", self.to_string())
+                .with_primary(
+                    *span,
+                    format!("this projection is `{actual}`, expected `{expected}`"),
+                )
+                .with_secondary(*expected_span, "expected list type comes from here"),
             Self::NotIterable { span, actual, .. } => {
                 Diagnostic::new(Severity::Error, "SIG026", self.to_string()).with_primary(
                     *span,
@@ -15444,6 +15832,16 @@ impl fmt::Display for ModuleTypeError {
                 formatter,
                 "module `{}` throws `{actual}`; expected `String` or `Error`",
                 module.path().display()
+            ),
+            Self::ComprehensionFilterMismatch { actual, .. } => write!(
+                formatter,
+                "list comprehension filter requires Bool, got `{actual}`"
+            ),
+            Self::ComprehensionProjectionMismatch {
+                expected, actual, ..
+            } => write!(
+                formatter,
+                "list comprehension projects `{actual}`, expected `{expected}`"
             ),
             Self::NotIterable { module, actual, .. } => write!(
                 formatter,

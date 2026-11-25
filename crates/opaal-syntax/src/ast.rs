@@ -708,6 +708,7 @@ pub enum ExpressionKind {
     Name(NameReference),
     Qualified(QualifiedName),
     List(Vec<ListItem>),
+    ListComprehension(Box<ListComprehension>),
     Tuple(TupleSyntax<Expression>),
     Record(Vec<RecordEntry>),
     NominalRecord(NominalRecordExpression),
@@ -719,6 +720,29 @@ pub enum ExpressionKind {
     Member(MemberExpression),
     Unary(UnaryExpression),
     Binary(BinaryExpression),
+}
+
+/// An eager list projection over one generator and an optional Bool filter.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ListComprehension {
+    pub open: Span,
+    pub projection: Expression,
+    pub for_span: Span,
+    pub index: Option<Identifier>,
+    pub binding: Pattern,
+    pub in_span: Span,
+    pub iterable: Expression,
+    pub filter: Option<(Span, Expression)>,
+    pub close: Span,
+}
+
+impl ListComprehension {
+    /// The operands in evaluation order. Scope-aware visitors bind after the iterable.
+    pub fn operands(&self) -> impl DoubleEndedIterator<Item = &Expression> {
+        std::iter::once(&self.iterable)
+            .chain(self.filter.iter().map(|(_, filter)| filter))
+            .chain(std::iter::once(&self.projection))
+    }
 }
 
 /// Ordered value arms and the required fallback of an `if` expression.

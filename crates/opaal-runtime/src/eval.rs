@@ -2092,7 +2092,10 @@ pub fn evaluate_in_environment(
                 script.span(),
             )));
         }
-        Err(opaal_syntax::TupleDepthError::Exceeded(span)) => {
+        Err(
+            opaal_syntax::TupleDepthError::Exceeded(span)
+            | opaal_syntax::TupleDepthError::ComprehensionExceeded(span),
+        ) => {
             return Err(RuntimeError::new(
                 RuntimeErrorKind::ResourceBudgetExceeded,
                 span,
@@ -3409,47 +3412,10 @@ impl Evaluator<'_, '_> {
         let iterable = self.expression(&statement.iterable, scope)?;
         let boundary = statement.iterable.span();
         let legacy = statement.index.is_none() && matches!(statement.binding, Pattern::Binding(_));
-        let mut element_type = None;
-        if !legacy && matches!(iterable, Value::List(_)) {
-            let iterable_type = crate::module::value_name_span(&statement.iterable)
-                .and_then(|span| scope.value_type(self.text(span)))
-                .or_else(|| self.binding_types.expression_type(boundary));
-            if let Some(ValueType::List(element)) = iterable_type {
-                element_type = Some(crate::module::substitute_type(
-                    element,
-                    &self.current_type_arguments,
-                ));
-            }
-        }
-        let mut list_items;
-        let mut range_items;
-        let items: &mut dyn Iterator<Item = Cow<'_, Value>> = match &iterable {
-            Value::List(items) => {
-                list_items = items.iter().map(Cow::Borrowed);
-                &mut list_items
-            }
-            Value::Range(range) => {
-                let start = range.start();
-                let end = if range.includes_end() {
-                    Some(range.end())
-                } else {
-                    range.end().checked_sub(1)
-                };
-                range_items = end
-                    .into_iter()
-                    .flat_map(move |end| start..=end)
-                    .map(|item| Cow::Owned(Value::Int(item)));
-                &mut range_items
-            }
-            other => {
-                return Err(self.error(
-                    RuntimeErrorKind::NotIterable {
-                        actual: other.family_name(),
-                    },
-                    boundary,
-                ));
-            }
-        };
+        let element_type = (!legacy)
+            .then(|| self.iteration_element_type(&statement.iterable, &iterable, scope))
+            .flatten();
+        let items = self.iteration_items(&iterable, boundary)?;
         let mut position = 0_u64;
         for item in items {
             self.check_cancel(boundary)?;
@@ -3458,30 +3424,15 @@ impl Evaluator<'_, '_> {
             }
             scope.push();
             let outcome = (|| {
-                if let Some(index) = statement.index {
-                    let index_value =
-                        loop_index(position).map_err(|error| self.error(error, index.span()))?;
-                    scope
-                        .declare_admitted(
-                            self.text(index.span()),
-                            BindingMutability::Immutable,
-                            Value::Int(index_value),
-                        )
-                        .map_err(|error| {
-                            self.error(RuntimeErrorKind::Scope(error), index.span())
-                        })?;
-                    position += 1;
-                }
-                if !self.pattern_matches(
+                self.bind_iteration(
+                    statement.index,
                     &statement.binding,
+                    position,
                     &item,
-                    scope,
-                    BindingMutability::Immutable,
                     element_type.as_ref(),
-                    true,
-                )? {
-                    return Err(self.error(RuntimeErrorKind::PatternMismatch, binding_span));
-                }
+                    scope,
+                )?;
+                position += u64::from(statement.index.is_some());
                 self.statements(&statement.body.statements, scope)
             })();
             scope.pop().expect("iteration pushes exactly one frame");
@@ -3492,6 +3443,98 @@ impl Evaluator<'_, '_> {
             }
         }
         Ok(Flow::Fallthrough(None))
+    }
+
+    fn iteration_element_type(
+        &self,
+        expression: &Expression,
+        iterable: &Value,
+        scope: &ScopeStack,
+    ) -> Option<ValueType> {
+        if let Value::List(_) = iterable {
+            let iterable_type = crate::module::value_name_span(expression)
+                .and_then(|span| scope.value_type(self.text(span)))
+                .or_else(|| self.binding_types.expression_type(expression.span()));
+            if let Some(ValueType::List(element)) = iterable_type {
+                return Some(crate::module::substitute_type(
+                    element,
+                    &self.current_type_arguments,
+                ));
+            }
+        }
+        None
+    }
+
+    fn iteration_items<'a>(
+        &self,
+        iterable: &'a Value,
+        span: Span,
+    ) -> Eval<impl Iterator<Item = Cow<'a, Value>> + use<'a>> {
+        let (list, range) = match iterable {
+            Value::List(items) => (Some(items), None),
+            Value::Range(range) => {
+                let end = if range.includes_end() {
+                    Some(range.end())
+                } else {
+                    range.end().checked_sub(1)
+                };
+                (None, end.map(|end| range.start()..=end))
+            }
+            other => {
+                return Err(self.error(
+                    RuntimeErrorKind::NotIterable {
+                        actual: other.family_name(),
+                    },
+                    span,
+                ));
+            }
+        };
+        Ok(list
+            .into_iter()
+            .flat_map(|items| items.iter())
+            .map(Cow::Borrowed)
+            .chain(
+                range
+                    .into_iter()
+                    .flatten()
+                    .map(|item| Cow::Owned(Value::Int(item))),
+            ))
+    }
+
+    fn bind_iteration(
+        &mut self,
+        index: Option<opaal_syntax::Identifier>,
+        binding: &Pattern,
+        position: u64,
+        item: &Value,
+        element_type: Option<&ValueType>,
+        scope: &mut ScopeStack,
+    ) -> Eval<()> {
+        if let Some(index) = index {
+            let index_value =
+                loop_index(position).map_err(|error| self.error(error, index.span()))?;
+            scope
+                .declare_admitted(
+                    self.text(index.span()),
+                    BindingMutability::Immutable,
+                    Value::Int(index_value),
+                )
+                .map_err(|error| self.error(RuntimeErrorKind::Scope(error), index.span()))?;
+        }
+        if !self.pattern_matches(
+            binding,
+            item,
+            scope,
+            BindingMutability::Immutable,
+            element_type,
+            true,
+        )? {
+            return Err(self.error(
+                RuntimeErrorKind::PatternMismatch,
+                crate::module::pattern_span(binding),
+            ));
+        }
+        Ok(())
     }
 
     /// Evaluates a `match`: the scrutinee is evaluated once, then arms are tried
@@ -4131,6 +4174,9 @@ impl Evaluator<'_, '_> {
             ExpressionKind::List(elements) => self
                 .list_literal(elements, scope, expected, span, false)
                 .map(|(value, _)| value),
+            ExpressionKind::ListComprehension(comprehension) => self
+                .list_comprehension(comprehension, scope, expected, span)
+                .map(|(value, _)| value),
             ExpressionKind::Record(entries) => {
                 if !self.budget.charge_collection_items(entries.len()) {
                     return Err(self.error(RuntimeErrorKind::ResourceBudgetExceeded, span));
@@ -4208,11 +4254,14 @@ impl Evaluator<'_, '_> {
         Ok(&branch.fallback)
     }
 
-    fn if_expression_type(&self, mut expression: &Expression) -> Option<ValueType> {
+    fn retained_expression_type(&self, mut expression: &Expression) -> Option<ValueType> {
         while let ExpressionKind::GroupedJob(chain) = expression.kind() {
             expression = crate::module::single_value_expression(chain)?;
         }
-        if !matches!(expression.kind(), ExpressionKind::If(_)) {
+        if !matches!(
+            expression.kind(),
+            ExpressionKind::If(_) | ExpressionKind::ListComprehension(_)
+        ) {
             return None;
         }
         self.binding_types
@@ -4240,7 +4289,7 @@ impl Evaluator<'_, '_> {
         value: &Value,
         scope: &ScopeStack,
     ) -> Option<ValueType> {
-        if let Some(value_type) = self.if_expression_type(expression) {
+        if let Some(value_type) = self.retained_expression_type(expression) {
             return Some(value_type);
         }
         let name = crate::module::value_name_span(expression).map(|span| self.text(span));
@@ -5088,6 +5137,110 @@ impl Evaluator<'_, '_> {
         Ok((value, value_type))
     }
 
+    fn list_comprehension(
+        &mut self,
+        comprehension: &opaal_syntax::ListComprehension,
+        scope: &mut ScopeStack,
+        expected: Option<&ValueType>,
+        span: Span,
+    ) -> Eval<(Value, Option<ValueType>)> {
+        if matches!(comprehension.binding, Pattern::Wildcard(_))
+            || !loop_pattern_is_supported(&comprehension.binding)
+        {
+            return Err(self.unsupported(
+                "for loop item pattern",
+                crate::module::pattern_span(&comprehension.binding),
+            ));
+        }
+        let retained = self
+            .binding_types
+            .expression_type(span)
+            .map(|ty| crate::module::substitute_type(ty, &self.current_type_arguments));
+        let result_type = match expected {
+            Some(ty @ ValueType::List(_))
+                if !crate::module::has_unbound_type_parameters(ty, &BTreeMap::new()) =>
+            {
+                Some(ty.clone())
+            }
+            _ => retained,
+        };
+        let expected_element = match &result_type {
+            Some(ValueType::List(element)) => Some(element.as_ref()),
+            _ => None,
+        };
+        let boundary = comprehension.iterable.span();
+        self.check_cancel(boundary)?;
+        let iterable = self.expression(&comprehension.iterable, scope)?;
+        let element_type = self.iteration_element_type(&comprehension.iterable, &iterable, scope);
+        let items = self.iteration_items(&iterable, boundary)?;
+        let mut values = Vec::new();
+        let mut position = 0_u64;
+        for item in items {
+            self.check_cancel(boundary)?;
+            self.charge(boundary)?;
+            scope.push();
+            let outcome = (|| {
+                self.bind_iteration(
+                    comprehension.index,
+                    &comprehension.binding,
+                    position,
+                    &item,
+                    element_type.as_ref(),
+                    scope,
+                )?;
+                position += u64::from(comprehension.index.is_some());
+                if let Some((_, guard)) = &comprehension.filter {
+                    self.check_cancel(guard.span())?;
+                    let value =
+                        self.expression_with_expected(guard, scope, Some(&ValueType::Bool))?;
+                    if !self.expect_logic_bool(&value, guard.span())? {
+                        return Ok(None);
+                    }
+                }
+                self.check_cancel(comprehension.projection.span())?;
+                self.expression_with_expected(&comprehension.projection, scope, expected_element)
+                    .map(Some)
+            })();
+            scope.pop().expect("iteration pushes exactly one frame");
+            if let Some(value) = outcome? {
+                let projection = comprehension.projection.span();
+                if let Some(expected) = expected_element
+                    && !self.validate_operation_value(expected, &value, projection)?
+                {
+                    return Err(self.error(
+                        RuntimeErrorKind::BindingTypeMismatch {
+                            expected: expected.clone(),
+                            actual: value.family_name(),
+                        },
+                        projection,
+                    ));
+                }
+                self.reserve_list_item(&mut values, usize::MAX, projection)?;
+                values.push(value);
+            }
+        }
+        self.charge_expanding_list_storage(values.len(), span)?;
+        let value = Value::list(values);
+        self.admit_shape(
+            || {
+                std::iter::once(shape::Node::Value(&value))
+                    .chain(result_type.as_ref().map(shape::Node::Type))
+            },
+            span,
+        )?;
+        self.check_cancel(span)?;
+        Ok((value, result_type))
+    }
+
+    fn charge_expanding_list_storage(&mut self, len: usize, span: Span) -> Eval<()> {
+        let bytes = len
+            .checked_mul(size_of::<Value>())
+            .and_then(|bytes| bytes.checked_add(2 * size_of::<usize>()))
+            .ok_or_else(|| self.error(RuntimeErrorKind::ResourceBudgetExceeded, span))?;
+        self.retain_collection_bytes(bytes, span)?;
+        self.check_cancel(span)
+    }
+
     fn list_literal(
         &mut self,
         items: &[ListItem],
@@ -5189,13 +5342,7 @@ impl Evaluator<'_, '_> {
         }
         if expands {
             // Charge Arc result storage separately; ordinary literals keep their existing budget.
-            let bytes = values
-                .len()
-                .checked_mul(size_of::<Value>())
-                .and_then(|bytes| bytes.checked_add(2 * size_of::<usize>()))
-                .ok_or_else(|| self.error(RuntimeErrorKind::ResourceBudgetExceeded, span))?;
-            self.retain_collection_bytes(bytes, span)?;
-            self.check_cancel(span)?;
+            self.charge_expanding_list_storage(values.len(), span)?;
         }
         let result_type = if homogeneous {
             element_type.map(|element| ValueType::List(Box::new(element)))
@@ -5222,7 +5369,7 @@ impl Evaluator<'_, '_> {
         match expression.kind() {
             ExpressionKind::If(_) => {
                 let result_type = self
-                    .if_expression_type(expression)
+                    .retained_expression_type(expression)
                     .or_else(|| expected.cloned());
                 let value = self.expression_with_expected(expression, scope, expected)?;
                 Ok((value, result_type))
@@ -5262,6 +5409,10 @@ impl Evaluator<'_, '_> {
             ExpressionKind::Tuple(tuple) => {
                 self.charge(expression.span())?;
                 self.tuple_literal(&tuple.elements, scope, expected, expression.span(), true)
+            }
+            ExpressionKind::ListComprehension(comprehension) => {
+                self.charge(expression.span())?;
+                self.list_comprehension(comprehension, scope, expected, expression.span())
             }
             ExpressionKind::List(elements) => {
                 self.charge(expression.span())?;
@@ -7043,6 +7194,9 @@ fn find_callable_in_expression(
         ExpressionKind::List(elements) => elements
             .iter()
             .find_map(|element| find_callable_in_expression(element.expression(), snapshot)),
+        ExpressionKind::ListComprehension(comprehension) => comprehension
+            .operands()
+            .find_map(|operand| find_callable_in_expression(operand, snapshot)),
         ExpressionKind::Record(entries) => entries.iter().find_map(|entry| {
             let key = match &entry.key {
                 RecordKey::DoubleQuoted(part) => find_callable_in_word_part(part, snapshot),

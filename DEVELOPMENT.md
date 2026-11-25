@@ -182,6 +182,58 @@ target/debug/opaal examples/language-foundation.opaal
 Pure non-interactive evaluation does not print its final value. Examples must not depend on authority that
 the pure foundation does not grant.
 
+## List comprehensions
+
+List comprehensions are scheduled for OPAAL 1.11.0. Use a build that includes
+the syntax for the saved report below. Projects that distribute comprehension
+source should require OPAAL 1.11.0 or later.
+
+```opaal
+let counts = [0, 2, 0, 1]
+let rows = [{index: i, findings: count} for i, count in counts if count > 0]
+```
+
+Write `[projection for binding in iterable]` or append `if filter` before
+the closing bracket. The header accepts an item name, a tuple item pattern,
+or a position name followed by a comma and either item form. Tuple patterns
+can nest and use `_` to skip slots. A List or ascending Range supplies the
+items. Positions are zero-based and keep their original values after filtering.
+
+The iterable is evaluated once in the enclosing scope. The projection and
+filter can read the immutable header bindings, including when a binder
+shadows the iterable's name. The filter must produce Bool. Group conditional
+chains explicitly, as in `if (count > 0 && count < 10)`. Each selected item
+produces one result. The checker visits every operand, including a skipped
+projection, and uses the expected List element type and the projection's
+checked type to retain evidence for empty results.
+
+The runtime meters each input visit and checks collection limits and
+cancellation before publishing the List. Evaluation stops at the first
+failure. Subexpressions use the caller's usual effect and error rules.
+Multiline submissions continue until the brackets and operands are complete.
+Formatting preserves clause comments. Definitions, references, and completion
+use the original header and operand spans.
+
+```sh
+target/debug/opaal check tests/golden/source-formatting/list-comprehensions/report.opaal
+target/debug/opaal tests/golden/source-formatting/list-comprehensions/report.opaal
+target/debug/opaal tests/golden/source-formatting/list-comprehensions/negative.opaal
+```
+
+The report checks positions 1 and 3, their findings, and the empty report
+summary. The negative input raises an error at the first negative count.
+The same policy exports a pure `verify` action used by the source-formatting
+project qualification. Changes to its source require ordinary replanning
+before accepted execution.
+
+Rust AST visitors should handle `ExpressionKind::ListComprehension`.
+`ListComprehension::operands` visits the iterable, optional filter, and
+projection. A scope-aware visitor adds the original header bindings after
+visiting the iterable, and uses one binder identity for the filter and
+projection. A structural path containing a comprehension can contain up to
+32 levels, including enclosing statement blocks and recursive statement
+`else if` edges. This applies to source and Rust-built ASTs.
+
 ## Module exports
 
 Place `export` before a module-level `def`, `let`, `mut`, `action`, `type`,

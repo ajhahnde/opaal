@@ -112,6 +112,16 @@ pub fn classify_opaal_tokens(
     source: &SourceFile,
     tokens: &[Token],
 ) -> Result<SyntaxClassification, SpanError> {
+    let structural = classify_opaal_structure(source, tokens)?;
+    Ok(crate::parser::classify_comprehensions(
+        source, tokens, structural,
+    ))
+}
+
+pub(crate) fn classify_opaal_structure(
+    source: &SourceFile,
+    tokens: &[Token],
+) -> Result<SyntaxClassification, SpanError> {
     for token in tokens {
         token.text(source)?;
         if let TokenKind::Invalid(kind) = token.kind() {
