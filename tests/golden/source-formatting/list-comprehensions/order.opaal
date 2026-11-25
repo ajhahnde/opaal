@@ -1,0 +1,14 @@
+import std::io
+
+let rows = [if io::println("project {i}") == null {
+    item * 10
+} else {
+    0
+} for i, item in if io::println("source") == null {
+    [0, 2, 0, 1]
+} else {
+    []
+} if (io::println(item) == null && item > 0)]
+if rows != [20, 10] {
+    throw "unexpected projection order"
+}

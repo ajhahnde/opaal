@@ -63,6 +63,10 @@ impl FormatLayout {
             layout.no_space_before.insert(comma.start());
             layout.space_after.insert(comma.end());
         }
+        for keyword in &spans.comprehension_keywords {
+            layout.space_before.insert(keyword.start());
+            layout.space_after.insert(keyword.end());
+        }
         layout
             .omitted_commas
             .extend(spans.tuple_trailing_commas.iter().map(|span| span.start()));

@@ -9,8 +9,9 @@ use opaal_platform::FakePlatform;
 use opaal_runtime::builtin::standard_registry;
 use opaal_runtime::eval::FakeClock;
 use opaal_runtime::module::{
-    ModuleCanonicalizer, ModuleEffect, ModuleId, ModulePathError, ModuleProgramLoader,
-    ModuleSourceError, ModuleSourceLoader,
+    AnalysisControl, AnalysisLimitKind, AnalysisLimits, ModuleAnalysisOutcome, ModuleCanonicalizer,
+    ModuleEffect, ModuleId, ModulePathError, ModuleProgramLoader, ModuleSourceError,
+    ModuleSourceLoader,
 };
 use opaal_runtime::plan::SessionOptions;
 use opaal_runtime::resolve::ExecutableProbe;
@@ -88,6 +89,241 @@ fn checked_value(case: &str, source: &str) -> Value {
     .unwrap_or_else(|error| panic!("{case} must execute after checking: {error}"));
     assert!(output.is_empty(), "{case} must not write process output");
     completion.value().clone()
+}
+
+#[test]
+fn list_comprehensions_resolve_the_source_then_filter_and_project() {
+    let value = checked_value(
+        "comprehension ordering and captures",
+        r#"
+def source() -> List[Int] { return [0, 2, 0, 3] }
+def project(n: Int) -> Int {
+    if n == 0 { throw "unselected projection" }
+    return n * 10
+}
+let item = source()
+let rows = [(i, project(item)) for i, item in item if (item != 0 && 9 / item > 0)]
+let closures = [{|| n } for n in 2..=3]
+let first = closures[0]
+let next = closures[1]
+let pairs = [i + left + right for i, (left, right) in [(1, 2), (1, 2)]]
+if first() != 2 || next() != 3 || pairs != [3, 4] || item != [0, 2, 0, 3] {
+    throw "comprehension binding escaped its iteration"
+}
+rows
+"#,
+    );
+    assert_eq!(
+        value,
+        Value::list(vec![
+            Value::Tuple(Arc::from([Value::Int(1), Value::Int(20)])),
+            Value::Tuple(Arc::from([Value::Int(3), Value::Int(30)])),
+        ])
+    );
+}
+
+#[test]
+fn list_comprehensions_type_imported_value_pipeline_stages() {
+    let value = checked_value(
+        "comprehension projections with an aliased value pipeline stage",
+        r#"
+import std::value::{length as count_items}
+def keep[T](rows: List[T]) -> List[T] { return rows }
+let typed: List[Int] = [([n] | count_items) for n in [1]]
+let inferred = [([n] | count_items) for n in [1, 2]]
+let empty = [([n] | count_items) for n in 1..1]
+if typed != [1] || inferred != [1, 1] || keep[Int](empty) != [] {
+    throw "comprehension projection returned an unexpected result"
+}
+keep(empty)
+"#,
+    );
+    assert_eq!(value, Value::list(vec![]));
+}
+
+#[test]
+fn list_comprehensions_retain_static_context_and_stop_on_deferred_mismatches() {
+    let value = checked_value(
+        "comprehension typed empties and dynamic failure",
+        r#"
+def keep[T](rows: List[T]) -> List[T] { return rows }
+def with_witness[T](rows: List[T], witness: T) -> List[T] { return rows }
+import std::list
+def predicate(row: List[Int]) -> Bool { return row == [] }
+def dynamic() -> Any { return "wrong" }
+def int_predicate(item: Int) -> Bool { return item == 0 }
+def project(n: Int) -> Any {
+    if n == 1 { return dynamic() }
+    throw "later projection"
+}
+let empty = [n for n in 1..1]
+let nested = with_witness([[] for n in [1]], [0])
+let counted = list::count([[] for n in [1]], predicate)
+let dynamic_empty = with_witness([dynamic() for n in []], 0)
+let dynamic_count = list::count([dynamic() for n in []], int_predicate)
+let explicit = keep[List[Int]]([[] for n in []])
+let later = keep((empty))
+mut caught = false
+try {
+    let values: List[Int] = [project(n) for n in 1..=2]
+} catch error {
+    caught = !(error.message in ["later projection"])
+}
+if !caught || nested != [[]] || counted != 1 || explicit != [] || later != [] ||
+    dynamic_empty != [] || dynamic_count != 0 {
+    throw "comprehension type evidence was lost"
+}
+true
+"#,
+    );
+    assert_eq!(value, Value::Bool(true));
+}
+
+#[test]
+fn inferred_comprehension_arguments_do_not_repeat_generic_analysis() {
+    let registry = standard_registry();
+    let root = Path::new("/predictable/main.opaal");
+    let kind = AnalysisLimitKind::GenericInstantiations;
+    for (prefix, suffix) in [("fixed(", ")"), ("value::length([", "])")] {
+        for projection in [false, true] {
+            let mut work = Vec::new();
+            let counts: &[usize] = if projection && prefix == "value::length([" {
+                &[4, 8, 12]
+            } else {
+                &[4, 8, 12, 18]
+            };
+            for &calls in counts {
+                let nested = format!("{}1{}", prefix.repeat(calls), suffix.repeat(calls));
+                let expression = if projection {
+                    format!("[{nested} for item in [0]]")
+                } else {
+                    nested
+                };
+                let source = OneModule {
+                    source: format!(
+                        "import std::value\ndef fixed[T](value: T) -> Int {{ return 1 }}\nlet output = {expression}\n"
+                    ).into_bytes(),
+                };
+                let loader = ModuleProgramLoader::new(&source, &source);
+                let report = loader.analyze_with_commands(root, &registry);
+                assert!(report.issues().is_empty(), "{:?}", report.issues());
+                assert_eq!(report.usage().get(kind), calls as u64, "{expression}");
+                work.push(report.usage().get(AnalysisLimitKind::WorkUnits));
+                let outcome = loader.analyze_with_commands_and_limits_controlled(
+                    root,
+                    &registry,
+                    &AnalysisControl::never(),
+                    AnalysisLimits::unlimited().with_limit(kind, calls as u64 - 1),
+                );
+                assert!(matches!(
+                    outcome,
+                    ModuleAnalysisOutcome::BudgetExceeded(error) if error.kind() == kind
+                ));
+            }
+            assert!(work[2] - work[1] <= 2 * (work[1] - work[0]), "{work:?}");
+            if let Some(&last) = work.get(3) {
+                assert!(last <= 2 * work[2], "{work:?}");
+            }
+        }
+    }
+}
+
+#[test]
+fn check_preserves_legacy_deep_list_arms_after_command_for_words() {
+    std::thread::Builder::new()
+        .stack_size(2 * 1024 * 1024)
+        .spawn(|| {
+            let registry = standard_registry();
+            let root = Path::new("/predictable/main.opaal");
+            let arm = format!("{}1{}", "[".repeat(33), "]".repeat(33));
+            let else_if = format!("true {{ {arm} }} else if ^true for item in rows && true");
+            for condition in [
+                "^true for && true",
+                "^true for item in rows && true",
+                else_if.as_str(),
+            ] {
+                let input = format!("let rows = [if {condition} {{ {arm} }} else {{ {arm} }}]");
+                let file = opaal_syntax::SourceFile::new(
+                    opaal_syntax::SourceId::new(1),
+                    "/predictable/main.opaal",
+                    input,
+                );
+                let opaal_syntax::FormatOutcome::Complete(formatted) =
+                    opaal_syntax::format_source_opaal(&file)
+                else {
+                    panic!("{condition}");
+                };
+                let source = OneModule {
+                    source: formatted.into_bytes(),
+                };
+                let report = ModuleProgramLoader::new(&source, &source)
+                    .analyze_with_commands(root, &registry);
+                assert!(report.issues().is_empty(), "{:?}", report.issues());
+            }
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
+#[test]
+fn comprehension_static_diagnostics_include_skipped_operands() {
+    let registry = standard_registry();
+    for (text, code) in [
+        ("let rows = [i for i in 3]", "SIG026"),
+        ("let rows = [i for i in [] if 1]", "SIG029"),
+        (
+            "import std::value\nlet rows = [value::misspelled for i in [] if false]",
+            "MOD009",
+        ),
+        (
+            "import std::value\nlet rows = [i for i in [] if value::misspelled]",
+            "MOD009",
+        ),
+        (
+            "import std::value\nlet rows = [i for i in value::misspelled]",
+            "MOD009",
+        ),
+        (
+            "def get_status() -> Status { ^true }\nlet rows = [i for i in [] if get_status()]",
+            "SIG029",
+        ),
+        (
+            "let rows: List[Int] = ['invalid' for i in [] if false]",
+            "SIG030",
+        ),
+        ("let rows = [i for i, (i, _) in []]", "MOD010"),
+        ("let rows = [a for (a, _) in [1]]", "SIG017"),
+        (
+            "def keep[T](rows: List[T]) -> List[T] { return rows }\nkeep([[] for n in []])",
+            "SIG010",
+        ),
+        (
+            "import std::value\nvalue::length([[] for n in []])",
+            "SIG010",
+        ),
+        (
+            "def item() -> List[Int] { return [1] }\nlet rows = [item() for item in item() if false]",
+            "SIG022",
+        ),
+    ] {
+        let source = OneModule {
+            source: text.as_bytes().to_vec(),
+        };
+        let report = ModuleProgramLoader::new(&source, &source)
+            .analyze_with_commands(Path::new("/predictable/main.opaal"), &registry);
+        let diagnostics: Vec<_> = report
+            .issues()
+            .iter()
+            .flat_map(|issue| issue.error().diagnostics())
+            .collect();
+        assert!(
+            diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code() == code),
+            "{text}: {diagnostics:?}"
+        );
+    }
 }
 
 #[test]

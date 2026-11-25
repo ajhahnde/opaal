@@ -30,7 +30,9 @@ pub use source::{
     LineColumn, LineIndex, PositionEncoding, PositionError, SourceFile, SourceId, Span, SpanError,
     TextPosition, TextRange,
 };
-pub use tuple_depth::{MAX_TUPLE_DEPTH, TupleDepthError, check_tuple_depth};
+pub use tuple_depth::{
+    MAX_COMPREHENSION_DEPTH, MAX_TUPLE_DEPTH, TupleDepthError, check_tuple_depth,
+};
 
 /// Stable package identifier for the syntax crate.
 pub const CRATE_NAME: &str = "opaal-syntax";

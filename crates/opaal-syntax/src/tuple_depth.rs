@@ -3,14 +3,17 @@ use crate::ast::*;
 
 /// Maximum number of enclosing constructs on a path that includes a tuple.
 pub const MAX_TUPLE_DEPTH: usize = 32;
+/// Maximum structural depth of a path containing a list comprehension.
+pub const MAX_COMPREHENSION_DEPTH: usize = 32;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TupleDepthError {
     Cancelled,
     Exceeded(Span),
+    ComprehensionExceeded(Span),
 }
 
-/// Checks the tuple depth of an AST, including trees provided by Rust callers.
+/// Checks tuple and comprehension depth, including trees provided by Rust callers.
 pub fn check_tuple_depth(
     script: &Script,
     is_cancelled: &dyn Fn() -> bool,
@@ -23,6 +26,7 @@ pub fn check_tuple_depth(
 #[derive(Clone, Copy)]
 enum Node<'a> {
     Statement(&'a Statement),
+    Block(&'a Block),
     Else(&'a ElseBranch),
     Expression(&'a Expression),
     Pattern(&'a Pattern),
@@ -37,6 +41,9 @@ struct Path {
     depth: usize,
     tuple: bool,
     excess: Option<Span>,
+    blocks: usize,
+    comprehension: bool,
+    comprehension_excess: Option<Span>,
 }
 
 #[derive(Default)]
@@ -56,12 +63,32 @@ impl<'a> Walk<'a> {
     }
 
     fn enter(&mut self, span: Span, tuple: bool) -> Result<(), TupleDepthError> {
+        self.enter_at(span, span, tuple)
+    }
+
+    fn enter_at(
+        &mut self,
+        span: Span,
+        comprehension_span: Span,
+        tuple: bool,
+    ) -> Result<(), TupleDepthError> {
         self.path.tuple |= tuple;
         self.path.depth += 1;
+        self.check_comprehension(comprehension_span)?;
         if self.path.depth > MAX_TUPLE_DEPTH {
             let first = *self.path.excess.get_or_insert(span);
             if self.path.tuple {
                 return Err(TupleDepthError::Exceeded(first));
+            }
+        }
+        Ok(())
+    }
+
+    fn check_comprehension(&mut self, span: Span) -> Result<(), TupleDepthError> {
+        if self.path.depth + self.path.blocks > MAX_COMPREHENSION_DEPTH {
+            let first = *self.path.comprehension_excess.get_or_insert(span);
+            if self.path.comprehension {
+                return Err(TupleDepthError::ComprehensionExceeded(first));
             }
         }
         Ok(())
@@ -74,7 +101,10 @@ impl<'a> Walk<'a> {
             visited += 1;
             seen_tuple |= match node {
                 Node::Expression(expression) => {
-                    matches!(expression.kind(), ExpressionKind::Tuple(_))
+                    matches!(
+                        expression.kind(),
+                        ExpressionKind::Tuple(_) | ExpressionKind::ListComprehension(_)
+                    )
                 }
                 Node::Pattern(pattern) => matches!(pattern, Pattern::Tuple(_)),
                 Node::Type(reference) => matches!(reference.kind, TypeReferenceKind::Tuple(_)),
@@ -86,9 +116,18 @@ impl<'a> Walk<'a> {
             self.path = path;
             match node {
                 Node::Statement(statement) => self.statement(statement.kind()),
+                Node::Block(block) => {
+                    self.path.blocks += 1;
+                    self.check_comprehension(block.span)?;
+                    self.extend(block.statements.iter().map(Node::Statement));
+                }
                 Node::Else(branch) => match branch {
                     ElseBranch::Block(block) => self.block(block),
-                    ElseBranch::If(branch) => self.if_statement(branch.kind()),
+                    ElseBranch::If(branch) => {
+                        self.path.blocks += 1;
+                        self.check_comprehension(branch.span())?;
+                        self.if_statement(branch.kind());
+                    }
                 },
                 Node::Expression(expression) => self.expression(expression)?,
                 Node::Pattern(pattern) => self.pattern(pattern)?,
@@ -119,7 +158,7 @@ impl<'a> Walk<'a> {
     }
 
     fn block(&mut self, block: &'a Block) {
-        self.extend(block.statements.iter().map(Node::Statement));
+        self.push(Node::Block(block));
     }
 
     fn parameters(&mut self, parameters: &'a [Parameter], result: Option<&'a TypeReference>) {
@@ -238,7 +277,16 @@ impl<'a> Walk<'a> {
             _ => true,
         };
         if has_children {
-            self.enter(expression.span(), matches!(kind, ExpressionKind::Tuple(_)))?;
+            self.path.comprehension |= matches!(kind, ExpressionKind::ListComprehension(_));
+            let comprehension_span = match kind {
+                ExpressionKind::Unary(unary) => unary.operator.span(),
+                _ => expression.span(),
+            };
+            self.enter_at(
+                expression.span(),
+                comprehension_span,
+                matches!(kind, ExpressionKind::Tuple(_)),
+            )?;
         }
         match kind {
             ExpressionKind::Literal(literal) => {
@@ -249,6 +297,10 @@ impl<'a> Walk<'a> {
             ExpressionKind::Name(_) | ExpressionKind::Qualified(_) => {}
             ExpressionKind::List(items) => {
                 self.extend(items.iter().map(|item| Node::Expression(item.expression())));
+            }
+            ExpressionKind::ListComprehension(comprehension) => {
+                self.extend(comprehension.operands().map(Node::Expression));
+                self.push(Node::Pattern(&comprehension.binding));
             }
             ExpressionKind::Tuple(tuple) => {
                 self.extend(tuple.elements.iter().map(Node::Expression));

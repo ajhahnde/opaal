@@ -575,6 +575,26 @@ impl<'source> SpanChecker<'source> {
                     self.expression(item.expression());
                 }
             }
+            ExpressionKind::ListComprehension(comprehension) => {
+                for span in [
+                    comprehension.open,
+                    comprehension.for_span,
+                    comprehension.in_span,
+                    comprehension.close,
+                ] {
+                    self.span(span);
+                }
+                if let Some(index) = comprehension.index {
+                    self.identifier(index);
+                }
+                self.pattern(&comprehension.binding);
+                if let Some((keyword, _)) = &comprehension.filter {
+                    self.span(*keyword);
+                }
+                for operand in comprehension.operands() {
+                    self.expression(operand);
+                }
+            }
             ExpressionKind::Record(entries) => {
                 for entry in entries {
                     self.span(entry.span);

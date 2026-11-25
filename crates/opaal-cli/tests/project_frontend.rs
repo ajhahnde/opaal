@@ -2007,7 +2007,8 @@ effects {
     secret.reveal(secrets::token, endpoints::failing),
 }
 
-    let authorization = http::secret_header("authorization", secrets::token)
+    let skipped = [http::secret_header("authorization", secrets::token) for item in [1] if false]
+    let authorization = [http::secret_header("authorization", secrets::token) for item in [1]][0]
     try {
         http::request(endpoints::failing, "GET", {}, authorization, null, 1024)
         return "unexpected"

@@ -96,7 +96,9 @@ pub fn completion_target(source: &str, cursor: usize) -> Option<CompletionTarget
     let stage = current_stage(&prior);
     let context = if import_group && is_path_spelling(&active) {
         path_context(source, &tokens, &active)
-    } else if scan_conditionals(&prior, false).unwrap_or(false) {
+    } else if scan_conditionals(&prior, false).unwrap_or(false)
+        || crate::parser::in_comprehension_operand(&source_file, &tokens, cursor)
+    {
         CompletionContext::Expression
     } else if prior.last().is_some_and(|token| {
         matches!(

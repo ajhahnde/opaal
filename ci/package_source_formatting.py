@@ -89,6 +89,12 @@ INDEXED_ITERATION_FIXTURES = (
     "bad-element.opaal", "indexed-and-paired.opaal", "noncanonical.opaal",
 )
 
+LIST_COMPREHENSION_FIXTURES = (
+    "bad-filter.opaal", "bad-input.opaal", "loop-report.opaal", "negative.opaal",
+    "order.opaal", "policy.opaal", "report.opaal", "skipped-effect.opaal",
+    "tasks.opaal", "typing-and-scope.opaal",
+)
+
 INLINE_EXPORT_FIXTURES = (
     "alias-conflict.opaal", "check-policy.opaal", "duplicate-exact.opaal",
     "duplicate-prefix.opaal", "facade.opaal", "failed-init.opaal",
@@ -139,6 +145,10 @@ def main() -> None:
     inline = {name.removeprefix("inline-module-exports/") for name in names if name.startswith("inline-module-exports/")}
     if inline != set(INLINE_EXPORT_FIXTURES):
         raise ValueError("inline export fixture census differs from the committed source")
+    comprehensions = {name.removeprefix("list-comprehensions/") for name in names
+                      if name.startswith("list-comprehensions/")}
+    if comprehensions != set(LIST_COMPREHENSION_FIXTURES):
+        raise ValueError("list comprehension fixture census differs from the committed source")
     archive = package_examples(ROOT, names, source, directory=FIXTURES, name="source-formatting")
     print(archive.relative_to(ROOT))
 

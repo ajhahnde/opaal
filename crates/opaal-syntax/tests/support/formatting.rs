@@ -121,6 +121,13 @@ trait Visit {
     }
 }
 
+impl<A: Visit, B: Visit> Visit for (A, B) {
+    fn visit(&self, context: &mut Context<'_>) {
+        self.0.visit(context);
+        self.1.visit(context);
+    }
+}
+
 impl<T: Visit> Visit for AstNode<T> {
     fn visit(&self, context: &mut Context<'_>) {
         self.kind().visit_node(self.span(), context);
@@ -404,7 +411,18 @@ impl Visit for ListItem {
     }
 }
 
-variants!(ExpressionKind { Literal(v), Name(v), Qualified(v), List(v), Tuple(v), Record(v), NominalRecord(v), Closure(v), GroupedJob(v), If(v), Call(v), Index(v), Member(v), Unary(v), Binary(v) });
+variants!(ExpressionKind { Literal(v), Name(v), Qualified(v), List(v), ListComprehension(v), Tuple(v), Record(v), NominalRecord(v), Closure(v), GroupedJob(v), If(v), Call(v), Index(v), Member(v), Unary(v), Binary(v) });
+fields!(ListComprehension {
+    open,
+    projection,
+    for_span,
+    index,
+    binding,
+    in_span,
+    iterable,
+    filter,
+    close
+});
 fields!(IfExpression { arms, fallback });
 fields!(IfExpressionArm { condition, value });
 variants!(Pattern { Wildcard(v), Literal(v), Binding(v), List(v), Tuple(v), NominalRecord(v), Variant(v) });

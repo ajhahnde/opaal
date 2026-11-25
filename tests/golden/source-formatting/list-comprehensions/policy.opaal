@@ -1,0 +1,37 @@
+import std::value as value
+
+def present(count: Int) -> Bool
+{
+    if count < 0 {
+        throw "negative finding count"
+    }
+    return count > 0
+}
+
+export def report(counts: List[Int]) -> List[Record]
+{
+    return [{index: index, findings: count} for index, count in counts if present(count)]
+}
+
+export def summarize(rows: List[Record]) -> (Int, String)
+{
+    let total = value::length(rows)
+    let label = if total > 0 {
+        "review"
+    } else {
+        "clear"
+    }
+    return (total, label)
+}
+
+export action verify() -> Int
+{
+    effects {
+    }
+
+    let rows = report([0, 2, 0, 1])
+    if rows != [{index: 1, findings: 2}, {index: 3, findings: 1}] {
+        throw "unexpected task report"
+    }
+    return value::length(rows)
+}

@@ -1,6 +1,8 @@
-use crate::classification::classify_opaal_tokens;
+use crate::classification::classify_opaal_structure;
 use crate::lexer::lex_opaal_with_control;
-use crate::tuple_depth::{MAX_TUPLE_DEPTH, TupleDepthError, check_tuple_depth};
+use crate::tuple_depth::{
+    MAX_COMPREHENSION_DEPTH, MAX_TUPLE_DEPTH, TupleDepthError, check_tuple_depth,
+};
 use crate::{
     ActionDefinition, AndChain, AndOperator, Assignment, AstNode, BinaryExpression, BinaryOperator,
     Block, CallExpression, CapabilityName, Closure, CommandHead, CommandHeadKind, CommandItem,
@@ -9,8 +11,8 @@ use crate::{
     EnvironmentStatement, Expression, ExpressionKind, FileRedirection, ForStatement,
     FunctionDefinition, Identifier, IfExpression, IfExpressionArm, IfStatement, IncompleteInput,
     IncompleteReason, IndexExpression, IndexedAssignment, IoNumber, JobStatement, Keyword,
-    ListItem, ListPattern, Literal, LiteralKind, MatchArm, MatchStatement, MemberExpression,
-    ModuleAliasImport, ModuleExportStatement, ModuleImportSource, NameReference,
+    ListComprehension, ListItem, ListPattern, Literal, LiteralKind, MatchArm, MatchStatement,
+    MemberExpression, ModuleAliasImport, ModuleExportStatement, ModuleImportSource, NameReference,
     NominalRecordExpression, NominalRecordFieldExpression, NominalRecordPattern,
     NominalTypeDeclaration, NominalTypeField, NumberKind, Operator, OutputMode, Parameter, Pattern,
     PatternField, PipeOperator, Pipeline, QualifiedName, RecordEntry, RecordKey, Redirection,
@@ -66,6 +68,7 @@ pub(crate) struct FormatSpans {
     pub(crate) interpolations: Vec<Span>,
     pub(crate) if_arms: Vec<IfArmSpans>,
     pub(crate) spaced_commas: Vec<Span>,
+    pub(crate) comprehension_keywords: Vec<Span>,
     pub(crate) tuple_trailing_commas: Vec<Span>,
 }
 
@@ -99,21 +102,32 @@ fn parse_tokens(
     if is_cancelled() {
         return ControlledParseOutcome::Cancelled;
     }
-    let classification = classify_opaal_tokens(source, &tokens)
+    let classification = classify_opaal_structure(source, &tokens)
         .expect("tokens produced from a source file have source-local spans");
     if is_cancelled() {
         return ControlledParseOutcome::Cancelled;
     }
-    match classification {
-        SyntaxClassification::Incomplete(incomplete) => {
-            return ControlledParseOutcome::Parsed(ParseOutcome::Incomplete(incomplete));
-        }
+    let incomplete = match classification {
+        SyntaxClassification::Incomplete(incomplete) => Some(incomplete),
         SyntaxClassification::Invalid(diagnostic) => {
             return ControlledParseOutcome::Parsed(ParseOutcome::Invalid(vec![diagnostic]));
         }
-        SyntaxClassification::Complete => {}
+        SyntaxClassification::Complete => None,
+    };
+    if let Some(incomplete) = incomplete
+        && (!can_recover_comprehension(incomplete) || !has_for_keyword(&tokens))
+    {
+        return ControlledParseOutcome::Parsed(ParseOutcome::Incomplete(incomplete));
     }
-    let parsed = Parser::new(source, tokens, is_cancelled, spans).parse_script();
+    let mut parser = Parser::new(source, tokens, is_cancelled, spans);
+    let parsed = parser.index_delimiters().and_then(|()| {
+        if let Some(incomplete) = incomplete
+            && !parser.has_comprehension_candidate()
+        {
+            return Err(ParseError::Incomplete(incomplete));
+        }
+        parser.parse_script()
+    });
     if is_cancelled() {
         return ControlledParseOutcome::Cancelled;
     }
@@ -132,6 +146,92 @@ fn parse_tokens(
     }
 }
 
+fn has_for_keyword(tokens: &[Token]) -> bool {
+    tokens
+        .iter()
+        .any(|token| token.kind() == TokenKind::Keyword(Keyword::For))
+}
+
+fn can_recover_comprehension(incomplete: IncompleteInput) -> bool {
+    !matches!(
+        incomplete.kind(),
+        IncompleteReason::UnmatchedSingleQuote
+            | IncompleteReason::UnmatchedDoubleQuote
+            | IncompleteReason::TrailingBackslash
+    )
+}
+
+pub(crate) fn classify_comprehensions(
+    source: &SourceFile,
+    tokens: &[Token],
+    structural: SyntaxClassification,
+) -> SyntaxClassification {
+    if !has_for_keyword(tokens)
+        || matches!(structural, SyntaxClassification::Invalid(_))
+        || matches!(structural, SyntaxClassification::Incomplete(input) if !can_recover_comprehension(input))
+    {
+        return structural;
+    }
+    let mut parser = Parser::new(source, tokens.to_vec(), &|| false, None);
+    parser
+        .index_delimiters()
+        .expect("classification never cancels");
+    if !parser.has_comprehension_candidate() {
+        return structural;
+    }
+    match parser.parse_script() {
+        Ok(_) => SyntaxClassification::Complete,
+        Err(ParseError::Incomplete(input)) => SyntaxClassification::Incomplete(input),
+        Err(ParseError::Invalid(diagnostic)) => SyntaxClassification::Invalid(*diagnostic),
+        Err(ParseError::InvalidMany(diagnostics)) => {
+            SyntaxClassification::Invalid(diagnostics.into_iter().next().unwrap())
+        }
+        Err(ParseError::Cancelled) => unreachable!("classification never cancels"),
+    }
+}
+
+pub(crate) fn in_comprehension_operand(
+    source: &SourceFile,
+    tokens: &[Token],
+    cursor: usize,
+) -> bool {
+    if !has_for_keyword(tokens) {
+        return false;
+    }
+    let mut parser = Parser::new(source, tokens.to_vec(), &|| false, None);
+    parser.projection_commands = Some(Vec::new());
+    parser.index_delimiters().expect("completion never cancels");
+    parser
+        .comprehension_brackets
+        .iter()
+        .enumerate()
+        .rev()
+        .find_map(|(open, for_position)| {
+            let for_position = (*for_position)?;
+            let end = parser.delimiter_ends[open];
+            (tokens[open].span().end() <= cursor
+                && (end == 0 || cursor <= tokens[end].span().start()))
+            .then_some((open, for_position, end))
+        })
+        .is_some_and(|(open, for_position, end)| {
+            if parser.projection_commands.as_ref().is_some_and(|commands| {
+                commands.iter().any(|span| {
+                    tokens[open].span().start() < span.start()
+                        && span.start() <= cursor
+                        && cursor <= span.end()
+                })
+            }) {
+                return false;
+            }
+            cursor <= tokens[for_position].span().start()
+                || tokens[for_position + 1..if end == 0 { tokens.len() } else { end }]
+                    .iter()
+                    .find(|token| token.kind() == TokenKind::Keyword(Keyword::In))
+                    .is_some_and(|keyword| keyword.span().end() <= cursor)
+        })
+}
+
+#[derive(Debug)]
 enum ParseError {
     Incomplete(IncompleteInput),
     Invalid(Box<Diagnostic>),
@@ -144,12 +244,21 @@ type ParseResult<T> = Result<T, ParseError>;
 pub(crate) const MAX_IF_EXPRESSION_DEPTH: usize = 32;
 pub(crate) const IF_EXPRESSION_DEPTH_ERROR: &str = "if expressions can nest at most 32 levels";
 const TUPLE_DEPTH_ERROR: &str = "a path containing a tuple can nest at most 32 levels";
+pub(crate) const COMPREHENSION_DEPTH_ERROR: &str =
+    "a path containing a list comprehension can nest at most 32 levels";
 
 struct Parser<'source, 'control, 'metadata> {
     source: &'source SourceFile,
     tokens: Vec<Token>,
     position: usize,
-    bracket_ends: Vec<usize>,
+    delimiter_ends: Vec<usize>,
+    comprehension_brackets: Vec<Option<usize>>,
+    comprehension_opens: Vec<usize>,
+    depth_frames: Vec<(usize, Span)>,
+    probing_projection: bool,
+    projection_commands: Option<Vec<Span>>,
+    comprehension_depth: usize,
+    completed_comprehensions: usize,
     group_commas: Vec<Option<usize>>,
     group_has_chain: Vec<bool>,
     tuple_groups: usize,
@@ -160,7 +269,7 @@ struct Parser<'source, 'control, 'metadata> {
     if_expression_header_depth: Option<usize>,
     loop_header_depth: Option<usize>,
     value_chain_depth: usize,
-    if_expression_depth: usize,
+    if_expression_spans: Vec<Span>,
     loop_pattern_depth: usize,
     diagnostics: Vec<Diagnostic>,
     inline_exports: Vec<(usize, Span)>,
@@ -177,7 +286,14 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
     ) -> Self {
         Self {
             source,
-            bracket_ends: vec![0; tokens.len()],
+            delimiter_ends: vec![0; tokens.len()],
+            comprehension_brackets: vec![None; tokens.len()],
+            comprehension_opens: Vec::new(),
+            depth_frames: Vec::new(),
+            probing_projection: false,
+            projection_commands: None,
+            comprehension_depth: 0,
+            completed_comprehensions: 0,
             group_commas: vec![None; tokens.len()],
             group_has_chain: vec![false; tokens.len()],
             tuple_groups: 0,
@@ -190,7 +306,7 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
             if_expression_header_depth: None,
             loop_header_depth: None,
             value_chain_depth: 0,
-            if_expression_depth: 0,
+            if_expression_spans: Vec::new(),
             loop_pattern_depth: 0,
             diagnostics: Vec::new(),
             inline_exports: Vec::new(),
@@ -200,7 +316,6 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
     }
 
     fn parse_script(mut self) -> ParseResult<Script> {
-        self.index_delimiters()?;
         let has_tuple_candidate = self.group_commas.iter().any(Option::is_some);
         if has_tuple_candidate {
             self.preflight_tuple_depth()?;
@@ -224,16 +339,23 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
                 .span(0..self.source.len())
                 .expect("the complete source range is valid"),
         );
-        if has_tuple_candidate {
+        if has_tuple_candidate || self.completed_comprehensions != 0 {
             match check_tuple_depth(&script, self.is_cancelled) {
                 Ok(()) => {}
                 Err(TupleDepthError::Cancelled) => return Err(ParseError::Cancelled),
                 Err(TupleDepthError::Exceeded(span)) => {
                     return Err(self.invalid_at(span, TUPLE_DEPTH_ERROR));
                 }
+                Err(TupleDepthError::ComprehensionExceeded(span)) => {
+                    return Err(self.invalid_at(span, COMPREHENSION_DEPTH_ERROR));
+                }
             }
         }
         Ok(script.with_inline_exports(self.inline_exports))
+    }
+
+    fn has_comprehension_candidate(&self) -> bool {
+        !self.comprehension_opens.is_empty()
     }
 
     fn index_delimiters(&mut self) -> ParseResult<()> {
@@ -253,10 +375,8 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
                     Delimiter::RightParenthesis | Delimiter::RightBracket | Delimiter::RightBrace,
                 )
                 | TokenKind::DoubleQuoteEnd => {
-                    if let Some((open, _)) = delimiters.pop()
-                        && token.kind() == TokenKind::Delimiter(Delimiter::RightBracket)
-                    {
-                        self.bracket_ends[open] = position;
+                    if let Some((open, _)) = delimiters.pop() {
+                        self.delimiter_ends[open] = position;
                     }
                 }
                 TokenKind::Operator(Operator::Comma) => {
@@ -276,12 +396,118 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
                         *chain = true;
                     }
                 }
+                TokenKind::Keyword(Keyword::For) => {
+                    if let Some(&(open, _)) = delimiters.last()
+                        && self.tokens[open].kind() == TokenKind::Delimiter(Delimiter::LeftBracket)
+                    {
+                        self.comprehension_brackets[open].get_or_insert(position);
+                    }
+                }
                 _ => {}
             }
+        }
+        self.confirm_comprehension_brackets()
+    }
+
+    fn confirm_comprehension_brackets(&mut self) -> ParseResult<()> {
+        // An if condition can consume a same-level `for` as a command word.
+        // Find the first list expression's boundary without parsing payloads.
+        let spans = self.format_spans.take();
+        self.probing_projection = true;
+        for open in 0..self.comprehension_brackets.len() {
+            if self.comprehension_brackets[open].is_none() {
+                continue;
+            }
+            self.position = open + 1;
+            self.continuation_depth = 1;
+            self.skip_layout();
+            self.comprehension_brackets[open] = if self.current_kind()
+                == Some(TokenKind::Operator(Operator::Spread))
+                || self.parse_expression().is_err()
+            {
+                None
+            } else {
+                self.skip_layout();
+                self.at_keyword(Keyword::For).then_some(self.position)
+            };
+            if self.comprehension_brackets[open].is_some() {
+                self.comprehension_opens.push(open);
+            }
+            self.check_cancelled()?;
+        }
+        self.position = 0;
+        self.continuation_depth = 0;
+        self.probing_projection = false;
+        self.format_spans = spans;
+        Ok(())
+    }
+
+    fn skip_probe_payload(&mut self) -> ParseResult<(Span, Span)> {
+        let open = self.current_span()?;
+        let close = self.delimiter_ends[self.position];
+        if close == 0 {
+            return Err(self.invalid_here("unclosed expression payload"));
+        }
+        self.position = close + 1;
+        Ok((open, self.tokens[close].span()))
+    }
+
+    fn probe_placeholder(&self, span: Span) -> Expression {
+        Expression::new(
+            ExpressionKind::Literal(Literal::new(LiteralKind::Null, span)),
+            span,
+        )
+    }
+
+    fn enter_payload(&mut self, unless_empty: Option<Delimiter>) -> ParseResult<()> {
+        if self.has_comprehension_candidate()
+            && !self.probing_projection
+            && !unless_empty.is_some_and(|close| self.followed_by_delimiter(self.position, close))
+        {
+            self.enter_payload_at(self.position)?;
         }
         Ok(())
     }
 
+    fn enter_payload_at(&mut self, open: usize) -> ParseResult<()> {
+        let close = self.delimiter_ends[open];
+        let end = if close == 0 { self.tokens.len() } else { close };
+        self.check_comprehension_path(open, end)?;
+        self.depth_frames.push((end, self.tokens[open].span()));
+        Ok(())
+    }
+
+    fn check_comprehension_path(&mut self, open: usize, end: usize) -> ParseResult<()> {
+        // Only grammar-selected constructors contribute here. The AST walk
+        // accounts for the remaining, non-delimited structural edges.
+        while self
+            .depth_frames
+            .last()
+            .is_some_and(|(end, _)| *end <= open)
+        {
+            self.depth_frames.pop();
+        }
+        if self.depth_frames.len() + self.if_expression_spans.len() >= MAX_COMPREHENSION_DEPTH {
+            let next = self
+                .comprehension_opens
+                .partition_point(|&candidate| candidate < open);
+            if self.comprehension_depth != 0
+                || self
+                    .comprehension_opens
+                    .get(next)
+                    .is_some_and(|&candidate| candidate < end)
+            {
+                let mut levels: Vec<_> = self.depth_frames.iter().map(|&(_, span)| span).collect();
+                levels.extend(self.if_expression_spans.iter().copied());
+                levels.push(self.tokens[open].span());
+                levels.sort_unstable_by_key(|span| span.start());
+                return Err(
+                    self.invalid_at(levels[MAX_COMPREHENSION_DEPTH], COMPREHENSION_DEPTH_ERROR)
+                );
+            }
+        }
+        Ok(())
+    }
     fn preflight_tuple_depth(&mut self) -> ParseResult<()> {
         #[derive(Clone, Copy, Default)]
         struct Frame {
@@ -1154,7 +1380,7 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
                         | Some(TokenKind::Number(_))
                         | Some(TokenKind::SingleQuoted)
                         | Some(TokenKind::DoubleQuoteStart) => {
-                            StaticEffectArgument::Literal(self.parse_literal()?)
+                            StaticEffectArgument::Literal(self.parse_literal(false)?)
                         }
                         _ => {
                             return Err(self.invalid_here(
@@ -1257,44 +1483,66 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
     }
 
     fn parse_if_node(&mut self) -> ParseResult<AstNode<IfStatement>> {
-        let start = self.take().expect("if keyword is current").span();
-        self.skip_inline();
-        let condition = self.parse_control_condition()?;
-        self.skip_inline();
-        let then_block = self.parse_block()?;
-        let mut end = then_block.span.end();
-        self.skip_inline();
-        let else_branch = if self.take_keyword(Keyword::Else).is_some() {
+        let mut arms = Vec::new();
+        let mut else_branch = loop {
+            let start = self.take().expect("if keyword is current").span();
             self.skip_inline();
-            if self.at_keyword(Keyword::If) {
-                let nested = self.parse_if_node()?;
-                end = nested.span().end();
-                Some(ElseBranch::If(Box::new(nested)))
+            let before = self.completed_comprehensions;
+            let condition = self.parse_control_condition()?;
+            self.skip_inline();
+            let then_block = self.parse_block()?;
+            self.skip_inline();
+            let has_else = self.take_keyword(Keyword::Else).is_some();
+            self.skip_inline();
+            let next_if = has_else && self.at_keyword(Keyword::If);
+            let fallback = if has_else && !next_if {
+                Some(self.parse_block()?)
             } else {
-                let block = self.parse_block()?;
-                end = block.span.end();
-                Some(ElseBranch::Block(block))
+                None
+            };
+            arms.push((start, condition, then_block));
+            if self.completed_comprehensions > before
+                && let Some((excess, _, _)) = arms.get(MAX_COMPREHENSION_DEPTH + 1)
+            {
+                return Err(self.invalid_at(*excess, COMPREHENSION_DEPTH_ERROR));
             }
-        } else {
-            None
+            if !next_if {
+                break fallback.map(ElseBranch::Block);
+            }
         };
-        Ok(AstNode::new(
-            IfStatement {
-                condition,
-                then_block,
-                else_branch,
-            },
-            self.span(start.start(), end),
-        ))
+        while let Some((start, condition, then_block)) = arms.pop() {
+            let end = else_branch
+                .as_ref()
+                .map_or(then_block.span.end(), |branch| match branch {
+                    ElseBranch::Block(block) => block.span.end(),
+                    ElseBranch::If(nested) => nested.span().end(),
+                });
+            let node = AstNode::new(
+                IfStatement {
+                    condition,
+                    then_block,
+                    else_branch,
+                },
+                self.span(start.start(), end),
+            );
+            if arms.is_empty() {
+                return Ok(node);
+            }
+            else_branch = Some(ElseBranch::If(Box::new(node)));
+        }
+        unreachable!("an if statement starts with an arm")
     }
 
     fn parse_if_expression(&mut self) -> ParseResult<Expression> {
-        if self.if_expression_depth == MAX_IF_EXPRESSION_DEPTH {
+        if self.if_expression_spans.len() == MAX_IF_EXPRESSION_DEPTH {
             return Err(self.invalid_here(IF_EXPRESSION_DEPTH_ERROR));
         }
-        self.if_expression_depth += 1;
+        if self.comprehension_depth != 0 {
+            self.check_comprehension_path(self.position, self.position)?;
+        }
+        self.if_expression_spans.push(self.current_span()?);
         let result = self.parse_if_expression_arms();
-        self.if_expression_depth -= 1;
+        self.if_expression_spans.pop();
         result
     }
 
@@ -1350,6 +1598,10 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
     }
 
     fn parse_if_expression_arm(&mut self) -> ParseResult<(Expression, Span, Span)> {
+        if self.probing_projection && self.at_delimiter(Some(Delimiter::LeftBrace)) {
+            let (open, close) = self.skip_probe_payload()?;
+            return Ok((self.probe_placeholder(open), open, close));
+        }
         let open = self.expect_delimiter(Delimiter::LeftBrace, "if expression arm requires `{`")?;
         let previous = self.continuation_depth;
         self.continuation_depth += 1;
@@ -1381,26 +1633,7 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
     fn parse_for(&mut self) -> ParseResult<Statement> {
         let start = self.take().expect("for keyword is current").span();
         self.skip_inline();
-        let (index, binding) = if self.at_delimiter(Some(Delimiter::LeftParenthesis)) {
-            (None, self.parse_loop_pattern()?)
-        } else {
-            let first = self.parse_identifier()?;
-            self.skip_inline();
-            if let Some(comma) = self.take_operator(Operator::Comma) {
-                if let Some(spans) = &mut self.format_spans {
-                    spans.spaced_commas.push(comma.span());
-                }
-                self.skip_layout();
-                let item = if self.at_delimiter(Some(Delimiter::LeftParenthesis)) {
-                    self.parse_loop_pattern()?
-                } else {
-                    Pattern::Binding(self.parse_identifier()?)
-                };
-                (Some(first), item)
-            } else {
-                (None, Pattern::Binding(first))
-            }
-        };
+        let (index, binding) = self.parse_for_binders()?;
         self.skip_inline();
         self.expect_keyword(Keyword::In, "for binding requires `in`")?;
         self.skip_layout();
@@ -1422,6 +1655,33 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
             }),
             span,
         ))
+    }
+
+    fn parse_for_binders(&mut self) -> ParseResult<(Option<Identifier>, Pattern)> {
+        Ok(if self.at_delimiter(Some(Delimiter::LeftParenthesis)) {
+            (None, self.parse_loop_pattern()?)
+        } else {
+            let first = self.parse_identifier()?;
+            if self.comprehension_depth == 0 {
+                self.skip_inline();
+            } else {
+                self.skip_layout();
+            }
+            if let Some(comma) = self.take_operator(Operator::Comma) {
+                if let Some(spans) = &mut self.format_spans {
+                    spans.spaced_commas.push(comma.span());
+                }
+                self.skip_layout();
+                let item = if self.at_delimiter(Some(Delimiter::LeftParenthesis)) {
+                    self.parse_loop_pattern()?
+                } else {
+                    Pattern::Binding(self.parse_identifier()?)
+                };
+                (Some(first), item)
+            } else {
+                (None, Pattern::Binding(first))
+            }
+        })
     }
 
     fn parse_loop_pattern(&mut self) -> ParseResult<Pattern> {
@@ -1519,6 +1779,7 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
                     return Ok(Pattern::Wildcard(name.span));
                 }
                 if self.at_delimiter(Some(Delimiter::LeftBrace)) {
+                    self.enter_payload(Some(Delimiter::RightBrace))?;
                     let start = name.span.start();
                     self.take();
                     self.skip_layout();
@@ -1563,6 +1824,7 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
                     }));
                 }
                 if self.at_delimiter(Some(Delimiter::LeftParenthesis)) {
+                    self.enter_payload(Some(Delimiter::RightParenthesis))?;
                     let start = name.span.start();
                     self.take();
                     self.skip_layout();
@@ -1601,13 +1863,21 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
             Some(TokenKind::Keyword(Keyword::Null | Keyword::True | Keyword::False))
             | Some(TokenKind::Number(_))
             | Some(TokenKind::SingleQuoted)
-            | Some(TokenKind::DoubleQuoteStart) => Ok(Pattern::Literal(self.parse_literal()?)),
+            | Some(TokenKind::DoubleQuoteStart) => Ok(Pattern::Literal(self.parse_literal(false)?)),
             Some(_) => Err(self.invalid_here("expected a match pattern")),
             None => Err(self.incomplete_here(IncompleteReason::Expression)),
         }
     }
 
     fn parse_list_pattern(&mut self) -> ParseResult<Pattern> {
+        if self
+            .next_non_layout_position(self.position + 1)
+            .is_none_or(|position| {
+                self.tokens[position].kind() != TokenKind::Operator(Operator::Spread)
+            })
+        {
+            self.enter_payload(Some(Delimiter::RightBracket))?;
+        }
         let open = self.take().expect("list-pattern opener is current");
         self.skip_layout();
         let mut elements = Vec::new();
@@ -1679,6 +1949,9 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
     }
 
     fn parse_block(&mut self) -> ParseResult<Block> {
+        if self.at_delimiter(Some(Delimiter::LeftBrace)) {
+            self.enter_payload(None)?;
+        }
         let open = self.expect_delimiter(Delimiter::LeftBrace, "expected a block")?;
         let statements = self.parse_statement_list(Some(Delimiter::RightBrace))?;
         let close = self.expect_delimiter(Delimiter::RightBrace, "block is not closed")?;
@@ -1806,7 +2079,9 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
         self.skip_inline();
         let mut arguments = Vec::new();
         let mut end = name.span.end();
-        if self.take_delimiter(Delimiter::LeftBracket).is_some() {
+        if self.at_delimiter(Some(Delimiter::LeftBracket)) {
+            self.enter_payload(None)?;
+            self.take();
             self.skip_layout();
             loop {
                 arguments.push(self.parse_type_reference()?);
@@ -2090,9 +2365,15 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
             end = item.span().end();
             items.push(item);
         }
+        let span = self.span(start.start(), end);
+        if self.probing_projection
+            && let Some(commands) = &mut self.projection_commands
+        {
+            commands.push(span);
+        }
         Ok(Stage::new(
             StageKind::Command(CommandStage { head, items }),
-            self.span(start.start(), end),
+            span,
         ))
     }
 
@@ -2104,6 +2385,14 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
             return self.parse_spread_item();
         }
         if self.starts_closure() {
+            if self.probing_projection {
+                let (open, close) = self.skip_probe_payload()?;
+                let span = self.span(open.start(), close.end());
+                return Ok(CommandItem::new(
+                    CommandItemKind::Spread(self.probe_placeholder(span)),
+                    span,
+                ));
+            }
             let closure = self.parse_closure()?;
             let span = closure.span;
             return Ok(CommandItem::new(CommandItemKind::Closure(closure), span));
@@ -2280,7 +2569,7 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
                     token.span(),
                 )))
             }
-            TokenKind::DoubleQuoteStart => self.parse_double_quoted().map(Some),
+            TokenKind::DoubleQuoteStart => self.parse_double_quoted(false).map(Some),
             TokenKind::InterpolationStart | TokenKind::Delimiter(Delimiter::LeftBrace) => {
                 self.parse_interpolation().map(Some)
             }
@@ -2312,8 +2601,16 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
         }
     }
 
-    fn parse_double_quoted(&mut self) -> ParseResult<WordPart> {
+    fn parse_double_quoted(&mut self, mut literal: bool) -> ParseResult<WordPart> {
         self.check_cancelled()?;
+        if self.probing_projection {
+            let (open, close) = self.skip_probe_payload()?;
+            return Ok(WordPart::new(
+                WordPartKind::DoubleQuoted(Vec::new()),
+                self.span(open.start(), close.end()),
+            ));
+        }
+        let open_position = self.position;
         let open = self.take().expect("double quote opener is current");
         let mut parts = Vec::new();
         while self.current_kind() != Some(TokenKind::DoubleQuoteEnd) {
@@ -2334,7 +2631,13 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
                     self.position += 1;
                     WordPart::new(WordPartKind::EscapedBrace, token.span())
                 }
-                TokenKind::InterpolationStart => self.parse_interpolation()?,
+                TokenKind::InterpolationStart => {
+                    if literal && self.has_comprehension_candidate() {
+                        self.enter_payload_at(open_position)?;
+                        literal = false;
+                    }
+                    self.parse_interpolation()?
+                }
                 _ => return Err(self.invalid_here("invalid double-quoted word part")),
             };
             parts.push(part);
@@ -2347,6 +2650,14 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
     }
 
     fn parse_interpolation(&mut self) -> ParseResult<WordPart> {
+        if self.probing_projection {
+            let (open, close) = self.skip_probe_payload()?;
+            let span = self.span(open.start(), close.end());
+            return Ok(WordPart::new(
+                WordPartKind::Interpolation(Box::new(self.probe_placeholder(span))),
+                span,
+            ));
+        }
         let open = self.take().expect("interpolation opener is current");
         self.continuation_depth += 1;
         self.skip_layout();
@@ -2365,6 +2676,7 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
     }
 
     fn parse_closure(&mut self) -> ParseResult<Closure> {
+        self.enter_payload(None)?;
         let open = self.expect_delimiter(Delimiter::LeftBrace, "expected a closure")?;
         let marker = self.take().expect("closure marker follows opener");
         self.continuation_depth += 1;
@@ -2434,7 +2746,7 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
 
     fn parse_expression(&mut self) -> ParseResult<Expression> {
         self.check_cancelled()?;
-        let before = self.completed_tuples;
+        let before = (self.completed_tuples, self.completed_comprehensions);
         let left = self.parse_unary()?;
         self.parse_binary_suffix(left, 1, before)
     }
@@ -2443,9 +2755,9 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
         &mut self,
         mut left: Expression,
         minimum: u8,
-        before: usize,
+        before: (usize, usize),
     ) -> ParseResult<Expression> {
-        let mut wraps = 0;
+        let mut wraps = (0, 0);
         loop {
             self.check_cancelled()?;
             self.skip_inline();
@@ -2456,12 +2768,19 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
                 break;
             }
             let token = self.take().expect("binary operator is current");
-            self.check_tuple_chain(before, &mut wraps, token.span())?;
+            self.check_expression_chain(before, &mut wraps, token.span())?;
             self.skip_layout();
-            let before_right = self.completed_tuples;
+            let before_right = (self.completed_tuples, self.completed_comprehensions);
             let right = self.parse_unary()?;
             let right = self.parse_binary_suffix(right, precedence + 1, before_right)?;
-            left = self.binary(left, operator, token.span(), right);
+            if self.completed_comprehensions > before_right.1 && wraps.1 == 0 {
+                wraps.1 = 1;
+            }
+            left = if self.probing_projection {
+                self.probe_placeholder(self.span(left.span().start(), right.span().end()))
+            } else {
+                self.binary(left, operator, token.span(), right)
+            };
             if let Some((_, next_precedence)) = self.binary_operator()
                 && precedence == next_precedence
             {
@@ -2525,12 +2844,19 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
             operators.push(AstNode::new(operator, token.span()));
             self.skip_layout();
         }
-        let before = self.completed_tuples;
+        let before = (self.completed_tuples, self.completed_comprehensions);
         let mut operand = self.parse_postfix()?;
-        if self.completed_tuples > before
+        if self.probing_projection {
+            return Ok(self.probe_placeholder(operand.span()));
+        }
+        if self.completed_tuples > before.0
             && let Some(excess) = operators.get(MAX_TUPLE_DEPTH)
         {
             return Err(self.invalid_at(excess.span(), TUPLE_DEPTH_ERROR));
+        }
+        if self.comprehension_depth != 0 || self.completed_comprehensions > before.1 {
+            // Keep the first excessive node for the depth walk without building an unbounded unary tree.
+            operators.truncate(MAX_COMPREHENSION_DEPTH + 1);
         }
         for operator in operators.into_iter().rev() {
             let span = self.span(operator.span().start(), operand.span().end());
@@ -2547,7 +2873,7 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
 
     fn parse_postfix(&mut self) -> ParseResult<Expression> {
         self.check_cancelled()?;
-        let before = self.completed_tuples;
+        let before = (self.completed_tuples, self.completed_comprehensions);
         let expression = self.parse_primary()?;
         self.parse_postfix_suffixes(expression, before)
     }
@@ -2555,9 +2881,9 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
     fn parse_postfix_suffixes(
         &mut self,
         mut expression: Expression,
-        before: usize,
+        before: (usize, usize),
     ) -> ParseResult<Expression> {
-        let mut wraps = 0;
+        let mut wraps = (0, 0);
         loop {
             self.check_cancelled()?;
             self.skip_inline();
@@ -2568,7 +2894,7 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
                         | TokenKind::Operator(Operator::Dot)
                 )
             {
-                self.check_tuple_chain(before, &mut wraps, token.span())?;
+                self.check_expression_chain(before, &mut wraps, token.span())?;
             }
             match self.current_kind() {
                 Some(TokenKind::Operator(Operator::Colon))
@@ -2606,6 +2932,13 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
                         ExpressionKind::Name(_) | ExpressionKind::Qualified(_)
                     ) && self.starts_nominal_record() =>
                 {
+                    if self.probing_projection {
+                        let (_, close) = self.skip_probe_payload()?;
+                        expression = self
+                            .probe_placeholder(self.span(expression.span().start(), close.end()));
+                        continue;
+                    }
+                    self.enter_payload(Some(Delimiter::RightBrace))?;
                     let name = match expression.into_kind() {
                         ExpressionKind::Name(reference) => QualifiedName {
                             segments: vec![reference.name],
@@ -2648,6 +2981,13 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
                     );
                 }
                 Some(TokenKind::Delimiter(Delimiter::LeftParenthesis)) => {
+                    if self.probing_projection {
+                        let (_, close) = self.skip_probe_payload()?;
+                        expression = self
+                            .probe_placeholder(self.span(expression.span().start(), close.end()));
+                        continue;
+                    }
+                    self.enter_payload(None)?;
                     self.position += 1;
                     self.continuation_depth += 1;
                     self.skip_layout();
@@ -2681,6 +3021,16 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
                         expression.kind(),
                         ExpressionKind::Name(_) | ExpressionKind::Qualified(_)
                     ) && self.bracket_is_followed_by_call();
+                    if self.probing_projection {
+                        let (_, close) = self.skip_probe_payload()?;
+                        if !can_have_type_arguments {
+                            expression = self.probe_placeholder(
+                                self.span(expression.span().start(), close.end()),
+                            );
+                        }
+                        continue;
+                    }
+                    self.enter_payload(None)?;
                     if can_have_type_arguments {
                         self.position += 1;
                         self.continuation_depth += 1;
@@ -2701,6 +3051,7 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
                         self.continuation_depth -= 1;
                         self.skip_inline();
                         if self.at_delimiter(Some(Delimiter::LeftParenthesis)) {
+                            self.enter_payload(None)?;
                             self.position += 1;
                             self.continuation_depth += 1;
                             self.skip_layout();
@@ -2752,6 +3103,10 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
                     self.skip_inline();
                     let member = self.parse_identifier()?;
                     let span = self.span(expression.span().start(), member.span().end());
+                    if self.probing_projection {
+                        expression = self.probe_placeholder(span);
+                        continue;
+                    }
                     expression = Expression::new(
                         ExpressionKind::Member(MemberExpression {
                             target: Box::new(expression),
@@ -2766,10 +3121,21 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
         Ok(expression)
     }
 
-    fn check_tuple_chain(&self, before: usize, wraps: &mut usize, span: Span) -> ParseResult<()> {
-        if self.tuple_groups != 0 || self.completed_tuples > before {
-            *wraps += 1;
-            if *wraps > MAX_TUPLE_DEPTH {
+    fn check_expression_chain(
+        &self,
+        before: (usize, usize),
+        wraps: &mut (usize, usize),
+        span: Span,
+    ) -> ParseResult<()> {
+        if self.comprehension_depth != 0 || self.completed_comprehensions > before.1 {
+            wraps.1 += 1;
+            if wraps.1 > MAX_COMPREHENSION_DEPTH {
+                return Err(self.invalid_at(span, COMPREHENSION_DEPTH_ERROR));
+            }
+        }
+        if self.tuple_groups != 0 || self.completed_tuples > before.0 {
+            wraps.0 += 1;
+            if wraps.0 > MAX_TUPLE_DEPTH {
                 return Err(self.invalid_at(span, TUPLE_DEPTH_ERROR));
             }
         }
@@ -2782,6 +3148,17 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
         let Some(kind) = self.current_kind() else {
             return Err(self.incomplete_here(IncompleteReason::Expression));
         };
+        if self.probing_projection
+            && matches!(
+                kind,
+                TokenKind::Delimiter(
+                    Delimiter::LeftBracket | Delimiter::LeftBrace | Delimiter::LeftParenthesis
+                )
+            )
+        {
+            let (open, close) = self.skip_probe_payload()?;
+            return Ok(self.probe_placeholder(self.span(open.start(), close.end())));
+        }
         match kind {
             TokenKind::Keyword(Keyword::If) => self.parse_if_expression(),
             TokenKind::Delimiter(Delimiter::LeftBracket) => self.parse_list(),
@@ -2806,7 +3183,7 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
             | TokenKind::Number(_)
             | TokenKind::SingleQuoted
             | TokenKind::DoubleQuoteStart => {
-                let literal = self.parse_literal()?;
+                let literal = self.parse_literal(true)?;
                 let span = literal.span();
                 Ok(Expression::new(ExpressionKind::Literal(literal), span))
             }
@@ -2818,7 +3195,7 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
         }
     }
 
-    fn parse_literal(&mut self) -> ParseResult<Literal> {
+    fn parse_literal(&mut self, expression: bool) -> ParseResult<Literal> {
         let token = self
             .current()
             .copied()
@@ -2849,7 +3226,7 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
                 Ok(Literal::new(LiteralKind::SingleQuoted, token.span()))
             }
             TokenKind::DoubleQuoteStart => {
-                let part = self.parse_double_quoted()?;
+                let part = self.parse_double_quoted(expression)?;
                 let span = part.span();
                 let WordPartKind::DoubleQuoted(parts) = part.into_kind() else {
                     unreachable!("double quote parser returns a double-quoted part")
@@ -2861,13 +3238,30 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
     }
 
     fn parse_list(&mut self) -> ParseResult<Expression> {
+        self.enter_payload(Some(Delimiter::RightBracket))?;
+        let candidate = self.comprehension_brackets[self.position].is_some();
         let open = self.take().expect("list opener is current");
         self.continuation_depth += 1;
+        self.comprehension_depth += usize::from(candidate);
+        let result = self.parse_list_contents(open.span());
+        self.comprehension_depth -= usize::from(candidate);
+        self.continuation_depth -= 1;
+        result
+    }
+
+    fn parse_list_contents(&mut self, open: Span) -> ParseResult<Expression> {
         self.skip_layout();
         let mut values = Vec::new();
         while !self.at_delimiter(Some(Delimiter::RightBracket)) {
             let marker = self.take_operator(Operator::Spread);
             let operand = self.parse_expression()?;
+            self.skip_layout();
+            if values.is_empty()
+                && marker.is_none()
+                && let Some(keyword) = self.take_keyword(Keyword::For)
+            {
+                return self.parse_comprehension(open, operand, keyword.span());
+            }
             values.push(match marker {
                 Some(marker) => ListItem::Spread {
                     marker: marker.span(),
@@ -2875,7 +3269,6 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
                 },
                 None => ListItem::Element(operand),
             });
-            self.skip_layout();
             if self.take_operator(Operator::Comma).is_none() {
                 break;
             }
@@ -2885,12 +3278,64 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
             }
         }
         let close = self.expect_delimiter(Delimiter::RightBracket, "list is not closed")?;
-        self.continuation_depth -= 1;
-        let span = self.span(open.span().start(), close.span().end());
+        let span = self.span(open.start(), close.span().end());
         Ok(Expression::new(ExpressionKind::List(values), span))
     }
 
+    fn parse_comprehension(
+        &mut self,
+        open: Span,
+        projection: Expression,
+        for_span: Span,
+    ) -> ParseResult<Expression> {
+        self.skip_layout();
+        let (index, binding) = self.parse_for_binders()?;
+        self.skip_layout();
+        let in_span = self
+            .expect_keyword(Keyword::In, "for binding requires `in`")?
+            .span();
+        self.skip_layout();
+        let iterable = self.parse_expression()?;
+        self.skip_layout();
+        let filter = if let Some(keyword) = self.take_keyword(Keyword::If) {
+            self.skip_layout();
+            let guard = self.parse_expression()?;
+            self.skip_layout();
+            Some((keyword.span(), guard))
+        } else {
+            None
+        };
+        let close = self
+            .expect_delimiter(
+                Delimiter::RightBracket,
+                "expected `]` after list comprehension",
+            )?
+            .span();
+        if let Some(spans) = &mut self.format_spans {
+            spans.comprehension_keywords.extend([for_span, in_span]);
+            spans
+                .comprehension_keywords
+                .extend(filter.iter().map(|(span, _)| *span));
+        }
+        self.completed_comprehensions += 1;
+        Ok(Expression::new(
+            ExpressionKind::ListComprehension(Box::new(ListComprehension {
+                open,
+                projection,
+                for_span,
+                index,
+                binding,
+                in_span,
+                iterable,
+                filter,
+                close,
+            })),
+            self.span(open.start(), close.end()),
+        ))
+    }
+
     fn parse_record(&mut self) -> ParseResult<Expression> {
+        self.enter_payload(Some(Delimiter::RightBrace))?;
         let open = self.take().expect("record opener is current");
         self.continuation_depth += 1;
         self.skip_layout();
@@ -2903,7 +3348,7 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
                     RecordKey::SingleQuoted(self.take().expect("record key is current").span())
                 }
                 Some(TokenKind::DoubleQuoteStart) => {
-                    RecordKey::DoubleQuoted(self.parse_double_quoted()?)
+                    RecordKey::DoubleQuoted(self.parse_double_quoted(false)?)
                 }
                 Some(_) => return Err(self.invalid_here("expected a record key")),
                 None => return Err(self.incomplete_here(IncompleteReason::Expression)),
@@ -2963,6 +3408,7 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
     }
 
     fn parse_grouped_job(&mut self) -> ParseResult<Expression> {
+        self.enter_payload(None)?;
         let comma = self.group_commas[self.position];
         let has_chain = self.group_has_chain[self.position];
         let open = self.take().expect("group opener is current");
@@ -3065,6 +3511,7 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
         &mut self,
         parse_element: fn(&mut Self) -> ParseResult<T>,
     ) -> ParseResult<TupleSyntax<T>> {
+        self.enter_payload(None)?;
         let open = self.take().expect("tuple opener is current");
         self.skip_layout();
         let first = parse_element(self)?;
@@ -3170,7 +3617,10 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
         let Some(open) = self.next_non_inline_position(self.position + 1) else {
             return false;
         };
-        let close = self.bracket_ends[open];
+        if self.tokens[open].kind() != TokenKind::Delimiter(Delimiter::LeftBracket) {
+            return false;
+        }
+        let close = self.delimiter_ends[open];
         close > open
             && self
                 .next_non_inline(close + 1)
@@ -3669,7 +4119,7 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
     }
 
     fn bracket_is_followed_by_call(&self) -> bool {
-        let close = self.bracket_ends[self.position];
+        let close = self.delimiter_ends[self.position];
         if close <= self.position {
             return false;
         }

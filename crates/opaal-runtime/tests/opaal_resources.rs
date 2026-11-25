@@ -615,6 +615,221 @@ fn new_loop_headers_charge_entries_and_poll_even_with_an_empty_body() {
 }
 
 #[test]
+fn comprehension_visits_and_retention_have_separate_budgets() {
+    let value_bytes = size_of::<Value>();
+    let envelope_bytes = 2 * size_of::<usize>();
+    for (source, budget, succeeds) in [
+        (
+            "[n for n in 0..10000 if false]",
+            ResourceBudget::steps(40),
+            false,
+        ),
+        (
+            "[n for n in 0..20 if false]",
+            ResourceBudget::steps(100).with_collection_items(0),
+            true,
+        ),
+        (
+            "[n for n in 0..2]",
+            ResourceBudget::steps(100)
+                .with_collection_items(2)
+                .with_collection_bytes((4 * value_bytes + envelope_bytes) as u64),
+            true,
+        ),
+        (
+            "[n for n in 0..2]",
+            ResourceBudget::steps(100).with_collection_items(1),
+            false,
+        ),
+        (
+            "[n for n in 0..2]",
+            ResourceBudget::steps(100)
+                .with_collection_bytes((4 * value_bytes + envelope_bytes - 1) as u64),
+            false,
+        ),
+        (
+            "[n for n in 0..0]",
+            ResourceBudget::steps(100).with_collection_bytes((envelope_bytes - 1) as u64),
+            false,
+        ),
+    ] {
+        let outcome = execute(
+            &program(source),
+            &EvalLimits::pure_opaal(CancellationToken::never(), budget),
+        );
+        assert_eq!(
+            matches!(outcome.primary(), PrimaryOutcome::Completed(_)),
+            succeeds,
+            "{source}: {outcome:?}"
+        );
+        if !succeeds {
+            assert!(
+                matches!(outcome.primary(), PrimaryOutcome::Error(error) if error.render().contains("resource budget"))
+            );
+        }
+    }
+}
+
+#[test]
+fn comprehension_cancellation_keeps_each_boundary_and_unwinds_bindings() {
+    let source = SourceFile::new(
+        SourceId::new(45),
+        "cancel-comprehension.opaal",
+        "let rows = [item + 1 for i, item in 0..10 if i < 5]",
+    );
+    let ParseOutcome::Complete(script) = parse_opaal(&source) else {
+        panic!("expected comprehension");
+    };
+    let mut cancelled_at = std::collections::BTreeSet::new();
+    let polls = Arc::new(AtomicUsize::new(0));
+    let counted = polls.clone();
+    let count = CancellationToken::from_fn(move || {
+        counted.fetch_add(1, Ordering::Relaxed);
+        false
+    });
+    let evaluate = |cancel, scope: &mut ScopeStack| {
+        evaluate_in_environment(
+            &script,
+            &source,
+            scope,
+            &mut Environment::new(),
+            &EvalLimits::new(cancel, ResourceBudget::steps(1000)),
+        )
+    };
+    assert!(evaluate(count, &mut ScopeStack::new()).is_ok());
+    for stop in 0..polls.load(Ordering::Relaxed) {
+        let count = AtomicUsize::new(0);
+        let cancel =
+            CancellationToken::from_fn(move || count.fetch_add(1, Ordering::Relaxed) >= stop);
+        let mut scope = ScopeStack::new();
+        if let Completion::Cancelled(cancelled) = evaluate(cancel, &mut scope).unwrap() {
+            cancelled_at.insert(source.slice(cancelled.span()).unwrap());
+            assert!(scope.get("rows").is_none());
+        }
+        assert!(scope.get("i").is_none());
+        assert!(scope.get("item").is_none());
+    }
+    for boundary in [
+        "0..10",
+        "i < 5",
+        "item + 1",
+        "[item + 1 for i, item in 0..10 if i < 5]",
+    ] {
+        assert!(cancelled_at.contains(boundary), "{cancelled_at:?}");
+    }
+}
+
+#[test]
+fn comprehension_final_shape_is_checked_before_publication() {
+    for (wrappers, accepted) in [(30, true), (31, false)] {
+        let source = format!(
+            "mut value: Any = (1, 2)\nfor _ in 0..{wrappers} {{ value = [value] }}\n[value for n in 0..1]"
+        );
+        let result = execute(&program(&source), &EvalLimits::default());
+        assert_eq!(
+            matches!(result.primary(), PrimaryOutcome::Completed(_)),
+            accepted,
+            "{result:?}"
+        );
+    }
+}
+
+#[test]
+fn dynamic_comprehension_operands_fail_at_their_own_boundaries() {
+    for (source, boundary) in [
+        ("[v for v in input]", "input"),
+        ("[v for v in 0..1 if input]", "input"),
+        ("[v for (v, _) in [input]]", "(v, _)"),
+    ] {
+        let source = SourceFile::new(SourceId::new(47), "dynamic-comprehension.opaal", source);
+        let ParseOutcome::Complete(script) = parse_opaal(&source) else {
+            panic!("expected comprehension");
+        };
+        let mut scope = ScopeStack::new();
+        scope
+            .declare("input", BindingMutability::Immutable, &Value::Int(4))
+            .unwrap();
+        let error = evaluate_in_environment(
+            &script,
+            &source,
+            &mut scope,
+            &mut Environment::new(),
+            &EvalLimits::default(),
+        )
+        .unwrap_err();
+        assert_eq!(source.slice(error.span()).unwrap(), boundary);
+        assert!(scope.get("v").is_none());
+    }
+}
+
+#[test]
+fn comprehension_depth_is_checked_at_rust_and_analysis_entry_points() {
+    use opaal_syntax::{Expression, ExpressionKind, Script, Statement, StatementKind};
+
+    std::thread::Builder::new()
+        .stack_size(2 * 1024 * 1024)
+        .spawn(|| {
+            let source = SourceFile::new(
+                SourceId::new(46),
+                "embedded-comprehension.opaal",
+                "let rows = [i for i in []]",
+            );
+            let ParseOutcome::Complete(script) = parse_opaal(&source) else {
+                panic!("expected comprehension");
+            };
+            let statement = &script.statements()[0];
+            let StatementKind::Declaration(mut declaration) = statement.kind().clone() else {
+                panic!("expected declaration");
+            };
+            for wrappers in 0..=32 {
+                if wrappers >= 31 {
+                    let embedded = Script::new(
+                        vec![Statement::new(
+                            StatementKind::Declaration(declaration.clone()),
+                            statement.span(),
+                        )],
+                        script.span(),
+                    );
+                    let result = evaluate_in_environment(
+                        &embedded,
+                        &source,
+                        &mut ScopeStack::new(),
+                        &mut Environment::new(),
+                        &EvalLimits::default(),
+                    );
+                    assert_eq!(result.is_ok(), wrappers == 31, "{result:?}");
+                    if let Err(error) = result {
+                        assert_eq!(error.kind(), &RuntimeErrorKind::ResourceBudgetExceeded);
+                    }
+                }
+                let span = declaration.value.span();
+                declaration.value =
+                    Expression::new(ExpressionKind::List(vec![declaration.value.into()]), span);
+            }
+            for depth in [31, 32, 33, 2000] {
+                let text = format!(
+                    "let rows = {}[n for n in 1..=2]{}",
+                    "[".repeat(depth - 2),
+                    "]".repeat(depth - 2)
+                );
+                let report = loader(&resource_sources(&text)).analyze_with_limits(
+                    Path::new("/project/main.opaal"),
+                    AnalysisLimits::unlimited(),
+                );
+                assert_eq!(
+                    report.program().is_some(),
+                    depth <= 32,
+                    "{depth}: {:?}",
+                    report.issues()
+                );
+            }
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
+#[test]
 fn indexed_loops_meter_validation_of_composite_items() {
     let items = ["1"; 32].join(", ");
     let legacy = program(&format!("for item in [[{items}]] {{}}"));

@@ -1,0 +1,12 @@
+import './policy.opaal' as policy
+
+let rows = policy::report([0, 2, 0, 1])
+let (total, label) = policy::summarize(rows)
+if rows != [{index: 1, findings: 2}, {index: 3, findings: 1}] || total != 2 || label != "review" {
+    throw "unexpected report"
+}
+let (empty, empty_label) = policy::summarize(policy::report([]))
+let (filtered, filtered_label) = policy::summarize(policy::report([0, 0]))
+if empty != 0 || filtered != 0 || empty_label != "clear" || filtered_label != "clear" {
+    throw "unexpected empty report"
+}

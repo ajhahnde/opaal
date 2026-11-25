@@ -1231,6 +1231,11 @@ impl<'a> CallFinder<'a> {
                     self.expression(item.expression());
                 }
             }
+            ExpressionKind::ListComprehension(comprehension) => {
+                for operand in comprehension.operands() {
+                    self.expression(operand);
+                }
+            }
             ExpressionKind::Record(entries) => {
                 for entry in entries {
                     if let RecordKey::DoubleQuoted(part) = &entry.key {
