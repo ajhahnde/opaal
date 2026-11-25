@@ -1,0 +1,3 @@
+import std::list as list
+
+list::map([], {|x| x + 1})

@@ -1,0 +1,6 @@
+import std::list as list
+
+let marks = list::map([1, 2], {|x: Int| -> Int x + 1})
+if marks != [2, 3] {
+    throw "wrong result"
+}

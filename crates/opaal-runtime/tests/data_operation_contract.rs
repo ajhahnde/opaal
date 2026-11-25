@@ -124,6 +124,130 @@ fn empty_calls_preflight_without_invoking_callback() {
 }
 
 #[test]
+fn inline_map_infers_from_the_input_and_checked_value_body() {
+    for source in [
+        "let amount = 3\nlist::map([2, 1, 2], {|x| x + amount})",
+        "import std::list::{map as transform}\ntransform([5, 4, 5], {|x| x})",
+        "import './api.opaal' as api\napi::lists::map([5, 4, 5], {|x| (x)})",
+    ] {
+        assert_eq!(
+            value(source),
+            Value::list(vec![Value::Int(5), Value::Int(4), Value::Int(5)])
+        );
+    }
+    assert_eq!(
+        value(
+            "let input: List[Int] = []\nlet marks = list::map(input, {|x| x + 1})\nlist::map(marks, {|x| x * 2})"
+        ),
+        Value::list(vec![]),
+    );
+    assert_eq!(
+        value("let rows: List[List[Int]] = [[]]\nlist::map(rows, {|row| list::reverse(row)})"),
+        Value::list(vec![Value::list(vec![])]),
+    );
+    assert_eq!(
+        value("let input: List[Int] = []\nlist::map((input), {|x| x + 1})"),
+        Value::list(vec![]),
+    );
+    assert_eq!(
+        value("let dynamic: Any = 1\nlist::map([dynamic == 1], {|x| x})"),
+        Value::list(vec![Value::Bool(true)]),
+    );
+    assert_eq!(
+        value("list::map([1], {|x: Any| 1})"),
+        Value::list(vec![Value::Int(1)]),
+    );
+    assert_eq!(
+        value(
+            "let input: List[Int] = []\ndef fail(x: Int) -> Int { throw 'unreachable' }\nlist::map(input, {|x| fail(x)})"
+        ),
+        Value::list(vec![]),
+    );
+    assert_eq!(
+        value(
+            "import std::outcome as outcome\ndef wrap(x: Int) -> outcome::Result[Int, String] { return outcome::Result::Ok(x) }\nlet values = list::map([1, 2], {|x| wrap(x)})\nmatch values[1] { outcome::Result::Ok(x) => { x }; outcome::Result::Err(e) => { 0 } }"
+        ),
+        Value::Int(2),
+    );
+    assert_eq!(
+        value(
+            "def map(input: List[Int], callback: Closure) -> Int { return 7 }\nmap([1], {|x| x})"
+        ),
+        Value::Int(7),
+    );
+}
+
+#[test]
+fn inline_map_preserves_evidence_boundaries_and_existing_diagnostics() {
+    for (source, code, detail) in [
+        ("list::map([], {|x| x + 1})", "SIG010", "`T`"),
+        (
+            "let input: List[List[Any]] = [[1]]\nlist::map(input, {|x| 1})",
+            "SIG010",
+            "`U`",
+        ),
+        (
+            "let dynamic: Any = 1\nlist::map([1], {|x| dynamic})",
+            "SIG010",
+            "`U`",
+        ),
+        (
+            "let dynamic: Any = 1\nlist::map([1], {|x| [(x, dynamic)]})",
+            "SIG010",
+            "`U`",
+        ),
+        ("list::map([1], {|x| []})", "SIG010", "`U`"),
+        ("list::map([1], {|x: Any| x})", "SIG010", "`U`"),
+        ("list::map([1], {|x| -> Any x})", "SIG010", "`U`"),
+        (
+            "let callback = {|x| x}\nlist::map([1], callback)",
+            "SIG010",
+            "`U`",
+        ),
+        ("list::map([1], ({|x| x}))", "SIG010", "`U`"),
+        ("list::map([1], {|x: String| x})", "OPR003", "String"),
+        (
+            "list::map([1], {|x: Int| -> String x + 1})",
+            "SIG005",
+            "String",
+        ),
+        (
+            "def f(x: String) -> String { x }\nlist::map([1], {|x| f(x)})",
+            "SIG004",
+            "String",
+        ),
+        (
+            "def require_strings(items: List[String]) -> List[String] { items }\nlet marks = list::map([1], {|x| x + 1})\nrequire_strings(marks)",
+            "SIG004",
+            "List[String]",
+        ),
+    ] {
+        let error = try_load(source).unwrap_err();
+        let diagnostics = error.diagnostics();
+        assert_eq!(diagnostics.len(), 1, "{source}: {diagnostics:?}");
+        let diagnostic = &diagnostics[0];
+        assert_eq!(diagnostic.code(), code, "{source}: {diagnostic:?}");
+        assert!(
+            diagnostic.message().contains(detail),
+            "{source}: {diagnostic:?}"
+        );
+    }
+    assert_eq!(
+        value("let result: List[Int] = list::map([1], {|x| x + 1})\nresult"),
+        Value::list(vec![Value::Int(2)]),
+    );
+    let program = load("let result: List[String] = list::map([1], {|x| x + 1})\nresult");
+    let result = execute(
+        &program,
+        EvalLimits::pure_opaal(CancellationToken::never(), ResourceBudget::default()),
+    );
+    assert!(
+        matches!(result.primary(), PrimaryOutcome::Error(_)),
+        "{result:?}"
+    );
+}
+
+#[test]
 fn aliases_reexports_and_generic_callbacks_share_descriptor_and_type_instantiation() {
     let source = "import './api.opaal' as api\napi::lists::map[Int, Int]([2, 1], api::identity)";
     assert_eq!(
@@ -180,7 +304,6 @@ fn known_invalid_shapes_types_generics_and_actions_fail_analysis_even_when_empty
         "list::map[Int, String]([], {|x: Int| -> Int x})",
         "list::fold[Int, Int]([], 0, {|a: Int, x: Int| -> String 'bad'})",
         "list::map([], {|x| x})",
-        "list::map([1], {|x| x})",
         "list::map[Int]([], {|x| x})",
         "list::map[Int, Int]([])",
         "list::map[Int, Int]([], 4)",
@@ -422,6 +545,10 @@ fn interactive_runtime_uses_complete_evidence_and_preserves_empty_any_ambiguity(
         Value::list(vec![Value::Int(2), Value::Int(3)])
     );
     assert_eq!(
+        direct_value("list::map([1], {|x| x + 1})"),
+        Value::list(vec![Value::Int(2)])
+    );
+    assert_eq!(
         direct_value("list::filter([], {|x: Int| -> Bool true})"),
         Value::list(vec![])
     );
@@ -431,6 +558,7 @@ fn interactive_runtime_uses_complete_evidence_and_preserves_empty_any_ambiguity(
     );
     for source in [
         "list::map([], {|x| -> Int 1})",
+        "list::map([1], ({|x| x + 1}))",
         "let input: Any = [1]\nlist::map(input, {|x| -> Int x})",
         "def dynamic(x: Any) -> Any { x }\nlist::map(dynamic([1]), {|x| -> Int x})",
         "list::map([1, 'bad'], {|x| -> Int x})",

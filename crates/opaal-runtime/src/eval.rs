@@ -4280,6 +4280,15 @@ impl Evaluator<'_, '_> {
         crate::module::value_name_span(expression)
             .and_then(|span| scope.inferred_type(self.text(span)))
             .cloned()
+            .or_else(|| {
+                let mut expression = expression;
+                while let ExpressionKind::GroupedJob(chain) = expression.kind() {
+                    expression = crate::module::single_value_expression(chain)?;
+                }
+                self.binding_types
+                    .inferred_map_type(expression.span())
+                    .cloned()
+            })
             .or_else(|| self.argument_type(expression, value, scope))
     }
 

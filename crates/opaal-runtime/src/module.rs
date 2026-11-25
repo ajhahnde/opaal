@@ -40,7 +40,8 @@ use crate::command::{
 use crate::documentation::Documentation;
 use crate::intrinsic::{DynamicBinding, ExpressionIntrinsic};
 use crate::operation::{
-    OperationDescriptor, OperationInputType, standard_operation, standard_operations,
+    OperationDescriptor, OperationInputType, StandardOperation, standard_operation,
+    standard_operations,
 };
 
 /// Host-free cooperative cancellation for static source analysis.
@@ -2142,19 +2143,35 @@ pub(crate) fn value_name_span(mut expression: &Expression) -> Option<Span> {
             ExpressionKind::Name(reference) => return Some(reference.span),
             ExpressionKind::GroupedJob(chain) => match single_stage(chain)?.kind() {
                 StageKind::Expression(inner) => expression = inner,
-                StageKind::Command(command)
-                    if command.head.kind() == CommandHeadKind::Bare && command.items.is_empty() =>
-                {
-                    let [part] = command.head.word().parts() else {
-                        return None;
-                    };
-                    return matches!(part.kind(), WordPartKind::Bare).then(|| part.span());
-                }
-                _ => return None,
+                stage => return bare_stage_name(stage),
             },
             _ => return None,
         }
     }
+}
+
+fn bare_stage_name(stage: &StageKind) -> Option<Span> {
+    let StageKind::Command(command) = stage else {
+        return None;
+    };
+    if command.head.kind() != CommandHeadKind::Bare || !command.items.is_empty() {
+        return None;
+    }
+    let [part] = command.head.word().parts() else {
+        return None;
+    };
+    matches!(part.kind(), WordPartKind::Bare).then(|| part.span())
+}
+
+fn inline_map_callback(argument: &Expression) -> Option<(&Closure, &opaal_syntax::Parameter)> {
+    let ExpressionKind::Closure(closure) = argument.kind() else {
+        return None;
+    };
+    let [parameter] = closure.parameters.as_slice() else {
+        return None;
+    };
+    (closure.result_type.is_none() && matches!(parameter.pattern, Pattern::Binding(_)))
+        .then_some((closure, parameter))
 }
 
 pub(crate) fn unify_type(
@@ -3986,6 +4003,7 @@ pub(crate) struct RuntimeBindingTypes {
     nominal_references_by_source: BTreeMap<SourceId, Vec<ResolvedNominalReference>>,
     operation_types_by_source: BTreeMap<SourceId, BTreeMap<usize, Vec<ValueType>>>,
     expression_types_by_source: BTreeMap<SourceId, ExpressionTypes>,
+    inferred_maps_by_source: BTreeMap<SourceId, BTreeSet<(usize, usize)>>,
     modules_by_source: BTreeMap<SourceId, ModuleId>,
     nominals_by_module: BTreeMap<ModuleId, BTreeMap<String, NominalType>>,
     aliases: ModuleAliasRegistry,
@@ -4056,6 +4074,7 @@ impl RuntimeTypeContext {
             !metrics.if_spans.is_empty()
                 || !metrics.loop_spans.is_empty()
                 || !metrics.comprehension_spans.is_empty()
+                || metrics.has_inline_map_candidate
         };
         let control = AnalysisControl::never().for_run(
             AnalysisLimits::OPAAL.with_limit(AnalysisLimitKind::WorkUnits, *work_remaining),
@@ -4387,6 +4406,12 @@ impl RuntimeBindingTypes {
             .last()
             .map_or(0, |statement| statement.span().end());
         let in_prefix = |span: Span| span.source_id() != source.id() || span.end() <= prefix_end;
+        if let Some(operations) = retained.operation_types_by_source.get_mut(&source.id()) {
+            operations.retain(|&start, _| start < prefix_end);
+        }
+        if let Some(maps) = retained.inferred_maps_by_source.get_mut(&source.id()) {
+            maps.retain(|&(_, end)| end <= prefix_end);
+        }
         let mut required = BTreeSet::new();
         let mut pending = Vec::new();
         if let Some(nominals) = self.nominals_by_module.get(&interactive) {
@@ -4512,6 +4537,14 @@ impl RuntimeBindingTypes {
         self.expression_types_by_source
             .get(&span.source_id())?
             .get(&(span.start(), span.end()))
+    }
+
+    pub(crate) fn inferred_map_type(&self, span: Span) -> Option<&ValueType> {
+        self.inferred_maps_by_source
+            .get(&span.source_id())?
+            .contains(&(span.start(), span.end()))
+            .then(|| self.expression_type(span))
+            .flatten()
     }
 
     pub(crate) fn binding_type(
@@ -5321,10 +5354,13 @@ impl RuntimeBindingTypes {
             return Err(error.diagnostic());
         }
         // Earlier cells contribute imports and schemas. Their live scopes are gone.
-        let expression_types = if (!entry.if_spans.is_empty()
+        let legacy_control_evidence = (!entry.if_spans.is_empty()
             || !metrics.loop_spans.is_empty()
             || !entry.comprehension_spans.is_empty())
-            && !matches!(outer_scope, Some(InteractiveScope::Historical))
+            && !matches!(outer_scope, Some(InteractiveScope::Historical));
+        let mut evidence = if legacy_control_evidence
+            || (metrics.has_inline_map_candidate
+                && !matches!(outer_scope, Some(InteractiveScope::Historical)))
         {
             let mut resolver = ReferenceResolver::new(&entry, &names, &aliases, false, control);
             if let Some(InteractiveScope::Live(scope)) = outer_scope {
@@ -5334,26 +5370,28 @@ impl RuntimeBindingTypes {
             resolver
                 .statements(entry.script().statements())
                 .expect("accumulating interactive analysis does not fail fast");
-            if let Some(error) = resolver.conditional_error {
+            if legacy_control_evidence && let Some(error) = resolver.conditional_error {
                 return Err(error);
             }
-            if let Some(error) = resolver.errors.iter().find(|error| {
-                let primary = match error {
-                    ModuleNameError::ReservedBinding {
-                        declaration_span, ..
-                    } => *declaration_span,
-                    ModuleNameError::DuplicateBinding { duplicate_span, .. } => *duplicate_span,
-                    ModuleNameError::ImmutableAssignment {
-                        assignment_span, ..
-                    }
-                    | ModuleNameError::CapturedAssignment {
-                        assignment_span, ..
-                    } => *assignment_span,
-                    _ => return false,
-                };
-                span_in_regions(primary, &metrics.loop_spans)
-                    || span_in_regions(primary, &entry.comprehension_spans)
-            }) {
+            if legacy_control_evidence
+                && let Some(error) = resolver.errors.iter().find(|error| {
+                    let primary = match error {
+                        ModuleNameError::ReservedBinding {
+                            declaration_span, ..
+                        } => *declaration_span,
+                        ModuleNameError::DuplicateBinding { duplicate_span, .. } => *duplicate_span,
+                        ModuleNameError::ImmutableAssignment {
+                            assignment_span, ..
+                        }
+                        | ModuleNameError::CapturedAssignment {
+                            assignment_span, ..
+                        } => *assignment_span,
+                        _ => return false,
+                    };
+                    span_in_regions(primary, &metrics.loop_spans)
+                        || span_in_regions(primary, &entry.comprehension_spans)
+                })
+            {
                 return Err(error.diagnostic());
             }
             let references = resolver.references;
@@ -5369,18 +5407,41 @@ impl RuntimeBindingTypes {
                 SignatureValidator::new(&entry, &sources, &aliases, &names, &declarations, control);
             validator.outer_scope = outer_scope;
             let evidence = validator.validate();
-            if let Some(error) = evidence.errors.iter().find(|error| {
-                let primary = error.primary_span();
-                span_in_regions(primary, &entry.if_spans)
-                    || span_in_regions(primary, &metrics.loop_spans)
-                    || intersects_regions(primary, &entry.comprehension_spans)
-            }) {
+            if legacy_control_evidence
+                && let Some(error) = evidence.errors.iter().find(|error| {
+                    let primary = error.primary_span();
+                    span_in_regions(primary, &entry.if_spans)
+                        || span_in_regions(primary, &metrics.loop_spans)
+                        || intersects_regions(primary, &entry.comprehension_spans)
+                })
+            {
                 return Err(error.diagnostic());
             }
-            BTreeMap::from([(source.id(), evidence.expression_types)])
+            evidence
         } else {
-            BTreeMap::new()
+            SignatureEvidence::default()
         };
+        let mut map_regions = Vec::new();
+        for &(start, end) in &evidence.inferred_maps {
+            if map_regions
+                .last()
+                .is_none_or(|&(_, outer_end)| end > outer_end)
+            {
+                map_regions.push((start, end));
+            }
+        }
+        let in_map = |start, end| {
+            let index = map_regions.partition_point(|&(left, _)| left <= start);
+            index > 0 && end <= map_regions[index - 1].1
+        };
+        evidence
+            .operations
+            .retain(|&start, _| in_map(start, start + 1));
+        if !legacy_control_evidence {
+            evidence
+                .expression_types
+                .retain(|&(start, end), _| in_map(start, end));
+        }
         if control.is_cancelled() {
             return Err(Diagnostic::new(
                 Severity::Error,
@@ -5411,8 +5472,9 @@ impl RuntimeBindingTypes {
             functions_by_source: BTreeMap::from([(source.id(), types.functions)]),
             annotations_by_source: BTreeMap::from([(source.id(), types.annotations)]),
             nominal_references_by_source: BTreeMap::from([(source.id(), types.nominal_references)]),
-            operation_types_by_source: BTreeMap::new(),
-            expression_types_by_source: expression_types,
+            operation_types_by_source: BTreeMap::from([(source.id(), evidence.operations)]),
+            expression_types_by_source: BTreeMap::from([(source.id(), evidence.expression_types)]),
+            inferred_maps_by_source: BTreeMap::from([(source.id(), evidence.inferred_maps)]),
             modules_by_source: BTreeMap::from([(source.id(), entry.module().clone())]),
             nominals_by_module: declarations
                 .by_module
@@ -5431,6 +5493,7 @@ pub struct ModuleTypeRegistry {
     by_module: BTreeMap<ModuleId, ModuleTypes>,
     operation_types: BTreeMap<ModuleId, BTreeMap<usize, Vec<ValueType>>>,
     expression_types: BTreeMap<ModuleId, ExpressionTypes>,
+    inferred_maps: BTreeMap<ModuleId, BTreeSet<(usize, usize)>>,
     inferred_bindings: BTreeMap<(ModuleId, usize), ValueType>,
 }
 
@@ -5583,6 +5646,9 @@ impl ModuleTypeRegistry {
             registry
                 .expression_types
                 .insert(entry.module().clone(), evidence.expression_types);
+            registry
+                .inferred_maps
+                .insert(entry.module().clone(), evidence.inferred_maps);
         }
         let source_order = sources
             .entries()
@@ -6605,11 +6671,13 @@ impl<'a> TypeCollector<'a> {
     }
 }
 
+#[derive(Default)]
 struct SignatureEvidence {
     errors: Vec<ModuleTypeError>,
     operations: BTreeMap<usize, Vec<ValueType>>,
     expression_types: ExpressionTypes,
     inferred_bindings: BTreeMap<(ModuleId, usize), ValueType>,
+    inferred_maps: BTreeSet<(usize, usize)>,
 }
 
 struct SignatureValidator<'a> {
@@ -6627,6 +6695,10 @@ struct SignatureValidator<'a> {
     expression_types: RefCell<ExpressionTypes>,
     in_if_expression: Cell<bool>,
     in_comprehension: Cell<bool>,
+    in_map_body: Cell<bool>,
+    unstable_map_input: Cell<Option<bool>>,
+    unstable_map_bindings: RefCell<BTreeSet<usize>>,
+    inferred_maps: RefCell<BTreeSet<(usize, usize)>>,
     type_parameter_scopes: RefCell<Vec<BTreeMap<String, Vec<TypeConstraint>>>>,
     errors: RefCell<Vec<ModuleTypeError>>,
     control: &'a AnalysisControl,
@@ -6657,6 +6729,10 @@ impl<'a> SignatureValidator<'a> {
             expression_types: RefCell::new(BTreeMap::new()),
             in_if_expression: Cell::new(false),
             in_comprehension: Cell::new(false),
+            in_map_body: Cell::new(false),
+            unstable_map_input: Cell::new(None),
+            unstable_map_bindings: RefCell::new(BTreeSet::new()),
+            inferred_maps: RefCell::new(BTreeSet::new()),
             type_parameter_scopes: RefCell::new(Vec::new()),
             errors: RefCell::new(Vec::new()),
             control,
@@ -6672,6 +6748,7 @@ impl<'a> SignatureValidator<'a> {
             operations: self.operation_types.into_inner(),
             expression_types: self.expression_types.into_inner(),
             inferred_bindings: self.inferred_bindings.into_inner(),
+            inferred_maps: self.inferred_maps.into_inner(),
         }
     }
 
@@ -6785,12 +6862,17 @@ impl<'a> SignatureValidator<'a> {
                 self.function_statements(&statement.body.statements, signature, false)
             }
             StatementKind::Match(statement) => {
-                let (subject_type, unstable) =
+                let (subject_type, unstable, unstable_for_map) =
                     self.observe_inference(|| self.expression(&statement.value))?;
                 self.validate_match(statement, subject_type.as_ref())?;
                 for arm in &statement.arms {
                     if let Some(subject_type) = &subject_type {
-                        self.record_pattern_inference(&arm.pattern, subject_type, unstable);
+                        self.record_pattern_inference(
+                            &arm.pattern,
+                            subject_type,
+                            unstable,
+                            unstable_for_map,
+                        );
                     }
                     if let Pattern::Literal(literal) = &arm.pattern {
                         self.literal(literal)?;
@@ -6992,7 +7074,7 @@ impl<'a> SignatureValidator<'a> {
                         .annotation(self.entry.module(), annotation.span)
                         .map(ResolvedTypeAnnotation::value_type)
                 });
-                let (actual, unstable) = self.observe_inference(|| {
+                let (actual, unstable, unstable_for_map) = self.observe_inference(|| {
                     self.expression_with_expected_at(
                         &declaration.value,
                         expected,
@@ -7037,7 +7119,12 @@ impl<'a> SignatureValidator<'a> {
                             });
                     }
                     self.validate_pattern(&declaration.pattern, &actual);
-                    self.record_pattern_inference(&declaration.pattern, &actual, unstable);
+                    self.record_pattern_inference(
+                        &declaration.pattern,
+                        &actual,
+                        unstable,
+                        unstable_for_map,
+                    );
                 }
                 Ok(())
             }
@@ -7070,12 +7157,17 @@ impl<'a> SignatureValidator<'a> {
                 self.statements(&statement.body.statements)
             }
             StatementKind::Match(statement) => {
-                let (subject_type, unstable) =
+                let (subject_type, unstable, unstable_for_map) =
                     self.observe_inference(|| self.expression(&statement.value))?;
                 self.validate_match(statement, subject_type.as_ref())?;
                 for arm in &statement.arms {
                     if let Some(subject_type) = &subject_type {
-                        self.record_pattern_inference(&arm.pattern, subject_type, unstable);
+                        self.record_pattern_inference(
+                            &arm.pattern,
+                            subject_type,
+                            unstable,
+                            unstable_for_map,
+                        );
                     }
                     if let Pattern::Literal(literal) = &arm.pattern {
                         self.literal(literal)?;
@@ -7528,12 +7620,14 @@ impl<'a> SignatureValidator<'a> {
                 result
             }
             ExpressionKind::Record(entries) => {
+                let prior_map_input = self.unstable_map_input.get();
                 for entry in entries {
                     if let RecordKey::DoubleQuoted(part) = &entry.key {
                         self.word_part(part)?;
                     }
                     self.expression(&entry.value)?;
                 }
+                self.unstable_map_input.set(prior_map_input);
                 Ok(Some(ValueType::Record))
             }
             ExpressionKind::NominalRecord(record) => self.nominal_record_type(record, expected),
@@ -7583,6 +7677,11 @@ impl<'a> SignatureValidator<'a> {
             ExpressionKind::GroupedJob(chain) => {
                 if let Some(expression) = single_value_expression(chain) {
                     return self.expression_with_expected_at(expression, expected, expected_span);
+                }
+                if self.in_map_body.get()
+                    && let Some(span) = value_name_span(expression)
+                {
+                    return Ok(self.lexical_value_type(span));
                 }
                 if !self.entry.if_spans.is_empty() || !self.entry.comprehension_spans.is_empty() {
                     let value_type = match self.value_reference(expression) {
@@ -7648,8 +7747,15 @@ impl<'a> SignatureValidator<'a> {
                 })
             }
             ExpressionKind::Binary(binary) => {
+                let prior_map_input = self.unstable_map_input.get();
                 let left = self.expression(&binary.left)?;
                 let right = self.expression(&binary.right)?;
+                if matches!(
+                    binary.operator.kind(),
+                    BinaryOperator::Equal | BinaryOperator::NotEqual
+                ) {
+                    self.unstable_map_input.set(prior_map_input);
+                }
                 Ok(self.binary_type(*binary.operator.kind(), left, right))
             }
         }
@@ -7919,8 +8025,19 @@ impl<'a> SignatureValidator<'a> {
             .reference(self.entry.module(), value_name_span(expression)?)
     }
 
+    fn lexical_value_type(&self, span: Span) -> Option<ValueType> {
+        match self.names.reference(self.entry.module(), span) {
+            Some(reference) => self.reference_type(reference.target()),
+            None => self.outer_value_type_at(span),
+        }
+    }
+
     fn outer_value_type(&self, expression: &Expression) -> Option<ValueType> {
-        let name = self.text(value_name_span(expression)?);
+        self.outer_value_type_at(value_name_span(expression)?)
+    }
+
+    fn outer_value_type_at(&self, span: Span) -> Option<ValueType> {
+        let name = self.text(span);
         let outer = self.outer_scope?;
         if matches!(outer, InteractiveScope::Captured { untyped_mutable, .. } if untyped_mutable.contains(name))
         {
@@ -7937,7 +8054,17 @@ impl<'a> SignatureValidator<'a> {
         if let Some(inferred) = scope.inferred_type(name) {
             return Some(inferred.clone());
         }
+        if self.in_map_body.get() {
+            return None;
+        }
+        self.mark_unstable_map_input();
         self.observed_value_type(scope.get(name)?, 1)
+    }
+
+    fn mark_unstable_map_input(&self) {
+        if self.unstable_map_input.get().is_some() {
+            self.unstable_map_input.set(Some(true));
+        }
     }
 
     fn observed_value_type(&self, value: &Value, depth: u64) -> Option<ValueType> {
@@ -8031,7 +8158,8 @@ impl<'a> SignatureValidator<'a> {
 
     fn declaration_type(&self, module: &ModuleId, declaration_span: Span) -> Option<ValueType> {
         let declared = self.types.binding_type(module, declaration_span);
-        if self.checking_loop_iterable.get() && declared.is_some() {
+        let stable_only = self.checking_loop_iterable.get() || self.in_map_body.get();
+        if stable_only && declared.is_some() {
             return declared.cloned();
         }
         let offset = declaration_span.start();
@@ -8049,7 +8177,16 @@ impl<'a> SignatureValidator<'a> {
             if unstable {
                 self.reads_unstable_type.set(true);
             }
-            if !unstable || !self.checking_loop_iterable.get() {
+            let unstable_for_map = (module == self.entry.module()
+                && self.unstable_map_bindings.borrow().contains(&offset))
+                || declared.is_some_and(|declared| declared != inferred);
+            if unstable || unstable_for_map {
+                self.mark_unstable_map_input();
+            }
+            if unstable_for_map && self.in_map_body.get() {
+                return None;
+            }
+            if !unstable || !stable_only {
                 return Some(inferred.clone());
             }
         }
@@ -8358,10 +8495,12 @@ impl<'a> SignatureValidator<'a> {
         unresolved_element: ValueType,
     ) -> Result<(), Box<ModuleTypeError>> {
         let previous = self.checking_loop_iterable.replace(true);
-        let evidence = self.expression(iterable).map(|value_type| {
-            value_type.or_else(|| match self.value_reference(iterable) {
-                Some(reference) => self.reference_type(reference.target()),
-                None => self.outer_value_type(iterable),
+        let (evidence, unstable_for_map) = self.observe_map_input(|| {
+            self.expression(iterable).map(|value_type| {
+                value_type.or_else(|| match self.value_reference(iterable) {
+                    Some(reference) => self.reference_type(reference.target()),
+                    None => self.outer_value_type(iterable),
+                })
             })
         });
         self.checking_loop_iterable.set(previous);
@@ -8401,7 +8540,7 @@ impl<'a> SignatureValidator<'a> {
             .collect();
         let shape = substitute_type(&element, &unresolved);
         if self.validate_pattern(binding, &shape) {
-            self.infer_pattern_bindings(binding, &element);
+            self.record_pattern_inference(binding, &element, false, unstable_for_map);
         }
         Ok(())
     }
@@ -8409,23 +8548,47 @@ impl<'a> SignatureValidator<'a> {
     fn observe_inference(
         &self,
         check: impl FnOnce() -> Result<Option<ValueType>, Box<ModuleTypeError>>,
-    ) -> Result<(Option<ValueType>, bool), Box<ModuleTypeError>> {
+    ) -> Result<(Option<ValueType>, bool, bool), Box<ModuleTypeError>> {
         let previous = self.reads_unstable_type.replace(false);
-        let value_type = check();
+        let (value_type, unstable_for_map) = self.observe_map_input(check);
         let unstable = self.reads_unstable_type.replace(previous);
-        value_type.map(|value_type| (value_type, unstable))
+        value_type.map(|value_type| (value_type, unstable, unstable_for_map))
     }
 
-    fn record_pattern_inference(&self, pattern: &Pattern, value_type: &ValueType, unstable: bool) {
-        self.infer_pattern_bindings(pattern, value_type);
+    fn observe_map_input<T>(&self, check: impl FnOnce() -> T) -> (T, bool) {
+        let previous = self.unstable_map_input.replace(Some(false));
+        let result = check();
+        let unstable = self.unstable_map_input.replace(previous) == Some(true);
         if unstable {
+            self.mark_unstable_map_input();
+        }
+        (result, unstable)
+    }
+
+    fn record_pattern_inference(
+        &self,
+        pattern: &Pattern,
+        value_type: &ValueType,
+        unstable: bool,
+        unstable_for_map: bool,
+    ) {
+        self.infer_pattern_bindings(pattern, value_type);
+        if unstable || unstable_for_map {
             let mut identifiers = Vec::new();
             collect_pattern_identifiers(pattern, &mut identifiers, None);
-            self.unstable_inferred_bindings.borrow_mut().extend(
+            let offsets = || {
                 identifiers
                     .iter()
-                    .map(|identifier| identifier.span().start()),
-            );
+                    .map(|identifier| identifier.span().start())
+            };
+            if unstable {
+                self.unstable_inferred_bindings
+                    .borrow_mut()
+                    .extend(offsets());
+            }
+            if unstable_for_map {
+                self.unstable_map_bindings.borrow_mut().extend(offsets());
+            }
         }
     }
 
@@ -8982,6 +9145,7 @@ impl<'a> SignatureValidator<'a> {
                 substitutions.insert(parameter.name().to_owned(), actual);
             }
         }
+        let prior_map_input = self.unstable_map_input.get();
         let mut argument_types = Vec::with_capacity(call.arguments.len());
         let mut deferred_comprehensions = Vec::new();
         for (index, argument) in call.arguments.iter().enumerate() {
@@ -9105,11 +9269,14 @@ impl<'a> SignatureValidator<'a> {
                 invalid = true;
             }
         }
-        Ok(Some(if invalid {
-            ValueType::Any
-        } else {
-            substitute_type(signature.result(), &substitutions)
-        }))
+        if invalid {
+            return Ok(Some(ValueType::Any));
+        }
+        if signature.type_parameters().is_empty() {
+            // A fixed result type does not depend on how the arguments were typed.
+            self.unstable_map_input.set(prior_map_input);
+        }
+        Ok(Some(substitute_type(signature.result(), &substitutions)))
     }
 
     fn variant_call_type(
@@ -9480,6 +9647,22 @@ impl<'a> SignatureValidator<'a> {
         let mut actuals = Vec::new();
         let mut callbacks = Vec::new();
         let mut deferred_comprehensions = Vec::new();
+        let map_context = match (
+            operation.implementation(),
+            operation.type_parameters(),
+            call.arguments.as_slice(),
+        ) {
+            (StandardOperation::Map, [element, result], [_, callback])
+                if !substitutions.contains_key(result) =>
+            {
+                inline_map_callback(callback).and_then(|(closure, binder)| {
+                    Some((element, result, self.map_value_body(&closure.body)?, binder))
+                })
+            }
+            _ => None,
+        };
+        let mut stable_map_input = true;
+        let mut inferred_map = false;
         for (index, (argument, parameter)) in
             call.arguments.iter().zip(overload.parameters()).enumerate()
         {
@@ -9490,7 +9673,63 @@ impl<'a> SignatureValidator<'a> {
             let expected =
                 (!has_unbound_type_parameters(input, &substitutions)).then_some(&expected);
             let prior_errors = self.errors.borrow().len();
-            let actual = self.operation_argument_type(argument, expected)?;
+            let context = parameter.callback().and_then(|relation| {
+                if !stable_map_input {
+                    return None;
+                }
+                let (element, result, body, binder) = map_context?;
+                let mut candidate = substitutions.clone();
+                self.callback_shape(argument)?
+                    .infer_operation(relation, &mut candidate)
+                    .ok()?;
+                let element = candidate.remove(element)?;
+                self.concrete_map_type(&element, 1)
+                    .then_some((body, binder, element, result))
+            });
+            let actual = if let Some((body, binder, element, result)) = context {
+                let actual = self.check_map_body(body, binder, element)?;
+                let body_failed = self.errors.borrow().len() != prior_errors;
+                if let Some(actual) =
+                    actual.filter(|ty| !body_failed && self.concrete_map_type(ty, 2))
+                {
+                    substitutions.insert(result.clone(), actual);
+                    inferred_map = true;
+                } else {
+                    let span = argument.span();
+                    let mut maps = self.inferred_maps.borrow_mut();
+                    let nested = maps
+                        .range((span.start(), 0)..(span.end(), 0))
+                        .copied()
+                        .collect::<Vec<_>>();
+                    for nested in nested {
+                        maps.remove(&nested);
+                    }
+                    if body_failed {
+                        return Ok(Some(ValueType::Any));
+                    }
+                }
+                Some(ValueType::Closure)
+            } else if map_context.is_some() && index == 0 {
+                let (actual, unstable) = self.observe_map_input(|| {
+                    if matches!(argument.kind(), ExpressionKind::GroupedJob(_))
+                        && let Some(span) = value_name_span(argument)
+                    {
+                        let actual = self
+                            .value_reference(argument)
+                            .and_then(|reference| self.declared_reference_type(reference.target()))
+                            .cloned()
+                            .or_else(|| self.lexical_value_type(span));
+                        if actual.is_some() {
+                            return Ok(actual);
+                        }
+                    }
+                    self.operation_argument_type(argument, expected)
+                });
+                stable_map_input = !unstable;
+                actual?
+            } else {
+                self.operation_argument_type(argument, expected)?
+            };
             if self.needs_argument_context(
                 argument,
                 actual.as_ref(),
@@ -9630,12 +9869,77 @@ impl<'a> SignatureValidator<'a> {
                 .map(|parameter| substitutions[parameter].clone())
                 .collect(),
         );
-        Ok(Some(self.operation_tuple_result(
-            operation,
-            call,
-            &actuals,
-            &substitutions,
-        )))
+        let result = self.operation_tuple_result(operation, call, &actuals, &substitutions);
+        if inferred_map {
+            let key = (call_span.start(), call_span.end());
+            self.inferred_maps.borrow_mut().insert(key);
+            self.expression_types
+                .borrow_mut()
+                .insert(key, result.clone());
+        }
+        Ok(Some(result))
+    }
+
+    fn concrete_map_type(&self, ty: &ValueType, depth: u64) -> bool {
+        if self.control.is_cancelled() || !self.control.observe(AnalysisLimitKind::TypeDepth, depth)
+        {
+            return false;
+        }
+        match ty {
+            ValueType::Any
+            | ValueType::Unknown
+            | ValueType::EmptyList
+            | ValueType::TypeParameter(_) => false,
+            ValueType::List(element) => self.concrete_map_type(element, depth + 1),
+            ValueType::Nominal { arguments, .. } | ValueType::Tuple(arguments) => arguments
+                .iter()
+                .all(|argument| self.concrete_map_type(argument, depth + 1)),
+            _ => true,
+        }
+    }
+
+    fn map_value_body<'b>(&self, mut chain: &'b ConditionalChain) -> Option<&'b StageKind> {
+        loop {
+            let stage = single_stage(chain)?.kind();
+            if let StageKind::Expression(expression) = stage {
+                if let ExpressionKind::GroupedJob(inner) = expression.kind() {
+                    chain = inner;
+                    continue;
+                }
+                return Some(stage);
+            }
+            let name = bare_stage_name(stage)?;
+            return (self.names.reference(self.entry.module(), name).is_some()
+                || self
+                    .outer_scope
+                    .and_then(InteractiveScope::scope)
+                    .is_some_and(|scope| scope.get(self.text(name)).is_some()))
+            .then_some(stage);
+        }
+    }
+
+    fn check_map_body(
+        &self,
+        body: &StageKind,
+        binder: &opaal_syntax::Parameter,
+        element: ValueType,
+    ) -> Result<Option<ValueType>, Box<ModuleTypeError>> {
+        let key = (self.entry.module().clone(), binder.name.span().start());
+        if binder.type_annotation.is_none() {
+            self.inferred_bindings
+                .borrow_mut()
+                .insert(key.clone(), element);
+        }
+        let previous = self.in_map_body.replace(true);
+        let result = match body {
+            StageKind::Expression(expression) => self.expression(expression),
+            stage => Ok(bare_stage_name(stage).and_then(|span| self.lexical_value_type(span))),
+        };
+        self.in_map_body.set(previous);
+        if binder.type_annotation.is_none() {
+            self.inferred_bindings.borrow_mut().remove(&key);
+        }
+        result
     }
 
     fn operation_tuple_result(
@@ -13141,6 +13445,7 @@ impl ModuleProgram {
         let mut modules_by_source = BTreeMap::new();
         let mut operation_types_by_source = BTreeMap::new();
         let mut expression_types_by_source = BTreeMap::new();
+        let mut inferred_maps_by_source = BTreeMap::new();
         for entry in self.sources.entries() {
             let types = self.types.by_module.get(entry.module());
             by_source.insert(
@@ -13170,6 +13475,9 @@ impl ModuleProgram {
             if let Some(types) = self.types.expression_types.get(entry.module()) {
                 expression_types_by_source.insert(entry.source().id(), types.clone());
             }
+            if let Some(maps) = self.types.inferred_maps.get(entry.module()) {
+                inferred_maps_by_source.insert(entry.source().id(), maps.clone());
+            }
             modules_by_source.insert(entry.source().id(), entry.module().clone());
         }
         RuntimeBindingTypes {
@@ -13179,6 +13487,7 @@ impl ModuleProgram {
             nominal_references_by_source,
             operation_types_by_source,
             expression_types_by_source,
+            inferred_maps_by_source,
             modules_by_source,
             nominals_by_module: self
                 .types
@@ -14178,6 +14487,7 @@ struct SyntaxMetrics {
     if_spans: Vec<Span>,
     loop_spans: Vec<Span>,
     comprehension_spans: Vec<Span>,
+    has_inline_map_candidate: bool,
 }
 
 impl SyntaxMetrics {
@@ -14188,6 +14498,7 @@ impl SyntaxMetrics {
             if_spans: Vec::new(),
             loop_spans: Vec::new(),
             comprehension_spans: Vec::new(),
+            has_inline_map_candidate: false,
         };
         metrics.statements(script.statements());
         metrics
@@ -14496,6 +14807,9 @@ impl SyntaxMetrics {
                 depth.max(self.expression(&branch.fallback))
             }
             ExpressionKind::Call(call) => {
+                self.has_inline_map_candidate |= call.arguments.len() == 2
+                    && call.type_arguments.is_empty()
+                    && inline_map_callback(&call.arguments[1]).is_some();
                 self.expression(&call.callee);
                 for argument in &call.type_arguments {
                     self.type_reference(argument, 1);

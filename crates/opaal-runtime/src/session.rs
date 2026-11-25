@@ -4396,6 +4396,120 @@ mod interactive_retention_tests {
     }
 
     #[test]
+    fn inline_map_retains_admitted_empty_types_and_restores_callables() {
+        use crate::capsule::{decode_background_capsule, encode_background_capsule};
+        use crate::eval::{Completion, EvalLimits, apply_callable};
+
+        let mut session = Session::new("/work", Environment::new(), SessionOptions::default());
+        submit(
+            &mut session,
+            "import std::list::{map as transform, reverse}",
+        )
+        .unwrap();
+        submit(
+            &mut session,
+            "let rows: List[List[Int]] = [[]]\nlet counts: List[Int] = []",
+        )
+        .unwrap();
+        assert_eq!(
+            submit(&mut session, "transform(rows, {|row| reverse(row)})")
+                .unwrap()
+                .1,
+            Value::list(vec![Value::list(vec![])]),
+        );
+        assert_eq!(
+            submit(
+                &mut session,
+                "let marks = transform(counts, {|x| x + 1})\ntransform(marks, {|x| x * 2})"
+            )
+            .unwrap()
+            .1,
+            Value::list(vec![]),
+        );
+        assert_eq!(
+            submit(&mut session, "transform(marks, {|x| x})").unwrap().1,
+            Value::list(vec![]),
+        );
+        let failure = submit(&mut session, "def saved() -> Any { return transform(marks, {|x| x + 1}) }\ntransform([], {|x| x})\nlet rejected = transform(counts, {|x| x})").unwrap_err();
+        assert!(matches!(failure, SubmitError::Runtime { .. }));
+        assert!(failure.render().contains("cannot infer type argument `T`"));
+        assert!(session.scope().get("rejected").is_none());
+        assert_eq!(
+            submit(&mut session, "saved()").unwrap().1,
+            Value::list(vec![])
+        );
+
+        let wire = encode_background_capsule(
+            "next",
+            "",
+            session.cwd(),
+            session.environment(),
+            None,
+            session.scope(),
+            SessionOptions::default(),
+        )
+        .unwrap();
+        let decoded = decode_background_capsule(&wire).unwrap();
+        let caller = SourceFile::new(SourceId::new(50_000), "caller", "saved()");
+        let restored = apply_callable(
+            decoded.scope().get("saved").unwrap(),
+            &[],
+            &caller,
+            caller.span(0..caller.len()).unwrap(),
+            &mut Environment::new(),
+            &EvalLimits::default(),
+        )
+        .unwrap();
+        assert!(matches!(restored, Completion::Value(value) if value == Value::list(vec![])));
+    }
+
+    #[test]
+    fn prompt_map_keeps_contextual_runtime_errors_and_requires_source_evidence() {
+        let mut session = Session::new("/work", Environment::new(), SessionOptions::default());
+        submit(&mut session, "import std::list as list").unwrap();
+        submit(&mut session, "let observed = [1, 2]").unwrap();
+        submit(&mut session, "let captured = 1").unwrap();
+        for text in [
+            "list::map(observed, {|x| x + 1})",
+            "list::map([1], {|x| captured})",
+            "let copied = observed\nlist::map(copied, {|x| x + 1})",
+            "let prior = captured\nlist::map([1], {|x| prior})",
+        ] {
+            let failure = submit(&mut session, text).unwrap_err();
+            assert!(matches!(failure, SubmitError::Runtime { .. }));
+            assert!(failure.render().contains("cannot infer type argument `U`"));
+        }
+        submit(
+            &mut session,
+            "def fixed(ignored: Any) -> List[Int] { return [1] }",
+        )
+        .unwrap();
+        assert_eq!(
+            submit(&mut session, "list::map(fixed(observed), {|x| x})")
+                .unwrap()
+                .1,
+            Value::list(vec![Value::Int(1)]),
+        );
+        assert_eq!(
+            submit(
+                &mut session,
+                "list::map([{ value: observed }], {|x| x == x})",
+            )
+            .unwrap()
+            .1,
+            Value::list(vec![Value::Bool(true)]),
+        );
+        let failure = submit(
+            &mut session,
+            "let mismatch: List[String] = list::map([1], {|x| x + 1})",
+        )
+        .unwrap_err();
+        assert!(matches!(failure, SubmitError::Runtime { .. }));
+        assert!(failure.render().contains("String"));
+        assert!(session.scope().get("mismatch").is_none());
+    }
+
+    #[test]
     fn capsule_restores_conditional_evidence_from_prior_cells() {
         use crate::capsule::{decode_background_capsule, encode_background_capsule};
         use crate::eval::{Completion, EvalLimits, apply_callable};

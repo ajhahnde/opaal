@@ -1,0 +1,13 @@
+import std::list as list
+
+let counts: List[Int] = []
+let marks = list::map(counts, {|x| x + 1})
+let doubled = list::map(marks, {|x| x * 2})
+if doubled != [] {
+    throw "expected an empty result"
+}
+let rows: List[List[Int]] = [[]]
+let reversed = list::map(rows, {|row| list::reverse(row)})
+if reversed != [[]] {
+    throw "expected one empty row"
+}

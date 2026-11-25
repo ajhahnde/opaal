@@ -6,6 +6,8 @@ All notable changes to OPAAL are documented here.
 
 ### Added
 
+- Infer inline `list::map` closures from a typed input and a single value
+  expression. Inferred List types survive empty input and later prompt cells.
 - Build eager lists with `[expression for item in items if condition]`.
   Generate from a List or Range, optionally bind original positions and
   tuple slots, and filter using a Bool expression. Empty results retain

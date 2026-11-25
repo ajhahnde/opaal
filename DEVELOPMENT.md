@@ -182,6 +182,37 @@ target/debug/opaal examples/language-foundation.opaal
 Pure non-interactive evaluation does not print its final value. Examples must not depend on authority that
 the pure foundation does not grant.
 
+## Inline closures for List map
+
+Inline `list::map` closure inference is scheduled for OPAAL 1.11.0. A
+typed List supplies the closure parameter type. When the call still needs a
+result type, the checker can derive it from a single value expression in
+the inline closure.
+
+```opaal
+import std::list as list
+
+let marks = list::map([1, 2], {|x| x + 1})
+let counts: List[Int] = []
+let empty_marks = list::map(counts, {|x| x + 1})
+```
+
+Both bindings have type `List[Int]`. At the prompt, enter the import and
+bindings in separate submissions and reuse `empty_marks` in a later map.
+An empty input invokes the closure zero times.
+
+For a bare `[]` or another input with insufficient element evidence, add a
+type annotation or explicit map type arguments. Add `-> Type` when the body
+does not establish a concrete result type. Bound and grouped closures use
+the existing callback rules. The explicit form
+`list::map([1, 2], {|x: Int| -> Int x + 1})` also works in OPAAL 1.10.0.
+
+```sh
+target/debug/opaal check tests/golden/source-formatting/list-map/inferred.opaal
+target/debug/opaal tests/golden/source-formatting/list-map/inferred.opaal
+target/debug/opaal tests/golden/source-formatting/list-map/typed-empty.opaal
+```
+
 ## List comprehensions
 
 List comprehensions are scheduled for OPAAL 1.11.0. Use a build that includes

@@ -1,0 +1,7 @@
+import std::list as list
+
+# The grouped callback keeps its explicit result type.
+let marks: List[Int] = list::map([1, 2], ({|x| -> Int x + 1}))
+if marks != [2, 3] {
+    throw "wrong result"
+}

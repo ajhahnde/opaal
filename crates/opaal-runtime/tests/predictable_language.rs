@@ -229,6 +229,61 @@ fn inferred_comprehension_arguments_do_not_repeat_generic_analysis() {
 }
 
 #[test]
+fn inline_map_checks_each_nested_callback_once_under_the_shared_limits() {
+    let root = Path::new("/predictable/main.opaal");
+    let registry = standard_registry();
+    let kind = AnalysisLimitKind::GenericInstantiations;
+    let mut work = Vec::new();
+    for calls in [4, 8, 12] {
+        let nested = (0..calls).fold("1".to_owned(), |body, _| {
+            format!("list::map([1], {{|x| {body} + x}})[0]")
+        });
+        let source = OneModule {
+            source: format!("import std::list\n{nested}\n").into_bytes(),
+        };
+        let loader = ModuleProgramLoader::new(&source, &source);
+        let report = loader.analyze_with_commands(root, &registry);
+        assert!(report.issues().is_empty(), "{:?}", report.issues());
+        assert_eq!(report.usage().get(kind), calls);
+        work.push(report.usage().get(AnalysisLimitKind::WorkUnits));
+        let outcome = loader.analyze_with_commands_and_limits_controlled(
+            root,
+            &registry,
+            &AnalysisControl::never(),
+            AnalysisLimits::unlimited().with_limit(kind, calls - 1),
+        );
+        assert!(
+            matches!(outcome, ModuleAnalysisOutcome::BudgetExceeded(error) if error.kind() == kind)
+        );
+        let polls = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&polls);
+        let observed = AnalysisControl::cooperative(move || {
+            counter.fetch_add(1, Ordering::SeqCst);
+            false
+        });
+        let observed = loader.analyze_with_commands_and_limits_controlled(
+            root,
+            &registry,
+            &observed,
+            AnalysisLimits::OPAAL,
+        );
+        assert!(matches!(observed, ModuleAnalysisOutcome::Complete(_)));
+        let stop = polls.swap(0, Ordering::SeqCst) - 2;
+        let counter = Arc::clone(&polls);
+        let control =
+            AnalysisControl::cooperative(move || counter.fetch_add(1, Ordering::SeqCst) >= stop);
+        let outcome = loader.analyze_with_commands_and_limits_controlled(
+            root,
+            &registry,
+            &control,
+            AnalysisLimits::OPAAL,
+        );
+        assert!(matches!(outcome, ModuleAnalysisOutcome::Cancelled));
+    }
+    assert!(work[2] - work[1] <= 2 * (work[1] - work[0]), "{work:?}");
+}
+
+#[test]
 fn check_preserves_legacy_deep_list_arms_after_command_for_words() {
     std::thread::Builder::new()
         .stack_size(2 * 1024 * 1024)
