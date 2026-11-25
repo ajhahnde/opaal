@@ -35,6 +35,7 @@ enum OpenDelimiter {
     InterpolationBrace,
     Parenthesis,
     Bracket,
+    DoubleQuote,
 }
 
 #[derive(Default)]
@@ -68,7 +69,17 @@ impl FormatLayout {
         for span in &spans.interpolations {
             layout.interpolation_open.insert(span.start());
             layout.interpolation_close.insert(span.end() - 1);
-            layout.no_space_after.insert(span.start() + 1);
+            let open_end = span.start() + 1;
+            if tokens_in(tokens, open_end, span.end())
+                .iter()
+                .find(|token| token.kind() != TokenKind::Whitespace)
+                .is_some_and(|token| token.kind() == TokenKind::Delimiter(Delimiter::LeftBrace))
+            {
+                // Adjacent opening braces would spell a literal brace.
+                layout.space_after.insert(open_end);
+            } else {
+                layout.no_space_after.insert(open_end);
+            }
             layout.no_space_before.insert(span.end() - 1);
         }
         for arm in &spans.if_arms {
@@ -526,8 +537,31 @@ fn format_tokens(source: &SourceFile, tokens: &[Token], layout: &FormatLayout) -
                         .expect("lexer spans belong to their source"),
                 );
                 previous_syntax_token_end = Some(token.span().end());
-                at_line_start = true;
+                at_line_start = open_delimiters.last() != Some(&OpenDelimiter::DoubleQuote);
                 pending_space = false;
+                if at_line_start {
+                    // A continuation leaves `#` inside a word unless whitespace intervenes.
+                    match &tokens[index + 1..] {
+                        [next, ..]
+                            if next.kind() == TokenKind::WordText
+                                && next.text(source).is_ok_and(|text| text.starts_with('#')) =>
+                        {
+                            at_line_start = false;
+                        }
+                        [space, comment, ..]
+                            if indent == 0
+                                && space.kind() == TokenKind::Whitespace
+                                && matches!(
+                                    comment.kind(),
+                                    TokenKind::Comment | TokenKind::DocumentationComment
+                                ) =>
+                        {
+                            at_line_start = false;
+                            pending_space = true;
+                        }
+                        _ => {}
+                    }
+                }
             }
             kind => {
                 suppress_source_newline = false;
@@ -610,7 +644,11 @@ fn format_tokens(source: &SourceFile, tokens: &[Token], layout: &FormatLayout) -
         }
     }
 
-    if !output.is_empty() && !output.ends_with('\n') {
+    let ends_with_continuation = tokens
+        .iter()
+        .rfind(|token| token.kind() != TokenKind::Whitespace)
+        .is_some_and(|token| token.kind() == TokenKind::LineContinuation);
+    if !output.is_empty() && (!output.ends_with('\n') || ends_with_continuation) {
         output.push('\n');
     }
     output
@@ -648,6 +686,7 @@ fn opening_delimiter(
         TokenKind::InterpolationStart => Some(OpenDelimiter::InterpolationBrace),
         TokenKind::Delimiter(Delimiter::LeftParenthesis) => Some(OpenDelimiter::Parenthesis),
         TokenKind::Delimiter(Delimiter::LeftBracket) => Some(OpenDelimiter::Bracket),
+        TokenKind::DoubleQuoteStart => Some(OpenDelimiter::DoubleQuote),
         _ => None,
     }
 }
@@ -671,6 +710,10 @@ fn closes_indenting_brace(
         }
         TokenKind::Delimiter(Delimiter::RightBracket) => {
             pop_expected(open, OpenDelimiter::Bracket);
+            return false;
+        }
+        TokenKind::DoubleQuoteEnd => {
+            pop_expected(open, OpenDelimiter::DoubleQuote);
             return false;
         }
         _ => None,

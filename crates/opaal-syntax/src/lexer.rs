@@ -652,7 +652,6 @@ impl<'source> Lexer<'source> {
             let byte = self.current_byte().expect("position is in bounds");
             if matches!(byte, b' ' | b'\t' | b'\n' | b'\r' | b'\\' | b'\'' | b'"')
                 || self.operator_or_delimiter_starts_here()
-                || (byte == b'#' && self.is_token_boundary())
                 || byte == b'\0'
             {
                 break;

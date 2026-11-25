@@ -28,6 +28,15 @@ All notable changes to OPAAL are documented here.
   tuple when another slot follows. Embedders can preserve a registered
   comma-bearing command head with an escape such as `(name\, argument)`.
 
+### Fixed
+
+- Preserve interpolation before record and closure literals when formatting.
+- Preserve bare `#` words, comments after explicit continuations, and the
+  line after a final explicit continuation when formatting.
+- Preserve quoted text across escaped newlines when formatting.
+- Allow unary expressions after whitespace in `if` expression arms so
+  formatted arms reparse.
+
 ### Security
 
 - Update `rustix` to resolve RUSTSEC-2026-0486 and upgrade the terminal editor
