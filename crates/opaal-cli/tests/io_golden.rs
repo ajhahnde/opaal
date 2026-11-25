@@ -14,7 +14,7 @@ fn packaged_processor_and_ci_job_check_references_use_public_entry_points() {
     let target = if cfg!(target_os = "macos") {
         "macos-arm64"
     } else if cfg!(target_arch = "aarch64") {
-        "linux-aarch64"
+        "linux-arm64"
     } else {
         "linux-x86_64"
     };

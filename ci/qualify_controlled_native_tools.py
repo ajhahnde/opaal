@@ -336,7 +336,7 @@ def qualify_archive(archive, fixtures, output, source, target, **options):
     require(fixtures is not None and source is not None and target in PLATFORMS,
             "archive mode requires --fixtures, --expected-source and --platform")
     require((platform.system(), platform.machine()) == {
-        "linux-x86_64": ("Linux", "x86_64"), "linux-aarch64": ("Linux", "aarch64"),
+        "linux-x86_64": ("Linux", "x86_64"), "linux-arm64": ("Linux", "aarch64"),
         "macos-arm64": ("Darwin", "arm64")}[target],
         "candidate target differs from running host")
     require(subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT).decode().strip() == source,

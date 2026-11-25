@@ -121,7 +121,7 @@ fn prepared_assets(
                         .as_slice()
                 }
                 "aarch64-unknown-linux-gnu" => include_bytes!(
-                    "../../../../examples/image-check/offline-tools-linux-aarch64.toml"
+                    "../../../../examples/image-check/offline-tools-linux-arm64.toml"
                 )
                 .as_slice(),
                 _ => return Err(setup_error(false)),
@@ -248,7 +248,7 @@ fn init_repository_project_with_writer(
                     .to_vec()
             } else if host == "aarch64-unknown-linux-gnu" {
                 include_bytes!(
-                    "../../../../examples/repository-check/offline-tools-linux-aarch64.toml"
+                    "../../../../examples/repository-check/offline-tools-linux-arm64.toml"
                 )
                 .to_vec()
             } else {

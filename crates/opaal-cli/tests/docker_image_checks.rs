@@ -37,7 +37,7 @@ fn saved_image_reference_binds_version_policy_report_and_native_assessment() {
             fs::read(owner.join(if cfg!(target_os = "macos") {
                 "offline-tools-macos.toml"
             } else if cfg!(target_arch = "aarch64") {
-                "offline-tools-linux-aarch64.toml"
+                "offline-tools-linux-arm64.toml"
             } else {
                 "offline-tools-linux.toml"
             }))

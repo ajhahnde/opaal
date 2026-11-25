@@ -5,6 +5,9 @@ on:
     paths:
       - .github/workflows/release.yml
       - ci/package_release.py
+      - ci/package_data_processing.py
+      - ci/qualify_data_processing.py
+      - tests/golden/data-processing/**
       - Cargo.toml
       - Cargo.lock
       - crates/**
@@ -22,20 +25,23 @@ concurrency:
 
 jobs:
   release-binaries:
-    name: release-binaries-${{ matrix.platform }}
+    name: Release binaries (${{ matrix.label }})
     if: github.event_name == 'push' || github.head_ref == 'release/opaal-1.10.0'
     strategy:
       fail-fast: false
       matrix:
         include:
           - runner: ubuntu-24.04
+            label: Linux x86_64
             platform: linux-x86_64
             arch: x86_64
           - runner: ubuntu-24.04-arm
-            platform: linux-aarch64
+            label: Linux ARM64
+            platform: linux-arm64
             arch: aarch64
             container: ubuntu:22.04@sha256:829f6df217bcbae2b371026e81711d1a787c61b2967ad09d015063663ebafbf7
-          - runner: macos-15
+          - runner: macos-26
+            label: macOS ARM64
             platform: macos-arm64
             arch: arm64
     runs-on: ${{ matrix.runner }}
@@ -45,8 +51,8 @@ jobs:
         shell: bash
     timeout-minutes: 40
     steps:
-      - name: Install the qualified Linux AArch64 build environment
-        if: matrix.platform == 'linux-aarch64'
+      - name: Install the qualified Linux ARM64 build environment
+        if: matrix.platform == 'linux-arm64'
         run: |
           apt-get update
           DEBIAN_FRONTEND=noninteractive apt-get install -y binutils build-essential ca-certificates curl git
@@ -69,7 +75,7 @@ jobs:
           fetch-depth: 0
 
       - name: Mark the ARM container checkout safe for Git
-        if: matrix.platform == 'linux-aarch64'
+        if: matrix.platform == 'linux-arm64'
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
       - name: Activate the pinned Rust toolchain
@@ -87,8 +93,8 @@ jobs:
       - name: Build the tagged programs
         run: cargo build --release --locked -p opaal-cli -p opaal-lsp
 
-      - name: Enforce the Linux AArch64 glibc baseline
-        if: matrix.platform == 'linux-aarch64'
+      - name: Enforce the Linux ARM64 glibc baseline
+        if: matrix.platform == 'linux-arm64'
         run: |
           for binary in target/release/opaal target/release/opaal-language-server; do
             readelf --version-info --wide "$binary" | python3 -c 'import re,sys; versions=[tuple(map(int,x.split("."))) for x in re.findall(r"GLIBC_(\d+\.\d+)",sys.stdin.read())]; assert versions and max(versions) <= (2,35), max(versions) if versions else "no GLIBC symbols"'
@@ -100,6 +106,8 @@ jobs:
           codesign --display --verbose=4 target/release/opaal
           codesign --force --sign - --options kill target/release/opaal
           codesign --verify --strict target/release/opaal
+          xcrun vtool -show-build target/release/opaal
+          xcrun vtool -show-build target/release/opaal-language-server
 
       - name: Verify the CLI release identity
         run: test "$(target/release/opaal --version)" = "opaal 1.10.0"
@@ -107,8 +115,24 @@ jobs:
       - name: Verify the release candidate boundary
         run: python3 ci/check_product.py release-candidate
 
-      - name: Package both programs and their checksum
-        run: python3 ci/package_release.py --platform "${{ matrix.platform }}"
+      - name: Package both programs and the replay fixtures
+        run: python3 ci/package_data_processing.py --platform "${{ matrix.platform }}"
+
+      - name: Qualify the exact release archive outside the checkout
+        run: |
+          version=$(python3 -c 'from ci.package_release import VERSION; print(VERSION)')
+          python3 ci/qualify_data_processing.py \
+            --archive "dist/opaal-v${version}-${{ matrix.platform }}.tar.gz" \
+            --examples "dist/opaal-v${version}-data-processing.tar.gz" \
+            --expected-version "$version" --expected-source "$(git rev-parse HEAD)" \
+            --platform "${{ matrix.platform }}" --report dist/release-qualification.json
+
+      - name: Upload the source and archive qualification report
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-qualification-${{ matrix.platform }}-${{ github.sha }}
+          path: dist/release-qualification.json
+          if-no-files-found: error
 
       - name: Upload the exact archive and checksum
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -121,4 +145,4 @@ jobs:
           compression-level: 0
 
       - name: Record the binary result
-        run: echo "Built and archived OPAAL 1.10.0 for ${{ matrix.platform }} from ${{ github.sha }}. The operator publishes the checked archive and checksum after all three tag jobs pass." >> "${GITHUB_STEP_SUMMARY}"
+        run: echo "Built and replayed the OPAAL 1.10.0 archive for ${{ matrix.platform }} from $(git rev-parse HEAD). The operator publishes the checked archive and checksum after all three tag jobs pass." >> "${GITHUB_STEP_SUMMARY}"

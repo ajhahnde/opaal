@@ -239,7 +239,7 @@ def references(binary: Path, inputs: Path, directory: Path, target: str) -> list
     # Independent lifecycle/comparison drivers remain qualification inputs.
     for name in ("comparison.py", "run-comparison.sh"):
         shutil.copyfile(inputs / name, template / name)
-    selected_lock = ("offline-tools-linux-aarch64.toml" if target == "linux-aarch64" else
+    selected_lock = ("offline-tools-linux-arm64.toml" if target == "linux-arm64" else
                      "offline-tools-linux.toml" if target == "linux-x86_64" else "offline-tools-macos.toml")
     require((template / "offline-tools.toml").read_bytes() == (inputs / selected_lock).read_bytes(),
             "embedded offline host lock differs")
@@ -580,7 +580,7 @@ def live_references(binary: Path, inputs: Path, directory: Path, live: dict) -> 
 
 def qualify(archive, fixtures, binaries, source, target, artifacts, live=None):
     require((platform.system(), platform.machine()) == {
-        "linux-x86_64": ("Linux", "x86_64"), "linux-aarch64": ("Linux", "aarch64"),
+        "linux-x86_64": ("Linux", "x86_64"), "linux-arm64": ("Linux", "aarch64"),
         "macos-arm64": ("Darwin", "arm64")}[target],
         "candidate target differs from running host")
     require(subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT).decode().strip() == source,
@@ -609,9 +609,9 @@ def qualify(archive, fixtures, binaries, source, target, artifacts, live=None):
             inputs = ROOT / FIXTURES
             pm = fm = {"sha256": None}
         binary = programs / "opaal"
-        profile_name = "docker-cli-profile-aarch64.json" if target == "linux-aarch64" else "docker-cli-profile.json"
+        profile_name = "docker-cli-profile-aarch64.json" if target == "linux-arm64" else "docker-cli-profile.json"
         profile = json.loads((inputs / profile_name).read_bytes())
-        expected_host = "aarch64-unknown-linux-gnu" if target == "linux-aarch64" else "x86_64-unknown-linux-gnu"
+        expected_host = "aarch64-unknown-linux-gnu" if target == "linux-arm64" else "x86_64-unknown-linux-gnu"
         require(profile["host"] == expected_host
                 and profile["cli_version"] == "29.9.0" and profile["engine_version"] == "29.9.0"
                 and profile["api_version"] == "1.48", "Docker CLI profile differs")

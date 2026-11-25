@@ -84,7 +84,7 @@ fn fixed_offline_assets_match_maintained_sources_and_private_modes() {
     let host = if cfg!(target_os = "macos") {
         "macos"
     } else if cfg!(target_arch = "aarch64") {
-        "linux-aarch64"
+        "linux-arm64"
     } else {
         "linux"
     };
@@ -227,7 +227,7 @@ fn native_destination_and_parent_refusals() {
         if cfg!(target_os = "macos") {
             include_bytes!("../../../examples/image-check/offline-tools-macos.toml").as_slice()
         } else if cfg!(target_arch = "aarch64") {
-            include_bytes!("../../../examples/image-check/offline-tools-linux-aarch64.toml")
+            include_bytes!("../../../examples/image-check/offline-tools-linux-arm64.toml")
                 .as_slice()
         } else {
             include_bytes!("../../../examples/image-check/offline-tools-linux.toml").as_slice()

@@ -73,40 +73,49 @@ publish = false
             "fuzz/run-smoke.sh\n"
             "python3 ci/qualify_operational_core.py --profile qualification\n"
             "  operational-core-linux:\n"
-            "    name: operational-core-linux\n"
+            "    name: Operational core (Linux x86_64)\n"
             "    runs-on: ubuntu-24.04\n"
             "        run: cargo test --workspace --locked --no-fail-fast\n"
             "  operational-core-macos:\n"
-            "    name: operational-core-macos\n"
-            "    runs-on: macos-15\n"
+            "    name: Operational core (macOS ARM64)\n"
+            "    runs-on: macos-26\n"
             "        run: cargo test --workspace --locked --no-fail-fast\n"
-            "  operational-core-linux-aarch64:\n"
-            "    name: operational-core-linux-aarch64\n"
+            "  operational-core-linux-arm64:\n"
+            "    name: Operational core (Linux ARM64)\n"
             "    runs-on: ubuntu-24.04-arm\n"
             "        run: cargo test --workspace --locked --no-fail-fast\n"
             "run: python3 benchmarks/run.py --profile qualification\n"
             "name: required\n"
-            "needs: [foundation, policy, fuzz, operational-core-linux, operational-core-macos, operational-core-linux-aarch64, data-processing-linux, data-processing-macos, data-processing-linux-aarch64]\n"
+            "needs: [foundation, policy, fuzz, operational-core-linux, operational-core-macos, operational-core-linux-arm64, data-processing-linux, data-processing-macos, data-processing-linux-arm64]\n"
             "  data-processing-linux:\n"
             "    runs-on: ubuntu-24.04\n"
             "    ref: ${{ github.event.pull_request.head.sha || github.sha }}\n"
             "    run: cargo build --release --workspace --locked\n"
-            "    ci/package_data_processing.py ci/qualify_data_processing.py ci/package_random_values.py ci/qualify_random_values.py --fixtures --expected-source actions/upload-artifact@\n"
+            "    run: bash ci/qualify_candidate_archives.sh linux-x86_64 dist\n"
+            "    uses: actions/upload-artifact@\n"
             "  data-processing-macos:\n"
-            "    runs-on: macos-15\n"
+            "    runs-on: macos-26\n"
             "    ref: ${{ github.event.pull_request.head.sha || github.sha }}\n"
             "    run: cargo build --release --workspace --locked\n"
-            "    ci/package_data_processing.py ci/qualify_data_processing.py ci/package_random_values.py ci/qualify_random_values.py --fixtures --expected-source actions/upload-artifact@\n"
-            "  data-processing-linux-aarch64:\n"
+            "    run: bash ci/qualify_candidate_archives.sh macos-arm64 dist\n"
+            "    uses: actions/upload-artifact@\n"
+            "  data-processing-linux-arm64:\n"
             "    runs-on: ubuntu-24.04-arm\n"
             "    ref: ${{ github.event.pull_request.head.sha || github.sha }}\n"
             "    run: cargo build --release --workspace --locked\n"
-            "    ci/package_data_processing.py ci/qualify_data_processing.py ci/package_random_values.py ci/qualify_random_values.py --fixtures --expected-source actions/upload-artifact@\n"
+            '    run: bash ci/qualify_candidate_archives.sh linux-arm64 "$RUNNER_TEMP"\n'
+            "    uses: actions/upload-artifact@\n"
             "    Path(event[\"manifest_path\"]).parent.name\n",
         )
         self.write(
             ".github/workflows/release.yml",
-            "python3 ci/check_product.py release-candidate\n",
+            "runner: macos-26\n"
+            "python3 ci/check_product.py release-candidate\n"
+            "python3 ci/package_data_processing.py --platform\n"
+            "python3 ci/qualify_data_processing.py\n"
+            '--expected-source "$(git rev-parse HEAD)"\n'
+            "--report dist/release-qualification.json\n"
+            "path: dist/release-qualification.json\n",
         )
         self.write(
             ".github/workflows/security.yml",
@@ -186,18 +195,30 @@ publish = false
         for required in (
             "ref: ${{ github.event.pull_request.head.sha || github.sha }}",
             "cargo build --release --workspace --locked",
-            "ci/qualify_data_processing.py", "--expected-source", "actions/upload-artifact@",
+            "bash ci/qualify_candidate_archives.sh", "actions/upload-artifact@",
         ):
             with self.subTest(required=required):
                 path.write_text(original.replace(required, "removed"))
                 findings = "\n".join(checker.source_problems(self.root, run=self.runner))
-                for candidate_host in ("linux", "macos", "linux-aarch64"):
+                for candidate_host in ("linux", "macos", "linux-arm64"):
                     self.assertIn(f"CI does not build/qualify/retain data-processing candidates on {candidate_host}", findings)
         path.write_text(original.replace(
-            "operational-core-macos, operational-core-linux-aarch64",
+            "operational-core-macos, operational-core-linux-arm64",
             "operational-core-macos"))
         self.assertIn("CI required aggregate does not require foundation, policy, fuzz, and all qualified operational-core and data-processing hosts",
                       checker.source_problems(self.root, run=self.runner))
+
+    def test_requires_release_archive_qualification_and_retention(self) -> None:
+        path = self.root / ".github/workflows/release.yml"
+        original = path.read_text()
+        for required in (
+            "runner: macos-26", "python3 ci/qualify_data_processing.py",
+            '--expected-source "$(git rev-parse HEAD)"', "path: dist/release-qualification.json",
+        ):
+            with self.subTest(required=required):
+                path.write_text(original.replace(required, "removed"))
+                self.assertIn("release workflow does not qualify and retain the exact release archive",
+                              checker.source_problems(self.root, run=self.runner))
 
     def test_arm_test_binary_collection_uses_the_manifest_path(self) -> None:
         path = self.root / ".github/workflows/ci.yml"
@@ -257,9 +278,9 @@ publish = false
         path = self.root / ".github/workflows/ci.yml"
         original = path.read_text(encoding="utf-8")
         command = "        run: cargo test --workspace --locked --no-fail-fast\n"
-        for host in ("linux", "macos", "linux-aarch64"):
+        for host in ("linux", "macos", "linux-arm64"):
             with self.subTest(host=host):
-                index = ("linux", "macos", "linux-aarch64").index(host)
+                index = ("linux", "macos", "linux-arm64").index(host)
                 start = [match.start() for match in re.finditer(re.escape(command), original)][index]
                 changed = original[:start] + original[start:].replace(command, "", 1)
                 self.write(
@@ -268,7 +289,7 @@ publish = false
                 )
                 findings = set(checker.source_problems(self.root, run=self.runner))
                 self.assertIn(f"CI does not test the complete workspace on {host}", findings)
-                for other in {"linux", "macos", "linux-aarch64"} - {host}:
+                for other in {"linux", "macos", "linux-arm64"} - {host}:
                     self.assertNotIn(f"CI does not test the complete workspace on {other}", findings)
 
     def test_requires_every_operational_core_qualification_file(self) -> None:

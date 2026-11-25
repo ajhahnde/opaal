@@ -32,6 +32,8 @@ FUZZ_TARGETS = {
 }
 FUZZ_PATH_PACKAGES = {"opaal-platform", "opaal-runtime", "opaal-syntax"}
 QUALIFICATION_FILES = {
+    "ci/qualify_candidate_archives.sh",
+    "ci/tests/test_candidate_archives.py",
     "ci/package_data_processing.py",
     "ci/qualify_data_processing.py",
     "ci/tests/test_data_processing_candidate.py",
@@ -382,21 +384,21 @@ def source_problems(root: Path, *, run: Run = run_command) -> list[str]:
         if "python3 ci/qualify_operational_core.py --profile qualification" not in ci:
             problems.append("CI does not run operational-core qualification")
         if not re.search(
-            r"(?m)^  operational-core-linux:\n    name: operational-core-linux\n    runs-on: ubuntu-24\.04$",
+            r"(?m)^  operational-core-linux:\n    name: [^\n]+\n    runs-on: ubuntu-24\.04$",
             ci,
         ):
             problems.append("CI does not pin the operational-core Linux host")
         if not re.search(
-            r"(?m)^  operational-core-macos:\n    name: operational-core-macos\n    runs-on: macos-15$",
+            r"(?m)^  operational-core-macos:\n    name: [^\n]+\n    runs-on: macos-26$",
             ci,
         ):
             problems.append("CI does not pin the operational-core Apple-silicon host")
         if not re.search(
-            r"(?m)^  operational-core-linux-aarch64:\n    name: operational-core-linux-aarch64\n    runs-on: ubuntu-24\.04-arm$",
+            r"(?m)^  operational-core-linux-arm64:\n    name: [^\n]+\n    runs-on: ubuntu-24\.04-arm$",
             ci,
         ):
-            problems.append("CI does not pin the operational-core Linux AArch64 host")
-        for host in ("linux", "macos", "linux-aarch64"):
+            problems.append("CI does not pin the operational-core Linux ARM64 host")
+        for host in ("linux", "macos", "linux-arm64"):
             job = re.search(
                 rf"(?ms)^  operational-core-{host}:\n(.*?)(?=^  [\w-]+:|\Z)",
                 ci,
@@ -414,32 +416,44 @@ def source_problems(root: Path, *, run: Run = run_command) -> list[str]:
         if "--budget-environment host-darwin-arm64" in ci:
             problems.append("CI applies a retained host budget to the shared macOS runner")
         if not re.search(
-            r"needs:\s*\[foundation, policy, fuzz, operational-core-linux, operational-core-macos, operational-core-linux-aarch64, data-processing-linux, data-processing-macos, data-processing-linux-aarch64\]",
+            r"needs:\s*\[foundation, policy, fuzz, operational-core-linux, operational-core-macos, operational-core-linux-arm64, data-processing-linux, data-processing-macos, data-processing-linux-arm64\]",
             ci,
         ):
             problems.append(
                 "CI required aggregate does not require foundation, policy, fuzz, and all qualified operational-core and data-processing hosts"
             )
-        for candidate_host, runner in (("linux", "ubuntu-24.04"), ("macos", "macos-15"),
-                                       ("linux-aarch64", "ubuntu-24.04-arm")):
+        for candidate_host, runner, archive_arguments in (
+            ("linux", "ubuntu-24.04", "linux-x86_64 dist"),
+            ("macos", "macos-26", "macos-arm64 dist"),
+            ("linux-arm64", "ubuntu-24.04-arm", 'linux-arm64 "$RUNNER_TEMP"'),
+        ):
             job = re.search(rf"(?ms)^  data-processing-{candidate_host}:\n(.*?)(?=^  [\w-]+:|\Z)", ci)
             if job is None or f"runs-on: {runner}" not in job.group(1) or not all(
                 owner in job.group(1) for owner in (
                     "ref: ${{ github.event.pull_request.head.sha || github.sha }}",
-                    "cargo build --release --workspace --locked", "ci/package_data_processing.py",
-                    "ci/qualify_data_processing.py", "--expected-source", "actions/upload-artifact@",
-                    "ci/package_random_values.py", "ci/qualify_random_values.py", "--fixtures",
+                    "cargo build --release --workspace --locked",
+                    f"bash ci/qualify_candidate_archives.sh {archive_arguments}",
+                    "actions/upload-artifact@",
                 )
             ):
                 problems.append(f"CI does not build/qualify/retain data-processing candidates on {candidate_host}")
             if (
-                candidate_host == "linux-aarch64"
+                candidate_host == "linux-arm64"
                 and job is not None
                 and 'Path(event["manifest_path"]).parent.name' not in job.group(1)
             ):
                 problems.append("CI ARM test-binary collection does not resolve Cargo artifacts by manifest path")
         if "python3 ci/check_product.py release-candidate" not in release:
             problems.append("release workflow does not run the release-candidate validator")
+        if not all(token in release for token in (
+            "runner: macos-26",
+            "python3 ci/package_data_processing.py --platform",
+            "python3 ci/qualify_data_processing.py",
+            '--expected-source "$(git rev-parse HEAD)"',
+            "--report dist/release-qualification.json",
+            "path: dist/release-qualification.json",
+        )):
+            problems.append("release workflow does not qualify and retain the exact release archive")
         if not re.search(
             r"needs:\s*\[dependency-review, cargo-policy, repository-policy\]",
             security,

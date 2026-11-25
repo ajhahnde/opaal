@@ -65,7 +65,7 @@ def project_workflow(run, work: Path, fixtures: Path, target: str, *, member_imp
                      compound_assignments: bool = False, list_spreads: bool = False, record_shorthands: bool = False, grouped_exports: bool = False, indexed_replacements: bool = False,
                      value_conditionals: bool = False) -> dict:
     shutil.copytree(fixtures / "project", work)
-    lock = "tools-macos.toml" if target == "macos-arm64" else "tools-linux-aarch64.toml" if target == "linux-aarch64" else "tools-linux.toml"
+    lock = "tools-macos.toml" if target == "macos-arm64" else "tools-linux-arm64.toml" if target == "linux-arm64" else "tools-linux.toml"
     shutil.copyfile(work / lock, work / "tools.toml")
     base = ("--project", "opaal.toml", "--task", "verify", "--environment", "ci")
     original = {path.name: path.read_bytes() for path in work.glob("*.toml")}
@@ -618,7 +618,7 @@ def list_comprehensions(run, work: Path, fixtures: Path, target: str) -> dict:
     original = fixtures / "list-comprehensions"
     require({path.name for path in original.iterdir()} == set(LIST_COMPREHENSION_FIXTURES),
             "list comprehension fixture census differs")
-    lock = {"linux-aarch64": "tools-linux-aarch64.toml", "macos-arm64": "tools-macos.toml"
+    lock = {"linux-arm64": "tools-linux-arm64.toml", "macos-arm64": "tools-macos.toml"
             }.get(target, "tools-linux.toml")
     outcome_digests = {}
     for spelling in ("loop", "comprehension"):
@@ -783,7 +783,7 @@ def list_map(run, work: Path, fixtures: Path, target: str) -> dict:
 
     folder = work / "mapped-task"
     shutil.copytree(fixtures / "project", folder)
-    lock = {"macos-arm64": "tools-macos.toml", "linux-aarch64": "tools-linux-aarch64.toml",
+    lock = {"macos-arm64": "tools-macos.toml", "linux-arm64": "tools-linux-arm64.toml",
             "linux-x86_64": "tools-linux.toml"}[target]
     shutil.copyfile(folder / lock, folder / "tools.toml")
     policy, tasks = folder / "policy.opaal", folder / "tasks.opaal"
@@ -879,7 +879,7 @@ def list_string_slicing(run, work: Path, fixtures: Path, target: str) -> dict:
     require({path.name for path in source.iterdir()} == set(SLICE_FIXTURES), "slice fixture census differs")
     folder = work / "slice-preview"
     shutil.copytree(fixtures / "project", folder)
-    lock = {"macos-arm64": "tools-macos.toml", "linux-aarch64": "tools-linux-aarch64.toml",
+    lock = {"macos-arm64": "tools-macos.toml", "linux-arm64": "tools-linux-arm64.toml",
             "linux-x86_64": "tools-linux.toml"}[target]
     shutil.copyfile(folder / lock, folder / "tools.toml")
     for name in SLICE_FIXTURES:
@@ -1284,7 +1284,7 @@ def action_declarations(run, binary: Path, root: Path, fixtures: Path, target: s
 
     work = root / "action-stream"
     shutil.copytree(fixtures / "project", work)
-    lock = "tools-macos.toml" if target == "macos-arm64" else "tools-linux-aarch64.toml" if target == "linux-aarch64" else "tools-linux.toml"
+    lock = "tools-macos.toml" if target == "macos-arm64" else "tools-linux-arm64.toml" if target == "linux-arm64" else "tools-linux.toml"
     shutil.copyfile(work / lock, work / "tools.toml")
     source = work / "tasks.opaal"
     stream = (inputs / "io.opaal").read_bytes()
@@ -1356,7 +1356,7 @@ def action_declarations(run, binary: Path, root: Path, fixtures: Path, target: s
 
 def inline_export_projects(run, work: Path, fixtures: Path, target: str) -> dict:
     source = fixtures / "inline-module-exports"
-    lock = {"macos-arm64": "tools-macos.toml", "linux-aarch64": "tools-linux-aarch64.toml",
+    lock = {"macos-arm64": "tools-macos.toml", "linux-arm64": "tools-linux-arm64.toml",
             "linux-x86_64": "tools-linux.toml"}[target]
     base = ("--project", "opaal.toml", "--task", "verify", "--environment", "ci")
     trials = {}
@@ -2320,7 +2320,7 @@ def qualify(archive: Path | None, fixture_archive: Path | None, binaries: Path |
     require(SOURCE.fullmatch(source) is not None, "expected source must be a full Git identity")
     require((platform.system(), platform.machine()) == {
         "macos-arm64": ("Darwin", "arm64"), "linux-x86_64": ("Linux", "x86_64"),
-        "linux-aarch64": ("Linux", "aarch64")}[target], "host differs")
+        "linux-arm64": ("Linux", "aarch64")}[target], "host differs")
     require(subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT).decode().strip() == source,
             "expected source differs from checkout head")
     paths = public_paths(ROOT)

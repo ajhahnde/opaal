@@ -19,7 +19,7 @@ class ReleasePackageTests(unittest.TestCase):
                 source.write_bytes(source_name.encode())
                 source.chmod(mode)
 
-            self.assertIn("linux-aarch64", PLATFORMS)
+            self.assertIn("linux-arm64", PLATFORMS)
             for platform in PLATFORMS:
                 archive, checksum = package(root, platform)
                 digest = hashlib.sha256(archive.read_bytes()).hexdigest()
@@ -37,4 +37,4 @@ class ReleasePackageTests(unittest.TestCase):
     def test_rejects_unknown_platform(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             with self.assertRaises(ValueError):
-                package(Path(temporary), "linux-arm64")
+                package(Path(temporary), "linux-aarch64")

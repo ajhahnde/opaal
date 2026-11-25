@@ -225,7 +225,7 @@ def controlled(binary: Path, work: Path, environment: dict[str, str], expected: 
 def qualify(archive: Path, examples: Path, version: str, source: str, platform: str) -> dict:
     require(VERSION.fullmatch(version) is not None and SOURCE.fullmatch(source) is not None,
             "expected version/source identity is not canonical")
-    observed = {("Linux", "x86_64"): "linux-x86_64", ("Linux", "aarch64"): "linux-aarch64",
+    observed = {("Linux", "x86_64"): "linux-x86_64", ("Linux", "aarch64"): "linux-arm64",
                 ("Darwin", "arm64"): "macos-arm64"}
     require(observed.get((host.system(), host.machine())) == platform, "qualification host differs")
     started = time.perf_counter()
@@ -248,7 +248,7 @@ def qualify(archive: Path, examples: Path, version: str, source: str, platform: 
         floor = b'>=1.9.0,<2.0.0'
         require(original_manifest.count(floor) == 1, "unexpected example version requirement")
         tool = ("tools-macos.toml" if platform == "macos-arm64" else
-                "tools-linux-aarch64.toml" if platform == "linux-aarch64" else "tools-linux.toml")
+                "tools-linux-arm64.toml" if platform == "linux-arm64" else "tools-linux.toml")
         shutil.copyfile(work / tool, work / "tools.toml")
         sources = ["report.opaal", "json-report.opaal", "text-report.opaal",
                    "policy-operations.opaal", "tasks.opaal"]

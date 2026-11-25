@@ -33,6 +33,8 @@ All notable changes to OPAAL are documented here.
 
 ### Changed
 
+- Linux ARM64 archives and checksums use the `linux-arm64` platform suffix
+  starting with 1.11.0. For earlier releases, use the `linux-aarch64` suffix.
 - In grouped jobs, an adjacent comma after a bare command name starts a
   tuple when another slot follows. Embedders can preserve a registered
   comma-bearing command head with an escape such as `(name\, argument)`.
