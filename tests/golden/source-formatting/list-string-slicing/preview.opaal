@@ -1,0 +1,8 @@
+let counts: List[Int] = [10, 20, 30]
+let caption = "héllo"
+let window = counts[1:3]
+let excerpt = caption[1:3]
+let accent = "é🙂"[1:2]
+if window != [20, 30] || excerpt != "él" || accent != "́" {
+    throw "unexpected report preview"
+}

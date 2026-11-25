@@ -92,6 +92,124 @@ fn checked_value(case: &str, source: &str) -> Value {
 }
 
 #[test]
+fn slices_keep_typed_empty_windows_and_unicode_scalars() {
+    let value = checked_value(
+        "half-open slices retain receiver evidence",
+        r#"
+import std::list as list
+def identity[T](rows: List[T]) -> List[T] { return rows }
+def rows() -> List[Int] { return [10, 20, 20, 30] }
+def bound() -> Any { return 1 }
+mut reassigned_bound = false
+reassigned_bound = 1
+let contextual: List[Int] = ([])[0:0]
+let wide: List[Any] = [10, "label"]
+let dynamic: Any = [10, 20]
+let nested: List[List[Int]] = [rows()]
+let bare = [][0:0]
+let alias = rows()
+let text = "é🙂z"
+if alias[0:4] != alias || alias[1:3] != [20, 20] || alias != [10, 20, 20, 30] {
+    throw "List window changed element order or alias"
+}
+if text[0:1] != "e" || text[1:3] != "́🙂" || text[3:4] != "z" || text[4:4] != "" {
+    throw "String window changed scalar sequence"
+}
+if dynamic[0:1] != [10] || nested[0:1][0][0:1] != [10] || [...bare, 2] != [2] {
+    throw "slice lost a valid receiver"
+}
+if identity[Any](wide[2:2]) != [] || identity(contextual) != [] || identity(alias[bound():1]) != [] {
+    throw "typed empty List changed its value"
+}
+if list::map((alias)[0:0], {|item| item + 1}) != [] {
+    throw "grouped receiver lost its List type"
+}
+let reassigned_empty = alias[reassigned_bound:reassigned_bound]
+if list::map(reassigned_empty, {|item| item + 1}) != [] {
+    throw "reassigned endpoints weakened List type"
+}
+list::map(rows()[4:4], {|item| item + 1})
+"#,
+    );
+    assert_eq!(value, Value::list(Vec::new()));
+}
+
+#[test]
+fn slice_bounds_declared_any_are_checked_at_runtime() {
+    let value = checked_value(
+        "declared Any defers endpoint validation",
+        r#"
+let rows = [10, 20]
+let bound: Any = false
+mut caught = false
+try {
+    let window = rows[0:(bound)]
+} catch error {
+    caught = true
+}
+(caught)
+"#,
+    );
+    assert_eq!(value, Value::Bool(true));
+}
+
+#[test]
+fn slice_type_diagnostics_name_each_responsible_operand() {
+    let source = OneModule {
+        source: b"let selected = false[\"first\":1.5]\n".to_vec(),
+    };
+    let report =
+        ModuleProgramLoader::new(&source, &source).analyze(Path::new("/predictable/main.opaal"));
+    let expected = [
+        ("SIG031", "false"),
+        ("SIG032", "\"first\""),
+        ("SIG032", "1.5"),
+    ];
+    assert_eq!(
+        report.issues().len(),
+        expected.len(),
+        "{:?}",
+        report.issues()
+    );
+    let diagnostics = report
+        .issues()
+        .iter()
+        .flat_map(|issue| issue.error().diagnostics());
+    for (diagnostic, (code, operand)) in diagnostics.zip(expected) {
+        let span = diagnostic.labels()[0].span();
+        assert_eq!(diagnostic.code(), code);
+        assert_eq!(&source.source[span.start()..span.end()], operand.as_bytes());
+    }
+}
+
+#[test]
+fn slice_type_evidence_neither_invents_nor_narrows_a_list_element() {
+    for (text, code) in [
+        (
+            "import std::list as list\nlist::map([][0:0], {|n| n + 1})",
+            "SIG010",
+        ),
+        (
+            "let wide: List[Any] = [1, 'x']\nlet narrow: List[Int] = wide[0:0]",
+            "SIG019",
+        ),
+    ] {
+        let source = OneModule {
+            source: text.as_bytes().to_vec(),
+        };
+        let report = ModuleProgramLoader::new(&source, &source)
+            .analyze(Path::new("/predictable/main.opaal"));
+        let diagnostics: Vec<_> = report
+            .issues()
+            .iter()
+            .flat_map(|issue| issue.error().diagnostics())
+            .collect();
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        assert_eq!(diagnostics[0].code(), code);
+    }
+}
+
+#[test]
 fn list_comprehensions_resolve_the_source_then_filter_and_project() {
     let value = checked_value(
         "comprehension ordering and captures",

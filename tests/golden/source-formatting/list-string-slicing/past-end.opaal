@@ -1,0 +1,2 @@
+let counts: List[Int] = [10, 20]
+let window = counts[1:3]

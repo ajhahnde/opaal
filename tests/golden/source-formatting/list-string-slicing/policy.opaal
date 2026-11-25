@@ -1,0 +1,12 @@
+export action verify() -> Int
+{
+    effects {
+    }
+    let counts: List[Int] = [10, 20, 30]
+    let window = counts[1:3]
+    let caption = "héllo"[1:3]
+    if window != [20, 30] || caption != "él" {
+        throw "unexpected report preview"
+    }
+    return window[0]
+}

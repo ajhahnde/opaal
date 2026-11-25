@@ -11,9 +11,16 @@ pub enum TupleDepthError {
     Cancelled,
     Exceeded(Span),
     ComprehensionExceeded(Span),
+    SliceExceeded(Span),
 }
 
-/// Checks tuple and comprehension depth, including trees provided by Rust callers.
+#[derive(Clone, Copy)]
+pub(crate) enum BoundedExpression {
+    Comprehension,
+    Slice,
+}
+
+/// Checks tuple, comprehension and slice depth, including trees provided by Rust callers.
 pub fn check_tuple_depth(
     script: &Script,
     is_cancelled: &dyn Fn() -> bool,
@@ -42,7 +49,7 @@ struct Path {
     tuple: bool,
     excess: Option<Span>,
     blocks: usize,
-    comprehension: bool,
+    bounded: Option<BoundedExpression>,
     comprehension_excess: Option<Span>,
 }
 
@@ -87,8 +94,14 @@ impl<'a> Walk<'a> {
     fn check_comprehension(&mut self, span: Span) -> Result<(), TupleDepthError> {
         if self.path.depth + self.path.blocks > MAX_COMPREHENSION_DEPTH {
             let first = *self.path.comprehension_excess.get_or_insert(span);
-            if self.path.comprehension {
-                return Err(TupleDepthError::ComprehensionExceeded(first));
+            match self.path.bounded {
+                Some(BoundedExpression::Comprehension) => {
+                    return Err(TupleDepthError::ComprehensionExceeded(first));
+                }
+                Some(BoundedExpression::Slice) => {
+                    return Err(TupleDepthError::SliceExceeded(first));
+                }
+                None => {}
             }
         }
         Ok(())
@@ -103,7 +116,9 @@ impl<'a> Walk<'a> {
                 Node::Expression(expression) => {
                     matches!(
                         expression.kind(),
-                        ExpressionKind::Tuple(_) | ExpressionKind::ListComprehension(_)
+                        ExpressionKind::Tuple(_)
+                            | ExpressionKind::ListComprehension(_)
+                            | ExpressionKind::Slice(_)
                     )
                 }
                 Node::Pattern(pattern) => matches!(pattern, Pattern::Tuple(_)),
@@ -277,9 +292,15 @@ impl<'a> Walk<'a> {
             _ => true,
         };
         if has_children {
-            self.path.comprehension |= matches!(kind, ExpressionKind::ListComprehension(_));
+            let bounded = match kind {
+                ExpressionKind::ListComprehension(_) => Some(BoundedExpression::Comprehension),
+                ExpressionKind::Slice(_) => Some(BoundedExpression::Slice),
+                _ => None,
+            };
+            self.path.bounded = self.path.bounded.or(bounded);
             let comprehension_span = match kind {
                 ExpressionKind::Unary(unary) => unary.operator.span(),
+                ExpressionKind::Slice(slice) => slice.open,
                 _ => expression.span(),
             };
             self.enter_at(
@@ -339,6 +360,7 @@ impl<'a> Walk<'a> {
                 self.push(Node::Expression(&index.index));
                 self.push(Node::Expression(&index.target));
             }
+            ExpressionKind::Slice(slice) => self.extend(slice.operands().map(Node::Expression)),
             ExpressionKind::Member(member) => self.push(Node::Expression(&member.target)),
             ExpressionKind::Unary(unary) => self.push(Node::Expression(&unary.operand)),
             ExpressionKind::Binary(binary) => {

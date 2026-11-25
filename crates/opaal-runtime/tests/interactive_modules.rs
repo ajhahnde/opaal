@@ -1342,3 +1342,47 @@ fn indexed_replacement_retains_cell_types_aliases_and_index_only_callables() {
         Value::list(vec![Value::list(vec![Value::Int(1), Value::Int(9)])])
     );
 }
+
+#[test]
+fn slices_keep_types_in_later_cells_and_captured_callables() {
+    let sources = Sources::default();
+    let mut session = session();
+    for text in [
+        "import std::list as list",
+        "let counts: List[Int] = [10, 20, 30]",
+        "let empty = counts[\n3:3\n]",
+        "let capture = {|| -> List[Int] list::map(empty[0:0], {|n| n + 1}) }",
+    ] {
+        submit(&mut session, &sources, text);
+    }
+    assert_eq!(
+        submit(&mut session, &sources, "list::map(empty, {|n| n + 1})"),
+        Value::list(vec![])
+    );
+    assert_eq!(
+        submit(&mut session, &sources, "capture()"),
+        Value::list(vec![])
+    );
+    for (text, code) in [
+        ("let failed = counts[0:4]", "RUN001"),
+        ("let failed = counts[0:'last']", "SIG032"),
+    ] {
+        let error = session
+            .submit_with_source_loader(
+                "slice-cell",
+                text,
+                &sources,
+                &sources,
+                &NoExecutables,
+                &FakePlatform::full(),
+                &FakeClock::new(),
+                &mut Vec::new(),
+            )
+            .unwrap_err();
+        assert!(format!("{error:?}").contains(code), "{text}: {error:?}");
+    }
+    assert_eq!(
+        submit(&mut session, &sources, "let failed = counts[1:3]\nfailed"),
+        Value::list(vec![Value::Int(20), Value::Int(30)])
+    );
+}

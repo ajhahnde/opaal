@@ -830,6 +830,58 @@ fn comprehension_depth_is_checked_at_rust_and_analysis_entry_points() {
 }
 
 #[test]
+fn slice_depth_is_checked_before_evaluating_a_rust_ast() {
+    use opaal_syntax::{Expression, ExpressionKind, Script, Statement, StatementKind};
+
+    let source = SourceFile::new(
+        SourceId::new(47),
+        "embedded-slice.opaal",
+        "let x = \"abc\"[0:1]",
+    );
+    let ParseOutcome::Complete(script) = parse_opaal(&source) else {
+        panic!("expected slice");
+    };
+    let statement = &script.statements()[0];
+    let StatementKind::Declaration(mut declaration) = statement.kind().clone() else {
+        panic!("expected declaration");
+    };
+    let ExpressionKind::Slice(slice) = declaration.value.kind() else {
+        panic!("expected slice");
+    };
+    let open = slice.open;
+    for wraps in 0..=32 {
+        if wraps >= 31 {
+            let embedded = Script::new(
+                vec![Statement::new(
+                    StatementKind::Declaration(declaration.clone()),
+                    statement.span(),
+                )],
+                script.span(),
+            );
+            let mut scope = ScopeStack::new();
+            let result = evaluate_in_environment(
+                &embedded,
+                &source,
+                &mut scope,
+                &mut Environment::new(),
+                &EvalLimits::default(),
+            );
+            if wraps == 31 {
+                assert!(result.is_ok(), "{result:?}");
+            } else {
+                let error = result.unwrap_err();
+                assert_eq!(error.kind(), &RuntimeErrorKind::ResourceBudgetExceeded);
+                assert_eq!(error.span(), open);
+                assert!(scope.get("x").is_none());
+            }
+        }
+        let span = declaration.value.span();
+        declaration.value =
+            Expression::new(ExpressionKind::List(vec![declaration.value.into()]), span);
+    }
+}
+
+#[test]
 fn indexed_loops_meter_validation_of_composite_items() {
     let items = ["1"; 32].join(", ");
     let legacy = program(&format!("for item in [[{items}]] {{}}"));

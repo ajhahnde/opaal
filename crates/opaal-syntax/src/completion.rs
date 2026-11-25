@@ -91,14 +91,14 @@ pub fn completion_target(source: &str, cursor: usize) -> Option<CompletionTarget
                 && !after_import
                     .any(|token| token.kind() == TokenKind::Delimiter(Delimiter::RightBrace))
         });
-    let active = ActiveWord::at(source, &tokens, cursor, import_group)?;
+    let (in_bracket_operand, separator) =
+        crate::parser::bracket_operand_context(&source_file, &tokens, cursor);
+    let active = ActiveWord::at(source, &tokens, cursor, import_group, separator)?;
     let prior = significant_before(&tokens, active.range.start);
     let stage = current_stage(&prior);
     let context = if import_group && is_path_spelling(&active) {
         path_context(source, &tokens, &active)
-    } else if scan_conditionals(&prior, false).unwrap_or(false)
-        || crate::parser::in_comprehension_operand(&source_file, &tokens, cursor)
-    {
+    } else if scan_conditionals(&prior, false).unwrap_or(false) || in_bracket_operand {
         CompletionContext::Expression
     } else if prior.last().is_some_and(|token| {
         matches!(
@@ -418,15 +418,20 @@ struct ActiveWord {
 }
 
 impl ActiveWord {
-    fn at(source: &str, tokens: &[Token], cursor: usize, import_group: bool) -> Option<Self> {
-        let is_component = |kind| {
-            is_word_component(kind)
-                && !(import_group && kind == TokenKind::Operator(Operator::Comma))
+    fn at(
+        source: &str,
+        tokens: &[Token],
+        cursor: usize,
+        import_group: bool,
+        separator: Option<Span>,
+    ) -> Option<Self> {
+        let is_component = |token: &Token| {
+            is_word_component(token.kind())
+                && !(import_group && token.kind() == TokenKind::Operator(Operator::Comma))
+                && separator != Some(token.span())
         };
         let containing = tokens.iter().position(|token| {
-            token.span().start() <= cursor
-                && cursor <= token.span().end()
-                && is_component(token.kind())
+            token.span().start() <= cursor && cursor <= token.span().end() && is_component(token)
         });
 
         let Some(index) = containing else {
@@ -446,14 +451,14 @@ impl ActiveWord {
         let mut first = index;
         while first > 0
             && tokens[first - 1].span().end() == tokens[first].span().start()
-            && is_component(tokens[first - 1].kind())
+            && is_component(&tokens[first - 1])
         {
             first -= 1;
         }
         let mut last = index;
         while last + 1 < tokens.len()
             && tokens[last].span().end() == tokens[last + 1].span().start()
-            && is_component(tokens[last + 1].kind())
+            && is_component(&tokens[last + 1])
         {
             last += 1;
         }

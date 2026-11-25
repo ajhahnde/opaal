@@ -138,3 +138,39 @@ fn token_highlight_kind(kind: TokenKind) -> HighlightKind {
         TokenKind::Invalid(_) => HighlightKind::Invalid,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn slice_highlights_keep_operand_and_separator_byte_ranges() {
+        let source = "\"é界🙂\"[1:2]";
+        let segments = SyntaxHighlighter::new().highlight(source);
+        assert_eq!(
+            segments
+                .iter()
+                .map(HighlightSegment::text)
+                .collect::<String>(),
+            source
+        );
+        let selected: Vec<_> = segments
+            .iter()
+            .filter(|segment| {
+                matches!(
+                    segment.kind(),
+                    HighlightKind::Literal | HighlightKind::Operator
+                )
+            })
+            .map(|segment| (segment.kind(), segment.text()))
+            .collect();
+        assert_eq!(
+            selected,
+            [
+                (HighlightKind::Literal, "1"),
+                (HighlightKind::Operator, ":"),
+                (HighlightKind::Literal, "2")
+            ]
+        );
+    }
+}

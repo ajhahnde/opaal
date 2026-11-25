@@ -1494,6 +1494,116 @@
       "assertion": "ci/qualify_source_formatting.py"
     },
     {
+      "path": "tests/golden/source-formatting/list-string-slicing/bad-operand.opaal",
+      "role": "semantic-negative",
+      "reason": "Known endpoint type error at the original String literal.",
+      "assertion": "ci/qualify_source_formatting.py",
+      "sha256": "8d6bbe5dba968a6a51c1470629b830d13d9837c62529d4e50332f9a711d802b6"
+    },
+    {
+      "path": "tests/golden/source-formatting/list-string-slicing/bad-target.opaal",
+      "role": "semantic-negative",
+      "reason": "Known receiver type error at the original binding reference.",
+      "assertion": "ci/qualify_source_formatting.py",
+      "sha256": "9a108dd3d68ba976a7cd44e489181cf3e0559c8cd19d71d58ae95c3a9cf9922c"
+    },
+    {
+      "path": "tests/golden/source-formatting/list-string-slicing/before.opaal",
+      "role": "positive",
+      "reason": "Indexed List and String preview on the earlier language surface.",
+      "assertion": "ci/qualify_source_formatting.py"
+    },
+    {
+      "path": "tests/golden/source-formatting/list-string-slicing/canonical.opaal",
+      "role": "positive",
+      "reason": "Expected compact separator and comment layout for CLI and LSP.",
+      "assertion": "ci/qualify_source_formatting.py"
+    },
+    {
+      "path": "tests/golden/source-formatting/list-string-slicing/compatibility.opaal",
+      "role": "positive",
+      "reason": "Generic calls, existing indices and colon-bearing command words retain their spelling.",
+      "assertion": "ci/qualify_source_formatting.py"
+    },
+    {
+      "path": "tests/golden/source-formatting/list-string-slicing/effect.opaal",
+      "role": "refused",
+      "reason": "Pure test admission discovers an effect reachable from a slice operand.",
+      "assertion": "ci/qualify_source_formatting.py",
+      "sha256": "9117365e716e75a607d830a80b0d6b64d88842364fc0be13b1caa3639bb2d268"
+    },
+    {
+      "path": "tests/golden/source-formatting/list-string-slicing/incomplete.opaal",
+      "role": "syntax-incomplete",
+      "reason": "An open slice continues in the prompt and cannot be rewritten.",
+      "assertion": "ci/qualify_source_formatting.py",
+      "sha256": "840ad0096b6b136aa8e1813450bb6c2bc3a80891c6cc71f883eaab773b321581",
+      "format_diagnostic": "SYN002",
+      "format_message": "incomplete input: expression requires another operand"
+    },
+    {
+      "path": "tests/golden/source-formatting/list-string-slicing/invalid.opaal",
+      "role": "syntax-invalid",
+      "reason": "The extra separator is diagnosed at its source position and cannot be rewritten.",
+      "assertion": "ci/qualify_source_formatting.py",
+      "sha256": "a8577084c8b050b5bce68384f996f8d6af971e8e3014015db5712c2209ca0a16",
+      "format_diagnostic": "OP1000",
+      "format_message": "expected `]` after slice endpoint"
+    },
+    {
+      "path": "tests/golden/source-formatting/list-string-slicing/noncanonical.opaal",
+      "role": "noncanonical",
+      "reason": "Input for exact slice formatter parity and comment retention.",
+      "assertion": "ci/qualify_source_formatting.py",
+      "sha256": "d0940e27fc50e76a60d16da6b4e68e1480fd6eca3119fea992af2abc094fa914",
+      "format_diagnostic": "FMT001",
+      "format_message": "source is not canonically formatted"
+    },
+    {
+      "path": "tests/golden/source-formatting/list-string-slicing/past-end.opaal",
+      "role": "runtime-negative",
+      "reason": "A well-typed endpoint past length fails during evaluation.",
+      "assertion": "ci/qualify_source_formatting.py",
+      "sha256": "d853d45120fedc7399875a1a0b0efe32e4b8b01aacf259f2248ee531ef91ff1d"
+    },
+    {
+      "path": "tests/golden/source-formatting/list-string-slicing/policy.opaal",
+      "role": "positive",
+      "reason": "Pure accepted action checks both slice families and returns the report value.",
+      "assertion": "ci/qualify_source_formatting.py"
+    },
+    {
+      "path": "tests/golden/source-formatting/list-string-slicing/preview.opaal",
+      "role": "positive",
+      "reason": "Executable report preview checks List, String and combining-mark results.",
+      "assertion": "ci/qualify_source_formatting.py"
+    },
+    {
+      "path": "tests/golden/source-formatting/list-string-slicing/qualified-bounds.opaal",
+      "role": "positive",
+      "reason": "Qualified calls and normal bindings are ordinary slice endpoints.",
+      "assertion": "ci/qualify_source_formatting.py"
+    },
+    {
+      "path": "tests/golden/source-formatting/list-string-slicing/rethrow.opaal",
+      "role": "runtime-negative",
+      "reason": "Rethrowing a slice error preserves its original endpoint span.",
+      "assertion": "ci/qualify_source_formatting.py",
+      "sha256": "214e5b5143d6b8c108ef2f9bfd482a4b63039b86c4108fd33f8d90ac244459aa"
+    },
+    {
+      "path": "tests/golden/source-formatting/list-string-slicing/tasks.opaal",
+      "role": "positive",
+      "reason": "Accepted task export for pure slice execution and source drift checks.",
+      "assertion": "ci/qualify_source_formatting.py"
+    },
+    {
+      "path": "tests/golden/source-formatting/list-string-slicing/typed-empty.opaal",
+      "role": "positive",
+      "reason": "Contextual and call-result List evidence survives empty slices.",
+      "assertion": "ci/qualify_source_formatting.py"
+    },
+    {
       "path": "tests/golden/source-formatting/missing-comma.opaal",
       "role": "syntax-invalid",
       "reason": "Exact formatter migration, comment layout or syntax refusal golden.",
@@ -2703,6 +2813,11 @@
       "path": "DEVELOPMENT.md",
       "ordinal": 1,
       "sha256": "d9b13789c6911b693c26e52293035a521d9d62141b3337812a8be1cd8174ffa4"
+    },
+    {
+      "path": "DEVELOPMENT.md",
+      "ordinal": 2,
+      "sha256": "b95cd7a96f78528e2038b23e032fc9ef6ae59094f33fa15bc4758f70a5190d54"
     }
   ],
   "embedded_owners": [
@@ -2954,8 +3069,8 @@
     },
     {
       "path": "ci/package_source_formatting.py",
-      "sha256": "e8b49fb2a48968cf53b64f1086a9b8a3b595e6141696df08f8380bb54e0f488e",
-      "source_markers": 181,
+      "sha256": "639b7c4fa8d9bec27d263fd9afe59069ff58645bd2b2f2c9bcdc4b09bdc1e3c9",
+      "source_markers": 197,
       "constructors_or_assertions": [
         "main",
         "module constants/imports"
@@ -3199,8 +3314,8 @@
     },
     {
       "path": "ci/qualify_source_formatting.py",
-      "sha256": "91c7450bd83c2f9766652580128f4a9b8419c250b39349f3b06655aa7f344205",
-      "source_markers": 500,
+      "sha256": "046a47e9630b7ddc79c78b730334ec4daadf39ded566dda0a5ef9d7d7b727062",
+      "source_markers": 540,
       "constructors_or_assertions": [
         "action_declarations",
         "action_position",
@@ -3227,6 +3342,7 @@
         "list_literal_spread",
         "list_map",
         "list_map_queries",
+        "list_string_slicing",
         "location",
         "main",
         "module constants/imports",
@@ -3244,6 +3360,7 @@
         "request",
         "run",
         "send",
+        "slice_queries",
         "source_range",
         "span",
         "terminal_continuation",
@@ -3664,7 +3781,7 @@
     },
     {
       "path": "crates/opaal-cli/src/highlight.rs",
-      "sha256": "f3af64f0dc344df5986c21a6c7764f93c48141549a26e2db7ec7b056f493291d",
+      "sha256": "e2225ac10a40b53704fbc7263e399befb136757356459961df6a755c5246e989",
       "source_markers": 1,
       "constructors_or_assertions": [
         "highlight"
@@ -4924,7 +5041,7 @@
     },
     {
       "path": "crates/opaal-runtime/src/eval.rs",
-      "sha256": "f5ebdea07a0421af451588a021f40e402276025a29fb5e9e74ef288629e39e3d",
+      "sha256": "490e8ee52ad74c095169e797077e3e3309854674de3122824a164a79855a5010",
       "source_markers": 17,
       "constructors_or_assertions": [
         "ambient_process_policy_propagates_into_lazy_transform_closures",
@@ -5054,6 +5171,18 @@
       "assertion": "crates/opaal-runtime/src/eval/tests/random_operations.rs"
     },
     {
+      "path": "crates/opaal-runtime/src/eval/tests/slices.rs",
+      "sha256": "8e084d0d930debaa3d8a23c434cd5e12db7961158990ece7b3c3ed621f910982",
+      "source_markers": 5,
+      "constructors_or_assertions": [
+        "callable_defined_inside_a_slice_endpoint_can_be_restored",
+        "evaluate_slice"
+      ],
+      "role": "mixed-test-buffers",
+      "reason": "Direct evaluator fixtures compare slice work, budget, cancellation, operand order and callable restoration.",
+      "assertion": "cargo test -p opaal-runtime --lib eval::tests::slices"
+    },
+    {
       "path": "crates/opaal-runtime/src/execute.rs",
       "sha256": "cb6874ac40cff0e90dc6654ff35076a212faa4bd17914e098df6d4aaaa4e2f41",
       "source_markers": 8,
@@ -5080,7 +5209,7 @@
     },
     {
       "path": "crates/opaal-runtime/src/module.rs",
-      "sha256": "904c1c723ded26dbcacceb4a16e4cad69435049f3fb044da35266a6bd6fd0a8f",
+      "sha256": "9c1ac888e96457cc3ed1431c1aadad652fe35efaf65de21edd11a705b7a1de6e",
       "source_markers": 22,
       "constructors_or_assertions": [
         "analyze_interactive_with_control",
@@ -5556,7 +5685,7 @@
     },
     {
       "path": "crates/opaal-runtime/tests/interactive_modules.rs",
-      "sha256": "f8077b1ebdebdf723013ddfa5ec66b2485a70cbb07f573e0e931c55066b15d63",
+      "sha256": "017b168653320000cc5cf5ecffad8a5ba46797774b443f5ac446bbfc8c0b4d99",
       "source_markers": 99,
       "constructors_or_assertions": [
         "a_declaration_cannot_publish_types_from_a_later_local_import",
@@ -5732,8 +5861,8 @@
     },
     {
       "path": "crates/opaal-runtime/tests/opaal_resources.rs",
-      "sha256": "85610da30c3233d927aa70c14e61f0ed15ac0111f2b676d2cfa7eee0b9a44083",
-      "source_markers": 78,
+      "sha256": "8c09ea3b0f6be5bc426db4a48f92c6da3d4af79649c7850d79af36df60180f40",
+      "source_markers": 80,
       "constructors_or_assertions": [
         "a_failed_dynamic_tuple_binding_never_runs_its_body_or_leaks_names",
         "analysis_source",
@@ -5760,6 +5889,7 @@
         "rust_built_loop_patterns_apply_the_tuple_depth_limit_before_evaluation",
         "rust_built_loops_reject_literal_patterns_before_iteration",
         "rust_ingress_rejects_before_taking_ownership_on_a_small_stack",
+        "slice_depth_is_checked_before_evaluating_a_rust_ast",
         "source_limit_requests_only_the_ceiling_plus_one_byte",
         "tuple_slot_depth_refuses_before_the_next_slot_runs"
       ],
@@ -5828,9 +5958,10 @@
     },
     {
       "path": "crates/opaal-runtime/tests/predictable_language.rs",
-      "sha256": "67926c9234461ddd38984130681bab6ce5ccbc7b22ca197bc13a05a770726f31",
-      "source_markers": 38,
+      "sha256": "1cd3e54c06592fa8a2a53a442d06f66cb990c9caa9cb93490459b0a68cff1871",
+      "source_markers": 42,
       "constructors_or_assertions": [
+        "bound",
         "check_preserves_legacy_deep_list_arms_after_command_for_words",
         "checked_names_calls_and_block_values_equal_their_runtime_values",
         "checked_value",
@@ -5848,6 +5979,9 @@
         "loop_checking_rejects_known_shapes_and_duplicate_or_mutable_bindings",
         "predicate",
         "project",
+        "rows",
+        "slice_type_diagnostics_name_each_responsible_operand",
+        "slice_type_evidence_neither_invents_nor_narrows_a_list_element",
         "source",
         "visit"
       ],
@@ -6331,7 +6465,7 @@
     },
     {
       "path": "crates/opaal-syntax/src/completion.rs",
-      "sha256": "95014a1a63c387f24943fd6fc2974581656c08b85c94b9b95a3e3063bc072b6b",
+      "sha256": "ebac47936fad84a41ca263277cac23874c4d053ed730888053dcd3d11addbfae",
       "source_markers": 1,
       "constructors_or_assertions": [
         "completion_target"
@@ -6342,7 +6476,7 @@
     },
     {
       "path": "crates/opaal-syntax/src/parser.rs",
-      "sha256": "35881afeec8b49e30d0d64f84f6dd2401325343f67878e0c1f2bbc711896d70a",
+      "sha256": "04bba7ae850cb2b0f9787d8d7acd1596a7c041a8362f9a6d0241a93bdd31ac88",
       "source_markers": 3,
       "constructors_or_assertions": [
         "cancellation_is_polled_during_shorthand_field_parsing_after_lexing",
@@ -6625,7 +6759,7 @@
     },
     {
       "path": "crates/opaal-syntax/tests/property_invariants.rs",
-      "sha256": "ca86fdd5fb6315ad089730194caea10e92b951c05f9547a91c02a695c5f7e3ec",
+      "sha256": "df545ecb082c4e4fe35fd09a915769ff84b40b9a8118c135bb48ab5c26e62178",
       "source_markers": 1,
       "constructors_or_assertions": [
         "bounded_utf8_sources_preserve_syntax_invariants"
@@ -6645,6 +6779,17 @@
       "role": "mixed-test-buffers",
       "reason": "Explicit shorthand syntax/semantic contract buffers and assertions.",
       "assertion": "crates/opaal-syntax/tests/record_shorthand.rs"
+    },
+    {
+      "path": "crates/opaal-syntax/tests/slices.rs",
+      "sha256": "883442b19d5f1e016dd33a5ef663f1ff49c97cb7d23422ec2cbba3baf47866bf",
+      "source_markers": 2,
+      "constructors_or_assertions": [
+        "source"
+      ],
+      "role": "mixed-test-buffers",
+      "reason": "Slice AST, grammar compatibility, formatting, diagnostics and structural depth fixtures.",
+      "assertion": "cargo test -p opaal-syntax --test slices"
     },
     {
       "path": "crates/opaal-syntax/tests/source_diagnostics.rs",
@@ -6677,7 +6822,7 @@
     },
     {
       "path": "crates/opaal-syntax/tests/support/formatting.rs",
-      "sha256": "35955979322f8961833c8622e0f4f9a737de2f8e4214ba2eacba93e8bdf45b5d",
+      "sha256": "ed2a8d4c4d86257a618be4265fb33b0148b5d92f2d8f40e885df02b19635220e",
       "source_markers": 1,
       "constructors_or_assertions": [
         "assert_roundtrip"
@@ -9530,6 +9675,118 @@
         "parser"
       ],
       "sha256": "5bd9309654ce02fce662992e4a330fff1aba14481d67fd6fafdde43cd8d5131a"
+    },
+    {
+      "path": "tests/golden/source-formatting/list-string-slicing/bad-operand.opaal",
+      "targets": [
+        "parser"
+      ],
+      "sha256": "8d6bbe5dba968a6a51c1470629b830d13d9837c62529d4e50332f9a711d802b6"
+    },
+    {
+      "path": "tests/golden/source-formatting/list-string-slicing/bad-target.opaal",
+      "targets": [
+        "parser"
+      ],
+      "sha256": "9a108dd3d68ba976a7cd44e489181cf3e0559c8cd19d71d58ae95c3a9cf9922c"
+    },
+    {
+      "path": "tests/golden/source-formatting/list-string-slicing/before.opaal",
+      "targets": [
+        "parser"
+      ],
+      "sha256": "38bfecc7b267eebcbbc1ef40da1aaf8896a205148b629140eac3065db74c6783"
+    },
+    {
+      "path": "tests/golden/source-formatting/list-string-slicing/canonical.opaal",
+      "targets": [
+        "parser"
+      ],
+      "sha256": "976a322a1eba10bbe264cf59bfb10991db59cbaf6484edcc80bf238c9655baa9"
+    },
+    {
+      "path": "tests/golden/source-formatting/list-string-slicing/compatibility.opaal",
+      "targets": [
+        "parser"
+      ],
+      "sha256": "34c9c626592efa37be387cccb71f9cbbdb2564bf1649263a67ede30a02330cfd"
+    },
+    {
+      "path": "tests/golden/source-formatting/list-string-slicing/effect.opaal",
+      "targets": [
+        "parser"
+      ],
+      "sha256": "9117365e716e75a607d830a80b0d6b64d88842364fc0be13b1caa3639bb2d268"
+    },
+    {
+      "path": "tests/golden/source-formatting/list-string-slicing/incomplete.opaal",
+      "targets": [
+        "parser"
+      ],
+      "sha256": "840ad0096b6b136aa8e1813450bb6c2bc3a80891c6cc71f883eaab773b321581"
+    },
+    {
+      "path": "tests/golden/source-formatting/list-string-slicing/invalid.opaal",
+      "targets": [
+        "parser"
+      ],
+      "sha256": "a8577084c8b050b5bce68384f996f8d6af971e8e3014015db5712c2209ca0a16"
+    },
+    {
+      "path": "tests/golden/source-formatting/list-string-slicing/noncanonical.opaal",
+      "targets": [
+        "parser"
+      ],
+      "sha256": "d0940e27fc50e76a60d16da6b4e68e1480fd6eca3119fea992af2abc094fa914"
+    },
+    {
+      "path": "tests/golden/source-formatting/list-string-slicing/past-end.opaal",
+      "targets": [
+        "parser"
+      ],
+      "sha256": "d853d45120fedc7399875a1a0b0efe32e4b8b01aacf259f2248ee531ef91ff1d"
+    },
+    {
+      "path": "tests/golden/source-formatting/list-string-slicing/policy.opaal",
+      "targets": [
+        "parser"
+      ],
+      "sha256": "a1178fbd5f2c612b91db68e0b0f0dd2d6e29d9f3817fd89fbd1ecea8360db2db"
+    },
+    {
+      "path": "tests/golden/source-formatting/list-string-slicing/preview.opaal",
+      "targets": [
+        "parser"
+      ],
+      "sha256": "889951aa866d5e81f0a866a716facbf64d06aebb94df5ec669b76e20b14941e3"
+    },
+    {
+      "path": "tests/golden/source-formatting/list-string-slicing/qualified-bounds.opaal",
+      "targets": [
+        "parser"
+      ],
+      "sha256": "ce49d4548139c0b74a8918fcc5080e185192b0704dbb2a721b1e735098e9ec34"
+    },
+    {
+      "path": "tests/golden/source-formatting/list-string-slicing/rethrow.opaal",
+      "targets": [
+        "parser"
+      ],
+      "sha256": "214e5b5143d6b8c108ef2f9bfd482a4b63039b86c4108fd33f8d90ac244459aa"
+    },
+    {
+      "path": "tests/golden/source-formatting/list-string-slicing/tasks.opaal",
+      "targets": [
+        "parser"
+      ],
+      "sha256": "d43db0d045f37c79c6398ba99191039c2fcf6bf8dcc5cfaa2104c19f570badc5"
+    },
+    {
+      "path": "tests/golden/source-formatting/list-string-slicing/typed-empty.opaal",
+      "targets": [
+        "parser"
+      ],
+      "sha256": "0664846839157e27e228e7a2dacd39642c7a3ea653e029c469fda63aee1b46f7"
     },
     {
       "path": "tests/golden/source-formatting/missing-comma.opaal",

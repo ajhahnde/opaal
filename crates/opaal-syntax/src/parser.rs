@@ -1,7 +1,7 @@
 use crate::classification::classify_opaal_structure;
 use crate::lexer::lex_opaal_with_control;
 use crate::tuple_depth::{
-    MAX_COMPREHENSION_DEPTH, MAX_TUPLE_DEPTH, TupleDepthError, check_tuple_depth,
+    BoundedExpression, MAX_COMPREHENSION_DEPTH, MAX_TUPLE_DEPTH, TupleDepthError, check_tuple_depth,
 };
 use crate::{
     ActionDefinition, AndChain, AndOperator, Assignment, AstNode, BinaryExpression, BinaryOperator,
@@ -16,11 +16,11 @@ use crate::{
     NominalRecordExpression, NominalRecordFieldExpression, NominalRecordPattern,
     NominalTypeDeclaration, NominalTypeField, NumberKind, Operator, OutputMode, Parameter, Pattern,
     PatternField, PipeOperator, Pipeline, QualifiedName, RecordEntry, RecordKey, Redirection,
-    RedirectionKind, Script, Severity, SourceFile, Span, Stage, StageKind, Statement,
-    StatementKind, StaticEffectArgument, SyntaxClassification, TaskDefinition, Token, TokenKind,
-    TryStatement, TupleSyntax, TypeConstraint, TypeParameter, TypeReference, TypeReferenceKind,
-    UnaryExpression, UnaryOperator, VariantDeclaration, VariantPattern, VariantTypeDeclaration,
-    WhileStatement, Word, WordPart, WordPartKind,
+    RedirectionKind, Script, Severity, SliceExpression, SourceFile, Span, Stage, StageKind,
+    Statement, StatementKind, StaticEffectArgument, SyntaxClassification, TaskDefinition, Token,
+    TokenKind, TryStatement, TupleSyntax, TypeConstraint, TypeParameter, TypeReference,
+    TypeReferenceKind, UnaryExpression, UnaryOperator, VariantDeclaration, VariantPattern,
+    VariantTypeDeclaration, WhileStatement, Word, WordPart, WordPartKind,
 };
 
 /// The result of parsing one source file.
@@ -69,6 +69,7 @@ pub(crate) struct FormatSpans {
     pub(crate) if_arms: Vec<IfArmSpans>,
     pub(crate) spaced_commas: Vec<Span>,
     pub(crate) comprehension_keywords: Vec<Span>,
+    pub(crate) slice_brackets: Vec<(Span, Span, Span)>,
     pub(crate) tuple_trailing_commas: Vec<Span>,
 }
 
@@ -115,14 +116,14 @@ fn parse_tokens(
         SyntaxClassification::Complete => None,
     };
     if let Some(incomplete) = incomplete
-        && (!can_recover_comprehension(incomplete) || !has_for_keyword(&tokens))
+        && (!can_recover_bracket_expression(incomplete) || !has_bracket_expression_marker(&tokens))
     {
         return ControlledParseOutcome::Parsed(ParseOutcome::Incomplete(incomplete));
     }
     let mut parser = Parser::new(source, tokens, is_cancelled, spans);
     let parsed = parser.index_delimiters().and_then(|()| {
         if let Some(incomplete) = incomplete
-            && !parser.has_comprehension_candidate()
+            && parser.bounded_opens.is_empty()
         {
             return Err(ParseError::Incomplete(incomplete));
         }
@@ -146,13 +147,16 @@ fn parse_tokens(
     }
 }
 
-fn has_for_keyword(tokens: &[Token]) -> bool {
-    tokens
-        .iter()
-        .any(|token| token.kind() == TokenKind::Keyword(Keyword::For))
+fn has_bracket_expression_marker(tokens: &[Token]) -> bool {
+    tokens.iter().any(|token| {
+        matches!(
+            token.kind(),
+            TokenKind::Keyword(Keyword::For) | TokenKind::Operator(Operator::Colon)
+        )
+    })
 }
 
-fn can_recover_comprehension(incomplete: IncompleteInput) -> bool {
+fn can_recover_bracket_expression(incomplete: IncompleteInput) -> bool {
     !matches!(
         incomplete.kind(),
         IncompleteReason::UnmatchedSingleQuote
@@ -161,14 +165,14 @@ fn can_recover_comprehension(incomplete: IncompleteInput) -> bool {
     )
 }
 
-pub(crate) fn classify_comprehensions(
+pub(crate) fn classify_bracket_expressions(
     source: &SourceFile,
     tokens: &[Token],
     structural: SyntaxClassification,
 ) -> SyntaxClassification {
-    if !has_for_keyword(tokens)
+    if !has_bracket_expression_marker(tokens)
         || matches!(structural, SyntaxClassification::Invalid(_))
-        || matches!(structural, SyntaxClassification::Incomplete(input) if !can_recover_comprehension(input))
+        || matches!(structural, SyntaxClassification::Incomplete(input) if !can_recover_bracket_expression(input))
     {
         return structural;
     }
@@ -176,7 +180,7 @@ pub(crate) fn classify_comprehensions(
     parser
         .index_delimiters()
         .expect("classification never cancels");
-    if !parser.has_comprehension_candidate() {
+    if parser.bounded_opens.is_empty() {
         return structural;
     }
     match parser.parse_script() {
@@ -190,45 +194,52 @@ pub(crate) fn classify_comprehensions(
     }
 }
 
-pub(crate) fn in_comprehension_operand(
+pub(crate) fn bracket_operand_context(
     source: &SourceFile,
     tokens: &[Token],
     cursor: usize,
-) -> bool {
-    if !has_for_keyword(tokens) {
-        return false;
+) -> (bool, Option<Span>) {
+    if !has_bracket_expression_marker(tokens) {
+        return (false, None);
     }
     let mut parser = Parser::new(source, tokens.to_vec(), &|| false, None);
     parser.projection_commands = Some(Vec::new());
     parser.index_delimiters().expect("completion never cancels");
-    parser
-        .comprehension_brackets
+    let Some((open, kind)) = parser
+        .bounded_opens
         .iter()
-        .enumerate()
         .rev()
-        .find_map(|(open, for_position)| {
-            let for_position = (*for_position)?;
+        .copied()
+        .find(|&(open, _)| {
             let end = parser.delimiter_ends[open];
-            (tokens[open].span().end() <= cursor
-                && (end == 0 || cursor <= tokens[end].span().start()))
-            .then_some((open, for_position, end))
+            tokens[open].span().end() <= cursor
+                && (end == 0 || cursor <= tokens[end].span().start())
         })
-        .is_some_and(|(open, for_position, end)| {
-            if parser.projection_commands.as_ref().is_some_and(|commands| {
-                commands.iter().any(|span| {
-                    tokens[open].span().start() < span.start()
-                        && span.start() <= cursor
-                        && cursor <= span.end()
-                })
-            }) {
-                return false;
-            }
-            cursor <= tokens[for_position].span().start()
-                || tokens[for_position + 1..if end == 0 { tokens.len() } else { end }]
+    else {
+        return (false, None);
+    };
+    if parser.projection_commands.as_ref().is_some_and(|commands| {
+        commands.iter().any(|span| {
+            tokens[open].span().start() < span.start()
+                && span.start() <= cursor
+                && cursor <= span.end()
+        })
+    }) {
+        return (false, None);
+    }
+    match kind {
+        BoundedExpression::Slice => (true, Some(tokens[parser.slice_separators[open]].span())),
+        BoundedExpression::Comprehension => {
+            let generator = parser.comprehension_brackets[open].expect("confirmed comprehension");
+            let end = parser.delimiter_ends[open];
+            let in_operand = cursor <= tokens[generator].span().start()
+                || tokens[generator + 1..if end == 0 { tokens.len() } else { end }]
                     .iter()
                     .find(|token| token.kind() == TokenKind::Keyword(Keyword::In))
-                    .is_some_and(|keyword| keyword.span().end() <= cursor)
-        })
+                    .is_some_and(|keyword| keyword.span().end() <= cursor);
+            (in_operand, None)
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -246,6 +257,16 @@ pub(crate) const IF_EXPRESSION_DEPTH_ERROR: &str = "if expressions can nest at m
 const TUPLE_DEPTH_ERROR: &str = "a path containing a tuple can nest at most 32 levels";
 pub(crate) const COMPREHENSION_DEPTH_ERROR: &str =
     "a path containing a list comprehension can nest at most 32 levels";
+const SLICE_DEPTH_ERROR: &str = "a path containing a slice can nest at most 32 levels";
+
+impl BoundedExpression {
+    fn depth_error(self) -> &'static str {
+        match self {
+            Self::Comprehension => COMPREHENSION_DEPTH_ERROR,
+            Self::Slice => SLICE_DEPTH_ERROR,
+        }
+    }
+}
 
 struct Parser<'source, 'control, 'metadata> {
     source: &'source SourceFile,
@@ -253,12 +274,14 @@ struct Parser<'source, 'control, 'metadata> {
     position: usize,
     delimiter_ends: Vec<usize>,
     comprehension_brackets: Vec<Option<usize>>,
-    comprehension_opens: Vec<usize>,
+    slice_separators: Vec<usize>,
+    bounded_opens: Vec<(usize, BoundedExpression)>,
     depth_frames: Vec<(usize, Span)>,
     probing_projection: bool,
     projection_commands: Option<Vec<Span>>,
-    comprehension_depth: usize,
-    completed_comprehensions: usize,
+    active_bounded_expression: Option<BoundedExpression>,
+    last_bounded_expression: Option<BoundedExpression>,
+    completed_bounded_expressions: usize,
     group_commas: Vec<Option<usize>>,
     group_has_chain: Vec<bool>,
     tuple_groups: usize,
@@ -288,12 +311,14 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
             source,
             delimiter_ends: vec![0; tokens.len()],
             comprehension_brackets: vec![None; tokens.len()],
-            comprehension_opens: Vec::new(),
+            slice_separators: vec![0; tokens.len()],
+            bounded_opens: Vec::new(),
             depth_frames: Vec::new(),
             probing_projection: false,
             projection_commands: None,
-            comprehension_depth: 0,
-            completed_comprehensions: 0,
+            active_bounded_expression: None,
+            last_bounded_expression: None,
+            completed_bounded_expressions: 0,
             group_commas: vec![None; tokens.len()],
             group_has_chain: vec![false; tokens.len()],
             tuple_groups: 0,
@@ -339,7 +364,7 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
                 .span(0..self.source.len())
                 .expect("the complete source range is valid"),
         );
-        if has_tuple_candidate || self.completed_comprehensions != 0 {
+        if has_tuple_candidate || self.completed_bounded_expressions != 0 {
             match check_tuple_depth(&script, self.is_cancelled) {
                 Ok(()) => {}
                 Err(TupleDepthError::Cancelled) => return Err(ParseError::Cancelled),
@@ -349,13 +374,12 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
                 Err(TupleDepthError::ComprehensionExceeded(span)) => {
                     return Err(self.invalid_at(span, COMPREHENSION_DEPTH_ERROR));
                 }
+                Err(TupleDepthError::SliceExceeded(span)) => {
+                    return Err(self.invalid_at(span, SLICE_DEPTH_ERROR));
+                }
             }
         }
         Ok(script.with_inline_exports(self.inline_exports))
-    }
-
-    fn has_comprehension_candidate(&self) -> bool {
-        !self.comprehension_opens.is_empty()
     }
 
     fn index_delimiters(&mut self) -> ParseResult<()> {
@@ -403,35 +427,57 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
                         self.comprehension_brackets[open].get_or_insert(position);
                     }
                 }
+                TokenKind::Operator(Operator::Colon) => {
+                    if let Some(&(open, _)) = delimiters.last()
+                        && self.tokens[open].kind() == TokenKind::Delimiter(Delimiter::LeftBracket)
+                    {
+                        self.slice_separators[open] = position;
+                    }
+                }
                 _ => {}
             }
         }
-        self.confirm_comprehension_brackets()
+        self.confirm_bounded_brackets()
     }
 
-    fn confirm_comprehension_brackets(&mut self) -> ParseResult<()> {
-        // An if condition can consume a same-level `for` as a command word.
-        // Find the first list expression's boundary without parsing payloads.
+    fn confirm_bounded_brackets(&mut self) -> ParseResult<()> {
+        // A command can consume a same-level `for` or `:`. Probe the operand
+        // boundary with the grammar, skipping nested delimiter payloads.
         let spans = self.format_spans.take();
         self.probing_projection = true;
         for open in 0..self.comprehension_brackets.len() {
-            if self.comprehension_brackets[open].is_none() {
+            if self.comprehension_brackets[open].is_none() && self.slice_separators[open] == 0 {
                 continue;
             }
             self.position = open + 1;
             self.continuation_depth = 1;
             self.skip_layout();
-            self.comprehension_brackets[open] = if self.current_kind()
-                == Some(TokenKind::Operator(Operator::Spread))
-                || self.parse_expression().is_err()
-            {
-                None
-            } else {
+            let boundary = if self.current_kind() == Some(TokenKind::Operator(Operator::Colon)) {
+                self.current_kind()
+            } else if self.parse_expression().is_ok() {
                 self.skip_layout();
-                self.at_keyword(Keyword::For).then_some(self.position)
+                self.current_kind()
+            } else {
+                None
+            };
+            self.comprehension_brackets[open] =
+                (boundary == Some(TokenKind::Keyword(Keyword::For))).then_some(self.position);
+            self.slice_separators[open] = if boundary == Some(TokenKind::Operator(Operator::Colon))
+            {
+                self.position
+            } else {
+                0
             };
             if self.comprehension_brackets[open].is_some() {
-                self.comprehension_opens.push(open);
+                self.bounded_opens
+                    .push((open, BoundedExpression::Comprehension));
+            } else if self.slice_separators[open] != 0 {
+                self.bounded_opens.push((open, BoundedExpression::Slice));
+                if self.projection_commands.is_some() {
+                    self.position += 1;
+                    self.skip_layout();
+                    let _ = self.parse_expression();
+                }
             }
             self.check_cancelled()?;
         }
@@ -460,7 +506,7 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
     }
 
     fn enter_payload(&mut self, unless_empty: Option<Delimiter>) -> ParseResult<()> {
-        if self.has_comprehension_candidate()
+        if !self.bounded_opens.is_empty()
             && !self.probing_projection
             && !unless_empty.is_some_and(|close| self.followed_by_delimiter(self.position, close))
         {
@@ -472,12 +518,12 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
     fn enter_payload_at(&mut self, open: usize) -> ParseResult<()> {
         let close = self.delimiter_ends[open];
         let end = if close == 0 { self.tokens.len() } else { close };
-        self.check_comprehension_path(open, end)?;
+        self.check_bounded_path(open, end)?;
         self.depth_frames.push((end, self.tokens[open].span()));
         Ok(())
     }
 
-    fn check_comprehension_path(&mut self, open: usize, end: usize) -> ParseResult<()> {
+    fn check_bounded_path(&mut self, open: usize, end: usize) -> ParseResult<()> {
         // Only grammar-selected constructors contribute here. The AST walk
         // accounts for the remaining, non-delimited structural edges.
         while self
@@ -489,21 +535,19 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
         }
         if self.depth_frames.len() + self.if_expression_spans.len() >= MAX_COMPREHENSION_DEPTH {
             let next = self
-                .comprehension_opens
-                .partition_point(|&candidate| candidate < open);
-            if self.comprehension_depth != 0
-                || self
-                    .comprehension_opens
+                .bounded_opens
+                .partition_point(|&(candidate, _)| candidate < open);
+            if let Some(kind) = self.active_bounded_expression.or_else(|| {
+                self.bounded_opens
                     .get(next)
-                    .is_some_and(|&candidate| candidate < end)
-            {
+                    .filter(|&&(candidate, _)| candidate < end)
+                    .map(|&(_, kind)| kind)
+            }) {
                 let mut levels: Vec<_> = self.depth_frames.iter().map(|&(_, span)| span).collect();
                 levels.extend(self.if_expression_spans.iter().copied());
                 levels.push(self.tokens[open].span());
                 levels.sort_unstable_by_key(|span| span.start());
-                return Err(
-                    self.invalid_at(levels[MAX_COMPREHENSION_DEPTH], COMPREHENSION_DEPTH_ERROR)
-                );
+                return Err(self.invalid_at(levels[MAX_COMPREHENSION_DEPTH], kind.depth_error()));
             }
         }
         Ok(())
@@ -1134,6 +1178,9 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
         self.skip_layout();
         let index = self.parse_expression()?;
         self.skip_layout();
+        if let Some(separator) = self.take_operator(Operator::Colon) {
+            return Err(self.invalid_at(separator.span(), "a slice cannot be assigned to"));
+        }
         let close = self.expect_delimiter(Delimiter::RightBracket, "index is not closed")?;
         self.continuation_depth -= 1;
         self.skip_inline();
@@ -1487,7 +1534,7 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
         let mut else_branch = loop {
             let start = self.take().expect("if keyword is current").span();
             self.skip_inline();
-            let before = self.completed_comprehensions;
+            let before = self.completed_bounded_expressions;
             let condition = self.parse_control_condition()?;
             self.skip_inline();
             let then_block = self.parse_block()?;
@@ -1501,10 +1548,13 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
                 None
             };
             arms.push((start, condition, then_block));
-            if self.completed_comprehensions > before
+            if self.completed_bounded_expressions > before
                 && let Some((excess, _, _)) = arms.get(MAX_COMPREHENSION_DEPTH + 1)
             {
-                return Err(self.invalid_at(*excess, COMPREHENSION_DEPTH_ERROR));
+                let kind = self
+                    .last_bounded_expression
+                    .expect("a bounded expression completed");
+                return Err(self.invalid_at(*excess, kind.depth_error()));
             }
             if !next_if {
                 break fallback.map(ElseBranch::Block);
@@ -1537,8 +1587,8 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
         if self.if_expression_spans.len() == MAX_IF_EXPRESSION_DEPTH {
             return Err(self.invalid_here(IF_EXPRESSION_DEPTH_ERROR));
         }
-        if self.comprehension_depth != 0 {
-            self.check_comprehension_path(self.position, self.position)?;
+        if self.active_bounded_expression.is_some() {
+            self.check_bounded_path(self.position, self.position)?;
         }
         self.if_expression_spans.push(self.current_span()?);
         let result = self.parse_if_expression_arms();
@@ -1662,7 +1712,10 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
             (None, self.parse_loop_pattern()?)
         } else {
             let first = self.parse_identifier()?;
-            if self.comprehension_depth == 0 {
+            if !matches!(
+                self.active_bounded_expression,
+                Some(BoundedExpression::Comprehension)
+            ) {
                 self.skip_inline();
             } else {
                 self.skip_layout();
@@ -2632,7 +2685,7 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
                     WordPart::new(WordPartKind::EscapedBrace, token.span())
                 }
                 TokenKind::InterpolationStart => {
-                    if literal && self.has_comprehension_candidate() {
+                    if literal && !self.bounded_opens.is_empty() {
                         self.enter_payload_at(open_position)?;
                         literal = false;
                     }
@@ -2746,7 +2799,7 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
 
     fn parse_expression(&mut self) -> ParseResult<Expression> {
         self.check_cancelled()?;
-        let before = (self.completed_tuples, self.completed_comprehensions);
+        let before = (self.completed_tuples, self.completed_bounded_expressions);
         let left = self.parse_unary()?;
         self.parse_binary_suffix(left, 1, before)
     }
@@ -2770,10 +2823,10 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
             let token = self.take().expect("binary operator is current");
             self.check_expression_chain(before, &mut wraps, token.span())?;
             self.skip_layout();
-            let before_right = (self.completed_tuples, self.completed_comprehensions);
+            let before_right = (self.completed_tuples, self.completed_bounded_expressions);
             let right = self.parse_unary()?;
             let right = self.parse_binary_suffix(right, precedence + 1, before_right)?;
-            if self.completed_comprehensions > before_right.1 && wraps.1 == 0 {
+            if self.completed_bounded_expressions > before_right.1 && wraps.1 == 0 {
                 wraps.1 = 1;
             }
             left = if self.probing_projection {
@@ -2844,7 +2897,7 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
             operators.push(AstNode::new(operator, token.span()));
             self.skip_layout();
         }
-        let before = (self.completed_tuples, self.completed_comprehensions);
+        let before = (self.completed_tuples, self.completed_bounded_expressions);
         let mut operand = self.parse_postfix()?;
         if self.probing_projection {
             return Ok(self.probe_placeholder(operand.span()));
@@ -2854,7 +2907,8 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
         {
             return Err(self.invalid_at(excess.span(), TUPLE_DEPTH_ERROR));
         }
-        if self.comprehension_depth != 0 || self.completed_comprehensions > before.1 {
+        if self.active_bounded_expression.is_some() || self.completed_bounded_expressions > before.1
+        {
             // Keep the first excessive node for the depth walk without building an unbounded unary tree.
             operators.truncate(MAX_COMPREHENSION_DEPTH + 1);
         }
@@ -2873,9 +2927,22 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
 
     fn parse_postfix(&mut self) -> ParseResult<Expression> {
         self.check_cancelled()?;
-        let before = (self.completed_tuples, self.completed_comprehensions);
-        let expression = self.parse_primary()?;
-        self.parse_postfix_suffixes(expression, before)
+        let before = (self.completed_tuples, self.completed_bounded_expressions);
+        let inherited = self.active_bounded_expression;
+        self.skip_inline();
+        if !self.probing_projection
+            && !self.bounded_opens.is_empty()
+            && inherited.is_none()
+            && let Some(suffix) = self.after_primary()?
+            && self.last_slice_suffix(suffix)?.is_some()
+        {
+            self.active_bounded_expression = Some(BoundedExpression::Slice);
+        }
+        let expression = self.parse_primary();
+        self.active_bounded_expression = inherited;
+        let result = self.parse_postfix_suffixes(expression?, before);
+        self.active_bounded_expression = inherited;
+        result
     }
 
     fn parse_postfix_suffixes(
@@ -2884,15 +2951,46 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
         before: (usize, usize),
     ) -> ParseResult<Expression> {
         let mut wraps = (0, 0);
+        let inherited = self.active_bounded_expression;
+        let mut searched_tail = self.probing_projection || self.bounded_opens.is_empty();
+        let mut last_slice = None;
         loop {
             self.check_cancelled()?;
             self.skip_inline();
-            if let Some(token) = self.current().copied()
-                && matches!(
-                    token.kind(),
+            let suffix = matches!(
+                self.current_kind(),
+                Some(
                     TokenKind::Delimiter(Delimiter::LeftParenthesis | Delimiter::LeftBracket)
                         | TokenKind::Operator(Operator::Dot)
                 )
+            );
+            if !searched_tail {
+                let start = if suffix {
+                    Some(self.position)
+                } else if self.at_delimiter(Some(Delimiter::LeftBrace))
+                    && matches!(
+                        expression.kind(),
+                        ExpressionKind::Name(_) | ExpressionKind::Qualified(_)
+                    )
+                    && self.starts_nominal_record()
+                {
+                    self.after_payload(self.position)
+                } else {
+                    None
+                };
+                if let Some(start) = start {
+                    last_slice = self.last_slice_suffix(start)?;
+                    searched_tail = true;
+                }
+            }
+            self.active_bounded_expression = if last_slice.is_some_and(|last| self.position <= last)
+            {
+                Some(BoundedExpression::Slice)
+            } else {
+                inherited
+            };
+            if let Some(token) = self.current().copied()
+                && suffix
             {
                 self.check_expression_chain(before, &mut wraps, token.span())?;
             }
@@ -3020,7 +3118,8 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
                     let can_have_type_arguments = matches!(
                         expression.kind(),
                         ExpressionKind::Name(_) | ExpressionKind::Qualified(_)
-                    ) && self.bracket_is_followed_by_call();
+                    ) && self.slice_separators[self.position] == 0
+                        && self.bracket_is_followed_by_call();
                     if self.probing_projection {
                         let (_, close) = self.skip_probe_payload()?;
                         if !can_have_type_arguments {
@@ -3081,22 +3180,7 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
                             continue;
                         }
                     }
-                    self.position += 1;
-                    self.continuation_depth += 1;
-                    self.skip_layout();
-                    let index = self.parse_expression()?;
-                    self.skip_layout();
-                    let close =
-                        self.expect_delimiter(Delimiter::RightBracket, "index is not closed")?;
-                    self.continuation_depth -= 1;
-                    let span = self.span(expression.span().start(), close.span().end());
-                    expression = Expression::new(
-                        ExpressionKind::Index(IndexExpression {
-                            target: Box::new(expression),
-                            index: Box::new(index),
-                        }),
-                        span,
-                    );
+                    expression = self.parse_read_subscript(expression)?;
                 }
                 Some(TokenKind::Operator(Operator::Dot)) => {
                     self.position += 1;
@@ -3121,16 +3205,143 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
         Ok(expression)
     }
 
+    fn parse_read_subscript(&mut self, target: Expression) -> ParseResult<Expression> {
+        let previous = self.active_bounded_expression;
+        if self.slice_separators[self.position] != 0 {
+            self.active_bounded_expression = Some(BoundedExpression::Slice);
+        }
+        let open = self.take().expect("subscript opener is current").span();
+        self.continuation_depth += 1;
+        let result = self.parse_read_subscript_contents(target, open);
+        self.continuation_depth -= 1;
+        self.active_bounded_expression = previous;
+        result
+    }
+
+    fn parse_read_subscript_contents(
+        &mut self,
+        target: Expression,
+        open: Span,
+    ) -> ParseResult<Expression> {
+        self.skip_layout();
+        let start = self.parse_expression()?;
+        self.skip_layout();
+        let bounds = if let Some(separator) = self.take_operator(Operator::Colon) {
+            self.skip_layout();
+            let end = self.parse_expression()?;
+            self.skip_layout();
+            Some((separator.span(), end))
+        } else {
+            None
+        };
+        let message = if bounds.is_some() {
+            "expected `]` after slice endpoint"
+        } else {
+            "index is not closed"
+        };
+        let close = self
+            .expect_delimiter(Delimiter::RightBracket, message)?
+            .span();
+        let span = self.span(target.span().start(), close.end());
+        let kind = if let Some((separator, end)) = bounds {
+            if let Some(spans) = &mut self.format_spans {
+                spans.slice_brackets.push((open, separator, close));
+            }
+            self.completed_bounded_expressions += 1;
+            self.last_bounded_expression = Some(BoundedExpression::Slice);
+            ExpressionKind::Slice(Box::new(SliceExpression {
+                target,
+                open,
+                start,
+                separator,
+                end,
+                close,
+            }))
+        } else {
+            ExpressionKind::Index(IndexExpression {
+                target: Box::new(target),
+                index: Box::new(start),
+            })
+        };
+        Ok(Expression::new(kind, span))
+    }
+
+    fn last_slice_suffix(&self, mut position: usize) -> ParseResult<Option<usize>> {
+        // Delimiter jumps bound each suffix census and skip recursive receivers.
+        let mut last = None;
+        while let Some(token) = self.tokens.get(position) {
+            self.check_cancelled()?;
+            match token.kind() {
+                TokenKind::Delimiter(Delimiter::LeftBracket | Delimiter::LeftParenthesis) => {
+                    if self.slice_separators[position] != 0 {
+                        last = Some(position);
+                    }
+                    let close = self.delimiter_ends[position];
+                    if close == 0 {
+                        break;
+                    }
+                    position = close + 1;
+                }
+                TokenKind::Operator(Operator::Dot) => {
+                    let Some(member) = self.postfix_layout_end(position + 1) else {
+                        break;
+                    };
+                    if self.tokens[member].kind() != TokenKind::Identifier {
+                        break;
+                    }
+                    position = member + 1;
+                }
+                _ => break,
+            }
+            let Some(next) = self.postfix_layout_end(position) else {
+                break;
+            };
+            position = next;
+        }
+        Ok(last)
+    }
+
+    fn after_payload(&self, open: usize) -> Option<usize> {
+        let close = *self.delimiter_ends.get(open)?;
+        (close > open)
+            .then(|| self.postfix_layout_end(close + 1))
+            .flatten()
+    }
+
+    fn after_primary(&mut self) -> ParseResult<Option<usize>> {
+        if !self.at_keyword(Keyword::If) {
+            return Ok(self.after_payload(self.position));
+        }
+        // Find the end of an if receiver before descending into its arms.
+        let position = self.position;
+        let continuation = self.continuation_depth;
+        let spans = self.format_spans.take();
+        self.probing_projection = true;
+        let primary = self.parse_if_expression();
+        let suffix = self.postfix_layout_end(self.position);
+        self.position = position;
+        self.continuation_depth = continuation;
+        self.probing_projection = false;
+        self.format_spans = spans;
+        self.check_cancelled()?;
+        Ok(primary.ok().and(suffix))
+    }
+
     fn check_expression_chain(
         &self,
         before: (usize, usize),
         wraps: &mut (usize, usize),
         span: Span,
     ) -> ParseResult<()> {
-        if self.comprehension_depth != 0 || self.completed_comprehensions > before.1 {
+        if let Some(kind) = self.active_bounded_expression.or_else(|| {
+            (self.completed_bounded_expressions > before.1).then(|| {
+                self.last_bounded_expression
+                    .expect("a bounded expression completed")
+            })
+        }) {
             wraps.1 += 1;
             if wraps.1 > MAX_COMPREHENSION_DEPTH {
-                return Err(self.invalid_at(span, COMPREHENSION_DEPTH_ERROR));
+                return Err(self.invalid_at(span, kind.depth_error()));
             }
         }
         if self.tuple_groups != 0 || self.completed_tuples > before.0 {
@@ -3242,9 +3453,12 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
         let candidate = self.comprehension_brackets[self.position].is_some();
         let open = self.take().expect("list opener is current");
         self.continuation_depth += 1;
-        self.comprehension_depth += usize::from(candidate);
+        let previous = self.active_bounded_expression;
+        if candidate {
+            self.active_bounded_expression = Some(BoundedExpression::Comprehension);
+        }
         let result = self.parse_list_contents(open.span());
-        self.comprehension_depth -= usize::from(candidate);
+        self.active_bounded_expression = previous;
         self.continuation_depth -= 1;
         result
     }
@@ -3317,7 +3531,8 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
                 .comprehension_keywords
                 .extend(filter.iter().map(|(span, _)| *span));
         }
-        self.completed_comprehensions += 1;
+        self.completed_bounded_expressions += 1;
+        self.last_bounded_expression = Some(BoundedExpression::Comprehension);
         Ok(Expression::new(
             ExpressionKind::ListComprehension(Box::new(ListComprehension {
                 open,
@@ -4123,7 +4338,12 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
         if close <= self.position {
             return false;
         }
-        let mut position = close + 1;
+        self.postfix_layout_end(close + 1).is_some_and(|position| {
+            self.tokens[position].kind() == TokenKind::Delimiter(Delimiter::LeftParenthesis)
+        })
+    }
+
+    fn postfix_layout_end(&self, mut position: usize) -> Option<usize> {
         while let Some(token) = self.tokens.get(position) {
             if matches!(
                 token.kind(),
@@ -4136,9 +4356,9 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
                 position += 1;
                 continue;
             }
-            return token.kind() == TokenKind::Delimiter(Delimiter::LeftParenthesis);
+            return Some(position);
         }
-        false
+        None
     }
 
     fn current(&self) -> Option<&Token> {

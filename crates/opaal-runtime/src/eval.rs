@@ -2094,7 +2094,8 @@ pub fn evaluate_in_environment(
         }
         Err(
             opaal_syntax::TupleDepthError::Exceeded(span)
-            | opaal_syntax::TupleDepthError::ComprehensionExceeded(span),
+            | opaal_syntax::TupleDepthError::ComprehensionExceeded(span)
+            | opaal_syntax::TupleDepthError::SliceExceeded(span),
         ) => {
             return Err(RuntimeError::new(
                 RuntimeErrorKind::ResourceBudgetExceeded,
@@ -4215,6 +4216,9 @@ impl Evaluator<'_, '_> {
                 let position = self.expression(&index.index, scope)?;
                 operation::index(&target, &position).map_err(|error| self.operation(error, span))
             }
+            ExpressionKind::Slice(slice) => self
+                .slice_expression(slice, scope, expected, span, false)
+                .map(|(value, _)| value),
             ExpressionKind::Member(member) => {
                 let target = self.expression(&member.target, scope)?;
                 let name = self.text(member.member.span());
@@ -4260,7 +4264,7 @@ impl Evaluator<'_, '_> {
         }
         if !matches!(
             expression.kind(),
-            ExpressionKind::If(_) | ExpressionKind::ListComprehension(_)
+            ExpressionKind::If(_) | ExpressionKind::ListComprehension(_) | ExpressionKind::Slice(_)
         ) {
             return None;
         }
@@ -5451,6 +5455,10 @@ impl Evaluator<'_, '_> {
                     .map(|value| (value, Some(result_type)))
                     .map_err(|error| self.operation(error, expression.span()))
             }
+            ExpressionKind::Slice(slice) => {
+                self.charge(expression.span())?;
+                self.slice_expression(slice, scope, expected, expression.span(), true)
+            }
             ExpressionKind::Member(member) => {
                 self.charge(expression.span())?;
                 let (target, declared) = self.operation_argument(&member.target, scope, None)?;
@@ -5479,6 +5487,194 @@ impl Evaluator<'_, '_> {
                 .expression_with_expected(expression, scope, expected)
                 .map(|value| (value, None)),
         }
+    }
+
+    fn slice_expression(
+        &mut self,
+        slice: &opaal_syntax::SliceExpression,
+        scope: &mut ScopeStack,
+        expected: Option<&ValueType>,
+        span: Span,
+        retain_type: bool,
+    ) -> Eval<(Value, Option<ValueType>)> {
+        self.check_cancel(span)?;
+        let contextual = crate::module::slice_target_expectation(&slice.target, expected);
+        let checked = self.binding_types.expression_type(span);
+        let (target, inferred) = if retain_type && checked.is_none() {
+            self.operation_argument(&slice.target, scope, contextual)?
+        } else {
+            (
+                self.expression_with_expected(&slice.target, scope, contextual)?,
+                None,
+            )
+        };
+        self.check_cancel(slice.start.span())?;
+        let start_value = self.expression(&slice.start, scope)?;
+        self.check_cancel(slice.end.span())?;
+        let end_value = self.expression(&slice.end, scope)?;
+        self.check_cancel(span)?;
+
+        if !matches!(target, Value::List(_) | Value::String(_)) {
+            return Err(self.slice_argument_error(
+                format!(
+                    "expected a List or String receiver, found {}",
+                    target.family_name()
+                ),
+                slice.target.span(),
+            ));
+        }
+        let start = self.slice_endpoint(start_value, slice.start.span())?;
+        let end = self.slice_endpoint(end_value, slice.end.span())?;
+        for (endpoint, endpoint_span) in [(start, slice.start.span()), (end, slice.end.span())] {
+            if endpoint < 0 {
+                return Err(self.slice_argument_error(
+                    format!("endpoint {endpoint} is negative"),
+                    endpoint_span,
+                ));
+            }
+        }
+        if end < start {
+            let error = RuntimeError::new(
+                RuntimeErrorKind::Operation(OperationError::InvalidArgument {
+                    operation: "slice".into(),
+                    message: format!("end endpoint {end} precedes start endpoint {start}"),
+                }),
+                slice.end.span(),
+            )
+            .with_source(Arc::clone(&self.source))
+            .with_label(ErrorLabel::new(
+                Arc::clone(&self.source),
+                slice.start.span(),
+                "start endpoint",
+            ));
+            return Err(error.into());
+        }
+
+        let value = match target {
+            Value::List(items) => {
+                let bounds = self.slice_bounds(start, end, items.len(), slice)?;
+                self.copy_list_slice(&items[bounds], span)?
+            }
+            Value::String(text) => {
+                let bounds = self.string_slice_bytes(&text, start, end, slice, span)?;
+                let bytes = bounds
+                    .len()
+                    .checked_add(2 * size_of::<usize>())
+                    .ok_or_else(|| self.error(RuntimeErrorKind::ResourceBudgetExceeded, span))?;
+                self.retain_collection_bytes(bytes, span)?;
+                self.check_cancel(span)?;
+                Value::String(Arc::from(&text[bounds]))
+            }
+            _ => unreachable!("slice receiver was validated"),
+        };
+        self.check_cancel(span)?;
+        let result_type = self
+            .binding_types
+            .expression_type(span)
+            .map(|ty| crate::module::substitute_type(ty, &self.current_type_arguments))
+            .or(inferred)
+            .or_else(|| contextual.cloned());
+        self.admit_shape(
+            || {
+                std::iter::once(shape::Node::Value(&value))
+                    .chain(result_type.as_ref().map(shape::Node::Type))
+            },
+            span,
+        )?;
+        self.check_cancel(span)?;
+        Ok((value, result_type))
+    }
+
+    fn slice_argument_error(&self, message: String, span: Span) -> Abort {
+        self.operation(
+            OperationError::InvalidArgument {
+                operation: "slice".into(),
+                message,
+            },
+            span,
+        )
+    }
+
+    fn slice_endpoint(&self, value: Value, span: Span) -> Eval<i64> {
+        match value {
+            Value::Int(endpoint) => Ok(endpoint),
+            _ => Err(self.slice_argument_error(
+                format!("expected an Int endpoint, found {}", value.family_name()),
+                span,
+            )),
+        }
+    }
+
+    fn slice_bounds(
+        &self,
+        start: i64,
+        end: i64,
+        length: usize,
+        slice: &opaal_syntax::SliceExpression,
+    ) -> Eval<std::ops::Range<usize>> {
+        let position = |endpoint, span| {
+            usize::try_from(endpoint)
+                .ok()
+                .filter(|position| *position <= length)
+                .ok_or_else(|| {
+                    self.slice_argument_error(
+                        format!("endpoint {endpoint} is outside length {length}"),
+                        span,
+                    )
+                })
+        };
+        Ok(position(start, slice.start.span())?..position(end, slice.end.span())?)
+    }
+
+    fn copy_list_slice(&mut self, items: &[Value], span: Span) -> Eval<Value> {
+        if !self.budget.charge_collection_items(items.len()) {
+            return Err(self.error(RuntimeErrorKind::ResourceBudgetExceeded, span));
+        }
+        let bytes = items
+            .len()
+            .checked_mul(2 * size_of::<Value>())
+            .and_then(|bytes| bytes.checked_add(2 * size_of::<usize>()))
+            .ok_or_else(|| self.error(RuntimeErrorKind::ResourceBudgetExceeded, span))?;
+        self.retain_collection_bytes(bytes, span)?;
+        let mut values = Vec::new();
+        values
+            .try_reserve_exact(items.len())
+            .map_err(|_| self.error(RuntimeErrorKind::ResourceBudgetExceeded, span))?;
+        for item in items {
+            self.shape_step(1, span)?;
+            values.push(self.copy_indexed_item(item, span)?);
+        }
+        self.check_cancel(span)?;
+        Ok(Value::list(values))
+    }
+
+    fn string_slice_bytes(
+        &mut self,
+        text: &str,
+        start: i64,
+        end: i64,
+        slice: &opaal_syntax::SliceExpression,
+        span: Span,
+    ) -> Eval<std::ops::Range<usize>> {
+        let mut chars = text.chars();
+        let mut offset = 0;
+        let mut start_byte = 0;
+        for position in 0..end {
+            self.check_cancel(span)?;
+            if position == start {
+                start_byte = offset;
+            }
+            let Some(character) = chars.next() else {
+                let length = usize::try_from(position).expect("scalar count fits the byte length");
+                return self.slice_bounds(start, end, length, slice);
+            };
+            self.charge(span)?;
+            offset += character.len_utf8();
+        }
+        if start == end {
+            start_byte = offset;
+        }
+        Ok(start_byte..offset)
     }
 
     /// Keep instantiated call evidence alongside the value without evaluating
@@ -7236,6 +7432,9 @@ fn find_callable_in_expression(
         }
         ExpressionKind::Index(index) => find_callable_in_expression(&index.target, snapshot)
             .or_else(|| find_callable_in_expression(&index.index, snapshot)),
+        ExpressionKind::Slice(slice) => slice
+            .operands()
+            .find_map(|operand| find_callable_in_expression(operand, snapshot)),
         ExpressionKind::Member(member) => find_callable_in_expression(&member.target, snapshot),
         ExpressionKind::Unary(unary) => find_callable_in_expression(&unary.operand, snapshot),
         ExpressionKind::Binary(binary) => find_callable_in_expression(&binary.left, snapshot)
@@ -7431,6 +7630,7 @@ mod tests {
     mod indexed_list_replacement;
     mod numeric_operations;
     mod random_operations;
+    mod slices;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use opaal_platform::{DirectoryEntry, DirectoryEntryKind, DirectoryReadError};

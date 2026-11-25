@@ -6,6 +6,9 @@ All notable changes to OPAAL are documented here.
 
 ### Added
 
+- Select an immutable List window or String excerpt with `value[start:end]`.
+  Bounds are zero-based Int positions with an exclusive end. String positions
+  count Unicode scalars. Empty List windows retain their element type.
 - Infer inline `list::map` closures from a typed input and a single value
   expression. Inferred List types survive empty input and later prompt cells.
 - Build eager lists with `[expression for item in items if condition]`.

@@ -712,6 +712,7 @@ pub struct RegisteredModuleSource {
     script: Script,
     if_spans: Vec<Span>,
     comprehension_spans: Vec<Span>,
+    slice_spans: Vec<Span>,
 }
 
 impl RegisteredModuleSource {
@@ -736,6 +737,7 @@ impl RegisteredModuleSource {
     fn intersects_value_expression(&self, span: Span) -> bool {
         intersects_regions(span, &self.if_spans)
             || intersects_regions(span, &self.comprehension_spans)
+            || intersects_regions(span, &self.slice_spans)
     }
 }
 
@@ -3507,6 +3509,11 @@ impl<'a> CallableReadCollector<'a> {
                 self.expression(&index.target);
                 self.expression(&index.index);
             }
+            ExpressionKind::Slice(slice) => {
+                for operand in slice.operands() {
+                    self.expression(operand);
+                }
+            }
             ExpressionKind::Member(member) => self.expression(&member.target),
             ExpressionKind::Unary(unary) => self.expression(&unary.operand),
             ExpressionKind::Binary(binary) => {
@@ -4074,6 +4081,7 @@ impl RuntimeTypeContext {
             !metrics.if_spans.is_empty()
                 || !metrics.loop_spans.is_empty()
                 || !metrics.comprehension_spans.is_empty()
+                || !metrics.slice_spans.is_empty()
                 || metrics.has_inline_map_candidate
         };
         let control = AnalysisControl::never().for_run(
@@ -4901,6 +4909,7 @@ impl RuntimeBindingTypes {
             script: script.clone(),
             if_spans: metrics.if_spans,
             comprehension_spans: metrics.comprehension_spans,
+            slice_spans: metrics.slice_spans,
         };
         let mut aliases = inherited_aliases.clone();
         for program in programs {
@@ -5134,6 +5143,7 @@ impl RuntimeBindingTypes {
                     script: standard_script,
                     if_spans: Vec::new(),
                     comprehension_spans: Vec::new(),
+                    slice_spans: Vec::new(),
                 };
                 let mut standard_aliases = ModuleAliases::default();
                 for import in standard_entry
@@ -5356,7 +5366,8 @@ impl RuntimeBindingTypes {
         // Earlier cells contribute imports and schemas. Their live scopes are gone.
         let legacy_control_evidence = (!entry.if_spans.is_empty()
             || !metrics.loop_spans.is_empty()
-            || !entry.comprehension_spans.is_empty())
+            || !entry.comprehension_spans.is_empty()
+            || !entry.slice_spans.is_empty())
             && !matches!(outer_scope, Some(InteractiveScope::Historical));
         let mut evidence = if legacy_control_evidence
             || (metrics.has_inline_map_candidate
@@ -5413,6 +5424,7 @@ impl RuntimeBindingTypes {
                     span_in_regions(primary, &entry.if_spans)
                         || span_in_regions(primary, &metrics.loop_spans)
                         || intersects_regions(primary, &entry.comprehension_spans)
+                        || intersects_regions(primary, &entry.slice_spans)
                 })
             {
                 return Err(error.diagnostic());
@@ -6217,6 +6229,9 @@ impl<'a> TypeCollector<'a> {
                 self.expression(&index.target)?;
                 self.expression(&index.index)
             }
+            ExpressionKind::Slice(slice) => slice
+                .operands()
+                .try_for_each(|operand| self.expression(operand)),
             ExpressionKind::Member(member) => self.expression(&member.target),
             ExpressionKind::Unary(unary) => self.expression(&unary.operand),
             ExpressionKind::Binary(binary) => {
@@ -7718,6 +7733,7 @@ impl<'a> SignatureValidator<'a> {
                     _ => None,
                 })
             }
+            ExpressionKind::Slice(slice) => self.slice_type(slice, expected, expression.span()),
             ExpressionKind::Member(member) => {
                 let target = self.expression(&member.target)?;
                 let name = self.text(member.member.span());
@@ -8037,6 +8053,10 @@ impl<'a> SignatureValidator<'a> {
     }
 
     fn outer_value_type_at(&self, span: Span) -> Option<ValueType> {
+        self.outer_value_type_with_observation(span, true)
+    }
+
+    fn outer_value_type_with_observation(&self, span: Span, observe: bool) -> Option<ValueType> {
         let name = self.text(span);
         let outer = self.outer_scope?;
         if matches!(outer, InteractiveScope::Captured { untyped_mutable, .. } if untyped_mutable.contains(name))
@@ -8054,7 +8074,7 @@ impl<'a> SignatureValidator<'a> {
         if let Some(inferred) = scope.inferred_type(name) {
             return Some(inferred.clone());
         }
-        if self.in_map_body.get() {
+        if !observe || self.in_map_body.get() {
             return None;
         }
         self.mark_unstable_map_input();
@@ -9971,6 +9991,91 @@ impl<'a> SignatureValidator<'a> {
         }
     }
 
+    fn slice_type(
+        &self,
+        slice: &opaal_syntax::SliceExpression,
+        expected: Option<&ValueType>,
+        span: Span,
+    ) -> Result<Option<ValueType>, Box<ModuleTypeError>> {
+        let expected = slice_target_expectation(&slice.target, expected);
+        let target = self.slice_operand_type(&slice.target, expected)?;
+        let result = match target {
+            Some(ty @ (ValueType::List(_) | ValueType::String | ValueType::Any)) => Some(ty),
+            Some(ValueType::Unknown | ValueType::EmptyList) => None,
+            Some(actual) => {
+                self.errors
+                    .borrow_mut()
+                    .push(ModuleTypeError::SliceTargetMismatch {
+                        module: self.entry.module().clone(),
+                        span: slice.target.span(),
+                        actual,
+                    });
+                None
+            }
+            None if direct_empty_list(&slice.target) => expected.cloned(),
+            None => None,
+        };
+        for endpoint in [&slice.start, &slice.end] {
+            if let Some(actual) = self.slice_operand_type(endpoint, None)?
+                && !matches!(actual, ValueType::Int | ValueType::Any | ValueType::Unknown)
+            {
+                self.errors
+                    .borrow_mut()
+                    .push(ModuleTypeError::SliceEndpointMismatch {
+                        module: self.entry.module().clone(),
+                        span: endpoint.span(),
+                        actual,
+                    });
+            }
+        }
+        if let Some(ty) = &result {
+            self.expression_types
+                .borrow_mut()
+                .insert((span.start(), span.end()), ty.clone());
+        }
+        Ok(result)
+    }
+
+    fn slice_operand_type(
+        &self,
+        operand: &Expression,
+        expected: Option<&ValueType>,
+    ) -> Result<Option<ValueType>, Box<ModuleTypeError>> {
+        let prior_map_input = self.unstable_map_input.get();
+        let result = self.observe_inference(|| self.slice_operand_evidence(operand, expected));
+        self.unstable_map_input.set(prior_map_input);
+        let (actual, unstable, unstable_for_map) = result?;
+        // A reassigned operand needs a runtime check. Endpoint types do not affect the result type.
+        Ok(actual.filter(|_| !unstable && !unstable_for_map))
+    }
+
+    fn slice_operand_evidence(
+        &self,
+        mut operand: &Expression,
+        expected: Option<&ValueType>,
+    ) -> Result<Option<ValueType>, Box<ModuleTypeError>> {
+        while let ExpressionKind::GroupedJob(chain) = operand.kind()
+            && let Some(inner) = single_value_expression(chain)
+        {
+            operand = inner;
+        }
+        let name = value_name_span(operand);
+        if let Some(reference) = self
+            .names
+            .reference(self.entry.module(), name.unwrap_or(operand.span()))
+        {
+            return Ok(self
+                .declared_reference_type(reference.target())
+                .cloned()
+                .or_else(|| self.reference_type(reference.target())));
+        }
+        if let Some(name) = name {
+            // A short slice must never infer its type by walking the live receiver.
+            return Ok(self.outer_value_type_with_observation(name, false));
+        }
+        self.operation_argument_type(operand, expected)
+    }
+
     /// Operation inference respects declared dynamic types even when a literal
     /// initializer supplies a more specific type for other source analyses.
     fn operation_argument_type(
@@ -11059,6 +11164,9 @@ impl<'a> ReferenceResolver<'a> {
                 self.expression(&index.target)?;
                 self.expression(&index.index)
             }
+            ExpressionKind::Slice(slice) => slice
+                .operands()
+                .try_for_each(|operand| self.expression(operand)),
             ExpressionKind::Member(member) => self.expression(&member.target),
             ExpressionKind::Unary(unary) => self.expression(&unary.operand),
             ExpressionKind::Binary(binary) => {
@@ -11448,8 +11556,7 @@ impl ModuleSourceRegistry {
         module: ModuleId,
         source: SourceFile,
         script: Script,
-        if_spans: Vec<Span>,
-        comprehension_spans: Vec<Span>,
+        metrics: SyntaxMetrics,
     ) {
         debug_assert!(!self.by_module.contains_key(&module));
         debug_assert!(!self.by_source.contains_key(&source.id()));
@@ -11460,8 +11567,9 @@ impl ModuleSourceRegistry {
             module,
             source,
             script,
-            if_spans,
-            comprehension_spans,
+            if_spans: metrics.if_spans,
+            comprehension_spans: metrics.comprehension_spans,
+            slice_spans: metrics.slice_spans,
         });
     }
 }
@@ -12136,6 +12244,11 @@ impl<'a> StaticEffectAnalyzer<'a> {
             ExpressionKind::Index(index) => {
                 self.expression(&index.target);
                 self.expression(&index.index);
+            }
+            ExpressionKind::Slice(slice) => {
+                for operand in slice.operands() {
+                    self.expression(operand);
+                }
             }
             ExpressionKind::Member(member) => self.expression(&member.target),
             ExpressionKind::Unary(unary) => self.expression(&unary.operand),
@@ -12971,6 +13084,11 @@ impl<'a> StaticPipelineAnalyzer<'a> {
             ExpressionKind::Index(index) => {
                 self.expression(&index.target);
                 self.expression(&index.index);
+            }
+            ExpressionKind::Slice(slice) => {
+                for operand in slice.operands() {
+                    self.expression(operand);
+                }
             }
             ExpressionKind::Member(member) => self.expression(&member.target),
             ExpressionKind::Unary(unary) => self.expression(&unary.operand),
@@ -14215,13 +14333,7 @@ impl<'a> ModuleProgramLoader<'a> {
                 },
             })
             .collect::<Vec<_>>();
-        sources.register(
-            module.clone(),
-            source.clone(),
-            script.clone(),
-            metrics.if_spans,
-            metrics.comprehension_spans,
-        );
+        sources.register(module.clone(), source.clone(), script.clone(), metrics);
         retained.push(ModuleAnalysisSource {
             module: module.clone(),
             source,
@@ -14487,6 +14599,7 @@ struct SyntaxMetrics {
     if_spans: Vec<Span>,
     loop_spans: Vec<Span>,
     comprehension_spans: Vec<Span>,
+    slice_spans: Vec<Span>,
     has_inline_map_candidate: bool,
 }
 
@@ -14498,6 +14611,7 @@ impl SyntaxMetrics {
             if_spans: Vec::new(),
             loop_spans: Vec::new(),
             comprehension_spans: Vec::new(),
+            slice_spans: Vec::new(),
             has_inline_map_candidate: false,
         };
         metrics.statements(script.statements());
@@ -14822,6 +14936,20 @@ impl SyntaxMetrics {
             ExpressionKind::Index(index) => {
                 self.expression(&index.target);
                 self.expression(&index.index);
+                1
+            }
+            ExpressionKind::Slice(slice) => {
+                let span = expression.span();
+                if self
+                    .slice_spans
+                    .last()
+                    .is_none_or(|outer| outer.end() < span.end())
+                {
+                    self.slice_spans.push(span);
+                }
+                for operand in slice.operands() {
+                    self.expression(operand);
+                }
                 1
             }
             ExpressionKind::Member(member) => {
@@ -15267,14 +15395,25 @@ fn tuple_mismatch_span(
     whole
 }
 
-fn direct_empty_list(mut expression: &Expression) -> bool {
+fn list_literal(mut expression: &Expression) -> Option<&[ListItem]> {
     while let ExpressionKind::GroupedJob(chain) = expression.kind() {
-        let Some(inner) = single_value_expression(chain) else {
-            return false;
-        };
-        expression = inner;
+        expression = single_value_expression(chain)?;
     }
-    matches!(expression.kind(), ExpressionKind::List(items) if items.is_empty())
+    match expression.kind() {
+        ExpressionKind::List(items) => Some(items),
+        _ => None,
+    }
+}
+
+fn direct_empty_list(expression: &Expression) -> bool {
+    list_literal(expression).is_some_and(<[_]>::is_empty)
+}
+
+pub(crate) fn slice_target_expectation<'a>(
+    target: &Expression,
+    expected: Option<&'a ValueType>,
+) -> Option<&'a ValueType> {
+    expected.filter(|ty| matches!(ty, ValueType::List(_)) && list_literal(target).is_some())
 }
 
 /// A failure while resolving annotations or validating a known function call.
@@ -15460,6 +15599,16 @@ pub enum ModuleTypeError {
         span: Span,
         actual: ValueType,
     },
+    SliceTargetMismatch {
+        module: ModuleId,
+        span: Span,
+        actual: ValueType,
+    },
+    SliceEndpointMismatch {
+        module: ModuleId,
+        span: Span,
+        actual: ValueType,
+    },
     AssignmentMismatch {
         module: ModuleId,
         name: String,
@@ -15557,6 +15706,8 @@ impl ModuleTypeError {
             | Self::ComprehensionProjectionMismatch { module, .. }
             | Self::IndexedAssignmentTargetMismatch { module, .. }
             | Self::IndexedAssignmentIndexMismatch { module, .. }
+            | Self::SliceTargetMismatch { module, .. }
+            | Self::SliceEndpointMismatch { module, .. }
             | Self::AssignmentMismatch { module, .. }
             | Self::BindingMismatch { module, .. }
             | Self::GenericArity { module, .. }
@@ -15601,7 +15752,9 @@ impl ModuleTypeError {
             | Self::ComprehensionFilterMismatch { span, .. }
             | Self::ComprehensionProjectionMismatch { span, .. } => *span,
             Self::IndexedAssignmentTargetMismatch { span, .. }
-            | Self::IndexedAssignmentIndexMismatch { span, .. } => *span,
+            | Self::IndexedAssignmentIndexMismatch { span, .. }
+            | Self::SliceTargetMismatch { span, .. }
+            | Self::SliceEndpointMismatch { span, .. } => *span,
             Self::AssignmentMismatch {
                 assignment_span, ..
             } => *assignment_span,
@@ -15845,6 +15998,16 @@ impl ModuleTypeError {
             Self::IndexedAssignmentIndexMismatch { span, actual, .. } => {
                 Diagnostic::new(Severity::Error, "SIG024", self.to_string())
                     .with_primary(*span, format!("this index is `{actual}`, expected Int"))
+            }
+            Self::SliceTargetMismatch { span, actual, .. } => {
+                Diagnostic::new(Severity::Error, "SIG031", self.to_string()).with_primary(
+                    *span,
+                    format!("this receiver is `{actual}`, expected List or String"),
+                )
+            }
+            Self::SliceEndpointMismatch { span, actual, .. } => {
+                Diagnostic::new(Severity::Error, "SIG032", self.to_string())
+                    .with_primary(*span, format!("this endpoint is `{actual}`, expected Int"))
             }
             Self::AssignmentMismatch {
                 assignment_span,
@@ -16170,6 +16333,16 @@ impl fmt::Display for ModuleTypeError {
             Self::IndexedAssignmentIndexMismatch { module, actual, .. } => write!(
                 formatter,
                 "module `{}` uses index `{actual}`; indexed assignment requires Int",
+                module.path().display()
+            ),
+            Self::SliceTargetMismatch { module, actual, .. } => write!(
+                formatter,
+                "module `{}` slices `{actual}`; a slice requires a List or String receiver",
+                module.path().display()
+            ),
+            Self::SliceEndpointMismatch { module, actual, .. } => write!(
+                formatter,
+                "module `{}` uses `{actual}` as a slice endpoint; a slice requires Int endpoints",
                 module.path().display()
             ),
             Self::AssignmentMismatch {

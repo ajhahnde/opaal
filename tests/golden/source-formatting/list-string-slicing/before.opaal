@@ -1,0 +1,9 @@
+import std::string as string
+
+let counts: List[Int] = [10, 20, 30]
+let caption = "héllo"
+let window: List[Int] = [counts[1], counts[2]]
+let excerpt = string::join([caption[1], caption[2]], "")
+if window != [20, 30] || excerpt != "él" {
+    throw "unexpected report preview"
+}

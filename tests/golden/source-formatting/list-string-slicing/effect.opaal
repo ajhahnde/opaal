@@ -1,0 +1,18 @@
+import std::io as io
+
+def end() -> Int
+{
+    io::println("unselected endpoint")
+    return 1
+}
+
+export def test_slice_effect() -> Bool
+{
+    let rows: List[Int] = [10, 20]
+    let selected = rows[0:if true {
+        1
+    } else {
+        end()
+    }]
+    return selected == [10]
+}

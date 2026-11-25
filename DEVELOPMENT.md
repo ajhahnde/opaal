@@ -265,6 +265,36 @@ projection. A structural path containing a comprehension can contain up to
 32 levels, including enclosing statement blocks and recursive statement
 `else if` edges. This applies to source and Rust-built ASTs.
 
+## List and String slices
+
+Use `value[start:end]` with two explicit Int endpoints. The start is inclusive
+and the end is exclusive. Both can equal the length, so `items[length:length]`
+returns an empty List with the receiver's element type. Strings count Unicode
+scalars, including combining marks and supplementary characters.
+
+```opaal
+let counts: List[Int] = [10, 20, 30]
+let preview = counts[1:3]
+let caption = "héllo"[1:3]
+let empty = counts[3:3]
+```
+
+The evaluator runs the receiver, start, and end from left to right. Valid bounds
+satisfy `0 <= start <= end <= length`. For a two-item List, `counts[1:3]` raises
+`RUN001` at `3`. Use `counts[1:2]` to select the final item. The checker reports
+known receiver and endpoint type errors at their respective expressions.
+
+Run the [preview fixture](tests/golden/source-formatting/list-string-slicing/preview.opaal)
+with a build that supports slicing. Projects distributed with slice syntax
+require OPAAL `>=1.11.0,<2.0.0` once 1.11.0 ships.
+
+Rust AST visitors can use `SliceExpression::operands()` to visit the receiver,
+start, and end in order. Exhaustive matches include `ExpressionKind::Slice`,
+`TupleDepthError::SliceExceeded`, and `ModuleTypeError` cases
+`SliceTargetMismatch` (`SIG031`) and `SliceEndpointMismatch` (`SIG032`). Paths
+with a slice can contain up to 32 structural levels, including statement
+blocks and `else if` edges. The limit also applies to Rust-built ASTs.
+
 ## Module exports
 
 Place `export` before a module-level `def`, `let`, `mut`, `action`, `type`,

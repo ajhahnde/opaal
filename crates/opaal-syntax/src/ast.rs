@@ -717,6 +717,7 @@ pub enum ExpressionKind {
     If(Box<IfExpression>),
     Call(CallExpression),
     Index(IndexExpression),
+    Slice(Box<SliceExpression>),
     Member(MemberExpression),
     Unary(UnaryExpression),
     Binary(BinaryExpression),
@@ -891,6 +892,24 @@ impl fmt::Debug for CallExpression {
 pub struct IndexExpression {
     pub target: Box<Expression>,
     pub index: Box<Expression>,
+}
+
+/// A postfix slice with two explicit endpoints.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SliceExpression {
+    pub target: Expression,
+    pub open: Span,
+    pub start: Expression,
+    pub separator: Span,
+    pub end: Expression,
+    pub close: Span,
+}
+
+impl SliceExpression {
+    /// Visits the receiver and endpoints in source and evaluation order.
+    pub fn operands(&self) -> impl DoubleEndedIterator<Item = &Expression> {
+        [&self.target, &self.start, &self.end].into_iter()
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

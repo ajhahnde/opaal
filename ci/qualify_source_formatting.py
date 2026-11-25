@@ -23,14 +23,14 @@ if __package__:
     from .package_data_processing import SOURCE, digest
     from .package_release import PLATFORMS, ROOT, VERSION
     from .package_source_formatting import FIXTURES, MEMBER_IMPORT_FIXTURES, COMPOUND_ASSIGNMENT_FIXTURES, LIST_LITERAL_SPREAD_FIXTURES, RECORD_SHORTHAND_FIXTURES, GROUPED_EXPORT_FIXTURES, ACTION_DECLARATION_FIXTURES, INDEXED_REPLACEMENT_FIXTURES, IF_EXPRESSION_FIXTURES, TYPED_TUPLE_FIXTURES, INDEXED_ITERATION_FIXTURES
-    from .package_source_formatting import INLINE_EXPORT_FIXTURES, LIST_COMPREHENSION_FIXTURES, LIST_MAP_FIXTURES
+    from .package_source_formatting import INLINE_EXPORT_FIXTURES, LIST_COMPREHENSION_FIXTURES, LIST_MAP_FIXTURES, SLICE_FIXTURES
     from .qualify_data_processing import require, success, unpack
 else:
     from check_source_formatting import public_paths, seed_census
     from package_data_processing import SOURCE, digest
     from package_release import PLATFORMS, ROOT, VERSION
     from package_source_formatting import FIXTURES, MEMBER_IMPORT_FIXTURES, COMPOUND_ASSIGNMENT_FIXTURES, LIST_LITERAL_SPREAD_FIXTURES, RECORD_SHORTHAND_FIXTURES, GROUPED_EXPORT_FIXTURES, ACTION_DECLARATION_FIXTURES, INDEXED_REPLACEMENT_FIXTURES, IF_EXPRESSION_FIXTURES, TYPED_TUPLE_FIXTURES, INDEXED_ITERATION_FIXTURES
-    from package_source_formatting import INLINE_EXPORT_FIXTURES, LIST_COMPREHENSION_FIXTURES, LIST_MAP_FIXTURES
+    from package_source_formatting import INLINE_EXPORT_FIXTURES, LIST_COMPREHENSION_FIXTURES, LIST_MAP_FIXTURES, SLICE_FIXTURES
     from qualify_data_processing import require, success, unpack
 
 PAIRS = (("legacy.opaal", "canonical.opaal"), ("legacy-effects.opaal", "effects.opaal"),
@@ -874,6 +874,130 @@ def list_map(run, work: Path, fixtures: Path, target: str) -> dict:
             "stale_refused_before_journal": True, "piped_continuation_and_recovery": True}
 
 
+def list_string_slicing(run, work: Path, fixtures: Path, target: str) -> dict:
+    source = fixtures / "list-string-slicing"
+    require({path.name for path in source.iterdir()} == set(SLICE_FIXTURES), "slice fixture census differs")
+    folder = work / "slice-preview"
+    shutil.copytree(fixtures / "project", folder)
+    lock = {"macos-arm64": "tools-macos.toml", "linux-aarch64": "tools-linux-aarch64.toml",
+            "linux-x86_64": "tools-linux.toml"}[target]
+    shutil.copyfile(folder / lock, folder / "tools.toml")
+    for name in SLICE_FIXTURES:
+        shutil.copyfile(source / name, folder / name)
+
+    def invoke(*arguments, **options):
+        return run(*arguments, cwd=folder, **options)
+
+    excluded = {"incomplete.opaal", "invalid.opaal", "noncanonical.opaal"}
+    require(success(invoke("format", "--check", *(name for name in SLICE_FIXTURES if name not in excluded)),
+                    "canonical slice fixture format") == b"", "slice format check wrote output")
+    for name, code in (("invalid.opaal", b"OP1000"), ("incomplete.opaal", b"SYN002")):
+        result = invoke("format", "--write", name)
+        require(result.returncode == 1 and not result.stdout and b"error[" + code + b"]" in result.stderr
+                and (folder / name).read_bytes() == (source / name).read_bytes(), f"slice {name} changed")
+    require(invoke("format", "--check", "noncanonical.opaal").returncode == 1,
+            "slice format check accepted noncanonical source")
+    success(invoke("format", "--write", "noncanonical.opaal", "compatibility.opaal"), "format slice fixtures")
+    require((folder / "noncanonical.opaal").read_bytes() == (source / "canonical.opaal").read_bytes(),
+            "slice formatting or comment bytes differ")
+    require((folder / "compatibility.opaal").read_bytes() == (source / "compatibility.opaal").read_bytes()
+            and (folder / "compatibility.opaal").read_bytes().count(b"^true a:b:c && true") == 3,
+            "slice formatter changed command words")
+    for name in ("before.opaal", "preview.opaal", "typed-empty.opaal", "qualified-bounds.opaal"):
+        require(success(invoke("check", name), name) == success(invoke(name), name) == b"",
+                f"{name}: slice workflow wrote output")
+    require(success(invoke("check", "compatibility.opaal"), "check slice compatibility") == b"",
+            "passive compatibility check wrote output")
+
+    diagnostics = {}
+    for name, code, spelling in (("bad-target.opaal", "SIG031", b"receiver"),
+                                 ("bad-operand.opaal", "SIG032", b'"three"')):
+        result = invoke("check", "--format", "json", name)
+        diagnostic, = json.loads(result.stdout)["diagnostics"]
+        start = (source / name).read_bytes().rindex(spelling)
+        require(result.returncode == 1 and not result.stderr and diagnostic["code"] == code
+                and diagnostic["range"] == {"start": start, "end": start + len(spelling)},
+                f"{name}: slice operand diagnostic differs")
+        diagnostics[name] = {"code": code, "range": diagnostic["range"]}
+    for name, line, column in (("past-end.opaal", 2, 23), ("rethrow.opaal", 3, 27)):
+        require(success(invoke("check", name), name) == b"", "slice interval was checked too early")
+        result = invoke(name)
+        require(result.returncode == 1 and not result.stdout and
+                b"error[RUN001]: slice: endpoint 3 is outside length 2" in result.stderr and
+                f"/{name}:{line}:{column}\n".encode() in result.stderr, f"{name}: slice runtime span differs")
+    effect = invoke("test", "effect.opaal", "--format", "json")
+    require(effect.returncode == 2 and not effect.stderr and b"unselected endpoint" not in effect.stdout
+            and json.loads(effect.stdout)["failure"] == "TEST_EFFECT", "slice operand effect reached a pure test")
+    prompt = invoke(stdin=b"import std::list as list\nlet counts: List[Int] = [10, 20, 30]\n"
+                         b"let empty = counts[\n3:3\n]\nlist::map(empty, {|count| count + 1})\n"
+                         b"counts[1:4]\ncounts[1:3]\n")
+    require(prompt.returncode == 0 and prompt.stdout == b">> >> >> ...> ...> >> []\n>> >> [20, 30]\n>> "
+            and prompt.stderr.count(b"error[") == 1 and b"endpoint 4 is outside length 3" in prompt.stderr,
+            "slice prompt continuation, retained type or recovery differs")
+    eof = invoke(stdin=b"let empty = [10][0:\n")
+    require(eof.returncode == 0 and b"...> " in eof.stdout and b"SYN002" in eof.stderr,
+            "slice prompt incomplete EOF differs")
+
+    options = ("--project", "opaal.toml", "--task", "preview", "--environment", "ci")
+    policy, tasks = folder / "policy.opaal", folder / "tasks.opaal"
+
+    def plan(label):
+        journals = sorted(folder.glob("*.run.jsonl"))
+        inspection, = json.loads(success(invoke("task", "inspect", "--project", "opaal.toml", "preview",
+                                               "--format", "json"), "inspect slice preview"))["tasks"]
+        require(inspection["id"] == "formatting_example::preview" and inspection["action"] == f"{policy}::verify"
+                and inspection["result"] == "Int" and inspection["parameters"] == inspection["effects"] == [],
+                "slice preview contract differs")
+        require(success(invoke("check", *options), "check slice preview") == b"", "project check wrote output")
+        path = f"{label}.plan.json"
+        accepted = success(invoke("plan", *options, "--expires-in", "900s", "--out", path,
+                                  "--format", "digest"), "plan slice preview").decode().strip()
+        sealed = json.loads((folder / path).read_bytes())
+        success(invoke("plan", "inspect", path), "inspect slice plan")
+        action, = sealed["actions"]
+        expected = {str(path): ("sha256:" + digest(path.read_bytes()), path.stat().st_size)
+                    for path in (policy, tasks)}
+        require(sealed["digest"] == accepted and
+                sealed["task"]["contract_digest"] == action["contract_digest"] == inspection["contract_digest"] and
+                sealed["task"]["action_id"] == action["action_id"] == inspection["action"] and
+                {row["module"]: (row["digest"], row["size"]) for row in sealed["sources"]} == expected and
+                action["requests"] == sealed["authority"]["requests"] == [] and
+                sorted(folder.glob("*.run.jsonl")) == journals, "slice plan sources, effects or receipt differ")
+        return accepted
+
+    def execute(label, accepted, journal):
+        return invoke("execute", "--plan", f"{label}.plan.json", "--accept", accepted, "--journal", journal)
+
+    def audit(label, accepted, fails):
+        journal = f"{label}.run.jsonl"
+        result = execute(label, accepted, journal)
+        require(result.returncode == int(fails), f"{label}: slice project exit differs: {result.stderr!r}")
+        path = f"{label}.audit.json"
+        success(invoke("audit", "--project", "opaal.toml", "--journal", journal, "--out", path), "audit slice preview")
+        success(invoke("audit", "inspect", path), "inspect slice audit")
+        receipt = json.loads((folder / path).read_bytes())
+        primary = receipt["primary"]
+        require(receipt["plan_digest"] == receipt["accepted_plan_digest"] == accepted
+                and receipt["completeness"] == "complete" and receipt["cleanup"] == []
+                and primary["class"] == ("error" if fails else "success") and primary["partial"] is False
+                and primary["value_digest"] == (None if fails else "sha256:" + digest(b"20"))
+                and (not fails or primary["code"] == "EXECUTE_LANGUAGE")
+                and [event["kind"] for event in receipt["events"]] == ["action-start", "action-end", "terminal"],
+                f"{label}: slice audit result, classification or events differ")
+        return {"plan": accepted, "outcome": primary["code"], "result": primary["value_digest"]}
+
+    initial = plan("preview")
+    preview = audit("preview", initial, False)
+    policy.write_bytes(policy.read_bytes().replace(b"counts[1:3]", b"counts[1:4]"))
+    stale = execute("preview", initial, "stale.run.jsonl")
+    require(stale.returncode == 1 and b"EXECUTE_STALE" in stale.stderr and not (folder / "stale.run.jsonl").exists(),
+            "slice policy drift reached journal creation")
+    changed = plan("past-end")
+    require(changed != initial, "slice policy edit kept the old digest")
+    return {"fixture_cases": sorted(SLICE_FIXTURES), "diagnostics": diagnostics, "prompt": True,
+            "stale_refused_before_journal": True, "preview": preview, "past_end": audit("past-end", changed, True)}
+
+
 def list_literal_spread(run, work: Path, fixtures: Path, target: str) -> dict:
     original = fixtures / "list-literal-spread"
     destination = work / "list-literal-spread"
@@ -1609,6 +1733,41 @@ def list_map_queries(send, receive, request, work: Path, fixtures: Path, encodin
             "repaired map did not restore navigation")
 
 
+def slice_queries(send, receive, request, work: Path, fixtures: Path, encoding: str) -> None:
+    uri = (work / "slice-query.opaal").as_uri()
+    lines = ["let first = 0", "let last = 2", 'let label = "é界🙂"[first:last]']
+    document = {"uri": uri}
+    send({"method": "textDocument/didOpen", "params": {"textDocument": {
+        **document, "languageId": "opaal", "version": 1, "text": "\n".join(lines) + "\n"}}})
+    require(receive((uri, 1))["params"]["diagnostics"] == [], "slice operands did not check")
+
+    def position(line, column):
+        prefix = lines[line][:column]
+        character = len(prefix.encode("utf-8")) if encoding == "utf-8" else len(prefix.encode("utf-16-le")) // 2
+        return {"line": line, "character": character}
+
+    def location(line, column, length):
+        return {"uri": uri, "range": {"start": position(line, column), "end": position(line, column + length)}}
+
+    for declaration, name in enumerate(("first", "last")):
+        start = lines[2].index(name)
+        at = {"textDocument": document, "position": position(2, start + 1)}
+        require(request("textDocument/definition", at)["result"] == location(declaration, 4, len(name)),
+                "slice endpoint definition range differs")
+        require(request("textDocument/references", {**at, "context": {"includeDeclaration": False}})["result"]
+                == [location(2, start, len(name))], "slice endpoint reference range differs")
+        require(name in {item["label"] for item in request("textDocument/completion", at)["result"]},
+                "slice endpoint completion omitted the binding")
+
+    bad = (fixtures / "list-string-slicing/bad-operand.opaal").read_text()
+    send({"method": "textDocument/didChange", "params": {"textDocument": {**document, "version": 2},
+                                                              "contentChanges": [{"text": bad}]}})
+    diagnostic, = receive((uri, 2))["params"]["diagnostics"]
+    require(diagnostic["code"] == "SIG032" and diagnostic["range"] == {
+        "start": {"line": 1, "character": 22}, "end": {"line": 1, "character": 29}},
+        "slice endpoint diagnostic range differs")
+
+
 def framed_formatting(binary: Path, work: Path, fixtures: Path, environment: dict) -> list[str]:
     observations = []
     for encoding in ("utf-8", "utf-16"):
@@ -1687,6 +1846,8 @@ def framed_formatting(binary: Path, work: Path, fixtures: Path, environment: dic
                 observations.append(f"{encoding}: comprehension original binders, clause completion, diagnostics and stale edit")
                 list_map_queries(send, receive, request, work, fixtures, encoding)
                 observations.append(f"{encoding}: List map binder, signature, completion and diagnostic ranges")
+                slice_queries(send, receive, request, work, fixtures, encoding)
+                observations.append(f"{encoding}: slice endpoint definitions, references, completion and diagnostics")
                 documents = [(name, (fixtures / name).read_text()) for name in
                              ("legacy.opaal", "canonical.opaal", "invalid.opaal", "incomplete.opaal")]
                 documents.extend((name, (fixtures / name).read_text()) for name in (
@@ -1702,6 +1863,8 @@ def framed_formatting(binary: Path, work: Path, fixtures: Path, environment: dic
                     "indexed-iteration/noncanonical.opaal", "indexed-iteration/indexed-and-paired.opaal",
                     "list-literal-spread/noncanonical.opaal", "list-literal-spread/canonical.opaal",
                     "list-literal-spread/incomplete.opaal", "list-literal-spread/invalid.opaal",
+                    "list-string-slicing/noncanonical.opaal", "list-string-slicing/canonical.opaal",
+                    "list-string-slicing/incomplete.opaal", "list-string-slicing/invalid.opaal",
                     "record-shorthand/noncanonical.opaal", "record-shorthand/canonical.opaal",
                     "record-shorthand/incomplete.opaal", "record-shorthand/invalid.opaal",
                     "grouped-export-prefixes/noncanonical.opaal", "grouped-export-prefixes/canonical.opaal",
@@ -1720,6 +1883,7 @@ def framed_formatting(binary: Path, work: Path, fixtures: Path, environment: dic
                                 "compound-assignment/noncanonical.opaal", "indexed-list-replacement/noncanonical.opaal", "list-literal-spread/noncanonical.opaal",
                                 "if-expressions/noncanonical.opaal",
                                 "indexed-iteration/noncanonical.opaal",
+                                "list-string-slicing/noncanonical.opaal",
                                 "record-shorthand/noncanonical.opaal", "grouped-export-prefixes/noncanonical.opaal",
                                 "action-declarations/noncanonical.opaal"):
                         if name == "indexed-iteration/noncanonical.opaal":
@@ -2006,6 +2170,24 @@ def terminal_continuation(binary: Path, work: Path, environment: dict) -> None:
             require(b"error[" not in captured, "terminal submitted an open List map")
         os.write(descriptor, b")\r")
         read_until(rb"(?:^|\n)\[2, 3\]\r?\n.*>> ")
+        os.write(descriptor, b"let slice_rows: List[Int] = [10, 20, 30]\r")
+        read_until(rb"\r?\n.*>> ")
+        for line in (b"let empty_slice = slice_rows[", b"3:3"):
+            os.write(descriptor, line + b"\r")
+            read_until(rb"\.\.\.> ")
+            require(b"error[" not in captured, "terminal submitted an open slice")
+        os.write(descriptor, b"]\r")
+        read_until(rb"\r?\n.*>> ")
+        os.write(descriptor, b"lists::map(empty_slice, {|x| x + 1})\r")
+        read_until(rb"(?:^|\n)\[\]\r?\n.*>> ")
+        os.write(descriptor, b"let cancelled_slice = slice_rows[1:\r")
+        read_until(rb"\.\.\.> ")
+        os.write(descriptor, b"\x03")
+        read_until(rb">> ")
+        os.write(descriptor, b"cancelled_slice\r")
+        read_until(rb"error\[.*>> ")
+        os.write(descriptor, b"slice_rows[1:3]\r")
+        read_until(rb"(?:^|\n)\[20, 30\]\r?\n.*>> ")
         for line in (b"import {", b"std::math,"):
             os.write(descriptor, line + b"\r")
             read_until(rb"\.\.\.> ")
@@ -2256,6 +2438,7 @@ def qualify(archive: Path | None, fixture_archive: Path | None, binaries: Path |
         loops_report = indexed_iteration(run, root, fixtures)
         comprehensions_report = list_comprehensions(run, root, fixtures, target)
         map_report = list_map(run, root, fixtures, target)
+        slices_report = list_string_slicing(run, root, fixtures, target)
         spread_report = list_literal_spread(run, root, fixtures, target)
         record_report = record_shorthand(run, root, fixtures, target)
         exports_report = grouped_export_prefixes(run, root, fixtures, target)
@@ -2264,6 +2447,7 @@ def qualify(archive: Path | None, fixture_archive: Path | None, binaries: Path |
         lsp_report = framed_formatting(installed / "opaal-language-server", root, fixtures, environment)
         terminal_continuation(binary, root, environment)
         map_report["terminal_continuation"] = True
+        slices_report["terminal_continuation"] = True
         require(public_paths(ROOT) == paths and
                 {name: digest((ROOT / name).read_bytes()) for name in paths if (ROOT / name).is_file()} == snapshot,
                 "source changed during qualification")
@@ -2282,6 +2466,7 @@ def qualify(archive: Path | None, fixture_archive: Path | None, binaries: Path |
                 "indexed_iteration": loops_report,
                 "list_comprehensions": comprehensions_report,
                 "list_map": map_report,
+                "list_string_slicing": slices_report,
                 "inline_module_exports": inline_report,
                 "action_declarations": actions_report, "language_server": lsp_report, "bounded_cases": bounded,
                 "assertions": ["exact fixture/source/program identity", "legacy/canonical execution and checking",

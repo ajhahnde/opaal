@@ -1274,6 +1274,11 @@ impl<'a> CallFinder<'a> {
                 self.expression(&index.target);
                 self.expression(&index.index);
             }
+            ExpressionKind::Slice(slice) => {
+                for operand in slice.operands() {
+                    self.expression(operand);
+                }
+            }
             ExpressionKind::Member(member) => self.expression(&member.target),
             ExpressionKind::Unary(unary) => self.expression(&unary.operand),
             ExpressionKind::Binary(binary) => {
