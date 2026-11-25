@@ -1,0 +1,8 @@
+import std::list as list
+
+def require_strings(items: List[String]) -> List[String]
+{
+    return items
+}
+let marks = list::map([1], {|x| x + 1})
+require_strings(marks)

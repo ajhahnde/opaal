@@ -127,6 +127,7 @@ fn composed_operations_admit_exact_shared_work_item_and_byte_budgets() {
     for source in [
         "string::join(string::split(string::replace('a/α/a', 'a', '😀😀'), '/'), 'é')",
         "list::map[Int, List[Int]]([1, 2, 3], {|x| list::reverse[Int]([x, x])})",
+        "list::map([1, 2, 3], {|x| list::reverse([x, x])})",
         "list::sort_by[Int, List[Int]]([3, 1, 2, 1], {|x| [x, -x]})",
         "list::drop(list::reverse(list::sort([3, 1, 2, 1])), 1)",
         "let row = { a: 1, b: 2, c: null }\nrecord::merge(record::select(row, ['b', 'a']), record::set(row, 'd', 4))",
@@ -149,6 +150,7 @@ fn json_and_nested_callbacks_use_the_callers_depth_budget() {
     for source in [
         "data::json_decode(data::json_encode([[[0]]]))",
         "list::map[Int, List[Int]]([1], {|x| list::map[Int, Int]([x], {|y| y})})",
+        "list::map([1], {|x| list::map([x], {|y| y})})",
         "list::sort_by[Int, List[Int]]([2, 1], {|x| [x, x]})",
     ] {
         check_boundary(&load(source), |n| {
@@ -163,6 +165,7 @@ fn cancellation_at_every_observed_poll_remains_primary_through_try_catch() {
         "string::replace('aaaaaaaaaaaaaaaa', 'a', 'α😀α😀')",
         "string::join(string::split('α/β//γ/', '/'), '😀')",
         "list::map[Int, List[Int]]([3, 1, 2, 1], {|x| list::map[Int, Int]([x, x], {|y| y + 1})})",
+        "list::map([3, 1, 2, 1], {|x| list::map([x, x], {|y| y + 1})})",
         "list::sort_by[Int, List[Int]]([3, 1, 2, 1], {|x| [x, -x]})",
         "list::sort(list::reverse([3, 1, 2, 1]))",
         "list::drop(list::take([3, 1, 2, 1], 3), 1)",

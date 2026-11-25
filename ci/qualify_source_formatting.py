@@ -23,14 +23,14 @@ if __package__:
     from .package_data_processing import SOURCE, digest
     from .package_release import PLATFORMS, ROOT, VERSION
     from .package_source_formatting import FIXTURES, MEMBER_IMPORT_FIXTURES, COMPOUND_ASSIGNMENT_FIXTURES, LIST_LITERAL_SPREAD_FIXTURES, RECORD_SHORTHAND_FIXTURES, GROUPED_EXPORT_FIXTURES, ACTION_DECLARATION_FIXTURES, INDEXED_REPLACEMENT_FIXTURES, IF_EXPRESSION_FIXTURES, TYPED_TUPLE_FIXTURES, INDEXED_ITERATION_FIXTURES
-    from .package_source_formatting import INLINE_EXPORT_FIXTURES, LIST_COMPREHENSION_FIXTURES
+    from .package_source_formatting import INLINE_EXPORT_FIXTURES, LIST_COMPREHENSION_FIXTURES, LIST_MAP_FIXTURES
     from .qualify_data_processing import require, success, unpack
 else:
     from check_source_formatting import public_paths, seed_census
     from package_data_processing import SOURCE, digest
     from package_release import PLATFORMS, ROOT, VERSION
     from package_source_formatting import FIXTURES, MEMBER_IMPORT_FIXTURES, COMPOUND_ASSIGNMENT_FIXTURES, LIST_LITERAL_SPREAD_FIXTURES, RECORD_SHORTHAND_FIXTURES, GROUPED_EXPORT_FIXTURES, ACTION_DECLARATION_FIXTURES, INDEXED_REPLACEMENT_FIXTURES, IF_EXPRESSION_FIXTURES, TYPED_TUPLE_FIXTURES, INDEXED_ITERATION_FIXTURES
-    from package_source_formatting import INLINE_EXPORT_FIXTURES, LIST_COMPREHENSION_FIXTURES
+    from package_source_formatting import INLINE_EXPORT_FIXTURES, LIST_COMPREHENSION_FIXTURES, LIST_MAP_FIXTURES
     from qualify_data_processing import require, success, unpack
 
 PAIRS = (("legacy.opaal", "canonical.opaal"), ("legacy-effects.opaal", "effects.opaal"),
@@ -743,6 +743,137 @@ def list_comprehensions(run, work: Path, fixtures: Path, target: str) -> dict:
             "typing_and_scope": True}
 
 
+def list_map(run, work: Path, fixtures: Path, target: str) -> dict:
+    source = fixtures / "list-map"
+    require({path.name for path in source.iterdir()} == set(LIST_MAP_FIXTURES),
+            "List map fixture census differs")
+    success(run("format", "--check", *(source / name for name in LIST_MAP_FIXTURES)), "List map format")
+    drivers = ["explicit.opaal", "inferred.opaal", "typed-empty.opaal", "grouped.opaal"]
+    for name in drivers:
+        require(success(run("check", source / name), name) == b""
+                and success(run(source / name), name) == b"", f"{name}: unexpected output")
+    diagnostics = {}
+    for name, code, detail, start, end in (
+        ("missing.opaal", "SIG010", "`T`", 26, 52),
+        ("missing-result.opaal", "SIG010", "`U`", 47, 76),
+        ("parameter-conflict.opaal", "OPR003", "String", 41, 56),
+        ("result-conflict.opaal", "SIG005", "String", 61, 66),
+        ("incompatible-consumer.opaal", "SIG004", "List[String]", 160, 165),
+    ):
+        result = run("check", "--format", "json", source / name)
+        diagnostic, = json.loads(result.stdout)["diagnostics"]
+        require(result.returncode == 1 and not result.stderr and diagnostic["code"] == code
+                and detail in diagnostic["message"] and diagnostic["range"] == {"start": start, "end": end},
+                f"{name}: List map diagnostic or range differs")
+        execution = run(source / name)
+        require(execution.returncode == 1 and not execution.stdout and f"error[{code}]".encode() in execution.stderr,
+                f"{name}: script admitted rejected source")
+        diagnostics[name] = {"code": code, "range": diagnostic["range"]}
+    grouped = work / "grouped-map.opaal"
+    shutil.copyfile(source / "grouped.opaal", grouped)
+    success(run("format", "--write", grouped), "format grouped callback")
+    require(grouped.read_bytes() == (source / "grouped.opaal").read_bytes(), "grouped callback or comment changed")
+
+    prompt = run(stdin=b"import std::list as list\nlist::map(\n[1, 2],\n{|x| x + 1}\n)\n"
+                 b"let counts: List[Int] = []\nlet marks = list::map(counts, {|x| x + 1})\n"
+                 b"list::map(marks, {|x| x * 2})\nlist::map([], {|x| x + 1})\nlist::map(marks, {|x| x})\n")
+    require(prompt.returncode == 0 and prompt.stdout == b">> >> ...> ...> ...> [2, 3]\n>> >> >> []\n>> >> []\n>> "
+            and prompt.stderr.count(b"error[") == 1 and b"error[RUN001]: cannot infer type argument `T`" in prompt.stderr,
+            "List map prompt continuation, retained binding or recovery differs")
+
+    folder = work / "mapped-task"
+    shutil.copytree(fixtures / "project", folder)
+    lock = {"macos-arm64": "tools-macos.toml", "linux-aarch64": "tools-linux-aarch64.toml",
+            "linux-x86_64": "tools-linux.toml"}[target]
+    shutil.copyfile(folder / lock, folder / "tools.toml")
+    policy, tasks = folder / "policy.opaal", folder / "tasks.opaal"
+    shutil.copyfile(source / "tasks.opaal", tasks)
+    base = ("--project", "opaal.toml", "--task", "mapped", "--environment", "ci")
+    identity = f"{policy}::verify"
+
+    def invoke(*args):
+        return run(*args, cwd=folder)
+
+    def plan(label):
+        journal_paths = sorted(folder.glob("*.run.jsonl"))
+        inspection, = json.loads(success(invoke("task", "inspect", "--project", "opaal.toml", "mapped",
+                                               "--format", "json"), "inspect mapped task"))["tasks"]
+        require(inspection["id"] == "formatting_example::mapped" and inspection["action"] == identity
+                and inspection["result"] == "Int" and inspection["parameters"] == inspection["effects"] == [],
+                "mapped task inspection differs")
+        require(success(invoke("check", *base), "check mapped task") == b"", "mapped task check wrote output")
+        path = f"{label}.plan.json"
+        accepted = success(invoke("plan", *base, "--expires-in", "900s", "--out", path,
+                                  "--format", "digest"), "plan mapped task").decode().strip()
+        sealed = json.loads((folder / path).read_bytes())
+        success(invoke("plan", "inspect", path), "inspect sealed mapped task")
+        require(sorted(folder.glob("*.run.jsonl")) == journal_paths, "planning mapped task created a journal")
+        expected = {str(path): ("sha256:" + digest(path.read_bytes()), path.stat().st_size)
+                    for path in (policy, tasks)}
+        observed = [row for row in sealed["observations"] if row["kind"] == "source"]
+        require(len(sealed["sources"]) == len(observed) == len(expected)
+                and {row["module"]: (row["digest"], row["size"]) for row in sealed["sources"]} == expected
+                and {row["id"]: (row["digest"], row["size"]) for row in observed} == expected,
+                "mapped task source census and bytes differ")
+        action, = sealed["actions"]
+        contract = inspection["contract_digest"]
+        require(sealed["digest"] == accepted and sealed["task"]["action_id"] == action["action_id"] == identity
+                and sealed["task"]["contract_digest"] == action["contract_digest"] == contract
+                and action["id"] == contract + "#000000" and action["dependencies"] == action["requests"] ==
+                sealed["authority"]["requests"] == sealed["tools"] == sealed["secrets"] == [],
+                "mapped task plan identity or requests differ")
+        return sealed
+
+    def execute(label, sealed, journal):
+        return invoke("execute", "--plan", f"{label}.plan.json", "--accept", sealed["digest"], "--journal", journal)
+
+    def audit(label, sealed, *, fails=False):
+        journal = f"{label}.run.jsonl"
+        require(not (folder / journal).exists(), "pre-execution journal exists")
+        result = execute(label, sealed, journal)
+        require(result.returncode == int(fails), f"{label}: mapped task execution status differs")
+        audit_path = f"{label}.audit.json"
+        success(invoke("audit", "--project", "opaal.toml", "--journal", journal, "--out", audit_path), "audit mapped task")
+        success(invoke("audit", "inspect", audit_path), "inspect mapped task audit")
+        report = json.loads((folder / audit_path).read_bytes())
+        primary = report["primary"]
+        value_digest = None if fails else "sha256:" + digest(b"3")
+        require(report["plan_digest"] == report["accepted_plan_digest"] == sealed["digest"]
+                and report["completeness"] == "complete" and report["cleanup"] == []
+                and primary["class"] == ("error" if fails else "success") and primary["partial"] is False
+                and primary["value_digest"] == value_digest
+                and (not fails or primary["code"] == "EXECUTE_LANGUAGE")
+                and [event["kind"] for event in report["events"]] == ["action-start", "action-end", "terminal"],
+                f"{label}: mapped task outcome or journal events differ")
+        start, end, terminal = (event["payload"] for event in report["events"])
+        action, = sealed["actions"]
+        require(start == {"action_id": identity, "action_node_id": action["id"], "contract_digest": action["contract_digest"]}
+                and end["action_node_id"] == action["id"]
+                and all(end["outcome"][key] == primary[key] for key in ("class", "partial", "value_digest"))
+                and terminal["primary"] == primary and terminal["complete"], "mapped task audit provenance differs")
+        return {"plan": sealed["digest"], "action_node": action["id"], "outcome": primary["code"], "result": value_digest}
+
+    inferred = (source / "policy.opaal").read_bytes()
+    policy.write_bytes(inferred.replace(b"{|x|", b"{|x| -> Int"))
+    reports = {"explicit": audit("explicit", plan("explicit"))}
+    policy.write_bytes(inferred)
+    sealed = plan("inferred")
+    reports["inferred"] = audit("inferred", sealed)
+    policy.write_bytes(inferred + b"\n# Changed after acceptance.\n")
+    stale = execute("inferred", sealed, "stale.run.jsonl")
+    require(stale.returncode == 1 and b"EXECUTE_STALE" in stale.stderr and not (folder / "stale.run.jsonl").exists(),
+            "changed List map source reached the stale journal")
+    reports["replanned"] = audit("replanned", plan("replanned"))
+    require(reports["replanned"]["action_node"] != reports["inferred"]["action_node"],
+            "source edit retained the old action identity")
+    helper = b'def fail(x: Int) -> Int\n{\n    throw "map callback reached execution"\n}\n\n'
+    policy.write_bytes(inferred.replace(b"export action", helper + b"export action", 1)
+                       .replace(b"x + 1", b"fail(x)"))
+    reports["throwing"] = audit("throwing", plan("throwing"), fails=True)
+    return {"drivers": drivers, "diagnostics": diagnostics, "project": reports,
+            "stale_refused_before_journal": True, "piped_continuation_and_recovery": True}
+
+
 def list_literal_spread(run, work: Path, fixtures: Path, target: str) -> dict:
     original = fixtures / "list-literal-spread"
     destination = work / "list-literal-spread"
@@ -1421,6 +1552,63 @@ def comprehension_queries(send, receive, request, work: Path, fixtures: Path, en
     require(query("definition", 0, 4) is None, "stale comprehension edit restored invalid bindings")
 
 
+def list_map_queries(send, receive, request, work: Path, fixtures: Path, encoding: str) -> None:
+    uri = (work / "map-query.opaal").as_uri()
+    document = {"uri": uri}
+    source = fixtures / "list-map"
+    send({"method": "textDocument/didOpen", "params": {"textDocument": {
+        **document, "languageId": "opaal", "version": 1, "text": (source / "inferred.opaal").read_text()}}})
+    require(receive((uri, 1))["params"]["diagnostics"] == [], "inferred map driver did not check")
+
+    def change(version, text):
+        send({"method": "textDocument/didChange", "params": {"textDocument": {**document, "version": version},
+              "contentChanges": [{"text": text}]}})
+        return receive((uri, version))["params"]["diagnostics"]
+
+    prefix = "import std::list as list\n"
+    line = "list::map(['界🙂'], {|item| item})"
+    unicode_source = prefix + line + "\n"
+    require(change(2, unicode_source) == [], "Unicode map did not check")
+
+    def position(text, column):
+        prefix = text[:column]
+        length = len(prefix.encode("utf-8")) if encoding == "utf-8" else len(prefix.encode("utf-16-le")) // 2
+        return {"line": 1, "character": length}
+
+    def source_range(text, start, end):
+        return {"start": position(text, start), "end": position(text, end)}
+
+    def query(method, column):
+        return request("textDocument/" + method, {"textDocument": document, "position": position(line, column)})["result"]
+
+    binder, reference = line.index("item"), line.rindex("item")
+    require(query("definition", reference) == {"uri": uri, "range": source_range(line, binder, binder + 4)},
+            "map callback did not resolve to its original binder")
+    signature = query("signatureHelp", line.rindex(")"))
+    require(signature["activeParameter"] == 1 and signature["signatures"][0]["label"] ==
+            "std::list::map[T, U](input: List[T], transform: Callable(T) -> U) -> List[U]",
+            "map signature differs")
+    require("item" in {item["label"] for item in query("completion", reference + 1)},
+            "map completion lost its callback binder")
+
+    conflict = line.replace("|item|", "|item: Int|")
+    diagnostic, = change(3, prefix + conflict + "\n")
+    require(diagnostic["code"] == "OPR003" and diagnostic["range"] ==
+            source_range(conflict, conflict.index("{"), conflict.index("}") + 1), "map conflict range differs")
+    for version, name, expected in ((4, "missing.opaal", "SIG010"),
+                                    (5, "missing-result.opaal", "SIG010"),
+                                    (6, "parameter-conflict.opaal", "OPR003"),
+                                    (7, "result-conflict.opaal", "SIG005"),
+                                    (8, "incompatible-consumer.opaal", "SIG004")):
+        require([item["code"] for item in change(version, (source / name).read_text())] == [expected],
+                f"{name}: framed map diagnostic differs")
+    require([item["code"] for item in change(9, prefix + "list::map([1], {|item| item")] == ["SYN002"],
+            "incomplete map edit lacks its parse diagnostic")
+    require(change(10, unicode_source) == [], "repaired map retained stale diagnostics")
+    require(query("definition", reference) == {"uri": uri, "range": source_range(line, binder, binder + 4)},
+            "repaired map did not restore navigation")
+
+
 def framed_formatting(binary: Path, work: Path, fixtures: Path, environment: dict) -> list[str]:
     observations = []
     for encoding in ("utf-8", "utf-16"):
@@ -1497,6 +1685,8 @@ def framed_formatting(binary: Path, work: Path, fixtures: Path, environment: dic
                 observations.append(f"{encoding}: inline exports and original diagnostic/declaration ranges")
                 comprehension_queries(send, receive, request, work, fixtures, encoding)
                 observations.append(f"{encoding}: comprehension original binders, clause completion, diagnostics and stale edit")
+                list_map_queries(send, receive, request, work, fixtures, encoding)
+                observations.append(f"{encoding}: List map binder, signature, completion and diagnostic ranges")
                 documents = [(name, (fixtures / name).read_text()) for name in
                              ("legacy.opaal", "canonical.opaal", "invalid.opaal", "incomplete.opaal")]
                 documents.extend((name, (fixtures / name).read_text()) for name in (
@@ -1808,6 +1998,14 @@ def terminal_continuation(binary: Path, work: Path, environment: dict) -> None:
             require(b"error[" not in captured, "terminal submitted an open comprehension")
         os.write(descriptor, b" if n > 2]\r")
         read_until(rb"(?:^|\n)\[\(1, 6\), \(2, 8\)\]\r?\n.*>> ")
+        os.write(descriptor, b"import std::list as lists\r")
+        read_until(rb">> ")
+        for line in (b"lists::map(", b"[1, 2],", b"{|x| x + 1}"):
+            os.write(descriptor, line + b"\r")
+            read_until(rb"\.\.\.> ")
+            require(b"error[" not in captured, "terminal submitted an open List map")
+        os.write(descriptor, b")\r")
+        read_until(rb"(?:^|\n)\[2, 3\]\r?\n.*>> ")
         for line in (b"import {", b"std::math,"):
             os.write(descriptor, line + b"\r")
             read_until(rb"\.\.\.> ")
@@ -2057,6 +2255,7 @@ def qualify(archive: Path | None, fixture_archive: Path | None, binaries: Path |
         tuples_report = typed_tuples(run, fixtures)
         loops_report = indexed_iteration(run, root, fixtures)
         comprehensions_report = list_comprehensions(run, root, fixtures, target)
+        map_report = list_map(run, root, fixtures, target)
         spread_report = list_literal_spread(run, root, fixtures, target)
         record_report = record_shorthand(run, root, fixtures, target)
         exports_report = grouped_export_prefixes(run, root, fixtures, target)
@@ -2064,6 +2263,7 @@ def qualify(archive: Path | None, fixture_archive: Path | None, binaries: Path |
         actions_report = action_declarations(run, binary, root, fixtures, target)
         lsp_report = framed_formatting(installed / "opaal-language-server", root, fixtures, environment)
         terminal_continuation(binary, root, environment)
+        map_report["terminal_continuation"] = True
         require(public_paths(ROOT) == paths and
                 {name: digest((ROOT / name).read_bytes()) for name in paths if (ROOT / name).is_file()} == snapshot,
                 "source changed during qualification")
@@ -2081,6 +2281,7 @@ def qualify(archive: Path | None, fixture_archive: Path | None, binaries: Path |
                 "typed_tuples": tuples_report,
                 "indexed_iteration": loops_report,
                 "list_comprehensions": comprehensions_report,
+                "list_map": map_report,
                 "inline_module_exports": inline_report,
                 "action_declarations": actions_report, "language_server": lsp_report, "bounded_cases": bounded,
                 "assertions": ["exact fixture/source/program identity", "legacy/canonical execution and checking",

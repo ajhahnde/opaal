@@ -95,6 +95,12 @@ LIST_COMPREHENSION_FIXTURES = (
     "tasks.opaal", "typing-and-scope.opaal",
 )
 
+LIST_MAP_FIXTURES = (
+    "explicit.opaal", "grouped.opaal", "incompatible-consumer.opaal", "inferred.opaal",
+    "missing.opaal", "missing-result.opaal", "parameter-conflict.opaal", "policy.opaal",
+    "result-conflict.opaal", "tasks.opaal", "typed-empty.opaal",
+)
+
 INLINE_EXPORT_FIXTURES = (
     "alias-conflict.opaal", "check-policy.opaal", "duplicate-exact.opaal",
     "duplicate-prefix.opaal", "facade.opaal", "failed-init.opaal",
@@ -149,6 +155,9 @@ def main() -> None:
                       if name.startswith("list-comprehensions/")}
     if comprehensions != set(LIST_COMPREHENSION_FIXTURES):
         raise ValueError("list comprehension fixture census differs from the committed source")
+    mappings = {name.removeprefix("list-map/") for name in names if name.startswith("list-map/")}
+    if mappings != set(LIST_MAP_FIXTURES):
+        raise ValueError("List map fixture census differs from the committed source")
     archive = package_examples(ROOT, names, source, directory=FIXTURES, name="source-formatting")
     print(archive.relative_to(ROOT))
 

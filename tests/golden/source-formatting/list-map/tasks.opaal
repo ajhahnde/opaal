@@ -1,0 +1,3 @@
+import './policy.opaal'::{verify}
+
+task mapped = verify

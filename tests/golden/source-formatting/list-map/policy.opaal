@@ -1,0 +1,9 @@
+import std::list as list
+
+export action verify() -> Int
+{
+    effects {
+    }
+    let marks = list::map([1, 2], {|x| x + 1})
+    return marks[1]
+}

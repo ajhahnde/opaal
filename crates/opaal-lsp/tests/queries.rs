@@ -1435,6 +1435,89 @@ fn callback_operation_signatures_show_relations_and_argument_positions() {
 }
 
 #[test]
+fn inline_map_keeps_binder_and_conflict_ranges_in_both_encodings() {
+    let directory = TestDirectory::new();
+    let uri = directory.uri("map.opaal");
+    let text = "import std::list as list\nlist::map(['界🙂'], {|item| item})\n";
+    let conflict = text.replace("|item|", "|item: Int|");
+    for encoding in [PositionEncoding::Utf8, PositionEncoding::Utf16] {
+        let mut workspace = Workspace::new();
+        workspace.open(uri.clone(), 1, text.into()).unwrap();
+        let diagnostics = workspace
+            .diagnostic_snapshot()
+            .analyze_diagnostics(encoding)
+            .unwrap();
+        assert!(
+            diagnostics
+                .documents()
+                .iter()
+                .all(|doc| doc.diagnostics().is_empty())
+        );
+        let binder = text.find("item").unwrap();
+        let query = |method, offset| {
+            request(
+                &workspace,
+                encoding,
+                &RequestControl::new(),
+                method,
+                positional(&uri, text, offset, encoding),
+            )
+            .unwrap()
+        };
+        assert_eq!(
+            query("textDocument/definition", text.rfind("item").unwrap()),
+            json!({
+                "uri": uri.as_str(),
+                "range": {"start": position(text, binder, encoding), "end": position(text, binder + 4, encoding)}
+            })
+        );
+        assert_eq!(
+            query("textDocument/signatureHelp", text.rfind(')').unwrap())["signatures"][0]["label"],
+            "std::list::map[T, U](input: List[T], transform: Callable(T) -> U) -> List[U]"
+        );
+        assert!(
+            query("textDocument/completion", text.rfind("item").unwrap() + 2)
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|candidate| candidate["label"] == "item")
+        );
+        workspace.change(&uri, Some(2), conflict.clone()).unwrap();
+        let diagnostics = workspace
+            .diagnostic_snapshot()
+            .analyze_diagnostics(encoding)
+            .unwrap();
+        let [diagnostic] = diagnostics.documents()[0].diagnostics() else {
+            panic!("{diagnostics:?}")
+        };
+        assert_eq!(diagnostic.code(), Some("OPR003"));
+        let source = SourceFile::new(SourceId::new(0), "conflict", conflict.as_str());
+        let span = source
+            .span(conflict.find('{').unwrap()..conflict.find('}').unwrap() + 1)
+            .unwrap();
+        assert_eq!(
+            diagnostic.range().start(),
+            source.text_position(span.start(), encoding).unwrap()
+        );
+        assert_eq!(
+            diagnostic.range().end(),
+            source.text_position(span.end(), encoding).unwrap()
+        );
+        workspace.change(&uri, Some(3), text.into()).unwrap();
+        let diagnostics = workspace
+            .diagnostic_snapshot()
+            .analyze_diagnostics(encoding)
+            .unwrap();
+        assert!(
+            diagnostics
+                .documents()
+                .iter()
+                .all(|doc| doc.diagnostics().is_empty())
+        );
+    }
+}
+
+#[test]
 fn list_query_and_order_signatures_expose_option_and_ordered_constraints() {
     for (text, expected, parameter) in [
         (
