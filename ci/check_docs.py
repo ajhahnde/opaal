@@ -55,7 +55,7 @@ def markdown_pages(root: Path) -> list[Path]:
         ).decode().split("\0")
         return sorted({root / name for name in names if name and (root / name).is_file()})
     pages = [root / name for name in ROOT_GUIDES if name.endswith(".md")]
-    for folder in ("benchmarks", "examples", "fuzz", "tests"):
+    for folder in ("benchmarks", "ci", "crates", "examples", "fuzz", "tests"):
         pages.extend((root / folder).rglob("*.md"))
     return sorted({page for page in pages if page.is_file()})
 

@@ -101,9 +101,9 @@ def asset_observations(destination, reference, host):
                 and path.suffix != ".py" and "__pycache__" not in path.parts}
     controls = {"opaal.toml": "offline.toml", "offline-tools.toml":
                 "offline-tools-linux.toml" if host == "x86_64-unknown-linux-gnu" else
-                "offline-tools-linux-aarch64.toml" if host == "aarch64-unknown-linux-gnu" else
+                "offline-tools-linux-arm64.toml" if host == "aarch64-unknown-linux-gnu" else
                 "offline-tools-macos.toml"}
-    omitted = {"offline.toml", "offline-tools-linux.toml", "offline-tools-linux-aarch64.toml", "offline-tools-macos.toml",
+    omitted = {"offline.toml", "offline-tools-linux.toml", "offline-tools-linux-arm64.toml", "offline-tools-macos.toml",
                "live.toml", "live-authority.toml", "live-tools.template.toml"}
     expected = {name: path for name, path in expected.items() if name not in omitted}
     expected.update({name: reference / owner for name, owner in controls.items()})

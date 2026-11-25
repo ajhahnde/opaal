@@ -113,7 +113,7 @@ jobs:
           done
 
   operational-core-linux:
-    name: operational-core-linux
+    name: Operational core (Linux x86_64)
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     steps:
@@ -139,8 +139,8 @@ jobs:
         run: python3 benchmarks/run.py --profile smoke
 
   operational-core-macos:
-    name: operational-core-macos
-    runs-on: macos-15
+    name: Operational core (macOS ARM64)
+    runs-on: macos-26
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -177,8 +177,8 @@ jobs:
       - name: Validate the full macOS performance profile
         run: python3 benchmarks/run.py --profile qualification
 
-  operational-core-linux-aarch64:
-    name: operational-core-linux-aarch64
+  operational-core-linux-arm64:
+    name: Operational core (Linux ARM64)
     runs-on: ubuntu-24.04-arm
     container:
       image: ubuntu:22.04@sha256:829f6df217bcbae2b371026e81711d1a787c61b2967ad09d015063663ebafbf7
@@ -240,11 +240,11 @@ jobs:
             readelf -hW "$binary" | grep -Fx '  Machine:                           AArch64'
             readelf --version-info --wide "$binary" | python3 -c 'import re,sys; versions=[tuple(map(int,x.split("."))) for x in re.findall(r"GLIBC_(\d+\.\d+)",sys.stdin.read())]; assert versions and max(versions) <= (2,35), max(versions) if versions else "no GLIBC symbols"'
           done
-          python3 ci/package_release.py --platform linux-aarch64
+          python3 ci/package_release.py --platform linux-arm64
           candidate_version=$(python3 -c 'from ci.package_release import VERSION; print(VERSION)')
-          (cd dist && sha256sum --check "opaal-v${candidate_version}-linux-aarch64.tar.gz.sha256")
+          (cd dist && sha256sum --check "opaal-v${candidate_version}-linux-arm64.tar.gz.sha256")
 
-      - name: Test the complete workspace on native Linux AArch64
+      - name: Test the complete workspace on native Linux ARM64
         run: cargo test --workspace --locked --no-fail-fast
 
       - name: Clippy and documentation
@@ -258,14 +258,14 @@ jobs:
         run: python3 ci/qualify_operational_core.py --profile qualification
 
       - name: Exercise the native ARM performance smoke profile
-        run: python3 benchmarks/run.py --profile smoke --output "$RUNNER_TEMP/benchmark-smoke-linux-aarch64.json"
+        run: python3 benchmarks/run.py --profile smoke --output "$RUNNER_TEMP/benchmark-smoke-linux-arm64.json"
 
       - name: Retain native ARM performance evidence
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: benchmark-smoke-linux-aarch64
-          path: ${{ runner.temp }}/benchmark-smoke-linux-aarch64.json
+          name: benchmark-smoke-linux-arm64
+          path: ${{ runner.temp }}/benchmark-smoke-linux-arm64.json
           if-no-files-found: error
 
   random-native-linux:
@@ -315,7 +315,7 @@ jobs:
           if-no-files-found: error
 
   data-processing-linux:
-    name: data-processing-linux
+    name: Archive qualification (Linux x86_64)
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -329,65 +329,8 @@ jobs:
         run: cargo build --release --workspace --locked
       - name: Check the classified source formatting inventory
         run: python3 ci/check_source_formatting.py --cli target/release/opaal
-      - name: Package the exact programs and examples
-        run: python3 ci/package_data_processing.py --platform linux-x86_64
-      - name: Package the exact source formatting fixtures
-        run: python3 ci/package_source_formatting.py
-      - name: Qualify source formatting outside the checkout
-        run: |
-          candidate_version=$(python3 -c 'from ci.package_release import VERSION; print(VERSION)')
-          python3 ci/qualify_source_formatting.py \
-            --archive "dist/opaal-v${candidate_version}-linux-x86_64.tar.gz" \
-            --fixtures "dist/opaal-v${candidate_version}-source-formatting.tar.gz" \
-            --expected-source "$(git rev-parse HEAD)" --platform linux-x86_64 \
-            --report dist/source-formatting-linux.json
-      - name: Qualify installation and report processing outside the checkout
-        run: |
-          candidate_version=$(python3 -c 'from ci.package_release import VERSION; print(VERSION)')
-          python3 ci/qualify_data_processing.py \
-            --archive "dist/opaal-v${candidate_version}-linux-x86_64.tar.gz" \
-            --examples "dist/opaal-v${candidate_version}-data-processing.tar.gz" \
-            --expected-version "${candidate_version}" --expected-source "$(git rev-parse HEAD)" \
-            --platform linux-x86_64 --report dist/data-processing-linux.json
-      - name: Qualify scalar numeric report workflows
-        run: |
-          candidate_version=$(python3 -c 'from ci.package_release import VERSION; print(VERSION)')
-          python3 ci/qualify_numeric_operations.py \
-            --archive "dist/opaal-v${candidate_version}-linux-x86_64.tar.gz" \
-            --expected-source "$(git rev-parse HEAD)" --platform linux-x86_64 \
-            --report dist/numeric-operations-linux.json
-      - name: Package the exact Random fixtures
-        run: python3 ci/package_random_values.py
-      - name: Qualify bounded Random outside the checkout
-        run: |
-          candidate_version=$(python3 -c 'from ci.package_release import VERSION; print(VERSION)')
-          python3 ci/qualify_random_values.py \
-            --archive "dist/opaal-v${candidate_version}-linux-x86_64.tar.gz" \
-            --fixtures "dist/opaal-v${candidate_version}-random-values.tar.gz" \
-            --expected-source "$(git rev-parse HEAD)" --platform linux-x86_64 \
-            --report dist/random-values-linux.json
-      - name: Package the exact standard-stream references
-        run: python3 ci/package_standard_input_output.py
-      - name: Qualify the processor and CI job check outside the checkout
-        run: |
-          candidate_version=$(python3 -c 'from ci.package_release import VERSION; print(VERSION)')
-          python3 ci/qualify_standard_input_output.py \
-            --archive "dist/opaal-v${candidate_version}-linux-x86_64.tar.gz" \
-            --fixtures "dist/opaal-v${candidate_version}-standard-input-output.tar.gz" \
-            --expected-source "$(git rev-parse HEAD)" --platform linux-x86_64 \
-            --report dist/standard-input-output-linux.json
-      - name: Package the exact Docker image check reference
-        run: python3 ci/package_docker_image_checks.py
-      - name: Qualify saved Docker image checks outside the checkout
-        run: |
-          candidate_version=$(python3 -c 'from ci.package_release import VERSION; print(VERSION)')
-          python3 ci/qualify_docker_image_checks.py --offline \
-            --archive "dist/opaal-v${candidate_version}-linux-x86_64.tar.gz" \
-            --fixtures "dist/opaal-v${candidate_version}-docker-image-checks.tar.gz" \
-            --expected-source "$(git rev-parse HEAD)" --platform linux-x86_64 \
-            --report dist/docker-image-checks-linux.json
-      - name: Package the exact controlled native tool reference
-        run: python3 ci/package_controlled_native_tools.py
+      - name: Package and qualify the candidate archives outside the checkout
+        run: bash ci/qualify_candidate_archives.sh linux-x86_64 dist
       - name: Qualify saved repository checks outside the checkout
         run: |
           candidate_version=$(python3 -c 'from ci.package_release import VERSION; print(VERSION)')
@@ -414,8 +357,8 @@ jobs:
           if-no-files-found: error
 
   data-processing-macos:
-    name: data-processing-macos
-    runs-on: macos-15
+    name: Archive qualification (macOS ARM64)
+    runs-on: macos-26
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -431,67 +374,12 @@ jobs:
           codesign --display --verbose=4 target/release/opaal
           codesign --force --sign - --options kill target/release/opaal
           codesign --verify --strict target/release/opaal
+          xcrun vtool -show-build target/release/opaal
+          xcrun vtool -show-build target/release/opaal-language-server
       - name: Check the classified source formatting inventory
         run: python3 ci/check_source_formatting.py --cli target/release/opaal
-      - name: Package the exact programs and examples
-        run: python3 ci/package_data_processing.py --platform macos-arm64
-      - name: Package the exact source formatting fixtures
-        run: python3 ci/package_source_formatting.py
-      - name: Qualify source formatting outside the checkout
-        run: |
-          candidate_version=$(python3 -c 'from ci.package_release import VERSION; print(VERSION)')
-          python3 ci/qualify_source_formatting.py \
-            --archive "dist/opaal-v${candidate_version}-macos-arm64.tar.gz" \
-            --fixtures "dist/opaal-v${candidate_version}-source-formatting.tar.gz" \
-            --expected-source "$(git rev-parse HEAD)" --platform macos-arm64 \
-            --report dist/source-formatting-macos.json
-      - name: Qualify installation and report processing outside the checkout
-        run: |
-          candidate_version=$(python3 -c 'from ci.package_release import VERSION; print(VERSION)')
-          python3 ci/qualify_data_processing.py \
-            --archive "dist/opaal-v${candidate_version}-macos-arm64.tar.gz" \
-            --examples "dist/opaal-v${candidate_version}-data-processing.tar.gz" \
-            --expected-version "${candidate_version}" --expected-source "$(git rev-parse HEAD)" \
-            --platform macos-arm64 --report dist/data-processing-macos.json
-      - name: Qualify scalar numeric report workflows
-        run: |
-          candidate_version=$(python3 -c 'from ci.package_release import VERSION; print(VERSION)')
-          python3 ci/qualify_numeric_operations.py \
-            --archive "dist/opaal-v${candidate_version}-macos-arm64.tar.gz" \
-            --expected-source "$(git rev-parse HEAD)" --platform macos-arm64 \
-            --report dist/numeric-operations-macos.json
-      - name: Package the exact Random fixtures
-        run: python3 ci/package_random_values.py
-      - name: Qualify bounded Random outside the checkout
-        run: |
-          candidate_version=$(python3 -c 'from ci.package_release import VERSION; print(VERSION)')
-          python3 ci/qualify_random_values.py \
-            --archive "dist/opaal-v${candidate_version}-macos-arm64.tar.gz" \
-            --fixtures "dist/opaal-v${candidate_version}-random-values.tar.gz" \
-            --expected-source "$(git rev-parse HEAD)" --platform macos-arm64 \
-            --report dist/random-values-macos.json
-      - name: Package the exact standard-stream references
-        run: python3 ci/package_standard_input_output.py
-      - name: Qualify the processor and CI job check outside the checkout
-        run: |
-          candidate_version=$(python3 -c 'from ci.package_release import VERSION; print(VERSION)')
-          python3 ci/qualify_standard_input_output.py \
-            --archive "dist/opaal-v${candidate_version}-macos-arm64.tar.gz" \
-            --fixtures "dist/opaal-v${candidate_version}-standard-input-output.tar.gz" \
-            --expected-source "$(git rev-parse HEAD)" --platform macos-arm64 \
-            --report dist/standard-input-output-macos.json
-      - name: Package the exact Docker image check reference
-        run: python3 ci/package_docker_image_checks.py
-      - name: Qualify saved Docker image checks outside the checkout
-        run: |
-          candidate_version=$(python3 -c 'from ci.package_release import VERSION; print(VERSION)')
-          python3 ci/qualify_docker_image_checks.py --offline \
-            --archive "dist/opaal-v${candidate_version}-macos-arm64.tar.gz" \
-            --fixtures "dist/opaal-v${candidate_version}-docker-image-checks.tar.gz" \
-            --expected-source "$(git rev-parse HEAD)" --platform macos-arm64 \
-            --report dist/docker-image-checks-macos.json
-      - name: Package the exact controlled native tool reference
-        run: python3 ci/package_controlled_native_tools.py
+      - name: Package and qualify the candidate archives outside the checkout
+        run: bash ci/qualify_candidate_archives.sh macos-arm64 dist
       - name: Qualify saved repository checks outside the checkout
         run: |
           candidate_version=$(python3 -c 'from ci.package_release import VERSION; print(VERSION)')
@@ -517,8 +405,8 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
-  data-processing-linux-aarch64:
-    name: data-processing-linux-aarch64
+  data-processing-linux-arm64:
+    name: Archive qualification (Linux ARM64)
     runs-on: ubuntu-24.04-arm
     container:
       image: ubuntu:22.04@sha256:829f6df217bcbae2b371026e81711d1a787c61b2967ad09d015063663ebafbf7
@@ -598,8 +486,8 @@ jobs:
         run: |
           cargo build --release --workspace --locked
           candidate_version=$(python3 -c 'from ci.package_release import VERSION; print(VERSION)')
-          python3 ci/package_release.py --platform linux-aarch64
-          (cd dist && sha256sum --check "opaal-v${candidate_version}-linux-aarch64.tar.gz.sha256")
+          python3 ci/package_release.py --platform linux-arm64
+          (cd dist && sha256sum --check "opaal-v${candidate_version}-linux-arm64.tar.gz.sha256")
 
       - name: Build native observer test binaries
         run: |
@@ -639,36 +527,18 @@ jobs:
                   output.write(f"{key}={value}\n")
           PY
 
-      - name: Package the exact native qualification fixtures
-        run: |
-          python3 ci/package_data_processing.py --platform linux-aarch64
-          python3 ci/package_source_formatting.py
-          python3 ci/package_random_values.py
-          python3 ci/package_standard_input_output.py
-          python3 ci/package_docker_image_checks.py
-          python3 ci/package_controlled_native_tools.py
-
-      - name: Qualify saved-input, numeric, Random, stream, and source workflows
-        run: |
-          candidate_version=$(python3 -c 'from ci.package_release import VERSION; print(VERSION)')
-          archive="dist/opaal-v${candidate_version}-linux-aarch64.tar.gz"
-          source_sha=$(git rev-parse HEAD)
-          python3 ci/qualify_source_formatting.py --archive "$archive" --fixtures "dist/opaal-v${candidate_version}-source-formatting.tar.gz" --expected-source "$source_sha" --platform linux-aarch64 --report "$RUNNER_TEMP/source-formatting-linux-aarch64.json"
-          python3 ci/qualify_data_processing.py --archive "$archive" --examples "dist/opaal-v${candidate_version}-data-processing.tar.gz" --expected-version "$candidate_version" --expected-source "$source_sha" --platform linux-aarch64 --report "$RUNNER_TEMP/data-processing-linux-aarch64.json"
-          python3 ci/qualify_numeric_operations.py --archive "$archive" --expected-source "$source_sha" --platform linux-aarch64 --report "$RUNNER_TEMP/numeric-operations-linux-aarch64.json"
-          python3 ci/qualify_random_values.py --archive "$archive" --fixtures "dist/opaal-v${candidate_version}-random-values.tar.gz" --expected-source "$source_sha" --platform linux-aarch64 --report "$RUNNER_TEMP/random-values-linux-aarch64.json"
-          python3 ci/qualify_standard_input_output.py --archive "$archive" --fixtures "dist/opaal-v${candidate_version}-standard-input-output.tar.gz" --expected-source "$source_sha" --platform linux-aarch64 --report "$RUNNER_TEMP/standard-input-output-linux-aarch64.json"
-          python3 ci/qualify_docker_image_checks.py --offline --archive "$archive" --fixtures "dist/opaal-v${candidate_version}-docker-image-checks.tar.gz" --expected-source "$source_sha" --platform linux-aarch64 --report "$RUNNER_TEMP/docker-image-checks-offline-linux-aarch64.json"
+      - name: Package and qualify the candidate archives outside the checkout
+        run: bash ci/qualify_candidate_archives.sh linux-arm64 "$RUNNER_TEMP"
 
       - name: Qualify controlled process, image, and fault boundaries
         run: |
           candidate_version=$(python3 -c 'from ci.package_release import VERSION; print(VERSION)')
-          archive="dist/opaal-v${candidate_version}-linux-aarch64.tar.gz"
+          archive="dist/opaal-v${candidate_version}-linux-arm64.tar.gz"
           source_sha=$(git rev-parse HEAD)
           cc -O2 -Wall -Wextra -Werror tests/golden/controlled-external-tools/checker.c -o "$RUNNER_TEMP/native-fault-checker"
-          python3 ci/qualify_controlled_native_tools.py --archive "$archive" --fixtures "dist/opaal-v${candidate_version}-controlled-native-tools.tar.gz" --expected-source "$source_sha" --platform linux-aarch64 --output "$RUNNER_TEMP/controlled-native-tools" --checker /usr/bin/shellcheck --fault-checker "$RUNNER_TEMP/native-fault-checker" --preparation-test-binary "$PREPARATION_TEST_BINARY" --image-test-binary "$IMAGE_TEST_BINARY" --evidence-test-binary "$EVIDENCE_TEST_BINARY" --process-test-binary "$PROCESS_TEST_BINARY" --cli-test-binary "$CLI_TEST_BINARY" --posix-test-binary "$POSIX_TEST_BINARY" --lsp-test-binary "$LSP_TEST_BINARY"
-          python3 ci/qualify_random_failures.py --binary target/release/opaal --output "$RUNNER_TEMP/random-failures-linux-aarch64"
-          python3 ci/qualify_standard_io_failures.py --binary target/release/opaal --output "$RUNNER_TEMP/standard-io-failures-linux-aarch64"
+          python3 ci/qualify_controlled_native_tools.py --archive "$archive" --fixtures "dist/opaal-v${candidate_version}-controlled-native-tools.tar.gz" --expected-source "$source_sha" --platform linux-arm64 --output "$RUNNER_TEMP/controlled-native-tools" --checker /usr/bin/shellcheck --fault-checker "$RUNNER_TEMP/native-fault-checker" --preparation-test-binary "$PREPARATION_TEST_BINARY" --image-test-binary "$IMAGE_TEST_BINARY" --evidence-test-binary "$EVIDENCE_TEST_BINARY" --process-test-binary "$PROCESS_TEST_BINARY" --cli-test-binary "$CLI_TEST_BINARY" --posix-test-binary "$POSIX_TEST_BINARY" --lsp-test-binary "$LSP_TEST_BINARY"
+          python3 ci/qualify_random_failures.py --binary target/release/opaal --output "$RUNNER_TEMP/random-failures-linux-arm64"
+          python3 ci/qualify_standard_io_failures.py --binary target/release/opaal --output "$RUNNER_TEMP/standard-io-failures-linux-arm64"
 
       - name: Load the deterministic ARM image and local multi-platform index
         run: |
@@ -683,35 +553,35 @@ jobs:
       - name: Qualify live Docker image inspection
         run: |
           candidate_version=$(python3 -c 'from ci.package_release import VERSION; print(VERSION)')
-          python3 ci/qualify_docker_image_checks.py --live --archive "dist/opaal-v${candidate_version}-linux-aarch64.tar.gz" --fixtures "dist/opaal-v${candidate_version}-docker-image-checks.tar.gz" --docker /usr/bin/docker --socket "$RUNNER_TEMP/docker.sock" --image-ref opaal-qualification/arm64:fixture --image-id sha256:2a654a940aa4d12f5f291f5d600ac3b9a6166bb3c3a0f391f6626f049161328e --image-revision opaal-arm64-live-fixture-v1 --index-ref ubuntu:22.04@sha256:829f6df217bcbae2b371026e81711d1a787c61b2967ad09d015063663ebafbf7 --expected-source "$(git rev-parse HEAD)" --platform linux-aarch64 --report "$RUNNER_TEMP/docker-live-linux-aarch64.json"
+          python3 ci/qualify_docker_image_checks.py --live --archive "dist/opaal-v${candidate_version}-linux-arm64.tar.gz" --fixtures "dist/opaal-v${candidate_version}-docker-image-checks.tar.gz" --docker /usr/bin/docker --socket "$RUNNER_TEMP/docker.sock" --image-ref opaal-qualification/arm64:fixture --image-id sha256:2a654a940aa4d12f5f291f5d600ac3b9a6166bb3c3a0f391f6626f049161328e --image-revision opaal-arm64-live-fixture-v1 --index-ref ubuntu:22.04@sha256:829f6df217bcbae2b371026e81711d1a787c61b2967ad09d015063663ebafbf7 --expected-source "$(git rev-parse HEAD)" --platform linux-arm64 --report "$RUNNER_TEMP/docker-live-linux-arm64.json"
 
       - name: Retain native qualification reports and failure traces
         if: always()
         run: |
-          for report in "$RUNNER_TEMP"/*linux-aarch64.json; do
+          for report in "$RUNNER_TEMP"/*linux-arm64.json; do
             if [ -f "$report" ]; then cp "$report" dist/; fi
           done
           if [ -d "$RUNNER_TEMP/controlled-native-tools" ]; then
-            tar -czf dist/controlled-native-tools-linux-aarch64-evidence.tar.gz \
+            tar -czf dist/controlled-native-tools-linux-arm64-evidence.tar.gz \
               -C "$RUNNER_TEMP" controlled-native-tools
           fi
-          if [ -d "$RUNNER_TEMP/docker-live-linux-aarch64.artifacts" ]; then
-            tar -czf dist/docker-live-linux-aarch64-evidence.tar.gz \
-              -C "$RUNNER_TEMP" docker-live-linux-aarch64.artifacts
+          if [ -d "$RUNNER_TEMP/docker-live-linux-arm64.artifacts" ]; then
+            tar -czf dist/docker-live-linux-arm64-evidence.tar.gz \
+              -C "$RUNNER_TEMP" docker-live-linux-arm64.artifacts
           fi
 
       - name: Retain candidate identity and qualification evidence
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: data-processing-linux-aarch64
+          name: data-processing-linux-arm64
           path: dist/*
           if-no-files-found: error
 
   required:
     name: required
     if: always()
-    needs: [foundation, policy, fuzz, operational-core-linux, operational-core-macos, operational-core-linux-aarch64, data-processing-linux, data-processing-macos, data-processing-linux-aarch64]
+    needs: [foundation, policy, fuzz, operational-core-linux, operational-core-macos, operational-core-linux-arm64, data-processing-linux, data-processing-macos, data-processing-linux-arm64]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -722,10 +592,10 @@ jobs:
           FUZZ_RESULT: ${{ needs.fuzz.result }}
           OPERATIONAL_CORE_LINUX_RESULT: ${{ needs.operational-core-linux.result }}
           OPERATIONAL_CORE_MACOS_RESULT: ${{ needs.operational-core-macos.result }}
-          OPERATIONAL_CORE_LINUX_AARCH64_RESULT: ${{ needs.operational-core-linux-aarch64.result }}
+          OPERATIONAL_CORE_LINUX_ARM64_RESULT: ${{ needs.operational-core-linux-arm64.result }}
           DATA_PROCESSING_LINUX_RESULT: ${{ needs.data-processing-linux.result }}
           DATA_PROCESSING_MACOS_RESULT: ${{ needs.data-processing-macos.result }}
-          DATA_PROCESSING_LINUX_AARCH64_RESULT: ${{ needs.data-processing-linux-aarch64.result }}
+          DATA_PROCESSING_LINUX_ARM64_RESULT: ${{ needs.data-processing-linux-arm64.result }}
         run: |
           if [ "${FOUNDATION_RESULT}" != "success" ] ||
              [ "${POLICY_RESULT}" != "success" ] ||
@@ -734,10 +604,10 @@ jobs:
              [ "${OPERATIONAL_CORE_MACOS_RESULT}" != "success" ] ||
              [ "${DATA_PROCESSING_LINUX_RESULT}" != "success" ] ||
              [ "${DATA_PROCESSING_MACOS_RESULT}" != "success" ] ||
-             [ "${OPERATIONAL_CORE_LINUX_AARCH64_RESULT}" != "success" ] ||
-             [ "${DATA_PROCESSING_LINUX_AARCH64_RESULT}" != "success" ]; then
+             [ "${OPERATIONAL_CORE_LINUX_ARM64_RESULT}" != "success" ] ||
+             [ "${DATA_PROCESSING_LINUX_ARM64_RESULT}" != "success" ]; then
             echo "foundation=${FOUNDATION_RESULT} policy=${POLICY_RESULT} fuzz=${FUZZ_RESULT} operational-core-linux=${OPERATIONAL_CORE_LINUX_RESULT} operational-core-macos=${OPERATIONAL_CORE_MACOS_RESULT}"
             echo "data-processing-linux=${DATA_PROCESSING_LINUX_RESULT} data-processing-macos=${DATA_PROCESSING_MACOS_RESULT}"
-            echo "operational-core-linux-aarch64=${OPERATIONAL_CORE_LINUX_AARCH64_RESULT} data-processing-linux-aarch64=${DATA_PROCESSING_LINUX_AARCH64_RESULT}"
+            echo "operational-core-linux-arm64=${OPERATIONAL_CORE_LINUX_ARM64_RESULT} data-processing-linux-arm64=${DATA_PROCESSING_LINUX_ARM64_RESULT}"
             exit 1
           fi

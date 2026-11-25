@@ -53,7 +53,7 @@ def byte_count(rendered: str) -> int:
 def qualify(archive: Path | None, fixtures: Path | None, binaries: Path | None,
             source: str, target: str) -> dict:
     require((platform.system(), platform.machine()) == {
-        "linux-x86_64": ("Linux", "x86_64"), "linux-aarch64": ("Linux", "aarch64"),
+        "linux-x86_64": ("Linux", "x86_64"), "linux-arm64": ("Linux", "aarch64"),
         "macos-arm64": ("Darwin", "arm64"),
     }[target], "candidate target differs from running host")
     require(subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT).decode().strip() == source,
@@ -89,7 +89,7 @@ def qualify(archive: Path | None, fixtures: Path | None, binaries: Path | None,
         shutil.copytree(inputs, work)
         require('required_opaal = ">=1.9.0,<2.0.0"' in (work / "opaal.toml").read_text(),
                 "Random reference version floor differs")
-        lock = "tools-macos.toml" if target == "macos-arm64" else "tools-linux-aarch64.toml" if target == "linux-aarch64" else "tools-linux.toml"
+        lock = "tools-macos.toml" if target == "macos-arm64" else "tools-linux-arm64.toml" if target == "linux-arm64" else "tools-linux.toml"
         shutil.copyfile(work / lock, work / "tools.toml")
         environment = {"PATH": os.defpath}
         binary = programs / "opaal"

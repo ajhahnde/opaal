@@ -33,7 +33,7 @@ The independent harness performs these public operations:
    non-executable refusal before stdin or an adapter can be used.
 4. Inspect, check, and plan the process-bearing readiness task against exact
    candidate, source, manifest, lock, authority, TLS, and tool identities.
-5. On Linux x86_64 and AArch64, explicitly accept the plan, run locked Git and Cargo operations,
+5. On Linux x86_64 and Linux ARM64, explicitly accept the plan, run locked Git and Cargo operations,
    contact only the fixed TLS loopback endpoint with a synthetic one-use secret,
    write readiness evidence, and audit the complete journal.
 6. On macOS, prove the same process-bearing task becomes a visible refused plan
@@ -58,8 +58,8 @@ exact host triple, exercised scenarios, process-execution classification, and
 products, Git metadata, tool locks, and synthetic inputs remain in the temporary
 workspace and are removed after the run.
 
-Pull-request CI runs the full workflow on Linux x86_64 and AArch64 and the
-unsupported-process boundary on Apple-silicon macOS. Linux also exercises the performance smoke;
+Pull-request CI runs the full workflow on Linux x86_64 and Linux ARM64 and the
+unsupported-process boundary on macOS ARM64. Linux also exercises the performance smoke;
 macOS validates the full retained qualification profile without treating the
 shared runner as the retained evidence host. Repository policy separately
 enforces the checked host evidence against its unchanged budgets. The stable
@@ -72,5 +72,14 @@ Passing these gates makes the exact revision eligible for a separate
 operator-controlled release review. It does not change the development version,
 publish a crate, package a binary, create a tag or release, qualify another
 operating-system image, or establish downstream hardware support.
+
+## Release archives
+
+The separate **Release binaries** workflow packages the CLI and LSP once on
+each host. It runs the saved-input report and LSP lifecycle from the unpacked
+archive in a temporary directory. The qualification report records the checked
+out commit and the archive's SHA-256. After the tag jobs pass, the operator
+checks each report against the matching archive and checksum and publishes
+those files.
 
 [← Repository overview](README.md) · [Project lifecycle](https://opaal-lang.org/docs/projects/) · [Development](DEVELOPMENT.md)

@@ -82,7 +82,7 @@ def qualify(binary: Path, output: Path) -> dict:
         shutil.copyfile(fixtures / "opaal.toml", work / "opaal.toml")
         manifest = work / "opaal.toml"
         manifest.write_text(manifest.read_text().replace(">=1.3.0", f">={VERSION}"))
-        target = {("Linux", "x86_64"): "linux", ("Linux", "aarch64"): "linux-aarch64",
+        target = {("Linux", "x86_64"): "linux", ("Linux", "aarch64"): "linux-arm64",
                   ("Darwin", "arm64"): "macos"}[(platform.system(), platform.machine())]
         shutil.copyfile(fixtures / f"tools-{target}.toml", work / "tools.toml")
         (work / "authority.toml").write_text(

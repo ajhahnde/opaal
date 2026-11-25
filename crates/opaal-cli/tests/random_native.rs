@@ -51,7 +51,7 @@ fn qualify(cancelled: bool, cleanup_failed: bool) {
     let target = if cfg!(target_os = "macos") {
         "macos"
     } else if cfg!(target_arch = "aarch64") {
-        "linux-aarch64"
+        "linux-arm64"
     } else {
         "linux"
     };

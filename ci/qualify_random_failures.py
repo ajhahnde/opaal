@@ -60,7 +60,7 @@ def reaped(pid: int) -> None:
 def qualify(binary: Path, output: Path) -> dict:
     require((platform.system(), platform.machine()) in [("Linux", "x86_64"), ("Linux", "aarch64"), ("Darwin", "arm64")],
             "unsupported qualification host")
-    target = {("Linux", "x86_64"): "linux", ("Linux", "aarch64"): "linux-aarch64",
+    target = {("Linux", "x86_64"): "linux", ("Linux", "aarch64"): "linux-arm64",
               ("Darwin", "arm64"): "macos"}[(platform.system(), platform.machine())]
     output.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="opaal-random-failures-") as temporary:

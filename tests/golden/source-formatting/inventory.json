@@ -2767,6 +2767,18 @@
       "path": "benchmarks/README.md"
     },
     {
+      "path": "ci/README.md"
+    },
+    {
+      "path": "ci/controlled-native-tools.md"
+    },
+    {
+      "path": "crates/README.md"
+    },
+    {
+      "path": "examples/README.md"
+    },
+    {
       "path": "examples/image-check/README.md"
     },
     {
@@ -2805,17 +2817,17 @@
   ],
   "fences": [
     {
-      "path": "DEVELOPMENT.md",
+      "path": "examples/README.md",
       "ordinal": 0,
       "sha256": "856a956b959a3990ed001d75771509832140a9b0df4486f12ee8877d72ebe346"
     },
     {
-      "path": "DEVELOPMENT.md",
+      "path": "examples/README.md",
       "ordinal": 1,
       "sha256": "d9b13789c6911b693c26e52293035a521d9d62141b3337812a8be1cd8174ffa4"
     },
     {
-      "path": "DEVELOPMENT.md",
+      "path": "examples/README.md",
       "ordinal": 2,
       "sha256": "b95cd7a96f78528e2038b23e032fc9ef6ae59094f33fa15bc4758f70a5190d54"
     }
@@ -2918,7 +2930,7 @@
     },
     {
       "path": "ci/check_docs.py",
-      "sha256": "f1b4b66f932256037f6519f80ecfb01390547a8401ad84fe11399cfa20bd3099",
+      "sha256": "a04fe0074c68c0e99c7b094f605004f872d011b56beabfab0719a9ff7cc1a8b9",
       "source_markers": 11,
       "constructors_or_assertions": [
         "check_examples",
@@ -2935,7 +2947,7 @@
     },
     {
       "path": "ci/check_product.py",
-      "sha256": "1ea9316359001f1d162f2ca71694ddd017c1bc09e55379d24366cac3a8a2ce47",
+      "sha256": "24bb38e33d8926fae8fdd545f709015b121961114d3e435091e119a93f2e9e12",
       "source_markers": 15,
       "constructors_or_assertions": [
         "command_json",
@@ -3057,7 +3069,7 @@
     },
     {
       "path": "ci/package_release.py",
-      "sha256": "edb8189b472bfe14d2e360c2eef0c7c8e3a57ac371f523e525d7ad9377e12637",
+      "sha256": "feab0fc8a2d196d3c3820d99eb2a38164a053d1deab41139e8c500eb5be0de1d",
       "source_markers": 2,
       "constructors_or_assertions": [
         "main",
@@ -3092,8 +3104,17 @@
       "assertion": "ci/tests/test_standard_input_output_candidate.py"
     },
     {
+      "path": "ci/qualify_candidate_archives.sh",
+      "sha256": "1af995d683f421e378b74d87679d4800de11fe76e5df0ac2a0c2354691ec0b4e",
+      "source_markers": 0,
+      "constructors_or_assertions": [],
+      "role": "source-infrastructure",
+      "reason": "Packages committed fixtures and replays them against the same candidate archive on every CI host.",
+      "assertion": "ci/tests/test_candidate_archives.py"
+    },
+    {
       "path": "ci/qualify_controlled_native_tools.py",
-      "sha256": "2ee758e606d0914d1c0211ad4ce265a91eb45ce48e10f6f0831f07b9baea9b6e",
+      "sha256": "bc81f54bf0a7f7d9f0e4390a7c2cb54ba53360c68d483d8716e5f08e21411dbe",
       "source_markers": 27,
       "constructors_or_assertions": [
         "accepted",
@@ -3116,7 +3137,7 @@
     },
     {
       "path": "ci/qualify_data_processing.py",
-      "sha256": "4ebcacf8980729ea0874b3da56c84b7f4e9ac218f76250896130ec4cfe0580fc",
+      "sha256": "b1ff540e9b792481061d98bb479d1bf9557f8224c730a069d8f42423d05a2c94",
       "source_markers": 23,
       "constructors_or_assertions": [
         "command",
@@ -3136,7 +3157,7 @@
     },
     {
       "path": "ci/qualify_docker_image_checks.py",
-      "sha256": "f6086f9eee50f47409a064d6eccac5b2df94775930e3f5864da2f4cf966e8cd5",
+      "sha256": "36039a3cedd9a052804afd43737a1ed162402b918e59a28aacb6ad164292a13f",
       "source_markers": 26,
       "constructors_or_assertions": [
         "accepted_run",
@@ -3207,7 +3228,7 @@
     },
     {
       "path": "ci/qualify_native_preparation.py",
-      "sha256": "fad9ef4f6ab61fe86be47e288a440ed654e79b5aba3faed56abc7257fb3f6d82",
+      "sha256": "eb64fb230751990aed45aaf1df8a382c17f58e4862ffc40991bd119acc881d32",
       "source_markers": 10,
       "constructors_or_assertions": [
         "asset_observations",
@@ -3225,7 +3246,7 @@
     },
     {
       "path": "ci/qualify_numeric_operations.py",
-      "sha256": "298bf5ac04df462563c7012c60ebe1c78ecbd8f11582d2003d0657194c5b8e3b",
+      "sha256": "bf5bb73bc2d85742c1d312e426eff22ea30f89356ed652b74f81e9e06f5c7f7b",
       "source_markers": 10,
       "constructors_or_assertions": [
         "main",
@@ -3280,7 +3301,7 @@
     },
     {
       "path": "ci/qualify_random_failures.py",
-      "sha256": "cdcb31d11da77e473de1698e655e748029be32ec005192297352b1a7374884b7",
+      "sha256": "90b45fbeaf06c12aa735164ea931f818c6114f4ba21fcb499ba297d1043f0767",
       "source_markers": 13,
       "constructors_or_assertions": [
         "children",
@@ -3299,7 +3320,7 @@
     },
     {
       "path": "ci/qualify_random_values.py",
-      "sha256": "e41a4cd90e1f80090b3cd51e28e51979f9e69183da4949beb5e9f2f8e7e94d30",
+      "sha256": "58d3d44f7ddde675c4902dfe94d6fa2ad1f6d0e378afdfd9f6458fa471940d67",
       "source_markers": 10,
       "constructors_or_assertions": [
         "byte_count",
@@ -3314,7 +3335,7 @@
     },
     {
       "path": "ci/qualify_source_formatting.py",
-      "sha256": "046a47e9630b7ddc79c78b730334ec4daadf39ded566dda0a5ef9d7d7b727062",
+      "sha256": "9811e5bba48a585739193f665fb949a66e2dd15c3c619bc8ae1ffe93bf245779",
       "source_markers": 540,
       "constructors_or_assertions": [
         "action_declarations",
@@ -3375,7 +3396,7 @@
     },
     {
       "path": "ci/qualify_standard_input_output.py",
-      "sha256": "992e1881e1e004f406ad819140b82f32bd655ff0e23eeeedcfe3328bfb3cb0ef",
+      "sha256": "bcd671304637a64122ca1e2500e2f7c45442526d0caa87fb9e6ea2ad19bacd62",
       "source_markers": 25,
       "constructors_or_assertions": [
         "assessment",
@@ -3391,7 +3412,7 @@
     },
     {
       "path": "ci/qualify_standard_io_failures.py",
-      "sha256": "3ba0fc03e95c7709762963351d7dd8d011407881273828726da8cab4c5266d1b",
+      "sha256": "9b356cc935f5fa2542d1c1721821cb9b795c310b82c4e1ae2a80e6248f2c0985",
       "source_markers": 18,
       "constructors_or_assertions": [
         "apply",
@@ -3412,6 +3433,20 @@
       "role": "positive-generator",
       "reason": "Generates controlled standard-stream projects for real transfers, interruption, exact reap and bounded journal persistence failures.",
       "assertion": "ci/qualify_standard_io_failures.py"
+    },
+    {
+      "path": "ci/tests/test_candidate_archives.py",
+      "sha256": "72e326575f16f263bad6fcef0806065f933491c0cd5c22f2e6ccc0d351bbe019",
+      "source_markers": 4,
+      "constructors_or_assertions": [
+        "run_replay",
+        "test_rejects_an_unknown_platform_before_packaging",
+        "test_replays_bind_the_same_archive_and_source_on_each_platform",
+        "test_stops_on_the_first_failed_qualifier"
+      ],
+      "role": "source-infrastructure",
+      "reason": "Checks fixture and archive arguments, retained report paths, and failure propagation.",
+      "assertion": "ci/tests/test_candidate_archives.py"
     },
     {
       "path": "ci/tests/test_check_benchmarks.py",
@@ -3462,8 +3497,8 @@
     },
     {
       "path": "ci/tests/test_check_product.py",
-      "sha256": "22fc79a94187f24c628f0f817beebbf03c9f8d9c539df74259c8894afbd322a0",
-      "source_markers": 25,
+      "sha256": "2e0888a339fa0d05d1162e71a9b79d6516feea3d98340d903d2615535a794196",
+      "source_markers": 26,
       "constructors_or_assertions": [
         "runner",
         "setUp",
@@ -3481,6 +3516,7 @@
         "test_release_candidate_rejects_wrong_cli_version",
         "test_requires_candidate_build_identity_qualification_and_retention",
         "test_requires_every_operational_core_qualification_file",
+        "test_requires_release_archive_qualification_and_retention",
         "test_requires_workspace_tests_in_each_host_job",
         "write",
         "wrong_version"
@@ -3615,7 +3651,7 @@
     },
     {
       "path": "ci/tests/test_package_release.py",
-      "sha256": "4daf37447dc861af4e3a9d4b8dea0550af6980161fbbd3eed3e0ad7be0a735eb",
+      "sha256": "ade252cc519200c1a167b3d0e4b3172ed265c74e69a671b4ebafb101a6a01419",
       "source_markers": 2,
       "constructors_or_assertions": [
         "test_archive_contains_exact_programs_and_checksum",
@@ -3840,7 +3876,7 @@
     },
     {
       "path": "crates/opaal-cli/src/project/preparation.rs",
-      "sha256": "5375c7bf7182beaf078f9ecbd56989a3f960712c526433446710fef1b334c152",
+      "sha256": "4d74b3605a38471f3f9dd256789314b6e0bfafffe425f3cad3f91a9154b70f43",
       "source_markers": 17,
       "constructors_or_assertions": [
         "concurrent_asset_collision_is_retained_without_overwrite",
@@ -3959,7 +3995,7 @@
     },
     {
       "path": "crates/opaal-cli/tests/controlled_native_tools.rs",
-      "sha256": "4e92e39ff7f32f26c89f0c6bfd4bd5bc90d54aa04736433ceacd7542c7b2565e",
+      "sha256": "8eb501bcec8b9705a6da9ddcc70a7de3ccd3dbe54e9bd4b39fe45213eeff9141",
       "source_markers": 21,
       "constructors_or_assertions": [
         "acceptance_revalidates_native_project_controls_inputs_and_tool_before_evidence",
@@ -4034,7 +4070,7 @@
     },
     {
       "path": "crates/opaal-cli/tests/docker_image_checks.rs",
-      "sha256": "0e4e4fb2b6c2440db8ab9ba32483568e523e513a92713baff04649b3c212408c",
+      "sha256": "46cd52598a959ac0bcb8ef804cc36545de6725842c7210e51ad897f07b66fa3b",
       "source_markers": 7,
       "constructors_or_assertions": [
         "changed_bound_target_facts_refuse_before_process_or_evidence_creation",
@@ -4212,7 +4248,7 @@
     },
     {
       "path": "crates/opaal-cli/tests/io_golden.rs",
-      "sha256": "baa7e1f692d265677300c6842e81b775eeadab44318a19f50589218c5440b9f4",
+      "sha256": "f570fa8b8544d3ff8b15abb739f30107b56a9570ec8707e130da894c15051cae",
       "source_markers": 13,
       "constructors_or_assertions": [
         "a_closed_stdout_is_catchable_and_leaves_stderr_and_entropy_available",
@@ -4227,7 +4263,7 @@
     },
     {
       "path": "crates/opaal-cli/tests/io_receipt_native.rs",
-      "sha256": "4ca91efc0818b4b7472b61a26f604ec2581f987fbd2f2353747795da55c109d2",
+      "sha256": "5fb1823d74177c04f34466b60161aed0f6efc92e7af59985221bda322f562f25",
       "source_markers": 1,
       "constructors_or_assertions": [
         "prepare"
@@ -4334,7 +4370,7 @@
     },
     {
       "path": "crates/opaal-cli/tests/project_preparation.rs",
-      "sha256": "40dc80ec5902fdcc70d4dcf30b2cfa5ec22e922a7478b00cb82e99e9ad7409c9",
+      "sha256": "244888ae74d28ef9783f532d473af490d29f3b431d41d9882ed46640766dbd5c",
       "source_markers": 4,
       "constructors_or_assertions": [
         "fixed_offline_assets_match_maintained_sources_and_private_modes"
@@ -4374,7 +4410,7 @@
     },
     {
       "path": "crates/opaal-cli/tests/random_native.rs",
-      "sha256": "27eec848edcdeaf8b17a40dac4b2b7613c2c16c5746a0400870be512cd9dd458",
+      "sha256": "50b0a705f4234e8d45f6acb9c506b3b157fd2a500c0ac93d7dec5204a938cd25",
       "source_markers": 1,
       "constructors_or_assertions": [
         "qualify"
@@ -4397,7 +4433,7 @@
     },
     {
       "path": "crates/opaal-cli/tests/support/data_processing.rs",
-      "sha256": "5bd341b31bfdda8d0f95622f8b410633d1a10b4a8c62e949e56dc60a6a31ca2b",
+      "sha256": "a5425ef912e9d49035ba89db31904181eb3d013cd0ca52334fb98f64d64255c7",
       "source_markers": 5,
       "constructors_or_assertions": [
         "new"

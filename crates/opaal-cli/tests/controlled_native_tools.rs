@@ -115,7 +115,7 @@ fn preparation_offline_assets_policy_and_accepted_saved_routes() {
     for name in [
         "offline.toml",
         "offline-tools-linux.toml",
-        "offline-tools-linux-aarch64.toml",
+        "offline-tools-linux-arm64.toml",
         "offline-tools-macos.toml",
         "live.toml",
         "live-authority.toml",

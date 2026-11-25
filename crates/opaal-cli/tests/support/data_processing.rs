@@ -42,7 +42,7 @@ pub fn host_platform_triple() -> &'static str {
 
 pub fn linux_fixture_arch_suffix() -> &'static str {
     if cfg!(all(target_os = "linux", target_arch = "aarch64")) {
-        "-aarch64"
+        "-arm64"
     } else {
         ""
     }
