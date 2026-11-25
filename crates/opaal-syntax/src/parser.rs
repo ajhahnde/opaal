@@ -1353,6 +1353,7 @@ impl<'source, 'control, 'metadata> Parser<'source, 'control, 'metadata> {
         let open = self.expect_delimiter(Delimiter::LeftBrace, "if expression arm requires `{`")?;
         let previous = self.continuation_depth;
         self.continuation_depth += 1;
+        self.skip_layout();
         let value = self.parse_expression();
         self.continuation_depth = previous;
         let value = value?;

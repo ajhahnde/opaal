@@ -6169,7 +6169,7 @@
     },
     {
       "path": "crates/opaal-syntax/src/parser.rs",
-      "sha256": "821fa3ca0573cc54989c166c1410aae432dfe0baa04903bfc43d4b4308ae9927",
+      "sha256": "101e1f53bf5e3250307c80c09843ce463d9599d43763e780283982e1ef4bf098",
       "source_markers": 3,
       "constructors_or_assertions": [
         "cancellation_is_polled_during_shorthand_field_parsing_after_lexing",
@@ -6255,7 +6255,7 @@
     },
     {
       "path": "crates/opaal-syntax/tests/formatter.rs",
-      "sha256": "e0f385415189040ac546f891fba4ce3f7ff19eee449e3122bda0f368d3c9f6a1",
+      "sha256": "6f99825b2c13813f8725f45f4e6f25ff7111d90936d61995a970884621e8608b",
       "source_markers": 71,
       "constructors_or_assertions": [
         "action_layout_preserves_punctuation_inside_command_words",

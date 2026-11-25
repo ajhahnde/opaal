@@ -44,6 +44,49 @@ fn interpolation_spacing_is_canonical() {
 }
 
 #[test]
+fn interpolation_openers_stay_separate_from_record_braces() {
+    assert_eq!(
+        roundtrip("\nit {  { valulue }\n }\n"),
+        "\nit { { valulue }\n}\n"
+    );
+    assert_eq!(
+        roundtrip("echo \"{  { value }   }\"\n"),
+        "echo \"{ { value }}\"\n"
+    );
+}
+
+#[test]
+fn hash_inside_bare_word_survives_indentation_removal() {
+    assert_eq!(roundtrip(" \u{3}#"), "\u{3}#\n");
+}
+
+#[test]
+fn formatting_keeps_the_line_after_a_final_continuation() {
+    assert_eq!(roundtrip("u\\\n "), "u\\\n\n");
+    assert_eq!(roundtrip("u\\\r\n\t"), "u\\\r\n\n");
+}
+
+#[test]
+fn formatting_preserves_hashes_after_continuations() {
+    assert_eq!(
+        roundtrip("echo a \\\n\t# comment\n"),
+        "echo a \\\n # comment\n"
+    );
+    assert_eq!(
+        roundtrip("echo a \\\r\n\t## comment\r\n"),
+        "echo a \\\r\n ## comment\n"
+    );
+    let bare_hash = "if true {\n    echo a \\\n#hash\n}\n";
+    assert_eq!(roundtrip(bare_hash), bare_hash);
+}
+
+#[test]
+fn formatting_preserves_quoted_text_after_continuations() {
+    let source = "if true {\n    throw \"left\\\n\\\nright\"\n}\n";
+    assert_eq!(roundtrip(source), source);
+}
+
+#[test]
 fn tuple_formatting_preserves_group_dispatch_and_comments() {
     assert_eq!(
         roundtrip("let (number ,label,) = (3 ,\"ready\",)\n"),
@@ -100,6 +143,18 @@ fn value_arms_format_with_comments_and_enclosing_delimiters() {
     assert_eq!(
         roundtrip("let x = \"value { if true { 1 }\n\nelse { 2 } }\""),
         "let x = \"value {if true {\n    1\n}\n\nelse {\n    2\n}}\"\n"
+    );
+}
+
+#[test]
+fn unary_value_arms_survive_formatter_layout() {
+    assert_eq!(
+        roundtrip("let result = if true {!false\n} else { false }"),
+        "let result = if true {\n    !false\n} else {\n    false\n}\n"
+    );
+    assert_eq!(
+        roundtrip("let result = if true {+1\n} else if false {-2\n} else {-3}"),
+        "let result = if true {\n    +1\n} else if false {\n    -2\n} else {\n    -3\n}\n"
     );
 }
 
