@@ -15,8 +15,8 @@ from typing import Callable, Sequence
 
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "1.10.0"
-RELEASED_VERSION = "1.9.0"
+VERSION = "1.11.0"
+RELEASED_VERSION = "1.10.0"
 REPOSITORY = "https://github.com/ajhahnde/opaal"
 WORKSPACE_PACKAGES = {
     "crates/opaal-syntax": "opaal-syntax",
@@ -447,11 +447,20 @@ def source_problems(root: Path, *, run: Run = run_command) -> list[str]:
             problems.append("release workflow does not run the release-candidate validator")
         if not all(token in release for token in (
             "runner: macos-26",
+            f"tags: [v{VERSION}]",
+            f"github.head_ref == 'release/opaal-{VERSION}'",
+            "SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}",
+            "ref: ${{ env.SOURCE_SHA }}",
             "python3 ci/package_data_processing.py --platform",
+            "python3 ci/package_source_formatting.py",
             "python3 ci/qualify_data_processing.py",
-            '--expected-source "$(git rev-parse HEAD)"',
+            "python3 ci/qualify_source_formatting.py",
+            '--expected-source "$SOURCE_SHA"',
             "--report dist/release-qualification.json",
-            "path: dist/release-qualification.json",
+            "--report dist/release-source-formatting.json",
+            "\n            dist/release-qualification.json\n",
+            "\n            dist/release-source-formatting.json\n",
+            f"\n            dist/opaal-v{VERSION}-source-formatting.tar.gz\n",
         )):
             problems.append("release workflow does not qualify and retain the exact release archive")
         if not re.search(

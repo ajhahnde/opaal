@@ -91,9 +91,9 @@ and macOS ARM64 run `ci/qualify_candidate_archives.sh` against the exact PR
 head, or the event commit for other runs. They package the source-formatting
 fixtures and replay them with the exact CLI/LSP archive, retaining both
 archives and the reports. The operational core jobs test the PR merge commit.
-The migrated fixture project requires OPAAL 1.10.0 or later and below
-2.0.0. Release qualification uses its committed version requirement without
-development adaptation.
+The shared fixture manifest requires OPAAL 1.11.0 or later and below 2.0.0
+because replay uses it for projects with the new language forms. Release
+qualification uses the committed version requirement.
 
 ## Benchmarks
 
