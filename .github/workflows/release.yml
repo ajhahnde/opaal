@@ -7,14 +7,17 @@ on:
       - ci/package_release.py
       - ci/package_data_processing.py
       - ci/qualify_data_processing.py
+      - ci/package_source_formatting.py
+      - ci/qualify_source_formatting.py
       - tests/golden/data-processing/**
+      - tests/golden/source-formatting/**
       - Cargo.toml
       - Cargo.lock
       - crates/**
       - README.md
       - LICENSE
   push:
-    tags: [v1.10.0]
+    tags: [v1.11.0]
 
 permissions:
   contents: read
@@ -26,7 +29,9 @@ concurrency:
 jobs:
   release-binaries:
     name: Release binaries (${{ matrix.label }})
-    if: github.event_name == 'push' || github.head_ref == 'release/opaal-1.10.0'
+    if: github.event_name == 'push' || github.head_ref == 'release/opaal-1.11.0'
+    env:
+      SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
     strategy:
       fail-fast: false
       matrix:
@@ -72,6 +77,7 @@ jobs:
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ env.SOURCE_SHA }}
           fetch-depth: 0
 
       - name: Mark the ARM container checkout safe for Git
@@ -85,7 +91,7 @@ jobs:
 
       - name: Verify the release tag
         if: github.event_name == 'push'
-        run: test "${GITHUB_REF_NAME}" = "v1.10.0"
+        run: test "${GITHUB_REF_NAME}" = "v1.11.0"
 
       - name: Verify the release host
         run: test "$(uname -m)" = "${{ matrix.arch }}"
@@ -110,39 +116,51 @@ jobs:
           xcrun vtool -show-build target/release/opaal-language-server
 
       - name: Verify the CLI release identity
-        run: test "$(target/release/opaal --version)" = "opaal 1.10.0"
+        run: test "$(target/release/opaal --version)" = "opaal 1.11.0"
 
       - name: Verify the release candidate boundary
         run: python3 ci/check_product.py release-candidate
 
       - name: Package both programs and the replay fixtures
-        run: python3 ci/package_data_processing.py --platform "${{ matrix.platform }}"
+        run: |
+          python3 ci/package_data_processing.py --platform "${{ matrix.platform }}"
+          python3 ci/package_source_formatting.py
 
       - name: Qualify the exact release archive outside the checkout
         run: |
           version=$(python3 -c 'from ci.package_release import VERSION; print(VERSION)')
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          archive="dist/opaal-v${version}-${{ matrix.platform }}.tar.gz"
           python3 ci/qualify_data_processing.py \
-            --archive "dist/opaal-v${version}-${{ matrix.platform }}.tar.gz" \
+            --archive "$archive" \
             --examples "dist/opaal-v${version}-data-processing.tar.gz" \
-            --expected-version "$version" --expected-source "$(git rev-parse HEAD)" \
+            --expected-version "$version" --expected-source "$SOURCE_SHA" \
             --platform "${{ matrix.platform }}" --report dist/release-qualification.json
+          python3 ci/qualify_source_formatting.py \
+            --archive "$archive" --fixtures "dist/opaal-v${version}-source-formatting.tar.gz" \
+            --expected-source "$SOURCE_SHA" --platform "${{ matrix.platform }}" \
+            --report dist/release-source-formatting.json
 
-      - name: Upload the source and archive qualification report
+      - name: Upload the qualification reports and replay fixtures
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: release-qualification-${{ matrix.platform }}-${{ github.sha }}
-          path: dist/release-qualification.json
+          name: release-qualification-${{ matrix.platform }}-${{ env.SOURCE_SHA }}
+          path: |
+            dist/release-qualification.json
+            dist/release-source-formatting.json
+            dist/opaal-v1.11.0-data-processing.tar.gz
+            dist/opaal-v1.11.0-source-formatting.tar.gz
           if-no-files-found: error
 
       - name: Upload the exact archive and checksum
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: opaal-v1.10.0-${{ matrix.platform }}-${{ github.sha }}
+          name: opaal-v1.11.0-${{ matrix.platform }}-${{ env.SOURCE_SHA }}
           path: |
-            dist/opaal-v1.10.0-${{ matrix.platform }}.tar.gz
-            dist/opaal-v1.10.0-${{ matrix.platform }}.tar.gz.sha256
+            dist/opaal-v1.11.0-${{ matrix.platform }}.tar.gz
+            dist/opaal-v1.11.0-${{ matrix.platform }}.tar.gz.sha256
           if-no-files-found: error
           compression-level: 0
 
       - name: Record the binary result
-        run: echo "Built and replayed the OPAAL 1.10.0 archive for ${{ matrix.platform }} from $(git rev-parse HEAD). The operator publishes the checked archive and checksum after all three tag jobs pass." >> "${GITHUB_STEP_SUMMARY}"
+        run: echo "Built and replayed the OPAAL 1.11.0 archive for ${{ matrix.platform }} from $SOURCE_SHA. The operator publishes the checked archive and checksum after all three tag jobs pass." >> "${GITHUB_STEP_SUMMARY}"

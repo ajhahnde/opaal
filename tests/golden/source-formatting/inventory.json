@@ -2947,7 +2947,7 @@
     },
     {
       "path": "ci/check_product.py",
-      "sha256": "24bb38e33d8926fae8fdd545f709015b121961114d3e435091e119a93f2e9e12",
+      "sha256": "a00cfa98ab292140690f656a86e9e707391e48e14cb06ca50065bb4d86026e1b",
       "source_markers": 15,
       "constructors_or_assertions": [
         "command_json",
@@ -3069,7 +3069,7 @@
     },
     {
       "path": "ci/package_release.py",
-      "sha256": "feab0fc8a2d196d3c3820d99eb2a38164a053d1deab41139e8c500eb5be0de1d",
+      "sha256": "f2d1c004a57378075a2871a56fac8e54942399b9fc0096dcb3738a49572c5029",
       "source_markers": 2,
       "constructors_or_assertions": [
         "main",
@@ -3497,7 +3497,7 @@
     },
     {
       "path": "ci/tests/test_check_product.py",
-      "sha256": "2e0888a339fa0d05d1162e71a9b79d6516feea3d98340d903d2615535a794196",
+      "sha256": "01313fb1b0e71277abdc6376c0f50c372c29d87891af8f3c523d0b858eae2a21",
       "source_markers": 26,
       "constructors_or_assertions": [
         "runner",

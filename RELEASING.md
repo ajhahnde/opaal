@@ -76,10 +76,11 @@ operating-system image, or establish downstream hardware support.
 ## Release archives
 
 The separate **Release binaries** workflow packages the CLI and LSP once on
-each host. It runs the saved-input report and LSP lifecycle from the unpacked
-archive in a temporary directory. The qualification report records the checked
+each host. It replays the data-processing and language fixtures against the
+same unpacked archive, including the saved check report, List map inference,
+List and String slices, and the LSP lifecycle. The reports record the checked
 out commit and the archive's SHA-256. After the tag jobs pass, the operator
-checks each report against the matching archive and checksum and publishes
-those files.
+checks both reports against the matching archive and checksum, then publishes
+the archive and checksum.
 
 [← Repository overview](README.md) · [Project lifecycle](https://opaal-lang.org/docs/projects/) · [Development](DEVELOPMENT.md)

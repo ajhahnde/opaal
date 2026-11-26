@@ -19,7 +19,7 @@ immutable and scoped to that iteration.
 
 ## Inline closures for List map
 
-Inline `list::map` closure inference is scheduled for OPAAL 1.11.0. A
+Starting with OPAAL 1.11.0, inline `list::map` closures can infer their types. A
 typed List supplies the closure parameter type. When the call still needs a
 result type, the checker can derive it from a single value expression in
 the inline closure.
@@ -50,9 +50,8 @@ target/debug/opaal tests/golden/source-formatting/list-map/typed-empty.opaal
 
 ## List comprehensions
 
-List comprehensions are scheduled for OPAAL 1.11.0. Use a build that includes
-the syntax for the saved report below. Projects that distribute comprehension
-source should require OPAAL 1.11.0 or later.
+List comprehensions require OPAAL 1.11.0 or later. Projects that distribute
+comprehension source can declare `required_opaal = ">=1.11.0,<2.0.0"`.
 
 ```opaal
 let counts = [0, 2, 0, 1]
@@ -86,8 +85,10 @@ target/debug/opaal tests/golden/source-formatting/list-comprehensions/report.opa
 target/debug/opaal tests/golden/source-formatting/list-comprehensions/negative.opaal
 ```
 
-The report checks positions 1 and 3, their findings, and the empty report
-summary. The negative input raises an error at the first negative count.
+The [report](../tests/golden/source-formatting/list-comprehensions/report.opaal)
+checks positions 1 and 3, their findings, and the empty report summary. The
+[negative input](../tests/golden/source-formatting/list-comprehensions/negative.opaal)
+raises an error at the first negative count.
 The same policy exports a pure `verify` action used by the source-formatting
 project qualification. Changes to its source require ordinary replanning
 before accepted execution.
@@ -112,8 +113,8 @@ satisfy `0 <= start <= end <= length`. For a two-item List, `counts[1:3]` raises
 known receiver and endpoint type errors at their respective expressions.
 
 Run the [preview fixture](../tests/golden/source-formatting/list-string-slicing/preview.opaal)
-with a build that supports slicing. Projects distributed with slice syntax
-require OPAAL `>=1.11.0,<2.0.0` once 1.11.0 ships.
+with OPAAL 1.11.0 or later. Projects that distribute slice syntax can declare
+`required_opaal = ">=1.11.0,<2.0.0"`.
 
 ## Module exports
 

@@ -4,6 +4,8 @@ All notable changes to OPAAL are documented here.
 
 ## [Unreleased]
 
+## [1.11.0]
+
 ### Added
 
 - Select an immutable List window or String excerpt with `value[start:end]`.
@@ -35,6 +37,10 @@ All notable changes to OPAAL are documented here.
 
 - Linux ARM64 archives and checksums use the `linux-arm64` platform suffix
   starting with 1.11.0. For earlier releases, use the `linux-aarch64` suffix.
+- Development guides now group source builds, CI qualification, and runnable
+  examples by task. The macOS arm64 build and qualification runner uses macOS 26.
+- Update `serde_json`, `unicode-width`, `unicode-normalization`, and `libc` to
+  newer patch releases.
 - In grouped jobs, an adjacent comma after a bare command name starts a
   tuple when another slot follows. Embedders can preserve a registered
   comma-bearing command head with an escape such as `(name\, argument)`.

@@ -110,12 +110,22 @@ publish = false
         self.write(
             ".github/workflows/release.yml",
             "runner: macos-26\n"
+            f"tags: [v{checker.VERSION}]\n"
+            f"github.head_ref == 'release/opaal-{checker.VERSION}'\n"
+            "SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}\n"
+            "ref: ${{ env.SOURCE_SHA }}\n"
             "python3 ci/check_product.py release-candidate\n"
             "python3 ci/package_data_processing.py --platform\n"
+            "python3 ci/package_source_formatting.py\n"
             "python3 ci/qualify_data_processing.py\n"
-            '--expected-source "$(git rev-parse HEAD)"\n'
+            "python3 ci/qualify_source_formatting.py\n"
+            '--expected-source "$SOURCE_SHA"\n'
             "--report dist/release-qualification.json\n"
-            "path: dist/release-qualification.json\n",
+            "--report dist/release-source-formatting.json\n"
+            "path: |\n"
+            "            dist/release-qualification.json\n"
+            "            dist/release-source-formatting.json\n"
+            f"            dist/opaal-v{checker.VERSION}-source-formatting.tar.gz\n",
         )
         self.write(
             ".github/workflows/security.yml",
@@ -212,8 +222,12 @@ publish = false
         path = self.root / ".github/workflows/release.yml"
         original = path.read_text()
         for required in (
-            "runner: macos-26", "python3 ci/qualify_data_processing.py",
-            '--expected-source "$(git rev-parse HEAD)"', "path: dist/release-qualification.json",
+            "runner: macos-26", "ref: ${{ env.SOURCE_SHA }}",
+            f"tags: [v{checker.VERSION}]", f"github.head_ref == 'release/opaal-{checker.VERSION}'",
+            "python3 ci/qualify_data_processing.py", "python3 ci/qualify_source_formatting.py",
+            '--expected-source "$SOURCE_SHA"',
+            "\n            dist/release-qualification.json\n",
+            "\n            dist/release-source-formatting.json\n",
         ):
             with self.subTest(required=required):
                 path.write_text(original.replace(required, "removed"))
